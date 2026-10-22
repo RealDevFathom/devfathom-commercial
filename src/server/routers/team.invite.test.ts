@@ -147,6 +147,33 @@ describe('team.inviteMember duplicate guard', () => {
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
+  it('returns a typed delivery failure while preserving the created, resendable invite', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+    mocks.sendEmail.mockRejectedValue(new Error('provider unavailable'));
+
+    await expect(
+      caller().inviteMember({ ...invite, email: 'alex@company.com' })
+    ).resolves.toMatchObject({
+      id: 'user_2',
+      inviteUrl: expect.stringContaining('/invite/'),
+      emailDelivery: { status: 'FAILED', code: 'EMAIL_DELIVERY_FAILED' },
+    });
+    expect(mocks.invitationUpsert).toHaveBeenCalledOnce();
+  });
+
+  it('reports successful delivery explicitly', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+    mocks.sendEmail.mockResolvedValue({ messageId: 'message_1' });
+
+    await expect(
+      caller().inviteMember({ ...invite, email: 'alex@company.com' })
+    ).resolves.toMatchObject({ emailDelivery: { status: 'SENT' } });
+  });
+
   it('retains the administrator capability check without HR', async () => {
     mocks.can.mockResolvedValue(false);
     await expect(caller().inviteMember({ ...invite, email: 'cashier@example.com' }))

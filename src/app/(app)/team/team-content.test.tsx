@@ -139,6 +139,44 @@ describe('tenant department invitation', () => {
     expect(screen.getByLabelText('Department')).toHaveValue('COUNTER');
     expect(screen.getByPlaceholderText('John Doe')).toHaveValue('Second operator');
   });
+
+  it('shows delivery failure, copy-link fallback, and resends the preserved invite', () => {
+    render(<AddMemberModal onClose={vi.fn()} />);
+    fill();
+    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    fireEvent.change(screen.getByLabelText('Restaurant staff role'), {
+      target: { value: 'role_gm' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+
+    act(() =>
+      state.invite.mutate.mock.calls[0][1].onSuccess({
+        id: 'user_2',
+        inviteUrl: 'https://app.example/invite/token-1',
+        emailDelivery: { status: 'FAILED', code: 'EMAIL_DELIVERY_FAILED' },
+      })
+    );
+
+    expect(screen.getByText('Invitation created, but email delivery failed')).toBeVisible();
+    expect(screen.getByText(/No email was delivered/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Copy invite link' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Resend email' }));
+    expect(state.invite.mutate).toHaveBeenCalledTimes(2);
+    expect(state.invite.mutate.mock.calls[1][0]).toMatchObject({
+      email: 'second@e2e.invalid',
+      department: 'COUNTER',
+      organizationRoleId: 'role_gm',
+    });
+
+    act(() =>
+      state.invite.mutate.mock.calls[1][1].onSuccess({
+        id: 'user_2',
+        inviteUrl: 'https://app.example/invite/token-2',
+        emailDelivery: { status: 'SENT' },
+      })
+    );
+    expect(screen.getByText('Invitation sent to second@e2e.invalid')).toBeVisible();
+  });
 });
 
 describe('baseline workspace invitations', () => {

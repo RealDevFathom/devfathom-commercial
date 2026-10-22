@@ -13,6 +13,8 @@ import {
   Loader2,
   Check,
   Copy,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -269,7 +271,11 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
   const [skillInput, setSkillInput] = useState('');
   const [skills, setSkills] = useState<string[]>([]);
   const [error, setError] = useState('');
-  const [sent, setSent] = useState<{ email: string; inviteUrl: string } | null>(null);
+  const [sent, setSent] = useState<{
+    email: string;
+    inviteUrl: string;
+    emailDelivery: 'SENT' | 'FAILED';
+  } | null>(null);
   const [copied, setCopied] = useState(false);
 
   const selectedDepartment = departmentOptions.find((item) => item.key === department);
@@ -302,7 +308,40 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
       {
         onSuccess: (data) => {
           utils.team.getAll.invalidate();
-          setSent({ email: submittedEmail, inviteUrl: data.inviteUrl });
+          setSent({
+            email: submittedEmail,
+            inviteUrl: data.inviteUrl,
+            emailDelivery: data.emailDelivery.status,
+          });
+        },
+        onError: (err) => setError(err.message),
+      }
+    );
+  };
+
+  const handleResend = () => {
+    if (!sent || inviteMember.isPending) return;
+    setError('');
+    inviteMember.mutate(
+      {
+        name: name.trim(),
+        email: sent.email,
+        role,
+        organizationRoleId: organizationRoleId || null,
+        department,
+        title: title.trim(),
+        phone: phone || undefined,
+        bio: bio || undefined,
+        skills,
+      },
+      {
+        onSuccess: (data) => {
+          utils.team.getAll.invalidate();
+          setSent({
+            email: sent.email,
+            inviteUrl: data.inviteUrl,
+            emailDelivery: data.emailDelivery.status,
+          });
         },
         onError: (err) => setError(err.message),
       }
@@ -339,20 +378,55 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
           {sent ? (
             <div className="p-6">
               <div className="flex flex-col items-center py-6 text-center">
-                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary/10">
-                  <Check className="h-7 w-7 text-primary" />
+                <div
+                  className={cn(
+                    'flex h-14 w-14 items-center justify-center rounded-full',
+                    sent.emailDelivery === 'SENT' ? 'bg-primary/10' : 'bg-destructive/10'
+                  )}
+                >
+                  {sent.emailDelivery === 'SENT' ? (
+                    <Check className="h-7 w-7 text-primary" />
+                  ) : (
+                    <AlertTriangle className="h-7 w-7 text-destructive" />
+                  )}
                 </div>
                 <h3 className="mt-4 font-display text-lg font-semibold text-foreground">
-                  Invitation sent to {sent.email}
+                  {sent.emailDelivery === 'SENT'
+                    ? `Invitation sent to ${sent.email}`
+                    : 'Invitation created, but email delivery failed'}
                 </h3>
                 <p className="mt-1.5 text-sm text-muted-foreground">
-                  They&apos;ll receive an email to set their password and finish their profile.
+                  {sent.emailDelivery === 'SENT'
+                    ? 'They’ll receive an email to set their password and finish their profile.'
+                    : `No email was delivered to ${sent.email}. Resend it or copy the invite link below.`}
                 </p>
+                {error && (
+                  <div
+                    role="alert"
+                    className="mt-4 w-full rounded-xl border border-destructive/20 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+                  >
+                    {error}
+                  </div>
+                )}
                 <div className="mt-6 w-full rounded-xl border border-border bg-card px-4 py-3 text-left">
                   <p className="mb-1.5 text-xs font-medium text-muted-foreground">Invite link</p>
                   <p className="break-all text-sm text-foreground">{sent.inviteUrl}</p>
                 </div>
-                <div className="mt-4 flex w-full items-center gap-2">
+                <div className="mt-4 flex w-full flex-col items-center gap-2 sm:flex-row">
+                  {sent.emailDelivery === 'FAILED' && (
+                    <button
+                      onClick={handleResend}
+                      disabled={inviteMember.isPending}
+                      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-40"
+                    >
+                      {inviteMember.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4" />
+                      )}
+                      {inviteMember.isPending ? 'Resending…' : 'Resend email'}
+                    </button>
+                  )}
                   <button
                     onClick={handleCopy}
                     className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
