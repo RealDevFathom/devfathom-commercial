@@ -13,16 +13,16 @@
 
 Interactive platform endpoints are available only on the admin host.
 
-| Method/path | Authentication | Purpose |
+| Method/path                    | Authentication                                    | Purpose                                         |
 | ------------------------------ | ------------------------------------------------- | ----------------------------------------------- | -------------------------- |
-| `POST /api/platform/session` | email/password plus MFA if enrolled; exact origin | create operator session |
-| `DELETE /api/platform/session` | operator cookie; exact origin | revoke current session |
-| `POST /api/platform/control` | operator cookie/capability; exact origin | execute typed platform command |
-| `GET /api/platform/mfa` | operator cookie | enrollment/status |
-| `POST /api/platform/mfa` | operator cookie; exact origin | enroll/confirm/regenerate/disable MFA |
-| `POST /api/platform/support` | `support:write`; exact origin | create one-use audited support launch |
-| `DELETE /api/platform/support` | `support:write`; exact origin | platform-side revocation when cookie is present |
-| `GET                           | POST /api/platform/jobs/process` | `Authorization: Bearer <CRON_SECRET>` | recover/claim/process jobs |
+| `POST /api/platform/session`   | email/password plus MFA if enrolled; exact origin | create operator session                         |
+| `DELETE /api/platform/session` | operator cookie; exact origin                     | revoke current session                          |
+| `POST /api/platform/control`   | operator cookie/capability; exact origin          | execute typed platform command                  |
+| `GET /api/platform/mfa`        | operator cookie                                   | enrollment/status                               |
+| `POST /api/platform/mfa`       | operator cookie; exact origin                     | enroll/confirm/regenerate/disable MFA           |
+| `POST /api/platform/support`   | `support:write`; exact origin                     | create one-use audited support launch           |
+| `DELETE /api/platform/support` | `support:write`; exact origin                     | platform-side revocation when cookie is present |
+| `GET                           | POST /api/platform/jobs/process`                  | `Authorization: Bearer <CRON_SECRET>`           | recover/claim/process jobs |
 
 `/api/platform/jobs/process` is a bearer-secret-protected worker endpoint. Azure scheduling/trigger configuration is a production gate; it does not use a platform cookie.
 
@@ -74,17 +74,17 @@ Authentication: `Authorization: Bearer df_<token>`.
 
 Token authentication resolves the bound organization in platform scope, then returns to a tenant-scoped database. It checks user/organization status, token expiry, rate limits, API module entitlement, scope, and admin role for finance.
 
-| Resource | Paths |
-| --- | --- |
-| API reference | `GET /api/v1/spec` |
-| projects | `GET /api/v1/projects`, `POST /api/v1/projects`, `GET /api/v1/projects/{id}`, `DELETE /api/v1/projects/{id}` |
-| clients | `GET /api/v1/clients`, `POST /api/v1/clients`, `GET /api/v1/clients/{id}`, `DELETE /api/v1/clients/{id}` |
-| tasks/boards/comments | `/api/v1/tasks`, `/api/v1/tasks/{id}`, `/comments`, `/boards/{id}` |
-| invoices | `/api/v1/invoices`, `/api/v1/invoices/{id}` |
-| transactions | `/api/v1/transactions`, `/api/v1/transactions/{id}` |
-| finance summary | `GET /api/v1/finance/summary` |
-| meetings | `GET                                                               | POST /api/v1/meetings` |
-| team | `GET /api/v1/team` |
+| Resource              | Paths                                                                                                        |
+| --------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------- |
+| API reference         | `GET /api/v1/spec`                                                                                           |
+| projects              | `GET /api/v1/projects`, `POST /api/v1/projects`, `GET /api/v1/projects/{id}`, `DELETE /api/v1/projects/{id}` |
+| clients               | `GET /api/v1/clients`, `POST /api/v1/clients`, `GET /api/v1/clients/{id}`, `DELETE /api/v1/clients/{id}`     |
+| tasks/boards/comments | `/api/v1/tasks`, `/api/v1/tasks/{id}`, `/comments`, `/boards/{id}`                                           |
+| invoices              | `/api/v1/invoices`, `/api/v1/invoices/{id}`                                                                  |
+| transactions          | `/api/v1/transactions`, `/api/v1/transactions/{id}`                                                          |
+| finance summary       | `GET /api/v1/finance/summary`                                                                                |
+| meetings              | `GET                                                                                                         | POST /api/v1/meetings` |
+| team                  | `GET /api/v1/team`                                                                                           |
 
 Scopes are documented by the live Markdown response at `/api/v1/spec`. Write scope implies read scope for the same resource; `*` grants all token scopes but never bypasses module, tenant, lifecycle, or finance-role checks.
 
@@ -92,15 +92,15 @@ Scopes are documented by the live Markdown response at `/api/v1/spec`. Write sco
 
 Authentication: `Authorization: Bearer scim_<token>`. Responses use `application/scim+json`.
 
-| Method/path | Behavior |
+| Method/path                              | Behavior                                  |
 | ---------------------------------------- | ----------------------------------------- | ---------------------------------------------------------- | ------------------------------- | -------------------------------- |
 | `GET /api/scim/v2/ServiceProviderConfig` | supported patch/filter/bulk/auth metadata |
-| `GET /api/scim/v2/Schemas` | User and Group schemas |
-| `GET /api/scim/v2/ResourceTypes` | resource metadata |
-| `GET                                     | POST /api/scim/v2/Users` | paginated/filterable list and create/JIT-like provisioning |
+| `GET /api/scim/v2/Schemas`               | User and Group schemas                    |
+| `GET /api/scim/v2/ResourceTypes`         | resource metadata                         |
+| `GET                                     | POST /api/scim/v2/Users`                  | paginated/filterable list and create/JIT-like provisioning |
 | `GET                                     | PUT                                       | PATCH                                                      | DELETE /api/scim/v2/Users/{id}` | read, replace, patch, deactivate |
-| `GET /api/scim/v2/Groups` | organization role list |
-| `GET                                     | PATCH /api/scim/v2/Groups/{id}` | read and member patch |
+| `GET /api/scim/v2/Groups`                | organization role list                    |
+| `GET                                     | PATCH /api/scim/v2/Groups/{id}`           | read and member patch                                      |
 
 The bearer token determines organization. The host must resolve to the same organization.
 
