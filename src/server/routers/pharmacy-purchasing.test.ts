@@ -1067,6 +1067,27 @@ describe('PUR-06 — the returns and settlement transport', () => {
     expect(db.pharmacySupplierCredit.create).not.toHaveBeenCalled();
   });
 
+  it('requires the central procurement decision before allocating supplier credit', async () => {
+    mocks.can.mockResolvedValue(false);
+
+    await expect(
+      caller().allocateSupplierCredit({
+        branchId: 'branch_a',
+        supplierCreditId: 'credit_a',
+        debitNoteId: 'note_a',
+        amountMinor: 1_000,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_a' }),
+      'pharmacy:procurement',
+      undefined,
+      expect.objectContaining({ db, source: 'TRPC' })
+    );
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
   it('reads the expected-vs-received positions for the session tenant and branch', async () => {
     db.pharmacyDebitNote.findMany.mockResolvedValue([]);
     await caller().debitNotePositions({ branchId: 'branch_a' });

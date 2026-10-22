@@ -1406,6 +1406,15 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      if (
+        !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:procurement', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        }))
+      ) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Procurement access required.' });
+      }
       const scope = receivingScope(ctx, input.branchId);
       try {
         return await ctx.db.$transaction((tx) =>

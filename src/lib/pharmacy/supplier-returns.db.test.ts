@@ -654,6 +654,80 @@ describeIfDatabase('PUR-06 — expected vs received credit', () => {
     expect(allocated._sum.amountMinor).toBe(10_000);
   });
 
+  it('serializes competing debit notes so a supplier credit cannot be over-allocated', async () => {
+    const fixture = await scenario(ORG_A, 'shared-credit');
+    const notes = await Promise.all([
+      dispatchedReturn(fixture, 'shared-credit-a', 10_000),
+      dispatchedReturn(fixture, 'shared-credit-b', 10_000),
+    ]);
+    const credit = await inOrg(ORG_A, (db) =>
+      deps.returns.recordSupplierCredit(db, scopeOf(fixture, CONTROLLER), {
+        supplierId: fixture.supplierId,
+        reference: `CN-${tag('shared-credit')}`,
+        amountMinor: 10_000,
+        receivedAt: NOW,
+      })
+    );
+
+    const attempts = await Promise.allSettled(
+      notes.map((note) =>
+        inOrg(ORG_A, (db) =>
+          deps.returns.allocateSupplierCredit(db, scopeOf(fixture, CONTROLLER), {
+            supplierCreditId: credit.id,
+            debitNoteId: note.id,
+            amountMinor: 10_000,
+            at: NOW,
+          })
+        )
+      )
+    );
+
+    expect(attempts.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
+    expect(attempts.filter(({ status }) => status === 'rejected')).toHaveLength(1);
+    const allocated = await inOrg(ORG_A, (db) =>
+      db.pharmacySupplierCreditAllocation.aggregate({
+        where: { organizationId: ORG_A, supplierCreditId: credit.id },
+        _sum: { amountMinor: true },
+      })
+    );
+    expect(allocated._sum.amountMinor).toBe(10_000);
+  });
+
+  it('refuses to allocate a supplier credit recorded for another branch', async () => {
+    const fixture = await scenario(ORG_A, 'cross-branch-credit');
+    const note = await dispatchedReturn(fixture, 'cross-branch-credit', 10_000);
+    const credit = await inOrg(ORG_A, (db) =>
+      deps.returns.recordSupplierCredit(db, scopeOf(fixture, CONTROLLER), {
+        supplierId: fixture.supplierId,
+        reference: `CN-${tag('cross-branch-credit')}`,
+        amountMinor: 10_000,
+        receivedAt: NOW,
+      })
+    );
+
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.returns.allocateSupplierCredit(
+          db,
+          { ...scopeOf(fixture, CONTROLLER), branchId: `${fixture.branchId}_other` },
+          {
+            supplierCreditId: credit.id,
+            debitNoteId: note.id,
+            amountMinor: 10_000,
+            at: NOW,
+          }
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'NOT_FOUND' });
+
+    const allocationCount = await inOrg(ORG_A, (db) =>
+      db.pharmacySupplierCreditAllocation.count({
+        where: { organizationId: ORG_A, supplierCreditId: credit.id },
+      })
+    );
+    expect(allocationCount).toBe(0);
+  });
+
   it('keeps the actor who submitted the return off its own settlement', async () => {
     const fixture = await scenario(ORG_A, 'segregation');
     const note = await dispatchedReturn(fixture, 'segregation', 12_000);
