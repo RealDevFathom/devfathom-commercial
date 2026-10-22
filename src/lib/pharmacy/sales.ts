@@ -153,15 +153,38 @@ export class PharmacySaleError extends Error {
   }
 }
 
-export function tendersCoverSaleTotal(sale: {
+/** A completed sale must have exact, safely representable persisted payment coverage. */
+export function tendersExactlyCoverSaleTotal(sale: {
   lines: readonly { quantity: number; unitPriceMinor: number; discountMinor: number }[];
   tenders: readonly { amountMinor: number }[];
 }) {
-  const totalMinor = sale.lines.reduce(
-    (total, line) => total + line.quantity * line.unitPriceMinor - line.discountMinor,
-    0
-  );
-  return sale.tenders.reduce((total, tender) => total + tender.amountMinor, 0) >= totalMinor;
+  let totalMinor = 0;
+  for (const line of sale.lines) {
+    if (
+      !Number.isSafeInteger(line.quantity) ||
+      !Number.isSafeInteger(line.unitPriceMinor) ||
+      !Number.isSafeInteger(line.discountMinor) ||
+      line.quantity <= 0 ||
+      line.unitPriceMinor < 0 ||
+      line.discountMinor < 0
+    )
+      return false;
+    const grossMinor = line.quantity * line.unitPriceMinor;
+    const netMinor = grossMinor - line.discountMinor;
+    if (!Number.isSafeInteger(grossMinor) || !Number.isSafeInteger(netMinor) || netMinor < 0)
+      return false;
+    totalMinor += netMinor;
+    if (!Number.isSafeInteger(totalMinor)) return false;
+  }
+  if (totalMinor <= 0) return false;
+
+  let tenderedMinor = 0;
+  for (const tender of sale.tenders) {
+    if (!Number.isSafeInteger(tender.amountMinor) || tender.amountMinor <= 0) return false;
+    tenderedMinor += tender.amountMinor;
+    if (!Number.isSafeInteger(tenderedMinor)) return false;
+  }
+  return tenderedMinor === totalMinor;
 }
 
 export function validateDiscount(input: {
@@ -397,8 +420,6 @@ export async function changeSaleStatus(
   } as const;
   const [from, to, kind] = transitions[action];
   if (sale.status !== from) throw new PharmacySaleError('INVALID_STATE');
-  if (action === 'complete' && !tendersCoverSaleTotal(sale))
-    throw new PharmacySaleError('INSUFFICIENT_TENDER');
   const witness =
     action === 'void' && sale.lines.some((line) => line.medicine.controlled)
       ? await authorizeControlledRestoration(db, scope, controlledWitness)
@@ -413,6 +434,12 @@ export async function changeSaleStatus(
     data: { status: to, completedAt: action === 'complete' ? new Date() : undefined },
   });
   if (claimed.count !== 1) throw new PharmacySaleError('INVALID_STATE');
+
+  // The conditional update above is also the sale-row lock. Re-read payment facts only
+  // after acquiring it so add-line and tender transactions cannot race this check.
+  const transitioned = action === 'complete' ? await saleInScope(db, scope, saleId) : undefined;
+  if (transitioned && !tendersExactlyCoverSaleTotal(transitioned))
+    throw new PharmacySaleError('INSUFFICIENT_TENDER');
 
   if (action === 'void') {
     const allocations = await db.pharmacySaleLineAllocation.findMany({
@@ -453,7 +480,7 @@ export async function changeSaleStatus(
   }
 
   if (action === 'complete') {
-    const completed = await saleInScope(db, scope, saleId);
+    const completed = transitioned!;
     if (completed.receiptNumber == null) {
       const receiptDeviceId = deviceId?.trim() || completed.receiptDeviceId || 'counter';
       const rows = await db.$queryRaw<Array<{ receipt_number: number }>>(Prisma.sql`

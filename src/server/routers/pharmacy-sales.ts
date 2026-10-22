@@ -82,7 +82,6 @@ import {
   restockRecoveryReport,
   returnSaleLine,
   readReturnHistory,
-  tendersCoverSaleTotal,
 } from '@/lib/pharmacy/sales';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -1207,23 +1206,6 @@ export const pharmacySalesRouter = router({
           try {
             const db = txDb(tx);
             const scope = await scopeFor(ctx, input.branchId);
-            if (input.action === 'complete') {
-              const sale = await db.pharmacySale.findFirst({
-                where: {
-                  id: input.saleId,
-                  organizationId: scope.organizationId,
-                  branchId: scope.branchId,
-                },
-                select: {
-                  lines: {
-                    select: { quantity: true, unitPriceMinor: true, discountMinor: true },
-                  },
-                  tenders: { select: { amountMinor: true } },
-                },
-              });
-              if (sale && !tendersCoverSaleTotal(sale))
-                throw new PharmacySaleError('INSUFFICIENT_TENDER');
-            }
             return await changeSaleStatus(
               db,
               scope,
