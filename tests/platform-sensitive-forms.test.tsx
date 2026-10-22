@@ -6,6 +6,25 @@ vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: 
 vi.mock('sonner', () => ({ toast: { success: vi.fn() } }));
 
 describe('sensitive command forms', () => {
+  it('renders field help with the contrast-safe muted text token', () => {
+    render(
+      <PlatformCommandForm
+        action="operator.upsert"
+        fields={[
+          {
+            name: 'password',
+            label: 'Temporary password',
+            type: 'password',
+            help: 'At least 12 characters.',
+          },
+        ]}
+      />
+    );
+
+    expect(screen.getByText('At least 12 characters.')).toHaveClass('text-text-muted');
+    expect(screen.getByText('At least 12 characters.')).not.toHaveClass('text-text-faint');
+  });
+
   it.each([
     'organization.user.password',
     'organization.identity',
