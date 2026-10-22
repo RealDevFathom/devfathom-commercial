@@ -153,7 +153,7 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
-      await assertProjectAccess(ctx, id);
+      await assertProjectAccess(ctx, id, { manage: true });
       const project = await ctx.db.project.update({ where: { id }, data });
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'project_updated',

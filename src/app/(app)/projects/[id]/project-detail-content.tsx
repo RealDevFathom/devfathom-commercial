@@ -159,27 +159,29 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
           }
           actions={
             <>
-              <Button
-                variant="outline"
-                size="lg"
-                onClick={() => {
-                  setIsEditing(!isEditing);
-                  setEditName(project.name);
-                  setEditDesc(project.description || '');
-                  setEditStatus(project.status);
-                  setEditStart(
-                    project.startDate ? format(new Date(project.startDate), 'yyyy-MM-dd') : ''
-                  );
-                  setEditEnd(
-                    project.endDate ? format(new Date(project.endDate), 'yyyy-MM-dd') : ''
-                  );
-                  setEditTech(project.techStack);
-                  setTechInput('');
-                }}
-              >
-                <Pencil className="h-3.5 w-3.5" />
-                Edit
-              </Button>
+              {canManage && (
+                <Button
+                  variant="outline"
+                  size="lg"
+                  onClick={() => {
+                    setIsEditing(!isEditing);
+                    setEditName(project.name);
+                    setEditDesc(project.description || '');
+                    setEditStatus(project.status);
+                    setEditStart(
+                      project.startDate ? format(new Date(project.startDate), 'yyyy-MM-dd') : ''
+                    );
+                    setEditEnd(
+                      project.endDate ? format(new Date(project.endDate), 'yyyy-MM-dd') : ''
+                    );
+                    setEditTech(project.techStack);
+                    setTechInput('');
+                  }}
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                  Edit
+                </Button>
+              )}
               {canManage &&
                 (!showDeleteConfirm ? (
                   <Button
