@@ -82,9 +82,10 @@ export async function findSubstituteProposals(
       branchId: scope.branchId,
       receivedAt: { not: null },
       batch: { medicineId: input.medicineId },
+      packLevel: { presentationId: input.presentationId },
     },
     select: { printedMrpMinor: true, unitsPerPack: true },
-    orderBy: { receivedAt: 'desc' },
+    orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
   });
   const referencePriceMinor = historicalReference
     ? Math.floor(

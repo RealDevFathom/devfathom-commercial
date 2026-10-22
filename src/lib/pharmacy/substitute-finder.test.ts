@@ -123,7 +123,7 @@ describe('AI-05 deterministic substitute finder', () => {
     ]);
   });
 
-  it('derives the comparison price from the latest same-tenant branch lot', async () => {
+  it('derives the comparison price from the latest matching presentation lot', async () => {
     let referenceQuery: unknown;
     const db = {
       medicine: { findFirst: async () => requested },
@@ -148,8 +148,9 @@ describe('AI-05 deterministic substitute finder', () => {
         branchId: 'branch-a',
         receivedAt: { not: null },
         batch: { medicineId: 'requested' },
+        packLevel: { presentationId: 'presentation-requested' },
       },
-      orderBy: { receivedAt: 'desc' },
+      orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
     });
     expect(rows[0]).toMatchObject({ priceMinor: 800, priceDifferenceMinor: 100 });
   });

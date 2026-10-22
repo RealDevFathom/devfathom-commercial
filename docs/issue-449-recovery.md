@@ -6,10 +6,11 @@ on substantially, while two narrowly useful pharmacy corrections were still miss
 
 ## Ported
 
-- `10706a9a` — substitute savings now use the latest received lot for the requested medicine in
-  the active organization and branch. The public router and counter no longer accept or submit a
-  client-selected reference price (`src/lib/pharmacy/substitute-finder.ts`; focused regression test
-  in `src/lib/pharmacy/substitute-finder.test.ts`).
+- `10706a9a` — substitute savings now use the latest received lot for the requested medicine and
+  presentation in the active organization and branch, with the lot ID breaking equal-time ties.
+  The public router and counter no longer accept or submit a client-selected reference price
+  (`src/lib/pharmacy/substitute-finder.ts`; focused regression test in
+  `src/lib/pharmacy/substitute-finder.test.ts`).
 - The Karachi-day portion of `dedce1b7` — counter expiry warnings compare `Asia/Karachi` calendar
   dates rather than elapsed UTC 24-hour periods (`src/components/pharmacy/counter/counter-cart.tsx`;
   boundary coverage in `src/components/pharmacy/counter/counter-cart.test.tsx`).
@@ -28,7 +29,11 @@ on substantially, while two narrowly useful pharmacy corrections were still miss
   database content, and `src/lib/pharmacy/whatsapp/provider.ts` retains the mandatory code-level
   live-send block; restoring archived encrypted-key storage would weaken that design.
 - `d3e8cdad`: the current connected restaurant checkout already reads and displays the guest's
-  loyalty balance and redemption state in `src/components/restaurant/pos/checkout-panel.tsx`.
+  live loyalty balance and redemption state in `src/components/restaurant/pos/checkout-panel.tsx`.
+  That mutable balance must not be added to historical receipts: the settled-bill receipt query in
+  `src/lib/restaurant/checkout-routes.ts` has no settlement-time loyalty-balance snapshot, so
+  recomputing it later would misstate the original receipt. A receipt wallet should only be added
+  with a separately designed, atomically frozen settlement fact.
 - `afc587fe` and `7b81f39e`: the current restaurant growth surface has persisted generation,
   listing, detail review, permission-denied states, and evidence links in
   `src/app/(app)/restaurant/growth/page.tsx` and `src/components/restaurant/growth/`. The archived
