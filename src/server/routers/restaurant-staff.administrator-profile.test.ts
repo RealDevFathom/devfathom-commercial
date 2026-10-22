@@ -348,4 +348,59 @@ describe('administrator repair authorization before writes', () => {
       expectNoWrites();
     }
   );
+
+  it('denies a branch manager direct ALLOW capabilities they do not hold', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'restaurant:configure'
+    );
+    mocks.staffFindMany.mockResolvedValue([
+      {
+        id: 'staff_actor',
+        primaryBranchId: 'branch_default',
+        jobRoles: [{ branchId: 'branch_default' }],
+        directCapabilityGrants: [],
+      },
+    ]);
+    mocks.staffFindUnique.mockResolvedValue({ id: 'staff_actor' });
+    mocks.resolveStaffCapabilities.mockResolvedValue(new Set(['staff:manage']));
+
+    await expect(
+      caller().setStaffAccess({
+        branchId: 'branch_default',
+        staffProfileId: 'staff_actor',
+        jobRoleIds: [],
+        overrides: [{ capability: 'payments:refund', effect: 'ALLOW' }],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.setStaffAccess).not.toHaveBeenCalled();
+  });
+
+  it('denies a branch manager roles containing capabilities they do not hold', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'restaurant:configure'
+    );
+    mocks.staffFindMany.mockResolvedValue([
+      {
+        id: 'staff_actor',
+        primaryBranchId: 'branch_default',
+        jobRoles: [{ branchId: 'branch_default' }],
+        directCapabilityGrants: [],
+      },
+    ]);
+    mocks.staffFindUnique.mockResolvedValue({ id: 'staff_target' });
+    mocks.resolveStaffCapabilities.mockResolvedValue(new Set(['staff:manage']));
+    mocks.jobRoleFindMany.mockResolvedValue([
+      { capabilities: [{ capability: 'payments:refund' }] },
+    ]);
+
+    await expect(
+      caller().setStaffAccess({
+        branchId: 'branch_default',
+        staffProfileId: 'staff_target',
+        jobRoleIds: ['role_refunds'],
+        overrides: [],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.setStaffAccess).not.toHaveBeenCalled();
+  });
 });

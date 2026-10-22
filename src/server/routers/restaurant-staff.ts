@@ -32,6 +32,7 @@ import {
   listStaffJobRoleAudit,
   listStaffJobRoles,
   resolveStaffCapabilityDecision,
+  resolveStaffCapabilities,
   setJobRoleCapabilities,
   setStaffAccess,
   setStaffCapabilityOverride,
@@ -118,6 +119,38 @@ function mapJobRoleError(err: unknown): never {
 }
 
 const staffProcedure = capabilityProcedure('staff:manage');
+
+/**
+ * Branch managers may delegate only capabilities they themselves currently
+ * hold at the branch. Organization-wide restaurant administrators are the
+ * deliberate exception: their authority comes from the organization role,
+ * rather than a branch staff role.
+ */
+async function assertStaffAccessDelegationCeiling(
+  db: Parameters<typeof resolveStaffCapabilities>[0],
+  authorization: Awaited<ReturnType<typeof resolveStaffBranchAuthorization>>,
+  branchId: string,
+  jobRoleIds: readonly string[],
+  allowedCapabilities: readonly string[]
+): Promise<void> {
+  if (authorization.organizationWide) return;
+  if (!authorization.actorStaffProfileId) denyStaffBranchAccess();
+
+  const [actorCapabilities, roles] = await Promise.all([
+    resolveStaffCapabilities(db, authorization.actorStaffProfileId, branchId),
+    db.restaurantJobRole.findMany({
+      where: { id: { in: [...new Set(jobRoleIds)] }, active: true },
+      select: { capabilities: { select: { capability: true } } },
+    }),
+  ]);
+  const delegated = new Set(allowedCapabilities.map((capability) => capability.trim()));
+  for (const role of roles) {
+    for (const row of role.capabilities) delegated.add(row.capability);
+  }
+  if ([...delegated].some((capability) => !actorCapabilities.has(capability))) {
+    denyStaffBranchAccess();
+  }
+}
 
 function workspaceOrganizationId(ctx: {
   organization: { id: string } | null;
@@ -755,6 +788,13 @@ export const restaurantStaffRouter = router({
         );
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
+        await assertStaffAccessDelegationCeiling(
+          ctx.db,
+          authorization,
+          input.branchId,
+          input.jobRoleIds,
+          []
+        );
         const result = await setStaffJobRoles(ctx.db, {
           staffProfileId: input.staffProfileId,
           branchId: input.branchId,
@@ -814,6 +854,17 @@ export const restaurantStaffRouter = router({
         );
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
+        await assertStaffAccessDelegationCeiling(
+          ctx.db,
+          authorization,
+          input.branchId,
+          input.jobRoleIds,
+          input.overrides
+            // Clearing a DENY can expose a role capability, so null is also an
+            // authority-increasing operation and belongs under the ceiling.
+            .filter((override) => override.effect !== 'DENY')
+            .map((override) => override.capability)
+        );
         const result = await setStaffAccess(ctx.db, {
           staffProfileId: input.staffProfileId,
           branchId: input.branchId,
@@ -890,6 +941,15 @@ export const restaurantStaffRouter = router({
         );
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
+        if (input.effect === 'ALLOW') {
+          await assertStaffAccessDelegationCeiling(
+            ctx.db,
+            authorization,
+            input.branchId,
+            [],
+            [input.capability]
+          );
+        }
         const result = await setStaffCapabilityOverride(ctx.db, {
           staffProfileId: input.staffProfileId,
           branchId: input.branchId,
@@ -932,6 +992,13 @@ export const restaurantStaffRouter = router({
         );
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
+        await assertStaffAccessDelegationCeiling(
+          ctx.db,
+          authorization,
+          input.branchId,
+          [],
+          [input.capability]
+        );
         const result = await clearStaffCapabilityOverride(ctx.db, {
           staffProfileId: input.staffProfileId,
           branchId: input.branchId,
