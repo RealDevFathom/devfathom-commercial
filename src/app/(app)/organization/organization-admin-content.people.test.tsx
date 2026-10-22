@@ -171,6 +171,12 @@ describe('organization people and access — staff onboarding', () => {
   it('shows the complete password policy when adding or resetting a staff password', () => {
     render(<OrganizationAdminContent />);
 
+    const passwordInputs = screen.getAllByLabelText('Temporary password');
+    expect(passwordInputs).toHaveLength(2);
+    for (const input of passwordInputs) {
+      expect(input).toHaveAttribute('minlength', '12');
+      expect(input).toHaveAttribute('maxlength', '256');
+    }
     expect(
       screen.getAllByText(
         /12–256 characters, with a lowercase letter, an uppercase letter and a digit\./

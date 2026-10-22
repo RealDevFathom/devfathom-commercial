@@ -566,7 +566,7 @@ export function OrganizationAdminContent() {
           )}
           <label className="sm:col-span-2 lg:col-span-2">
             <span className={labelClass}>Temporary password</span>
-            <Input name="password" type="password" minLength={12} required />
+            <Input name="password" type="password" minLength={12} maxLength={256} required />
           </label>
           <div className="flex items-end">
             <SubmitButton pending={addMember.isPending}>Add staff</SubmitButton>
@@ -682,7 +682,13 @@ export function OrganizationAdminContent() {
                 >
                   <label>
                     <span className={labelClass}>Temporary password</span>
-                    <Input name="password" type="password" minLength={12} required />
+                    <Input
+                      name="password"
+                      type="password"
+                      minLength={12}
+                      maxLength={256}
+                      required
+                    />
                   </label>
                   <p className="text-[11px] text-muted-foreground">
                     12–256 characters, with a lowercase letter, an uppercase letter and a digit. All
