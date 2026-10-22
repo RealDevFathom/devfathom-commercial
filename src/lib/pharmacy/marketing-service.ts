@@ -51,12 +51,65 @@ export type MarketingScope = {
 export class MarketingWorkflowError extends Error {}
 const DAY = 86_400_000;
 
+const FORBIDDEN_MARKETING_TERMS = [
+  'prescription',
+  'condition',
+  'allerg',
+  'medicine',
+  'diagnos',
+  'patient',
+  'drug',
+  // Common generic and brand names are denied explicitly. This is a backstop;
+  // approved pharmacy marketing remains generic retail copy, not a drug catalogue.
+  'paracetamol',
+  'acetaminophen',
+  'ibuprofen',
+  'aspirin',
+  'amoxicillin',
+  'azithromycin',
+  'metformin',
+  'insulin',
+  'omeprazole',
+  'panadol',
+  'augmentin',
+  'brufen',
+  'flagyl',
+] as const;
+
+/** Collapse common Unicode, punctuation and leetspeak disguises before policy checks. */
+function marketingSkeleton(value: string) {
+  return value
+    .normalize('NFKD')
+    .toLocaleLowerCase('en-US')
+    .replace(/\p{Mark}/gu, '')
+    .replace(/[013457@!$]/g, (character) =>
+      ({ '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', '!': 'i', '$': 's' })[
+        character
+      ]!
+    )
+    .replace(/[аɑα]/gu, 'a')
+    .replace(/[еε]/gu, 'e')
+    .replace(/[іι]/gu, 'i')
+    .replace(/[оο]/gu, 'o')
+    .replace(/[υµμ]/gu, 'u')
+    .replace(/[сϲ]/gu, 'c')
+    .replace(/[рρ]/gu, 'p')
+    .replace(/[хχ]/gu, 'x')
+    .replace(/[^a-z]/g, '');
+}
+
 export function validateMarketingBody(body: string) {
-  if (/prescription|condition|allerg|medicine|diagnos|patient|drug|\brx\b/i.test(body))
+  const skeleton = marketingSkeleton(body);
+  if (
+    FORBIDDEN_MARKETING_TERMS.some((term) => skeleton.includes(term)) ||
+    /(?:^|[^\p{Letter}\p{Number}])r[^\p{Letter}\p{Number}]*x(?:$|[^\p{Letter}\p{Number}])/iu.test(
+      body
+    )
+  )
     throw new MarketingWorkflowError(
       'Use generic retail copy without clinical or medicine content.'
     );
-  if (!body.toUpperCase().includes('STOP'))
+  if (!/(?:^|[^\p{Letter}\p{Number}])stop(?:$|[^\p{Letter}\p{Number}])/iu.test(body))
     throw new MarketingWorkflowError('Include STOP opt-out instructions in the template.');
 }
 const whereScope = (scope: MarketingScope) => ({

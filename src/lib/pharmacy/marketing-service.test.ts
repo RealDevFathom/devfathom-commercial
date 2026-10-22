@@ -8,6 +8,7 @@ import {
   marketingDraftInput,
   previewMarketingCampaign,
   requireCaptureWindow,
+  validateMarketingBody,
 } from './marketing-service';
 
 const scope = {
@@ -118,6 +119,18 @@ beforeEach(() => {
 });
 
 describe('persisted capture workflow', () => {
+  it.each([
+    'Ask about P.a.n.a.d.o.l. Reply STOP.',
+    'Save on paracetamo1. Reply STOP.',
+    'New drµg offers. Reply STOP.',
+    'Bring your r.x. Reply STOP.',
+    'PRESCRIPTI0N savings. Reply STOP.',
+  ])('rejects drug copy after disguise normalization: %s', (body) => {
+    expect(() => validateMarketingBody(body)).toThrow('generic retail copy');
+  });
+  it('requires STOP as an instruction rather than as part of another word', () => {
+    expect(() => validateMarketingBody('Unstoppable retail value.')).toThrow('STOP opt-out');
+  });
   it('creates a draft linked to an immutable reviewed template and stored retail rules', async () => {
     const input = {
       branchId: scope.branchId,
