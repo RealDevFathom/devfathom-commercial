@@ -1,3 +1,16 @@
+-- Bind every import batch and manifest identity to one pharmacy branch.
+ALTER TABLE "pharmacy_migration_batches" ADD COLUMN "branchId" TEXT;
+UPDATE "pharmacy_migration_batches" b SET "branchId" = (
+  SELECT p.id FROM "pharmacy_branches" p WHERE p."organizationId" = b."organizationId" ORDER BY p.id LIMIT 1
+);
+ALTER TABLE "pharmacy_migration_batches" ALTER COLUMN "branchId" SET NOT NULL;
+ALTER TABLE "pharmacy_migration_batches" ADD CONSTRAINT "pharmacy_migration_batches_branch_fkey"
+  FOREIGN KEY ("organizationId", "branchId") REFERENCES "pharmacy_branches" ("organizationId", "id") ON DELETE RESTRICT;
+ALTER TABLE "pharmacy_migration_batch_entities" ADD COLUMN "branchId" TEXT NOT NULL, ADD COLUMN "lotKey" TEXT NOT NULL DEFAULT '';
+ALTER TABLE "pharmacy_migration_batch_entities" DROP CONSTRAINT "pharmacy_migration_batch_entities_row_entity_key";
+ALTER TABLE "pharmacy_migration_batch_entities" ADD CONSTRAINT "pharmacy_migration_batch_entities_row_entity_key"
+  UNIQUE ("organizationId", "batchId", "branchId", "rowSourceKey", "entityType", "operation", "lotKey");
+
 -- PH-MIG import 2/5: isolated historical sales and audited loyalty policy.
 CREATE TABLE "pharmacy_imported_sales" (
   "id" TEXT PRIMARY KEY,
@@ -5,14 +18,14 @@ CREATE TABLE "pharmacy_imported_sales" (
   "importBatchId" TEXT NOT NULL,
   "sourceKey" TEXT NOT NULL,
   "branchId" TEXT NOT NULL,
-  "customerId" TEXT,
+  "sourceCustomerRef" TEXT,
   "invoiceNumber" TEXT,
   "occurredAt" TIMESTAMP(3) NOT NULL,
   "totalMinor" BIGINT NOT NULL,
   "costMinor" BIGINT,
   "payload" JSONB NOT NULL,
   "imported" BOOLEAN NOT NULL DEFAULT true,
-  "loyaltyPointsAwarded" INTEGER NOT NULL DEFAULT 0,
+  "loyaltyPointsAwarded" BIGINT NOT NULL DEFAULT 0,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "pharmacy_imported_sales_imported_check" CHECK (imported = true),
   CONSTRAINT "pharmacy_imported_sales_money_check" CHECK ("totalMinor" >= 0 AND ("costMinor" IS NULL OR "costMinor" >= 0)),
@@ -25,16 +38,20 @@ CREATE TABLE "pharmacy_imported_sales" (
   CONSTRAINT "pharmacy_imported_sales_source_key" UNIQUE ("organizationId", "importBatchId", "sourceKey")
 );
 CREATE INDEX "pharmacy_imported_sales_org_branch_occurred_idx" ON "pharmacy_imported_sales" ("organizationId", "branchId", "occurredAt");
-CREATE INDEX "pharmacy_imported_sales_org_customer_occurred_idx" ON "pharmacy_imported_sales" ("organizationId", "customerId", "occurredAt");
+CREATE INDEX "pharmacy_imported_sales_org_customer_occurred_idx" ON "pharmacy_imported_sales" ("organizationId", "sourceCustomerRef", "occurredAt");
 
 CREATE TABLE "pharmacy_import_loyalty_decisions" (
   "id" TEXT PRIMARY KEY,
   "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true),
+  "batchId" TEXT NOT NULL,
   "enabled" BOOLEAN NOT NULL,
   "actorUserId" TEXT NOT NULL,
   "reason" TEXT NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT "pharmacy_import_loyalty_decisions_org_id_key" UNIQUE ("organizationId", "id"),
+  CONSTRAINT "pharmacy_import_loyalty_decisions_batch_key" UNIQUE ("organizationId", "batchId"),
+  CONSTRAINT "pharmacy_import_loyalty_decisions_batch_fkey" FOREIGN KEY ("organizationId", "batchId")
+    REFERENCES "pharmacy_migration_batches" ("organizationId", "id") ON DELETE RESTRICT,
   CONSTRAINT "pharmacy_import_loyalty_decisions_reason_check" CHECK (length(btrim(reason)) > 0),
   CONSTRAINT "pharmacy_import_loyalty_decisions_actor_fkey" FOREIGN KEY ("organizationId", "actorUserId")
     REFERENCES "users" ("organizationId", "id") ON DELETE RESTRICT

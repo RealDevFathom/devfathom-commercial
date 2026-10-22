@@ -2,7 +2,7 @@ import 'server-only';
 
 /** Imported records participate in behavioural analytics, never operational ledgers. */
 export const importedSalesAnalyticsSql = `
-  SELECT "customerId", "occurredAt", "totalMinor"
+  SELECT "sourceCustomerRef", "occurredAt", "totalMinor"
   FROM "pharmacy_imported_sales"
   WHERE "organizationId" = $1 AND "branchId" = $2 AND imported = true
 `;
@@ -11,9 +11,11 @@ export function importedLoyaltyPoints(input: {
   ownerOptIn: boolean;
   netPaidMinor: bigint;
   minorPerPoint: bigint;
-}): number {
-  if (!input.ownerOptIn || input.netPaidMinor <= 0n || input.minorPerPoint <= 0n) return 0;
-  return Number(input.netPaidMinor / input.minorPerPoint);
+}): bigint {
+  if (!input.ownerOptIn || input.netPaidMinor <= 0n || input.minorPerPoint <= 0n) return 0n;
+  const points = input.netPaidMinor / input.minorPerPoint;
+  if (points > 9_223_372_036_854_775_807n) throw new RangeError('Imported loyalty points exceed BIGINT.');
+  return points;
 }
 
 /** Sources used by churn/win-back reads; imported history is an explicit baseline. */

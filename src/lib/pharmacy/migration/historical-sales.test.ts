@@ -9,8 +9,8 @@ describe('historical import isolation', () => {
   });
 
   it('defaults loyalty off and awards only after owner opt-in', () => {
-    expect(importedLoyaltyPoints({ ownerOptIn: false, netPaidMinor: 25_000n, minorPerPoint: 10_000n })).toBe(0);
-    expect(importedLoyaltyPoints({ ownerOptIn: true, netPaidMinor: 25_000n, minorPerPoint: 10_000n })).toBe(2);
+    expect(importedLoyaltyPoints({ ownerOptIn: false, netPaidMinor: 25_000n, minorPerPoint: 10_000n })).toBe(0n);
+    expect(importedLoyaltyPoints({ ownerOptIn: true, netPaidMinor: 25_000n, minorPerPoint: 10_000n })).toBe(2n);
   });
 
   it('includes imported history in churn and win-back activity baselines', () => {

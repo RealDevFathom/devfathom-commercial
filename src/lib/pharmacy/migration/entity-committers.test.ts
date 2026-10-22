@@ -14,7 +14,7 @@ function writer() {
     manifest: vi.fn(), audit: vi.fn(), remove: vi.fn(), reverseOpeningMovement: vi.fn(async () => 'reversal-1'),
   } satisfies EntityImportWriter;
 }
-const context = { batchId: 'batch', actorId: 'owner', branchId: 'branch', stockLocationId: 'location', awardImportedLoyalty: false };
+const context = { batchId: 'batch', actorId: 'owner', organizationId: 'org', branchId: 'branch', stockLocationId: 'location', awardImportedLoyalty: false };
 const row = (targetModelKey: string) => ({ id: targetModelKey, sourceKey: targetModelKey, targetModelKey, rawPayload: {} });
 
 describe('entity committer registry', () => {

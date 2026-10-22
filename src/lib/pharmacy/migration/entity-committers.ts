@@ -12,6 +12,7 @@ export type ImportEntityRow = {
 export type ImportCommitContext = {
   batchId: string;
   actorId: string;
+  organizationId: string;
   branchId: string;
   stockLocationId: string;
   awardImportedLoyalty: boolean;
@@ -22,7 +23,15 @@ export type CreatedEntity = {
   entityId: string;
   operation: 'CREATED' | 'STOCK_MOVEMENT';
   movementKind?: 'OPENING';
+  /** Stable identity includes the branch and prevents cross-branch replay. */
+  branchId?: string;
+  lotKey?: string;
 };
+
+/** Stable retry key for every row operation; lot distinguishes split opening stock. */
+export function entityOperationIdempotencyKey(context: ImportCommitContext, row: ImportEntityRow, operation: CreatedEntity['operation'], lotKey = ''): string {
+  return ['pharmacy-import', context.batchId, context.branchId, row.sourceKey, operation, lotKey].map(encodeURIComponent).join(':');
+}
 
 export interface EntityImportWriter {
   product(row: ImportEntityRow, context: ImportCommitContext): Promise<CreatedEntity[]>;
@@ -67,7 +76,7 @@ export async function commitEntityRows(
     for (const entity of entities) {
       if (entity.operation === 'STOCK_MOVEMENT' && entity.movementKind !== 'OPENING')
         throw new Error('Imported stock may be posted only as an OPENING movement.');
-      await writer.manifest(row, context, entity);
+      await writer.manifest(row, context, { ...entity, branchId: context.branchId, lotKey: entity.lotKey ?? '' });
       created.push(entity);
     }
   }

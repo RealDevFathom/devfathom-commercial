@@ -11572,6 +11572,7 @@ model PharmacyMigrationBatch {
   id              String                       @id @default(cuid())
   organizationId  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   sourceId        String
+  branchId        String
   label           String
   status          PharmacyMigrationBatchStatus @default(UPLOADED)
   rowCount        Int                          @default(0)
@@ -11604,21 +11605,21 @@ model PharmacyImportedSale {
   importBatchId        String
   sourceKey            String
   branchId             String
-  customerId           String?
+  sourceCustomerRef    String?
   invoiceNumber        String?
   occurredAt           DateTime
   totalMinor           BigInt
   costMinor            BigInt?
   payload              Json
   imported             Boolean                   @default(true)
-  loyaltyPointsAwarded Int                       @default(0)
+  loyaltyPointsAwarded BigInt                       @default(0)
   createdAt            DateTime                  @default(now())
   batch                PharmacyMigrationBatch    @relation(fields: [organizationId, importBatchId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id])
   @@unique([organizationId, importBatchId, sourceKey])
   @@index([organizationId, branchId, occurredAt])
-  @@index([organizationId, customerId, occurredAt])
+  @@index([organizationId, sourceCustomerRef, occurredAt])
   @@map("pharmacy_imported_sales")
 }
 
@@ -11626,12 +11627,14 @@ model PharmacyImportedSale {
 model PharmacyImportLoyaltyDecision {
   id             String   @id @default(cuid())
   organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  batchId        String
   enabled        Boolean
   actorUserId    String
   reason         String
   createdAt      DateTime @default(now())
 
   @@unique([organizationId, id])
+  @@unique([organizationId, batchId])
   @@index([organizationId, createdAt])
   @@map("pharmacy_import_loyalty_decisions")
 }
@@ -11643,6 +11646,8 @@ model PharmacyMigrationBatchEntity {
   organizationId  String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   batchId         String
   rowSourceKey    String
+  branchId        String
+  lotKey          String                           @default("")
   entityType      String
   entityId        String
   operation       PharmacyMigrationEntityOperation
@@ -11651,7 +11656,7 @@ model PharmacyMigrationBatchEntity {
   batch           PharmacyMigrationBatch           @relation(fields: [organizationId, batchId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id])
-  @@unique([organizationId, batchId, rowSourceKey, entityType, operation])
+  @@unique([organizationId, batchId, branchId, rowSourceKey, entityType, operation, lotKey])
   @@index([organizationId, batchId, operation])
   @@map("pharmacy_migration_batch_entities")
 }

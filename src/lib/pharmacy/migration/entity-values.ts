@@ -1,25 +1,29 @@
 /** Values accepted by entity preview. Committers only consume these normalized values. */
-export type PackConversion = {
-  unit: number;
-  strip: number | null;
-  box: number | null;
-  smallestUnits: number;
-};
+export const MAX_PACK_FACTOR = 2_147_483_647n;
+export const MAX_SMALLEST_UNITS = 9_223_372_036_854_775_807n;
+export type PackConversion = { unit: bigint; strip: bigint | null; box: bigint | null; smallestUnits: bigint };
+
+function boundedPositiveInteger(text: string): bigint | null {
+  if (!/^\d+$/.test(text) || text === '0' || text.length > 19) return null;
+  const value = BigInt(text);
+  return value <= MAX_PACK_FACTOR ? value : null;
+}
 
 export function parsePackConversion(value: unknown): PackConversion | null {
   const text = String(value ?? '').trim().toLowerCase();
-  if (!text) return { unit: 1, strip: null, box: null, smallestUnits: 1 };
-  const numbers = text.match(/\d+/g)?.map(Number) ?? [];
-  if (numbers.length === 0 || numbers.length > 2 || numbers.some((part) => part <= 0)) return null;
-  if (numbers.length === 1) {
-    return { unit: 1, strip: numbers[0]!, box: null, smallestUnits: numbers[0]! };
-  }
-  return {
-    unit: 1,
-    strip: numbers[1]!,
-    box: numbers[0]!,
-    smallestUnits: numbers[0]! * numbers[1]!,
-  };
+  if (!text) return { unit: 1n, strip: null, box: null, smallestUnits: 1n };
+  // Separators may be labels or `x`; signs, decimals and embedded whitespace are rejected.
+  if (/^[+-]|\d\s+\d|\d+\.\d+/.test(text)) return null;
+  const tokens = text.match(/\d+/g) ?? [];
+  if (tokens.length < 1 || tokens.length > 2) return null;
+  const factors = tokens.map(boundedPositiveInteger);
+  if (factors.some((factor) => factor === null)) return null;
+  const [first, second] = factors as [bigint, bigint?];
+  const product = second === undefined ? first : first * second;
+  if (product > MAX_SMALLEST_UNITS) return null;
+  return second === undefined
+    ? { unit: 1n, strip: first, box: null, smallestUnits: first }
+    : { unit: 1n, strip: second, box: first, smallestUnits: product };
 }
 
 function utcDate(year: number, month: number, day: number): Date | null {
@@ -55,5 +59,7 @@ export function parseImportExpiry(value: unknown): Date | null {
 export function smallestUnitQuantity(quantity: unknown, packing: unknown): bigint | null {
   const conversion = parsePackConversion(packing);
   const number = typeof quantity === 'bigint' ? quantity : /^\d+$/.test(String(quantity ?? '').trim()) ? BigInt(String(quantity).trim()) : null;
-  return conversion && number !== null && number >= 0n ? number * BigInt(conversion.smallestUnits) : null;
+  if (!conversion || number === null || number < 0n) return null;
+  const result = number * conversion.smallestUnits;
+  return result <= MAX_SMALLEST_UNITS ? result : null;
 }
