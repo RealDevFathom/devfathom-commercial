@@ -53,6 +53,7 @@ const DAILY_SELECT = {
   computedAt: true,
   createdAt: true,
   updatedAt: true,
+  loyaltyLiabilityFact: { select: { liability: true } },
   branch: { select: { name: true, timezone: true } },
   sourceDailyClose: { select: { supersededBy: { select: { id: true }, take: 1 } } },
 } as const;
@@ -92,10 +93,11 @@ type DailyRow = {
   refundTotal: Prisma.Decimal;
   voidTotal: Prisma.Decimal;
   drawerVariance: Prisma.Decimal;
-  loyaltyLiability: Prisma.Decimal;
   computedAt: Date;
   createdAt: Date;
   updatedAt: Date;
+  loyaltyLiability: Prisma.Decimal;
+  loyaltyLiabilityFact: { liability: Prisma.Decimal } | null;
   branch: { name: string; timezone: string };
   sourceDailyClose: { supersededBy: Array<{ id: string }> };
 };
@@ -173,7 +175,9 @@ function serializeDaily(row: DailyRow, kind: InsightReportKind) {
           refundTotal: row.refundTotal.toString(),
           voidTotal: row.voidTotal.toString(),
           drawerVariance: row.drawerVariance.toString(),
-          loyaltyLiability: row.loyaltyLiability.toString(),
+          loyaltyLiability: (
+            row.loyaltyLiabilityFact?.liability ?? row.loyaltyLiability
+          ).toString(),
         }
       : {}),
     freshness: {
@@ -257,6 +261,15 @@ export async function exportInsightReports(
   input: Omit<InsightRangeInput, 'limit'>
 ) {
   const rows = await listInsightReports(db, kind, { ...input, limit: 5_000 });
+  const liabilityDates = new Set<string>();
+  const exportRows =
+    kind === 'financial' && !input.branchId
+      ? rows.map((row) => {
+          if (liabilityDates.has(row.businessDate)) return { ...row, loyaltyLiability: '' };
+          liabilityDates.add(row.businessDate);
+          return row;
+        })
+      : rows;
   const columns =
     kind === 'financial'
       ? [
@@ -277,7 +290,7 @@ export async function exportInsightReports(
   return {
     filename: `restaurant-${kind}-report.csv`,
     contentType: 'text/csv; charset=utf-8',
-    content: toCsv(rows as Array<Record<string, unknown>>, columns),
+    content: toCsv(exportRows as Array<Record<string, unknown>>, columns),
   };
 }
 

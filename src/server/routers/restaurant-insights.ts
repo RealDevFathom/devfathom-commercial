@@ -64,6 +64,16 @@ async function requireAction(ctx: TRPCContext, action: Action): Promise<void> {
 /** Branch proof is an ACTIVE linked operator pinned to the requested branch. */
 async function requireBranchScope(ctx: TRPCContext, branchId?: string): Promise<void> {
   if (branchId) {
+    const branch = await ctx.db.restaurantBranch.findFirst({
+      where: { id: branchId },
+      select: { id: true },
+    });
+    if (!branch) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this branch.',
+      });
+    }
     const staff = await ctx.db.restaurantStaffProfile.findFirst({
       where: { userId: ctx.session!.user.id, status: 'ACTIVE' },
       select: { primaryBranchId: true },
@@ -151,6 +161,7 @@ export const restaurantInsightsRouter = router({
   backfill: configureProcedure
     .input(z.object({ branchId: ID, from: DATE, to: DATE }).strict())
     .mutation(async ({ ctx, input }) => {
+      await requireBranchScope(ctx, input.branchId);
       try {
         return await enqueueInsightBackfill(ctx.db, input);
       } catch (error) {

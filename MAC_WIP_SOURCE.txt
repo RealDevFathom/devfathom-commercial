@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Downloads/Projects & Code/DevFathom hub/company-hub/.paperclip/worktrees/WHA-134-m8-correction-d-historical-loyalty-liability-reconciliation-and-bounded-backfill
+Branch: WHA-134-m8-correction-d-historical-loyalty-liability-reconciliation-and-bounded-backfill
+HEAD: da4c2422037c80c257c5cabd9cc7692f4fc768ac
+Mode: applied
+Excluded (secrets): 2
