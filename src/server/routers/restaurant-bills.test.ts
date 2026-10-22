@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   billFindMany: vi.fn(),
   billFindUnique: vi.fn(),
   orderFindUnique: vi.fn(async () => ({ branchId: 'b1' })),
+  promotionApplicationsFindMany: vi.fn(async () => []),
   evaluateOrderSettlement: vi.fn(),
   requireBranchScope: vi.fn<(ctx: unknown, branchId: string) => Promise<void>>(
     async () => undefined
@@ -59,6 +60,9 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 const db = {
   restaurantBill: { findMany: mocks.billFindMany, findUnique: mocks.billFindUnique },
   restaurantOrder: { findUnique: mocks.orderFindUnique },
+  restaurantPromotionBillApplicationSnapshot: {
+    findMany: mocks.promotionApplicationsFindMany,
+  },
 } as unknown as ScopedDb;
 
 function caller() {
@@ -193,14 +197,90 @@ describe('read model (C12)', () => {
           amount: D('5.00'),
           tipRefundAmount: D('0'),
           serviceChargeRefundAmount: D('0.75'),
+          deliveryFeeRefundAmount: D('1.25'),
           taxRefundAmount: D('0.50'),
           kind: 'REFUND',
           reason: 'overcharge',
           businessDate: new Date('2026-08-20T00:00:00.000Z'),
+          staffProfileId: 'staff_refund',
+          deviceId: 'device_refund',
+          coAuthorizationId: 'coauth_refund',
           createdAt: new Date(),
         },
       ],
+      taxTransactionSnapshots: [
+        {
+          id: 'tax_1',
+          transactionReference: 'txn-ref-1',
+          profileVersionId: 'profile-v1',
+          currency: 'USD',
+          subtotal: D('23'),
+          discountTotal: D('4'),
+          serviceChargeTotal: D('2'),
+          taxTotal: D('1'),
+          grandTotal: D('22'),
+          settledAt: new Date('2026-08-19T18:00:00.000Z'),
+          reversesSnapshotId: null,
+          reversalReason: null,
+          promotionEvaluationId: 'promo-eval-1',
+          promotionEvaluationHash: 'promo-hash-1',
+          evidenceVersion: 1,
+          buckets: [
+            {
+              id: 'bucket_1',
+              ruleVersionId: 'rule-v1',
+              paymentCategory: 'CARD',
+              priceMode: 'EXCLUSIVE',
+              rate: D('0.05'),
+              taxableAmount: D('20'),
+              taxAmount: D('1'),
+              grossAmount: D('21'),
+              preDiscountGrossAmount: D('25'),
+              beforeTaxDiscountAmount: D('4'),
+              afterTaxDiscountAmount: D('0'),
+              allocationKind: 'MERCHANDISE_UNIT',
+              billLineId: 'l1',
+              unitOrdinal: 0,
+              tenderAllocations: [
+                {
+                  id: 'allocation_1',
+                  originalTenderId: 't1',
+                  paymentCategory: 'CARD',
+                  cents: 100n,
+                  refundAllocations: [{ id: 'refund-allocation_1', refundId: 'r1', cents: 25n }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
     });
+    mocks.promotionApplicationsFindMany.mockResolvedValue([
+      {
+        id: 'promo-app-1',
+        evaluationId: 'promo-eval-1',
+        applicationId: 'application-1',
+        promotionId: 'promotion-1',
+        promotionVersionId: 'promotion-v1',
+        ruleHash: 'rule-hash-1',
+        authorityActorId: 'staff_manager',
+        applicationOrdinal: 0,
+        subtotalBasis: D('23'),
+        computedAmount: D('4'),
+        taxTreatment: 'BEFORE_TAX',
+        reversesBillApplicationId: null,
+        reversalReason: null,
+        evaluation: {
+          evaluatedAt: new Date('2026-08-19T17:55:00.000Z'),
+          engineVersion: '1',
+          moneyVersion: '1',
+          setRevisionId: 'set-1',
+          setRevisionHash: 'set-hash-1',
+          inputHash: 'input-hash-1',
+          outputHash: 'output-hash-1',
+        },
+      },
+    ]);
 
     const bill = await caller().getBill({ billId: 'a' });
     expect(bill).not.toBeNull();
@@ -214,12 +294,37 @@ describe('read model (C12)', () => {
       amount: '5',
       tipRefundAmount: '0',
       serviceChargeRefundAmount: '0.75',
+      deliveryFeeRefundAmount: '1.25',
       taxRefundAmount: '0.5',
       netServiceChargeAmount: '1.25',
     });
     expect(bill!.netCollected).toBe('17'); // 22 tendered − 5 refunded
     expect(bill!.receiptNumber).toBe(5);
     expect(bill!.tenders[1].changeGiven).toBe('3');
+    expect(bill!.refunds[0]).toMatchObject({
+      staffProfileId: 'staff_refund',
+      deviceId: 'device_refund',
+      coAuthorizationId: 'coauth_refund',
+      deliveryFeeRefundAmount: '1.25',
+    });
+    expect(bill!.taxTransactionSnapshots[0].buckets[0]).toMatchObject({
+      paymentCategory: 'CARD',
+      priceMode: 'EXCLUSIVE',
+      rate: '0.05',
+      beforeTaxDiscountAmount: '4',
+      tenderAllocations: [
+        expect.objectContaining({
+          cents: '100',
+          refundAllocations: [expect.objectContaining({ cents: '25' })],
+        }),
+      ],
+    });
+    expect(bill!.promotionApplications[0]).toMatchObject({
+      ruleHash: 'rule-hash-1',
+      computedAmount: '4',
+      taxTreatment: 'BEFORE_TAX',
+      evaluation: expect.objectContaining({ outputHash: 'output-hash-1' }),
+    });
     expect(mocks.requireBranchScope).toHaveBeenCalledWith(expect.anything(), 'b1');
   });
 

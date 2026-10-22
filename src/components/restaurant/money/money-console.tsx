@@ -29,6 +29,7 @@ import { RestaurantDeviceSelect, type RestaurantDeviceOption } from '../restaura
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type BillPage = RouterOutputs['restaurantBills']['listBills'];
 type BillDetail = NonNullable<RouterOutputs['restaurantBills']['getBill']>;
+type OrderSettlement = RouterOutputs['restaurantBills']['getOrderSettlement'];
 type TenderPage = RouterOutputs['restaurantPayments']['listTenders'];
 type RefundPage = RouterOutputs['restaurantPayments']['listRefunds'];
 type TenderTotals = RouterOutputs['restaurantPayments']['getTenderTypeTotals'];
@@ -281,6 +282,7 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
   const [businessDate, setBusinessDate] = useState('');
   const [tab, setTab] = useState<MoneyTab>(initialTab);
   const [selectedBillId, setSelectedBillId] = useState('');
+  const [billOrderId, setBillOrderId] = useState('');
   const [selectedPaymentId, setSelectedPaymentId] = useState('');
   const [selectedDrawerId, setSelectedDrawerId] = useState('');
   const [selectedCloseId, setSelectedCloseId] = useState('');
@@ -318,7 +320,11 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
   };
 
   const billsQuery = trpc.restaurantBills.listBills.useQuery(
-    { ...listInput, ...(billCursor ? { cursor: billCursor } : {}) },
+    {
+      ...listInput,
+      ...(billOrderId.trim() ? { orderId: billOrderId.trim() } : {}),
+      ...(billCursor ? { cursor: billCursor } : {}),
+    },
     {
       enabled: billsEnabled,
     }
@@ -326,6 +332,10 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
   const billQuery = trpc.restaurantBills.getBill.useQuery(
     { billId: selectedBillId },
     { enabled: billsEnabled && selectedBillId.length > 0 }
+  );
+  const settlementQuery = trpc.restaurantBills.getOrderSettlement.useQuery(
+    { orderId: billOrderId.trim() },
+    { enabled: billsEnabled && billOrderId.trim().length > 0 }
   );
   const tendersQuery = trpc.restaurantPayments.listTenders.useQuery(
     { ...listInput, ...(tenderCursor ? { cursor: tenderCursor } : {}) },
@@ -511,6 +521,14 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
               <BillsLedger
                 query={billsQuery}
                 detailQuery={billQuery}
+                settlementQuery={settlementQuery}
+                orderId={billOrderId}
+                onOrderIdChange={(value) => {
+                  setBillOrderId(value);
+                  setBillCursor(undefined);
+                  setBillHistory([]);
+                  setSelectedBillId('');
+                }}
                 staff={staffQuery.data ?? []}
                 devices={devicesQuery.data ?? []}
                 selectedId={selectedBillId}
@@ -781,6 +799,9 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
 function BillsLedger({
   query,
   detailQuery,
+  settlementQuery,
+  orderId,
+  onOrderIdChange,
   staff,
   devices,
   selectedId,
@@ -789,6 +810,9 @@ function BillsLedger({
 }: {
   query: ReadQuery<BillPage>;
   detailQuery: ReadQuery<BillDetail | null>;
+  settlementQuery: ReadQuery<OrderSettlement>;
+  orderId: string;
+  onOrderIdChange: (value: string) => void;
   staff: StaffOption[];
   devices: RestaurantDeviceOption[];
   selectedId: string;
@@ -799,6 +823,19 @@ function BillsLedger({
   return (
     <div className="space-y-5">
       <SectionCard eyebrow="Bill register" title="Bills">
+        <div className="mb-5 max-w-md">
+          <Field
+            label="Order ID"
+            description="Filter bills and load the authoritative settlement state for one order."
+          >
+            <Input
+              value={orderId}
+              onChange={(event) => onOrderIdChange(event.target.value)}
+              placeholder="All orders"
+            />
+          </Field>
+        </div>
+        {orderId.trim() ? <OrderSettlementPanel query={settlementQuery} /> : null}
         {query.isLoading ? (
           <LoadingState label="Loading bills" />
         ) : query.error ? (
@@ -976,7 +1013,8 @@ function BillDetailPanel({
       </section>
 
       <BillTenderTable bill={bill} />
-      <BillRefundTable bill={bill} />
+      <BillRefundTable bill={bill} staff={staff} devices={devices} />
+      <BillEvidenceTables bill={bill} />
     </div>
   );
 }
@@ -1023,7 +1061,15 @@ function BillTenderTable({ bill }: { bill: BillDetail }) {
   );
 }
 
-function BillRefundTable({ bill }: { bill: BillDetail }) {
+function BillRefundTable({
+  bill,
+  staff,
+  devices,
+}: {
+  bill: BillDetail;
+  staff: StaffOption[];
+  devices: RestaurantDeviceOption[];
+}) {
   return (
     <section aria-labelledby="bill-refunds-heading">
       <h3 id="bill-refunds-heading" className="mb-3 font-semibold text-text-strong">
@@ -1031,7 +1077,7 @@ function BillRefundTable({ bill }: { bill: BillDetail }) {
       </h3>
       {bill.refunds.length ? (
         <TableFrame label="Bill refund summary table">
-          <Table className="min-w-[760px]">
+          <Table className="min-w-[1320px]">
             <TableHeader>
               <TableRow>
                 <TableHead>Refund</TableHead>
@@ -1039,6 +1085,12 @@ function BillRefundTable({ bill }: { bill: BillDetail }) {
                 <TableHead>Kind</TableHead>
                 <TableHead numeric>Amount</TableHead>
                 <TableHead numeric>Tip refund</TableHead>
+                <TableHead numeric>Service refund</TableHead>
+                <TableHead numeric>Delivery refund</TableHead>
+                <TableHead numeric>Tax refund</TableHead>
+                <TableHead>Operator</TableHead>
+                <TableHead>Device</TableHead>
+                <TableHead>Manager authorization</TableHead>
                 <TableHead>Reason</TableHead>
                 <TableHead>Date</TableHead>
               </TableRow>
@@ -1051,6 +1103,12 @@ function BillRefundTable({ bill }: { bill: BillDetail }) {
                   <TableCell>{label(refund.kind)}</TableCell>
                   <TableCell numeric>{refund.amount}</TableCell>
                   <TableCell numeric>{refund.tipRefundAmount}</TableCell>
+                  <TableCell numeric>{refund.serviceChargeRefundAmount}</TableCell>
+                  <TableCell numeric>{refund.deliveryFeeRefundAmount}</TableCell>
+                  <TableCell numeric>{refund.taxRefundAmount}</TableCell>
+                  <TableCell>{staffDisplayName(staff, refund.staffProfileId)}</TableCell>
+                  <TableCell>{deviceDisplayName(devices, refund.deviceId)}</TableCell>
+                  <TableCell className="font-mono text-xs">{refund.coAuthorizationId}</TableCell>
                   <TableCell>{refund.reason}</TableCell>
                   <TableCell>{refund.businessDate}</TableCell>
                 </TableRow>
@@ -1060,6 +1118,157 @@ function BillRefundTable({ bill }: { bill: BillDetail }) {
         </TableFrame>
       ) : (
         <EmptyState title="No refunds" detail="No refund references this bill." />
+      )}
+    </section>
+  );
+}
+
+function OrderSettlementPanel({ query }: { query: ReadQuery<OrderSettlement> }) {
+  if (query.isLoading) return <LoadingState label="Loading order settlement" />;
+  if (query.error) {
+    return (
+      <ErrorState
+        error={query.error}
+        retry={() => void query.refetch()}
+        subject="order settlement"
+      />
+    );
+  }
+  if (!query.data) return null;
+  const settlement = query.data;
+  return (
+    <div className="mb-5 rounded-md border border-border-default p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="font-semibold text-text-strong">Order settlement</h3>
+        <StatusPill
+          status={settlement.settled ? 'Settled' : label(settlement.blocker ?? 'Blocked')}
+          tone={settlement.settled ? 'success' : 'warning'}
+        />
+      </div>
+      <dl className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <DetailField label="Derived total" value={settlement.derivedOrderTotal} />
+        <DetailField label="Accounted total" value={settlement.accountedTotal} />
+        <DetailField
+          label="Unbilled items"
+          value={settlement.unbilledItemIds.length ? settlement.unbilledItemIds.join(', ') : 'None'}
+        />
+        <DetailField label="Bills" value={settlement.bills.length} />
+        {settlement.bills.map((bill) => (
+          <DetailField
+            key={bill.id}
+            label={`Bill ${bill.receiptNumber ?? bill.id} remaining`}
+            value={bill.remainingDue}
+          />
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+function BillEvidenceTables({ bill }: { bill: BillDetail }) {
+  return (
+    <section aria-labelledby="bill-evidence-heading" className="space-y-4">
+      <h3 id="bill-evidence-heading" className="font-semibold text-text-strong">
+        Frozen tax and promotion evidence
+      </h3>
+      {bill.taxTransactionSnapshots.length ? (
+        bill.taxTransactionSnapshots.map((snapshot) => (
+          <div key={snapshot.id} className="space-y-3 rounded-md border border-border-default p-4">
+            <dl className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <DetailField label="Transaction reference" value={snapshot.transactionReference} />
+              <DetailField label="Tax profile version" value={snapshot.profileVersionId} />
+              <DetailField label="Promotion evaluation" value={snapshot.promotionEvaluationId} />
+              <DetailField label="Promotion hash" value={snapshot.promotionEvaluationHash} />
+              <DetailField label="Reverses snapshot" value={snapshot.reversesSnapshotId} />
+              <DetailField label="Reversal reason" value={snapshot.reversalReason} />
+            </dl>
+            <TableFrame label={`Tax buckets for ${snapshot.transactionReference}`}>
+              <Table className="min-w-[1180px]">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Category</TableHead>
+                    <TableHead>Mode</TableHead>
+                    <TableHead>Rule version</TableHead>
+                    <TableHead numeric>Rate</TableHead>
+                    <TableHead numeric>Taxable basis</TableHead>
+                    <TableHead numeric>Before-tax discount</TableHead>
+                    <TableHead numeric>After-tax discount</TableHead>
+                    <TableHead numeric>Tax</TableHead>
+                    <TableHead>Tender allocation</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {snapshot.buckets.map((bucket) => (
+                    <TableRow key={bucket.id}>
+                      <TableCell>{label(bucket.paymentCategory)}</TableCell>
+                      <TableCell>{label(bucket.priceMode)}</TableCell>
+                      <TableCell className="font-mono text-xs">{bucket.ruleVersionId}</TableCell>
+                      <TableCell numeric>{bucket.rate}</TableCell>
+                      <TableCell numeric>{bucket.taxableAmount}</TableCell>
+                      <TableCell numeric>{bucket.beforeTaxDiscountAmount}</TableCell>
+                      <TableCell numeric>{bucket.afterTaxDiscountAmount}</TableCell>
+                      <TableCell numeric>{bucket.taxAmount}</TableCell>
+                      <TableCell>
+                        {bucket.tenderAllocations.length
+                          ? bucket.tenderAllocations
+                              .map(
+                                (allocation) =>
+                                  `${label(allocation.paymentCategory)} ${allocation.cents}¢ (${allocation.originalTenderId})`
+                              )
+                              .join(', ')
+                          : '—'}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableFrame>
+          </div>
+        ))
+      ) : (
+        <EmptyState
+          title="No tax snapshots"
+          detail="No frozen tax evidence references this bill."
+        />
+      )}
+      {bill.promotionApplications.length ? (
+        <TableFrame label="Promotion evidence table">
+          <Table className="min-w-[980px]">
+            <TableHeader>
+              <TableRow>
+                <TableHead>Promotion</TableHead>
+                <TableHead>Evaluation</TableHead>
+                <TableHead>Rule hash</TableHead>
+                <TableHead>Treatment</TableHead>
+                <TableHead numeric>Basis</TableHead>
+                <TableHead numeric>Amount</TableHead>
+                <TableHead>Output hash</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {bill.promotionApplications.map((application) => (
+                <TableRow key={application.id}>
+                  <TableCell className="font-mono text-xs">
+                    {application.promotionVersionId}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{application.evaluationId}</TableCell>
+                  <TableCell className="font-mono text-xs">{application.ruleHash}</TableCell>
+                  <TableCell>{label(application.taxTreatment)}</TableCell>
+                  <TableCell numeric>{application.subtotalBasis}</TableCell>
+                  <TableCell numeric>{application.computedAmount}</TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {application.evaluation.outputHash}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableFrame>
+      ) : (
+        <EmptyState
+          title="No promotion applications"
+          detail="No frozen promotion evidence references this bill."
+        />
       )}
     </section>
   );

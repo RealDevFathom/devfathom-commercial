@@ -179,22 +179,110 @@ async function getBill(db: ScopedDb, billId: string) {
           amount: true,
           tipRefundAmount: true,
           serviceChargeRefundAmount: true,
+          deliveryFeeRefundAmount: true,
           taxRefundAmount: true,
           kind: true,
           reason: true,
           businessDate: true,
+          staffProfileId: true,
+          deviceId: true,
+          coAuthorizationId: true,
           createdAt: true,
+        },
+      },
+      taxTransactionSnapshots: {
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          transactionReference: true,
+          profileVersionId: true,
+          currency: true,
+          subtotal: true,
+          discountTotal: true,
+          serviceChargeTotal: true,
+          taxTotal: true,
+          grandTotal: true,
+          settledAt: true,
+          reversesSnapshotId: true,
+          reversalReason: true,
+          promotionEvaluationId: true,
+          promotionEvaluationHash: true,
+          evidenceVersion: true,
+          buckets: {
+            orderBy: { createdAt: 'asc' },
+            select: {
+              id: true,
+              ruleVersionId: true,
+              paymentCategory: true,
+              priceMode: true,
+              rate: true,
+              taxableAmount: true,
+              taxAmount: true,
+              grossAmount: true,
+              preDiscountGrossAmount: true,
+              beforeTaxDiscountAmount: true,
+              afterTaxDiscountAmount: true,
+              allocationKind: true,
+              billLineId: true,
+              unitOrdinal: true,
+              tenderAllocations: {
+                orderBy: { createdAt: 'asc' },
+                select: {
+                  id: true,
+                  originalTenderId: true,
+                  paymentCategory: true,
+                  cents: true,
+                  refundAllocations: {
+                    orderBy: { createdAt: 'asc' },
+                    select: { id: true, refundId: true, cents: true },
+                  },
+                },
+              },
+            },
+          },
         },
       },
     },
   });
   if (!bill) return null;
 
+  const promotionApplications = await db.restaurantPromotionBillApplicationSnapshot.findMany({
+    where: { billId },
+    orderBy: { createdAt: 'asc' },
+    select: {
+      id: true,
+      evaluationId: true,
+      applicationId: true,
+      promotionId: true,
+      promotionVersionId: true,
+      ruleHash: true,
+      authorityActorId: true,
+      applicationOrdinal: true,
+      subtotalBasis: true,
+      computedAmount: true,
+      taxTreatment: true,
+      reversesBillApplicationId: true,
+      reversalReason: true,
+      evaluation: {
+        select: {
+          evaluatedAt: true,
+          engineVersion: true,
+          moneyVersion: true,
+          setRevisionId: true,
+          setRevisionHash: true,
+          inputHash: true,
+          outputHash: true,
+        },
+      },
+    },
+  });
+
   const tenderTotal = sum(bill.tenders.map((t) => t.amount));
   const tipTotal = sum(bill.tenders.map((t) => t.tipAmount));
   const refundTotal = sum(bill.refunds.map((r) => r.amount));
   const refundTipTotal = sum(bill.refunds.map((r) => r.tipRefundAmount));
   const refundedServiceChargeTotal = sum(bill.refunds.map((r) => r.serviceChargeRefundAmount));
+  const refundedDeliveryFeeTotal = sum(bill.refunds.map((r) => r.deliveryFeeRefundAmount));
   const refundedTaxTotal = sum(bill.refunds.map((r) => r.taxRefundAmount));
 
   return {
@@ -233,11 +321,46 @@ async function getBill(db: ScopedDb, billId: string) {
       amount: money(r.amount),
       tipRefundAmount: money(r.tipRefundAmount),
       serviceChargeRefundAmount: money(r.serviceChargeRefundAmount),
+      deliveryFeeRefundAmount: money(r.deliveryFeeRefundAmount),
       taxRefundAmount: money(r.taxRefundAmount),
       kind: r.kind,
       reason: r.reason,
       businessDate: r.businessDate.toISOString().slice(0, 10),
+      staffProfileId: r.staffProfileId,
+      deviceId: r.deviceId,
+      coAuthorizationId: r.coAuthorizationId,
       createdAt: r.createdAt,
+    })),
+    taxTransactionSnapshots: bill.taxTransactionSnapshots.map((snapshot) => ({
+      ...snapshot,
+      subtotal: money(snapshot.subtotal),
+      discountTotal: money(snapshot.discountTotal),
+      serviceChargeTotal: money(snapshot.serviceChargeTotal),
+      taxTotal: money(snapshot.taxTotal),
+      grandTotal: money(snapshot.grandTotal),
+      buckets: snapshot.buckets.map((bucket) => ({
+        ...bucket,
+        rate: bucket.rate.toString(),
+        taxableAmount: money(bucket.taxableAmount),
+        taxAmount: money(bucket.taxAmount),
+        grossAmount: money(bucket.grossAmount),
+        preDiscountGrossAmount: money(bucket.preDiscountGrossAmount),
+        beforeTaxDiscountAmount: money(bucket.beforeTaxDiscountAmount),
+        afterTaxDiscountAmount: money(bucket.afterTaxDiscountAmount),
+        tenderAllocations: bucket.tenderAllocations.map((allocation) => ({
+          ...allocation,
+          cents: allocation.cents.toString(),
+          refundAllocations: allocation.refundAllocations.map((refund) => ({
+            ...refund,
+            cents: refund.cents.toString(),
+          })),
+        })),
+      })),
+    })),
+    promotionApplications: promotionApplications.map((application) => ({
+      ...application,
+      subtotalBasis: money(application.subtotalBasis),
+      computedAmount: money(application.computedAmount),
     })),
     tenderSummary: {
       count: bill.tenders.length,
@@ -249,6 +372,7 @@ async function getBill(db: ScopedDb, billId: string) {
       amount: money(refundTotal),
       tipRefundAmount: money(refundTipTotal),
       serviceChargeRefundAmount: money(refundedServiceChargeTotal),
+      deliveryFeeRefundAmount: money(refundedDeliveryFeeTotal),
       taxRefundAmount: money(refundedTaxTotal),
       netServiceChargeAmount: money(bill.serviceChargeTotal.minus(refundedServiceChargeTotal)),
     },

@@ -34,6 +34,25 @@ const mocks = vi.hoisted(() => {
       nextCursor: null as string | null,
     }),
     bill: query(null),
+    settlement: query({
+      orderId: 'order_1',
+      settled: false,
+      blocker: 'BILLS_OPEN',
+      derivedOrderTotal: '22',
+      accountedTotal: '22',
+      unbilledItemIds: ['item_2'],
+      bills: [
+        {
+          id: 'bill_1',
+          status: 'OPEN',
+          splitKind: 'NONE',
+          grandTotal: '22',
+          remainingDue: '5',
+          compTotal: '0',
+          receiptNumber: 7,
+        },
+      ],
+    }),
     tenders: query({
       tenders: [
         {
@@ -210,6 +229,7 @@ const mocks = vi.hoisted(() => {
     calls: {
       bills: [] as Array<{ input: unknown; enabled: boolean }>,
       bill: [] as Array<{ input: unknown; enabled: boolean }>,
+      settlement: [] as Array<{ input: unknown; enabled: boolean }>,
       tenders: [] as Array<{ input: unknown; enabled: boolean }>,
       refunds: [] as Array<{ input: unknown; enabled: boolean }>,
       totals: [] as Array<{ input: unknown; enabled: boolean }>,
@@ -279,6 +299,10 @@ vi.mock('@/lib/trpc', () => ({
       getBill: {
         useQuery: (input: unknown, options: { enabled: boolean }) =>
           hook(mocks.bill, mocks.calls.bill, input, options),
+      },
+      getOrderSettlement: {
+        useQuery: (input: unknown, options: { enabled: boolean }) =>
+          hook(mocks.settlement, mocks.calls.settlement, input, options),
       },
     },
     restaurantPayments: {
@@ -385,6 +409,7 @@ describe('MoneyConsole', () => {
     [
       mocks.bills,
       mocks.bill,
+      mocks.settlement,
       mocks.tenders,
       mocks.refunds,
       mocks.totals,
@@ -457,6 +482,30 @@ describe('MoneyConsole', () => {
     expect(mocks.calls.drawers.at(-1)?.enabled).toBe(false);
     expect(mocks.calls.closes.at(-1)?.enabled).toBe(true);
     expect(mocks.calls.close.at(-1)?.enabled).toBe(false);
+  });
+
+  it('filters by order and renders authoritative settlement blockers and remaining due', () => {
+    renderConsole();
+    setBranchAndDate();
+
+    fireEvent.change(screen.getByLabelText('Order ID'), { target: { value: 'order_1' } });
+
+    expect(mocks.calls.bills.at(-1)).toEqual({
+      input: {
+        branchId: 'branch_1',
+        businessDate: '2026-08-19',
+        orderId: 'order_1',
+        limit: 100,
+      },
+      enabled: true,
+    });
+    expect(mocks.calls.settlement.at(-1)).toEqual({
+      input: { orderId: 'order_1' },
+      enabled: true,
+    });
+    expect(screen.getByText('BILLS OPEN')).toBeInTheDocument();
+    expect(screen.getByText('item_2')).toBeInTheDocument();
+    expect(screen.getByText('5')).toBeInTheDocument();
   });
 
   it('opens the requested read-only ledger while preserving the denied state', () => {
