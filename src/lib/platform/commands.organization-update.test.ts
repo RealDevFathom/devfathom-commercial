@@ -5,7 +5,7 @@
  * `organization.create` and the workspace profile already apply (mock-style,
  * modeled on commands.package-inheritance.test.ts).
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 vi.mock('server-only', () => ({}));
@@ -30,10 +30,13 @@ const platformDb = {
     findUnique: vi.fn(async () => before),
     update: vi.fn(async (args: { data: object }) => ({ ...before, ...args.data })),
   },
+  organizationDeployment: { upsert: vi.fn() },
+  platformJob: { create: vi.fn() },
   platformAuditLog: { create: vi.fn(async () => ({ id: 'audit_1' })) },
 };
 
 import { executePlatformCommand } from './commands';
+import { PlatformSecurityError } from './security';
 
 const actor = { id: 'op_1', role: 'SUPER_ADMIN' } as never;
 const request = new Request('https://admin.devfathom.com/api/platform/control', { method: 'POST' });
@@ -41,6 +44,7 @@ const update = (timezone: string) =>
   executePlatformCommand(actor, 'organization.update', { id: 'org_1', timezone }, request);
 
 beforeEach(() => vi.clearAllMocks());
+afterEach(() => vi.unstubAllEnvs());
 
 describe('organization.update time zone', () => {
   it.each(['PKT', 'UTC+5', 'Mars/Olympus'])(
@@ -61,5 +65,30 @@ describe('organization.update time zone', () => {
       where: { id: 'org_1' },
       data: expect.objectContaining({ timezone: 'America/Chicago' }),
     });
+  });
+});
+
+describe('organization.update dedicated provisioning preflight', () => {
+  it('rejects a switch to DEDICATED before changing the organization or deployment', async () => {
+    vi.stubEnv('VERCEL_ACCESS_TOKEN', undefined);
+    vi.stubEnv('VERCEL_TEAM_ID', undefined);
+    vi.stubEnv('VERCEL_ORG_ID', undefined);
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.update',
+      { id: 'org_1', deploymentMode: 'DEDICATED' },
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect(error).toMatchObject({
+      status: 400,
+      message:
+        'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
+    });
+    expect(platformDb.organization.update).not.toHaveBeenCalled();
+    expect(platformDb.organizationDeployment.upsert).not.toHaveBeenCalled();
+    expect(platformDb.platformJob.create).not.toHaveBeenCalled();
   });
 });
