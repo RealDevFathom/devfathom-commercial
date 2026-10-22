@@ -95,6 +95,18 @@ Parameters:
   AiProvider:
     Type: String
     Default: disabled
+  AiBedrockHaikuModelId:
+    Type: String
+    Default: anthropic.claude-3-5-haiku-20241022-v1:0
+    Description: Bedrock foundation model ID for the low-cost Haiku route.
+  AiBedrockSonnetModelId:
+    Type: String
+    Default: anthropic.claude-3-5-sonnet-20241022-v2:0
+    Description: Bedrock foundation model ID for the standard Sonnet route.
+  AiBedrockOpusModelId:
+    Type: String
+    Default: anthropic.claude-3-opus-20240229-v1:0
+    Description: Bedrock foundation model ID for the high-capability Opus route.
   StorageAdapter:
     Type: String
     Default: disabled
@@ -111,6 +123,10 @@ Parameters:
       Needs CertificateArn and live DNS, because it calls the public HTTPS host.
 
 Rules:
+  SingaporeOnly:
+    Assertions:
+      - Assert: !Equals [!Ref AWS::Region, ap-southeast-1]
+        AssertDescription: The environment stack and its Bedrock permissions are restricted to ap-southeast-1.
   SeedOnlyInStaging:
     RuleCondition: !Equals [!Ref MigrationMode, seed]
     Assertions:
@@ -389,6 +405,16 @@ Resources:
         PasswordLength: 48
         ExcludePunctuation: true
 
+  # Intentionally has no value/version in CloudFormation. The operator supplies
+  # the API key out of band before starting a task that references this secret.
+  AnthropicApiKeySecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub devfathom/${EnvironmentName}/anthropic-api-key
+      Description: ANTHROPIC_API_KEY supplied out of band; CloudFormation never stores its value.
+
   # Initialization-only credentials, passed to the migration task only when it
   # seeds (staging) or bootstraps (production): sign-in passwords for the seeded
   # users and the first workspace and platform administrators.
@@ -609,6 +635,7 @@ Resources:
                   - !Ref AdminPasswordSecret
                   - !Ref PlatformAdminPasswordSecret
                   - !If [MigrationSeeds, !Ref DemoAccessCodeSecret, !Ref AWS::NoValue]
+                  - !Ref AnthropicApiKeySecret
 
   WebTaskRole:
     Type: AWS::IAM::Role
@@ -636,6 +663,21 @@ Resources:
               - Effect: Allow
                 Action: s3:ListBucket
                 Resource: !GetAtt UploadsBucket.Arn
+        - PolicyName: invoke-approved-bedrock-models
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:bedrock:ap-southeast-1::foundation-model/${AiBedrockHaikuModelId}'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:ap-southeast-1::foundation-model/${AiBedrockSonnetModelId}'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:ap-southeast-1::foundation-model/${AiBedrockOpusModelId}'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:ap-southeast-1:${AWS::AccountId}:inference-profile/apac.${AiBedrockHaikuModelId}'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:ap-southeast-1:${AWS::AccountId}:inference-profile/apac.${AiBedrockSonnetModelId}'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:ap-southeast-1:${AWS::AccountId}:inference-profile/apac.${AiBedrockOpusModelId}'
 
   MigrateTaskRole:
     Type: AWS::IAM::Role
@@ -690,6 +732,14 @@ Resources:
               Value: !Ref EmailDeliveryMode
             - Name: AI_PROVIDER
               Value: !Ref AiProvider
+            - Name: AI_BEDROCK_REGION
+              Value: ap-southeast-1
+            - Name: AI_BEDROCK_HAIKU_MODEL_ID
+              Value: !Sub 'apac.${AiBedrockHaikuModelId}'
+            - Name: AI_BEDROCK_SONNET_MODEL_ID
+              Value: !Sub 'apac.${AiBedrockSonnetModelId}'
+            - Name: AI_BEDROCK_OPUS_MODEL_ID
+              Value: !Sub 'apac.${AiBedrockOpusModelId}'
             - Name: STORAGE_ADAPTER
               Value: !Ref StorageAdapter
             - Name: S3_UPLOADS_BUCKET
@@ -712,6 +762,8 @@ Resources:
               ValueFrom: !Sub '${CameraCredentialKeySecret}:value::'
             - Name: CRON_SECRET
               ValueFrom: !Sub '${CronSecret}:value::'
+            - Name: ANTHROPIC_API_KEY
+              ValueFrom: !Ref AnthropicApiKeySecret
             - !If
               - MigrationSeeds
               - Name: DEMO_ACCESS_CODE
@@ -1120,3 +1172,5 @@ Outputs:
     Value: !Sub devfathom/${EnvironmentName}/platform-admin-password
   SeedPasswordSecretName:
     Value: !Sub devfathom/${EnvironmentName}/seed-password
+  AnthropicApiKeySecretName:
+    Value: !Sub devfathom/${EnvironmentName}/anthropic-api-key
