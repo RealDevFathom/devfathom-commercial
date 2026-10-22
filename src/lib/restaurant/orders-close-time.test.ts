@@ -19,7 +19,7 @@ vi.mock('./loyalty', () => ({
 }));
 vi.mock('./outbox', () => ({ appendOrderEvent: mocks.appendOrderEvent }));
 
-import { closeOrder } from './orders';
+import { closeOrder, closeOrderAfterSettlement } from './orders';
 
 const actor = {
   staffProfileId: 'staff-1',
@@ -40,11 +40,14 @@ const order = {
 
 function makeDb() {
   let idempotency: { resultRef: string | null } | null = null;
+  const currentOrder = { ...order };
   const tx = {
     $queryRaw: vi.fn(async () => []),
     restaurantOrder: {
-      findUnique: vi.fn(async () => order),
-      update: vi.fn(async () => order),
+      findUnique: vi.fn(async () => currentOrder),
+      update: vi.fn(async ({ data }: { data: Partial<typeof currentOrder> }) =>
+        Object.assign(currentOrder, data)
+      ),
     },
     restaurantOrderTable: { updateMany: vi.fn() },
     restaurantOrderIdempotencyKey: {
@@ -139,5 +142,50 @@ describe('closeOrder close time', () => {
       { staffProfileId: actor.staffProfileId, deviceId: actor.deviceId },
       current
     );
+  });
+});
+
+describe('closeOrderAfterSettlement', () => {
+  it('closes a payment-pending order when its bills are fully settled', async () => {
+    const { tx } = makeDb();
+    const settledAt = new Date('2026-09-04T09:15:00.000Z');
+
+    await expect(
+      closeOrderAfterSettlement(tx as unknown as ScopedDb, order.id, actor, settledAt)
+    ).resolves.toBe(true);
+
+    expect(tx.restaurantOrder.update).toHaveBeenCalledWith({
+      where: { id: order.id },
+      data: { status: 'CLOSED', closedAt: settledAt },
+    });
+    expect(tx.restaurantOrderTable.updateMany).toHaveBeenCalledWith({
+      where: { orderId: order.id, active: true },
+      data: { active: false, unlinkedAt: settledAt },
+    });
+    expect(mocks.appendOrderEvent).toHaveBeenCalledWith(
+      tx,
+      expect.objectContaining({ orderId: order.id, eventType: 'order.closed' })
+    );
+
+    await expect(
+      closeOrderAfterSettlement(tx as unknown as ScopedDb, order.id, actor, settledAt)
+    ).resolves.toBe(false);
+    expect(tx.restaurantOrder.update).toHaveBeenCalledTimes(1);
+    expect(tx.restaurantOrderTable.updateMany).toHaveBeenCalledTimes(1);
+    expect(mocks.appendOrderEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a payment-pending order open when another bill remains unsettled', async () => {
+    const { tx } = makeDb();
+    mocks.evaluateOrderSettlement.mockResolvedValue({ settled: false, blocker: 'OPEN_BILL' });
+
+    await expect(
+      closeOrderAfterSettlement(tx as unknown as ScopedDb, order.id, actor, new Date())
+    ).resolves.toBe(false);
+
+    expect(tx.restaurantOrder.update).not.toHaveBeenCalled();
+    expect(mocks.appendOrderEvent).not.toHaveBeenCalled();
+    expect(mocks.earnLoyaltyForClosedOrder).not.toHaveBeenCalled();
+    expect(mocks.postOrderRecipeConsumption).not.toHaveBeenCalled();
   });
 });

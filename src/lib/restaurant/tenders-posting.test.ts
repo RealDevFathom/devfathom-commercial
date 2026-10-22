@@ -10,14 +10,25 @@ import { appendMovement, closeDrawerSession, foldExpectedCash } from './drawer-s
 import { refundTender } from './refunds';
 import { applyTenderInTransaction, type ApplyTenderInput } from './tenders';
 
+const closeMocks = vi.hoisted(() => ({
+  appendOrderEvent: vi.fn(),
+  earnLoyaltyForClosedOrder: vi.fn(),
+  postOrderRecipeConsumption: vi.fn(),
+}));
+
 vi.mock('./bills', async (original) => ({
   ...(await original<typeof import('./bills')>()),
   finalizeBillSettlement: vi.fn(),
 }));
 vi.mock('./loyalty', async (original) => ({
   ...(await original<typeof import('./loyalty')>()),
+  earnLoyaltyForClosedOrder: closeMocks.earnLoyaltyForClosedOrder,
   reverseLoyaltyForRefund: vi.fn(),
 }));
+vi.mock('./inventory', () => ({
+  postOrderRecipeConsumption: closeMocks.postOrderRecipeConsumption,
+}));
+vi.mock('./outbox', () => ({ appendOrderEvent: closeMocks.appendOrderEvent }));
 
 const D = (value: string) => new Prisma.Decimal(value);
 const D1 = new Date('2026-09-10T00:00:00Z');
@@ -71,6 +82,36 @@ function fixture() {
     receiptNumber: null as number | null,
     lines: [{ orderItemId: 'item' }],
     tenders,
+  };
+  const order = {
+    id: 'order',
+    organizationId: 'tenant',
+    branchId: 'branch',
+    orderNumber: 1,
+    status: 'PAYMENT_PENDING',
+    channel: 'DINE_IN',
+    businessDate: D1,
+    publicationId: 'publication',
+    serviceChargePolicyVersion: null,
+    deliveryFulfillment: null,
+    items: [
+      {
+        id: 'item',
+        status: 'SERVED',
+        course: 1,
+        unitPrice: D('4000'),
+        quantity: 1,
+        modifiers: [],
+        productId: 'product',
+        variantId: null,
+        name: 'Item',
+        taxAmount: D('0'),
+        serviceChargeAmount: D('0'),
+        seatNumber: null,
+        wastageDisposition: null,
+        product: { categoryId: null },
+      },
+    ],
   };
   // The register summary re-quotes each OPEN bill by id (QA-143), so bills and their
   // lines resolve from id-keyed registries; unregistered ids fall back to the base bill.
@@ -153,22 +194,28 @@ function fixture() {
     },
     restaurantOrder: {
       findFirst: vi.fn(async ({ where }: { where: Where }) =>
-        matches({ id: 'order', branchId: 'branch' }, where)
-          ? {
-              id: 'order',
-              branchId: 'branch',
-              serviceChargePolicyVersion: null,
-              deliveryFulfillment: null,
-              items: [
-                { id: 'item', status: 'SENT', unitPrice: D('4000'), quantity: 1, modifiers: [] },
-              ],
-            }
-          : null
+        matches(order, where) ? order : null
+      ),
+      findUnique: vi.fn(async ({ where }: { where: Where }) =>
+        matches(order, where) ? order : null
+      ),
+      update: vi.fn(async ({ data }: { data: Partial<typeof order> }) =>
+        Object.assign(order, data)
       ),
     },
+    restaurantOrderTable: { updateMany: vi.fn(async () => ({ count: 1 })) },
     restaurantBill: {
       findUnique: vi.fn(async ({ where }: { where: Where }) => billsById.get(where.id!) ?? bill),
-      findMany: vi.fn(async ({ where }: { where: Where }) => (matches(bill, where) ? [bill] : [])),
+      findMany: vi.fn(async ({ where }: { where: Where }) => {
+        if (where.orderId === order.id) {
+          return [...billsById.values()].map((row) => ({
+            ...row,
+            lines: linesByBill.get(row.id) ?? [defaultLine],
+            tenders: row.tenders,
+          }));
+        }
+        return matches(bill, where) ? [bill] : [];
+      }),
     },
     restaurantTender: {
       findFirst: vi.fn(async ({ where }: { where: { id: string; bill: { branchId: string } } }) => {
@@ -286,6 +333,7 @@ function fixture() {
     db,
     raw,
     bill,
+    order,
     drawer,
     tenders,
     movements,
@@ -320,6 +368,12 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
       '3860.00'
     );
     expect(today.cashExpected.toFixed(2)).toBe('3960.00');
+    expect(f.order.status).toBe('CLOSED');
+    expect(f.raw.restaurantOrder.update).toHaveBeenCalledTimes(1);
+    expect(f.raw.restaurantOrderTable.updateMany).toHaveBeenCalledWith({
+      where: { orderId: f.order.id, active: true },
+      data: { active: false, unlinkedAt: NOW },
+    });
     const closed = await closeDrawerSession(f.db, {
       drawerSessionId: 'drawer',
       countedCash: '3960',
@@ -338,6 +392,9 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
       (await getOrderSettlementForBranch(f.db, 'order', 'branch'))?.bills[0].remainingDue
     ).toBe('3860.00');
     await f.collect({ tender: { type: 'CASH', amount: '1000.10', cashReceived: '1100' } });
+    expect(f.order.status).toBe('PAYMENT_PENDING');
+    expect(f.raw.restaurantOrder.update).not.toHaveBeenCalled();
+    expect(f.raw.restaurantOrderTable.updateMany).not.toHaveBeenCalled();
     const summary = await getOrderSettlementForBranch(f.db, 'order', 'branch');
     expect(summary?.bills[0]).toMatchObject({
       grandTotal: '3860.00',
@@ -348,6 +405,9 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
       actor: { ...actor, idempotencyKey: 'finish' },
       tender: { type: 'CASH', amount: '2859.90', cashReceived: '3000' },
     });
+    expect(f.order.status).toBe('CLOSED');
+    expect(f.raw.restaurantOrder.update).toHaveBeenCalledTimes(1);
+    expect(closeMocks.appendOrderEvent).toHaveBeenCalledTimes(1);
     expect(
       (await getOrderSettlementForBranch(f.db, 'order', 'branch'))?.bills[0].remainingDue
     ).toBe('0.00');
