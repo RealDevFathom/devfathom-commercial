@@ -7,6 +7,7 @@ import { generateVoucherCode } from './loyalty-vouchers';
 import { claimMessageLogInTransaction } from './whatsapp/message-log';
 
 export type SpendVoucherTier = { thresholdMinor: number; valueMinor: number };
+export const MAX_DATABASE_MINOR = 2_147_483_647;
 type IssuedVoucher = { id: string; code: string; valueMinor: number; status: string } & Record<string, unknown>;
 type SpendVoucherSettings = {
   spendVoucherTiers: unknown; spendVoucherMinBasketMinor: number;
@@ -23,9 +24,13 @@ export function validateSpendVoucherTiers(value: unknown): SpendVoucherTier[] {
     throw new RangeError('INVALID_SPEND_VOUCHER_TIERS');
   const tiers = value.map((tier) => {
     if (!tier || typeof tier !== 'object') throw new RangeError('INVALID_SPEND_VOUCHER_TIERS');
+    const keys = Object.keys(tier);
+    if (keys.length !== 2 || !keys.includes('thresholdMinor') || !keys.includes('valueMinor'))
+      throw new RangeError('INVALID_SPEND_VOUCHER_TIERS');
     const { thresholdMinor, valueMinor } = tier as Record<string, unknown>;
     if (!Number.isSafeInteger(thresholdMinor) || Number(thresholdMinor) <= 0 ||
-        !Number.isSafeInteger(valueMinor) || Number(valueMinor) <= 0)
+        !Number.isSafeInteger(valueMinor) || Number(valueMinor) <= 0 ||
+        Number(valueMinor) > MAX_DATABASE_MINOR)
       throw new RangeError('INVALID_SPEND_VOUCHER_TIERS');
     return { thresholdMinor: Number(thresholdMinor), valueMinor: Number(valueMinor) };
   }).sort((a, b) => a.thresholdMinor - b.thresholdMinor);
@@ -38,6 +43,25 @@ export function validateSpendVoucherTiers(value: unknown): SpendVoucherTier[] {
 export function qualifyingSpendVoucherTier(netPaidMinor: number, value: unknown) {
   if (!Number.isSafeInteger(netPaidMinor) || netPaidMinor < 0) throw new RangeError('INVALID_MONEY');
   return validateSpendVoucherTiers(value).filter((tier) => tier.thresholdMinor <= netPaidMinor).at(-1) ?? null;
+}
+
+function uniqueConstraintTarget(error: unknown): string[] | null {
+  if (!(error instanceof Error) || !('code' in error) || error.code !== 'P2002') return null;
+  const target = 'meta' in error && error.meta && typeof error.meta === 'object' &&
+    'target' in error.meta ? error.meta.target : undefined;
+  if (typeof target === 'string') return [target];
+  return Array.isArray(target) && target.every((part) => typeof part === 'string') ? target : [];
+}
+
+function isIssuedSaleConflict(target: string[]) {
+  return target.includes('pharmacy_vouchers_issued_sale_key') ||
+    (target.includes('organizationId') && target.includes('issuedSaleId'));
+}
+
+function isVoucherCodeConflict(target: string[]) {
+  return target.includes('pharmacy_vouchers_org_code_key') ||
+    target.includes('pharmacy_vouchers_organizationId_code_key') ||
+    (target.includes('organizationId') && target.includes('code'));
 }
 
 /**
@@ -60,7 +84,7 @@ export async function issueSpendVoucherForCompletedSale(
     findUnique(args: unknown): Promise<SpendVoucherSettings | null>;
   };
   const prior = await voucherStore.findFirst({
-    where: { organizationId: scope.organizationId, issuedSaleId: saleId },
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, issuedSaleId: saleId },
   });
   if (prior) return { voucher: prior, replayed: true };
   const sale = await db.pharmacySale.findFirst({
@@ -95,11 +119,18 @@ export async function issueSpendVoucherForCompletedSale(
       } });
       break;
     } catch (error) {
-      if (!(error instanceof Error) || !('code' in error) || error.code !== 'P2002') throw error;
-      const replay = await voucherStore.findFirst({
-        where: { organizationId: scope.organizationId, issuedSaleId: sale.id },
-      });
-      if (replay) return { voucher: replay, replayed: true };
+      const target = uniqueConstraintTarget(error);
+      if (!target) throw error;
+      if (isIssuedSaleConflict(target)) {
+        const replay = await voucherStore.findFirst({
+          where: { organizationId: scope.organizationId, branchId: scope.branchId,
+            issuedSaleId: sale.id },
+        });
+        if (replay) return { voucher: replay, replayed: true };
+        // A sale identifier claimed outside this branch must never disclose or reuse that voucher.
+        throw new Error('VOUCHER_ISSUED_SALE_SCOPE_CONFLICT');
+      }
+      if (!isVoucherCodeConflict(target)) throw error;
     }
   }
   if (!voucher) throw new Error('VOUCHER_COLLISION_RETRY_EXHAUSTED');
@@ -108,7 +139,8 @@ export async function issueSpendVoucherForCompletedSale(
   if (sale.customer.whatsappOptIn === true) {
     const consent = await db.patientConsent.findFirst({
       where: { organizationId: scope.organizationId, patientId: sale.customer.patientId,
-        purpose: 'LOYALTY', channel: 'WHATSAPP' },
+        purpose: 'LOYALTY', channel: 'WHATSAPP', granted: true, revokedAt: null,
+        recordedAt: { lte: issuedAt } },
       orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
       select: { granted: true, revokedAt: true },
     });

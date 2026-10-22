@@ -29,7 +29,7 @@ import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-sour
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
-import { validateSpendVoucherTiers } from '@/lib/pharmacy/spend-vouchers';
+import { MAX_DATABASE_MINOR, validateSpendVoucherTiers } from '@/lib/pharmacy/spend-vouchers';
 import {
   authorizeKhataCharge,
   FamilyKhataError,
@@ -440,9 +440,9 @@ export const pharmacySalesRouter = router({
       expiryOverrideGraceDays: z.number().int().min(0).max(365),
       spendVoucherTiers: z.array(z.object({
         thresholdMinor: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-        valueMinor: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        valueMinor: z.number().int().positive().max(MAX_DATABASE_MINOR),
       }).strict()).min(1).max(20),
-      spendVoucherMinBasketMinor: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      spendVoucherMinBasketMinor: z.number().int().nonnegative().max(MAX_DATABASE_MINOR),
     }).strict())
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements?.organizationId;

@@ -18,7 +18,18 @@ Issuance runs inside the sale transaction after completion. Receipt reads join t
 and the existing receipt builders print its code, value, expiry, and minimum next basket. A
 transactional `PENDING` pharmacy message-log row is claimed in that same transaction only when the
 customer opted in to WhatsApp and the latest WhatsApp `LOYALTY` patient consent is granted and not
-revoked. This reuses the existing outbox/provider seam; the production live-send block is unchanged.
+revoked, and was recorded no later than the sale transaction time. This reuses the existing
+outbox/provider seam; the production live-send block is unchanged.
+
+## Migration rollout
+
+The migration uses a five-second PostgreSQL `lock_timeout`, so it fails instead of queueing checkout
+writes behind an unexpectedly busy table. Deploy it before application code during a low-traffic
+window and retry the migration if the lock timeout fires. The new nullable sale reference requires
+no backfill; build its indexes immediately after the metadata-only column add. The settings default
+is a PostgreSQL fast default, and the database validates every threshold as a positive, unique
+JavaScript safe integer and every voucher value as a positive PostgreSQL `INTEGER` before checkout
+can consume it.
 
 ## Refund decision
 
