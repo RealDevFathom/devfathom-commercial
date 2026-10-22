@@ -34,7 +34,7 @@ export const actorFixture: Record<ActorKey, Actor> = {
     password: value('RESTAURANT_ACTOR_AGENCY_PASSWORD'),
     loginPath: '/login',
     host: 'app.localhost',
-    workspace: /agency/i,
+    workspace: /DevFathom/i,
   },
   restaurantAdmin: {
     email: value('RESTAURANT_ACTOR_ADMIN_EMAIL'),

@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Downloads/Projects & Code/DevFathom hub/company-hub/.paperclip/worktrees/WHA-401-correct-l3-actor-harness-login-and-rerun-full-matrix
+Branch: WHA-401-correct-l3-actor-harness-login-and-rerun-full-matrix
+HEAD: 7667ce2526a3bca15dd12fa75db66fbd66f23bb2
+Mode: applied
+Excluded (secrets): 0
