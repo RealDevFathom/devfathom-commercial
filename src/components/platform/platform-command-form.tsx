@@ -39,6 +39,8 @@ export type CommandField = {
   help?: string;
   checkboxText?: string;
   minLength?: number;
+  maxLength?: number;
+  pattern?: string;
   min?: number;
   max?: number;
   step?: number;
@@ -211,10 +213,11 @@ export function PlatformCommandForm({
     if (!requiresReason) return configuredFields;
     const reason: CommandField = {
       name: 'reason',
-      label: 'Reason (required)',
+      label: 'Operator reason',
       type: 'textarea',
       required: true,
       minLength: 10,
+      maxLength: 500,
       help: 'Explain why this change is needed (at least 10 characters).',
     };
     return configuredFields.some((field) => field.name === 'reason')
@@ -257,15 +260,21 @@ export function PlatformCommandForm({
     setFieldErrors({});
     setRevealed('');
     const clientFieldErrors: Record<string, string> = {};
+    const formData = new FormData(form);
     for (const field of fields) {
+      const value = String(formData.get(field.name) ?? '').trim();
       if (field.minLength) {
-        const value = String(new FormData(form).get(field.name) ?? '').trim();
         if (value.length < field.minLength) {
-          clientFieldErrors[field.name] = `Enter at least ${field.minLength} characters.`;
+          clientFieldErrors[field.name] = `${field.label} must be at least ${field.minLength} characters.`;
         }
       }
+      if (field.maxLength && value.length > field.maxLength) {
+        clientFieldErrors[field.name] = `${field.label} must be at most ${field.maxLength} characters.`;
+      }
+      if (field.pattern && value && !new RegExp(`^(?:${field.pattern})$`).test(value)) {
+        clientFieldErrors[field.name] = `${field.label} has an invalid format.`;
+      }
       if (field.format !== 'time24') continue;
-      const value = String(new FormData(form).get(field.name) ?? '');
       if (value && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) {
         clientFieldErrors[field.name] = 'Use 24-hour time, e.g. 09:30';
       }
@@ -290,7 +299,6 @@ export function PlatformCommandForm({
       const body = (await response.json()) as {
         error?: string;
         data?: { id?: string; [key: string]: unknown };
-        details?: Array<{ message?: string; path?: Array<PropertyKey> }>;
         fieldErrors?: Record<string, string>;
       };
       if (!response.ok) {
@@ -313,7 +321,7 @@ export function PlatformCommandForm({
             form.querySelector(`[data-field-name="${firstInvalid}"]`) as HTMLElement | null
           )?.focus() ?? (form.elements.namedItem(firstInvalid) as HTMLElement | null)?.focus();
         } else {
-          setError(body.error ?? body.details?.[0]?.message ?? 'The command failed.');
+          setError(body.error ?? 'The command failed.');
         }
         return;
       }
@@ -378,6 +386,7 @@ export function PlatformCommandForm({
                   name={field.name}
                   required={field.required}
                   minLength={field.minLength}
+                  maxLength={field.maxLength}
                   disabled={field.disabled}
                   defaultValue={
                     field.defaultValue !== null && typeof field.defaultValue === 'object'
@@ -441,6 +450,8 @@ export function PlatformCommandForm({
                   type={field.type ?? 'text'}
                   required={field.required}
                   minLength={field.minLength}
+                  maxLength={field.format === 'time24' ? 5 : field.maxLength}
+                  pattern={field.format === 'time24' ? '[0-2][0-9]:[0-5][0-9]' : field.pattern}
                   disabled={field.disabled}
                   defaultValue={
                     typeof field.defaultValue === 'boolean'
@@ -452,8 +463,6 @@ export function PlatformCommandForm({
                   max={field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ?? field.max}
                   step={field.step}
                   inputMode={field.format === 'time24' ? 'numeric' : undefined}
-                  maxLength={field.format === 'time24' ? 5 : undefined}
-                  pattern={field.format === 'time24' ? '[0-2][0-9]:[0-5][0-9]' : undefined}
                   aria-invalid={Boolean(fieldError)}
                   aria-describedby={fieldError ? errorId : undefined}
                   onInput={

@@ -25,7 +25,7 @@ describe('POST /api/platform/control validation contract', () => {
     mocks.requirePlatformSession.mockResolvedValue({ id: 'operator_1' });
   });
 
-  it('keeps zod details and adds path-addressable field errors with human messages', async () => {
+  it('returns only a friendly message and path-addressable field errors', async () => {
     const schema = z.object({
       businessDayCutoff: z
         .string()
@@ -42,14 +42,10 @@ describe('POST /api/platform/control validation contract', () => {
     const body = await response.json();
 
     expect(response.status).toBe(400);
-    expect(body.error).toBe('The command payload is invalid.');
-    expect(body.details[0]).toMatchObject({
-      code: 'invalid_format',
-      path: ['businessDayCutoff'],
-      message: 'Use 24-hour time, e.g. 09:30',
-    });
+    expect(body.error).toBe('Business day cutoff: Use 24-hour time, e.g. 09:30');
     expect(body.fieldErrors).toEqual({
       businessDayCutoff: 'Use 24-hour time, e.g. 09:30',
     });
+    expect(JSON.stringify(body)).not.toMatch(/\"(?:code|origin|inclusive)\"/);
   });
 });

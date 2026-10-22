@@ -15,6 +15,38 @@ vi.mock('sonner', () => ({
 }));
 
 describe('PlatformCommandForm', () => {
+  it('mirrors text constraints and reports them within the submitted form', async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    render(
+      <PlatformCommandForm
+        action="catalog.create"
+        fields={[
+          {
+            name: 'key',
+            label: 'Catalogue key',
+            minLength: 3,
+            maxLength: 5,
+            pattern: '[a-z]+',
+          },
+        ]}
+      />
+    );
+
+    const input = screen.getByLabelText('Catalogue key');
+    expect(input).toHaveAttribute('minlength', '3');
+    expect(input).toHaveAttribute('maxlength', '5');
+    expect(input).toHaveAttribute('pattern', '[a-z]+');
+
+    fireEvent.change(input, { target: { value: 'NO' } });
+    fireEvent.submit(input.closest('form')!);
+
+    expect(await screen.findByTestId('platform-field-error-key')).toHaveTextContent(
+      'Catalogue key must be at least 3 characters.'
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('renders nullable textareas as empty rather than the string null', () => {
     render(
       <PlatformCommandForm
