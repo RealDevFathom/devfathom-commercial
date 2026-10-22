@@ -447,7 +447,10 @@ async function loadActorBranch(
 
 async function loadTender(tx: ScopedDb, tenderId: string, branchId: string): Promise<LoadedTender> {
   const tender = await tx.restaurantTender.findFirst({
-    where: { id: tenderId, bill: { branchId } },
+    // An OPEN bill can hold partial tenders that settlement still counts at their
+    // original value. Keep those funds outside the refund workflow until the bill
+    // is final, while preserving the same not-found response used for branch scope.
+    where: { id: tenderId, bill: { branchId, status: 'SETTLED' } },
     select: {
       id: true,
       type: true,

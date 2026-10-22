@@ -171,12 +171,20 @@ function fixture() {
       findMany: vi.fn(async ({ where }: { where: Where }) => (matches(bill, where) ? [bill] : [])),
     },
     restaurantTender: {
-      findFirst: vi.fn(async ({ where }: { where: { id: string; bill: { branchId: string } } }) => {
-        const row = tenders.find((tender) => tender.id === where.id);
-        return row && where.bill.branchId === bill.branchId
-          ? { ...row, paymentId: null, bill }
-          : null;
-      }),
+      findFirst: vi.fn(
+        async ({
+          where,
+        }: {
+          where: { id: string; bill: { branchId: string; status?: string } };
+        }) => {
+          const row = tenders.find((tender) => tender.id === where.id);
+          return row &&
+            where.bill.branchId === bill.branchId &&
+            (!where.bill.status || where.bill.status === bill.status)
+            ? { ...row, paymentId: null, bill }
+            : null;
+        }
+      ),
       findMany: vi.fn(async ({ where }: { where: Where & { bill?: { branchId: string } } }) => {
         const { bill: scope, ...fields } = where;
         return scope && scope.branchId !== bill.branchId
@@ -453,6 +461,36 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     expect(
       (await getOrderSettlementForBranch(f.db, 'order', 'branch'))?.bills[0].remainingDue
     ).toBe('0.00');
+  });
+
+  it('rejects refunding a partial tender while its bill remains open', async () => {
+    const f = fixture();
+    const partial = await f.collect({
+      tender: { type: 'CASH', amount: '60', cashReceived: '60' },
+    });
+
+    await expect(
+      refundTender(f.db, {
+        originalTenderId: partial.tenderId,
+        amount: '60',
+        reason: 'Must wait for settlement',
+        approvingStaffProfileId: 'manager',
+        actor: { ...actor, idempotencyKey: 'refund-open-bill' },
+        branchId: 'branch',
+        now: NOW,
+      })
+    ).rejects.toMatchObject({ reason: 'TENDER_NOT_FOUND' });
+
+    expect(f.bill.status).toBe('OPEN');
+    expect(f.raw.restaurantTender.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: partial.tenderId, bill: { branchId: 'branch', status: 'SETTLED' } },
+      })
+    );
+    expect(f.raw.restaurantMoneyIdempotencyKey.create).not.toHaveBeenCalled();
+    expect(f.raw.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+    expect(f.raw.restaurantRefund.create).not.toHaveBeenCalled();
+    expect(f.movements.filter((row) => row.kind === 'CASH_REFUND')).toHaveLength(0);
   });
 
   it('refuses a refund into a closed processing day before approval and ledger writes', async () => {
