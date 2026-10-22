@@ -7,6 +7,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { businessDateToUtcDate } from './business-date';
 import { resolveChainTip } from './daily-close';
 import { computeRecipeCost, RecipeCostingError } from './recipe-costing';
+import { zonedWallTimeToUtc } from './sop-recurrence';
 
 export const MAX_REPORT_DAYS = 90;
 export const MAX_REPORT_BRANCHES = 100;
@@ -85,6 +86,42 @@ export function validateRestaurantReportRange(range: RestaurantReportRange) {
     );
   }
   return { from, to, toExclusive: nextUtcDay(to), days };
+}
+
+type BranchTimestampRange = { branchId: string; from: Date; toExclusive: Date };
+
+async function resolveBranchTimestampRanges(
+  db: ScopedDb,
+  range: RestaurantReportRange
+): Promise<BranchTimestampRange[]> {
+  validateRestaurantReportRange(range);
+  const branches = await db.restaurantBranch.findMany({
+    where: { id: { in: range.branchIds } },
+    select: { id: true, timezone: true },
+  });
+  if (branches.length !== range.branchIds.length) {
+    throw new RestaurantReportError('One or more selected Restaurant branches are unavailable.');
+  }
+  const toExclusiveDate = dateKey(nextUtcDay(businessDateToUtcDate(range.to)));
+  return branches.map((branch) => ({
+    branchId: branch.id,
+    from: zonedWallTimeToUtc(range.from, 0, branch.timezone).instant,
+    toExclusive: zonedWallTimeToUtc(toExclusiveDate, 0, branch.timezone).instant,
+  }));
+}
+
+function branchTimestampClause(
+  ranges: readonly BranchTimestampRange[],
+  branchSql: Prisma.Sql,
+  timestampSql: Prisma.Sql
+) {
+  return Prisma.sql`(${Prisma.join(
+    ranges.map(
+      (range) =>
+        Prisma.sql`(${branchSql} = ${range.branchId} AND ${timestampSql} >= ${range.from} AND ${timestampSql} < ${range.toExclusive})`
+    ),
+    ' OR '
+  )})`;
 }
 
 async function loadReportBackbone(db: ScopedDb, range: RestaurantReportRange) {
@@ -1276,7 +1313,7 @@ function stockLocationClause(range: RestaurantStockReportRange) {
 
 function valuedWastageCte(
   range: RestaurantStockReportRange,
-  parsed: ReturnType<typeof validateRestaurantReportRange>
+  timestampRanges: readonly BranchTimestampRange[]
 ) {
   return Prisma.sql`
     WITH current_costs AS (
@@ -1295,6 +1332,7 @@ function valuedWastageCte(
         movement."locationId",
         location."branchId",
         branch."name" AS "branchName",
+        branch."timezone" AS "branchTimezone",
         location."name" AS "locationName",
         ingredient."name" AS "ingredientName",
         COALESCE(unit."abbreviation", unit."name") AS "canonicalUnit",
@@ -1321,10 +1359,12 @@ function valuedWastageCte(
       LEFT JOIN current_costs
         ON current_costs."stockItemId" = movement."stockItemId"
        AND current_costs."locationId" = movement."locationId"
-      WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
+      WHERE ${branchTimestampClause(
+        timestampRanges,
+        Prisma.sql`location."branchId"`,
+        Prisma.sql`movement."occurredAt"`
+      )}
         ${stockLocationClause(range)}
-        AND movement."occurredAt" >= ${parsed.from}
-        AND movement."occurredAt" < ${parsed.toExclusive}
         AND (
           movement."reason" IN ('WASTAGE', 'SPOILAGE', 'STAFF_MEAL')
           OR (movement."reason" = 'MANUAL_CORRECTION' AND movement."quantity" < 0)
@@ -1370,11 +1410,11 @@ function serializeWastageGroup<T extends WastageAggregateRow>(row: T, totalCost:
 async function readWastageIngredientRows(
   db: ScopedDb,
   range: RestaurantStockReportRange,
-  limit: number
+  limit: number,
+  timestampRanges: readonly BranchTimestampRange[]
 ) {
-  const parsed = validateRestaurantReportRange(range);
   const rows = await db.$queryRaw<WastageIngredientRow[]>(Prisma.sql`
-    ${valuedWastageCte(range, parsed)}
+    ${valuedWastageCte(range, timestampRanges)}
     SELECT
       "stockItemId",
       "ingredientName",
@@ -1390,23 +1430,23 @@ async function readWastageIngredientRows(
 }
 
 export async function readWastageReport(db: ScopedDb, range: RestaurantStockReportRange) {
-  const parsed = validateRestaurantReportRange(range);
+  const timestampRanges = await resolveBranchTimestampRanges(db, range);
   const [reasonRows, dayRows, ingredients] = await Promise.all([
     db.$queryRaw<WastageReasonRow[]>(Prisma.sql`
-      ${valuedWastageCte(range, parsed)}
+      ${valuedWastageCte(range, timestampRanges)}
       SELECT "reason", ${wastageAggregateSelect()}
       FROM valued_wastage
       GROUP BY "reason"
       ORDER BY "reason" ASC
     `),
     db.$queryRaw<WastageDayRow[]>(Prisma.sql`
-      ${valuedWastageCte(range, parsed)}
-      SELECT TO_CHAR("occurredAt", 'YYYY-MM-DD') AS "day", ${wastageAggregateSelect()}
+      ${valuedWastageCte(range, timestampRanges)}
+      SELECT TO_CHAR("occurredAt" AT TIME ZONE "branchTimezone", 'YYYY-MM-DD') AS "day", ${wastageAggregateSelect()}
       FROM valued_wastage
-      GROUP BY TO_CHAR("occurredAt", 'YYYY-MM-DD')
+      GROUP BY TO_CHAR("occurredAt" AT TIME ZONE "branchTimezone", 'YYYY-MM-DD')
       ORDER BY "day" ASC
     `),
-    readWastageIngredientRows(db, range, MAX_INTERACTIVE_ROWS),
+    readWastageIngredientRows(db, range, MAX_INTERACTIVE_ROWS, timestampRanges),
   ]);
   const totals = reasonRows.reduce<WastageAggregateRow>(
     (total, row) => ({
@@ -1633,7 +1673,7 @@ export async function readStockMovementReport(db: ScopedDb, range: RestaurantSto
 }
 
 async function readWastageExportRows(db: ScopedDb, range: RestaurantStockReportRange) {
-  const parsed = validateRestaurantReportRange(range);
+  const timestampRanges = await resolveBranchTimestampRanges(db, range);
   const rows = await db.$queryRaw<
     Array<{
       id: string;
@@ -1649,10 +1689,10 @@ async function readWastageExportRows(db: ScopedDb, range: RestaurantStockReportR
       valuationSource: string;
     }>
   >(Prisma.sql`
-    ${valuedWastageCte(range, parsed)}
+    ${valuedWastageCte(range, timestampRanges)}
     SELECT
       "id",
-      TO_CHAR("occurredAt", 'YYYY-MM-DD') AS "day",
+      TO_CHAR("occurredAt" AT TIME ZONE "branchTimezone", 'YYYY-MM-DD') AS "day",
       "branchName",
       "locationName",
       "ingredientName",
@@ -1670,7 +1710,17 @@ async function readWastageExportRows(db: ScopedDb, range: RestaurantStockReportR
 }
 
 export async function readPurchasingReport(db: ScopedDb, range: RestaurantReportRange) {
-  const parsed = validateRestaurantReportRange(range);
+  const timestampRanges = await resolveBranchTimestampRanges(db, range);
+  const purchaseOrderRange = branchTimestampClause(
+    timestampRanges,
+    Prisma.sql`purchase_order."branchId"`,
+    Prisma.sql`purchase_order."createdAt"`
+  );
+  const receiptRange = branchTimestampClause(
+    timestampRanges,
+    Prisma.sql`receipt."branchId"`,
+    Prisma.sql`receipt."receivedAt"`
+  );
   const [summaryRows, statusRows, supplierRows, discrepancyRows] = await Promise.all([
     db.$queryRaw<
       Array<{
@@ -1685,51 +1735,39 @@ export async function readPurchasingReport(db: ScopedDb, range: RestaurantReport
         (
           SELECT COUNT(*)::int
           FROM "restaurant_purchase_orders" purchase_order
-          WHERE purchase_order."branchId" IN (${Prisma.join(range.branchIds)})
-            AND purchase_order."createdAt" >= ${parsed.from}
-            AND purchase_order."createdAt" < ${parsed.toExclusive}
+          WHERE ${purchaseOrderRange}
         ) AS "purchaseOrderCount",
         (
           SELECT COALESCE(SUM(line."orderedQuantity" * line."unitCost"), 0)
           FROM "restaurant_purchase_order_lines" line
           JOIN "restaurant_purchase_orders" purchase_order
             ON purchase_order."id" = line."purchaseOrderId"
-          WHERE purchase_order."branchId" IN (${Prisma.join(range.branchIds)})
-            AND purchase_order."createdAt" >= ${parsed.from}
-            AND purchase_order."createdAt" < ${parsed.toExclusive}
+          WHERE ${purchaseOrderRange}
         ) AS "purchaseOrderValue",
         (
           SELECT COUNT(*)::int
           FROM "restaurant_purchase_receipts" receipt
-          WHERE receipt."branchId" IN (${Prisma.join(range.branchIds)})
-            AND receipt."receivedAt" >= ${parsed.from}
-            AND receipt."receivedAt" < ${parsed.toExclusive}
+          WHERE ${receiptRange}
         ) AS "receiptCount",
         (
           SELECT COALESCE(SUM(line."receivedQuantity" * line."unitCost"), 0)
           FROM "restaurant_purchase_receipt_lines" line
           JOIN "restaurant_purchase_receipts" receipt
             ON receipt."id" = line."purchaseReceiptId"
-          WHERE receipt."branchId" IN (${Prisma.join(range.branchIds)})
-            AND receipt."receivedAt" >= ${parsed.from}
-            AND receipt."receivedAt" < ${parsed.toExclusive}
+          WHERE ${receiptRange}
         ) AS "receivedSupplierSpend",
         (
           SELECT COUNT(*)::int
           FROM "restaurant_receiving_discrepancies" discrepancy
           JOIN "restaurant_purchase_receipts" receipt
             ON receipt."id" = discrepancy."purchaseReceiptId"
-          WHERE receipt."branchId" IN (${Prisma.join(range.branchIds)})
-            AND receipt."receivedAt" >= ${parsed.from}
-            AND receipt."receivedAt" < ${parsed.toExclusive}
+          WHERE ${receiptRange}
         ) AS "discrepancyCount"
     `),
     db.$queryRaw<Array<{ status: string; count: number }>>(Prisma.sql`
       SELECT purchase_order."status"::text AS "status", COUNT(*)::int AS "count"
       FROM "restaurant_purchase_orders" purchase_order
-      WHERE purchase_order."branchId" IN (${Prisma.join(range.branchIds)})
-        AND purchase_order."createdAt" >= ${parsed.from}
-        AND purchase_order."createdAt" < ${parsed.toExclusive}
+      WHERE ${purchaseOrderRange}
       GROUP BY purchase_order."status"
       ORDER BY purchase_order."status" ASC
     `),
@@ -1740,17 +1778,17 @@ export async function readPurchasingReport(db: ScopedDb, range: RestaurantReport
       JOIN "restaurant_purchase_receipts" receipt
         ON receipt."id" = line."purchaseReceiptId"
       JOIN "restaurant_suppliers" supplier ON supplier."id" = receipt."supplierId"
-      WHERE receipt."branchId" IN (${Prisma.join(range.branchIds)})
-        AND receipt."receivedAt" >= ${parsed.from}
-        AND receipt."receivedAt" < ${parsed.toExclusive}
+      WHERE ${receiptRange}
       GROUP BY supplier."name"
       ORDER BY supplier."name" ASC
     `),
     db.restaurantReceivingDiscrepancy.findMany({
       where: {
         purchaseReceipt: {
-          branchId: { in: range.branchIds },
-          receivedAt: { gte: parsed.from, lt: parsed.toExclusive },
+          OR: timestampRanges.map((timestampRange) => ({
+            branchId: timestampRange.branchId,
+            receivedAt: { gte: timestampRange.from, lt: timestampRange.toExclusive },
+          })),
         },
       },
       orderBy: [{ purchaseReceipt: { receivedAt: 'asc' } }, { id: 'asc' }],
