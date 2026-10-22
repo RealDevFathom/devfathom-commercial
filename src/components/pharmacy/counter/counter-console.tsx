@@ -1,6 +1,7 @@
 'use client';
 
 import { browserUuid } from '@/lib/browser-uuid';
+import { clearActiveSale, persistActiveSale, readActiveSale } from './active-sale-storage';
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
@@ -351,6 +352,17 @@ function ScopedPharmacyCounterConsole({
     !branchesQuery.isError &&
     branches.some((branch) => branch.id === branchId);
 
+  // The URL remains authoritative when supplied. A plain reload has no URL
+  // state, so recover the last bill only after this account's branch list has
+  // proved that the saved branch is still in scope.
+  useEffect(() => {
+    if (!branchesQuery.isSuccess || initialSaleId || saleId) return;
+    const saved = readActiveSale({ organizationId, accountId });
+    if (!saved || !branches.some((branch) => branch.id === saved.branchId)) return;
+    setSelectedBranchId(saved.branchId);
+    setSaleId(saved.saleId);
+  }, [accountId, branches, branchesQuery.isSuccess, initialSaleId, organizationId, saleId]);
+
   const discardReceiptIntent = useCallback(() => {
     receiptIntent.current?.printReservation?.cancel();
     receiptIntent.current = null;
@@ -530,9 +542,34 @@ function ScopedPharmacyCounterConsole({
       setTenderOutcome(null);
       setTenderReadRequired(false);
       setRestoredAttempt(null);
+      try {
+        if (nextSaleId) {
+          persistActiveSale({ organizationId, accountId, branchId, saleId: nextSaleId });
+        } else {
+          clearActiveSale({ organizationId, accountId });
+        }
+      } catch {
+        // The bill remains usable when browser storage is disabled; the server
+        // remains authoritative and the URL can still recover it explicitly.
+      }
     },
-    [discardReceiptIntent]
+    [accountId, branchId, discardReceiptIntent, organizationId]
   );
+
+  useEffect(() => {
+    if (!branchAuthorized || !saleId) return;
+    if (
+      cartQuery.isSuccess &&
+      cartQuery.data?.saleId === saleId &&
+      cartQuery.data.status !== 'OPEN'
+    ) {
+      try {
+        clearActiveSale({ organizationId, accountId });
+      } catch {
+        // A stale pointer is harmless: the scoped API read rejects inaccessible bills.
+      }
+    }
+  }, [accountId, branchAuthorized, cartQuery.data, cartQuery.isSuccess, organizationId, saleId]);
 
   // ── Derived state ─────────────────────────────────────────────────────────
 

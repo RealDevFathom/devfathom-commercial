@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   mutationOptions: vi.fn(),
   receiptProps: vi.fn(),
   queryOptions: vi.fn(),
+  queryInput: vi.fn(),
   outcomeQuery: vi.fn(),
   khataAccounts: vi.fn(),
   khataStatement: vi.fn(),
@@ -55,6 +56,7 @@ vi.mock('@/lib/trpc', () => {
         name,
         {
           useQuery: (_input: unknown, options?: unknown) => {
+            mocks.queryInput(name, _input);
             mocks.queryOptions(name, options);
             return mocks.queries[name];
           },
@@ -283,6 +285,29 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('PharmacyCounterConsole authoritative bill state', () => {
+  it('restores the scoped open bill and its branch after a plain reload', async () => {
+    window.localStorage.setItem(
+      'devfathom.pharmacy.counter.active:["org-a","account-a"]',
+      JSON.stringify({
+        version: 1,
+        organizationId: 'org-a',
+        accountId: 'account-a',
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+      })
+    );
+
+    render(<PharmacyCounterConsole />);
+
+    await waitFor(() =>
+      expect(mocks.queryInput).toHaveBeenCalledWith('counterCart', {
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+      })
+    );
+    expect(screen.getByText('Synthetic item')).toBeInTheDocument();
+  });
+
   it.each([
     'missing',
     'loading',
