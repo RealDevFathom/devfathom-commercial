@@ -98,18 +98,24 @@ describe('restaurant navigation', () => {
 describe('pharmacy navigation', () => {
   const pharmacyRoutes = ['/pharmacy', '/pharmacy/counter', '/pharmacy/regulatory'];
   const operations = [
-    ['/pharmacy/inventory', 'pharmacy-inventory'],
-    ['/pharmacy/purchasing', 'pharmacy-procurement'],
-    ['/pharmacy/finance', 'pharmacy-finance'],
-    ['/pharmacy/reports', 'pharmacy-reports'],
+    ['/pharmacy/inventory', 'pharmacy-inventory', 'pharmacy:inventory'],
+    ['/pharmacy/purchasing', 'pharmacy-procurement', 'pharmacy:procurement'],
+    ['/pharmacy/finance', 'pharmacy-finance', 'reports:operational'],
+    ['/pharmacy/reports', 'pharmacy-reports', 'reports:operational'],
   ] as const;
 
   it.each(operations)(
     'shows %s only with its own license, independently of Chat',
-    (route, module) => {
+    (route, module, capability) => {
       const granted = visibleNavigation(
         { vertical: 'PHARMACY', enabledModules: [module] },
-        'ADMIN'
+        'ADMIN',
+        [],
+        capability === 'reports:operational' && route === '/pharmacy/finance'
+          ? ['reports:operational', 'reports:financial']
+          : capability
+            ? [capability]
+            : []
       ).map((item) => item.href);
       expect(granted).toContain(route);
       expect(granted).not.toContain('/chat');
@@ -133,30 +139,125 @@ describe('pharmacy navigation', () => {
     }
   );
 
-  it.each(['MEMBER', 'HR', undefined])(
-    'keeps operational navigation available without granting admin-only finance to %s',
-    (role) => {
-      const visible = visibleNavigation(
-        {
-          vertical: 'PHARMACY',
-          enabledModules: ['pharmacy-core', ...operations.map(([, module]) => module)],
-        },
-        role
-      ).map((item) => item.href);
-      expect(visible).toEqual(
-        expect.arrayContaining(['/pharmacy/inventory', '/pharmacy/purchasing', '/pharmacy/reports'])
-      );
-      for (const adminRoute of [
-        '/pharmacy',
-        '/pharmacy/medicines',
-        '/pharmacy/regulatory',
-        '/pharmacy/settings/branches',
+  const allPharmacyModules = [
+    'pharmacy-core',
+    'pharmacy-counter',
+    'pharmacy-inventory',
+    'pharmacy-procurement',
+    'pharmacy-finance',
+    'pharmacy-reports',
+    'pharmacy-dispensing',
+    'pharmacy-safety',
+  ];
+
+  it.each([
+    {
+      role: 'Manager',
+      capabilities: ['pharmacy:manage', 'pharmacy:orders'] as const,
+      routes: ['/pharmacy/prescriptions'],
+    },
+    {
+      role: 'Cashier',
+      capabilities: ['pharmacy:counter', 'pharmacy:orders'] as const,
+      routes: ['/pharmacy/counter', '/pharmacy/prescriptions'],
+    },
+    {
+      role: 'Pharmacist',
+      capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'] as const,
+      routes: [
+        '/pharmacy/counter',
+        '/pharmacy/prescriptions',
+        '/pharmacy/pharmacist-queue',
+        '/pharmacy/substitution',
+      ],
+    },
+    {
+      role: 'Owner / Operator',
+      capabilities: [
+        'reports:operational',
+        'reports:financial',
+        'pharmacy:orders',
+        'pharmacy:dispense',
+        'pharmacy:catalogue-review',
+        'pharmacy:safety',
+      ] as const,
+      routes: [
+        '/pharmacy/counter',
+        '/pharmacy/reports',
+        '/pharmacy/prescriptions',
+        '/pharmacy/pharmacist-queue',
+        '/pharmacy/substitution',
+        '/pharmacy/controlled-register',
+      ],
+    },
+    {
+      role: 'Procurement',
+      capabilities: ['pharmacy:procurement'] as const,
+      routes: ['/pharmacy/purchasing'],
+    },
+    {
+      role: 'Inventory',
+      capabilities: ['pharmacy:inventory'] as const,
+      routes: ['/pharmacy/inventory'],
+    },
+    {
+      role: 'Auditor',
+      capabilities: ['reports:operational'] as const,
+      routes: ['/pharmacy/reports'],
+    },
+    {
+      role: 'Finance',
+      capabilities: ['reports:financial'] as const,
+      routes: [],
+    },
+  ])('shows only the pharmacy work permitted to the $role role', ({ capabilities, routes }) => {
+    const visible = visibleNavigation(
+      { vertical: 'PHARMACY', enabledModules: allPharmacyModules },
+      'EMPLOYEE',
+      [],
+      capabilities
+    )
+      .filter((item) => item.group === 'Pharmacy')
+      .map((item) => item.href);
+
+    expect(visible).toEqual(routes);
+    expect(visible).not.toContain('/pharmacy/counter/close');
+  });
+
+  it('keeps sensitive pharmacist navigation out of the wildcard Owner role', () => {
+    // These are the effective decisions returned by ABAC for pharmacy:* plus
+    // the Owner template's two exact report grants. Sensitive capabilities are
+    // intentionally absent because wildcard ALLOW rules cannot confer them.
+    const ownerCapabilities = [
+      'pharmacy:counter',
+      'pharmacy:procurement',
+      'pharmacy:inventory',
+      'pharmacy:orders',
+      'reports:operational',
+      'reports:financial',
+    ] as const;
+    const visible = visibleNavigation(
+      { vertical: 'PHARMACY', enabledModules: allPharmacyModules },
+      'ADMIN',
+      [],
+      ownerCapabilities
+    ).map((item) => item.href);
+
+    expect(visible).toEqual(
+      expect.arrayContaining([
+        '/pharmacy/counter/close',
+        '/pharmacy/counter',
+        '/pharmacy/inventory',
+        '/pharmacy/purchasing',
         '/pharmacy/finance',
-      ]) {
-        expect(visible).not.toContain(adminRoute);
-      }
-    }
-  );
+        '/pharmacy/reports',
+        '/pharmacy/prescriptions',
+      ])
+    );
+    expect(visible).not.toContain('/pharmacy/pharmacist-queue');
+    expect(visible).not.toContain('/pharmacy/substitution');
+    expect(visible).not.toContain('/pharmacy/controlled-register');
+  });
 
   it.each(['RESTAURANT', 'AGENCY'] as const)(
     'hides every Pharmacy entry from %s even with all Pharmacy modules granted',
@@ -191,7 +292,9 @@ describe('pharmacy navigation', () => {
         vertical: 'RESTAURANT',
         enabledModules: ['restaurant-core', 'pharmacy-core', 'pharmacy-counter'],
       },
-      'ADMIN'
+      'ADMIN',
+      [],
+      ['pharmacy:counter']
     ).map((item) => item.href);
 
     for (const route of pharmacyRoutes) {
@@ -222,7 +325,9 @@ describe('pharmacy navigation', () => {
         vertical: 'PHARMACY',
         enabledModules: ['pharmacy-core', 'pharmacy-counter'],
       },
-      'ADMIN'
+      'ADMIN',
+      [],
+      ['pharmacy:counter']
     ).map((item) => item.href);
 
     expect(visible).toEqual(expect.arrayContaining(pharmacyRoutes));
