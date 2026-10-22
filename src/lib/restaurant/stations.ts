@@ -15,10 +15,10 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * conflict (never a silent double-default). The "at least one" half is maintained
  * by defaulting a branch's FIRST station automatically.
  *
- * A routing rule targets exactly one of a product or a category (the DB CHECK
+ * A routing rule targets exactly one of a product, category or course (the DB CHECK
  * enforces the XOR; this layer rejects it earlier as a friendly error) and
  * carries a `priority`; resolution precedence lives in the pure
- * `station-routing.ts` (product > category > default, priority breaking ties).
+ * `station-routing.ts` (product > category > course > default, priority breaking ties).
  * Referenced station/product/category rows are validated in scope so a
  * cross-tenant reference is rejected here before the composite tenant foreign
  * keys would reject it (C1).
@@ -70,10 +70,10 @@ async function assertBranchInScope(db: ScopedDb, branchId: string): Promise<void
 async function requireStation(
   db: ScopedDb,
   id: string
-): Promise<{ id: string; branchId: string; isDefault: boolean }> {
+): Promise<{ id: string; branchId: string; isDefault: boolean; active: boolean }> {
   const station = await db.restaurantKitchenStation.findUnique({
     where: { id },
-    select: { id: true, branchId: true, isDefault: true },
+    select: { id: true, branchId: true, isDefault: true, active: true },
   });
   if (!station) {
     throw new StationError('Station not found.', 'STATION_NOT_FOUND');
@@ -167,6 +167,12 @@ export async function updateStation(db: ScopedDb, id: string, patch: UpdateStati
  */
 export async function setDefaultStation(db: ScopedDb, id: string) {
   const station = await requireStation(db, id);
+  if (!station.active) {
+    throw new StationError(
+      'Reactivate this station before making it the branch default.',
+      'INVALID'
+    );
+  }
   if (station.isDefault) return db.restaurantKitchenStation.findUniqueOrThrow({ where: { id } });
   try {
     return await db.$transaction(async (tx) => {
@@ -209,18 +215,21 @@ export type CreateRoutingRuleInput = {
   stationId: string;
   productId?: string | null;
   categoryId?: string | null;
+  course?: number | null;
   priority?: number;
 };
 
-/** Validate the product-XOR-category target and that the referenced row is in scope. */
+/** Validate the product/category/course XOR target and referenced rows in scope. */
 async function assertRoutingTarget(
   db: ScopedDb,
   productId: string | null,
-  categoryId: string | null
+  categoryId: string | null,
+  course: number | null
 ): Promise<void> {
-  if ((productId === null) === (categoryId === null)) {
+  const targets = [productId !== null, categoryId !== null, course !== null].filter(Boolean).length;
+  if (targets !== 1 || (course !== null && (!Number.isInteger(course) || course < 1))) {
     throw new StationError(
-      'A routing rule must target exactly one of a product or a category.',
+      'A routing rule must target exactly one product, category, or positive course number.',
       'RULE_TARGET_INVALID'
     );
   }
@@ -243,9 +252,16 @@ export async function createRoutingRule(db: ScopedDb, input: CreateRoutingRuleIn
   await requireStation(db, input.stationId);
   const productId = input.productId ?? null;
   const categoryId = input.categoryId ?? null;
-  await assertRoutingTarget(db, productId, categoryId);
+  const course = input.course ?? null;
+  await assertRoutingTarget(db, productId, categoryId, course);
   return db.restaurantStationRoutingRule.create({
-    data: { stationId: input.stationId, productId, categoryId, priority: input.priority ?? 0 },
+    data: {
+      stationId: input.stationId,
+      productId,
+      categoryId,
+      course,
+      priority: input.priority ?? 0,
+    },
   });
 }
 
@@ -292,6 +308,7 @@ export type RoutingRuleView = {
   productName: string | null;
   categoryId: string | null;
   categoryName: string | null;
+  course: number | null;
 };
 
 export type StationView = {
@@ -329,6 +346,7 @@ export async function listStations(db: ScopedDb, input: ListStationsInput): Prom
           priority: true,
           productId: true,
           categoryId: true,
+          course: true,
           product: { select: { name: true } },
           category: { select: { name: true } },
         },
@@ -349,6 +367,7 @@ export async function listStations(db: ScopedDb, input: ListStationsInput): Prom
       productName: rule.product?.name ?? null,
       categoryId: rule.categoryId,
       categoryName: rule.category?.name ?? null,
+      course: rule.course,
     })),
   }));
 }

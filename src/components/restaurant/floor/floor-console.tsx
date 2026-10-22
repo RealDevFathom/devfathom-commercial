@@ -109,6 +109,7 @@ export function FloorConsole() {
   const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
     enabled: posEnabled,
   });
+  const accessQuery = trpc.restaurantFloor.access.useQuery(undefined, { enabled: posEnabled });
   const [branchId, setBranchId] = useState('');
   const [businessDate, setBusinessDate] = useState('');
   const [includeInactive, setIncludeInactive] = useState(false);
@@ -142,7 +143,9 @@ export function FloorConsole() {
   const categoriesQuery = trpc.restaurantCatalog.listCategories.useQuery(undefined, {
     enabled: posEnabled && editor?.kind === 'routing' && !editor.item,
   });
-  const [routingTargetType, setRoutingTargetType] = useState<'product' | 'category'>('product');
+  const [routingTargetType, setRoutingTargetType] = useState<'product' | 'category' | 'course'>(
+    'product'
+  );
   const [routingTargetSearch, setRoutingTargetSearch] = useState('');
 
   const refresh = () => {
@@ -220,9 +223,11 @@ export function FloorConsole() {
   const floors = floorsQuery.data ?? [];
   const allTables = floors.flatMap((floor) => floor.tables);
   const occupiedTables = allTables.filter((table) => table.occupied).length;
-  const readError = floorsQuery.error ?? sectionsQuery.error ?? stationsQuery.error;
+  const readError =
+    accessQuery.error ?? floorsQuery.error ?? sectionsQuery.error ?? stationsQuery.error;
   const permissionDenied = isPermissionError(readError);
-  const loading = floorsQuery.isLoading || stationsQuery.isLoading;
+  const canManage = accessQuery.data?.canManage === true;
+  const loading = accessQuery.isLoading || floorsQuery.isLoading || stationsQuery.isLoading;
 
   const openEditor = (value: Editor) => {
     setMutationError('');
@@ -322,6 +327,7 @@ export function FloorConsole() {
             stationId: editor.stationId,
             productId: targetType === 'product' ? targetId : null,
             categoryId: targetType === 'category' ? targetId : null,
+            course: targetType === 'course' ? integer(data, 'course', 1) : null,
             priority: integer(data, 'priority'),
           });
         }
@@ -390,7 +396,7 @@ export function FloorConsole() {
         heading="Floor"
         description="Manage floor occupancy, server sections, and kitchen routing by branch."
         actions={
-          posEnabled && branchReady && !permissionDenied ? (
+          posEnabled && branchReady && !permissionDenied && canManage ? (
             <Button className="min-h-11" onClick={() => openEditor({ kind: 'floor' })}>
               Add floor
             </Button>
@@ -472,6 +478,14 @@ export function FloorConsole() {
             </SectionCard>
           ) : (
             <>
+              {!canManage ? (
+                <SectionCard title="Read-only floor">
+                  <p role="status" className="text-sm text-text-muted">
+                    You can review floor occupancy and routing. A restaurant manager must make
+                    configuration changes.
+                  </p>
+                </SectionCard>
+              ) : null}
               <SectionCard eyebrow="Live ledger" title="Floor snapshot">
                 <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
                   <Stat label="Floors" value={floors.length} />
@@ -516,29 +530,31 @@ export function FloorConsole() {
                               {floor.name} · sort {floor.sortOrder}
                             </p>
                           </div>
-                          <div className="flex flex-wrap gap-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => openEditor({ kind: 'table', floorId: floor.id })}
-                            >
-                              Add table
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => openEditor({ kind: 'floor', item: floor })}
-                            >
-                              Edit
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={() => confirmDeleteFloor(floor)}
-                            >
-                              Delete
-                            </Button>
-                          </div>
+                          {canManage ? (
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => openEditor({ kind: 'table', floorId: floor.id })}
+                              >
+                                Add table
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => openEditor({ kind: 'floor', item: floor })}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => confirmDeleteFloor(floor)}
+                              >
+                                Delete
+                              </Button>
+                            </div>
+                          ) : null}
                         </div>
                         {floor.tables.length === 0 ? (
                           <p className="mt-4 text-sm text-text-muted">No tables on this floor.</p>
@@ -585,24 +601,30 @@ export function FloorConsole() {
                                     {table.activeOrderIds.join(', ')}
                                   </p>
                                 ) : null}
-                                <div className="mt-3 flex gap-2">
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() =>
-                                      openEditor({ kind: 'table', floorId: floor.id, item: table })
-                                    }
-                                  >
-                                    Edit
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="destructive"
-                                    onClick={() => confirmDeleteTable(table)}
-                                  >
-                                    Delete
-                                  </Button>
-                                </div>
+                                {canManage ? (
+                                  <div className="mt-3 flex gap-2">
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() =>
+                                        openEditor({
+                                          kind: 'table',
+                                          floorId: floor.id,
+                                          item: table,
+                                        })
+                                      }
+                                    >
+                                      Edit
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      onClick={() => confirmDeleteTable(table)}
+                                    >
+                                      Delete
+                                    </Button>
+                                  </div>
+                                ) : null}
                               </div>
                             ))}
                           </div>
@@ -618,9 +640,11 @@ export function FloorConsole() {
                   eyebrow="Date assignment"
                   title="Server sections"
                   actions={
-                    <Button size="sm" onClick={() => openEditor({ kind: 'section' })}>
-                      Add section
-                    </Button>
+                    canManage ? (
+                      <Button size="sm" onClick={() => openEditor({ kind: 'section' })}>
+                        Add section
+                      </Button>
+                    ) : null
                   }
                 >
                   {!businessDate ? (
@@ -654,38 +678,40 @@ export function FloorConsole() {
                                 {section.assignments.length === 1 ? '' : 's'}
                               </p>
                             </div>
-                            <div className="flex flex-wrap gap-2">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => openEditor({ kind: 'membership', section })}
-                              >
-                                Tables
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() =>
-                                  openEditor({ kind: 'assignment', sectionId: section.id })
-                                }
-                              >
-                                Assign
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => openEditor({ kind: 'section', item: section })}
-                              >
-                                Edit
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={() => confirmDeleteSection(section)}
-                              >
-                                Delete
-                              </Button>
-                            </div>
+                            {canManage ? (
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => openEditor({ kind: 'membership', section })}
+                                >
+                                  Tables
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() =>
+                                    openEditor({ kind: 'assignment', sectionId: section.id })
+                                  }
+                                >
+                                  Assign
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => openEditor({ kind: 'section', item: section })}
+                                >
+                                  Edit
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => confirmDeleteSection(section)}
+                                >
+                                  Delete
+                                </Button>
+                              </div>
+                            ) : null}
                           </div>
                           <p className="mt-3 text-sm text-text-muted">
                             Tables: {section.tables.map((table) => table.code).join(', ') || 'None'}
@@ -702,13 +728,15 @@ export function FloorConsole() {
                                   </span>
                                   <StatusPill status={assignment.staffStatus} />
                                 </div>
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => confirmUnassign(section, assignment)}
-                                >
-                                  Unassign
-                                </Button>
+                                {canManage ? (
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    onClick={() => confirmUnassign(section, assignment)}
+                                  >
+                                    Unassign
+                                  </Button>
+                                ) : null}
                               </div>
                             ))}
                           </div>
@@ -727,9 +755,11 @@ export function FloorConsole() {
                   eyebrow="Kitchen routing"
                   title="Stations"
                   actions={
-                    <Button size="sm" onClick={() => openEditor({ kind: 'station' })}>
-                      Add station
-                    </Button>
+                    canManage ? (
+                      <Button size="sm" onClick={() => openEditor({ kind: 'station' })}>
+                        Add station
+                      </Button>
+                    ) : null
                   }
                 >
                   {stationsQuery.data?.length ? (
@@ -761,48 +791,50 @@ export function FloorConsole() {
                                 />
                               </div>
                             </div>
-                            <div className="flex flex-wrap gap-2">
-                              {!station.isDefault ? (
+                            {canManage ? (
+                              <div className="flex flex-wrap gap-2">
+                                {!station.isDefault && station.active ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() =>
+                                      confirm({
+                                        title: `Make ${station.name} default?`,
+                                        description:
+                                          'This station becomes the branch routing fallback.',
+                                        label: 'Set default',
+                                        run: () => setDefaultStation.mutate({ id: station.id }),
+                                      })
+                                    }
+                                  >
+                                    Make default
+                                  </Button>
+                                ) : null}
                                 <Button
                                   size="sm"
                                   variant="outline"
                                   onClick={() =>
-                                    confirm({
-                                      title: `Make ${station.name} default?`,
-                                      description:
-                                        'This station becomes the branch routing fallback.',
-                                      label: 'Set default',
-                                      run: () => setDefaultStation.mutate({ id: station.id }),
-                                    })
+                                    openEditor({ kind: 'routing', stationId: station.id })
                                   }
                                 >
-                                  Make default
+                                  Add rule
                                 </Button>
-                              ) : null}
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() =>
-                                  openEditor({ kind: 'routing', stationId: station.id })
-                                }
-                              >
-                                Add rule
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => openEditor({ kind: 'station', item: station })}
-                              >
-                                Edit
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={() => confirmDeleteStation(station)}
-                              >
-                                Delete
-                              </Button>
-                            </div>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => openEditor({ kind: 'station', item: station })}
+                                >
+                                  Edit
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => confirmDeleteStation(station)}
+                                >
+                                  Delete
+                                </Button>
+                              </div>
+                            ) : null}
                           </div>
                           {station.routingRules.length ? (
                             <div className="mt-3 space-y-2">
@@ -814,33 +846,37 @@ export function FloorConsole() {
                                   <p className="text-sm text-text-strong">
                                     {rule.productName
                                       ? `Product: ${rule.productName}`
-                                      : `Category: ${rule.categoryName ?? 'Unavailable category'}`}{' '}
+                                      : rule.categoryName
+                                        ? `Category: ${rule.categoryName}`
+                                        : `Course: ${rule.course}`}{' '}
                                     <span className="text-text-muted">
                                       · priority {rule.priority}
                                     </span>
                                   </p>
-                                  <div className="flex gap-2">
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      onClick={() =>
-                                        openEditor({
-                                          kind: 'routing',
-                                          stationId: station.id,
-                                          item: rule,
-                                        })
-                                      }
-                                    >
-                                      Edit
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="destructive"
-                                      onClick={() => confirmDeleteRule(rule)}
-                                    >
-                                      Delete
-                                    </Button>
-                                  </div>
+                                  {canManage ? (
+                                    <div className="flex gap-2">
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() =>
+                                          openEditor({
+                                            kind: 'routing',
+                                            stationId: station.id,
+                                            item: rule,
+                                          })
+                                        }
+                                      >
+                                        Edit
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="destructive"
+                                        onClick={() => confirmDeleteRule(rule)}
+                                      >
+                                        Delete
+                                      </Button>
+                                    </div>
+                                  ) : null}
                                 </div>
                               ))}
                             </div>
@@ -1039,73 +1075,89 @@ export function FloorConsole() {
                           className={selectClass}
                           value={routingTargetType}
                           onChange={(event) =>
-                            setRoutingTargetType(event.target.value as 'product' | 'category')
+                            setRoutingTargetType(
+                              event.target.value as 'product' | 'category' | 'course'
+                            )
                           }
                         >
                           <option value="product">Product</option>
                           <option value="category">Category</option>
+                          <option value="course">Course</option>
                         </select>
                       </Field>
-                      <div className="space-y-1.5">
-                        <label htmlFor="routing-target" className={labelClass}>
-                          {routingTargetType === 'product' ? 'Product' : 'Category'}
-                        </label>
-                        <Input
-                          type="search"
-                          aria-label={`Search ${routingTargetType === 'product' ? 'products' : 'categories'}`}
-                          value={routingTargetSearch}
-                          onChange={(event) => setRoutingTargetSearch(event.target.value)}
-                          placeholder={`Search ${routingTargetType === 'product' ? 'products' : 'categories'}`}
-                          className="mb-2 h-11"
-                        />
-                        <select
-                          id="routing-target"
-                          name="targetId"
-                          required
-                          className={selectClass}
-                          disabled={
-                            routingTargetType === 'product'
-                              ? productsQuery.isLoading || Boolean(productsQuery.error)
-                              : categoriesQuery.isLoading || Boolean(categoriesQuery.error)
-                          }
-                        >
-                          <option value="">
-                            {(
+                      {routingTargetType === 'course' ? (
+                        <Field label="Course number">
+                          <Input
+                            name="course"
+                            type="number"
+                            required
+                            min={1}
+                            defaultValue={1}
+                            className="h-11"
+                          />
+                        </Field>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <label htmlFor="routing-target" className={labelClass}>
+                            {routingTargetType === 'product' ? 'Product' : 'Category'}
+                          </label>
+                          <Input
+                            type="search"
+                            aria-label={`Search ${routingTargetType === 'product' ? 'products' : 'categories'}`}
+                            value={routingTargetSearch}
+                            onChange={(event) => setRoutingTargetSearch(event.target.value)}
+                            placeholder={`Search ${routingTargetType === 'product' ? 'products' : 'categories'}`}
+                            className="mb-2 h-11"
+                          />
+                          <select
+                            id="routing-target"
+                            name="targetId"
+                            required
+                            className={selectClass}
+                            disabled={
                               routingTargetType === 'product'
-                                ? productsQuery.isLoading
-                                : categoriesQuery.isLoading
+                                ? productsQuery.isLoading || Boolean(productsQuery.error)
+                                : categoriesQuery.isLoading || Boolean(categoriesQuery.error)
+                            }
+                          >
+                            <option value="">
+                              {(
+                                routingTargetType === 'product'
+                                  ? productsQuery.isLoading
+                                  : categoriesQuery.isLoading
+                              )
+                                ? 'Loading catalog…'
+                                : (
+                                      routingTargetType === 'product'
+                                        ? productsQuery.error
+                                        : categoriesQuery.error
+                                    )
+                                  ? 'Catalog unavailable for your access'
+                                  : `Choose a ${routingTargetType}`}
+                            </option>
+                            {(routingTargetType === 'product'
+                              ? (productsQuery.data ?? []).map((item) => ({
+                                  id: item.id,
+                                  label: item.name,
+                                }))
+                              : (categoriesQuery.data ?? []).map((item) => ({
+                                  id: item.id,
+                                  label: item.name,
+                                }))
                             )
-                              ? 'Loading catalog…'
-                              : (
-                                    routingTargetType === 'product'
-                                      ? productsQuery.error
-                                      : categoriesQuery.error
-                                  )
-                                ? 'Catalog unavailable for your access'
-                                : `Choose a ${routingTargetType}`}
-                          </option>
-                          {(routingTargetType === 'product'
-                            ? (productsQuery.data ?? []).map((item) => ({
-                                id: item.id,
-                                label: item.name,
-                              }))
-                            : (categoriesQuery.data ?? []).map((item) => ({
-                                id: item.id,
-                                label: item.name,
-                              }))
-                          )
-                            .filter((item) =>
-                              item.label
-                                .toLowerCase()
-                                .includes(routingTargetSearch.trim().toLowerCase())
-                            )
-                            .map((item) => (
-                              <option key={item.id} value={item.id}>
-                                {item.label}
-                              </option>
-                            ))}
-                        </select>
-                      </div>
+                              .filter((item) =>
+                                item.label
+                                  .toLowerCase()
+                                  .includes(routingTargetSearch.trim().toLowerCase())
+                              )
+                              .map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {item.label}
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+                      )}
                     </>
                   ) : (
                     <p className="rounded-md bg-surface-sunken p-3 text-sm text-text-muted">

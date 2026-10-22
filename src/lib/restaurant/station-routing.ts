@@ -6,11 +6,11 @@
  * the single source of the most-specific-wins precedence used by L2's ticket
  * generation and CRUDed by L3:
  *
- *   product-level rule  >  category-level rule  >  branch default station
+ *   product-level rule  >  category-level rule  >  course-level rule  >  branch default station
  *
  * Within a level, the highest `priority` wins; ties are broken deterministically
  * by station id (ascending) so the result never depends on rule insertion order.
- * A rule targets exactly one of product or category (the DB enforces the XOR), so
+ * A rule targets exactly one of product, category or course (the DB enforces the XOR), so
  * a rule contributes to exactly one level.
  *
  * The module performs no I/O — the caller loads the rules (already tenant- and
@@ -23,6 +23,7 @@ export type StationRoutingRule = {
   stationId: string;
   productId: string | null;
   categoryId: string | null;
+  course: number | null;
   priority: number;
 };
 
@@ -31,10 +32,11 @@ export type StationRoutingRule = {
 export type RoutingTarget = {
   productId: string;
   categoryId: string | null;
+  course: number;
 };
 
 /** How the station was chosen — useful for KOT/debug attribution. */
-export type StationMatchLevel = 'product' | 'category' | 'default';
+export type StationMatchLevel = 'product' | 'category' | 'course' | 'default';
 
 export type StationResolution = {
   stationId: string;
@@ -75,6 +77,11 @@ export function resolveStation(
     );
     if (categoryWinner) return { stationId: categoryWinner.stationId, matchedBy: 'category' };
   }
+
+  const courseWinner = pickWinner(
+    rules.filter((rule) => rule.course !== null && rule.course === target.course)
+  );
+  if (courseWinner) return { stationId: courseWinner.stationId, matchedBy: 'course' };
 
   if (defaultStationId !== null) {
     return { stationId: defaultStationId, matchedBy: 'default' };

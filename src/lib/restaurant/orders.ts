@@ -819,6 +819,7 @@ async function fireItems(
     orderItemId: i.id,
     productId: i.productId,
     categoryId: i.product.categoryId,
+    course: i.course,
     quantity: i.quantity,
   }));
   const tickets = await generateKitchenTickets(tx, {
