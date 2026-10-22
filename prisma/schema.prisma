@@ -10613,7 +10613,7 @@ model RestaurantTimeAdjustment {
   shiftId                  String
   breakId                  String?
   kind                     RestaurantTimeAdjustmentKind
-  originalAt               DateTime
+  originalAt               DateTime?
   correctedAt              DateTime
   reason                   String
   adjustedByUserId         String

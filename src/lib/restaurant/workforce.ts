@@ -177,7 +177,9 @@ export function presentWorkforceShift(shift: WorkforceShift, now = new Date()) {
     shift.status === 'CANCELLED'
       ? 'CANCELLED'
       : clockedOutAt
-        ? 'COMPLETE'
+        ? lateMinutes > DEFAULT_LATE_THRESHOLD_MINUTES
+          ? 'COMPLETE_LATE'
+          : 'COMPLETE'
         : clockedInAt
           ? lateMinutes > DEFAULT_LATE_THRESHOLD_MINUTES
             ? 'LATE'
@@ -558,8 +560,6 @@ export async function appendTimeAdjustment(
             : input.kind === 'BREAK_END' && breakRow
               ? adjustedBreakAt(shift, breakRow.id, 'BREAK_END', breakRow.endedAt)
               : null;
-    if (!originalAt)
-      throw new WorkforceError('The timestamp to correct does not exist.', 'NOT_FOUND');
     if (Number.isNaN(input.correctedAt.getTime())) {
       throw new WorkforceError('A valid corrected timestamp is required.', 'INVALID');
     }
@@ -629,6 +629,15 @@ export async function exportWorkforceAttendanceCsv(
         Math.max(0, Math.round((item.endedAt.getTime() - item.startedAt.getTime()) / MINUTE_MS))
       );
     }, 0);
+    const workedMinutes =
+      shift.clockedInAt && shift.clockedOutAt
+        ? Math.max(
+            0,
+            Math.round(
+              (shift.clockedOutAt.getTime() - shift.clockedInAt.getTime()) / MINUTE_MS
+            ) - breakMinutes
+          )
+        : null;
     return {
       branch: shift.branch.name,
       employee: shift.staffProfile.displayName,
@@ -638,6 +647,8 @@ export async function exportWorkforceAttendanceCsv(
       clockIn: shift.clockedInAt?.toISOString() ?? '',
       clockOut: shift.clockedOutAt?.toISOString() ?? '',
       breakMinutes,
+      workedMinutes: workedMinutes ?? '',
+      workedHours: workedMinutes === null ? '' : (workedMinutes / 60).toFixed(2),
       attendanceStatus: shift.attendanceStatus,
       lateMinutes: shift.lateMinutes,
     };
@@ -653,6 +664,8 @@ export async function exportWorkforceAttendanceCsv(
       'clockIn',
       'clockOut',
       'breakMinutes',
+      'workedMinutes',
+      'workedHours',
       'attendanceStatus',
       'lateMinutes',
     ]),

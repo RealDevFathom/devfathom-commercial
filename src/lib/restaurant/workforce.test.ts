@@ -39,6 +39,17 @@ describe('restaurant workforce presentation and export', () => {
     });
   });
 
+  it('preserves lateness after a late employee clocks out', () => {
+    const completed = {
+      ...baseShift,
+      clockedOutAt: new Date('2026-08-20T17:00:00Z'),
+    };
+    expect(presentWorkforceShift(completed, new Date('2026-08-20T18:00:00Z'))).toMatchObject({
+      attendanceStatus: 'COMPLETE_LATE',
+      lateMinutes: 7,
+    });
+  });
+
   it('keeps corrected timestamps append-only and applies the latest correction on reads', () => {
     const first = new Date('2026-08-20T09:03:00Z');
     const latest = new Date('2026-08-20T08:59:00Z');
@@ -65,5 +76,31 @@ describe('restaurant workforce presentation and export', () => {
     expect(result.csv).toContain("'=HYPERLINK");
     expect(result.csv).toContain("'+SUM(1,1)");
     expect(result.csv).not.toContain('\n=HYPERLINK');
+  });
+
+  it('exports net worked time only for completed attendance', async () => {
+    const completed = {
+      ...baseShift,
+      clockedOutAt: new Date('2026-08-20T17:07:00Z'),
+      breaks: [
+        {
+          id: 'break_1',
+          startedAt: new Date('2026-08-20T12:00:00Z'),
+          endedAt: new Date('2026-08-20T12:30:00Z'),
+        },
+      ],
+    };
+    const db = {
+      restaurantShift: { findMany: vi.fn(async () => [completed, baseShift]) },
+    } as unknown as ScopedDb;
+    const result = await exportWorkforceAttendanceCsv(db, {
+      branchId: 'branch_1',
+      fromBusinessDate: new Date('2026-08-20T00:00:00Z'),
+      toBusinessDate: new Date('2026-08-20T00:00:00Z'),
+    });
+    const [header, completedRow, openRow] = result.csv.split('\n');
+    expect(header).toContain('breakMinutes,workedMinutes,workedHours,attendanceStatus');
+    expect(completedRow).toContain(',30,450,7.50,COMPLETE_LATE,7');
+    expect(openRow).toContain(',0,,,LATE,7');
   });
 });
