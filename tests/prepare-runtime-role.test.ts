@@ -56,6 +56,12 @@ describe('runtime role preparation', () => {
     expect(queries.filter(({ sql }) => /^(GRANT|ALTER DEFAULT PRIVILEGES)/.test(sql))).toHaveLength(
       6
     );
+    const pgTrgmGrant = queries.find(({ sql }) => sql.startsWith('DO $grant_pg_trgm$'))?.sql;
+    expect(pgTrgmGrant).toContain("extension.extname = 'pg_trgm'");
+    expect(pgTrgmGrant).toContain('dependency.deptype = \'e\'');
+    expect(pgTrgmGrant).toContain('GRANT EXECUTE ON FUNCTION %s TO devfathom_app');
+    expect(pgTrgmGrant).not.toContain('ALL FUNCTIONS IN SCHEMA');
+    expect(pgTrgmGrant).not.toContain(' TO PUBLIC');
     expect([...output.log.mock.calls, ...output.warn.mock.calls].flat().join('\n')).not.toContain(
       'secret-value'
     );
@@ -81,6 +87,7 @@ describe('runtime role preparation', () => {
     expect(queries.filter(({ sql }) => /^(GRANT|ALTER DEFAULT PRIVILEGES)/.test(sql))).toHaveLength(
       6
     );
+    expect(queries.some(({ sql }) => sql.startsWith('DO $grant_pg_trgm$'))).toBe(true);
     expect(output.warn).toHaveBeenCalledWith(
       'password: skipped (permission denied; final posture verified)'
     );

@@ -89,6 +89,29 @@ export async function prepareRuntimeRole(
     ['database connect', `GRANT CONNECT ON DATABASE devfathom TO ${ROLE_NAME}`],
     ['schema usage', `GRANT USAGE ON SCHEMA public TO ${ROLE_NAME}`],
     [
+      'pg_trgm search functions',
+      `DO $grant_pg_trgm$
+       DECLARE extension_function regprocedure;
+       BEGIN
+         FOR extension_function IN
+           SELECT procedure.oid::regprocedure
+             FROM pg_catalog.pg_proc AS procedure
+             JOIN pg_catalog.pg_depend AS dependency
+               ON dependency.classid = 'pg_catalog.pg_proc'::regclass
+              AND dependency.objid = procedure.oid
+              AND dependency.refclassid = 'pg_catalog.pg_extension'::regclass
+              AND dependency.deptype = 'e'
+             JOIN pg_catalog.pg_extension AS extension
+               ON extension.oid = dependency.refobjid
+              AND extension.extname = 'pg_trgm'
+            ORDER BY procedure.oid
+         LOOP
+           EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO ${ROLE_NAME}', extension_function);
+         END LOOP;
+       END
+       $grant_pg_trgm$`,
+    ],
+    [
       'existing tables',
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${ROLE_NAME}`,
     ],
