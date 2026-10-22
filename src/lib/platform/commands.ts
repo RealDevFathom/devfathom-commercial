@@ -233,6 +233,8 @@ function sensitiveCommand(action: string): boolean {
       'organization.scim.token',
       'organization.scim.revoke',
       'organization.transition',
+      'organization.pharmacy.placeholder.apply',
+      'organization.pharmacy.placeholder.lock',
     ].includes(action) ||
     action === 'organization.identity' ||
     action.startsWith('organization.identity.') ||
@@ -1504,6 +1506,99 @@ async function runCommand(
   payload: unknown
 ): Promise<CommandResult> {
   switch (action) {
+    case 'organization.pharmacy.placeholder.apply': {
+      if (actor.role !== 'SUPER_ADMIN')
+        throw new PlatformSecurityError('Only a SuperAdmin may apply a placeholder rule set.', 403);
+      const input = z.object({ organizationId: id, reason: sensitiveReason }).parse(payload);
+      const organization = await db.organization.findUnique({
+        where: { id: input.organizationId },
+        select: { id: true, vertical: true },
+      });
+      if (!organization || organization.vertical !== 'PHARMACY')
+        throw new PlatformSecurityError('A Pharmacy organization is required.', 400);
+
+      const label = 'PLACEHOLDER – not a real licence';
+      const effectiveFrom = new Date();
+      const ruleSet = await db.jurisdictionRuleSet.upsert({
+        where: { id: 'pk_pb_placeholder_v1' },
+        update: {},
+        create: {
+          id: 'pk_pb_placeholder_v1',
+          code: 'PK-PB-PLACEHOLDER',
+          version: 1,
+          effectiveFrom: new Date('1970-01-01T00:00:00.000Z'),
+          isPlaceholder: true,
+          licenceCategories: { values: ['*'], provisional: false, label },
+          permittedSchedules: { values: ['*'], provisional: false, label },
+          prescriptionOnlyClasses: { values: ['*'], provisional: false, label },
+          prescriptionRetentionDays: { values: {}, provisional: false, label },
+          controlledRegisterFlags: { values: { recordEverySale: true }, provisional: false, label },
+          pharmacistCoverageRule: { values: { dispenseGrantRequired: true }, provisional: false, label },
+          recordRetentionByClass: { values: {}, provisional: false, label },
+        },
+      });
+      const branches = await db.pharmacyBranch.findMany({
+        where: { organizationId: input.organizationId, active: true },
+      });
+      for (const branch of branches) {
+        const existing = await db.branchRegulatoryProfile.findFirst({
+          where: { organizationId: input.organizationId, branchId: branch.id, isPlaceholder: true },
+        });
+        if (existing) continue;
+        const latest = await db.branchRegulatoryProfile.findFirst({
+          where: { organizationId: input.organizationId, branchId: branch.id },
+          orderBy: { version: 'desc' },
+        });
+        if (latest?.effectiveTo === null)
+          throw new PlatformSecurityError('Lock the current regulatory profile before applying the placeholder.', 409);
+        await db.branchRegulatoryProfile.create({
+          data: {
+            organizationId: input.organizationId,
+            branchId: branch.id,
+            version: (latest?.version ?? 0) + 1,
+            effectiveFrom,
+            provinceCode: branch.provinceCode,
+            jurisdictionRuleSetId: ruleSet.id,
+            premises: { label },
+            licenceCategory: '*', licenceNumber: label, licenceIssuingAuthority: label,
+            licenceValidFrom: new Date('1970-01-01T00:00:00.000Z'),
+            licenceValidTo: new Date('9999-12-31T00:00:00.000Z'),
+            licenceExpiryLabel: label,
+            licenceEvidenceFileRef: label,
+            permittedSchedules: ['OTC', 'RX', 'CONTROLLED'],
+            qualifiedPersonRegistration: label,
+            qualifiedPersonValidFrom: new Date('1970-01-01T00:00:00.000Z'),
+            qualifiedPersonValidTo: new Date('9999-12-31T00:00:00.000Z'),
+            qualifiedPersonCoverageRosterRef: label,
+            fiscalStatus: label,
+            retentionPolicy: { label },
+            isPlaceholder: true,
+          },
+        });
+      }
+      return { targetType: 'Organization', targetId: input.organizationId,
+        organizationId: input.organizationId, data: { applied: true },
+        audit: { placeholder: true, ruleSetId: ruleSet.id, reason: input.reason } };
+    }
+    case 'organization.pharmacy.placeholder.lock': {
+      if (actor.role !== 'SUPER_ADMIN')
+        throw new PlatformSecurityError('Only a SuperAdmin may lock a placeholder rule set.', 403);
+      const input = z.object({ organizationId: id, reason: sensitiveReason }).parse(payload);
+      const removed = await db.branchRegulatoryProfile.deleteMany({
+        where: { organizationId: input.organizationId, isPlaceholder: true },
+      });
+      const organization = await db.organization.findUnique({ where: { id: input.organizationId } });
+      if (!organization) throw new PlatformSecurityError('Organization not found.', 400);
+      if (organization.status === 'ACTIVE') {
+        await db.organization.update({
+          where: { id: input.organizationId },
+          data: { status: 'ONBOARDING', activatedAt: null },
+        });
+      }
+      return { targetType: 'Organization', targetId: input.organizationId,
+        organizationId: input.organizationId, data: { locked: true, removed: removed.count },
+        audit: { placeholder: true, locked: true, removed: removed.count, reason: input.reason } };
+    }
     case 'organization.create': {
       const input = organizationInput.parse(payload);
       const organization = await bootstrapOrganization(db, actor, input);
@@ -3878,6 +3973,17 @@ export async function executePlatformCommand(
       // The audit row is built from the command's declared projection only.
       // `result.data` is the reveal channel and never reaches this table.
       const { before, after } = auditProjection(result);
+      const declaredPlaceholder =
+        result.audit !== null &&
+        typeof result.audit === 'object' &&
+        'placeholder' in result.audit &&
+        result.audit.placeholder === true;
+      const placeholder = result.organizationId && db.branchRegulatoryProfile
+        ? await db.branchRegulatoryProfile.findFirst({
+            where: { organizationId: result.organizationId, isPlaceholder: true, effectiveTo: null },
+            select: { id: true },
+          })
+        : null;
       await db.platformAuditLog.create({
         data: {
           organizationId: result.organizationId,
@@ -3887,6 +3993,7 @@ export async function executePlatformCommand(
           targetId: result.targetId,
           before,
           after,
+          metadata: placeholder || declaredPlaceholder ? { placeholder: true } : undefined,
           requestId: request.headers.get('x-devfathom-request-id'),
           ip:
             request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
@@ -3901,3 +4008,35 @@ export async function executePlatformCommand(
     throw error;
   }
 }
+
+/** Owner-approved emergency entry points. Both run through the normal platform
+ * command transaction and immutable platform audit trail. */
+export function applyPlaceholderRuleSet(
+  organizationId: string,
+  actor: PlatformIdentity,
+  reason: string,
+  request = new Request('http://platform.internal/commands/pharmacy-placeholder', { method: 'POST' })
+) {
+  return executePlatformCommand(
+    actor,
+    'organization.pharmacy.placeholder.apply',
+    { organizationId, reason },
+    request
+  );
+}
+
+export function lockPlaceholderRuleSet(
+  organizationId: string,
+  actor: PlatformIdentity,
+  reason: string,
+  request = new Request('http://platform.internal/commands/pharmacy-placeholder', { method: 'POST' })
+) {
+  return executePlatformCommand(
+    actor,
+    'organization.pharmacy.placeholder.lock',
+    { organizationId, reason },
+    request
+  );
+}
+
+export const revertToPending = lockPlaceholderRuleSet;

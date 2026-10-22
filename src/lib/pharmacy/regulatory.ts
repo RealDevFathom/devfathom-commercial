@@ -51,6 +51,10 @@ function stringValues(value: unknown): readonly string[] {
   return Array.isArray(values) && values.every((item) => typeof item === 'string') ? values : [];
 }
 
+function permits(values: readonly string[], value: string): boolean {
+  return values.includes('*') || values.includes(value);
+}
+
 /**
  * PLAT-02 fail-closed primitive. Every denial is typed and audited before it is
  * thrown; callers cannot downgrade it to a warning by inspecting a boolean.
@@ -76,7 +80,7 @@ export function assertBranchMayOperate(
 
   if (
     !branch.licenceCategory.trim() ||
-    !stringValues(branch.ruleSet.licenceCategories).includes(branch.licenceCategory) ||
+    !permits(stringValues(branch.ruleSet.licenceCategories), branch.licenceCategory) ||
     at < branch.licenceValidFrom ||
     at >= branch.licenceValidTo
   ) {
@@ -96,7 +100,7 @@ export function assertBranchMayOperate(
   if (
     action.schedule &&
     (!branch.permittedSchedules.includes(action.schedule) ||
-      !stringValues(branch.ruleSet.permittedSchedules).includes(action.schedule))
+      !permits(stringValues(branch.ruleSet.permittedSchedules), action.schedule))
   ) {
     deny('SCHEDULE_NOT_PERMITTED');
   }

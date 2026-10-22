@@ -135,6 +135,7 @@ model JurisdictionRuleSet {
   pharmacistCoverageRule    Json
   recordRetentionByClass    Json
   createdAt                 DateTime  @default(now())
+  isPlaceholder             Boolean   @default(false)
 
   regulatoryProfiles BranchRegulatoryProfile[]
 
@@ -158,8 +159,10 @@ model BranchRegulatoryProfile {
   premises                         Json
   licenceCategory                  String
   licenceNumber                    String
+  licenceIssuingAuthority          String?
   licenceValidFrom                 DateTime
   licenceValidTo                   DateTime
+  licenceExpiryLabel               String?
   licenceEvidenceFileRef           String
   permittedSchedules               String[]
   qualifiedPersonRegistration      String
@@ -171,6 +174,7 @@ model BranchRegulatoryProfile {
   fiscalStatus                     String
   retentionPolicy                  Json
   createdAt                        DateTime  @default(now())
+  isPlaceholder                    Boolean   @default(false)
 
   jurisdictionRuleSet JurisdictionRuleSet @relation(fields: [jurisdictionRuleSetId], references: [id], onDelete: Restrict)
   branch              PharmacyBranch      @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)

@@ -146,6 +146,7 @@ async function readOverview(ctx: TRPCContext) {
 async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
   const ruleSets = await ctx.db.jurisdictionRuleSet.findMany({
     where: {
+      isPlaceholder: false,
       effectiveFrom: { lte: at },
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
     },
@@ -321,6 +322,7 @@ export const pharmacyOnboardingRouter = router({
               retentionPolicy: true,
               premises: true,
               createdAt: true,
+              isPlaceholder: true,
               jurisdictionRuleSet: {
                 select: {
                   licenceCategories: true,
