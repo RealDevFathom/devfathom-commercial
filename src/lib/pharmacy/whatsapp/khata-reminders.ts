@@ -111,7 +111,8 @@ export async function processDueWhatsAppKhataReminders(
     notDue: 0,
   };
   const organizationId = config.organizationId;
-  if (!result.configured || config.provider === 'meta' || !organizationId || !config.phoneNumberId)
+  const providerConfigured = config.provider !== 'meta' || Boolean(config.accessToken);
+  if (!result.configured || !providerConfigured || !organizationId || !config.phoneNumberId)
     return { ...result, configured: false };
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));

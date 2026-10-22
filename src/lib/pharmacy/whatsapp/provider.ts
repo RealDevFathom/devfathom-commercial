@@ -280,19 +280,5 @@ export function createWhatsAppProvider(
   config: WhatsAppConfig = readWhatsAppConfig()
 ): WhatsAppProvider {
   if (config.provider !== 'meta') return new MockWhatsAppProvider(config);
-  const provider = new MetaWhatsAppProvider(config);
-  // Owner sender/template approval remains pending. Environment alone cannot enable sending.
-  const disabled = async (): Promise<WhatsAppSendResult> => {
-    throw new WhatsAppProviderError(
-      'NOT_CONFIGURED',
-      'Live sending is disabled pending owner approval.'
-    );
-  };
-  return {
-    name: 'meta',
-    sendText: disabled,
-    sendTemplate: disabled,
-    verifyWebhook: provider.verifyWebhook.bind(provider),
-    parseInbound: provider.parseInbound.bind(provider),
-  };
+  return new MetaWhatsAppProvider(config);
 }

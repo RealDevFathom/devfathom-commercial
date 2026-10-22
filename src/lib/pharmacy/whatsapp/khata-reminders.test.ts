@@ -245,6 +245,58 @@ describe('processDueWhatsAppKhataReminders', () => {
     expect(result).toMatchObject({ configured: false, scanned: 0 });
     expect(provider.calls).toEqual([]);
   });
+
+  it('reports Meta as unconfigured without provider credentials', async () => {
+    store.accounts = [account()];
+    const metaConfig = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_PROVIDER: 'meta',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sender',
+      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER: 'khata_due_ur_v1',
+      PHARMACY_WHATSAPP_TEMPLATE_LANGUAGE: 'ur',
+    });
+
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config: metaConfig });
+
+    expect(result).toMatchObject({ configured: false, scanned: 0, sent: 0 });
+  });
+
+  it('does not reject a configured Meta delivery before scanning', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const metaConfig = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_PROVIDER: 'meta',
+      PHARMACY_WHATSAPP_ACCESS_TOKEN: 'token',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sender',
+      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER: 'khata_due_ur_v1',
+      PHARMACY_WHATSAPP_TEMPLATE_LANGUAGE: 'ur',
+    });
+    const sendTemplate = vi.fn().mockResolvedValue({
+      providerMessageId: 'wamid.khata',
+      acceptedByProvider: true,
+    });
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: metaConfig,
+      provider: {
+        name: 'meta',
+        sendTemplate,
+        sendText: vi.fn(),
+        verifyWebhook: vi.fn(),
+        parseInbound: vi.fn(),
+      },
+    });
+
+    expect(result).toMatchObject({ configured: true, scanned: 1, sent: 1, failed: 0 });
+    expect(sendTemplate).toHaveBeenCalledWith({
+      to: '923001234567',
+      template: 'khataReminder',
+      parameters: ['Khan household', '500.00'],
+    });
+  });
 });
 
 describe('reminder text and daily customer dedupe', () => {
