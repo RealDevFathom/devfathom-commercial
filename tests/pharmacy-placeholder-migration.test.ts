@@ -33,12 +33,16 @@ describe('#631 placeholder migration contract', () => {
     );
   });
 
-  it('restores purge, orphan cleanup and platform placeholder delete exceptions', () => {
+  it('allows deletes only for organization purge and orphan cleanup', () => {
     expect(restoredTriggerMigration).toContain("current_setting('app.purging_organization_id'");
     expect(restoredTriggerMigration).toContain(
       'NOT EXISTS (SELECT 1 FROM "organizations" WHERE "id" = OLD."organizationId")'
     );
-    expect(restoredTriggerMigration).toContain('OLD."isPlaceholder" = true');
+    expect(restoredTriggerMigration).not.toContain('OLD."isPlaceholder" = true');
+    // Purge deletes additionally require the platform-admin session flag (main's guard).
+    expect(restoredTriggerMigration).toMatch(
+      /app\.purging_organization_id[\s\S]{0,160}AND current_setting\('app\.is_platform_admin', true\) = 'true'/
+    );
     expect(restoredTriggerMigration).toContain(
       "TG_TABLE_NAME = 'pharmacy_branch_regulatory_profiles'"
     );

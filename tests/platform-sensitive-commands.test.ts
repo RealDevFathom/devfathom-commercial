@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   organization: { id: 'org_1', vertical: 'AGENCY', status: 'ONBOARDING' } as any,
   placeholderActive: false,
   latestProfile: null as any,
+  lifecycleEvents: [] as any[],
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('bcryptjs', () => ({ hash: async () => 'hashed' }));
@@ -45,7 +46,8 @@ const db = {
       }
       return state.latestProfile;
     }),
-    update: vi.fn(async ({ data }: any) => {
+    update: vi.fn(async ({ where, data }: any) => {
+      if (where?.id === 'placeholder_profile' && data.effectiveTo) state.placeholderActive = false;
       state.latestProfile = { ...state.latestProfile, ...data };
       return state.latestProfile;
     }),
@@ -53,6 +55,11 @@ const db = {
       state.placeholderActive = true;
       return { id: 'placeholder_profile', ...data };
     }),
+    findMany: vi.fn(async () =>
+      state.placeholderActive
+        ? [{ id: 'placeholder_profile', effectiveFrom: new Date('2026-01-01T00:00:00.000Z') }]
+        : []
+    ),
     deleteMany: vi.fn(async () => {
       const count = state.placeholderActive ? 1 : 0;
       state.placeholderActive = false;
@@ -62,6 +69,12 @@ const db = {
   platformAuditLog: {
     create: vi.fn(async ({ data }: any) => {
       state.audits.push(data);
+      return data;
+    }),
+  },
+  organizationLifecycleEvent: {
+    create: vi.fn(async ({ data }: any) => {
+      state.lifecycleEvents.push(data);
       return data;
     }),
   },
@@ -94,6 +107,7 @@ beforeEach(() => {
   state.organization = { id: 'org_1', vertical: 'AGENCY', status: 'ONBOARDING' };
   state.placeholderActive = false;
   state.latestProfile = null;
+  state.lifecycleEvents = [];
 });
 
 describe('pharmacy placeholder commands', () => {
@@ -117,12 +131,13 @@ describe('pharmacy placeholder commands', () => {
 
   it('refuses a tenant administrator identity before any placeholder write', async () => {
     await expect(
-      execute(
+      executePlatformCommand(
+        { id: 'actor_1', role: 'ADMIN', capabilities: [] } as any,
         'organization.pharmacy.placeholder.apply',
         { organizationId: 'org_1', reason, authenticationCode: '123456' },
-        'ADMIN'
+        req
       )
-    ).rejects.toMatchObject({ status: 403 });
+    ).rejects.toThrow(); // tenant roles are not platform roles; capability lookup refuses them
     expect(db.jurisdictionRuleSet.upsert).not.toHaveBeenCalled();
   });
 
@@ -167,9 +182,13 @@ describe('pharmacy placeholder commands', () => {
       permittedSchedules: ['OTC', 'RX', 'CONTROLLED'],
     });
     expect(state.audits.at(-1)).toMatchObject({ metadata: { placeholder: true } });
+    expect(state.lifecycleEvents.at(-1)).toMatchObject({
+      actorId: 'actor_1',
+      metadata: { placeholder: true, operation: 'APPLIED' },
+    });
   });
 
-  it('locks idempotently, clears placeholder profiles, and returns an active org to onboarding', async () => {
+  it('locks append-only, closes placeholder profiles, and returns an active org to onboarding', async () => {
     state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ACTIVE' };
     state.placeholderActive = true;
 
@@ -177,7 +196,11 @@ describe('pharmacy placeholder commands', () => {
     await execute('organization.pharmacy.placeholder.lock', payload);
     await execute('organization.pharmacy.placeholder.lock', payload);
 
-    expect(db.branchRegulatoryProfile.deleteMany).toHaveBeenCalledTimes(2);
+    expect(db.branchRegulatoryProfile.deleteMany).not.toHaveBeenCalled();
+    expect(db.branchRegulatoryProfile.update).toHaveBeenCalledWith({
+      where: { id: 'placeholder_profile' },
+      data: { effectiveTo: expect.any(Date) },
+    });
     expect(db.organization.update).toHaveBeenCalledWith({
       where: { id: 'org_1' },
       data: { status: 'ONBOARDING', activatedAt: null },
@@ -191,9 +214,14 @@ describe('pharmacy placeholder commands', () => {
         toStatus: 'ONBOARDING',
         reason,
         actorId: 'actor_1',
+        metadata: { placeholder: true, operation: 'LOCKED', closed: 1 },
       },
     });
     expect(state.audits.at(-1)).toMatchObject({ metadata: { placeholder: true } });
+    expect(state.lifecycleEvents.at(-1)).toMatchObject({
+      actorId: 'actor_1',
+      metadata: { placeholder: true, operation: 'LOCKED' },
+    });
   });
 
   it.each(['organization.pharmacy.placeholder.apply', 'organization.pharmacy.placeholder.lock'])(
@@ -253,6 +281,28 @@ describe('pharmacy placeholder commands', () => {
       expect(db.organizationLifecycleEvent.create).not.toHaveBeenCalled();
     }
   );
+
+  it('locks a non-ACTIVE pharmacy without changing its status and still records a lifecycle event', async () => {
+    state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ONBOARDING' };
+    state.placeholderActive = true;
+
+    await execute('organization.pharmacy.placeholder.lock', {
+      organizationId: 'org_1',
+      reason,
+      authenticationCode: '123456',
+    });
+
+    expect(db.branchRegulatoryProfile.deleteMany).not.toHaveBeenCalled();
+    expect(db.organization.update).not.toHaveBeenCalled();
+    expect(db.organizationLifecycleEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org_1',
+        fromStatus: 'ONBOARDING',
+        toStatus: 'ONBOARDING',
+        metadata: expect.objectContaining({ placeholder: true, operation: 'LOCKED' }),
+      }),
+    });
+  });
 
   it('flags failed platform commands while the placeholder is active', async () => {
     state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ACTIVE' };

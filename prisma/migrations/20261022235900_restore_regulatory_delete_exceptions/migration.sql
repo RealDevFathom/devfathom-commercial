@@ -12,10 +12,8 @@ BEGIN
   END IF;
 
   IF TG_OP = 'DELETE' AND TG_TABLE_NAME = 'pharmacy_branch_regulatory_profiles' THEN
-    IF OLD."isPlaceholder" = true
-       AND current_setting('app.is_platform_admin', true) = 'true' THEN
-      RETURN OLD;
-    END IF;
+    -- Regulatory evidence is never removed by the placeholder lock. Deletes
+    -- remain available only to the two existing teardown paths below.
     IF NULLIF(current_setting('app.purging_organization_id', true), '') = OLD."organizationId"
        AND current_setting('app.is_platform_admin', true) = 'true' THEN
       RETURN OLD;

@@ -398,6 +398,37 @@ export const pharmacyOnboardingRouter = router({
         throw badRequest('branchId', 'Choose one of this workspace’s active branches.');
       }
 
+      const activePlaceholder = await ctx.db.branchRegulatoryProfile.findFirst({
+        where: {
+          organizationId,
+          branchId: branch.id,
+          isPlaceholder: true,
+          effectiveTo: null,
+        },
+        select: { id: true },
+      });
+      if (!activePlaceholder) {
+        const placeholderField = [
+          'premisesAddressLine',
+          'premisesCity',
+          'premisesStorageDescription',
+          'licenceCategory',
+          'licenceNumber',
+          'licenceEvidenceFileRef',
+          'qualifiedPersonRegistration',
+          'qualifiedPersonCoverageRosterRef',
+          'ntn',
+          'strn',
+          'fiscalStatus',
+        ].find((field) => /\bPLACEHOLDER\b/i.test(String(input[field as keyof typeof input])));
+        if (placeholderField) {
+          throw badRequest(
+            placeholderField,
+            'PLACEHOLDER text is reserved for the active platform placeholder rule set.'
+          );
+        }
+      }
+
       const jurisdictions = await jurisdictionsInForce(ctx, effectiveFrom);
       const jurisdiction = jurisdictions.find(
         (candidate) => candidate.provinceCode === input.provinceCode

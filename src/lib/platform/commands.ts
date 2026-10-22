@@ -1562,7 +1562,7 @@ async function runCommand(
       await assertFreshPlaceholderMfa(db, actor, input.authenticationCode);
       const organization = await db.organization.findUnique({
         where: { id: input.organizationId },
-        select: { id: true, vertical: true },
+        select: { id: true, vertical: true, status: true },
       });
       if (!organization || organization.vertical !== 'PHARMACY')
         throw new PlatformSecurityError('A Pharmacy organization is required.', 400);
@@ -1645,6 +1645,17 @@ async function runCommand(
           },
         });
       }
+      await db.organizationLifecycleEvent.create({
+        data: {
+          organizationId: input.organizationId,
+          action: 'CREATED',
+          fromStatus: organization.status,
+          toStatus: organization.status,
+          reason: input.reason,
+          actorId: actor.id,
+          metadata: { placeholder: true, operation: 'APPLIED', ruleSetId: ruleSet.id },
+        },
+      });
       return {
         targetType: 'Organization',
         targetId: input.organizationId,
@@ -1666,31 +1677,64 @@ async function runCommand(
       if (!organization) throw new PlatformSecurityError('Organization not found.', 400);
       if (organization.vertical !== 'PHARMACY')
         throw new PlatformSecurityError('A Pharmacy organization is required.', 400);
-      const removed = await db.branchRegulatoryProfile.deleteMany({
-        where: { organizationId: input.organizationId, isPlaceholder: true },
+      const effectiveTo = new Date();
+      const openPlaceholders = await db.branchRegulatoryProfile.findMany({
+        where: {
+          organizationId: input.organizationId,
+          isPlaceholder: true,
+          effectiveTo: null,
+        },
+        select: { id: true, effectiveFrom: true },
       });
+      if (openPlaceholders.length === 0 && organization.status !== 'ACTIVE') {
+        // Idempotent re-lock: nothing open and nothing to transition.
+        return {
+          targetType: 'Organization',
+          targetId: input.organizationId,
+          organizationId: input.organizationId,
+          data: { locked: true, closed: 0 },
+          audit: { placeholder: true, locked: true, closed: 0, reason: input.reason },
+        };
+      }
+      for (const profile of openPlaceholders) {
+        await db.branchRegulatoryProfile.update({
+          where: { id: profile.id },
+          data: {
+            effectiveTo:
+              effectiveTo > profile.effectiveFrom
+                ? effectiveTo
+                : new Date(profile.effectiveFrom.getTime() + 1),
+          },
+        });
+      }
       if (organization.status === 'ACTIVE') {
         await db.organization.update({
           where: { id: input.organizationId },
           data: { status: 'ONBOARDING', activatedAt: null },
         });
-        await db.organizationLifecycleEvent.create({
-          data: {
-            organizationId: input.organizationId,
-            action: lifecycleAction(organization.status, 'ONBOARDING'),
-            fromStatus: organization.status,
-            toStatus: 'ONBOARDING',
-            reason: input.reason,
-            actorId: actor.id,
-          },
-        });
       }
+      await db.organizationLifecycleEvent.create({
+        data: {
+          organizationId: input.organizationId,
+          action: lifecycleAction(organization.status, 'ONBOARDING'),
+          fromStatus: organization.status,
+          toStatus: organization.status === 'ACTIVE' ? 'ONBOARDING' : organization.status,
+          reason: input.reason,
+          actorId: actor.id,
+          metadata: { placeholder: true, operation: 'LOCKED', closed: openPlaceholders.length },
+        },
+      });
       return {
         targetType: 'Organization',
         targetId: input.organizationId,
         organizationId: input.organizationId,
-        data: { locked: true, removed: removed.count },
-        audit: { placeholder: true, locked: true, removed: removed.count, reason: input.reason },
+        data: { locked: true, closed: openPlaceholders.length },
+        audit: {
+          placeholder: true,
+          locked: true,
+          closed: openPlaceholders.length,
+          reason: input.reason,
+        },
       };
     }
     case 'organization.create': {
