@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Downloads/Projects & Code/DevFathom hub/company-hub/.paperclip/worktrees/WHA-437-correct-focused-sop-failure-state-harness-on-durable-l3-fixture
+Branch: WHA-437-correct-focused-sop-failure-state-harness-on-durable-l3-fixture
+HEAD: 21ed755c801b636bd41350ae94768d53e6c27a2c
+Mode: applied
+Excluded (secrets): 0

@@ -29,6 +29,23 @@ type BrowserErrors = {
 };
 
 const browserErrors = new WeakMap<Page, BrowserErrors>();
+const sopInitialReadProcedures = new Set([
+  'restaurantSop.listTemplates',
+  'restaurantSop.listAssignableJobRoles',
+  'restaurantSop.listAssignments',
+]);
+
+function trpcProcedures(url: string) {
+  const marker = '/api/trpc/';
+  const pathname = new URL(url).pathname;
+  const procedurePath = pathname.slice(pathname.indexOf(marker) + marker.length);
+  return decodeURIComponent(procedurePath).split(',');
+}
+
+function isInducedSopRead(url: string) {
+  const procedures = trpcProcedures(url);
+  return procedures.length > 0 && procedures.every((name) => sopInitialReadProcedures.has(name));
+}
 
 function collectUnexpectedErrors(page: Page) {
   const errors: BrowserErrors = { console: [], page: [], request: [] };
@@ -43,7 +60,13 @@ function collectUnexpectedErrors(page: Page) {
     );
   });
   page.on('response', (response) => {
-    if (response.status() < 400 || response.headers()['x-wha-expected-error'] === 'true') return;
+    if (
+      response.status() < 400 ||
+      (response.headers()['x-wha-expected-sop-read-error'] === 'true' &&
+        response.request().method() === 'GET' &&
+        isInducedSopRead(response.url()))
+    )
+      return;
     errors.request.push(`${response.status()} ${response.request().method()} ${response.url()}`);
   });
 }
@@ -180,20 +203,45 @@ test.describe('accepted manifest: final actor and accessibility acceptance', () 
   }) => {
     const actorOrigin = await signInAs(page, 'restaurantAdmin');
     let failed = true;
+    let inducedFailures = 0;
     let mutationRequests = 0;
     await page.route('**/api/trpc/**', async (route) => {
-      if (route.request().method() !== 'GET') mutationRequests += 1;
-      if (failed)
+      const request = route.request();
+      if (request.method() !== 'GET') mutationRequests += 1;
+      if (failed && request.method() === 'GET' && isInducedSopRead(request.url())) {
+        const procedures = trpcProcedures(request.url());
+        const errors = procedures.map((procedure) => ({
+          error: {
+            json: {
+              message: 'SOP workspace is temporarily unavailable.',
+              code: -32603,
+              data: {
+                code: 'INTERNAL_SERVER_ERROR',
+                httpStatus: 500,
+                path: procedure,
+                validation: null,
+              },
+            },
+          },
+        }));
+        inducedFailures += 1;
         await route.fulfill({
-          status: 503,
+          status: 500,
           contentType: 'application/json',
-          headers: { 'x-wha-expected-error': 'true' },
-          body: '{}',
+          headers: { 'x-wha-expected-sop-read-error': 'true' },
+          body: JSON.stringify(
+            new URL(request.url()).searchParams.has('batch') ? errors : errors[0]
+          ),
         });
-      else await route.continue();
+      } else await route.continue();
     });
     await page.goto(`${actorOrigin}/restaurant/sop/admin`);
-    await expect(page.getByRole('alert')).toContainText(/could not load|no data was changed/i);
+    await expect(
+      page.getByRole('heading', { level: 2, name: 'SOP workspace could not load' })
+    ).toBeVisible();
+    await expect(page.getByRole('alert')).toContainText(
+      'SOP workspace is temporarily unavailable.'
+    );
     const retry = page.getByRole('button', { name: 'Retry' });
     await expect(retry).toBeVisible();
     await retry.focus();
@@ -202,8 +250,12 @@ test.describe('accepted manifest: final actor and accessibility acceptance', () 
     await page.keyboard.press('Enter');
     await expect(page.getByRole('status')).toContainText(/loading sop workspace/i);
     await expect(page.locator('[aria-busy="true"]')).toBeHidden();
-    await expect(page.getByRole('heading', { level: 1, name: 'SOP administration' })).toBeVisible();
+    const heading = page.getByRole('heading', { level: 1, name: 'SOP administration' });
+    await expect(heading).toHaveCount(1);
+    await expect(heading).toBeVisible();
+    expect(new URL(page.url()).origin).toBe(actorOrigin);
     await expect(page.locator(':focus')).toBeVisible();
+    expect(inducedFailures).toBeGreaterThan(0);
     expect(mutationRequests).toBe(0);
   });
 
