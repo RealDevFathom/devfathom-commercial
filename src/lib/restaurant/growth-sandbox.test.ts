@@ -7,6 +7,7 @@ vi.mock('./growth-review', async () => ({
 vi.mock('./customers', () => ({ appendCustomerConsent: mocks.consent }));
 import {
   captureRestaurantGrowthDraft,
+  handleRestaurantGrowthSandboxInbound,
   stopRestaurantGrowthSandbox,
   diagnoseRestaurantGrowthSandbox,
   growthSandboxQuiet,
@@ -202,6 +203,21 @@ it.each([' stop ', 'بند'])('withdraws consent for %j and returns a bilingual 
     'You will no longer receive WhatsApp messages from this restaurant. Reply START to opt back in.\n' +
       'آپ کو اب اس ریسٹورنٹ سے واٹس ایپ پیغامات نہیں ملیں گے۔ دوبارہ شروع کرنے کے لیے START لکھیں۔'
   );
+});
+it('captures the bilingual reply at the sandbox inbound boundary without a live sender', async () => {
+  const capture = vi.fn().mockResolvedValue(undefined);
+  await handleRestaurantGrowthSandboxInbound(
+    h,
+    { branchId: 'b', customerId: 'c1', eventId: input.requestId, text: 'STOP' },
+    policy,
+    { capture }
+  );
+  expect(capture).toHaveBeenCalledWith({
+    eventId: input.requestId,
+    body:
+      'You will no longer receive WhatsApp messages from this restaurant. Reply START to opt back in.\n' +
+      'آپ کو اب اس ریسٹورنٹ سے واٹس ایپ پیغامات نہیں ملیں گے۔ دوبارہ شروع کرنے کے لیے START لکھیں۔',
+  });
 });
 it('does not accept an arbitrary inbound message', async () => {
   await expect(

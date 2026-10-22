@@ -44,6 +44,11 @@ export const RESTAURANT_GROWTH_OPT_OUT_REPLY =
   'You will no longer receive WhatsApp messages from this restaurant. Reply START to opt back in.\n' +
   'آپ کو اب اس ریسٹورنٹ سے واٹس ایپ پیغامات نہیں ملیں گے۔ دوبارہ شروع کرنے کے لیے START لکھیں۔';
 
+export type GrowthSandboxReplyCapture = {
+  /** Test-harness capture only. Deliberately not a WhatsApp provider/send interface. */
+  capture(input: { eventId: string; body: string }): Promise<void>;
+};
+
 async function admit(db: ScopedDb, raw: GrowthSandboxAdmission) {
   const admission = admissionSchema.parse(raw);
   const rows = await db.$queryRawUnsafe<
@@ -279,6 +284,22 @@ export async function stopRestaurantGrowthSandbox(
     });
     return { consent, confirmation: RESTAURANT_GROWTH_OPT_OUT_REPLY };
   });
+}
+
+/**
+ * Sandbox inbound seam. Admission inside `stopRestaurantGrowthSandbox` keeps this
+ * localhost/test-database only; live WhatsApp delivery intentionally remains unavailable.
+ */
+export async function handleRestaurantGrowthSandboxInbound(
+  h: GrowthActor,
+  raw: unknown,
+  admission: GrowthSandboxAdmission,
+  replies: GrowthSandboxReplyCapture
+) {
+  const result = await stopRestaurantGrowthSandbox(h, raw, admission);
+  const eventId = z.object({ eventId: z.uuid() }).passthrough().parse(raw).eventId;
+  await replies.capture({ eventId, body: result.confirmation });
+  return result;
 }
 /** Bounded, internal operational receipt diagnostic. No attribution write or money guess. */
 export async function diagnoseRestaurantGrowthSandbox(
