@@ -46,6 +46,14 @@ function model() {
 
 function makeDb() {
   const db = {
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+    },
     medicine: model(),
     packLevel: model(),
     pharmacyStockLocation: model(),
@@ -82,7 +90,21 @@ function makeDb() {
 }
 
 let db = makeDb();
-function caller(overrides: { enabledModules?: string[]; userId?: string | null } = {}) {
+function caller(
+  overrides: {
+    enabledModules?: string[];
+    userId?: string | null;
+    denySafety?: boolean;
+  } = {}
+) {
+  db.user.findUnique.mockResolvedValue({
+    organizationRole: {
+      permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
+    },
+    permissionOverrides: overrides.denySafety
+      ? [{ capability: 'pharmacy:safety', effect: 'DENY' }]
+      : [],
+  });
   return pharmacyInventoryRouter.createCaller({
     db,
     entitlements: {
@@ -113,6 +135,56 @@ beforeEach(() => {
 });
 
 describe('pharmacy inventory entitlement and tenant boundaries', () => {
+  it.each([
+    'ingestDrapManual',
+    'ingestDrapFile',
+    'confirmDrapPrice',
+    'reverseDrapRecall',
+    'createLocation',
+    'recordTemperature',
+    'importTemperatureCsv',
+    'configureTemperatureMonitoring',
+    'registerBatch',
+    'setBatchState',
+    'receiveLot',
+    'allocateForSale',
+    'breakPack',
+    'transfer',
+    'createCount',
+    'approveCount',
+    'writeOff',
+    'quarantinePart',
+    'allocateTransfer',
+    'approveTransfer',
+    'dispatchTransfer',
+    'receiveTransferLine',
+    'createRecall',
+    'acknowledgeRecall',
+    'closeRecall',
+    'reserveSupplierClaim',
+    'approveSafetyStock',
+    'refreshStockSignals',
+    'markStaleSignals',
+    'acknowledgeSignal',
+    'snoozeSignal',
+    'dismissSignal',
+    'createDraftAction',
+    'draftExpiryMarkdown',
+    'draftExpiryReturn',
+    'quarantineExpiring',
+    'receiveTransferWithVariance',
+  ] as const)('lets an explicit pharmacy:safety DENY block %s', async (procedure) => {
+    const denied = caller({ denySafety: true }) as unknown as Record<
+      string,
+      (input?: unknown) => Promise<unknown>
+    >;
+
+    await expect(denied[procedure]()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  });
+
   it('maps the public router prefix to the pharmacy-inventory entitlement', () => {
     expect(moduleForProcedure('pharmacyInventory.allocateForSale')).toBe('pharmacy-inventory');
     // Not the mandatory Core module the medicine identity lane maps to.
