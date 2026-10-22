@@ -711,14 +711,14 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
 
   tools.deleteTask = tool({
     description:
-      'Permanently delete a task (and its comments, checklist, labels). Identify it by title (or id). This cannot be undone. Use for "delete the <title> task".',
+      'Permanently delete a task (and its comments, checklist, labels). Only a project LEAD or an admin may delete. Identify it by title (or id). This cannot be undone. Use for "delete the <title> task".',
     inputSchema: z.object({ ...taskRef }),
     needsApproval: true,
     execute: async ({ taskTitle, taskId }) => {
       const r = await resolveTask({ taskId, title: taskTitle });
       if (!r.ok) return asFail(r);
       const { task } = r;
-      if (!(await canWriteTask(task)))
+      if (!(await h.canManageProject(task.column.board.projectId)))
         return { error: 'You do not have access to that task’s project.' };
 
       await h.db.task.delete({ where: { id: task.id } });
