@@ -294,3 +294,26 @@ it('round-trips Khata recovery without storing authentication credentials', () =
   ).toThrow();
   expect(window.localStorage.length).toBe(0);
 });
+
+it('keeps the over-limit reason the server hashed, only on an override', () => {
+  const attempt = original();
+  attempt.input = {
+    ...attempt.input,
+    type: 'KHATA',
+    familyAccountId: 'family-a',
+    ownerOverride: true,
+    overrideReason: 'Regular family',
+  };
+  delete attempt.input.cashReceivedMinor;
+  attempt.draft.cashReceived = '';
+  persistTenderAttempt(attempt);
+  expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
+  clearTenderAttempt(attempt);
+  for (const input of [
+    { ...attempt.input, ownerOverride: false },
+    { ...attempt.input, overrideReason: '   ' },
+  ]) {
+    expect(() => persistTenderAttempt({ ...attempt, input })).toThrow();
+  }
+  expect(window.localStorage.length).toBe(0);
+});
