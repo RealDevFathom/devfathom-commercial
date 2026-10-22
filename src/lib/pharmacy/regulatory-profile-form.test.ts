@@ -5,6 +5,7 @@ import {
   FISCAL_STATUSES,
   fieldError,
   provinceName,
+  provinceForBranch,
   regulatoryProfileInput,
   ruleSetOptions,
 } from './regulatory-profile-form';
@@ -125,6 +126,12 @@ describe('branch regulatory profile input', () => {
     expect(provinceName('PK-PB')).toBe('Punjab');
     expect(provinceName('PK-ICT')).toBe('Islamabad Capital Territory');
     expect(provinceName('PK-ZZ')).toBe('PK-ZZ');
+  });
+
+  it("selects the branch's published province instead of the first jurisdiction", () => {
+    expect(provinceForBranch('PK-SD', ['PK-PB', 'PK-SD'])).toBe('PK-SD');
+    expect(provinceForBranch('PK-ZZ', ['PK-PB', 'PK-SD'])).toBe('PK-PB');
+    expect(provinceForBranch('PK-SD', [])).toBe('');
   });
 
   it('offers a sentence, not an enum, for every fiscal status', () => {

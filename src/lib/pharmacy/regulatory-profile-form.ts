@@ -38,6 +38,16 @@ export function provinceName(code: string): string {
   return PAKISTAN_PROVINCES[code] ?? code;
 }
 
+/** Prefer the selected branch's jurisdiction, but only when it is actually published. */
+export function provinceForBranch(
+  branchProvinceCode: string | null | undefined,
+  publishedProvinceCodes: readonly string[]
+): string {
+  return branchProvinceCode && publishedProvinceCodes.includes(branchProvinceCode)
+    ? branchProvinceCode
+    : (publishedProvinceCodes[0] ?? '');
+}
+
 /** Fiscal registration states, with the sentence the operator picks by. */
 export const FISCAL_STATUSES = [
   { value: 'REGISTERED', label: 'Registered for sales tax' },

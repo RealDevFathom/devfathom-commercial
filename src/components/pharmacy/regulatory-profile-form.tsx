@@ -33,6 +33,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   FISCAL_STATUSES,
   PROVISIONAL_LICENCE_CATEGORY,
+  provinceForBranch,
 } from '@/lib/pharmacy/regulatory-profile-form';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -90,8 +91,11 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [evidenceRef, setEvidenceRef] = useState('');
-  const [provinceCode, setProvinceCode] = useState<string>(
-    initial.jurisdictions[0]?.provinceCode ?? ''
+  const [provinceCode, setProvinceCode] = useState<string>(() =>
+    provinceForBranch(
+      initial.branches.find((branch) => branch.id === initial.selectedBranchId)?.provinceCode,
+      initial.jurisdictions.map((jurisdiction) => jurisdiction.provinceCode)
+    )
   );
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -139,6 +143,12 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
 
   const selectBranch = (nextBranchId: string) => {
     setBranchId(nextBranchId);
+    setProvinceCode(
+      provinceForBranch(
+        data.branches.find((branch) => branch.id === nextBranchId)?.provinceCode,
+        data.jurisdictions.map((jurisdiction) => jurisdiction.provinceCode)
+      )
+    );
     setErrors({});
     setSaved(null);
     refresh(nextBranchId);
