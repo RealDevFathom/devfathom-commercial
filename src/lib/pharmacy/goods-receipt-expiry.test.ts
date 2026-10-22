@@ -18,6 +18,7 @@ function receiptDb(line: {
   rejected: number;
   expiry: string;
   warnings?: string[];
+  purchaseOrderBranch?: string;
 }) {
   const batchFind = vi.fn().mockResolvedValue(null);
   const lineUpdate = vi.fn().mockResolvedValue({});
@@ -31,7 +32,10 @@ function receiptDb(line: {
         status: 'DRAFT',
         supplierInvoiceRef: 'INV',
         warrantyEvidenceRef: 'WAR',
-        purchaseOrderId: null,
+        purchaseOrderId: line.purchaseOrderBranch ? 'po' : null,
+        purchaseOrder: line.purchaseOrderBranch
+          ? { id: 'po', branchId: line.purchaseOrderBranch, status: 'SENT' }
+          : null,
         supplier: {
           name: 'Supplier',
           authorized: true,
@@ -78,6 +82,7 @@ function receiptDb(line: {
     pharmacyReceivingException: {
       create: vi.fn().mockResolvedValue({ id: 'ex', kind: 'DAMAGE', detail: '' }),
     },
+    pharmacyPurchaseOrder: { update: vi.fn().mockResolvedValue({}) },
   };
   return { db: db as unknown as ScopedDb, batchFind, lineUpdate };
 }
@@ -91,6 +96,22 @@ beforeEach(() => {
 });
 
 describe('postGoodsReceipt expiry', () => {
+  it("rejects a cross-branch purchase order before posting the receipt's stock", async () => {
+    const { db } = receiptDb({
+      accepted: 10,
+      rejected: 0,
+      expiry: '2027-12-31',
+      purchaseOrderBranch: 'branch_b',
+    });
+
+    await expect(
+      postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT })
+    ).rejects.toMatchObject({ reason: 'CROSS_BRANCH_REFERENCE' });
+    expect(receiveLot).not.toHaveBeenCalled();
+    expect(db.pharmacyGoodsReceipt.update).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
+  });
+
   it('does not put accepted units of an expired pack into stock', async () => {
     const { db, batchFind } = receiptDb({ accepted: 10, rejected: 0, expiry: '2025-12-31' });
     await expect(

@@ -160,11 +160,15 @@ export async function postGoodsReceipt(
     where: { id: input.goodsReceiptId, organizationId: scope.organizationId },
     include: {
       supplier: { include: { licences: true } },
+      purchaseOrder: { select: { id: true, branchId: true, status: true } },
       lines: { orderBy: { lineNumber: 'asc' } },
     },
   });
   if (!receipt) throw new PharmacyReceivingError('NOT_FOUND');
   if (receipt.branchId !== scope.branchId) {
+    throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
+  }
+  if (receipt.purchaseOrderId && receipt.purchaseOrder?.branchId !== receipt.branchId) {
     throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
   }
   assertGoodsReceiptTransition(receipt.status, 'POSTED');
@@ -340,16 +344,11 @@ export async function postGoodsReceipt(
   // PUR-02: the order is now being received against. SENT → RECEIVING is the
   // last transition of that status machine, so a second receipt against the
   // same order finds it already there and leaves it alone.
-  if (receipt.purchaseOrderId) {
-    const order = await db.pharmacyPurchaseOrder.findFirst({
-      where: { id: receipt.purchaseOrderId, organizationId: scope.organizationId },
+  if (receipt.purchaseOrder?.status === 'SENT') {
+    await db.pharmacyPurchaseOrder.update({
+      where: { id: receipt.purchaseOrder.id },
+      data: { status: 'RECEIVING' },
     });
-    if (order?.status === 'SENT') {
-      await db.pharmacyPurchaseOrder.update({
-        where: { id: order.id },
-        data: { status: 'RECEIVING' },
-      });
-    }
   }
 
   return { goodsReceiptId: receipt.id, postedAt: input.at, lines, exceptions };

@@ -599,7 +599,11 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
 
   /** A resolvable purchase order whose one line the receipt may name. */
   function resolvableOrder() {
-    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'po_a', supplierId: 'supplier_a' });
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      branchId: 'branch_a',
+    });
     db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([{ id: 'poline_a' }]);
   }
 
@@ -703,6 +707,18 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     });
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
       code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a receipt drafted for a different branch than its purchase order', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue(null);
+
+    await expect(
+      caller().createGoodsReceipt({ ...RECEIPT, branchId: 'branch_b' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
+      where: { id: 'po_a', supplierId: 'supplier_a', branchId: 'branch_b' },
     });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
