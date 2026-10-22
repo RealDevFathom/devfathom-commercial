@@ -979,7 +979,11 @@ const purchasingRouter = router({
         }
         const purchaseOrder = input.purchaseOrderId
           ? await ctx.db.pharmacyPurchaseOrder.findFirst({
-              where: { id: input.purchaseOrderId, supplierId: input.supplierId },
+              where: {
+                id: input.purchaseOrderId,
+                supplierId: input.supplierId,
+                branchId: scope.branchId,
+              },
               include: { lines: { orderBy: { lineNumber: 'asc' } } },
             })
           : null;

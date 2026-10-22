@@ -689,6 +689,10 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
 
     const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
     expect(line.unitCostMinor).toBe(1_001);
+    expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
+      where: { id: 'po_a', supplierId: 'supplier_a', branchId: 'branch_a' },
+      include: { lines: { orderBy: { lineNumber: 'asc' } } },
+    });
   });
 
   it('takes the receiver from the session, never from the payload', async () => {
