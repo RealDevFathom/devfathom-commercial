@@ -21,7 +21,8 @@ Use one status on every capability claim:
 | --- | --- | --- |
 | Everyone | [Technical overview](technical-overview.md) | Product boundaries, architecture, tenancy, and operating model |
 | Developers | [Local setup](LOCAL_SETUP.md) | Local environment and verification |
-| Operators | [Azure deployment](azure-deployment.md) | Staging, production gate, backups, and rollback |
+| Developers | [Developer onboarding](dev/onboarding.md) | Start here: setup overview, DB rules, seeds, scripts |
+| Operators | [Azure deployment](azure-deployment.md) | **DEPRECATED – never deploy to Azure.** Kept for reference only |
 | Platform team | [Admin platform handbook](admin-platform/README.md) | Control-plane architecture and runbooks |
 | Product and sales | [Product and commercial pack](product-pack.md) | ICP, positioning, feature status, packaging, and customer lifecycle |
 | Product and engineering | [POS & terminal module PRD](product/modules/pos-terminal.md) | Evidence-linked register, terminal, checkout, and branch-boundary scope |
@@ -34,6 +35,8 @@ Use one status on every capability claim:
 - [Kitchen Display System (KDS)](product/modules/kds.md) — station queue, ticket lifecycle, actions, permissions, and acceptance criteria
 
 ## Technical reference
+
+- Developer guides: [onboarding](dev/onboarding.md), [architecture](dev/architecture.md), [auth and roles](dev/auth-and-roles.md), [testing](dev/testing.md), [contributing and branching](dev/contributing.md)
 
 - [Tenant/RLS architecture](admin-platform/architecture-tenancy.md)
 - [Identity and access](admin-platform/identity-access.md)
