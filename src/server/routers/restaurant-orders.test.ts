@@ -338,4 +338,13 @@ describe('mutation wiring', () => {
       code: 'CONFLICT',
     });
   });
+
+  it('maps a post-cut item void to CONFLICT', async () => {
+    mocks.voidItem.mockRejectedValue(
+      new OrderCommandError('void and recut the bill first', 'BILL_ALREADY_CUT')
+    );
+    await expect(
+      caller().voidItem({ orderId: 'o1', itemId: 'i1', reason: 'changed mind', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
 });
