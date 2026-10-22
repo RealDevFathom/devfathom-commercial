@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   MODULE_CATALOG,
+  PROCEDURE_MODULE_OVERRIDES,
   PROCEDURE_MODULES,
   ROUTE_MODULES,
   SOP_DEPTH_REQUIREMENTS,
@@ -64,9 +65,31 @@ describe('module catalog routing', () => {
     ['restaurantDashboard.getPreferences', 'restaurant-core'],
     ['restaurantGrowth.read', 'restaurant-core'],
     ['restaurantGrowth.review', 'restaurant-core'],
+    ['pharmacyPrescriptions.counterPatients', 'pharmacy-counter'],
+    ['pharmacyPrescriptions.counterPatientPanel', 'pharmacy-counter'],
+    ['pharmacyPrescriptions.capture', 'pharmacy-dispensing'],
     ['unknown.list', null],
   ])('maps tRPC procedure %s to %s', (procedure, expected) => {
     expect(moduleForProcedure(procedure)).toBe(expected);
+  });
+
+  it('limits the counter prescription exception to the two counter reads', () => {
+    expect(PROCEDURE_MODULE_OVERRIDES).toEqual({
+      'pharmacyPrescriptions.counterPatients': 'pharmacy-counter',
+      'pharmacyPrescriptions.counterPatientPanel': 'pharmacy-counter',
+    });
+
+    for (const procedure of [
+      'pharmacyPrescriptions.workspace',
+      'pharmacyPrescriptions.capture',
+      'pharmacyPrescriptions.uploadSource',
+      'pharmacyPrescriptions.extractSource',
+      'pharmacyPrescriptions.readPatient',
+      'pharmacyPrescriptions.counterPatients.export',
+      'pharmacyPrescriptions.counterPatientPanelAdmin',
+    ]) {
+      expect(moduleForProcedure(procedure)).toBe('pharmacy-dispensing');
+    }
   });
 
   it('pins every restaurant procedure namespace to its licensed module', () => {
@@ -108,6 +131,9 @@ describe('module catalog routing', () => {
     const catalogKeys = new Set(MODULE_CATALOG.map((module) => module.key));
 
     expect(Object.values(PROCEDURE_MODULES).filter((key) => !catalogKeys.has(key))).toEqual([]);
+    expect(
+      Object.values(PROCEDURE_MODULE_OVERRIDES).filter((key) => !catalogKeys.has(key))
+    ).toEqual([]);
     expect(ROUTE_MODULES.map(([, key]) => key).filter((key) => !catalogKeys.has(key))).toEqual([]);
   });
 
