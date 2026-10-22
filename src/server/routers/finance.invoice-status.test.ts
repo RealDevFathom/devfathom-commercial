@@ -137,6 +137,7 @@ describe('finance.addPayment', () => {
     mocks.can.mockResolvedValue(true);
     mocks.findUnique.mockResolvedValue({
       id: 'invoice-584',
+      invoiceNumber: 'INV-584',
       status: 'SENT',
       total: 100,
       currency: 'USD',
@@ -172,6 +173,21 @@ describe('finance.addPayment', () => {
       data: { status: 'PAID', paidAt: expect.any(Date) },
     });
     expect(result).toMatchObject({ amountPaid: 100, balance: 0, status: 'PAID' });
+    expect(mocks.logActivity).toHaveBeenCalledWith(expect.anything(), 'admin-1', {
+      type: 'invoice_paid',
+      message: 'marked invoice INV-584 as paid ($100)',
+      entityType: 'Invoice',
+      entityId: 'invoice-584',
+    });
+  });
+
+  it('does not log paid activity for a partial payment', async () => {
+    mocks.paymentCreate.mockResolvedValue({ id: 'payment-partial', amount: 40 });
+
+    const result = await caller().addPayment({ invoiceId: 'invoice-584', amount: 40 });
+
+    expect(result).toMatchObject({ amountPaid: 40, balance: 60, status: 'SENT' });
+    expect(mocks.logActivity).not.toHaveBeenCalled();
   });
 
   it('locks the tenant-owned invoice before checking its status and balance', async () => {

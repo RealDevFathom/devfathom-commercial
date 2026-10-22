@@ -523,13 +523,14 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // IMP-REST-03: captured inside the tx, fired only AFTER it commits.
+      // Capture paid side-effect data inside the tx, then publish only AFTER it commits.
       let paidEvent: {
         invoiceId: string;
         total: number;
         currency: string;
         clientId: string;
       } | null = null;
+      let paidActivity: { invoiceId: string; invoiceNumber: string; total: number } | null = null;
 
       const result = await ctx.db.$transaction(async (tx) => {
         // Serialize payment writers on the tenant-owned invoice before reading
@@ -543,7 +544,14 @@ export const financeRouter = router({
         }
         const invoice = await tx.invoice.findUnique({
           where: { id: input.invoiceId },
-          select: { id: true, status: true, total: true, currency: true, clientId: true },
+          select: {
+            id: true,
+            invoiceNumber: true,
+            status: true,
+            total: true,
+            currency: true,
+            clientId: true,
+          },
         });
         if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
 
@@ -610,6 +618,7 @@ export const financeRouter = router({
             currency: invoice.currency,
             clientId: invoice.clientId,
           };
+          paidActivity = { invoiceId: invoice.id, invoiceNumber: invoice.invoiceNumber, total };
         }
 
         return {
@@ -620,10 +629,20 @@ export const financeRouter = router({
         };
       });
 
-      // IMP-REST-03: fan out invoice.paid once the invoice has truly flipped to
-      // PAID and the transaction has committed. Fire-and-forget — emitEvent
-      // never throws, so it can't affect the recorded payment.
-      if (paidEvent) emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', paidEvent);
+      // Publish invoice.paid and its matching activity only once the invoice has
+      // truly flipped to PAID and the transaction has committed. Both helpers are
+      // fire-and-forget, so they cannot affect the recorded payment.
+      if (paidEvent) {
+        emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', paidEvent);
+      }
+      if (paidActivity) {
+        logActivity(ctx.db, ctx.session.user.id, {
+          type: 'invoice_paid',
+          message: `marked invoice ${paidActivity.invoiceNumber} as paid ($${paidActivity.total.toLocaleString()})`,
+          entityType: 'Invoice',
+          entityId: paidActivity.invoiceId,
+        });
+      }
 
       return result;
     }),
