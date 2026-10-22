@@ -35,8 +35,17 @@ const storedSchema = z
         idempotencyKey: z.string().trim().min(1).max(160),
         familyAccountId: id.optional(),
         ownerOverride: z.boolean().optional(),
+        overrideReason: z.string().trim().min(1).max(500).optional(),
       })
-      .strict(),
+      .strict()
+      .superRefine((input, ctx) => {
+        if (input.ownerOverride === true && input.overrideReason === undefined)
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['overrideReason'],
+            message: 'An override reason is required.',
+          });
+      }),
     draft: z.object({ amount: amountText, cashReceived: amountText }).strict(),
   })
   .strict();
@@ -77,7 +86,9 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
   const date = new Date(input.businessDate);
   if (
     (input.type === 'KHATA' && !input.familyAccountId) ||
-    ((input.familyAccountId !== undefined || input.ownerOverride !== undefined) &&
+    ((input.familyAccountId !== undefined ||
+      input.ownerOverride !== undefined ||
+      input.overrideReason !== undefined) &&
       !['KHATA', 'CREDIT'].includes(input.type)) ||
     !sameScope(stored.scope, scope) ||
     input.branchId !== scope.branchId ||
@@ -96,7 +107,9 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
 }
 
 export type TenderAttemptRead =
-  { status: 'empty' } | { status: 'pending'; attempt: TenderAttempt } | { status: 'blocked' };
+  | { status: 'empty' }
+  | { status: 'pending'; attempt: TenderAttempt }
+  | { status: 'blocked' };
 
 export function readTenderAttempt(scope: TenderAttemptScope): TenderAttemptRead {
   try {

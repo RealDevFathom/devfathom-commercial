@@ -70,6 +70,11 @@ function fixture() {
       create: vi.fn().mockResolvedValue({}),
     },
     pharmacyKhataLimitDecision: { create: vi.fn().mockResolvedValue({}) },
+    user: {
+      findFirst: vi.fn().mockResolvedValue({
+        organizationRole: { key: 'owner', isSystem: true },
+      }),
+    },
   };
   db.$transaction.mockImplementation(async (callback) => callback(db));
   const user = {
@@ -132,12 +137,18 @@ describe('Khata router trust and recovery boundary', () => {
   });
   it('hands only the fresh server-session claim to the audited owner gate', async () => {
     const f = fixture();
-    await f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true });
+    await f.caller().tender({
+      ...input,
+      amountMinor: 101,
+      ownerOverride: true,
+      overrideReason: 'Emergency supply',
+    });
     expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         reasons: expect.objectContaining({
           ownerAuthorizedByUserId: 'owner-a',
           ownerReauthenticatedAt: new Date(f.user.passwordAuthenticatedAt).toISOString(),
+          overrideReason: 'Emergency supply',
         }),
       }),
     });
@@ -152,18 +163,55 @@ describe('Khata router trust and recovery boundary', () => {
       expect(applyPharmacyTender).not.toHaveBeenCalled();
     }
   );
-  it('rejects stale owner evidence and non-owner override', async () => {
+  it.each(['owner', 'manager'])('allows the system %s role to approve an override', async (key) => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    f.db.user.findFirst.mockResolvedValue({ organizationRole: { key, isSystem: true } });
+    await expect(
+      f.caller().tender({
+        ...input,
+        amountMinor: 101,
+        ownerOverride: true,
+        overrideReason: 'Emergency supply',
+      })
+    ).resolves.toMatchObject({ tenderId: 'tender-a' });
+  });
+  it('rejects stale evidence, inactive admins, and non-approver roles', async () => {
     const f = fixture();
     f.user.passwordAuthenticatedAt -= 301000;
     await expect(
-      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
+      f
+        .caller()
+        .tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Emergency' })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
-    f.user.passwordAuthenticatedAt = Date.now();
-    f.user.role = 'EMPLOYEE';
+    const inactive = fixture();
+    inactive.db.user.findFirst.mockResolvedValue(null);
+    await expect(
+      inactive
+        .caller()
+        .tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Emergency' })
+    ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+    for (const organizationRole of [
+      { key: 'manager', isSystem: false },
+      { key: 'owner-operator', isSystem: true },
+      { key: 'cashier', isSystem: true },
+    ]) {
+      const nonApprover = fixture();
+      nonApprover.user.role = 'EMPLOYEE';
+      nonApprover.db.user.findFirst.mockResolvedValue({ organizationRole });
+      await expect(
+        nonApprover
+          .caller()
+          .tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Emergency' })
+      ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+    }
+  });
+  it('requires a reason for a requested override', async () => {
+    const f = fixture();
     await expect(
       f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
-    ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
-    expect(applyPharmacyTender).not.toHaveBeenCalled();
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
   });
   it('replays exact accepted evidence without reauthorizing or duplicating a charge', async () => {
     const f = fixture();
@@ -174,7 +222,9 @@ describe('Khata router trust and recovery boundary', () => {
       replayUnsafe: true,
       result,
     });
-    expect(await f.caller().tender({ ...input, ownerOverride: true })).toEqual({
+    expect(
+      await f.caller().tender({ ...input, ownerOverride: true, overrideReason: 'Emergency' })
+    ).toEqual({
       ...result,
       replayed: true,
     });
