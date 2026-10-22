@@ -79,6 +79,7 @@ For local multi-host development, open
 ```bash
 bun run dev        # Next.js development server
 bun run build      # prisma generate && next build
+bun run start      # start the standalone production build (run `bun run build` first)
 bun run typecheck  # TypeScript
 bun run lint       # ESLint
 bun run test       # Vitest
