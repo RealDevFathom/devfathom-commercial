@@ -102,7 +102,7 @@ type PublicationRow = {
   menuId: string;
   priceListId: string | null;
   channels: OrderChannel[];
-  branch: { timezone: string };
+  branch: { id: string; timezone: string };
 };
 
 /** Load a publication scoped to the caller's org (RLS), or throw NOT_FOUND. */
@@ -114,7 +114,7 @@ async function loadPublication(db: ScopedDb, publicationId: string): Promise<Pub
       menuId: true,
       priceListId: true,
       channels: true,
-      branch: { select: { timezone: true } },
+      branch: { select: { id: true, timezone: true } },
     },
   });
   if (!publication) {
@@ -128,13 +128,20 @@ async function loadPublication(db: ScopedDb, publicationId: string): Promise<Pub
 
 /**
  * Resolve the publication + price-list-version references to stamp on an order at
- * open (C4). Validates the publication exists and publishes the order's channel.
+ * open (C4). Validates the publication belongs to the trusted order branch and
+ * publishes the order's channel.
  */
 export async function resolveOrderPricingRefs(
   db: ScopedDb,
-  input: { publicationId: string; channel: OrderChannel; at: Date }
+  input: { publicationId: string; branchId: string; channel: OrderChannel; at: Date }
 ): Promise<ResolvedOrderPricingRefs> {
   const publication = await loadPublication(db, input.publicationId);
+  if (publication.branch.id !== input.branchId) {
+    throw new OrderPricingError(
+      'The menu publication does not exist for this branch.',
+      'PUBLICATION_NOT_FOUND'
+    );
+  }
   if (!channelPublished(publication.channels, input.channel)) {
     throw new OrderPricingError(
       `The menu publication is not offered on the ${input.channel} channel.`,

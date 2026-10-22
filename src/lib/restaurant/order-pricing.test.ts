@@ -25,6 +25,7 @@ const PAST = new Date('2026-08-01T00:00:00.000Z');
 type Config = {
   publication?: {
     id: string;
+    branchId?: string;
     menuId: string;
     priceListId: string | null;
     channels: string[];
@@ -71,7 +72,10 @@ function makeDb(config: Config): ScopedDb {
               menuId: config.publication.menuId,
               priceListId: config.publication.priceListId,
               channels: config.publication.channels,
-              branch: { timezone: config.publication.timezone ?? 'UTC' },
+              branch: {
+                id: config.publication.branchId ?? 'branch_1',
+                timezone: config.publication.timezone ?? 'UTC',
+              },
             }
           : null,
     },
@@ -351,6 +355,7 @@ describe('resolveOrderPricingRefs', () => {
     });
     const refs = await resolveOrderPricingRefs(db, {
       publicationId: 'pub_1',
+      branchId: 'branch_1',
       channel: 'DINE_IN',
       at: AT,
     });
@@ -362,9 +367,23 @@ describe('resolveOrderPricingRefs', () => {
     const db = makeDb({ publication: { ...basePublication, priceListId: null } });
     const refs = await resolveOrderPricingRefs(db, {
       publicationId: 'pub_1',
+      branchId: 'branch_1',
       channel: 'DINE_IN',
       at: AT,
     });
     expect(refs.priceListVersionId).toBeNull();
+  });
+
+  it('rejects a publication belonging to another branch', async () => {
+    const db = makeDb({ publication: { ...basePublication, branchId: 'branch_2' } });
+
+    await expect(
+      resolveOrderPricingRefs(db, {
+        publicationId: 'pub_1',
+        branchId: 'branch_1',
+        channel: 'DINE_IN',
+        at: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'PUBLICATION_NOT_FOUND' });
   });
 });
