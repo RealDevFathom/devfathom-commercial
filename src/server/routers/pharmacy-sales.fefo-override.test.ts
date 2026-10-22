@@ -3,6 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
+vi.mock('@/lib/abac', () => ({
+  can: vi.fn(async (_subject: unknown, capability: string) => capability === 'pharmacy:safety'),
+  subjectFromSession: vi.fn((user: unknown) => user),
+}));
+vi.mock('@/lib/restaurant/operator-credentials', () => ({
+  isLockedOut: vi.fn(() => false),
+  registerFailedAttempt: vi.fn(),
+  clearLockout: vi.fn(),
+  verifyOperatorCredential: vi.fn(async () => true),
+}));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
   resolveOrganizationEntitlements: vi.fn(),
@@ -25,6 +35,7 @@ vi.mock('@/lib/pharmacy/stock-ledger', async (importOriginal) => ({
 }));
 
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
+import { can } from '@/lib/abac';
 import { addSaleLine } from '@/lib/pharmacy/sales';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
 import { recordTrpcAudit } from '@/server/audit';
@@ -47,8 +58,8 @@ const line = {
 const override = {
   inventoryLotId: 'lot-later',
   reason: 'Customer travelling; wants longer dating',
-  approvalPolicy: 'PHARMACIST_ON_DUTY',
 };
+const approval = { staffProfileId: 'supervisor-profile', pin: '1234' };
 
 function fixture() {
   const transaction = vi.fn(async (callback: (tx: unknown) => unknown) => callback(db));
@@ -63,6 +74,15 @@ function fixture() {
     pharmacyInventoryLot: { findMany: lotRead },
     // Integrated tip: addLine first reads the medicine to route controlled lines; these are not.
     medicine: { findFirst: vi.fn(async () => null) },
+    restaurantOperatorCredential: {
+      findFirst: vi.fn(async () => ({
+        credentialHash: 'hash',
+        staffProfile: {
+          status: 'ACTIVE',
+          user: { id: 'supervisor-1', organizationId: 'org-1', status: 'ACTIVE' },
+        },
+      })),
+    },
   };
   const context = {
     db,
@@ -76,7 +96,7 @@ function fixture() {
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
-  return { context, transaction, lotRead, caller: app.createCaller(context).pharmacySales };
+  return { context, db, transaction, lotRead, caller: app.createCaller(context).pharmacySales };
 }
 
 function lastAudit() {
@@ -98,12 +118,15 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
       allocation: { overrideId: 'override-1', recommendedLotId: 'lot-fefo' },
     } as never);
 
-    await f.caller.addLine({ ...line, override });
+    await f.caller.addLine({ ...line, override, approval });
 
     expect(addSaleLine).toHaveBeenCalledOnce();
     const [, scope, input] = vi.mocked(addSaleLine).mock.calls[0]!;
     expect(scope).toEqual({ organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' });
-    expect(input.override).toEqual(override);
+    expect(input).toMatchObject({
+      approvedByUserId: 'supervisor-1',
+      override: { ...override, approvalPolicy: 'PHARMACY_SAFETY_PIN' },
+    });
 
     const audit = lastAudit();
     expect(audit.outcome).toBe('SUCCESS');
@@ -121,7 +144,7 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
         overrideId: 'override-1',
         saleLineId: 'line-1',
         reason: override.reason,
-        approvalPolicy: 'PHARMACIST_ON_DUTY',
+        approvalPolicy: 'PHARMACY_SAFETY_PIN',
       },
     });
   });
@@ -146,7 +169,7 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
   ])('refuses a %s reason before any stock is touched', async (_label, reason) => {
     const f = fixture();
     await expect(
-      f.caller.addLine({ ...line, override: { ...override, reason } })
+      f.caller.addLine({ ...line, override: { ...override, reason }, approval })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(f.transaction).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
@@ -154,9 +177,9 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
 
   it('refuses an override with no reason field at all', async () => {
     const f = fixture();
-    const withoutReason = { inventoryLotId: override.inventoryLotId, approvalPolicy: 'X' };
+    const withoutReason = { inventoryLotId: override.inventoryLotId };
     await expect(
-      f.caller.addLine({ ...line, override: withoutReason } as never)
+      f.caller.addLine({ ...line, override: withoutReason, approval } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(addSaleLine).not.toHaveBeenCalled();
   });
@@ -171,7 +194,7 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
       const f = fixture();
       vi.mocked(addSaleLine).mockRejectedValue(new PharmacyInventoryError(reason));
 
-      await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
+      await expect(f.caller.addLine({ ...line, override, approval })).rejects.toMatchObject({
         code,
         message: reason,
       });
@@ -188,9 +211,79 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
   it('keeps a blocked override lot a FORBIDDEN refusal', async () => {
     const f = fixture();
     vi.mocked(addSaleLine).mockRejectedValue(new PharmacyInventoryError('BLOCKED_STOCK'));
-    await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
+    await expect(f.caller.addLine({ ...line, override, approval })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
+  });
+
+  it('refuses caller-supplied approval text and requires authenticated approval', async () => {
+    const f = fixture();
+    await expect(
+      f.caller.addLine({
+        ...line,
+        override: { ...override, approvalPolicy: 'FAKE' },
+        approvedByUserId: 'fake-user',
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.transaction).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('refuses self-approval even with a valid supervisor credential', async () => {
+    const f = fixture();
+    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue({
+      credentialHash: 'hash',
+      staffProfile: {
+        status: 'ACTIVE',
+        user: { id: 'actor-1', organizationId: 'org-1', status: 'ACTIVE' },
+      },
+    });
+
+    await expect(f.caller.addLine({ ...line, override, approval })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('requires the manager capability for a discount', async () => {
+    const f = fixture();
+    vi.mocked(can).mockResolvedValue(false);
+
+    await expect(
+      f.caller.addLine({ ...line, discountKind: 'DISCOUNT', discountMinor: 1, approval })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'supervisor-1' }),
+      'pharmacy:manage',
+      undefined,
+      expect.objectContaining({ db: f.db })
+    );
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('derives discount evidence from an authenticated manager instead of request text', async () => {
+    const f = fixture();
+    vi.mocked(can).mockResolvedValue(true);
+    vi.mocked(addSaleLine).mockResolvedValue({
+      line: { id: 'line-discount' },
+      allocation: { overrideId: null, recommendedLotId: 'lot-fefo' },
+    } as never);
+
+    await f.caller.addLine({
+      ...line,
+      discountKind: 'DISCOUNT',
+      discountMinor: 1,
+      approval,
+    });
+
+    expect(addSaleLine).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        approvedByUserId: 'supervisor-1',
+        approvalPolicy: 'PHARMACY_MANAGER_PIN',
+      })
+    );
   });
 });
 
