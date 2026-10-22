@@ -937,7 +937,7 @@ export const pharmacySalesRouter = router({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
           if (!medicine?.controlled) {
-            // #518: an Rx/restricted line needs the exact dispense grant or the owner policy.
+            // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
             return addSaleLine(db, scope, input);
           }
