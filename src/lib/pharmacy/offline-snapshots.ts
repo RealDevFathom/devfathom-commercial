@@ -160,13 +160,26 @@ export async function issueOfflineSnapshot(
   scope: SnapshotScope,
   input: IssueSnapshotInput
 ): Promise<IssuedSnapshot> {
-  const safetyLease = input.safetyLease ?? {
-    issuedAt: input.issuedAt.toISOString(),
-    expiresAt: input.expiresAt.toISOString(),
-    recallVersion: 0,
-    licenceVersion: 0,
-    ruleVersion: 0,
-  };
+  let safetyLease = input.safetyLease;
+  if (!safetyLease) {
+    const recalled = await db.pharmacyManufacturingBatch.findMany({
+      where: { organizationId: scope.organizationId, state: 'RECALLED' },
+      select: {
+        id: true,
+        lots: { where: { branchId: scope.branchId }, select: { id: true } },
+      },
+    });
+    safetyLease = {
+      issuedAt: input.issuedAt.toISOString(),
+      expiresAt: input.expiresAt.toISOString(),
+      recallVersion: input.issuedAt.getTime(),
+      recalledBatchIds: [
+        ...new Set(recalled.flatMap((batch) => [batch.id, ...batch.lots.map((lot) => lot.id)])),
+      ].sort(),
+      licenceVersion: 0,
+      ruleVersion: 0,
+    };
+  }
   if (
     input.expiresAt.getTime() <= input.issuedAt.getTime() ||
     !validSafetyLeaseShape(safetyLease) ||

@@ -51,6 +51,7 @@ const SAFETY_LEASE = {
   issuedAt: ISSUED_AT,
   expiresAt: EXPIRES_AT,
   recallVersion: 0,
+  recalledBatchIds: [],
   licenceVersion: 1,
   ruleVersion: 1,
 };
@@ -329,10 +330,15 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
     expect(counter.snapshot().queue?.safetyLeaseEvents.at(-1)?.type).toBe('EXPIRED');
   });
 
-  it('applies a reconnect recall before sale and blocks its batch within the lease SLA', async () => {
+  it('applies recall state carried by a renewed signed snapshot before sale', async () => {
     const counter = await readyCounter(createMemoryDriver());
     const renewedAt = '2026-09-02T11:00:00.000Z';
-    const renewedLease = { ...SAFETY_LEASE, issuedAt: renewedAt, recallVersion: 1 };
+    const renewedLease = {
+      ...SAFETY_LEASE,
+      issuedAt: renewedAt,
+      recallVersion: 1,
+      recalledBatchIds: ['lot_1'],
+    };
     await install(
       counter,
       'RULES',
@@ -344,17 +350,6 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
       }
     );
 
-    expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({
-      ok: false,
-      reason: 'SAFETY_LEASE_EXPIRED',
-    });
-    expect(
-      await counter.applyRecallBulletin({
-        issuedAt: '2026-09-02T12:01:00.000Z',
-        recallVersion: 1,
-        recalledBatchIds: ['lot_1'],
-      })
-    ).toBe(true);
     expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({
       ok: false,
       reason: 'BATCH_RECALLED',

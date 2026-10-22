@@ -238,7 +238,7 @@ export class PharmacyCounterRuntime {
             occurredAt: input.envelope.safetyLease.issuedAt,
             lease: input.envelope.safetyLease,
             recallVersion: input.envelope.safetyLease.recallVersion,
-            recalledBatchIds: [],
+            recalledBatchIds: input.envelope.safetyLease.recalledBatchIds,
           },
         ],
       },
@@ -263,9 +263,7 @@ export class PharmacyCounterRuntime {
   safetyLeaseState(): SafetyLeaseState {
     const leases = this.cache().snapshots.map((snapshot) => snapshot.envelope.safetyLease);
     const lease = leases.sort((a, b) => Date.parse(b.issuedAt) - Date.parse(a.issuedAt))[0] ?? null;
-    const recallEvents = this.queue().safetyLeaseEvents.filter(
-      (event) => event.type === 'RECALL_APPLIED'
-    );
+    const recallEvents = this.queue().safetyLeaseEvents;
     return {
       lease,
       appliedRecallVersion: Math.max(0, ...recallEvents.map((event) => event.recallVersion)),

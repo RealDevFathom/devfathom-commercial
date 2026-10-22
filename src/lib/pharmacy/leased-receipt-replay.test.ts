@@ -46,6 +46,7 @@ function leasedReceipt() {
       issuedAt: '2026-09-02T09:00:00.000Z',
       expiresAt: '2026-09-02T11:00:00.000Z',
       recallVersion: 1,
+      recalledBatchIds: [],
       licenceVersion: 1,
       ruleVersion: 1,
     },

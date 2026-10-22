@@ -31,6 +31,7 @@ const SAFETY_LEASE = {
   issuedAt: ISSUED_AT,
   expiresAt: EXPIRES_AT,
   recallVersion: 0,
+  recalledBatchIds: [],
   licenceVersion: 1,
   ruleVersion: 1,
 };

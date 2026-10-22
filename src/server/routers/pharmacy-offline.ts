@@ -128,6 +128,7 @@ const safety = z
     issuedAt: z.iso.datetime(),
     expiresAt: z.iso.datetime(),
     recallVersion: z.number().int().nonnegative(),
+    recalledBatchIds: z.array(id).max(10_000),
     licenceVersion: z.number().int().nonnegative(),
     ruleVersion: z.number().int().nonnegative(),
   })
@@ -226,6 +227,7 @@ export async function replayCounterCommand(
   validateLeasedReceiptReplay(scope, deviceId, command.leasedReceipt);
   const originalMs = Date.parse(command.leasedReceipt.originalSaleAt);
   const snapshots = command.snapshots.map((snapshot) => {
+    const safetyLease = snapshot.envelope.safetyLease;
     if (
       !verifySnapshotSignature(snapshot.envelope, snapshot.signature) ||
       !checkEnvelope({
@@ -237,9 +239,9 @@ export async function replayCounterCommand(
       }).ok ||
       !checkSafetyLease(
         {
-          lease: snapshot.envelope.safetyLease,
-          appliedRecallVersion: snapshot.envelope.safetyLease.recallVersion,
-          recalledBatchIds: [],
+          lease: safetyLease,
+          appliedRecallVersion: safetyLease.recallVersion,
+          recalledBatchIds: safetyLease.recalledBatchIds,
         },
         originalMs
       ).ok
@@ -255,6 +257,25 @@ export async function replayCounterCommand(
     (n, line) => n + line.quantity * line.canonicalUnitsPerSaleUnit,
     0
   );
+  const requestedLotIds = [...new Set(command.lines.map((line) => line.inventoryLotId))];
+  // The signed lease lets the counter refuse known recalls while disconnected.
+  // Replay also checks current server state: a recall raised after the offline
+  // sale must win over an older, otherwise-valid snapshot.
+  const currentLots = await db.pharmacyInventoryLot.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      id: { in: requestedLotIds },
+    },
+    select: { id: true, batch: { select: { id: true, state: true } } },
+  });
+  const unsafeCurrentLot =
+    currentLots.length !== requestedLotIds.length ||
+    currentLots.some((lot) => lot.batch.state !== 'ACTIVE');
+  const recalledInSnapshot = command.snapshots.some((snapshot) => {
+    const recalled = new Set(snapshot.envelope.safetyLease.recalledBatchIds);
+    return currentLots.some((lot) => recalled.has(lot.batch.id));
+  });
   authorizeReplayedCommand(command.action, {
     nowMs: originalMs,
     snapshots,
@@ -267,8 +288,8 @@ export async function replayCounterCommand(
     originalSaleAvailable: false,
     deviceUsable: true,
     medicineSale: true,
-    safetyLeaseOk: true,
-    batchRecalled: false,
+    safetyLeaseOk: snapshots.length > 0,
+    batchRecalled: unsafeCurrentLot || recalledInSnapshot,
   });
   const recorded = await recordOfflineCommand(db, scope, {
     deviceId,
@@ -579,6 +600,26 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           });
           const now = new Date();
           const expiry = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+          const recalledLots = await db.pharmacyInventoryLot.findMany({
+            where: {
+              organizationId: ctx.scope.organizationId,
+              branchId: device.branchId,
+              id: { in: quotas.map((quota) => quota.inventoryLotId) },
+              batch: { state: 'RECALLED' },
+            },
+            select: { id: true, batch: { select: { id: true } } },
+          });
+          const recalledBatchIds = [
+            ...new Set(recalledLots.flatMap((lot) => [lot.batch.id, lot.id])),
+          ].sort();
+          const safetyLease = {
+            issuedAt: now.toISOString(),
+            expiresAt: expiry.toISOString(),
+            recallVersion: now.getTime(),
+            recalledBatchIds,
+            licenceVersion: 0,
+            ruleVersion: 0,
+          };
           const payloads = {
             CATALOG: catalog,
             PRICES: lots,
@@ -595,6 +636,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
                 payload: JSON.parse(JSON.stringify(payloads[snapshotKind])),
                 issuedAt: now,
                 expiresAt: expiry,
+                safetyLease,
               })
             );
           return { snapshots, publicKey: snapshotPublicKey(), catalogLimit: 1000 };

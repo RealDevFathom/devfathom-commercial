@@ -481,4 +481,26 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
     expect(await r.json()).toEqual({ error: 'medicine_not_offline_otc' });
     expect((await f.counts()).commands).toBe(0);
   });
+  it('denies replay when the server recalled the sold lot after snapshot issuance', async () => {
+    const f = await setup();
+    await inOrg(ORG_A, (db) =>
+      db.pharmacyManufacturingBatch.updateMany({
+        where: { lots: { some: { id: f.fixture.lotId } } },
+        data: { state: 'RECALLED', stateReason: 'Safety recall', stateChangedAt: new Date() },
+      })
+    );
+    const refreshed = await f.call('snapshot');
+    expect(refreshed.status).toBe(200);
+    const recallAwareSnapshots = (await refreshed.json()).snapshots;
+    expect(
+      recallAwareSnapshots.every((snapshot: { envelope: { safetyLease: { recalledBatchIds: string[] } } }) =>
+        snapshot.envelope.safetyLease.recalledBatchIds.includes(f.fixture.lotId)
+      )
+    ).toBe(true);
+
+    const r = await f.replay();
+    expect(r.status).toBe(409);
+    expect(await r.json()).toEqual({ error: 'ACTION_DENIED' });
+    expect((await f.counts()).commands).toBe(0);
+  });
 });

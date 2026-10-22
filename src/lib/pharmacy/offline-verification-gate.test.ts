@@ -65,6 +65,7 @@ async function readyCounter(
         issuedAt: START.toISOString(),
         expiresAt: new Date(START.getTime() + FOUR_HOURS_MS + 1).toISOString(),
         recallVersion: 0,
+        recalledBatchIds: [],
         licenceVersion: 1,
         ruleVersion: 1,
       },

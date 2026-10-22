@@ -4,6 +4,8 @@ export type OfflineSafetyLease = {
   issuedAt: string;
   expiresAt: string;
   recallVersion: number;
+  /** Recalled batch ids and their offline inventory-lot ids at issuance. */
+  recalledBatchIds: readonly string[];
   licenceVersion: number;
   ruleVersion: number;
 };
@@ -39,6 +41,9 @@ export function validSafetyLeaseShape(lease: OfflineSafetyLease): boolean {
     Number.isFinite(issuedAt) &&
     Number.isFinite(expiresAt) &&
     expiresAt > issuedAt &&
+    Array.isArray(lease.recalledBatchIds) &&
+    lease.recalledBatchIds.every((id) => typeof id === 'string' && id.length > 0) &&
+    new Set(lease.recalledBatchIds).size === lease.recalledBatchIds.length &&
     [lease.recallVersion, lease.licenceVersion, lease.ruleVersion].every(
       (version) => Number.isSafeInteger(version) && version >= 0
     )
