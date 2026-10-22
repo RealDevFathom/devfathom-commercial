@@ -1,4 +1,11 @@
-import { type Decimal, type MoneyInput, multiply, roundMoney, sum } from './money-arithmetic';
+import {
+  compare,
+  type Decimal,
+  type MoneyInput,
+  multiply,
+  roundMoney,
+  sum,
+} from './money-arithmetic';
 
 /**
  * The gross merchandise basis a service charge multiplies: Σ (unit charge) ×
@@ -23,5 +30,9 @@ export function serviceChargeBasis(
  * open bill.
  */
 export function serviceChargeFor(basis: MoneyInput, rate: MoneyInput): Decimal {
+  if (compare(basis, 0) < 0) throw new RangeError('Service-charge basis cannot be negative.');
+  if (compare(rate, 0) < 0 || compare(rate, 1) > 0) {
+    throw new RangeError('Service-charge rate must be between zero and one.');
+  }
   return roundMoney(multiply(basis, rate));
 }

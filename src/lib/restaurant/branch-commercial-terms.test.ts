@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { loadBranchCommercialTerms } from './branch-commercial-terms';
+import { BranchCommercialTermsError, loadBranchCommercialTerms } from './branch-commercial-terms';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const at = new Date('2026-10-21T00:00:00.000Z');
@@ -36,7 +36,7 @@ describe('loadBranchCommercialTerms', () => {
         ]),
       },
       restaurantServiceChargePolicyVersion: {
-        findFirst: vi.fn().mockResolvedValue({ rate: { toString: () => '0.100000' } }),
+        findMany: vi.fn().mockResolvedValue([{ rate: { toString: () => '0.100000' } }]),
       },
     };
     const terms = await loadBranchCommercialTerms(db as unknown as ScopedDb, 'branch-1', at);
@@ -59,9 +59,10 @@ describe('loadBranchCommercialTerms', () => {
         }),
       })
     );
-    expect(db.restaurantServiceChargePolicyVersion.findFirst).toHaveBeenCalledWith(
+    expect(db.restaurantServiceChargePolicyVersion.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ branchId: 'branch-1', effectiveFrom: { lte: at } }),
+        take: 2,
       })
     );
     expect(terms.serviceChargeRate).toBe('0.100000');
@@ -72,9 +73,25 @@ describe('loadBranchCommercialTerms', () => {
   it('returns a null service-charge rate when the branch has no effective policy', async () => {
     const db = {
       restaurantTaxProfileVersion: { findMany: vi.fn().mockResolvedValue([]) },
-      restaurantServiceChargePolicyVersion: { findFirst: vi.fn().mockResolvedValue(null) },
+      restaurantServiceChargePolicyVersion: { findMany: vi.fn().mockResolvedValue([]) },
     };
     const terms = await loadBranchCommercialTerms(db as unknown as ScopedDb, 'branch-1', at);
     expect(terms).toEqual({ profiles: [], rules: [], serviceChargeRate: null });
+  });
+
+  it('denies an ambiguous service-charge policy instead of choosing one', async () => {
+    const db = {
+      restaurantTaxProfileVersion: { findMany: vi.fn().mockResolvedValue([]) },
+      restaurantServiceChargePolicyVersion: {
+        findMany: vi.fn().mockResolvedValue([
+          { rate: { toString: () => '0.100000' } },
+          { rate: { toString: () => '0.200000' } },
+        ]),
+      },
+    };
+
+    await expect(
+      loadBranchCommercialTerms(db as unknown as ScopedDb, 'branch-1', at)
+    ).rejects.toBeInstanceOf(BranchCommercialTermsError);
   });
 });
