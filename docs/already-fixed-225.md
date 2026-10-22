@@ -11,4 +11,8 @@ The current code already applies the shared password policy to organization onbo
   proving that `aaaaaaaaaaaa` is rejected before either the organization or administrator is
   created.
 
-The fix is present in commit `21df23e5c15b413ec368bee910ae7c290b4d2f8a` (`fix(#225)`), which is already an ancestor of the current branch. No additional code change is needed.
+The organization-onboarding fix is present in commit
+`21df23e5c15b413ec368bee910ae7c290b4d2f8a` (`fix(#225)`), which is already an ancestor
+of the current branch. During follow-up review, the related platform administrator password-reset
+command was also aligned with this shared policy, with focused coverage proving that a weak reset
+password is rejected before the user is updated.

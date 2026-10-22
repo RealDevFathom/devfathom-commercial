@@ -68,7 +68,7 @@ describe('sensitive commands', () => {
   it('allows SA password reset and audits the reason without the password', async () => {
     await execute('organization.user.password', {
       id: 'user_1',
-      password: 'a-secret-password',
+      password: 'A-secret-password1',
       reason: 'Verified owner recovery',
     });
     expect(db.user.update).toHaveBeenCalledOnce();
@@ -76,7 +76,18 @@ describe('sensitive commands', () => {
       reason: 'Verified owner recovery',
       passwordReset: true,
     });
-    expect(JSON.stringify(state.audits)).not.toContain('a-secret-password');
+    expect(JSON.stringify(state.audits)).not.toContain('A-secret-password1');
+  });
+  it('rejects a weak SA password reset before updating the user', async () => {
+    await expect(
+      execute('organization.user.password', {
+        id: 'user_1',
+        password: 'aaaaaaaaaaaa',
+        reason: 'Verified owner recovery',
+      })
+    ).rejects.toMatchObject({ issues: expect.any(Array) });
+
+    expect(db.user.update).not.toHaveBeenCalled();
   });
   it('denies an OPERATIONS vertical correction before mutation', async () => {
     await expect(

@@ -2512,7 +2512,7 @@ async function runCommand(
       };
     }
     case 'organization.user.password': {
-      const input = z.object({ id, password: z.string().min(12).max(256) }).parse(payload);
+      const input = z.object({ id, password: passwordSchema.min(12).max(256) }).parse(payload);
       const password = await hash(input.password, 12);
       const saved = await db.user.update({
         where: { id: input.id },
