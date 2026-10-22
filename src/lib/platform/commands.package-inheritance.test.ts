@@ -98,7 +98,7 @@ const createPayload = {
   primaryContactEmail: 'ops@acme.com',
   adminName: 'Acme Admin',
   adminEmail: 'admin@acme.com',
-  adminPassword: 'a-strong-password',
+  adminPassword: 'A-strong-password1',
 };
 
 /** An org row shaped for both the `before` lookup and `assertActivationReady`. */

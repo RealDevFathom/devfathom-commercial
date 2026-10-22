@@ -50,7 +50,7 @@ function payload(slug: string, adminEmail: string) {
     primaryContactEmail: `ops-${suffix}@test.local`,
     adminName: 'QA Admin',
     adminEmail,
-    adminPassword: 'a-strong-password',
+    adminPassword: 'A-strong-password1',
   };
 }
 
