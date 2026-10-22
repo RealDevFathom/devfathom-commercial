@@ -22,6 +22,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { matchScore, norm } from '@/lib/ai/context';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
+import { assertInOrganization } from '@/server/org-refs';
 
 export function buildProjectsTools(h: AssistantHelpers): ToolSet {
   const { db } = h;
@@ -264,7 +265,7 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       type: z.enum(['CLIENT', 'INTERNAL']).describe('CLIENT (for a client) or INTERNAL'),
       description: z.string().nullish(),
       status: z.enum(['ACTIVE', 'IN_DEVELOPMENT', 'ON_HOLD']).nullish().describe('Default ACTIVE'),
-      clientName: z.string().nullish().describe('Attach to a client by name (fuzzy match)'),
+      clientName: z.string().min(1).nullish().describe('Attach to a client by name (fuzzy match)'),
       techStack: z.array(z.string()).nullish().describe('e.g. ["Next.js", "Postgres"]'),
       startDate: z.string().nullish().describe('ISO date'),
       endDate: z.string().nullish().describe('ISO date'),
@@ -295,6 +296,11 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
           return { needsClarification: `Which client — ${cr.candidates.join(', ')}?` };
         clientId = cr.value.id;
         resolvedClient = cr.value.name;
+      }
+
+      await assertInOrganization(db.user, h.ctx.organizationId, [userId]);
+      if (clientId) {
+        await assertInOrganization(db.client, h.ctx.organizationId, [clientId]);
       }
 
       const project = await db.project.create({

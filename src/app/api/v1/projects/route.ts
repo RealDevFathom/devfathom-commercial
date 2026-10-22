@@ -1,8 +1,10 @@
 import { NextResponse } from 'next/server';
+import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
+import { assertInOrganization } from '@/server/org-refs';
 
 export const GET = withApiAuth('projects:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -28,11 +30,11 @@ const createProjectSchema = z.object({
   description: z.string().optional(),
   type: z.enum(['CLIENT', 'INTERNAL']),
   status: z.enum(['ACTIVE', 'IN_DEVELOPMENT', 'ON_HOLD', 'COMPLETED']).default('ACTIVE'),
-  clientId: z.string().optional(),
+  clientId: z.string().min(1).optional(),
   startDate: z.string().datetime().optional(),
   endDate: z.string().datetime().optional(),
   techStack: z.array(z.string()).default([]),
-  memberIds: z.array(z.string()).default([]),
+  memberIds: z.array(z.string().min(1)).default([]),
 });
 
 export const POST = withApiAuth('projects:write', async (ctx, request) => {
@@ -48,6 +50,16 @@ export const POST = withApiAuth('projects:write', async (ctx, request) => {
   }
   const { memberIds, startDate, endDate, ...data } = parsed.data;
   const allMembers = [...new Set([ctx.userId, ...memberIds])];
+
+  try {
+    await assertInOrganization(ctx.db.user, ctx.organizationId, allMembers);
+    await assertInOrganization(ctx.db.client, ctx.organizationId, [data.clientId]);
+  } catch (error) {
+    if (error instanceof TRPCError && error.code === 'BAD_REQUEST') {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    throw error;
+  }
 
   const project = await ctx.db.project.create({
     data: {
