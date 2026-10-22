@@ -272,7 +272,7 @@ function makeState() {
       shiftId: string;
       breakId: string | null;
       kind: string;
-      originalAt: Date;
+      originalAt: Date | null;
       correctedAt: Date;
       reason: string;
       createdAt: Date;
@@ -1101,6 +1101,27 @@ describe('restaurantShifts.correctTime', () => {
     });
   });
 
+  it('repairs a missing clock-out while preserving its absent original timestamp', async () => {
+    await caller('EMPLOYEE').clockIn({ shiftId: 'shift_emp', idempotencyKey: 'ci' });
+    const adjustment = await caller('MANAGER').correctTime({
+      shiftId: 'shift_emp',
+      branchId: 'branch_1',
+      kind: 'CLOCK_OUT',
+      correctedAt: '2026-09-20T17:00:00Z' as unknown as Date,
+      reason: 'Forgot to clock out',
+    });
+    expect(adjustment).toMatchObject({
+      kind: 'CLOCK_OUT',
+      originalAt: null,
+      correctedAt: at('2026-09-20T17:00:00Z'),
+    });
+    expect(state.shifts.find((s) => s.id === 'shift_emp')!.clockedOutAt).toBeNull();
+    const roster = await caller('MANAGER').managerRoster({ branchId: 'branch_1', ...RANGE });
+    expect(roster.find((r) => r.id === 'shift_emp')?.clockedOutAt).toEqual(
+      at('2026-09-20T17:00:00Z')
+    );
+  });
+
   it('rejects cross-branch shifts, impossible corrections and non-managers', async () => {
     await caller('EMPLOYEE').clockIn({ shiftId: 'shift_emp', idempotencyKey: 'ci' });
     const base = {
@@ -1110,8 +1131,6 @@ describe('restaurantShifts.correctTime', () => {
       correctedAt: '2026-09-20T17:00:00Z' as unknown as Date,
       reason: 'Forgot to clock out',
     };
-    // Clock-out was never punched: nothing to correct.
-    await expect(caller('MANAGER').correctTime(base)).rejects.toMatchObject({ code: 'NOT_FOUND' });
     // A branch_1 manager naming branch_1 cannot correct a punched branch_2 shift.
     state.shifts.find((s) => s.id === 'shift_dha')!.clockedInAt = at('2026-09-20T09:00:00Z');
     await expect(
@@ -1163,7 +1182,7 @@ describe('restaurantShifts.exportAttendanceCsv', () => {
     expect(result.filename).toBe('restaurant-workforce-2026-09-20-2026-09-21.csv');
     const lines = result.csv.split('\n');
     expect(lines[0]).toBe(
-      'branch,employee,businessDate,scheduledStart,scheduledEnd,clockIn,clockOut,breakMinutes,attendanceStatus,lateMinutes'
+      'branch,employee,businessDate,scheduledStart,scheduledEnd,clockIn,clockOut,breakMinutes,workedMinutes,workedHours,attendanceStatus,lateMinutes'
     );
     expect(lines).toHaveLength(4);
     const cells = (line: string) => line.split(',');
@@ -1176,12 +1195,14 @@ describe('restaurantShifts.exportAttendanceCsv', () => {
       '2026-09-20T09:02:00.000Z',
       '2026-09-20T17:01:00.000Z',
       '45',
+      '434',
+      '7.23',
       'COMPLETE',
       '2',
     ]);
     expect(cells(lines[2]!).slice(0, 2)).toEqual(['Gulberg Main', 'Bilal']);
-    expect(cells(lines[2]!).slice(5, 10)).toEqual(['', '', '0', 'ABSENT', '0']);
-    expect(cells(lines[3]!).slice(8)).toEqual(['CANCELLED', '0']);
+    expect(cells(lines[2]!).slice(5, 12)).toEqual(['', '', '0', '', '', 'ABSENT', '0']);
+    expect(cells(lines[3]!).slice(10)).toEqual(['CANCELLED', '0']);
     expect(result.csv).not.toContain('DHA Phase 6');
   });
 
