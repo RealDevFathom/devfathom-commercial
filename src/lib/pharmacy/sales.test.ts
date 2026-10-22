@@ -188,6 +188,16 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
     ).toMatchObject({ grossMinor: 1_005, mrpAdjustmentMinor: 5 });
   });
 
+  it('rejects a short allocation instead of converting it into an MRP adjustment', () => {
+    expect(() =>
+      priceAllocatedLots(
+        [{ canonicalUnits: 1, unitPriceMinor: 100, proRataCeilingMinor: 100 }],
+        2,
+        1
+      )
+    ).toThrow('INVALID_QUANTITY');
+  });
+
   it("rejects an allocation price above that lot's own pro-rata MRP ceiling", () => {
     expect(() =>
       priceAllocatedLots(

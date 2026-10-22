@@ -185,6 +185,37 @@ describe('internal reserved checkout allocation', () => {
     ).rejects.toThrow('MARGIN_GUARDRAIL');
     expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
   });
+  it('persists the exact mixed-lot total as a non-discretionary MRP adjustment', async () => {
+    const db = fixture();
+    db.pharmacyInventoryLot.findMany.mockResolvedValue([
+      { id: 'reserved', printedMrpMinor: 100, unitsPerPack: 1, unitCostMinor: 40 },
+      { id: 'split', printedMrpMinor: 101, unitsPerPack: 1, unitCostMinor: 40 },
+    ]);
+
+    const result = await addReservedSaleLine(
+      db as never,
+      scope,
+      {
+        saleId: 'sale',
+        medicineId: 'medicine',
+        presentationId: 'presentation',
+        packLevelId: 'pack',
+        saleUnit: 'UNIT',
+        quantity: 3,
+        canonicalUnitsPerSaleUnit: 1,
+        idempotencyKey: 'mixed-lot-line',
+      },
+      reservation
+    );
+
+    expect(result.line).toMatchObject({
+      quantity: 3,
+      canonicalUnits: 3,
+      unitPriceMinor: 101,
+      discountMinor: 2,
+    });
+    expect(result.line.unitPriceMinor * result.line.quantity - result.line.discountMinor).toBe(301);
+  });
 });
 
 describe('mixed sealed and loose physical depletion', () => {

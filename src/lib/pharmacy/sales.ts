@@ -246,11 +246,21 @@ export function priceAllocatedLots(
   quantity: number,
   canonicalUnitsPerSaleUnit: number
 ) {
+  const expectedCanonicalUnits = quantity * canonicalUnitsPerSaleUnit;
+  if (
+    !Number.isSafeInteger(quantity) ||
+    quantity <= 0 ||
+    !Number.isSafeInteger(canonicalUnitsPerSaleUnit) ||
+    canonicalUnitsPerSaleUnit <= 0 ||
+    !Number.isSafeInteger(expectedCanonicalUnits) ||
+    allocations.some(
+      (part) => !Number.isSafeInteger(part.canonicalUnits) || part.canonicalUnits <= 0
+    )
+  )
+    throw new PharmacySaleError('INVALID_QUANTITY');
   if (
     allocations.some(
       (part) =>
-        !Number.isSafeInteger(part.canonicalUnits) ||
-        part.canonicalUnits <= 0 ||
         !Number.isSafeInteger(part.unitPriceMinor) ||
         part.unitPriceMinor < 0 ||
         !Number.isSafeInteger(part.proRataCeilingMinor) ||
@@ -258,6 +268,15 @@ export function priceAllocatedLots(
     )
   )
     throw new PharmacySaleError('PRICE_ABOVE_MRP');
+  const allocatedCanonicalUnits = allocations.reduce(
+    (total, part) => total + part.canonicalUnits,
+    0
+  );
+  if (
+    !Number.isSafeInteger(allocatedCanonicalUnits) ||
+    allocatedCanonicalUnits !== expectedCanonicalUnits
+  )
+    throw new PharmacySaleError('INVALID_QUANTITY');
   const unitPriceMinor = Math.max(...allocations.map((part) => part.unitPriceMinor));
   const proRataCeilingMinor = Math.max(
     ...allocations.map((part) => part.proRataCeilingMinor)
