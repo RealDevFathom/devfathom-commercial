@@ -110,6 +110,25 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('organization people and access — staff onboarding', () => {
+  it.each([
+    [1, 1, '1 of 1 licensed seat is currently occupied.'],
+    [1, 10, '1 of 10 licensed seats is currently occupied.'],
+    [2, 10, '2 of 10 licensed seats are currently occupied.'],
+  ])(
+    'uses grammatical seat copy for %i active seats and a limit of %i',
+    (activeSeats, seatLimit, copy) => {
+      const data = overviewData.current as {
+        entitlements: { activeSeats: number; seatLimit: number };
+      };
+      data.entitlements.activeSeats = activeSeats;
+      data.entitlements.seatLimit = seatLimit;
+
+      render(<OrganizationAdminContent />);
+
+      expect(screen.getByText(copy)).toBeInTheDocument();
+    }
+  );
+
   it('offers an add-staff form with the organization pharmacy departments', () => {
     render(<OrganizationAdminContent />);
 

@@ -293,6 +293,7 @@ export function OrganizationAdminContent() {
   }
 
   const { organization, entitlements, pharmacyBranches } = overview.data;
+  const occupiedSeatsDescription = `${entitlements.activeSeats} of ${entitlements.seatLimit} licensed seat${entitlements.seatLimit === 1 ? '' : 's'} ${entitlements.activeSeats === 1 ? 'is' : 'are'} currently occupied.`;
   const createRoleErrors = !role.variables?.id ? role.error?.data?.validation : null;
   const createRoleKeyError = createRoleErrors?.key?.[0];
   const createRolePermissionsError = createRoleErrors?.permissions?.[0];
@@ -480,7 +481,7 @@ export function OrganizationAdminContent() {
 
       <Card
         title="People and access"
-        description={`${entitlements.activeSeats} of ${entitlements.seatLimit} licensed seats are currently occupied.`}
+        description={occupiedSeatsDescription}
       >
         <form
           className="mb-5 grid gap-3 rounded-xl bg-muted/35 p-4 sm:grid-cols-2 lg:grid-cols-3"
