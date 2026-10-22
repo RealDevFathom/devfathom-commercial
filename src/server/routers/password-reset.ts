@@ -1,15 +1,17 @@
-import { z } from 'zod';
 import { hash } from 'bcryptjs';
 import { TRPCError } from '@trpc/server';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { router, publicProcedure } from '../trpc';
-import { passwordSchema } from '@/lib/password-policy';
 import { generateInviteToken, hashInviteToken } from '@/lib/invite-token';
 import { rateLimit } from '@/lib/rate-limit';
 import { ACTIVE_STATUSES } from '@/lib/abac';
-import { emailLookupSchema } from '@/lib/email-address';
 import { appUrl, templates, sendEmail } from '@/lib/email';
 import { RESET_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
+import {
+  passwordResetInput,
+  passwordResetRequestInput,
+  passwordResetTokenInput,
+} from './anonymous-input-schemas';
 
 // Public (unauthenticated) procedures backing the forgot-password / reset flow.
 // A raw, high-entropy token is emailed once; only its SHA-256 hash is stored
@@ -17,7 +19,6 @@ import { RESET_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
 // the presented raw token with the SAME sha256 (hashInviteToken) and look up by
 // tokenHash — no plaintext token ever lives in the DB.
 
-const tokenInput = z.object({ token: z.string().min(1) });
 const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // One message for every way a reset link can fail. Shared with the fallback
@@ -59,7 +60,7 @@ export const passwordResetRouter = router({
     // D10: lookup-only normalization. A malformed address must be indistinguish-
     // able from an unknown one here, so this deliberately does not validate the
     // format — it would turn the endpoint into an enumeration oracle.
-    .input(z.object({ email: emailLookupSchema }))
+    .input(passwordResetRequestInput)
     .mutation(async ({ ctx, input }) => {
       if (ctx.organization?.isDemo) return { success: true };
       const email = input.email;
@@ -120,7 +121,7 @@ export const passwordResetRouter = router({
 
   // Lightweight pre-check so the reset page can show an "expired link" state
   // before the user types anything. Reveals only whether the token is usable.
-  validate: publicProcedure.input(tokenInput).query(async ({ ctx, input }) => {
+  validate: publicProcedure.input(passwordResetTokenInput).query(async ({ ctx, input }) => {
     const record = await loadUsableToken(ctx.db, input.token);
     return { valid: Boolean(record) };
   }),
@@ -128,7 +129,7 @@ export const passwordResetRouter = router({
   // Step 2 — consume the token and set a new password. Rejects missing / used /
   // expired tokens with one generic error.
   reset: publicProcedure
-    .input(z.object({ token: z.string().min(1), newPassword: passwordSchema }))
+    .input(passwordResetInput)
     .mutation(async ({ ctx, input }) => {
       const record = await loadUsableToken(ctx.db, input.token);
       if (!record) throw invalidResetLink();

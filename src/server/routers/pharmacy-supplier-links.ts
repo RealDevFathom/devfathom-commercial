@@ -10,6 +10,11 @@ import {
   submitSupplierEvidence,
   uploadSupplierDocument,
 } from '@/lib/pharmacy/supplier-action-links';
+import {
+  supplierLinkGetInput,
+  supplierLinkSubmitInput,
+  supplierLinkUploadInput,
+} from './anonymous-input-schemas';
 
 const id = z.string().trim().min(1).max(200);
 const kind = z.enum([
@@ -40,7 +45,7 @@ function mapError(error: unknown): never {
 }
 
 export const pharmacySupplierLinksRouter = router({
-  get: publicProcedure.input(z.object({ token: id }).strict()).query(async ({ ctx, input }) => {
+  get: publicProcedure.input(supplierLinkGetInput).query(async ({ ctx, input }) => {
     try {
       return await getSupplierActionPage(ctx.db, input.token);
     } catch (error) {
@@ -48,17 +53,7 @@ export const pharmacySupplierLinksRouter = router({
     }
   }),
   submit: publicProcedure
-    .input(
-      z
-        .object({
-          token: id,
-          kind,
-          idempotencyKey: id,
-          payload: z.record(z.string(), z.unknown()),
-          supersedesId: id.optional(),
-        })
-        .strict()
-    )
+    .input(supplierLinkSubmitInput)
     .mutation(async ({ ctx, input }) => {
       try {
         return await submitSupplierEvidence(ctx.db, input);
@@ -67,17 +62,7 @@ export const pharmacySupplierLinksRouter = router({
       }
     }),
   uploadDocument: publicProcedure
-    .input(
-      z
-        .object({
-          token: id,
-          idempotencyKey: id,
-          fileName: z.string().trim().min(1).max(255),
-          declaredMimeType: z.enum(['application/pdf', 'image/png', 'image/jpeg']),
-          contentBase64: z.string().min(1).max(14_000_000),
-        })
-        .strict()
-    )
+    .input(supplierLinkUploadInput)
     .mutation(async ({ ctx, input }) => {
       try {
         return await uploadSupplierDocument(ctx.db, {

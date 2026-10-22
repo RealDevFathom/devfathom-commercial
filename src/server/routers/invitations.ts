@@ -1,11 +1,10 @@
-import { z } from 'zod';
 import { hash } from 'bcryptjs';
 import { TRPCError } from '@trpc/server';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { router, publicProcedure } from '../trpc';
-import { passwordSchema } from '@/lib/password-policy';
 import { hashInviteToken } from '@/lib/invite-token';
 import { INVITATION_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
+import { invitationAcceptInput, invitationTokenInput } from './anonymous-input-schemas';
 
 // Public (unauthenticated) procedures backing the /invite/[token] page. An
 // invited user has status INVITED and a null password — they cannot sign in
@@ -17,8 +16,6 @@ import { INVITATION_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
 // whether a token had ever existed. `INVITATION_GENERIC_MESSAGE` is shared with
 // the fallback router the transport uses when a token names no tenant, so all
 // three outcomes are indistinguishable.
-
-const tokenInput = z.object({ token: z.string().min(1) });
 
 function invalidInvitation() {
   return new TRPCError({ code: 'NOT_FOUND', message: INVITATION_GENERIC_MESSAGE });
@@ -53,7 +50,7 @@ async function loadPendingInvitation(db: PrismaClient, token: string) {
 
 export const invitationsRouter = router({
   // Fetch the read-only details to render on the accept page.
-  get: publicProcedure.input(tokenInput).query(async ({ ctx, input }) => {
+  get: publicProcedure.input(invitationTokenInput).query(async ({ ctx, input }) => {
     const { user } = await loadPendingInvitation(ctx.db, input.token);
     return {
       name: user.name,
@@ -68,15 +65,7 @@ export const invitationsRouter = router({
   // Identity fields (name/email/title/department/role) are admin-controlled and
   // intentionally NOT accepted here.
   accept: publicProcedure
-    .input(
-      z.object({
-        token: z.string().min(1),
-        password: passwordSchema,
-        phone: z.string().trim().min(1, 'Phone number is required'),
-        bio: z.string().optional(),
-        skills: z.array(z.string()).optional(),
-      })
-    )
+    .input(invitationAcceptInput)
     .mutation(async ({ ctx, input }) => {
       const invitation = await loadPendingInvitation(ctx.db, input.token);
       const hashed = await hash(input.password, 12);

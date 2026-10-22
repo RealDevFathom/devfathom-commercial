@@ -37,6 +37,8 @@ import { INVITATION_GENERIC_MESSAGE, RESET_GENERIC_MESSAGE } from '@/lib/auth/an
 import { publicProcedure, router } from '@/server/trpc';
 
 import { anonymousFallbackRouter } from './anonymous-fallback';
+import { invitationsRouter } from './invitations';
+import { passwordResetRouter } from './password-reset';
 
 const TRPC_ENDPOINT = '/api/trpc';
 
@@ -56,6 +58,13 @@ const realRouter = router({
       throw new TRPCError({ code: 'BAD_REQUEST', message: RESET_GENERIC_MESSAGE });
     }),
   }),
+});
+
+// Unlike the formatter-only stand-in above, this router mounts the production
+// procedures and therefore proves that their validation boundary also matches.
+const productionPublicRouter = router({
+  invitations: invitationsRouter,
+  passwordReset: passwordResetRouter,
 });
 
 type ServedResponse = {
@@ -94,7 +103,7 @@ function stripStacks(value: unknown): { body: unknown; hasStack: boolean } {
 }
 
 async function serve(
-  router_: typeof realRouter | typeof anonymousFallbackRouter,
+  router_: typeof realRouter | typeof productionPublicRouter | typeof anonymousFallbackRouter,
   request: Request
 ): Promise<ServedResponse> {
   const response = await fetchRequestHandler({
@@ -114,8 +123,12 @@ async function serve(
   };
 }
 
-const query = (path: string) =>
-  new Request(`http://acme.example.test${TRPC_ENDPOINT}/${path}?batch=1`, { method: 'GET' });
+const query = (path: string, input?: unknown) => {
+  const url = new URL(`http://acme.example.test${TRPC_ENDPOINT}/${path}`);
+  url.searchParams.set('batch', '1');
+  if (input !== undefined) url.searchParams.set('input', JSON.stringify({ '0': { json: input } }));
+  return new Request(url, { method: 'GET' });
+};
 
 const mutation = (path: string, input: unknown) =>
   new Request(`http://acme.example.test${TRPC_ENDPOINT}/${path}?batch=1`, {
@@ -163,5 +176,27 @@ describe('fallback and real routers serialize refusals identically', () => {
     expect(Array.isArray(fallback.body)).toBe(true);
     expect((fallback.body as unknown[]).length).toBe((real.body as unknown[]).length);
     expect(fallback.body).toEqual(real.body);
+  });
+});
+
+describe('fallback and production routers validate anonymous input identically', () => {
+  it.each([
+    ['invitations.get', () => query('invitations.get', { token: '' })],
+    [
+      'invitations.accept',
+      () => mutation('invitations.accept', { token: '', password: '', phone: '' }),
+    ],
+    ['passwordReset.request', () => mutation('passwordReset.request', { email: '' })],
+    ['passwordReset.validate', () => query('passwordReset.validate', { token: '' })],
+    [
+      'passwordReset.reset',
+      () => mutation('passwordReset.reset', { token: '', newPassword: 'not-acceptable' }),
+    ],
+  ])('matches production %s for malformed input', async (_path, request) => {
+    const real = await serve(productionPublicRouter, request());
+    const fallback = await serve(anonymousFallbackRouter, request());
+
+    expect(real.status).toBe(400);
+    expect(fallback).toEqual(real);
   });
 });
