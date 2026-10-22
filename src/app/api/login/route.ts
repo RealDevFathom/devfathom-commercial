@@ -4,7 +4,7 @@ import { rateLimit } from '@/lib/rate-limit';
 import { emailSchema } from '@/lib/email-address';
 import { publicRequestOrigin } from '@/lib/http-origin';
 import { requestHost } from '@/lib/tenancy/host';
-import { isSharedHost, tenantHostUrl } from '@/lib/tenancy/host-routing';
+import { classifyHost, isSharedHost, tenantHostUrl } from '@/lib/tenancy/host-routing';
 import { safeCallbackUrl } from '@/lib/auth/callback-url';
 import {
   clearedLoginIntentCookieOptions,
@@ -201,7 +201,14 @@ export async function POST(request: Request) {
  * half-finished login cannot be resumed by the next person at the browser.
  */
 export async function DELETE(request: Request) {
-  if (!isSharedHost(requestHost(request))) {
+  const hostKind = classifyHost(requestHost(request)).kind;
+  if (hostKind === 'tenant') {
+    // The sign-out helper calls this before Auth.js. Tenant hosts cannot hold a
+    // shared-host intent cookie, so acknowledge the cleanup without touching
+    // platform state rather than emitting an expected 404 in the browser.
+    return new Response(null, { status: 204 });
+  }
+  if (hostKind !== 'shared') {
     return json({ error: 'Not found.' }, { status: 404 });
   }
   await discardLoginIntent(parseCookie(request.headers.get('cookie'), LOGIN_INTENT_COOKIE));

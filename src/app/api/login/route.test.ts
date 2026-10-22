@@ -308,4 +308,30 @@ describe('DELETE /api/login', () => {
     expect(mocks.discardLoginIntent).toHaveBeenCalledWith('t'.repeat(43));
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
   });
+
+  it('quietly acknowledges tenant-host cleanup without accessing shared intent state', async () => {
+    const response = await DELETE(
+      new Request('https://acme.devfathom.com/api/login', {
+        method: 'DELETE',
+        headers: { host: 'acme.devfathom.com' },
+      })
+    );
+
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe('');
+    expect(response.headers.get('set-cookie')).toBeNull();
+    expect(mocks.discardLoginIntent).not.toHaveBeenCalled();
+  });
+
+  it('remains unavailable on the admin host', async () => {
+    const response = await DELETE(
+      new Request('https://admin.devfathom.com/api/login', {
+        method: 'DELETE',
+        headers: { host: 'admin.devfathom.com' },
+      })
+    );
+
+    expect(response.status).toBe(404);
+    expect(mocks.discardLoginIntent).not.toHaveBeenCalled();
+  });
 });
