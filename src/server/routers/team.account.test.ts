@@ -40,6 +40,11 @@ import { teamRouter } from './team';
 
 const app = router({ team: teamRouter });
 const HR_REFUSAL = 'The HR module is not enabled for this organization.';
+
+function applySelect<T extends Record<string, unknown>>(row: T, args: { select?: Record<string, boolean> }) {
+  if (!args.select) return row;
+  return Object.fromEntries(Object.keys(args.select).map((key) => [key, row[key]]));
+}
 /** What a member who is neither HR nor Admin is shown of a colleague's work. */
 const MEMBER_SCOPE = { projects: 'SHARED', tasks: 'VISIBLE' };
 /** The person themself, or an administrator. */
@@ -77,9 +82,9 @@ function caller(enabledModules: string[], role = 'EMPLOYEE') {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.findUnique.mockResolvedValue({ id: 'user_self', name: 'Hotel General Manager' });
+  mocks.findUnique.mockImplementation(async (args) => applySelect({ id: 'user_self', name: 'Hotel General Manager', password: 'bcrypt-secret' }, args));
   mocks.findMany.mockResolvedValue([]);
-  mocks.update.mockResolvedValue({ id: 'user_self', name: 'Hotel GM' });
+  mocks.update.mockImplementation(async (args) => applySelect({ id: 'user_self', name: 'Hotel GM', password: 'bcrypt-secret' }, args));
   mocks.permissions.mockResolvedValue({ organizationRole: null, permissionOverrides: [] });
 });
 
@@ -96,9 +101,9 @@ describe('module catalog', () => {
 
 describe('team.getById', () => {
   it('reads the caller without the hr module', async () => {
-    await expect(caller([]).getById({ id: 'user_self' })).resolves.toMatchObject({
-      id: 'user_self',
-    });
+    const response = await caller([]).getById({ id: 'user_self' });
+    expect(response).toMatchObject({ id: 'user_self' });
+    expect(response).not.toHaveProperty('password');
     expect(mocks.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'user_self' } })
     );
@@ -328,12 +333,13 @@ describe('team.getAll and team:view', () => {
 
 describe('team.updateProfile', () => {
   it('saves the caller profile without the hr module', async () => {
-    await expect(caller([]).updateProfile({ name: 'Hotel GM', skills: [] })).resolves.toMatchObject(
-      { id: 'user_self' }
-    );
+    const response = await caller([]).updateProfile({ name: 'Hotel GM', skills: [] });
+    expect(response).toMatchObject({ id: 'user_self' });
+    expect(response).not.toHaveProperty('password');
     expect(mocks.update).toHaveBeenCalledWith({
       where: { id: 'user_self' },
       data: { name: 'Hotel GM', skills: [] },
+      select: expect.not.objectContaining({ password: expect.anything() }),
     });
   });
 });

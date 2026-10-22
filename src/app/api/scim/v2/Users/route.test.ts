@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   findFirst: vi.fn(),
+  findMany: vi.fn(),
+  count: vi.fn(),
   create: vi.fn(),
   recordScimEvent: vi.fn(),
   // WHA-290: the route resolves the department from the tenant's own catalog
@@ -31,7 +33,7 @@ vi.mock('@/lib/scim', async () => {
         organizationId: 'org_devfathom',
         tokenId: 'tok_1',
         db: {
-          user: { findFirst: mocks.findFirst, create: mocks.create },
+          user: { findFirst: mocks.findFirst, findMany: mocks.findMany, count: mocks.count, create: mocks.create },
           organization: { findUnique: mocks.organizationFindUnique },
           organizationDepartment: { findMany: mocks.departmentFindMany },
         },
@@ -39,7 +41,11 @@ vi.mock('@/lib/scim', async () => {
   };
 });
 
-import { POST } from './route';
+import { GET, POST } from './route';
+
+const PASSWORD_CANARY = 'PASSWORD_HASH_CANARY_413';
+const storedUser = { id: 'user_2', name: 'Alex Carter', email: 'alex@example.com', role: 'EMPLOYEE', status: 'ACTIVE', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-02'), password: PASSWORD_CANARY };
+const selected = (select: Record<string, unknown>) => Object.fromEntries(Object.keys(select).map((key) => [key, storedUser[key as keyof typeof storedUser]]));
 
 function scimRequest(userName: string) {
   return new Request('https://devfathom.localhost/api/scim/v2/Users', {
@@ -56,6 +62,19 @@ describe('SCIM Users POST', () => {
     // fakes so each case starts from the same tenant.
     mocks.organizationFindUnique.mockResolvedValue({ vertical: 'AGENCY' });
     mocks.departmentFindMany.mockResolvedValue([{ key: 'LEADERSHIP' }, { key: 'ENGINEERING' }]);
+  });
+
+  it('never serializes a stored hash from list or create responses', async () => {
+    mocks.findMany.mockImplementation(async ({ select }) => [selected(select)]);
+    mocks.count.mockResolvedValue(1);
+    const listResponse = await GET(new Request('https://devfathom.localhost/api/scim/v2/Users'));
+    expect(await listResponse.text()).not.toContain(PASSWORD_CANARY);
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.create.mockImplementation(async ({ select }) => selected(select));
+    const createResponse = await POST(scimRequest('alex@example.com'));
+    const serialized = await createResponse.text();
+    expect(serialized).not.toContain(PASSWORD_CANARY);
+    expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ select: expect.not.objectContaining({ password: expect.anything() }) }));
   });
 
   it.each([['ALEX@COMPANY.COM'], ['Alex@Company.com'], ['  alex@company.com  ']])(

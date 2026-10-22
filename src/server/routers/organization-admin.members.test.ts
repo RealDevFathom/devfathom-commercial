@@ -289,6 +289,18 @@ describe('organization member last-admin guard', () => {
     expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
 
+  it('allows an admin demotion when another active admin remains without exposing secrets', async () => {
+    mocks.userCount.mockResolvedValue(2);
+    mocks.userUpdate.mockImplementation(async ({ select }) => {
+      const stored = { id: 'admin_b', email: 'admin@example.test', role: 'EMPLOYEE', status: 'ACTIVE', password: 'bcrypt-secret' };
+      return Object.fromEntries(Object.keys(select).map((key) => [key, stored[key as keyof typeof stored]]));
+    });
+    const response = await caller().updateMember(updateInput);
+    expect(response).toMatchObject({ id: 'admin_b', role: 'EMPLOYEE' });
+    expect(response).not.toHaveProperty('password');
+    expect(mocks.userUpdate).toHaveBeenCalledWith(expect.objectContaining({ select: expect.not.objectContaining({ password: expect.anything() }) }));
+  });
+
   it('serializes concurrent two-admin demotions so one active admin remains', async () => {
     let activeAdmins = 2;
     let transactionTail = Promise.resolve();

@@ -20,6 +20,7 @@ import { emailSchema } from '@/lib/email-address';
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
 import { generateInviteToken } from '@/lib/invite-token';
+import { safeUserSelect } from '../safe-user-select';
 
 // IMP-AUTH-04: per-category × per-channel notification opt-outs. Sparse —
 // anything unset means "opted in" (notify() defaults to ON). Keys mirror
@@ -201,9 +202,11 @@ export const teamRouter = router({
           ? await tx.user.update({
               where: { id: existing.id },
               data: { ...profile, password: null, status: 'INVITED' },
+              select: safeUserSelect,
             })
           : await tx.user.create({
               data: { ...profile, email, password: null, status: 'INVITED' },
+              select: safeUserSelect,
             });
 
         await tx.invitation.upsert({
@@ -286,19 +289,7 @@ export const teamRouter = router({
     const member = await ctx.db.user.findUnique({
       where: { id: input.id },
       select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        department: true,
-        title: true,
-        avatar: true,
-        phone: true,
-        bio: true,
-        skills: true,
-        startDate: true,
-        status: true,
-        lastActiveAt: true,
+        ...safeUserSelect,
         projectMembers: {
           ...(workScope.projects === 'ALL'
             ? {}
@@ -699,6 +690,7 @@ export const teamRouter = router({
       return ctx.db.user.update({
         where: { id: ctx.session.user.id },
         data: input,
+        select: safeUserSelect,
       });
     }),
 
@@ -857,7 +849,7 @@ export const teamRouter = router({
         }
       }
 
-      const updated = await ctx.db.user.update({ where: { id }, data });
+      const updated = await ctx.db.user.update({ where: { id }, data, select: safeUserSelect });
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: id,
@@ -958,6 +950,7 @@ export const teamRouter = router({
       const updated = await ctx.db.user.update({
         where: { id: input.id },
         data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+        select: safeUserSelect,
       });
       annotateAudit(ctx, {
         targetType: 'User',

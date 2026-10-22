@@ -70,6 +70,9 @@ function caller(activeSeats = 1) {
   } as unknown as TRPCContext).team;
 }
 
+const PASSWORD_CANARY = 'PASSWORD_HASH_CANARY_413';
+const expectCanaryAbsent = (value: unknown) => expect(JSON.stringify(value)).not.toContain(PASSWORD_CANARY);
+
 const invite = {
   name: 'Alex Carter',
   role: 'EMPLOYEE' as const,
@@ -103,16 +106,31 @@ describe('team.inviteMember duplicate guard', () => {
 
   it('stores the canonical form for a genuinely new member', async () => {
     mocks.findFirst.mockResolvedValue(null);
-    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter', password: 'bcrypt-secret' });
     mocks.invitationUpsert.mockResolvedValue({});
 
-    await caller().inviteMember({ ...invite, email: 'New.Person@Company.COM' });
+    const response = await caller().inviteMember({ ...invite, email: 'New.Person@Company.COM' });
+    expect(response).not.toHaveProperty('password');
+    expectCanaryAbsent(response);
 
     expect(mocks.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ email: 'new.person@company.com' }),
+        select: expect.not.objectContaining({ password: expect.anything() }),
       })
     );
+  });
+
+  it('never serializes the previous hash when re-inviting a pending member', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_pending', status: 'INVITED' });
+    mocks.update.mockImplementation(async ({ select }) => {
+      const stored = { id: 'user_pending', name: 'Alex Carter', password: PASSWORD_CANARY };
+      return Object.fromEntries(Object.keys(select).map((key) => [key, stored[key as keyof typeof stored]]));
+    });
+    mocks.invitationUpsert.mockResolvedValue({});
+    const response = await caller().inviteMember({ ...invite, email: 'alex@company.com' });
+    expectCanaryAbsent(response);
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ select: expect.not.objectContaining({ password: expect.anything() }) }));
   });
 
   it('stores a restaurant role template on the invited member', async () => {

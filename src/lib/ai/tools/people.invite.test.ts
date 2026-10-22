@@ -27,6 +27,17 @@ import type { AssistantHelpers } from '@/lib/ai/context';
 
 const db = {
   user: { findFirst: mocks.findFirst, create: mocks.create, update: mocks.update },
+  it('does not expose the previous password hash when re-inviting a pending member', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_pending', status: 'INVITED' });
+    mocks.update.mockImplementation(async ({ select }) => {
+      const stored = { id: 'user_pending', name: 'Alex Carter', password: PASSWORD_CANARY };
+      return Object.fromEntries(Object.keys(select).map((key) => [key, stored[key as keyof typeof stored]]));
+    });
+    const result = await inviteTool().execute({ ...base, email: 'alex@company.com' });
+    expect(JSON.stringify(result)).not.toContain(PASSWORD_CANARY);
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({ select: expect.not.objectContaining({ password: expect.anything() }) }));
+  });
+
   // WHA-278: the invite path validates the department against the tenant's own
   // configured catalog before writing.
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
@@ -53,6 +64,8 @@ function inviteTool() {
     execute: (input: Record<string, unknown>) => Promise<{ error?: string }>;
   };
 }
+
+const PASSWORD_CANARY = 'PASSWORD_HASH_CANARY_413';
 
 const base = {
   name: 'Alex Carter',
