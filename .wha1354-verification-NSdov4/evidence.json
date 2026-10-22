@@ -1,0 +1,36 @@
+{
+  "role": {
+    "database": "wha1354_disposable_b032106891",
+    "rolname": "wha1354_runtime_b032106891",
+    "rolsuper": false,
+    "rolbypassrls": false,
+    "rolcreatedb": false,
+    "rolcreaterole": false
+  },
+  "tables": [
+    {
+      "relname": "pharmacy_branches",
+      "relrowsecurity": true,
+      "relforcerowsecurity": true,
+      "owner": "wha1354_owner_b032106891"
+    },
+    {
+      "relname": "restaurant_branches",
+      "relrowsecurity": true,
+      "relforcerowsecurity": true,
+      "owner": "wha1354_owner_b032106891"
+    }
+  ],
+  "runtimeOwnedApplicationTables": 0,
+  "migrationCount": 105,
+  "checksumMismatches": 0,
+  "unsuccessfulMigrations": 0,
+  "tests": {
+    "passed": 4,
+    "failed": 0,
+    "pending": 0,
+    "tenants": 2,
+    "restaurantBranches": 3
+  },
+  "pharmacyAdapterVerified": false
+}

@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1354-hw-p0-shared-receipt-designer-and-persisted-printer-layout-settings-restaurant-first
+Branch: WHA-1354-hw-p0-shared-receipt-designer-and-persisted-printer-layout-settings-restaurant-first
+HEAD: 513d05ad34f3268c2229c2ea5703786726e7ccde
+Mode: applied
+Excluded (secrets): 12
