@@ -150,6 +150,46 @@ export function arrangementFor(
   };
 }
 
+/**
+ * Plan a transfer from the balance's physical arrangement. Loose units are
+ * shipped first; when necessary, one sealed pack is opened and its remainder
+ * stays loose at the source.
+ */
+export function planTransferRemoval(input: {
+  sealedPacks: number;
+  looseUnits: number;
+  unitsPerPack: number;
+  units: number;
+}): {
+  sourceSealedPackDelta: number;
+  sourceLooseUnitDelta: number;
+  shippedSealedPacks: number;
+  shippedLooseUnits: number;
+} {
+  const { sealedPacks, looseUnits, unitsPerPack, units } = input;
+  assertUnitCount(sealedPacks);
+  assertUnitCount(looseUnits);
+  assertPackSize(unitsPerPack);
+  assertUnitCount(units);
+  if (unitsForArrangement(sealedPacks, looseUnits, unitsPerPack) < units) {
+    throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+  }
+
+  const looseTaken = Math.min(looseUnits, units);
+  const remaining = units - looseTaken;
+  const shippedSealedPacks = Math.floor(remaining / unitsPerPack);
+  const openedUnitsTaken = remaining % unitsPerPack;
+  const packsOpened = openedUnitsTaken === 0 ? 0 : 1;
+
+  return {
+    sourceSealedPackDelta: -(shippedSealedPacks + packsOpened),
+    sourceLooseUnitDelta:
+      -looseTaken + (packsOpened === 0 ? 0 : unitsPerPack - openedUnitsTaken),
+    shippedSealedPacks,
+    shippedLooseUnits: looseTaken + openedUnitsTaken,
+  };
+}
+
 /** The canonical-unit total a sealed/open arrangement represents. */
 export function unitsForArrangement(
   sealedPacks: number,

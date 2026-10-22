@@ -2,7 +2,7 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { arrangementFor, PharmacyInventoryError } from './inventory';
+import { arrangementFor, PharmacyInventoryError, planTransferRemoval } from './inventory';
 import type { LedgerScope } from './stock-ledger';
 
 function assertPositive(units: number) {
@@ -356,16 +356,28 @@ export async function dispatchTransfer(
     throw new PharmacyInventoryError('INVALID_STATE');
   for (const [i, line] of transfer.lines.entries()) {
     const balances = await db.$queryRaw<
-      Array<{ onHandUnits: number; unitsPerPack: number; state: string; expiresAt: Date }>
+      Array<{
+        onHandUnits: number;
+        sealedPacks: number;
+        looseUnits: number;
+        unitsPerPack: number;
+        state: string;
+        expiresAt: Date;
+      }>
     >(
-      Prisma.sql`SELECT (b."onHandUnits"-COALESCE((SELECT SUM(c."reservedUnits") FROM "pharmacy_supplier_claims" c WHERE c."organizationId"=b."organizationId" AND c."inventoryLotId"=b."inventoryLotId" AND c.status='RESERVED'),0))::int AS "onHandUnits",l."unitsPerPack",mb.state::text,mb."expiresAt" FROM "pharmacy_stock_balances" b JOIN "pharmacy_inventory_lots" l ON l.id=b."inventoryLotId" JOIN "pharmacy_manufacturing_batches" mb ON mb.id=l."manufacturingBatchId" WHERE b."organizationId"=${scope.organizationId} AND b."branchId"=${scope.branchId} AND b."inventoryLotId"=${line.sourceLotId} AND b."stockLocationId"=${line.sourceStockLocationId} AND b."disposition"='AVAILABLE' FOR UPDATE OF b`
+      Prisma.sql`SELECT (b."onHandUnits"-COALESCE((SELECT SUM(c."reservedUnits") FROM "pharmacy_supplier_claims" c WHERE c."organizationId"=b."organizationId" AND c."inventoryLotId"=b."inventoryLotId" AND c.status='RESERVED'),0))::int AS "onHandUnits",b."sealedPacks",b."looseUnits",l."unitsPerPack",mb.state::text,mb."expiresAt" FROM "pharmacy_stock_balances" b JOIN "pharmacy_inventory_lots" l ON l.id=b."inventoryLotId" JOIN "pharmacy_manufacturing_batches" mb ON mb.id=l."manufacturingBatchId" WHERE b."organizationId"=${scope.organizationId} AND b."branchId"=${scope.branchId} AND b."inventoryLotId"=${line.sourceLotId} AND b."stockLocationId"=${line.sourceStockLocationId} AND b."disposition"='AVAILABLE' FOR UPDATE OF b`
     );
     const balance = balances[0];
     if (!balance || Number(balance.onHandUnits) < line.quantityUnits)
       throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
     if (balance.state !== 'ACTIVE' || balance.expiresAt <= new Date())
       throw new PharmacyInventoryError('BLOCKED_STOCK');
-    const a = arrangementFor(line.quantityUnits, balance.unitsPerPack);
+    const a = planTransferRemoval({
+      sealedPacks: balance.sealedPacks,
+      looseUnits: balance.looseUnits,
+      unitsPerPack: balance.unitsPerPack,
+      units: line.quantityUnits,
+    });
     const common = {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
@@ -379,8 +391,8 @@ export async function dispatchTransfer(
         kind: 'TRANSFER_OUT',
         disposition: 'AVAILABLE',
         quantityUnits: -line.quantityUnits,
-        sealedPackDelta: -a.sealedPacks,
-        looseUnitDelta: -a.looseUnits,
+        sealedPackDelta: a.sourceSealedPackDelta,
+        looseUnitDelta: a.sourceLooseUnitDelta,
         idempotencyKey: `${key}:${i}:out`,
       },
     });
@@ -390,8 +402,8 @@ export async function dispatchTransfer(
         kind: 'TRANSFER_IN',
         disposition: 'IN_TRANSIT',
         quantityUnits: line.quantityUnits,
-        sealedPackDelta: a.sealedPacks,
-        looseUnitDelta: a.looseUnits,
+        sealedPackDelta: a.shippedSealedPacks,
+        looseUnitDelta: a.shippedLooseUnits,
         idempotencyKey: `${key}:${i}:transit`,
       },
     });

@@ -23,6 +23,7 @@ import {
   blockReasonFor,
   planAllocation,
   planBreakPack,
+  planTransferRemoval,
   unitsForArrangement,
   PharmacyInventoryError,
 } from './inventory';
@@ -167,6 +168,30 @@ describe('break-pack planning (INV-04)', () => {
     expect(() =>
       planBreakPack({ sealedPacks: 1, looseUnits: 0, unitsPerPack: 10, requiredLooseUnits: 25 })
     ).toThrow(PharmacyInventoryError);
+  });
+});
+
+describe('transfer removal planning (INV-04)', () => {
+  it('opens a sealed pack to ship a partial pack without inventing loose source stock', () => {
+    expect(
+      planTransferRemoval({ sealedPacks: 1, looseUnits: 0, unitsPerPack: 10, units: 1 })
+    ).toEqual({
+      sourceSealedPackDelta: -1,
+      sourceLooseUnitDelta: 9,
+      shippedSealedPacks: 0,
+      shippedLooseUnits: 1,
+    });
+  });
+
+  it('ships loose stock as loose instead of removing a synthetic sealed pack', () => {
+    expect(
+      planTransferRemoval({ sealedPacks: 0, looseUnits: 10, unitsPerPack: 10, units: 10 })
+    ).toEqual({
+      sourceSealedPackDelta: 0,
+      sourceLooseUnitDelta: -10,
+      shippedSealedPacks: 0,
+      shippedLooseUnits: 10,
+    });
   });
 });
 
