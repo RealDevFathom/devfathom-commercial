@@ -4,9 +4,12 @@ import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platf
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
 import { PlatformMfaCard } from '@/components/platform/platform-mfa-card';
+import { AIUsagePanel } from '@/components/platform/ai-usage-panel';
+import { readMonthlyAIUsage } from '@/lib/ai/usage';
 
 export default async function PlatformSettingsPage() {
-  await requirePlatformRead('/platform/settings');
+  const actor = await requirePlatformRead('/platform/settings');
+  const aiUsage = actor.role === 'SUPER_ADMIN' ? await readMonthlyAIUsage(new Date(), actor) : null;
   const settings = await withPlatformDb((db) =>
     db.platformSetting.findMany({ orderBy: [{ category: 'asc' }, { key: 'asc' }] })
   );
@@ -30,6 +33,7 @@ export default async function PlatformSettingsPage() {
       />
       <div className="mt-7 grid gap-7 xl:grid-cols-[1fr_400px]">
         <div className="space-y-7">
+          {aiUsage ? <AIUsagePanel usage={aiUsage} /> : null}
           <PlatformMfaCard />
           <section className="border border-border-default bg-surface-card">
             <div className="border-b border-border-subtle px-5 py-4">

@@ -47,8 +47,16 @@ export async function readAIRoutingSettings(): Promise<AIRoutingSettings | null>
       mode: row.mode,
       monthlyAnthropicBudgetUsd: Number(row.monthlyAnthropicBudgetUsd),
       models: {
-        anthropic: { cheap: row.cheapAnthropicModel, standard: row.standardAnthropicModel, deep: row.deepAnthropicModel },
-        bedrock: { cheap: row.cheapBedrockModel, standard: row.standardBedrockModel, deep: row.deepBedrockModel },
+        anthropic: {
+          cheap: row.cheapAnthropicModel,
+          standard: row.standardAnthropicModel,
+          deep: row.deepAnthropicModel,
+        },
+        bedrock: {
+          cheap: row.cheapBedrockModel,
+          standard: row.standardBedrockModel,
+          deep: row.deepBedrockModel,
+        },
       },
     };
   });
@@ -75,8 +83,10 @@ export type UsageWrite = {
 };
 
 export async function recordAIUsage(usage: UsageWrite): Promise<number> {
-  return withPlatformDb(async (db) => {
-    const prices = await db.$queryRaw<Array<{ inputUsdPerMTok: Prisma.Decimal; outputUsdPerMTok: Prisma.Decimal }>>(Prisma.sql`
+  const cost = await withPlatformDb(async (db) => {
+    const prices = await db.$queryRaw<
+      Array<{ inputUsdPerMTok: Prisma.Decimal; outputUsdPerMTok: Prisma.Decimal }>
+    >(Prisma.sql`
       SELECT "inputUsdPerMTok", "outputUsdPerMTok" FROM "ai_model_prices"
       WHERE "provider" = ${usage.provider} AND "model" = ${usage.model}
         AND "effectiveFrom" <= ${usage.createdAt ?? new Date()}
@@ -90,9 +100,15 @@ export async function recordAIUsage(usage: UsageWrite): Promise<number> {
       VALUES (${randomUUID()}, ${usage.provider}, ${usage.tier}, ${usage.model}, ${usage.feature}, ${usage.organizationId ?? null}, ${usage.inputTokens}, ${usage.outputTokens}, ${cost}, ${usage.createdAt ?? new Date()})`);
     return cost;
   });
+  // Budget notification work must never add latency or fail an AI request.
+  void import('./usage')
+    .then(({ maybeCreateAIBudgetAlert }) => maybeCreateAIBudgetAlert(usage.createdAt ?? new Date()))
+    .catch(() => undefined);
+  return cost;
 }
 
 export const DEFAULT_AI_ROUTING_SETTINGS: AIRoutingSettings = {
-  mode: 'Auto', monthlyAnthropicBudgetUsd: 200,
+  mode: 'Auto',
+  monthlyAnthropicBudgetUsd: 200,
   models: { anthropic: { ...DEFAULT_MODELS.anthropic }, bedrock: { ...DEFAULT_MODELS.bedrock } },
 };
