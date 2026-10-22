@@ -1,0 +1,149 @@
+diff --git a/src/app/(app)/team/team-content.tsx b/src/app/(app)/team/team-content.tsx
+index 239ef3e7..89161e4b 100644
+--- a/src/app/(app)/team/team-content.tsx
++++ b/src/app/(app)/team/team-content.tsx
+@@ -238,23 +238,16 @@ const TeamMemberCard = memo(function TeamMemberCard({ member }: { member: TeamMe
+   );
+ });
+ 
+-const departmentOptions = [
+-  'LEADERSHIP',
+-  'ENGINEERING',
+-  'PRODUCT',
+-  'QUALITY',
+-  'MARKETING',
+-  'DESIGN',
+-] as const;
+-
+-function AddMemberModal({ onClose }: { onClose: () => void }) {
++export function AddMemberModal({ onClose }: { onClose: () => void }) {
+   const utils = trpc.useUtils();
+   const inviteMember = trpc.team.inviteMember.useMutation();
++  const departmentQuery = trpc.organizationAdmin.departments.useQuery(undefined, { retry: false });
++  const departmentOptions = (departmentQuery.data ?? []).filter((item) => item.active);
+ 
+   const [name, setName] = useState('');
+   const [email, setEmail] = useState('');
+   const [role, setRole] = useState<'ADMIN' | 'HR' | 'EMPLOYEE'>('EMPLOYEE');
+-  const [department, setDepartment] = useState<(typeof departmentOptions)[number]>('ENGINEERING');
++  const [department, setDepartment] = useState('');
+   const [title, setTitle] = useState('');
+   const [phone, setPhone] = useState('');
+   const [bio, setBio] = useState('');
+@@ -264,9 +257,20 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
+   const [sent, setSent] = useState<{ email: string; inviteUrl: string } | null>(null);
+   const [copied, setCopied] = useState(false);
+ 
++  const selectedDepartment = departmentOptions.find((item) => item.key === department);
++  const departmentReady =
++    !departmentQuery.isFetching && !departmentQuery.isError && Boolean(selectedDepartment);
++
+   const handleSubmit = () => {
+     setError('');
+-    if (!name.trim() || !email.trim() || !title.trim()) return;
++    if (
++      !name.trim() ||
++      !email.trim() ||
++      !title.trim() ||
++      !departmentReady ||
++      inviteMember.isPending
++    )
++      return;
+     const submittedEmail = email.trim().toLowerCase();
+     inviteMember.mutate(
+       {
+@@ -372,7 +376,9 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
+                     />
+                   </div>
+                   <div>
+-                <label className="block text-sm font-medium text-foreground mb-1.5">Email *</label>
++                    <label className="block text-sm font-medium text-foreground mb-1.5">
++                      Email *
++                    </label>
+                     <input
+                       type="email"
+                       value={email}
+@@ -396,7 +402,9 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
+                     />
+                   </div>
+                   <div>
+-                <label className="block text-sm font-medium text-foreground mb-1.5">Phone</label>
++                    <label className="block text-sm font-medium text-foreground mb-1.5">
++                      Phone
++                    </label>
+                     <input
+                       value={phone}
+                       onChange={(e) => setPhone(e.target.value)}
+@@ -408,20 +416,58 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
+ 
+                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                   <div>
+-                <label className="block text-sm font-medium text-foreground mb-1.5">
++                    <label
++                      htmlFor="invite-department"
++                      className="block text-sm font-medium text-foreground mb-1.5"
++                    >
+                       Department
+                     </label>
+                     <select
+-                  value={department}
+-                  onChange={(e) => setDepartment(e.target.value as typeof department)}
++                      id="invite-department"
++                      value={selectedDepartment ? department : ''}
++                      disabled={
++                        departmentQuery.isFetching ||
++                        departmentQuery.isError ||
++                        !departmentOptions.length ||
++                        inviteMember.isPending
++                      }
++                      aria-describedby="invite-department-status"
++                      aria-invalid={Boolean(department && !selectedDepartment)}
++                      onChange={(e) => setDepartment(e.target.value)}
+                       className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                     >
+-                  {departmentOptions.map((d) => (
+-                    <option key={d} value={d}>
+-                      {d.charAt(0) + d.slice(1).toLowerCase()}
++                      <option value="">Choose a department</option>
++                      {departmentOptions.map((item) => (
++                        <option key={item.key} value={item.key}>
++                          {item.name}
+                         </option>
+                       ))}
+                     </select>
++                    <div
++                      id="invite-department-status"
++                      className="mt-2 text-sm text-text-muted"
++                      role={departmentQuery.isError ? 'alert' : 'status'}
++                    >
++                      {departmentQuery.isFetching
++                        ? 'Loading departments…'
++                        : departmentQuery.isError
++                          ? 'Departments could not be loaded. Retry or ask your administrator to check access.'
++                          : !departmentOptions.length
++                            ? 'No active departments are available. Ask your administrator to review the organization department catalog.'
++                            : department && !selectedDepartment
++                              ? 'That department is no longer available. Choose an active department.'
++                              : 'Choose from this workspace’s active departments.'}
++                      {departmentQuery.isError ? (
++                        <Button
++                          type="button"
++                          variant="outline"
++                          className="mt-2"
++                          onClick={() => void departmentQuery.refetch()}
++                        >
++                          Retry departments
++                        </Button>
++                      ) : null}
++                    </div>
+                   </div>
+                   <div>
+                     <label className="block text-sm font-medium text-foreground mb-1.5">Role</label>
+@@ -509,6 +555,7 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
+                     !name.trim() ||
+                     !email.trim() ||
+                     !title.trim() ||
++                    !departmentReady ||
+                     inviteMember.isPending
+                   }
+                   className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none"

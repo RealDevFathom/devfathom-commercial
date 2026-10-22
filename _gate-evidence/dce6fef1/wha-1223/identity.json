@@ -1,0 +1,43 @@
+{
+  "candidate": "dce6fef1407a9211aa8801cc8ab0c115c40107a7",
+  "invitation": "98bc27736c9600f698d716252627b0835d484fca",
+  "base": "0e6ba8911b3d1c41f64875ba644097ef3bbf6ed6",
+  "source": "/Users/Saad/Downloads/Projects & Code/DevFathom hub/company-hub/.paperclip/worktrees/WHA-1203-wha-1195a-build-first-run-checklist-and-first-sale-scenario",
+  "source_head_final": "dce6fef1407a9211aa8801cc8ab0c115c40107a7",
+  "source_status_final": "",
+  "review_cwd": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1223-gate-candidate-b20b577f-browser-suite-wha-1132-contract-on-the-runner-with-the-working-postgresql-path-self-cho",
+  "review_head": "b20b577f9d397855458cbef15ea8d178870d85a3",
+  "review_branch": "WHA-1223-gate-candidate-b20b577f-browser-suite-wha-1132-contract-on-the-runner-with-the-working-postgresql-path-self-cho",
+  "blobs": [
+    {
+      "file": "src/app/(app)/team/team-content.departments.test.ts",
+      "blob": "f0b58335aa7d4529507415c058c92728cbc1c0fe",
+      "archive": "f0b58335aa7d4529507415c058c92728cbc1c0fe"
+    },
+    {
+      "file": "src/app/(app)/team/team-content.test.tsx",
+      "blob": "ebf22daa4be5ef5627a7c25953dc6f45759ad8fc",
+      "archive": "ebf22daa4be5ef5627a7c25953dc6f45759ad8fc"
+    },
+    {
+      "file": "src/app/(app)/team/team-content.tsx",
+      "blob": "89161e4b47b1c9187d216d8ef74016337523db7e",
+      "archive": "89161e4b47b1c9187d216d8ef74016337523db7e"
+    },
+    {
+      "file": "tests/e2e/fixtures/pharmacy-first-sale.ts",
+      "blob": "bd53c0c8e6317b991ec078890223d13a54cba93d",
+      "archive": "bd53c0c8e6317b991ec078890223d13a54cba93d"
+    },
+    {
+      "file": "tests/e2e/time-to-first-sale.config.ts",
+      "blob": "d4cff388ab9a9bc4d588be143a166c4b200891d1",
+      "archive": "d4cff388ab9a9bc4d588be143a166c4b200891d1"
+    },
+    {
+      "file": "tests/e2e/time-to-first-sale.spec.ts",
+      "blob": "50b3f1b945a7efa2227d43d8fb8f2f300adae3d4",
+      "archive": "50b3f1b945a7efa2227d43d8fb8f2f300adae3d4"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "diff.patch": "b9aaeeddc1f6ebb48d73646cd5f998e32d7db0e88f0eea2a03776de42048e104",
+  "types.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "checklist.log": "3cea9a6fc6e1e887a39037eb19b5c7b7fb7d00fd6746a8ed52766bd2cd425c26",
+  "tsconfig.navigation.json": "a111abb58f0551a570d8c758a0543e68e903ce193e3a5de5adcf3d3491de012f",
+  "format.log": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20",
+  "lint.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "REPORT.md": "f995215bf4348a95e45b1ec13b986683932f81e052ad28347ff463ed374a67da",
+  "diff-check.log": "28d3b9e880a77975493dc7e359144c0295a4f694cfe0af4f928c22307bc5c320",
+  "commands.json": "f4ca905593fad4ba492f3c9dd4f40e57bdf7f13427843550cd4b2c7219d5ae8c",
+  ".paperclip-run-scratch.json": "44b52ad41a0d74878e8a01bb614f9234be79da9bd00bd67c3ecc39ec9da717b3",
+  "identity.json": "ad6e4f2b04111536dad69b9b28a1a26228e8eaedfcc46b7762f3d9b9294d83f0",
+  "generate.log": "67bbf185087e3b2f0afa6180fa60845f6fc15974c6deb25a0aea0ef2fe54554d",
+  "checklist.json": "5260749e383d2c788a68ec73cb0c677fe41682a1aa48725ef5813ba1bbf99a79"
+}

@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1223-gate-candidate-b20b577f-browser-suite-wha-1132-contract-on-the-runner-with-the-working-postgresql-path-self-cho
+Branch: WHA-1223-gate-candidate-b20b577f-browser-suite-wha-1132-contract-on-the-runner-with-the-working-postgresql-path-self-cho
+HEAD: b20b577f9d397855458cbef15ea8d178870d85a3
+Mode: applied
+Excluded (secrets): 80

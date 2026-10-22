@@ -1,0 +1,86 @@
+diff --git a/tests/e2e/fixtures/pharmacy-first-sale.test.tsx b/tests/e2e/fixtures/pharmacy-first-sale.test.tsx
+new file mode 100644
+index 00000000..b9c1dc2a
+--- /dev/null
++++ b/tests/e2e/fixtures/pharmacy-first-sale.test.tsx
+@@ -0,0 +1,50 @@
++import { cleanup, render, screen } from '@testing-library/react';
++import { afterEach, expect, it } from 'vitest';
++
++import { ReadinessChecklistItem } from '@/components/onboarding/readiness-checklist';
++import { pharmacyChecklistLinkName } from './pharmacy-first-sale';
++
++afterEach(cleanup);
++
++it('uniquely matches all six journey links with their real accessible suffix', () => {
++  const destinations = [
++    ['Branches and locations', 'Create or review stock locations', '/pharmacy/inventory'],
++    ['Premises and licences', 'Open regulatory profile', '/pharmacy/regulatory'],
++    ['Medicine catalog readiness', 'Set up medicines and packs', '/pharmacy/medicines'],
++    ['Parties and balances', 'Set up suppliers', '/pharmacy/purchasing/suppliers'],
++    ['Opening stock readiness', 'Receive opening stock', '/pharmacy/purchasing/receiving'],
++    ['Readiness and parallel run', 'Open pharmacy counter', '/pharmacy/counter'],
++  ] as const;
++  render(
++    <ol>
++      {destinations.map(([label, linkLabel, href], index) => (
++        <ReadinessChecklistItem
++          key={label}
++          row={{
++            key: label,
++            step: index + 1,
++            label,
++            linkLabel,
++            href,
++            state: 'NEEDS_YOU',
++            why: 'Complete setup.',
++          }}
++        />
++      ))}
++    </ol>
++  );
++  for (const [gate, link, href] of destinations) {
++    // Preserve the original failure: the bare exact name cannot select this DOM.
++    expect(screen.queryByRole('link', { name: link })).toBeNull();
++    const name = pharmacyChecklistLinkName(gate, link);
++    const matches = screen.getAllByRole('link', { name });
++    expect(matches).toHaveLength(1);
++    expect(matches[0]).toHaveAttribute('href', href);
++    expect(matches[0]).toHaveTextContent(link);
++    expect(name.test(`${link}— ${gate}`)).toBe(true);
++    expect(name.test(`${link} — ${gate}`)).toBe(true);
++    expect(name.test(`${link} — ${gate} extra`)).toBe(false);
++    expect(name.test(`Other ${link} — ${gate}`)).toBe(false);
++    expect(name.test(`${link} — Wrong gate`)).toBe(false);
++  }
++});
+diff --git a/tests/e2e/fixtures/pharmacy-first-sale.ts b/tests/e2e/fixtures/pharmacy-first-sale.ts
+index bd53c0c8..19564016 100644
+--- a/tests/e2e/fixtures/pharmacy-first-sale.ts
++++ b/tests/e2e/fixtures/pharmacy-first-sale.ts
+@@ -206,6 +206,12 @@ async function noRawIdEntry(page: Page) {
+   ).toEqual([]);
+ }
+ 
++/** Full accessible link name used by the shared readiness renderer. */
++export function pharmacyChecklistLinkName(gate: string, link: string): RegExp {
++  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
++  return new RegExp(`^${escape(link)}\\s*—\\s*${escape(gate)}$`);
++}
++
+ export async function freshPharmacyFirstSale(
+   page: Page,
+   browser: Browser,
+@@ -247,7 +253,11 @@ export async function freshPharmacyFirstSale(
+       .getByRole('listitem')
+       .filter({ hasText: label });
+   const follow = async (actor: Page, gate: string, link: string) => {
+-    await click(row(actor, gate).getByRole('link', { name: link, exact: true }));
++    const target = row(actor, gate).getByRole('link', {
++      name: pharmacyChecklistLinkName(gate, link),
++    });
++    await expect(target).toHaveCount(1);
++    await click(target);
+     await noRawIdEntry(actor);
+   };
+   const formFor = (actor: Page, submit: string) =>
