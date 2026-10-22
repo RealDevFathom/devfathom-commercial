@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => {
     findStaffProfiles: fn(),
     findBranchAssignments: fn(),
     findPurchaseOrder: fn(),
+    findPurchaseReceipt: fn(),
     findStockLocation: fn(),
     annotateAudit: fn(),
   };
@@ -108,6 +109,7 @@ function caller() {
         ),
       },
       restaurantPurchaseOrder: { findUnique: mocks.findPurchaseOrder },
+      restaurantPurchaseReceipt: { findUnique: mocks.findPurchaseReceipt },
       restaurantStockLocation: { findUnique: mocks.findStockLocation },
     } as never,
     entitlements: {
@@ -142,6 +144,7 @@ beforeEach(() => {
   mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff_server', primaryBranchId: 'b1' }]);
   mocks.findBranchAssignments.mockResolvedValue([]);
   mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b1', locationId: 'loc1' });
+  mocks.findPurchaseReceipt.mockResolvedValue({ branchId: 'b1' });
   mocks.findStockLocation.mockResolvedValue({ branchId: 'b1' });
 });
 
@@ -245,6 +248,51 @@ describe('Decimal-as-string serialization (D07)', () => {
 });
 
 describe('actor + idempotency plumbing', () => {
+  it('denies an unscoped purchase-order list without organization-wide branch access', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+
+    await expect(caller().listPurchaseOrders({})).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.listPurchaseOrders).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['listPurchaseOrders', { branchId: 'b2' }, mocks.listPurchaseOrders],
+    ['getPurchaseOrder', { purchaseOrderId: 'po1' }, mocks.getPurchaseOrder],
+    ['getReceipt', { receiptId: 'receipt1' }, mocks.getPurchaseReceipt],
+    [
+      'addPurchaseOrderLine',
+      {
+        purchaseOrderId: 'po1',
+        line: { stockItemId: 'stock1', orderedQuantity: '1', unitId: 'unit1', unitCost: '1' },
+      },
+      mocks.addPurchaseOrderLine,
+    ],
+    [
+      'updatePurchaseOrderLine',
+      { purchaseOrderId: 'po1', lineId: 'line1', orderedQuantity: '2' },
+      mocks.updatePurchaseOrderLine,
+    ],
+    [
+      'removePurchaseOrderLine',
+      { purchaseOrderId: 'po1', lineId: 'line1' },
+      mocks.removePurchaseOrderLine,
+    ],
+    ['submitPurchaseOrder', { purchaseOrderId: 'po1' }, mocks.submitPurchaseOrder],
+    ['cancelPurchaseOrder', { purchaseOrderId: 'po1' }, mocks.cancelPurchaseOrder],
+    ['closePurchaseOrder', { purchaseOrderId: 'po1' }, mocks.closePurchaseOrder],
+  ] as const)('denies cross-branch access through %s', async (procedure, input, operation) => {
+    mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b2', locationId: 'loc2' });
+    mocks.findPurchaseReceipt.mockResolvedValue({ branchId: 'b2' });
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+
+    await expect(
+      (caller()[procedure] as (value: never) => Promise<unknown>)(input as never)
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(operation).not.toHaveBeenCalled();
+  });
+
   it('rejects a create location outside the authorized branch before mutation', async () => {
     mocks.findStockLocation.mockResolvedValue({ branchId: 'b2' });
 

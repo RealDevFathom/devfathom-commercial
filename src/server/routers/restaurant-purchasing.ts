@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
+import { can, subjectFromSession } from '@/lib/abac';
 import { Prisma } from '@/generated/prisma/client';
 import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
@@ -114,6 +115,33 @@ async function requirePurchaseOrderScope(ctx: TRPCContext, purchaseOrderId: stri
   return order;
 }
 
+async function requirePurchaseReceiptScope(ctx: TRPCContext, receiptId: string) {
+  const receipt = await ctx.db.restaurantPurchaseReceipt.findUnique({
+    where: { id: receiptId },
+    select: { branchId: true },
+  });
+  if (!receipt) throw new TRPCError({ code: 'NOT_FOUND', message: 'Receipt not found.' });
+  await resolveRestaurantActor(ctx, [receipt.branchId]);
+}
+
+async function requireAllBranchScope(ctx: TRPCContext): Promise<void> {
+  await resolveRestaurantActor(ctx, []);
+  const user = ctx.session?.user;
+  if (
+    !user ||
+    !(await can(subjectFromSession(user), 'restaurant:configure', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }))
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'All-branch purchasing access requires restaurant:configure.',
+    });
+  }
+}
+
 async function requireLocationInBranch(
   ctx: TRPCContext,
   locationId: string,
@@ -212,6 +240,8 @@ export const restaurantPurchasingRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
+      if (input.branchId) await resolveRestaurantActor(ctx, [input.branchId]);
+      else await requireAllBranchScope(ctx);
       const result = await listPurchaseOrders(ctx.db, input);
       return { orders: result.orders.map(serializeOrderSummary), nextCursor: result.nextCursor };
     }),
@@ -219,13 +249,20 @@ export const restaurantPurchasingRouter = router({
   getPurchaseOrder: readProcedure
     .input(z.object({ purchaseOrderId: ID }).strict())
     .query(({ ctx, input }) =>
-      run(async () => serializePurchaseOrder(await getPurchaseOrder(ctx.db, input.purchaseOrderId)))
+      run(async () => {
+        const scope = await requirePurchaseOrderScope(ctx, input.purchaseOrderId);
+        await resolveRestaurantActor(ctx, [scope.branchId]);
+        return serializePurchaseOrder(await getPurchaseOrder(ctx.db, input.purchaseOrderId));
+      })
     ),
 
   getReceipt: readProcedure
     .input(z.object({ receiptId: ID }).strict())
     .query(({ ctx, input }) =>
-      run(async () => serializeReceipt(await getPurchaseReceipt(ctx.db, input.receiptId)))
+      run(async () => {
+        await requirePurchaseReceiptScope(ctx, input.receiptId);
+        return serializeReceipt(await getPurchaseReceipt(ctx.db, input.receiptId));
+      })
     ),
 
   // ── Purchase orders — creation & line editing (DRAFT) ────────────────────────────
@@ -269,11 +306,13 @@ export const restaurantPurchasingRouter = router({
         targetType: 'RestaurantPurchaseOrder',
         targetId: input.purchaseOrderId,
       });
-      return run(async () =>
-        serializePurchaseOrder(
+      return run(async () => {
+        const scope = await requirePurchaseOrderScope(ctx, input.purchaseOrderId);
+        await resolveRestaurantActor(ctx, [scope.branchId]);
+        return serializePurchaseOrder(
           await addPurchaseOrderLine(ctx.db, input.purchaseOrderId, input.line)
-        )
-      );
+        );
+      });
     }),
 
   updatePurchaseOrderLine: writeProcedure
@@ -291,11 +330,13 @@ export const restaurantPurchasingRouter = router({
     .mutation(({ ctx, input }) => {
       const { purchaseOrderId, lineId, ...patch } = input;
       annotateAudit(ctx, { targetType: 'RestaurantPurchaseOrder', targetId: purchaseOrderId });
-      return run(async () =>
-        serializePurchaseOrder(
+      return run(async () => {
+        const scope = await requirePurchaseOrderScope(ctx, purchaseOrderId);
+        await resolveRestaurantActor(ctx, [scope.branchId]);
+        return serializePurchaseOrder(
           await updatePurchaseOrderLine(ctx.db, purchaseOrderId, lineId, patch)
-        )
-      );
+        );
+      });
     }),
 
   removePurchaseOrderLine: writeProcedure
@@ -305,11 +346,13 @@ export const restaurantPurchasingRouter = router({
         targetType: 'RestaurantPurchaseOrder',
         targetId: input.purchaseOrderId,
       });
-      return run(async () =>
-        serializePurchaseOrder(
+      return run(async () => {
+        const scope = await requirePurchaseOrderScope(ctx, input.purchaseOrderId);
+        await resolveRestaurantActor(ctx, [scope.branchId]);
+        return serializePurchaseOrder(
           await removePurchaseOrderLine(ctx.db, input.purchaseOrderId, input.lineId)
-        )
-      );
+        );
+      });
     }),
 
   // ── Purchase orders — lifecycle transitions ──────────────────────────────────────
@@ -320,9 +363,11 @@ export const restaurantPurchasingRouter = router({
         targetType: 'RestaurantPurchaseOrder',
         targetId: input.purchaseOrderId,
       });
-      return run(async () =>
-        serializePurchaseOrder(await submitPurchaseOrder(ctx.db, input.purchaseOrderId))
-      );
+      return run(async () => {
+        const scope = await requirePurchaseOrderScope(ctx, input.purchaseOrderId);
+        await resolveRestaurantActor(ctx, [scope.branchId]);
+        return serializePurchaseOrder(await submitPurchaseOrder(ctx.db, input.purchaseOrderId));
+      });
     }),
 
   approvePurchaseOrder: approveProcedure
@@ -350,9 +395,11 @@ export const restaurantPurchasingRouter = router({
         targetType: 'RestaurantPurchaseOrder',
         targetId: input.purchaseOrderId,
       });
-      return run(async () =>
-        serializePurchaseOrder(await cancelPurchaseOrder(ctx.db, input.purchaseOrderId))
-      );
+      return run(async () => {
+        const scope = await requirePurchaseOrderScope(ctx, input.purchaseOrderId);
+        await resolveRestaurantActor(ctx, [scope.branchId]);
+        return serializePurchaseOrder(await cancelPurchaseOrder(ctx.db, input.purchaseOrderId));
+      });
     }),
 
   closePurchaseOrder: writeProcedure
@@ -362,9 +409,11 @@ export const restaurantPurchasingRouter = router({
         targetType: 'RestaurantPurchaseOrder',
         targetId: input.purchaseOrderId,
       });
-      return run(async () =>
-        serializePurchaseOrder(await closePurchaseOrder(ctx.db, input.purchaseOrderId))
-      );
+      return run(async () => {
+        const scope = await requirePurchaseOrderScope(ctx, input.purchaseOrderId);
+        await resolveRestaurantActor(ctx, [scope.branchId]);
+        return serializePurchaseOrder(await closePurchaseOrder(ctx.db, input.purchaseOrderId));
+      });
     }),
 
   // ── Receiving & returns ──────────────────────────────────────────────────────────
