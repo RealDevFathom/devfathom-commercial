@@ -675,6 +675,9 @@ Resources:
               Value: production
             - Name: AUTH_URL
               Value: !Sub https://${TenantHost}
+            # Legacy fallback still read by email links and platform commands.
+            - Name: NEXTAUTH_URL
+              Value: !Sub https://${TenantHost}
             - Name: AUTH_TRUST_HOST
               Value: 'true'
             - Name: NEXT_PUBLIC_APP_URL
@@ -758,6 +761,9 @@ Resources:
             - Name: NODE_ENV
               Value: production
             - Name: AUTH_URL
+              Value: !Sub https://${TenantHost}
+            # Legacy fallback still read by email links and platform commands.
+            - Name: NEXTAUTH_URL
               Value: !Sub https://${TenantHost}
             - Name: DEFAULT_ORGANIZATION_ID
               Value: org_devfathom

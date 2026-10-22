@@ -191,3 +191,12 @@ without a database connection:
 
     SEED_PASSWORD=… PLATFORM_ADMIN_PASSWORD=… DEMO_ACCESS_CODE=… PLATFORM_BASE_DOMAIN=staging.devfathom.com \
       STAGING_LOGINS_FILE=/workspace/plan/staging-logins.md bun scripts/seed-staging-demo.ts --logins-only
+
+## Staging checklist: Insights and app URLs
+
+- Insights and other background work run only through `/api/platform/jobs/process`. On AWS that
+  is the `platform-jobs` scheduler, which is created only when the stack parameter
+  `EnableJobsSchedule=true` (default `false`). Staging must deploy with `EnableJobsSchedule=true`
+  now that DNS and the certificate are live; also confirm the `cron-secret` secret is set.
+- `AUTH_URL`, `NEXTAUTH_URL` and `NEXT_PUBLIC_APP_URL` are all `https://${TenantHost}`; keep
+  `TenantHost=staging.devfathom.com` for staging.
