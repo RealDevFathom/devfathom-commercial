@@ -7,6 +7,14 @@ import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -20,6 +28,13 @@ type Draft = {
   shiftSignInEnforced: boolean;
 };
 
+type FieldName = keyof Pick<Draft, 'name' | 'code' | 'timezone' | 'businessDayCutoff' | 'address'>;
+type FieldErrors = Partial<Record<FieldName, string>>;
+type MutationError = {
+  message: string;
+  data?: { validation?: Partial<Record<FieldName, string[]>> | null };
+};
+
 const EMPTY: Draft = {
   name: '',
   code: '',
@@ -29,20 +44,60 @@ const EMPTY: Draft = {
   shiftSignInEnforced: false,
 };
 
+function FieldError({ id, message }: { id: string; message?: string }) {
+  return message ? (
+    <p id={id} role="alert" className="text-xs text-destructive">
+      {message}
+    </p>
+  ) : null;
+}
+
 export function RestaurantBranchesConsole() {
   const utils = trpc.useUtils();
   const query = trpc.restaurantBranches.list.useQuery();
+  const branches = query.data?.branches ?? [];
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [deactivating, setDeactivating] = useState<(typeof branches)[number] | null>(null);
   const refresh = () => void utils.restaurantBranches.list.invalidate();
   const failure = (error: { message: string }) => toast.error(error.message);
+  const formFailure = (error: MutationError) => {
+    const validation = error.data?.validation;
+    const next: FieldErrors = {};
+    if (validation) {
+      for (const field of Object.keys(validation) as FieldName[]) {
+        const message = validation[field]?.[0];
+        if (message) next[field] = message;
+      }
+    }
+    if (error.message.includes('with this name')) next.name = error.message;
+    if (error.message.includes('with this code')) next.code = error.message;
+    if (error.message.startsWith('Timezone and business-day cutoff')) {
+      next.timezone = error.message;
+      next.businessDayCutoff = error.message;
+    }
+    setFieldErrors(next);
+    const first = (
+      ['name', 'code', 'timezone', 'businessDayCutoff', 'address'] as FieldName[]
+    ).find((field) => next[field]);
+    const fieldIds: Record<FieldName, string> = {
+      name: 'branch-name',
+      code: 'branch-code',
+      timezone: 'branch-timezone',
+      businessDayCutoff: 'branch-cutoff',
+      address: 'branch-address',
+    };
+    if (first) requestAnimationFrame(() => document.getElementById(fieldIds[first])?.focus());
+    toast.error(error.message);
+  };
   const create = trpc.restaurantBranches.create.useMutation({
     onSuccess: () => {
       setDraft(EMPTY);
       refresh();
       toast.success('Branch created.');
     },
-    onError: failure,
+    onError: formFailure,
   });
   const update = trpc.restaurantBranches.update.useMutation({
     onSuccess: () => {
@@ -51,15 +106,20 @@ export function RestaurantBranchesConsole() {
       refresh();
       toast.success('Branch updated.');
     },
-    onError: failure,
+    onError: formFailure,
   });
   const setActive = trpc.restaurantBranches.setActive.useMutation({
-    onSuccess: refresh,
+    onSuccess: (_branch, variables) => {
+      setDeactivating(null);
+      refresh();
+      toast.success(variables.active ? 'Branch activated.' : 'Branch deactivated.');
+    },
     onError: failure,
   });
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    setFieldErrors({});
     const editable = {
       name: draft.name,
       timezone: draft.timezone,
@@ -71,7 +131,6 @@ export function RestaurantBranchesConsole() {
     else create.mutate({ ...editable, code: draft.code.toUpperCase() });
   };
   const pending = create.isPending || update.isPending;
-  const branches = query.data?.branches ?? [];
   const activeCount = branches.filter((branch) => branch.active).length;
   const atLimit = activeCount >= (query.data?.limit ?? 1);
 
@@ -156,14 +215,17 @@ export function RestaurantBranchesConsole() {
                         Edit
                       </Button>
                       <Button
-                        variant="outline"
+                        variant={branch.active ? 'destructive' : 'outline'}
                         disabled={setActive.isPending || (branch.active && branch.isDefault)}
                         title={
                           branch.isDefault && branch.active
                             ? 'Choose another primary branch first.'
                             : undefined
                         }
-                        onClick={() => setActive.mutate({ id: branch.id, active: !branch.active })}
+                        onClick={() => {
+                          if (branch.active) setDeactivating(branch);
+                          else setActive.mutate({ id: branch.id, active: true });
+                        }}
                       >
                         {branch.active ? 'Deactivate' : 'Activate'}
                       </Button>
@@ -183,8 +245,15 @@ export function RestaurantBranchesConsole() {
                   value={draft.name}
                   required
                   minLength={2}
-                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                  maxLength={120}
+                  aria-invalid={Boolean(fieldErrors.name)}
+                  aria-describedby={fieldErrors.name ? 'branch-name-error' : undefined}
+                  onChange={(e) => {
+                    setDraft({ ...draft, name: e.target.value });
+                    setFieldErrors({ ...fieldErrors, name: undefined });
+                  }}
                 />
+                <FieldError id="branch-name-error" message={fieldErrors.name} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="branch-code">Branch code</Label>
@@ -194,11 +263,18 @@ export function RestaurantBranchesConsole() {
                   required
                   minLength={2}
                   maxLength={24}
+                  pattern="[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"
                   placeholder="DHA-PH6"
                   className="uppercase"
                   disabled={editingId !== null}
-                  onChange={(e) => setDraft({ ...draft, code: e.target.value })}
+                  aria-invalid={Boolean(fieldErrors.code)}
+                  aria-describedby={fieldErrors.code ? 'branch-code-error' : undefined}
+                  onChange={(e) => {
+                    setDraft({ ...draft, code: e.target.value });
+                    setFieldErrors({ ...fieldErrors, code: undefined });
+                  }}
                 />
+                <FieldError id="branch-code-error" message={fieldErrors.code} />
                 <p className="text-xs text-text-muted">
                   {editingId
                     ? 'Branch codes are permanent so operational references remain stable.'
@@ -211,8 +287,14 @@ export function RestaurantBranchesConsole() {
                   id="branch-timezone"
                   value={draft.timezone}
                   required
-                  onChange={(e) => setDraft({ ...draft, timezone: e.target.value })}
+                  aria-invalid={Boolean(fieldErrors.timezone)}
+                  aria-describedby={fieldErrors.timezone ? 'branch-timezone-error' : undefined}
+                  onChange={(e) => {
+                    setDraft({ ...draft, timezone: e.target.value });
+                    setFieldErrors({ ...fieldErrors, timezone: undefined });
+                  }}
                 />
+                <FieldError id="branch-timezone-error" message={fieldErrors.timezone} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="branch-cutoff">Business day cutoff</Label>
@@ -221,16 +303,31 @@ export function RestaurantBranchesConsole() {
                   type="time"
                   value={draft.businessDayCutoff}
                   required
-                  onChange={(e) => setDraft({ ...draft, businessDayCutoff: e.target.value })}
+                  aria-invalid={Boolean(fieldErrors.businessDayCutoff)}
+                  aria-describedby={
+                    fieldErrors.businessDayCutoff ? 'branch-cutoff-error' : undefined
+                  }
+                  onChange={(e) => {
+                    setDraft({ ...draft, businessDayCutoff: e.target.value });
+                    setFieldErrors({ ...fieldErrors, businessDayCutoff: undefined });
+                  }}
                 />
+                <FieldError id="branch-cutoff-error" message={fieldErrors.businessDayCutoff} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="branch-address">Address</Label>
                 <Input
                   id="branch-address"
                   value={draft.address}
-                  onChange={(e) => setDraft({ ...draft, address: e.target.value })}
+                  maxLength={300}
+                  aria-invalid={Boolean(fieldErrors.address)}
+                  aria-describedby={fieldErrors.address ? 'branch-address-error' : undefined}
+                  onChange={(e) => {
+                    setDraft({ ...draft, address: e.target.value });
+                    setFieldErrors({ ...fieldErrors, address: undefined });
+                  }}
                 />
+                <FieldError id="branch-address-error" message={fieldErrors.address} />
               </div>
               <label className="flex items-start gap-3 text-sm text-text-body">
                 <input
@@ -267,6 +364,43 @@ export function RestaurantBranchesConsole() {
           </SectionCard>
         </div>
       ) : null}
+
+      <Dialog
+        open={deactivating !== null}
+        onOpenChange={(open) => {
+          if (!open && !setActive.isPending) setDeactivating(null);
+        }}
+      >
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Deactivate {deactivating?.name}?</DialogTitle>
+            <DialogDescription>
+              Terminals at this branch will lose access immediately. New operational work will be
+              blocked, while existing history remains available.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={setActive.isPending}
+              onClick={() => setDeactivating(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={setActive.isPending}
+              onClick={() => {
+                if (deactivating) setActive.mutate({ id: deactivating.id, active: false });
+              }}
+            >
+              {setActive.isPending ? 'Deactivating…' : 'Deactivate branch'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

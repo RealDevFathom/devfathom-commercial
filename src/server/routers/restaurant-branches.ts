@@ -109,20 +109,27 @@ export const restaurantBranchesRouter = router({
             message: `Your plan supports ${limit} active branch${limit === 1 ? '' : 'es'}.`,
           });
         }
-        const duplicate = await tx.restaurantBranch.findFirst({
+        const duplicateName = await tx.restaurantBranch.findFirst({
           where: {
             organizationId: organization,
-            OR: [
-              { name: { equals: input.name, mode: 'insensitive' } },
-              { code: input.code.toUpperCase() },
-            ],
+            name: { equals: input.name, mode: 'insensitive' },
           },
           select: { id: true },
         });
-        if (duplicate) {
+        if (duplicateName) {
           throw new TRPCError({
             code: 'CONFLICT',
-            message: 'A branch with this name or code already exists.',
+            message: 'A branch with this name already exists.',
+          });
+        }
+        const duplicateCode = await tx.restaurantBranch.findFirst({
+          where: { organizationId: organization, code: input.code.toUpperCase() },
+          select: { id: true },
+        });
+        if (duplicateCode) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'A branch with this code already exists.',
           });
         }
         return tx.restaurantBranch.create({
@@ -161,6 +168,31 @@ export const restaurantBranchesRouter = router({
             where: { id, organizationId: organization },
           });
           if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
+          const schedulingChanges =
+            (patch.timezone !== undefined && patch.timezone !== current.timezone) ||
+            (patch.businessDayCutoff !== undefined &&
+              patch.businessDayCutoff !== current.businessDayCutoff);
+          if (schedulingChanges) {
+            const now = new Date();
+            const [scheduledShifts, pendingSopOccurrences] = await Promise.all([
+              tx.restaurantShift.count({
+                where: { branchId: id, status: 'SCHEDULED', endAt: { gt: now } },
+              }),
+              tx.restaurantSopOccurrence.count({
+                where: {
+                  branchId: id,
+                  dueAt: { gt: now },
+                  status: { notIn: ['VERIFIED', 'MISSED', 'WAIVED'] },
+                },
+              }),
+            ]);
+            if (scheduledShifts || pendingSopOccurrences) {
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: `Timezone and business-day cutoff cannot change while this branch has ${scheduledShifts} future scheduled shift${scheduledShifts === 1 ? '' : 's'} and ${pendingSopOccurrences} pending SOP occurrence${pendingSopOccurrences === 1 ? '' : 's'}. Reschedule or resolve that work first; historical business dates will remain unchanged.`,
+              });
+            }
+          }
           if (patch.name !== undefined) {
             const duplicate = await tx.restaurantBranch.findFirst({
               where: {
@@ -173,7 +205,7 @@ export const restaurantBranchesRouter = router({
             if (duplicate) {
               throw new TRPCError({
                 code: 'CONFLICT',
-                message: 'A branch with this name or code already exists.',
+                message: 'A branch with this name already exists.',
               });
             }
           }

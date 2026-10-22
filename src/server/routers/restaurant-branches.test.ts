@@ -59,6 +59,7 @@ function makeDb() {
     restaurantOrder: { count: dependencies.orders },
     restaurantDrawerSession: { count: dependencies.drawers },
     restaurantShift: { count: dependencies.shifts },
+    restaurantSopOccurrence: { count: vi.fn().mockResolvedValue(0) },
   } as Record<string, unknown>;
   db.$queryRaw = vi.fn().mockResolvedValue([{ pg_advisory_xact_lock: null }]);
   db.$transaction = vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db));
@@ -184,6 +185,30 @@ describe('restaurant branch administration', () => {
   it('keeps branch codes immutable', async () => {
     const mutation = { id: branch.id, code: 'NEW-CODE' };
     await expect(caller().update(mutation)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('blocks scheduling configuration changes until future work is rescheduled', async () => {
+    state.delegate.findFirst.mockResolvedValue(branch);
+    state.dependencies.shifts.mockResolvedValue(2);
+
+    await expect(
+      caller().update({ id: branch.id, timezone: 'Europe/London' })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: expect.stringContaining('2 future scheduled shifts'),
+    });
+    expect(state.delegate.update).not.toHaveBeenCalled();
+  });
+
+  it('allows scheduling configuration changes when no future work exists', async () => {
+    state.delegate.findFirst.mockResolvedValue(branch);
+
+    await caller().update({ id: branch.id, businessDayCutoff: '05:00' });
+
+    expect(state.delegate.update).toHaveBeenCalledWith({
+      where: { id: branch.id },
+      data: { businessDayCutoff: '05:00' },
+    });
   });
 
   it('prevents cross-tenant updates', async () => {
