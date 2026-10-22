@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Downloads/Projects & Code/DevFathom hub/consolidate-v1
+Branch: restaurant/v1
+HEAD: 27b4e51165428e00248edc12d1b6e175f31933a6
+Mode: applied
+Excluded (secrets): 1
