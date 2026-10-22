@@ -2,14 +2,12 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { parseMajorUnitsToMinor, safeMinorFromBigInt } from './money';
 
 export const DEFAULT_AI_MONTHLY_BUDGET_MINOR = 20_000;
 
 function envBudgetMinor(): number {
-  const dollars = Number(process.env.AI_MONTHLY_BUDGET);
-  return Number.isFinite(dollars) && dollars >= 0
-    ? Math.round(dollars * 100)
-    : DEFAULT_AI_MONTHLY_BUDGET_MINOR;
+  return parseMajorUnitsToMinor(process.env.AI_MONTHLY_BUDGET) ?? DEFAULT_AI_MONTHLY_BUDGET_MINOR;
 }
 
 /**
@@ -18,16 +16,19 @@ function envBudgetMinor(): number {
  * rebased; until then the environment/default fallback remains operational.
  */
 export async function getAiBudgetMinor(): Promise<number> {
+  let rows: Array<{ budgetMinor: bigint }>;
   try {
-    return await withPlatformDb(async (db) => {
-      const rows = await db.$queryRaw<Array<{ budgetMinor: bigint }>>(Prisma.sql`
+    rows = await withPlatformDb((db) =>
+      db.$queryRaw<Array<{ budgetMinor: bigint }>>(Prisma.sql`
         SELECT ROUND("monthlyAnthropicBudgetUsd" * 100)::bigint AS "budgetMinor"
-        FROM "ai_settings" WHERE "id" = 'default' LIMIT 1`);
-      return rows[0] ? Number(rows[0].budgetMinor) : envBudgetMinor();
-    });
+        FROM "ai_settings" WHERE "id" = 'default' LIMIT 1`)
+    );
   } catch {
     // Supports deployments during the migration/rebase window where the piece-3
     // settings storage is not present yet. Never log configuration values.
     return envBudgetMinor();
   }
+  return rows[0]
+    ? safeMinorFromBigInt(rows[0].budgetMinor, 'AI monthly budget')
+    : envBudgetMinor();
 }

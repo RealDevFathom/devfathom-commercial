@@ -62,6 +62,40 @@ describe('monthly AI usage', () => {
     await expect(maybeCreateAIBudgetAlert(new Date('2026-11-20T00:00:00Z'))).resolves.toBe(true);
   });
 
+  it('allows only one claim when alert attempts race', async () => {
+    mocks.raw.mockResolvedValue([{ provider: 'anthropic', tier: 'cheap', spendMinor: 8_000n }]);
+    let claimed = false;
+    mocks.execute.mockImplementation(async () => {
+      if (!claimed) {
+        claimed = true;
+        return 1;
+      }
+      return 0;
+    });
+    const results = await Promise.all([
+      maybeCreateAIBudgetAlert(new Date('2026-10-20T00:00:00Z')),
+      maybeCreateAIBudgetAlert(new Date('2026-10-20T00:00:00Z')),
+    ]);
+    expect(results.sort()).toEqual([false, true]);
+  });
+
+  it('propagates notification failure so the platform transaction can roll back its claim', async () => {
+    mocks.raw.mockResolvedValue([{ provider: 'anthropic', tier: 'cheap', spendMinor: 8_000n }]);
+    mocks.execute.mockResolvedValueOnce(1).mockRejectedValueOnce(new Error('notification failed'));
+    await expect(maybeCreateAIBudgetAlert()).rejects.toThrow('notification failed');
+  });
+
+  it('rejects unsafe database minor units instead of rounding them', async () => {
+    mocks.raw.mockResolvedValue([
+      {
+        provider: 'anthropic',
+        tier: 'cheap',
+        spendMinor: BigInt(Number.MAX_SAFE_INTEGER) + 1n,
+      },
+    ]);
+    await expect(readMonthlyAIUsage()).rejects.toThrow('outside the safe minor-unit range');
+  });
+
   it('does not alert below 80 percent', async () => {
     mocks.raw.mockResolvedValue([{ provider: 'anthropic', tier: 'cheap', spendMinor: 7_999n }]);
     await expect(maybeCreateAIBudgetAlert()).resolves.toBe(false);

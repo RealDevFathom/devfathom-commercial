@@ -6,6 +6,8 @@ import { requirePlatformSession, type PlatformIdentity } from '@/lib/platform/au
 import { PlatformSecurityError } from '@/lib/platform/security';
 import { withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { getAiBudgetMinor } from './budget';
+import { addSafeMinor, safeMinorFromBigInt } from './money';
+import { AI_METERING_PRINCIPAL, can } from './mutation-authorization';
 
 export type AIUsageBreakdown = { provider: string; tier: string; spendMinor: number };
 export type MonthlyAIUsage = {
@@ -37,7 +39,10 @@ async function aggregate(db: ScopedDb, from: Date, to: Date): Promise<AIUsageBre
       FROM "ai_usage" WHERE "createdAt" >= ${from} AND "createdAt" < ${to}
       GROUP BY "provider", "tier" ORDER BY "provider", "tier"`
   );
-  return rows.map((row) => ({ ...row, spendMinor: Number(row.spendMinor) }));
+  return rows.map((row) => ({
+    ...row,
+    spendMinor: safeMinorFromBigInt(row.spendMinor, 'AI usage spend'),
+  }));
 }
 
 export async function readMonthlyAIUsage(
@@ -56,10 +61,21 @@ export async function readMonthlyAIUsage(
   const providerSpendMinor: Record<string, number> = {};
   const tierSpendMinor: Record<string, number> = {};
   for (const row of breakdown) {
-    providerSpendMinor[row.provider] = (providerSpendMinor[row.provider] ?? 0) + row.spendMinor;
-    tierSpendMinor[row.tier] = (tierSpendMinor[row.tier] ?? 0) + row.spendMinor;
+    providerSpendMinor[row.provider] = addSafeMinor(
+      providerSpendMinor[row.provider] ?? 0,
+      row.spendMinor,
+      'AI provider spend'
+    );
+    tierSpendMinor[row.tier] = addSafeMinor(
+      tierSpendMinor[row.tier] ?? 0,
+      row.spendMinor,
+      'AI tier spend'
+    );
   }
-  const totalSpendMinor = breakdown.reduce((sum, row) => sum + row.spendMinor, 0);
+  const totalSpendMinor = breakdown.reduce(
+    (sum, row) => addSafeMinor(sum, row.spendMinor, 'Total AI spend'),
+    0
+  );
   const anthropicSpendMinor = providerSpendMinor.anthropic ?? 0;
   return {
     ...range,
@@ -80,14 +96,21 @@ export async function readMonthlyAIUsage(
 
 /** Claims the month and fans out atomically, so concurrent usage writes cannot duplicate alerts. */
 export async function maybeCreateAIBudgetAlert(now = new Date()): Promise<boolean> {
+  if (!can(AI_METERING_PRINCIPAL, 'budget-alert:write')) {
+    throw new PlatformSecurityError('AI metering principal cannot create budget alerts.', 403);
+  }
   const { month, from, to } = karachiMonthRange(now);
   const budgetMinor = await getAiBudgetMinor();
   return withPlatformDb(async (db) => {
     const rows = await aggregate(db, from, to);
     const spendMinor = rows
       .filter((row) => row.provider === 'anthropic')
-      .reduce((sum, row) => sum + row.spendMinor, 0);
-    if ((budgetMinor === 0 && spendMinor === 0) || spendMinor * 100 < budgetMinor * 80) return false;
+      .reduce((sum, row) => addSafeMinor(sum, row.spendMinor, 'Anthropic spend'), 0);
+    if (
+      (budgetMinor === 0 && spendMinor === 0) ||
+      BigInt(spendMinor) * 100n < BigInt(budgetMinor) * 80n
+    )
+      return false;
 
     const claimed = await db.$executeRaw(Prisma.sql`
       INSERT INTO "ai_budget_alert_months" ("month", "createdAt") VALUES (${month}, ${now})

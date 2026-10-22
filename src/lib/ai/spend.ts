@@ -5,6 +5,7 @@ import { Prisma } from '@prisma/client';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { DEFAULT_MODELS, type TieredAIProviderName } from './model-defaults';
 import type { AITier } from './tiers';
+import { AI_METERING_PRINCIPAL, can } from './mutation-authorization';
 
 export type AIRoutingMode = 'Auto' | 'ForceAnthropic' | 'ForceBedrock' | 'Disabled';
 export type AIRoutingSettings = {
@@ -17,6 +18,8 @@ const FALLBACK_USD_PER_MTOK: Record<TieredAIProviderName, { input: number; outpu
   anthropic: { input: 3, output: 15 },
   bedrock: { input: 3, output: 15 },
 };
+const MAX_DATABASE_TOKEN_COUNT = 2_147_483_647;
+const MAX_DATABASE_COST_USD = 9_999_999_999.99999999;
 
 export function computeAIUsageCost(
   inputTokens: number,
@@ -83,6 +86,19 @@ export type UsageWrite = {
 };
 
 export async function recordAIUsage(usage: UsageWrite): Promise<number> {
+  if (!can(AI_METERING_PRINCIPAL, 'usage:write')) {
+    throw new Error('AI metering principal is not authorized to write usage.');
+  }
+  if (
+    !Number.isSafeInteger(usage.inputTokens) ||
+    usage.inputTokens < 0 ||
+    usage.inputTokens > MAX_DATABASE_TOKEN_COUNT ||
+    !Number.isSafeInteger(usage.outputTokens) ||
+    usage.outputTokens < 0 ||
+    usage.outputTokens > MAX_DATABASE_TOKEN_COUNT
+  ) {
+    throw new RangeError('AI token counts must be non-negative safe integers.');
+  }
   const cost = await withPlatformDb(async (db) => {
     const prices = await db.$queryRaw<
       Array<{ inputUsdPerMTok: Prisma.Decimal; outputUsdPerMTok: Prisma.Decimal }>
@@ -94,7 +110,13 @@ export async function recordAIUsage(usage: UsageWrite): Promise<number> {
     const fallback = FALLBACK_USD_PER_MTOK[usage.provider];
     const inputRate = Number(prices[0]?.inputUsdPerMTok ?? fallback.input);
     const outputRate = Number(prices[0]?.outputUsdPerMTok ?? fallback.output);
+    if (![inputRate, outputRate].every((rate) => Number.isFinite(rate) && rate >= 0)) {
+      throw new RangeError('AI model prices must be finite and non-negative.');
+    }
     const cost = computeAIUsageCost(usage.inputTokens, usage.outputTokens, inputRate, outputRate);
+    if (!Number.isFinite(cost) || cost < 0 || cost > MAX_DATABASE_COST_USD) {
+      throw new RangeError('Computed AI usage cost is outside the supported range.');
+    }
     await db.$executeRaw(Prisma.sql`
       INSERT INTO "ai_usage" ("id", "provider", "tier", "model", "feature", "organizationId", "inputTokens", "outputTokens", "costUsd", "createdAt")
       VALUES (${randomUUID()}, ${usage.provider}, ${usage.tier}, ${usage.model}, ${usage.feature}, ${usage.organizationId ?? null}, ${usage.inputTokens}, ${usage.outputTokens}, ${cost}, ${usage.createdAt ?? new Date()})`);
