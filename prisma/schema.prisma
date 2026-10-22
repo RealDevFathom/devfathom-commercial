@@ -4586,6 +4586,7 @@ model Note {
   visibility     NoteVisibility @default(PRIVATE)
   projectId      String? // Optional: attach to a project
   clientId       String? // Optional: attach to a client
+  revision       Int            @default(0) // Optimistic concurrency token for collaborative saves
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 

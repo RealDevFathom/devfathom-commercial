@@ -334,8 +334,9 @@ const NoteListRow = memo(function NoteListRow({
    - EDIT: takes a snapshot of the current note into a local draft. The editor
      is keyed on a stable "edit session" key so it doesn't re-mount when the
      server data refetches in the background. Refetch on focus is disabled to
-     avoid stomping the draft. Save sends the draft to the server (last write
-     wins), then refetches and returns to view mode. Cancel discards the draft.
+     avoid stomping the draft. Save sends the draft to the server with its
+     revision, then refetches and returns to view mode. A concurrent
+     save is rejected instead of silently overwriting either editor's work.
    ============================================ */
 function NoteDetail({ noteId }: { noteId: string }) {
   const router = useRouter();
@@ -346,6 +347,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [draftTitle, setDraftTitle] = useState('');
   const [draftContent, setDraftContent] = useState<unknown>(null);
+  const [draftRevision, setDraftRevision] = useState<number | null>(null);
   const [showSharePanel, setShowSharePanel] = useState(false);
   // IMP-NOTE-01: toggles the version-history panel.
   const [showHistory, setShowHistory] = useState(false);
@@ -385,6 +387,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
     if (!note) return;
     setDraftTitle(note.title);
     setDraftContent(note.contentJson);
+    setDraftRevision(note.revision);
     setShowHistory(false);
     setMode('edit');
   };
@@ -393,17 +396,19 @@ function NoteDetail({ noteId }: { noteId: string }) {
     // No "are you sure" — the draft is local, server is untouched.
     setDraftTitle('');
     setDraftContent(null);
+    setDraftRevision(null);
     setMode('view');
   };
 
   const handleSave = useCallback(() => {
-    if (!note || mode !== 'edit') return;
+    if (!note || mode !== 'edit' || draftRevision === null) return;
     updateNote.mutate({
       id: noteId,
       title: draftTitle.trim() || 'Untitled',
       contentJson: draftContent,
+      expectedRevision: draftRevision,
     });
-  }, [mode, note, noteId, draftTitle, draftContent, updateNote]);
+  }, [mode, note, noteId, draftTitle, draftContent, draftRevision, updateNote]);
 
   // Cmd/Ctrl+S saves while in edit mode
   useEffect(() => {
@@ -561,7 +566,11 @@ function NoteDetail({ noteId }: { noteId: string }) {
               <select
                 value={note.visibility}
                 onChange={(e) =>
-                  updateNote.mutate({ id: noteId, visibility: e.target.value as Visibility })
+                  updateNote.mutate({
+                    id: noteId,
+                    visibility: e.target.value as Visibility,
+                    expectedRevision: note.revision,
+                  })
                 }
                 className="rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-foreground focus:border-primary focus:outline-none"
               >
@@ -620,6 +629,7 @@ function NoteDetail({ noteId }: { noteId: string }) {
             visibility={note.visibility as Visibility}
             shares={note.shares}
             authorId={note.authorId}
+            revision={note.revision}
             onClose={() => setShowSharePanel(false)}
           />
         )}
@@ -766,12 +776,14 @@ function SharePanel({
   visibility,
   shares,
   authorId,
+  revision,
   onClose,
 }: {
   noteId: string;
   visibility: Visibility;
   shares: ShareEntry[];
   authorId: string;
+  revision: number;
   onClose: () => void;
 }) {
   const utils = trpc.useUtils();
@@ -806,7 +818,7 @@ function SharePanel({
     persist(next);
     // If currently PRIVATE, auto-flip to SHARED so the share takes effect
     if (visibility === 'PRIVATE') {
-      updateNote.mutate({ id: noteId, visibility: 'SHARED' });
+      updateNote.mutate({ id: noteId, visibility: 'SHARED', expectedRevision: revision });
     }
     setPicker('');
   };

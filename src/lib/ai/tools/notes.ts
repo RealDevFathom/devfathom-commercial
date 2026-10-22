@@ -1,5 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
+import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 
@@ -395,6 +396,16 @@ export function buildNotesTools(h: AssistantHelpers): ToolSet {
 
       // Apply update + resync backlinks atomically — mirrors notes.update.
       const updated = await h.db.$transaction(async (tx) => {
+        const claimed = await tx.note.updateMany({
+          where: { id: existing.id, revision: existing.revision },
+          data: { revision: { increment: 1 } },
+        });
+        if (claimed.count !== 1) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This note was changed by someone else. Retry the update from the latest note.',
+          });
+        }
         const note = await tx.note.update({ where: { id: existing.id }, data });
         if (linkedIds !== null) {
           await tx.noteLink.deleteMany({ where: { fromNoteId: note.id } });

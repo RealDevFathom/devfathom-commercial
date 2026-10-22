@@ -519,6 +519,7 @@ export const notesRouter = router({
     .input(
       z.object({
         id: z.string(),
+        expectedRevision: z.number().int().nonnegative(),
         title: z.string().min(1).optional(),
         contentJson: tiptapJsonSchema.optional(),
         visibility: NoteVisibilityEnum.optional(),
@@ -559,16 +560,14 @@ export const notesRouter = router({
       await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
       await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
 
-      const data: Prisma.NoteUpdateInput = {};
+      const data: Prisma.NoteUpdateManyMutationInput = {};
       if (input.title !== undefined) data.title = input.title;
       if (input.visibility !== undefined) data.visibility = input.visibility;
       if (input.projectId !== undefined) {
-        data.project = input.projectId
-          ? { connect: { id: input.projectId } }
-          : { disconnect: true };
+        data.projectId = input.projectId;
       }
       if (input.clientId !== undefined) {
-        data.client = input.clientId ? { connect: { id: input.clientId } } : { disconnect: true };
+        data.clientId = input.clientId;
       }
 
       let linkedIds: string[] | null = null;
@@ -625,7 +624,21 @@ export const notesRouter = router({
           await snapshotAndPrune(tx, existing, userId);
         }
 
-        const note = await tx.note.update({ where: { id: input.id }, data });
+        // Compare-and-swap in the same transaction as the history snapshot. If
+        // another editor saved after this client loaded the note, PostgreSQL
+        // re-checks this predicate after the competing update commits. Throwing
+        // rolls back our stale snapshot as well as every derived-table change.
+        const claimed = await tx.note.updateMany({
+          where: { id: input.id, revision: input.expectedRevision },
+          data: { ...data, revision: { increment: 1 } },
+        });
+        if (claimed.count !== 1) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This note was changed by someone else. Reload it before saving again.',
+          });
+        }
+        const note = await tx.note.findUniqueOrThrow({ where: { id: input.id } });
 
         if (linkedIds !== null) {
           await tx.noteLink.deleteMany({ where: { fromNoteId: note.id } });
@@ -765,14 +778,22 @@ export const notesRouter = router({
         // Snapshot the CURRENT content first so the restore is itself undoable.
         await snapshotAndPrune(tx, note, userId);
 
-        const next = await tx.note.update({
-          where: { id: note.id },
+        const restored = await tx.note.updateMany({
+          where: { id: note.id, revision: note.revision },
           data: {
             title: rev.title,
             contentJson: rev.contentJson as Prisma.InputJsonValue,
             contentText: rev.contentText,
+            revision: { increment: 1 },
           },
         });
+        if (restored.count !== 1) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This note was changed by someone else. Reload it before restoring.',
+          });
+        }
+        const next = await tx.note.findUniqueOrThrow({ where: { id: note.id } });
 
         // Resync backlinks from the restored content.
         await tx.noteLink.deleteMany({ where: { fromNoteId: note.id } });
