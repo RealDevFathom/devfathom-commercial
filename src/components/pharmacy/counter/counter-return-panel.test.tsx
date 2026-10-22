@@ -158,6 +158,33 @@ describe('counter returns', () => {
     expect(screen.queryByText(/Return recorded/)).not.toBeInTheDocument();
     expect(localStorage.getItem('pharmacy-return:o:a:b')).toBeNull();
   });
+  it('never persists or replays a controlled-return witness PIN', async () => {
+    (mocks.history.data as { lines: Array<{ controlled?: boolean }> }).lines[0]!.controlled = true;
+    mocks.returnLine.mockRejectedValueOnce(new Error('Disconnected'));
+    const view = render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
+    fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
+      target: { value: 'seal unknown' },
+    });
+    fireEvent.change(screen.getByLabelText('Witness pharmacist'), {
+      target: { value: 'witness' },
+    });
+    fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '1234' } });
+    fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+    fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+    await screen.findByRole('button', { name: 'Retry saved return' });
+    const saved = localStorage.getItem('pharmacy-return:o:a:b');
+    expect(saved).not.toContain('1234');
+    expect(JSON.parse(saved!)).not.toHaveProperty('input.controlledWitness');
+
+    view.unmount();
+    render(<ReturnForm {...props} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry saved return' }));
+    await waitFor(() => expect(mocks.returnLine).toHaveBeenCalledTimes(2));
+    expect(mocks.returnLine.mock.calls[1]![0]).not.toHaveProperty('controlledWitness');
+  });
   it('caps refunds at returned value and requires explicit cash fallback for card', () => {
     render(<ReturnForm {...props} />);
     chooseReceipt();

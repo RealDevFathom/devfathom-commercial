@@ -609,9 +609,6 @@ export async function returnSaleLine(
     },
   });
   if (!line || line.sale.status !== 'COMPLETED') throw new PharmacySaleError('NOT_FOUND');
-  const witness = line.medicine.controlled
-    ? await authorizeControlledRestoration(db, scope, input.controlledWitness)
-    : undefined;
   const requestedDisposition = input.disposition ?? 'QUARANTINE';
   const disposition = input.lotId ? requestedDisposition : 'QUARANTINE';
   // Keep legacy request fingerprints stable; never infer physical identity from allocations.
@@ -667,6 +664,9 @@ export async function returnSaleLine(
     if (!saleReturn || !returnLine || !movement) throw new PharmacySaleError('INVALID_STATE');
     return { saleReturn, returnLine, movement, returnId: saleReturn.id, replayed: true };
   }
+  const witness = line.medicine.controlled
+    ? await authorizeControlledRestoration(db, scope, input.controlledWitness)
+    : undefined;
   const returned =
     line.returnLines.reduce((sum, item) => sum + item.canonicalUnits, 0) +
     line.unidentifiedReturnHolds.reduce((sum, item) => sum + item.canonicalUnits, 0);

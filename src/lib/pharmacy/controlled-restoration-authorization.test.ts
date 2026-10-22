@@ -39,6 +39,7 @@ function fixture() {
         .fn()
         .mockResolvedValue({ sale: { status: 'COMPLETED' }, medicine: { controlled: true } }),
     },
+    pharmacySaleEvent: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyStockMovement: { create: vi.fn() },
   };
   return { db, witness };
@@ -82,6 +83,46 @@ describe('fresh controlled restoration authorization', () => {
       where: { id: 'cred' },
       data: { failedAttempts: 1 },
     });
+  });
+  it('reconciles a completed controlled return without retaining or rechecking its PIN', async () => {
+    const { db } = fixture();
+    const input = {
+      saleLineId: 'line',
+      canonicalUnits: 1,
+      reason: 'return',
+      integrityDecision: 'sealed',
+      idempotencyKey: 'key',
+    };
+    db.pharmacySaleLine.findFirst.mockResolvedValue({
+      id: 'line',
+      saleId: 'sale',
+      sale: { status: 'COMPLETED' },
+      medicine: { controlled: true },
+    });
+    db.pharmacySaleEvent.findFirst.mockResolvedValue({
+      payload: {
+        fingerprint: JSON.stringify({ ...input, disposition: 'QUARANTINE' }),
+        returnId: 'return',
+      },
+    });
+    Object.assign(db, {
+      pharmacySaleReturn: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'return',
+          lines: [{ stockMovementId: 'movement' }],
+          unidentifiedHolds: [],
+        }),
+      },
+    });
+    Object.assign(db.pharmacyStockMovement, {
+      findFirst: vi.fn().mockResolvedValue({ id: 'movement' }),
+    });
+
+    await expect(returnSaleLine(db as never, scope, input)).resolves.toMatchObject({
+      returnId: 'return',
+      replayed: true,
+    });
+    expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
   });
   it('rejects self-witnessing and a witness denied by ABAC', async () => {
     const { db, witness } = fixture();

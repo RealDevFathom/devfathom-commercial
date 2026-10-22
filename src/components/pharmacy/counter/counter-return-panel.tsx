@@ -25,9 +25,6 @@ const attemptSchema = z.discriminatedUnion('kind', [
       quarantineLocationId: z.string().optional(),
       reason: z.string(),
       integrityDecision: z.string(),
-      controlledWitness: z
-        .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
-        .optional(),
       idempotencyKey: z.string(),
     }),
   }),
@@ -175,18 +172,24 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const locked = busy || !!attempt || !ready || !online;
   const stale = history.isFetching || history.isError;
 
-  async function execute(next: Attempt) {
+  async function execute(
+    next: Attempt,
+    controlledWitness?: { staffProfileId: string; pin: string }
+  ) {
     if (latch.current || !online || !ready) return;
     latch.current = true;
     setBusy(true);
     setError('');
     setMessage('');
     try {
-      // Write before sending; an ambiguous network outcome can only replay this exact request.
+      // Write before sending so an ambiguous outcome can reuse the operation key. Witness
+      // credentials stay only in memory and are deliberately excluded from this recovery record.
       localStorage.setItem(storageKey, JSON.stringify(next));
       setAttempt(next);
       if (next.kind === 'return') {
-        const outcome = await returnLine.mutateAsync(next.input);
+        // The recovery record deliberately excludes the witness credential. A completed request
+        // can be reconciled by idempotency key; unfinished controlled returns need a fresh PIN.
+        const outcome = await returnLine.mutateAsync({ ...next.input, controlledWitness });
         if ('blocked' in outcome) {
           localStorage.removeItem(storageKey);
           setAttempt(null);
@@ -574,24 +577,24 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 (line?.controlled && (!witnessId || !/^\d{4,8}$/.test(witnessPin)))
               }
               onClick={() =>
-                void execute({
-                  kind: 'return',
-                  saleId,
-                  input: {
-                    branchId,
-                    saleLineId: lineId,
-                    lotId: lotId || undefined,
-                    canonicalUnits: Number(units),
-                    disposition,
-                    quarantineLocationId: disposition === 'QUARANTINE' ? location : undefined,
-                    reason,
-                    integrityDecision: integrity,
-                    controlledWitness: line.controlled
-                      ? { staffProfileId: witnessId, pin: witnessPin }
-                      : undefined,
-                    idempotencyKey: browserUuid(),
+                void execute(
+                  {
+                    kind: 'return',
+                    saleId,
+                    input: {
+                      branchId,
+                      saleLineId: lineId,
+                      lotId: lotId || undefined,
+                      canonicalUnits: Number(units),
+                      disposition,
+                      quarantineLocationId: disposition === 'QUARANTINE' ? location : undefined,
+                      reason,
+                      integrityDecision: integrity,
+                      idempotencyKey: browserUuid(),
+                    },
                   },
-                })
+                  line.controlled ? { staffProfileId: witnessId, pin: witnessPin } : undefined
+                )
               }
             >
               Record return
