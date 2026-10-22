@@ -507,9 +507,18 @@ export const teamRouter = router({
         });
       }
 
-      const leave = await ctx.db.leaveRequest.update({
-        where: { id: input.id },
-        data: { status: input.status, approvedById: ctx.session.user.id },
+      const leave = await ctx.db.$transaction(async (tx) => {
+        const decided = await tx.leaveRequest.updateMany({
+          where: { id: input.id, status: 'PENDING' },
+          data: { status: input.status, approvedById: ctx.session.user.id },
+        });
+        if (decided.count !== 1) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This leave request has already been decided.',
+          });
+        }
+        return tx.leaveRequest.findUniqueOrThrow({ where: { id: input.id } });
       });
 
       // Let the requester know the decision.

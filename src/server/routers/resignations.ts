@@ -191,28 +191,36 @@ export const resignationsRouter = router({
       }
 
       const approved = input.decision === 'APPROVED';
-      const updated = await ctx.db.resignation.update({
-        where: { id: input.id },
-        data: {
-          status: input.decision,
-          reviewedById: ctx.session.user.id,
-          reviewedAt: new Date(),
-          reviewNote: input.reviewNote ?? null,
-          lastWorkingDay: approved ? (input.lastWorkingDay ?? resignation.proposedLastDay) : null,
-        },
-      });
-
-      // IMP-HR-02: off-boarding automation. Once the approved last working day has
-      // arrived (on/before today), deactivate the account. The JWT revalidation
-      // re-reads `status` (~60s), so this also cuts the employee's active sessions
-      // without needing the AUTH-01 token-version column. (A future last day would
-      // be enforced by a scheduled job — not wired here.)
-      if (approved && updated.lastWorkingDay && updated.lastWorkingDay <= new Date()) {
-        await ctx.db.user.update({
-          where: { id: resignation.userId },
-          data: { status: 'INACTIVE' },
+      const updated = await ctx.db.$transaction(async (tx) => {
+        const decided = await tx.resignation.updateMany({
+          where: { id: input.id, status: 'PENDING' },
+          data: {
+            status: input.decision,
+            reviewedById: ctx.session.user.id,
+            reviewedAt: new Date(),
+            reviewNote: input.reviewNote ?? null,
+            lastWorkingDay: approved ? (input.lastWorkingDay ?? resignation.proposedLastDay) : null,
+          },
         });
-      }
+        if (decided.count !== 1) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This resignation has already been decided.',
+          });
+        }
+
+        const result = await tx.resignation.findUniqueOrThrow({ where: { id: input.id } });
+
+        // IMP-HR-02: atomically couple an already-due approval to account
+        // deactivation. A losing reviewer rolls back before either effect occurs.
+        if (approved && result.lastWorkingDay && result.lastWorkingDay <= new Date()) {
+          await tx.user.update({
+            where: { id: resignation.userId },
+            data: { status: 'INACTIVE' },
+          });
+        }
+        return result;
+      });
 
       annotateAudit(ctx, {
         targetType: 'Resignation',
