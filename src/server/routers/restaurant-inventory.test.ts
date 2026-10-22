@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   findStockLocation: vi.fn(),
   findStockCount: vi.fn(),
   findStockTransfer: vi.fn(),
+  findLowStockRule: vi.fn(),
   findBranch: vi.fn(),
   countStockLocations: vi.fn(),
   createStockLocation: vi.fn(),
@@ -122,6 +123,7 @@ const db = {
   },
   restaurantStockCount: { findUnique: mocks.findStockCount },
   restaurantStockTransfer: { findUnique: mocks.findStockTransfer },
+  restaurantLowStockRule: { findUnique: mocks.findLowStockRule },
   $queryRaw: mocks.queryRaw,
   $transaction: vi.fn(async (run: (tx: unknown) => unknown) => run(db)),
 } as unknown as ScopedDb;
@@ -164,6 +166,7 @@ beforeEach(() => {
     sourceLocation: { branchId: 'branch_1' },
     destinationLocation: { branchId: 'branch_1' },
   });
+  mocks.findLowStockRule.mockResolvedValue({ location: { branchId: 'branch_1' } });
   mocks.findBranch.mockResolvedValue({ id: 'branch_1', active: true });
   mocks.findStockLocation.mockImplementation(async ({ where }) => ({
     id: where.id,
@@ -346,6 +349,48 @@ describe('restaurantInventoryRouter', () => {
   });
 
   // ── Low-stock rule evaluation ─────────────────────────────────────────────────
+
+  it('authorizes low-stock rule mutations against the location branch', async () => {
+    mocks.createLowStockRule.mockResolvedValue({ id: 'rule_1', threshold: D('5') });
+    mocks.updateLowStockRule.mockResolvedValue({ id: 'rule_1', threshold: D('6') });
+    mocks.deleteLowStockRule.mockResolvedValue(undefined);
+
+    const api = caller();
+    await api.createLowStockRule({ stockItemId: 'si_1', locationId: 'loc_1', threshold: '5' });
+    await api.updateLowStockRule({ id: 'rule_1', threshold: '6' });
+    await api.deleteLowStockRule({ id: 'rule_1' });
+
+    expect(mocks.findStockLocation).toHaveBeenCalledWith({
+      where: { id: 'loc_1' },
+      select: { branchId: true },
+    });
+    expect(mocks.findLowStockRule).toHaveBeenCalledTimes(2);
+    expect(mocks.createLowStockRule).toHaveBeenCalledOnce();
+    expect(mocks.updateLowStockRule).toHaveBeenCalledOnce();
+    expect(mocks.deleteLowStockRule).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [
+      'create',
+      () =>
+        caller().createLowStockRule({
+          stockItemId: 'si_1',
+          locationId: 'loc_2',
+          threshold: '5',
+        }),
+    ],
+    ['update', () => caller().updateLowStockRule({ id: 'rule_2', threshold: '6' })],
+    ['delete', () => caller().deleteLowStockRule({ id: 'rule_2' })],
+  ])('denies low-stock rule %s outside assigned branches before writing', async (_name, attempt) => {
+    mocks.findLowStockRule.mockResolvedValue({ location: { branchId: 'branch_2' } });
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    await expect(attempt()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.createLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.updateLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
+  });
 
   it('evaluateLowStockRules returns isTriggered flag and Decimal-as-string amounts', async () => {
     mocks.evaluateLowStockRules.mockResolvedValue([
