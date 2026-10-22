@@ -48,13 +48,13 @@ async function customDecision(
   const overrides = user.permissionOverrides.filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
-  if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
-  if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
-  if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
+  // A revocation is authoritative regardless of which layer supplied it. In
+  // particular, a user ALLOW must never punch through a role DENY.
+  if ([...overrides, ...roleRules].some((rule) => rule.effect === 'DENY')) return false;
+  if ([...overrides, ...roleRules].some((rule) => rule.effect === 'ALLOW')) return true;
   return null;
 }
 

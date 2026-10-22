@@ -46,6 +46,14 @@ function model() {
 
 function makeDb() {
   const db = {
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:inventory', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+    },
     medicine: model(),
     packLevel: model(),
     pharmacyStockLocation: model(),
@@ -69,6 +77,9 @@ function makeDb() {
     pharmacyInterbranchTransfer: model(),
     pharmacyPurchaseReturn: model(),
     pharmacyPurchaseReturnLine: model(),
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'assignment_a' }),
+    },
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
         (where.id?.in ?? []).map((id) => ({ id }))
@@ -229,6 +240,112 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       })
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(db.pharmacyStockLocation.create).not.toHaveBeenCalled();
+  });
+
+  const vulnerableMutations = [
+    {
+      name: 'createLocation',
+      invoke: () =>
+        caller().createLocation({
+          branchId: 'branch_a',
+          code: 'MAIN',
+          name: 'Main store',
+          kind: 'STORE',
+        }),
+    },
+    {
+      name: 'receiveLot',
+      invoke: () =>
+        caller().receiveLot({
+          branchId: 'branch_a',
+          manufacturingBatchId: 'batch_1',
+          packLevelId: 'pack_1',
+          stockLocationId: 'location_1',
+          unitsPerPack: 10,
+          supplierName: 'Distributor Ltd',
+          supplierInvoiceRef: 'INV-1',
+          unitCostMinor: 1200,
+          printedMrpMinor: 2000,
+          printedExpiry: new Date('2027-06-15T00:00:00.000Z'),
+          expiryPrecision: 'DAY',
+          quantityUnits: 100,
+          idempotencyKey: 'receipt-1',
+        }),
+    },
+    {
+      name: 'createCount',
+      invoke: () =>
+        caller().createCount({
+          branchId: 'branch_a',
+          varianceThreshold: 0,
+          readings: [
+            {
+              inventoryLotId: 'lot_1',
+              stockLocationId: 'location_1',
+              countedSealedPacks: 1,
+              countedLooseUnits: 0,
+            },
+          ],
+        }),
+    },
+    {
+      name: 'writeOff',
+      invoke: () =>
+        caller().writeOff({
+          branchId: 'branch_a',
+          inventoryLotId: 'lot_1',
+          stockLocationId: 'location_1',
+          units: 1,
+          witnessId: 'witness_1',
+          reason: 'Damaged',
+          evidenceRef: 'photo-1',
+          idempotencyKey: 'write-off-1',
+        }),
+    },
+  ];
+
+  it.each(vulnerableMutations)('denies $name without pharmacy:inventory', async ({ invoke }) => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: { permissions: [] },
+      permissionOverrides: [],
+    });
+
+    await expect(invoke()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+  });
+
+  it.each(vulnerableMutations)(
+    'denies $name outside the actor branch assignment',
+    async ({ invoke }) => {
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+
+      await expect(invoke()).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Branch is outside your scope.',
+      });
+      expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org_a',
+          branchId: 'branch_a',
+          userId: 'user_a',
+          active: true,
+          branch: { organizationId: 'org_a', active: true },
+        },
+        select: { id: true },
+      });
+    }
+  );
+
+  it('lets an explicit user deny override an inventory allow from the role', async () => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [{ capability: 'pharmacy:inventory', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [{ capability: 'pharmacy:inventory', effect: 'DENY' }],
+    });
+
+    await expect(vulnerableMutations[0]!.invoke()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
   });
 });
 

@@ -80,6 +80,7 @@ import type { TRPCContext } from '../trpc';
 const branchId = z.string().trim().min(1).max(128);
 const expiryPrecision = z.enum(['DAY', 'MONTH']);
 const regulatory = capabilityProcedure('pharmacy:safety');
+const inventoryMutation = capabilityProcedure('pharmacy:inventory');
 const drapNotice = z.discriminatedUnion('kind', [
   z
     .object({
@@ -151,6 +152,19 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   await assertInOrganization(ctx.db.pharmacyBranch, actor.organizationId, [branch], {
     active: true,
   });
+  const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+    where: {
+      organizationId: actor.organizationId,
+      branchId: branch,
+      userId: actor.actorId,
+      active: true,
+      branch: { organizationId: actor.organizationId, active: true },
+    },
+    select: { id: true },
+  });
+  if (!assignment) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
   return { ...actor, branchId: branch };
 }
 
@@ -601,7 +615,7 @@ export const pharmacyInventoryRouter = router({
       )
     ),
 
-  createLocation: protectedProcedure
+  createLocation: inventoryMutation
     .input(
       z
         .object({
@@ -800,7 +814,7 @@ export const pharmacyInventoryRouter = router({
       });
     }),
 
-  receiveLot: protectedProcedure
+  receiveLot: inventoryMutation
     .input(
       z
         .object({
@@ -959,7 +973,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  createCount: protectedProcedure
+  createCount: inventoryMutation
     .input(
       z
         .object({
@@ -1015,7 +1029,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  writeOff: protectedProcedure
+  writeOff: inventoryMutation
     .input(
       z
         .object({

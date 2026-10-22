@@ -156,6 +156,15 @@ describe('custom ABAC decisions', () => {
     ).resolves.toBe(false);
   });
 
+  it('gives a role deny precedence over a user-level allow', async () => {
+    const db = authorizationDb({
+      overrides: [{ capability: 'pharmacy:inventory', effect: 'ALLOW' }],
+      rolePermissions: [{ capability: 'pharmacy:*', effect: 'DENY' }],
+    });
+
+    await expect(can(employee, 'pharmacy:inventory', undefined, { db })).resolves.toBe(false);
+  });
+
   it('falls back to built-in policy only when no custom rule matches', async () => {
     const db = authorizationDb({});
 
