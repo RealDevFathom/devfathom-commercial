@@ -64,6 +64,7 @@ describe('checkout money serialization', () => {
           deliveryFulfillment: { deliveryFeeSnapshot: decimal(value) },
         }),
       },
+      restaurantBillLine: { findMany: vi.fn().mockResolvedValue([]) },
     } as unknown as ScopedDb;
     const summary = await getOrderSettlementForBranch(summaryDb, 'order-1', 'branch-1');
 
@@ -191,6 +192,18 @@ describe('checkout money serialization', () => {
       restaurantOrder: {
         findFirst: vi.fn().mockResolvedValue({ id: 'order-1', deliveryFulfillment: null }),
       },
+      restaurantBillLine: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'line-1',
+            billId: 'bill-1',
+            name: 'Item',
+            quantity: 1,
+            lineSubtotal: decimal('970.00'),
+            compAmount: decimal('0.00'),
+          },
+        ]),
+      },
     } as unknown as ScopedDb;
     const summary = await getOrderSettlementForBranch(summaryDb, 'order-1', 'branch-1');
 
@@ -198,6 +211,15 @@ describe('checkout money serialization', () => {
       grandTotal: '1115.50',
       taxTotal: '145.50',
       remainingDue: '145.50',
+      lines: [
+        {
+          id: 'line-1',
+          name: 'Item',
+          quantity: 1,
+          lineSubtotal: '970.00',
+          compAmount: '0.00',
+        },
+      ],
     });
   });
 });

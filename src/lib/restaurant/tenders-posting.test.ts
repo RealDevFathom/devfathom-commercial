@@ -76,9 +76,12 @@ function fixture() {
   // lines resolve from id-keyed registries; unregistered ids fall back to the base bill.
   const defaultLine = {
     id: 'line',
+    billId: 'bill',
     orderItemId: 'item',
+    name: 'Item',
     quantity: 1,
     unitPrice: D('4000'),
+    lineSubtotal: D('4000'),
     compAmount: D('140'),
     orderItem: { modifiers: [] },
   };
@@ -244,8 +247,14 @@ function fixture() {
     },
     restaurantBillLine: {
       findMany: vi.fn(
-        async ({ where }: { where: { billId: string } }) =>
-          linesByBill.get(where.billId) ?? [defaultLine]
+        async ({ where }: { where: { billId: string | { in: string[] } } }) => {
+          if (typeof where.billId === 'string') {
+            return linesByBill.get(where.billId) ?? [defaultLine];
+          }
+          return where.billId.in.flatMap((billId) =>
+            (linesByBill.get(billId) ?? []).map((line) => ({ ...line, billId }))
+          );
+        }
       ),
     },
     restaurantPromotionBillApplicationSnapshot: { findMany: vi.fn(async () => []) },
