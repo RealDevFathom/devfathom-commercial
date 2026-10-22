@@ -93,6 +93,8 @@ export async function reverseRefundedEarnedPoints(
       netPaidMinor,
       tenderId: refund.originalTenderId,
       refundId: refund.id,
+      // The lot this reverses, for expiry's source-lot accounting (docs/loyalty-3.md).
+      sourceEntryId: earn.id,
       actorId: scope.actorId,
       idempotencyKey: key,
     },

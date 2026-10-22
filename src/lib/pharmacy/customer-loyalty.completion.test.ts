@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { redeemSalePoints } from './customer-loyalty';
 import { postSaleLineEntry, postTenderEntry } from './finance-postings';
 import { requestCounterEvidence } from './counter-evidence';
+import { DEFAULT_PHARMACY_POINTS_POLICY } from './loyalty-points';
 
 vi.mock('./finance-postings', () => ({ postSaleLineEntry: vi.fn(), postTenderEntry: vi.fn() }));
 vi.mock('./counter-evidence', () => ({ requestCounterEvidence: vi.fn() }));
@@ -61,13 +62,16 @@ function fixture() {
     tenders: [],
   };
   const db = {
-    $queryRaw: vi
-      .fn()
-      .mockImplementation(async (q) =>
-        q.strings.join('').includes('receipt_number_sequences')
-          ? [{ receipt_number: 42 }]
-          : [{ id: sale.id, patientId: 'patient-a' }]
-      ),
+    $queryRaw: vi.fn().mockImplementation(async (q) => {
+      const sql = q.strings.join('');
+      if (sql.includes('receipt_number_sequences')) return [{ receipt_number: 42 }];
+      // An empty points ledger: nothing to expire before the balance check.
+      if (sql.includes('FROM pharmacy_loyalty_points_entries')) return [];
+      // An owner-configured 1-point minimum keeps this 2-point redemption valid.
+      if (sql.includes('FROM pharmacy_loyalty_settings'))
+        return [{ ...DEFAULT_PHARMACY_POINTS_POLICY, minimumRedemptionPoints: 1 }];
+      return [{ id: sale.id, patientId: 'patient-a' }];
+    }),
     pharmacySale: { findFirst: vi.fn().mockResolvedValue(sale), update: vi.fn() },
     pharmacyCustomer: {
       findFirst: vi

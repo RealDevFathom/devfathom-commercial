@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
+const consent = vi.hoisted(() => ({ lockCustomerConsent: vi.fn() }));
+vi.mock('./consent-writer', () => consent);
 
 import { pointsForNetPaid, redemptionFor } from '@/lib/commerce/loyalty-arithmetic';
 
@@ -13,6 +15,17 @@ import {
 } from './customer-loyalty';
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'cashier-a' };
+
+/** Raw reads by table: the points-account lock finds its one customer row. */
+function raw(policy: unknown[] = [], order: string[] = []) {
+  return vi.fn(async (query: { sql?: string }) => {
+    if (String(query.sql).includes('FROM pharmacy_customers')) {
+      order.push('lock-account');
+      return [{ id: 'customer-a' }];
+    }
+    return policy;
+  });
+}
 
 describe('CRM-L01 pharmacy loyalty', () => {
   it('links a retail customer only with current purpose-specific LOYALTY consent', async () => {
@@ -53,11 +66,17 @@ describe('CRM-L01 pharmacy loyalty', () => {
             { type: 'CASH', amountMinor: 10_099 },
             { type: 'LOYALTY', amountMinor: 500 },
           ],
-          lines: [{ quantity: 1, unitPriceMinor: 10_099, discountMinor: 0,
-            medicine: { productFamily: 'PHARMACEUTICAL' } }],
+          lines: [
+            {
+              quantity: 1,
+              unitPriceMinor: 10_099,
+              discountMinor: 0,
+              medicine: { productFamily: 'PHARMACEUTICAL' },
+            },
+          ],
         }),
       },
-      $queryRaw: vi.fn().mockResolvedValue([]),
+      $queryRaw: raw(),
     };
     await accrueSalePoints(db as never, scope, 'sale-a');
     expect(create).toHaveBeenCalledWith({
@@ -65,11 +84,41 @@ describe('CRM-L01 pharmacy loyalty', () => {
     });
   });
 
+  it('locks the customer points account before it writes an earn', async () => {
+    const order: string[] = [];
+    const create = vi.fn().mockImplementation(async ({ data }) => {
+      order.push('earn');
+      return { id: 'earn-a', ...data };
+    });
+    const db = {
+      pharmacyLoyaltyPointsEntry: { findUnique: vi.fn().mockResolvedValue(null), create },
+      pharmacySale: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'sale-a',
+          customerId: 'customer-a',
+          tenders: [{ type: 'CASH', amountMinor: 20_000 }],
+          lines: [
+            {
+              quantity: 1,
+              unitPriceMinor: 20_000,
+              discountMinor: 0,
+              medicine: { productFamily: 'PHARMACEUTICAL' },
+            },
+          ],
+        }),
+      },
+      $queryRaw: raw([], order),
+    };
+    await accrueSalePoints(db as never, scope, 'sale-a');
+    expect(order).toEqual(['lock-account', 'earn']);
+    expect(create.mock.calls[0]![0].data.expiresAt).toBeInstanceOf(Date);
+  });
+
   it('qualifies Gold spend within the current tenant branch only', async () => {
     const aggregate = vi.fn().mockResolvedValue({ _sum: { netPaidMinor: 5_000_000 } });
     const create = vi.fn().mockImplementation(async ({ data }) => ({ id: 'earn-a', ...data }));
     const db = {
-      $queryRaw: vi.fn().mockResolvedValue([
+      $queryRaw: raw([
         {
           medicineEarnPoints: 1,
           nonDrugEarnPoints: 3,
@@ -92,12 +141,14 @@ describe('CRM-L01 pharmacy loyalty', () => {
           id: 'sale-a',
           customerId: 'customer-a',
           tenders: [{ type: 'CASH', amountMinor: 10_000 }],
-          lines: [{
-            quantity: 1,
-            unitPriceMinor: 10_000,
-            discountMinor: 0,
-            medicine: { productFamily: 'PHARMACEUTICAL' },
-          }],
+          lines: [
+            {
+              quantity: 1,
+              unitPriceMinor: 10_000,
+              discountMinor: 0,
+              medicine: { productFamily: 'PHARMACEUTICAL' },
+            },
+          ],
         }),
       },
     };
@@ -150,7 +201,7 @@ describe('CRM-L01 pharmacy loyalty', () => {
     const db = {
       pharmacyLoyaltyPointsEntry: {
         findUnique: vi.fn().mockImplementation(async () => created),
-        findFirst: vi.fn().mockResolvedValue({ points: -20 }),
+        findFirst: vi.fn().mockResolvedValue({ points: -20, tender: { amountMinor: 2_000 } }),
         aggregate: vi.fn().mockResolvedValue({ _sum: { points: 5 } }),
         create,
       },
@@ -175,6 +226,32 @@ describe('CRM-L01 pharmacy loyalty', () => {
     });
     expect(replay).toMatchObject({ id: 'offset-a', replayed: true });
     expect(create).toHaveBeenCalledTimes(1);
+    // Same lock order as redemption and earn reversal: consent, then the points account.
+    expect(consent.lockCustomerConsent).toHaveBeenCalledWith(db, 'org-a', 'customer-a');
+  });
+
+  it('restores at the redemption own point value, not a fixed Rs 1 per point', async () => {
+    // 400 points bought Rs 200 (a 50-paisa point); half the tender is refunded.
+    const create = vi.fn().mockImplementation(async ({ data }) => ({ id: 'offset-b', ...data }));
+    const db = {
+      pharmacyLoyaltyPointsEntry: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        findFirst: vi.fn().mockResolvedValue({ points: -400, tender: { amountMinor: 20_000 } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { points: null } }),
+        create,
+      },
+      pharmacyRefund: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { amountMinor: 10_000 } }),
+      },
+    };
+    await expect(
+      restoreRefundedLoyaltyPoints(db as never, scope, {
+        refundId: 'refund-b',
+        tenderId: 'tender-b',
+        saleId: 'sale-b',
+        customerId: 'customer-a',
+      })
+    ).resolves.toMatchObject({ kind: 'REFUND', points: 200 });
   });
 
   it('returns counter history, points and khata visibility without patient fields', async () => {

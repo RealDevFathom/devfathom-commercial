@@ -88,6 +88,8 @@ import {
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
+import { LOYALTY_POINTS_MAX } from '@/lib/commerce/loyalty-arithmetic';
+import { writeLoyaltyPointsSettings } from '@/lib/pharmacy/loyalty-settings';
 import {
   admitVoucherLookup,
   PharmacyVoucherError,
@@ -428,53 +430,54 @@ function requireCloseAccess(ctx: TRPCContext) {
 
 export const pharmacySalesRouter = router({
   updateLoyaltyPointsSettings: protectedProcedure
-    .input(z.object({
-      medicineEarnPoints: z.number().int().min(0).max(1000),
-      nonDrugEarnPoints: z.number().int().min(0).max(1000),
-      earnBlockMinor: z.number().int().positive(),
-      pointValueMinor: z.number().int().positive(),
-      minimumRedemptionPoints: z.number().int().positive(),
-      pointsExpiryMonths: z.number().int().min(1).max(120),
-      goldTierEnabled: z.boolean(),
-      goldTierThresholdMinor: z.number().int().nonnegative(),
-      goldTierMultiplier: z.number().int().min(1).max(100),
-    }).strict())
+    .input(
+      z
+        .object({
+          medicineEarnPoints: z.number().int().min(0).max(1000),
+          nonDrugEarnPoints: z.number().int().min(0).max(1000),
+          earnBlockMinor: z.number().int().positive().max(LOYALTY_POINTS_MAX),
+          pointValueMinor: z.number().int().positive().max(LOYALTY_POINTS_MAX),
+          minimumRedemptionPoints: z.number().int().positive().max(LOYALTY_POINTS_MAX),
+          pointsExpiryMonths: z.number().int().min(1).max(120),
+          goldTierEnabled: z.boolean(),
+          goldTierThresholdMinor: z.number().int().nonnegative().max(LOYALTY_POINTS_MAX),
+          goldTierMultiplier: z.number().int().min(1).max(100),
+        })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements?.organizationId;
       const actorId = ctx.session?.user?.id;
       if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-      if (!(await can(subjectFromSession(ctx.session!.user), 'pharmacy:loyalty-manage', undefined, {
-        db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip,
-      }))) throw new TRPCError({ code: 'FORBIDDEN' });
-      return ctx.db.$transaction(async (tx) => {
-        const rows = await tx.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
-          SELECT * FROM pharmacy_loyalty_settings WHERE "organizationId"=${organizationId} FOR UPDATE`);
-        const oldValue = rows[0] ?? null;
-        await tx.$executeRaw(Prisma.sql`INSERT INTO pharmacy_loyalty_settings
-          (id,"organizationId","medicineEarnPoints","nonDrugEarnPoints","earnBlockMinor",
-           "pointValueMinor","minimumRedemptionPoints","pointsExpiryMonths","goldTierEnabled",
-           "goldTierThresholdMinor","goldTierMultiplier","createdAt","updatedAt")
-          VALUES (${randomUUID()},${organizationId},${input.medicineEarnPoints},${input.nonDrugEarnPoints},
-            ${input.earnBlockMinor},${input.pointValueMinor},${input.minimumRedemptionPoints},
-            ${input.pointsExpiryMonths},${input.goldTierEnabled},${input.goldTierThresholdMinor},
-            ${input.goldTierMultiplier},now(),now())
-          ON CONFLICT ("organizationId") DO UPDATE SET
-            "medicineEarnPoints"=EXCLUDED."medicineEarnPoints",
-            "nonDrugEarnPoints"=EXCLUDED."nonDrugEarnPoints","earnBlockMinor"=EXCLUDED."earnBlockMinor",
-            "pointValueMinor"=EXCLUDED."pointValueMinor",
-            "minimumRedemptionPoints"=EXCLUDED."minimumRedemptionPoints",
-            "pointsExpiryMonths"=EXCLUDED."pointsExpiryMonths","goldTierEnabled"=EXCLUDED."goldTierEnabled",
-            "goldTierThresholdMinor"=EXCLUDED."goldTierThresholdMinor",
-            "goldTierMultiplier"=EXCLUDED."goldTierMultiplier","updatedAt"=now()`);
-        const [newValue] = await tx.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
-          SELECT * FROM pharmacy_loyalty_settings WHERE "organizationId"=${organizationId}`);
-        await tx.$executeRaw(Prisma.sql`INSERT INTO pharmacy_loyalty_settings_audits
-          (id,"organizationId","actorId","oldValue","newValue","occurredAt") VALUES
-          (${randomUUID()},${organizationId},${actorId},${JSON.stringify(oldValue)}::jsonb,
-           ${JSON.stringify(newValue)}::jsonb,now())`);
-        annotateAudit(ctx, { action: 'pharmacy.loyalty.points-settings.update', targetId: organizationId });
-        return input;
+      // Central can(): an explicit DENY on the user or role refuses before any write.
+      if (
+        !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:loyalty-manage', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        }))
+      )
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      const saved = await writeLoyaltyPointsSettings(ctx.db, {
+        organizationId,
+        actorId,
+        settings: input,
       });
+      annotateAudit(ctx, {
+        action: 'pharmacy.loyalty.points-settings.update',
+        targetId: organizationId,
+      });
+      return {
+        medicineEarnPoints: saved.medicineEarnPoints,
+        nonDrugEarnPoints: saved.nonDrugEarnPoints,
+        earnBlockMinor: saved.earnBlockMinor,
+        pointValueMinor: saved.pointValueMinor,
+        minimumRedemptionPoints: saved.minimumRedemptionPoints,
+        pointsExpiryMonths: saved.pointsExpiryMonths,
+        goldTierEnabled: saved.goldTierEnabled,
+        goldTierThresholdMinor: saved.goldTierThresholdMinor,
+        goldTierMultiplier: saved.goldTierMultiplier,
+      };
     }),
   updateLoyaltySettings: protectedProcedure
     .input(

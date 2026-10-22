@@ -764,7 +764,9 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: ['pharmacy:*', 'pharmacy:loyalty-manage', 'reports:operational', 'reports:financial'],
+    // `pharmacy:*` carries pharmacy:loyalty-manage, as it does for Owner roles migrated to
+    // this exact template (#130): loyalty policy is not an exact-grant-only action.
+    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN

@@ -1396,7 +1396,7 @@ model PharmacyLoyaltyPointsEntry {
   @@index([organizationId, branchId, customerId, occurredAt])
   @@index([organizationId, saleId])
   @@index([organizationId, refundId])
-  @@index([organizationId, branchId, customerId, expiresAt])
+  @@index([organizationId, branchId, customerId, expiresAt], map: "pharmacy_loyalty_points_entries_expiry_idx")
   @@map("pharmacy_loyalty_points_entries")
 }
 

@@ -14,24 +14,59 @@ remainder is assigned to non-drug. An enabled Gold tier multiplies the resulting
 award by 2 after a customer reaches Rs 50,000 (5,000,000 paisa) eligible spend in the preceding
 12 months. Gold is off by default.
 
-One point is Rs 1 (100 paisa), and checkout rejects a redemption request below 200 points.
+One point is Rs 1 (100 paisa), and a redemption debits at least 200 points. The minimum applies
+to the points actually debited: a request is first capped to what the bill can take, and a
+capped redemption below the minimum is refused (there is no rounding up). Every award is
+computed in integer arithmetic and refused above the PostgreSQL `INTEGER` points column.
 Checkout retains the loyalty-1 consent and stacking/benefit-selection rules. It locks the linked
 customer/consent boundary, lazily appends expiry entries, checks balance, writes the existing
 `LOYALTY` tender and an idempotent `REDEEM` entry in the sale transaction. Thus concurrent sales
 cannot both spend the same balance, and a retry with the same sale key cannot debit twice.
 
-Earning rows expire six calendar months after posting. Consumption and expiry use earliest-expiry
-first (FIFO); expiry is represented by an append-only `EXPIRE` debit tied to its source earning.
-The lazy writer is suitable for checkout and can also be invoked by a future scheduled batch.
-Refunds reverse the immutable award proportionally, so a later settings or tier change cannot
-reprice the historic earning.
+Earning rows expire six calendar months after posting. Expiry is an append-only `EXPIRE` debit
+of one source lot. The lazy writer (`expireCustomerPoints`) opens its own transaction (or joins
+the caller's), locks the customer's points account (the tenant-scoped `pharmacy_customers` row,
+which must be exactly one row), reads the branch ledger, plans and inserts in that transaction.
+Earning, redemption, restoration and earn reversal take the same lock, so a second caller waits
+and plans from the first one's committed debits. It is suitable for checkout and for a future
+scheduled batch. Refunds reverse the immutable award proportionally, so a later settings or
+tier change cannot reprice the historic earning, and a refunded points tender restores the
+share of its points that the refunded share of the tender bought, at that redemption's own
+point value.
+
+### Source lots
+
+The planner replays every balance-changing entry of one customer in one branch in order:
+
+| Kind                   | Effect                                                                                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EARN`                 | A lot with its own `expiresAt`. Awards written before expiry existed have none and never expire.                                                              |
+| `ADJUST` > 0           | A lot; it must carry an `expiresAt`.                                                                                                                          |
+| `REDEEM`, `ADJUST` < 0 | Consume lots earliest-expiry first, skipping lots already expired at that time. A redemption remembers the lots it consumed.                                  |
+| `REFUND`               | Restores a refunded redemption into the lots that redemption consumed, most recently consumed first, so restored points keep their original earning's expiry. |
+| `EARN_REVERSAL`        | Debits the `EARN` of its sale (new rows name it as `sourceEntryId`).                                                                                          |
+| `EXPIRE`, `REVERSAL`   | Debit the lot named by `sourceEntryId`.                                                                                                                       |
+
+A debit a named lot cannot cover is consumed like a redemption; a debit nothing can cover is
+debt that the next credit repays first. Every remaining point of a lot whose expiry has passed
+expires, capped at the balance, so expiry never takes a balance below zero. Each `EXPIRE` key
+names its lot and the lot's running expired total, so a lot can expire again after a later
+restoration, but the same plan can never be written twice. The database enforces one shape per
+kind: `EXPIRE` and `REVERSAL` must name a lot of the same tenant, branch and customer (a
+composite foreign key), a positive `ADJUST` must carry an expiry and a negative one must not,
+and every `EARN` written from now on must carry its expiry.
 
 ## Configuration, authorization, and isolation
 
 Owners can edit medicine/non-drug earn rates, earn block, point value, redemption minimum,
-expiry months, and Gold threshold/multiplier through `pharmacy:loyalty-manage`. The mutation uses
-central `can()`, so an explicit DENY overrides an ALLOW, locks the tenant settings row, and writes
-full old/new JSON to `PharmacyLoyaltySettingsAudit`. Counter redemption continues to use the
+expiry months, and Gold threshold/multiplier through `pharmacy:loyalty-manage`. The capability is
+a registered ABAC action with no static policy; the Owner holds it through the canonical
+`pharmacy:*` grant of the Owner template, as migrated Owner roles already do, and no other
+pharmacy template grants it. The mutation uses central `can()`, so an explicit DENY overrides an
+ALLOW. A tenant without a settings row has nothing for `SELECT ... FOR UPDATE` to lock, so both
+settings mutations first take the same tenant-keyed transaction advisory lock, then read, upsert
+and write the full old/new policy JSON to `PharmacyLoyaltySettingsAudit`: each audit's old value
+is exactly the previous audit's new value (the column defaults for the first write). Counter redemption continues to use the
 existing sale capability. Tenant predicates and the existing forced-RLS settings/ledger policies
 remain the database boundary; points ledger rows remain branch-scoped.
 
@@ -45,7 +80,5 @@ sibling after that piece lands. Voucher stacking and benefit selection must cont
 loyalty-1 core rules; this piece does not implement or modify the sibling voucher behavior.
 
 - Invoke the lazy expiry service from a scheduled pharmacy job for inactive customers.
-- Add PostgreSQL integration coverage for the two-session redemption race and forced-RLS tenant
-  isolation when the shared database harness is available.
 - Reconcile any settings-row migration conflict during the loyalty-2 rebase without merging the
   two independently authorized settings mutations.
