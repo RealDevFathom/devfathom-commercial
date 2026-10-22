@@ -17,13 +17,13 @@ import {
 } from '@/lib/restaurant/service-charge-policy';
 import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
 import { annotateAudit } from '../audit';
-import { adminProcedure, capabilityProcedure, router } from '../trpc';
+import { capabilityProcedure, router } from '../trpc';
 
 const configureProcedure = capabilityProcedure('restaurant:configure');
 const serviceChargePublishSchema = z.object({
   branchId: z.string().min(1),
   rate: z.string().regex(/^(?:0\.\d{1,6}|1(?:\.0{1,6})?)$/),
-  effectiveFrom: z.iso.datetime(),
+  effectiveFrom: z.iso.date(),
   acknowledgementRef: z.string().trim().min(1).max(240),
   acknowledged: z.literal(true),
   replaceOpenPolicy: z.boolean().default(false),
@@ -32,7 +32,7 @@ const serviceChargePublishSchema = z.object({
 const serviceChargeEndSchema = z.object({
   branchId: z.string().min(1),
   policyVersionId: z.string().min(1),
-  effectiveTo: z.iso.datetime(),
+  effectiveTo: z.iso.date(),
   idempotencyKey: z.string().trim().min(8).max(128),
 });
 
@@ -54,10 +54,11 @@ function serviceChargeError(error: unknown): never {
 const activationSchema = z.object({
   branchId: z.string().min(1),
   profileId: z.string().min(1),
-  effectiveFrom: z.iso.datetime(),
+  effectiveFrom: z.iso.date(),
   accountantConfirmation: z.boolean(),
   approvalReference: z.string().trim().min(1).max(240),
   eligibilityConfirmations: z.array(z.string().min(1)).default([]),
+  replaceOpenProfile: z.boolean().default(false),
   idempotencyKey: z.string().trim().min(8).max(128),
 });
 
@@ -111,10 +112,11 @@ function canonicalActivationPayload(input: z.infer<typeof activationSchema>) {
   return {
     branchId: input.branchId,
     profileId: input.profileId,
-    effectiveFrom: new Date(input.effectiveFrom).toISOString(),
+    effectiveFrom: input.effectiveFrom,
     accountantConfirmation: input.accountantConfirmation,
     approvalReference: input.approvalReference.trim(),
     eligibilityConfirmations: [...new Set(input.eligibilityConfirmations)].sort(),
+    replaceOpenProfile: input.replaceOpenProfile,
   };
 }
 
@@ -124,10 +126,19 @@ export const restaurantTaxRouter = router({
     .mutation(async ({ ctx, input }) => {
       await requireRestaurantBranchScope(ctx, input.branchId);
       try {
+        const branch = await ctx.db.restaurantBranch.findFirst({
+          where: {
+            id: input.branchId,
+            organizationId: ctx.entitlements.organizationId,
+            active: true,
+          },
+          select: { timezone: true },
+        });
+        if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
         const published = await publishServiceChargePolicy(ctx.db, {
           ...input,
           organizationId: ctx.entitlements.organizationId,
-          effectiveFrom: new Date(input.effectiveFrom),
+          effectiveFrom: zonedWallTimeToUtc(input.effectiveFrom, 0, branch.timezone).instant,
         });
         annotateAudit(ctx, {
           targetType: 'RestaurantServiceChargePolicyVersion',
@@ -152,10 +163,19 @@ export const restaurantTaxRouter = router({
     .mutation(async ({ ctx, input }) => {
       await requireRestaurantBranchScope(ctx, input.branchId);
       try {
+        const branch = await ctx.db.restaurantBranch.findFirst({
+          where: {
+            id: input.branchId,
+            organizationId: ctx.entitlements.organizationId,
+            active: true,
+          },
+          select: { timezone: true },
+        });
+        if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
         const ended = await endServiceChargePolicy(ctx.db, {
           organizationId: ctx.entitlements.organizationId,
           ...input,
-          effectiveTo: new Date(input.effectiveTo),
+          effectiveTo: zonedWallTimeToUtc(input.effectiveTo, 0, branch.timezone).instant,
         });
         annotateAudit(ctx, {
           targetType: 'RestaurantServiceChargePolicyVersion',
@@ -174,7 +194,7 @@ export const restaurantTaxRouter = router({
       }
     }),
 
-  previewCustom: adminProcedure.input(previewSchema).query(({ input }) => {
+  previewCustom: configureProcedure.input(previewSchema).query(({ input }) => {
     const at = new Date('2030-01-01T00:00:00.000Z');
     const result = calculateTax(
       [{ id: 'preview-line', unitPrice: input.amount, quantity: 1 }],
@@ -210,18 +230,19 @@ export const restaurantTaxRouter = router({
     };
   }),
 
-  configuration: adminProcedure.query(async ({ ctx }) => {
-    const [branches, activeProfiles] = await Promise.all([
+  configuration: configureProcedure.query(async ({ ctx }) => {
+    const organizationId = ctx.entitlements.organizationId;
+    const [branches, activeProfiles, serviceChargePolicies] = await Promise.all([
       ctx.db.restaurantBranch.findMany({
         where: {
-          organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
+          organizationId,
           active: true,
         },
         select: { id: true, name: true, timezone: true },
         orderBy: { name: 'asc' },
       }),
       ctx.db.restaurantTaxProfileVersion.findMany({
-        where: { status: 'PUBLISHED' },
+        where: { organizationId, status: 'PUBLISHED' },
         include: {
           rules: {
             select: {
@@ -235,11 +256,21 @@ export const restaurantTaxRouter = router({
         },
         orderBy: { effectiveFrom: 'desc' },
       }),
+      ctx.db.restaurantServiceChargePolicyVersion.findMany({
+        where: { organizationId },
+        include: { branch: { select: { name: true, timezone: true } } },
+        orderBy: { effectiveFrom: 'desc' },
+      }),
     ]);
-    return { branches, profiles: PAKISTAN_TAX_PROFILE_CATALOG, activeProfiles };
+    return {
+      branches,
+      profiles: PAKISTAN_TAX_PROFILE_CATALOG,
+      activeProfiles,
+      serviceChargePolicies,
+    };
   }),
 
-  publishCustom: adminProcedure.input(customSchema).mutation(async ({ ctx, input }) => {
+  publishCustom: configureProcedure.input(customSchema).mutation(async ({ ctx, input }) => {
     const canonical = {
       ...input,
       profileName: input.profileName.trim(),
@@ -353,7 +384,7 @@ export const restaurantTaxRouter = router({
     return created;
   }),
 
-  scheduleEnd: adminProcedure.input(scheduleEndSchema).mutation(async ({ ctx, input }) => {
+  scheduleEnd: configureProcedure.input(scheduleEndSchema).mutation(async ({ ctx, input }) => {
     const ended = await ctx.db.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${ctx.entitlements.organizationId}:${input.branchId}`}, 0))`;
       const branch = await tx.restaurantBranch.findFirst({
@@ -409,7 +440,7 @@ export const restaurantTaxRouter = router({
     return ended;
   }),
 
-  activate: adminProcedure.input(activationSchema).mutation(async ({ ctx, input }) => {
+  activate: configureProcedure.input(activationSchema).mutation(async ({ ctx, input }) => {
     const preset = findPakistanTaxProfile(input.profileId);
     if (!preset) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Unknown tax profile.' });
     if (!preset.enabled)
@@ -441,8 +472,7 @@ export const restaurantTaxRouter = router({
         message: 'Eligibility evidence does not match the selected profile.',
       });
     }
-    const effectiveFrom = new Date(input.effectiveFrom);
-    if (preset.effectiveFrom && effectiveFrom < new Date(`${preset.effectiveFrom}T00:00:00.000Z`)) {
+    if (preset.effectiveFrom && input.effectiveFrom < preset.effectiveFrom) {
       throw new TRPCError({
         code: 'BAD_REQUEST',
         message: `This profile is unavailable before ${preset.effectiveFrom}.`,
@@ -463,9 +493,10 @@ export const restaurantTaxRouter = router({
           organizationId: ctx.entitlements.organizationId,
           active: true,
         },
-        select: { id: true },
+        select: { id: true, timezone: true },
       });
       if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
+      const effectiveFrom = zonedWallTimeToUtc(input.effectiveFrom, 0, branch.timezone).instant;
       const approvalReference = `${preset.id} · ${canonicalPayload.approvalReference}`;
       const result = await publishTaxProfile(tx, {
         organizationId: ctx.entitlements.organizationId,
@@ -491,6 +522,7 @@ export const restaurantTaxRouter = router({
             label: control.label,
           })),
         },
+        replaceOpenProfile: input.replaceOpenProfile,
       });
       if (result.kind === 'idempotency-conflict')
         throw new TRPCError({

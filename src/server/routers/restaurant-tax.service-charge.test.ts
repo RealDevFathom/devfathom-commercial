@@ -38,7 +38,11 @@ import { restaurantTaxRouter } from './restaurant-tax';
 
 function caller() {
   return restaurantTaxRouter.createCaller({
-    db: {} as never,
+    db: {
+      restaurantBranch: {
+        findFirst: vi.fn(async () => ({ timezone: 'UTC' })),
+      },
+    } as never,
     entitlements: {
       organizationId: 'org-1',
       enabledModules: ['restaurant-core'],
@@ -80,7 +84,7 @@ describe('service-charge configuration boundary', () => {
     await caller().publishServiceCharge({
       branchId: 'branch-1',
       rate: '0.1',
-      effectiveFrom: '2026-09-01T00:00:00.000Z',
+      effectiveFrom: '2026-09-01',
       acknowledgementRef: 'sensitive-accountant-reference',
       acknowledged: true,
       idempotencyKey: 'sensitive-publish-key',
@@ -114,7 +118,7 @@ describe('service-charge configuration boundary', () => {
     await caller().endServiceCharge({
       branchId: 'branch-1',
       policyVersionId: 'policy-1',
-      effectiveTo: '2026-10-01T00:00:00.000Z',
+      effectiveTo: '2026-10-01',
       idempotencyKey: 'sensitive-end-key',
     });
 

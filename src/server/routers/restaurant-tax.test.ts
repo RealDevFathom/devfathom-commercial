@@ -59,7 +59,7 @@ function caller() {
 
 const base = {
   branchId: 'branch_1',
-  effectiveFrom: '2026-07-01T00:00:00.000Z',
+  effectiveFrom: '2026-07-01',
   accountantConfirmation: true,
   approvalReference: 'Accountant memo 42',
   idempotencyKey: 'activation-key-42',
@@ -68,7 +68,7 @@ const base = {
 describe('restaurant tax activation router', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    db.restaurantBranch.findUnique.mockResolvedValue({ id: 'branch_1' });
+    db.restaurantBranch.findUnique.mockResolvedValue({ id: 'branch_1', timezone: 'UTC' });
     db.$transaction.mockImplementation(async (run) => run(db));
     db.restaurantTaxProfileVersion.findUnique.mockResolvedValue(null);
     db.restaurantTaxProfileVersion.findFirst.mockResolvedValue(null);
@@ -173,6 +173,7 @@ describe('restaurant tax activation router', () => {
       accountantConfirmation: true,
       approvalReference: firstInput.approvalReference,
       eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
+      replaceOpenProfile: false,
     };
     db.restaurantTaxProfileVersion.findUnique.mockResolvedValue({
       id: 'profile_1',

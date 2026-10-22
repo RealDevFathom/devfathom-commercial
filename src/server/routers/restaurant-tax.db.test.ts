@@ -68,7 +68,7 @@ function caller(db: ScopedDb) {
 const input = {
   branchId,
   profileId: 'PK-ICT-RESTAURANT',
-  effectiveFrom: '2031-07-01T00:00:00.000Z',
+  effectiveFrom: '2031-07-01',
   accountantConfirmation: true,
   approvalReference: 'Concurrent activation test',
   eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],

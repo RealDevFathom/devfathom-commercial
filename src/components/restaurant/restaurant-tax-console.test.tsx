@@ -7,6 +7,8 @@ import { PAKISTAN_TAX_PROFILE_CATALOG } from '@/lib/restaurant/pakistan-tax-prof
 const mocks = vi.hoisted(() => ({
   activate: vi.fn(),
   publishCustom: vi.fn(),
+  publishServiceCharge: vi.fn(),
+  endServiceCharge: vi.fn(),
   invalidate: vi.fn(),
   publicationOptions: {
     onSuccess: () => {},
@@ -30,6 +32,7 @@ vi.mock('@/lib/trpc', () => ({
             branches: [{ id: 'branch_1', name: 'Karachi' }],
             profiles: PAKISTAN_TAX_PROFILE_CATALOG,
             activeProfiles: [],
+            serviceChargePolicies: [],
           },
           isLoading: false,
           error: null,
@@ -45,6 +48,12 @@ vi.mock('@/lib/trpc', () => ({
           mocks.publicationOptions = options;
           return { mutate: mocks.publishCustom, isPending: false };
         },
+      },
+      publishServiceCharge: {
+        useMutation: () => ({ mutate: mocks.publishServiceCharge, isPending: false }),
+      },
+      endServiceCharge: {
+        useMutation: () => ({ mutate: mocks.endServiceCharge, isPending: false }),
       },
     },
   },
@@ -123,10 +132,11 @@ describe('restaurant tax configuration UI', () => {
     expect(mocks.activate).toHaveBeenCalledWith({
       branchId: 'branch_1',
       profileId: 'PK-ICT-RESTAURANT',
-      effectiveFrom: '2026-07-01T00:00:00.000Z',
+      effectiveFrom: '2026-07-01',
       approvalReference: 'Memo 42',
       accountantConfirmation: true,
       eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
+      replaceOpenProfile: false,
       idempotencyKey: expect.any(String),
     });
   });

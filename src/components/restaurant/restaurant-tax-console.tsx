@@ -57,6 +57,12 @@ function parsePercentage(value: string): { decimal?: string; error?: string } {
   return { decimal: decimalFraction ? `${decimalWhole}.${decimalFraction}` : decimalWhole };
 }
 
+function formatBranchDate(value: Date | string, timezone: string) {
+  return new Intl.DateTimeFormat('en-PK', { dateStyle: 'medium', timeZone: timezone }).format(
+    new Date(value)
+  );
+}
+
 export function RestaurantTaxConsole() {
   const utils = trpc.useUtils();
   const configuration = trpc.restaurantTax.configuration.useQuery();
@@ -65,7 +71,10 @@ export function RestaurantTaxConsole() {
   const [previewAmount, setPreviewAmount] = useState('1000.00');
   const [previewRate, setPreviewRate] = useState('');
   const [rateErrors, setRateErrors] = useState<RateErrors>({});
-  const idempotencyKey = useRef(browserUuid());
+  const activationIdempotencyKey = useRef(browserUuid());
+  const customIdempotencyKey = useRef(browserUuid());
+  const serviceChargeIdempotencyKey = useRef(browserUuid());
+  const serviceChargeEndIdempotencyKey = useRef(browserUuid());
   const selected = useMemo(
     () => configuration.data?.profiles.find((profile) => profile.id === selectedId),
     [configuration.data, selectedId]
@@ -77,7 +86,7 @@ export function RestaurantTaxConsole() {
   const activation = trpc.restaurantTax.activate.useMutation({
     onSuccess: () => {
       toast.success('Tax profile activated.');
-      idempotencyKey.current = browserUuid();
+      activationIdempotencyKey.current = browserUuid();
       void utils.restaurantTax.configuration.invalidate();
     },
     onError: (error) => toast.error(error.message),
@@ -85,7 +94,23 @@ export function RestaurantTaxConsole() {
   const customPublication = trpc.restaurantTax.publishCustom.useMutation({
     onSuccess: () => {
       toast.success('Customer-supplied tax profile published.');
-      idempotencyKey.current = browserUuid();
+      customIdempotencyKey.current = browserUuid();
+      void utils.restaurantTax.configuration.invalidate();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const serviceChargePublication = trpc.restaurantTax.publishServiceCharge.useMutation({
+    onSuccess: () => {
+      toast.success('Dine-in service-charge policy published.');
+      serviceChargeIdempotencyKey.current = browserUuid();
+      void utils.restaurantTax.configuration.invalidate();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const serviceChargeEnd = trpc.restaurantTax.endServiceCharge.useMutation({
+    onSuccess: () => {
+      toast.success('Service-charge policy end scheduled.');
+      serviceChargeEndIdempotencyKey.current = browserUuid();
       void utils.restaurantTax.configuration.invalidate();
     },
     onError: (error) => toast.error(error.message),
@@ -121,7 +146,41 @@ export function RestaurantTaxConsole() {
       approvalReference: String(data.get('customApprovalReference') ?? ''),
       accountantConfirmation: true,
       replaceOpenProfile: data.get('replaceOpenProfile') === 'on',
-      idempotencyKey: idempotencyKey.current,
+      idempotencyKey: customIdempotencyKey.current,
+    });
+  };
+
+  const submitServiceCharge = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const parsedRate = parsePercentage(String(data.get('serviceChargeRate') ?? ''));
+    if (!parsedRate.decimal || /^0(?:\.0*)?$/.test(parsedRate.decimal)) {
+      toast.error(parsedRate.error ?? 'Service-charge rate must be greater than zero.');
+      return;
+    }
+    serviceChargePublication.mutate({
+      branchId: String(data.get('serviceChargeBranchId') ?? ''),
+      rate: parsedRate.decimal,
+      effectiveFrom: String(data.get('serviceChargeEffectiveFrom') ?? ''),
+      acknowledgementRef: String(data.get('serviceChargeAcknowledgementRef') ?? ''),
+      acknowledged: true,
+      replaceOpenPolicy: data.get('replaceOpenPolicy') === 'on',
+      idempotencyKey: serviceChargeIdempotencyKey.current,
+    });
+  };
+
+  const submitServiceChargeEnd = (
+    event: FormEvent<HTMLFormElement>,
+    branchId: string,
+    policyVersionId: string
+  ) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    serviceChargeEnd.mutate({
+      branchId,
+      policyVersionId,
+      effectiveTo: String(data.get('serviceChargeEffectiveTo') ?? ''),
+      idempotencyKey: serviceChargeEndIdempotencyKey.current,
     });
   };
 
@@ -140,13 +199,14 @@ export function RestaurantTaxConsole() {
     activation.mutate({
       branchId: String(data.get('branchId') ?? ''),
       profileId: selected.id,
-      effectiveFrom: new Date(`${String(data.get('effectiveFrom'))}T00:00:00.000Z`).toISOString(),
+      effectiveFrom: String(data.get('effectiveFrom') ?? ''),
       approvalReference: String(data.get('approvalReference') ?? '').trim(),
       accountantConfirmation: data.get('accountantConfirmation') === 'on',
       eligibilityConfirmations: selected.eligibilityControls
         .filter((control) => data.get(control.id) === 'on')
         .map((control) => control.id),
-      idempotencyKey: idempotencyKey.current,
+      replaceOpenProfile: data.get('replaceOpenProfile') === 'on',
+      idempotencyKey: activationIdempotencyKey.current,
     });
   };
 
@@ -312,10 +372,135 @@ export function RestaurantTaxConsole() {
                 I confirm an accountant reviewed this exact branch, profile, effective date, and
                 eligibility evidence.
               </label>
+              <label className="flex items-start gap-3 text-sm text-text-strong">
+                <input className="mt-1 size-4" type="checkbox" name="replaceOpenProfile" />
+                Atomically close the current open profile at this preset’s branch-local start and
+                replace it.
+              </label>
               <Button type="submit" disabled={!selected?.enabled || activation.isPending}>
                 {activation.isPending ? 'Activating…' : 'Activate tax profile'}
               </Button>
             </form>
+          </SectionCard>
+
+          <SectionCard eyebrow="Dine-in settlement" title="Service charge">
+            <p className="mb-5 text-sm text-text-muted">
+              Publish a separately configured, non-taxable dine-in service charge. Effective dates
+              begin at midnight in the selected branch timezone.
+            </p>
+            <form className="space-y-5" onSubmit={submitServiceCharge}>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className={labelClass}>
+                  Branch
+                  <select
+                    className={selectClass}
+                    name="serviceChargeBranchId"
+                    required
+                    defaultValue=""
+                  >
+                    <option value="" disabled>
+                      Select a branch
+                    </option>
+                    {configuration.data?.branches.map((branch) => (
+                      <option key={branch.id} value={branch.id}>
+                        {branch.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className={labelClass}>
+                  Service charge rate (%)
+                  <Input
+                    className="mt-1 min-h-11"
+                    name="serviceChargeRate"
+                    inputMode="decimal"
+                    placeholder="10"
+                    required
+                  />
+                </label>
+                <label className={labelClass}>
+                  Effective date (branch local)
+                  <Input
+                    className="mt-1 min-h-11"
+                    name="serviceChargeEffectiveFrom"
+                    type="date"
+                    required
+                  />
+                </label>
+                <label className={labelClass}>
+                  Approval or acknowledgement reference
+                  <Input
+                    className="mt-1 min-h-11"
+                    name="serviceChargeAcknowledgementRef"
+                    maxLength={240}
+                    required
+                  />
+                </label>
+              </div>
+              <label className="flex items-start gap-3 text-sm text-text-strong">
+                <input className="mt-1 size-4" type="checkbox" required />
+                I acknowledge this policy applies a non-taxable service charge to dine-in orders.
+              </label>
+              <label className="flex items-start gap-3 text-sm text-text-strong">
+                <input className="mt-1 size-4" type="checkbox" name="replaceOpenPolicy" />
+                Atomically close and replace the current open service-charge policy.
+              </label>
+              <Button type="submit" disabled={serviceChargePublication.isPending}>
+                {serviceChargePublication.isPending ? 'Publishing…' : 'Publish service charge'}
+              </Button>
+            </form>
+
+            <div className="mt-6 space-y-3">
+              <h3 className="font-medium text-text-strong">Policy history</h3>
+              {configuration.data?.serviceChargePolicies.length ? (
+                configuration.data.serviceChargePolicies.map((policy) => (
+                  <div key={policy.id} className="rounded-md border border-border-default p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-medium text-text-strong">{policy.branch.name}</span>
+                      <StatusPill
+                        status={policy.effectiveTo ? 'Ended' : 'Open'}
+                        tone={policy.effectiveTo ? 'neutral' : 'success'}
+                      />
+                    </div>
+                    <p className="mt-2 text-sm text-text-muted">
+                      {Number(policy.rate) * 100}% · Effective{' '}
+                      {formatBranchDate(policy.effectiveFrom, policy.branch.timezone)}
+                      {policy.effectiveTo
+                        ? ` to ${formatBranchDate(policy.effectiveTo, policy.branch.timezone)}`
+                        : ''}
+                    </p>
+                    <p className="mt-1 text-xs text-text-faint">{policy.acknowledgementRef}</p>
+                    {!policy.effectiveTo ? (
+                      <form
+                        className="mt-4 flex flex-wrap items-end gap-3"
+                        onSubmit={(event) =>
+                          submitServiceChargeEnd(event, policy.branchId, policy.id)
+                        }
+                      >
+                        <label className={labelClass}>
+                          End date (branch local)
+                          <Input
+                            className="mt-1 min-h-11"
+                            name="serviceChargeEffectiveTo"
+                            type="date"
+                            required
+                          />
+                        </label>
+                        <Button
+                          type="submit"
+                          variant="outline"
+                          disabled={serviceChargeEnd.isPending}
+                        >
+                          {serviceChargeEnd.isPending ? 'Scheduling…' : 'Schedule end'}
+                        </Button>
+                      </form>
+                    ) : null}
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-text-muted">No service-charge policy configured.</p>
+              )}
+            </div>
           </SectionCard>
 
           <SectionCard

@@ -96,7 +96,11 @@ export async function publishServiceChargePolicy(
       );
     }
     const open = await tx.restaurantServiceChargePolicyVersion.findFirst({
-      where: { branchId: input.branchId, effectiveTo: null },
+      where: {
+        organizationId: input.organizationId,
+        branchId: input.branchId,
+        effectiveTo: null,
+      },
       orderBy: { effectiveFrom: 'desc' },
     });
     if (open) {
@@ -107,7 +111,9 @@ export async function publishServiceChargePolicy(
         );
       }
       await tx.restaurantServiceChargePolicyVersion.update({
-        where: { id: open.id },
+        where: {
+          organizationId_id: { organizationId: input.organizationId, id: open.id },
+        },
         data: { effectiveTo: input.effectiveFrom },
       });
     }
@@ -153,7 +159,11 @@ export async function endServiceChargePolicy(db: ScopedDb, input: EndServiceChar
       return replay;
     }
     const current = await tx.restaurantServiceChargePolicyVersion.findFirst({
-      where: { id: input.policyVersionId, branchId: input.branchId },
+      where: {
+        organizationId: input.organizationId,
+        id: input.policyVersionId,
+        branchId: input.branchId,
+      },
     });
     if (!current) throw new ServiceChargePolicyError('Open policy not found.', 'NOT_FOUND');
     if (current.effectiveTo) {
@@ -163,7 +173,9 @@ export async function endServiceChargePolicy(db: ScopedDb, input: EndServiceChar
       throw new ServiceChargePolicyError('Policy end must be after its start.', 'INVALID');
     }
     return tx.restaurantServiceChargePolicyVersion.update({
-      where: { id: current.id },
+      where: {
+        organizationId_id: { organizationId: input.organizationId, id: current.id },
+      },
       data: {
         effectiveTo: input.effectiveTo,
         endIdempotencyKey: input.idempotencyKey,
