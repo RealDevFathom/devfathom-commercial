@@ -1298,6 +1298,7 @@ export const pharmacySalesRouter = router({
             data: {
               organizationId: scope.organizationId,
               prescriptionLineId: rx.id,
+              saleLineId: result.line.id,
               fillSequence: rx.fills.length + 1,
               quantityCanonicalUnits: units,
               dispensedByUserId: pharmacist.id,

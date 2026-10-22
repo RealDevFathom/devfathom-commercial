@@ -1491,6 +1491,7 @@ model PharmacySaleLine {
   allocations               PharmacySaleLineAllocation[]
   returnLines               PharmacySaleReturnLine[]
   unidentifiedReturnHolds   PharmacyUnidentifiedReturnHold[]
+  prescriptionFill          PrescriptionFill?
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
@@ -12363,16 +12364,21 @@ model PrescriptionFill {
   id                     String                         @id @default(cuid())
   organizationId         String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   prescriptionLineId     String
+  saleLineId             String?
   fillSequence           Int
   quantityCanonicalUnits Int
   dispensedByUserId      String
   dispensedAt            DateTime                       @default(now())
+  reversedAt             DateTime?
+  reversedByUserId       String?
   idempotencyKey         String
   line                   PrescriptionLine               @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict)
+  saleLine               PharmacySaleLine?              @relation(fields: [organizationId, saleLineId], references: [organizationId, id], onDelete: Restrict)
   reminderCapture        PharmacyRefillReminderCapture?
 
   @@unique([organizationId, id])
   @@unique([organizationId, prescriptionLineId, fillSequence])
+  @@unique([organizationId, saleLineId])
   @@unique([organizationId, idempotencyKey])
   @@map("pharmacy_prescription_fills")
 }

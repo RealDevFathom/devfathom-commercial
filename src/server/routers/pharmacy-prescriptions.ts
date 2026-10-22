@@ -24,8 +24,8 @@ import {
   resolveRxOcrAdapter,
   RxOcrError,
 } from '@/lib/pharmacy/rx-ocr';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import type { TRPCContext } from '../trpc';
+import { dispenseRxSaleLine } from '@/lib/pharmacy/rx-sale-gate';
+import { txDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   auditedProtectedProcedure,
   capabilityProcedure,
@@ -424,48 +424,26 @@ export const pharmacyPrescriptionsRouter = router({
       return patient;
     }),
 
-  // Recording a fill is a dispensing act: require the exact-grant-only
-  // pharmacy:dispense capability through central ABAC (DENY wins).
   fill: capabilityProcedure('pharmacy:dispense')
     .input(
       z
         .object({
-          id: z.string().min(1),
+          branchId: z.string().min(1),
           saleLineId: z.string().min(1),
           prescriptionLineId: z.string().min(1),
-          fillSequence: z.number().int().positive(),
-          quantityCanonicalUnits: z.number().int().positive(),
           idempotencyKey: z.string().trim().min(1).max(200),
         })
         .strict()
     )
-    .mutation(async ({ ctx, input }) => {
-      const saleLine = await ctx.db.pharmacySaleLine.findFirst({
-        where: { id: input.saleLineId, organizationId: ctx.entitlements.organizationId },
-        include: { medicine: true },
-      });
-      if (!saleLine || !saleLine.medicine.rx || saleLine.medicine.controlled) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'A non-controlled Rx sale line is required.',
-        });
-      }
-      try {
-        await assertPrescriptionSaleLineReady(ctx.db, {
-          ...saleLine,
-          prescriptionLineId: input.prescriptionLineId,
-        });
-      } catch (error) {
-        if (error instanceof PharmacyDispensingError) {
-          throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
-        }
-        throw error;
-      }
-      const { saleLineId: _saleLineId, ...fill } = input;
-      return ctx.db.prescriptionFill.create({
-        data: { ...fill, dispensedByUserId: ctx.session.user.id },
-      });
-    }),
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction((tx) =>
+        dispenseRxSaleLine(txDb(tx), {
+          ...input,
+          organizationId: ctx.entitlements.organizationId,
+          actorId: ctx.session!.user.id,
+        })
+      )
+    ),
 
   captureRefillReminder: capabilityProcedure('pharmacy:dispense')
     .input(

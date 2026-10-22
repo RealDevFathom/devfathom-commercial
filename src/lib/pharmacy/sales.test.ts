@@ -87,6 +87,7 @@ describe('POS sale voiding', () => {
       },
       pharmacyControlledRegisterEntry: { findMany: async () => [] },
       pharmacySaleEvent: { create: async ({ data }: { data: Record<string, unknown> }) => data },
+      $executeRaw: vi.fn(async () => 0),
     };
 
     await changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Customer cancelled');
@@ -122,12 +123,14 @@ describe('POS sale voiding', () => {
       'INVALID_STATE'
     );
     expect(reversals).toHaveLength(2);
+    expect(db.$executeRaw).toHaveBeenCalledOnce();
   });
 
   it('gives a completed sale a receipt number', async () => {
     const sale = {
       id: 'sale-a',
       status: 'OPEN',
+      lines: [],
       receiptNumber: null as number | null,
       receiptDeviceId: null as string | null,
       businessDate: null as Date | null,
