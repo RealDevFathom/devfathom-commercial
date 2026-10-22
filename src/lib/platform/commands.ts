@@ -8,6 +8,7 @@ import {
   type LifecycleAction,
   type OrganizationIdentityConnection,
   type OrganizationStatus,
+  type OpportunityStage,
   type PlatformJob,
   type PrismaClient,
 } from '@/generated/prisma/client';
@@ -851,6 +852,36 @@ async function bootstrapOrganization(
       400
     );
   }
+  let conversionOpportunity: { id: string; accountId: string; stage: OpportunityStage } | null =
+    null;
+  if (input.opportunityId && actor) {
+    const opportunity = await db.platformOpportunity.findUnique({
+      where: { id: input.opportunityId },
+      select: { id: true, accountId: true, stage: true, convertedOrganizationId: true },
+    });
+    if (!opportunity) {
+      throw new PlatformSecurityError('Opportunity not found.', 400);
+    }
+    if (opportunity.convertedOrganizationId || ['WON', 'LOST'].includes(opportunity.stage)) {
+      throw new PlatformSecurityError('Opportunity is not eligible for conversion.', 409);
+    }
+
+    // Claim the source row before provisioning anything. The conditional write is
+    // deliberately inside the onboarding transaction: concurrent replays serialize
+    // on this row, and a later provisioning failure rolls the claim back with it.
+    const claimed = await db.platformOpportunity.updateMany({
+      where: {
+        id: opportunity.id,
+        convertedOrganizationId: null,
+        stage: { notIn: ['WON', 'LOST'] },
+      },
+      data: { stage: 'WON', wonAt: new Date() },
+    });
+    if (claimed.count !== 1) {
+      throw new PlatformSecurityError('Opportunity is not eligible for conversion.', 409);
+    }
+    conversionOpportunity = opportunity;
+  }
   const packageRecord = await db.platformPackage.findUnique({
     where: { id: input.packageId },
     include: { moduleLinks: { where: { enabled: true } } },
@@ -1181,34 +1212,27 @@ async function bootstrapOrganization(
       ...(demo ? { createdAt: demo.now } : {}),
     },
   });
-  if (input.opportunityId && actor) {
-    const opportunity = await db.platformOpportunity.findUnique({
-      where: { id: input.opportunityId },
-      select: { id: true, accountId: true, stage: true },
+  if (conversionOpportunity && actor) {
+    const opportunity = conversionOpportunity;
+    await db.platformOpportunity.update({
+      where: { id: opportunity.id },
+      data: {
+        convertedOrganizationId: organization.id,
+      },
     });
-    if (opportunity) {
-      await db.platformOpportunity.update({
-        where: { id: opportunity.id },
-        data: {
-          stage: 'WON',
-          wonAt: new Date(),
-          convertedOrganizationId: organization.id,
-        },
-      });
-      await db.platformOpportunityStageEvent.create({
-        data: {
-          opportunityId: opportunity.id,
-          fromStage: opportunity.stage,
-          toStage: 'WON',
-          changedById: actor.id,
-          reason: 'Converted into an organization',
-        },
-      });
-      await db.platformAccount.update({
-        where: { id: opportunity.accountId },
-        data: { organizationId: organization.id, status: 'CUSTOMER' },
-      });
-    }
+    await db.platformOpportunityStageEvent.create({
+      data: {
+        opportunityId: opportunity.id,
+        fromStage: opportunity.stage,
+        toStage: 'WON',
+        changedById: actor.id,
+        reason: 'Converted into an organization',
+      },
+    });
+    await db.platformAccount.update({
+      where: { id: opportunity.accountId },
+      data: { organizationId: organization.id, status: 'CUSTOMER' },
+    });
   }
   return organization;
 }
