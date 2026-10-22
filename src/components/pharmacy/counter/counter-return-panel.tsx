@@ -26,6 +26,9 @@ const attemptSchema = z.discriminatedUnion('kind', [
       reason: z.string(),
       integrityDecision: z.string(),
       idempotencyKey: z.string(),
+      controlledWitness: z
+        .object({ staffProfileId: z.string(), pin: z.string() })
+        .optional(),
     }),
   }),
   z.object({
@@ -124,6 +127,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const [disposition, setDisposition] = useState<'RESTOCK' | 'QUARANTINE'>('QUARANTINE');
   const [location, setLocation] = useState('');
   const [integrity, setIntegrity] = useState('');
+  const [witnessStaffProfileId, setWitnessStaffProfileId] = useState('');
+  const [witnessPin, setWitnessPin] = useState('');
   const [tenderId, setTenderId] = useState('');
   const [amount, setAmount] = useState('');
   const [manual, setManual] = useState(false);
@@ -149,10 +154,14 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     { branchId, saleId },
     { enabled: ready && online && !!saleId, retry: false }
   );
-  const returnLine = trpc.pharmacySales.returnLine.useMutation();
-  const refund = trpc.pharmacySales.refundTender.useMutation();
   const data = history.data;
   const line = data?.lines.find((row) => row.id === lineId);
+  const returnLine = trpc.pharmacySales.returnLine.useMutation();
+  const refund = trpc.pharmacySales.refundTender.useMutation();
+  const witnesses = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
+    enabled: ready && online && Boolean(line?.controlled),
+    retry: false,
+  });
   const selectedLot = line?.lots.find((row) => row.lotId === lotId);
   const maximumUnits =
     selectedLot?.returnableUnits ?? (line ? line.canonicalUnits - line.returnedUnits : 0);
@@ -174,10 +183,23 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     setMessage('');
     try {
       // Write before sending; an ambiguous network outcome can only replay this exact request.
-      localStorage.setItem(storageKey, JSON.stringify(next));
-      setAttempt(next);
-      if (next.kind === 'return') await returnLine.mutateAsync(next.input);
-      else
+      const recoverable =
+        next.kind === 'return'
+          ? { ...next, input: { ...next.input, controlledWitness: undefined } }
+          : next;
+      // A witness PIN is a transient credential: never persist it in browser recovery state.
+      localStorage.setItem(storageKey, JSON.stringify(recoverable));
+      setAttempt(recoverable);
+      if (next.kind === 'return') {
+        const result = await returnLine.mutateAsync(next.input);
+        if (result && 'blocked' in result) {
+          localStorage.removeItem(storageKey);
+          setAttempt(null);
+          setWitnessPin('');
+          setError(result.blocked);
+          return;
+        }
+      } else
         await refund.mutateAsync({
           ...next.input,
           businessDate: new Date(next.input.businessDate),
@@ -186,6 +208,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       localStorage.removeItem(storageKey);
       setAttempt(null);
       setConfirmed(false);
+      setWitnessPin('');
       setUnits('1');
       setAmount('');
       setMessage(
@@ -360,6 +383,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 setLineId(event.target.value);
                 setLotId('');
                 setDisposition('QUARANTINE');
+                setWitnessStaffProfileId('');
+                setWitnessPin('');
                 setConfirmed(false);
               }}
             >
@@ -491,6 +516,53 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               Restock only inspected medicine with acceptable storage and intact packaging. Expired
               or recalled lots are refused by the server.
             </p>
+            {line?.controlled && (
+              <div className="space-y-3 rounded-md border border-border-subtle p-3">
+                <p className="text-sm font-semibold">Second pharmacist witness required</p>
+                <p className="text-sm text-text-muted">
+                  A different pharmacist must authorize restoration with their fresh PIN.
+                </p>
+                <Label htmlFor="return-witness">Witness pharmacist</Label>
+                <select
+                  id="return-witness"
+                  className={selectClass}
+                  value={witnessStaffProfileId}
+                  disabled={witnesses.isLoading || witnesses.isError}
+                  onChange={(event) => {
+                    setWitnessStaffProfileId(event.target.value);
+                    setWitnessPin('');
+                    setConfirmed(false);
+                  }}
+                >
+                  <option value="">Choose pharmacist</option>
+                  {witnesses.data?.map((staff) => (
+                    <option key={staff.id} value={staff.id}>
+                      {staff.name}
+                    </option>
+                  ))}
+                </select>
+                {witnesses.isLoading && <p role="status">Loading pharmacists…</p>}
+                {witnesses.isError && (
+                  <p role="alert">Pharmacists could not be loaded. Retry by reopening the panel.</p>
+                )}
+                <Label htmlFor="return-witness-pin">Witness PIN</Label>
+                <Input
+                  id="return-witness-pin"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  minLength={4}
+                  maxLength={8}
+                  className="h-11"
+                  disabled={!witnessStaffProfileId}
+                  value={witnessPin}
+                  onChange={(event) => {
+                    setWitnessPin(event.target.value);
+                    setConfirmed(false);
+                  }}
+                />
+              </div>
+            )}
             <label className="flex min-h-11 items-center gap-2">
               <input
                 type="checkbox"
@@ -510,7 +582,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 Number(units) < 1 ||
                 Number(units) > maximumUnits ||
                 (disposition === 'RESTOCK' && !selectedLot?.restockAllowed) ||
-                (disposition === 'QUARANTINE' && !location)
+                (disposition === 'QUARANTINE' && !location) ||
+                (line.controlled &&
+                  (!witnessStaffProfileId || !/^\d{4,8}$/.test(witnessPin)))
               }
               onClick={() =>
                 void execute({
@@ -526,6 +600,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                     reason,
                     integrityDecision: integrity,
                     idempotencyKey: browserUuid(),
+                    controlledWitness: line.controlled
+                      ? { staffProfileId: witnessStaffProfileId, pin: witnessPin }
+                      : undefined,
                   },
                 })
               }
