@@ -37,6 +37,9 @@ const nodeVerifier: SnapshotVerifier = {
   verify: ({ envelope, signature, publicKey: key }) =>
     signing.verifySnapshotSignature(envelope, signature, key),
 };
+const replaySigner = {
+  sign: () => ({ commandSignature: 'command-hmac', receiptSignature: 'receipt-hmac' }),
+};
 
 beforeAll(async () => {
   signing = await import('./offline-snapshots');
@@ -65,7 +68,7 @@ const CATALOG_KINDS: PharmacyOfflineSnapshotKind[] = [
 ];
 
 function runtime(driver: TerminalStorageDriver, verifier: SnapshotVerifier = nodeVerifier) {
-  return new PharmacyCounterRuntime(SCOPE, driver, verifier, publicKey);
+  return new PharmacyCounterRuntime(SCOPE, driver, verifier, publicKey, replaySigner);
 }
 
 function envelopeFor(
@@ -518,7 +521,8 @@ describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
       { ...SCOPE, deviceId: 'counter_2' },
       driver,
       nodeVerifier,
-      publicKey
+      publicKey,
+      replaySigner
     );
     await impostor.hydrate();
     expect((await impostor.replay(async () => ({ status: 200 }))).state).toBe('IDLE');

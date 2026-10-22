@@ -58,6 +58,7 @@ import type {
   CounterQueueSnapshot,
   CounterQuota,
   CounterReplayRequest,
+  CounterReplaySignatures,
 } from './counter-command-queue';
 import type { CachedSnapshotState, PharmacyOfflineSnapshotKind } from './offline-action-matrix';
 import { checkEnvelope } from './offline-snapshot-envelope';
@@ -110,6 +111,18 @@ export interface SnapshotVerifier {
   }): Promise<boolean> | boolean;
 }
 
+/**
+ * Supplies device-bound HMACs immediately before transport. The credential
+ * stays outside the persisted counter document; only the resulting signatures
+ * are placed on the request.
+ */
+export interface CounterReplaySigner {
+  sign(input: {
+    body: Record<string, unknown>;
+    leasedReceipt: unknown;
+  }): Promise<CounterReplaySignatures> | CounterReplaySignatures;
+}
+
 export type InstallSnapshotResult =
   | { ok: true; snapshot: StoredCounterSnapshot }
   | { ok: false; reason: EnvelopeRejection | 'BAD_SIGNATURE'; message: string };
@@ -134,7 +147,8 @@ export class PharmacyCounterRuntime {
     readonly scope: TerminalScope,
     private readonly driver: TerminalStorageDriver,
     private readonly verifier: SnapshotVerifier,
-    snapshotPublicKey: string
+    snapshotPublicKey: string,
+    private readonly replaySigner: CounterReplaySigner
   ) {
     this.state = emptyTerminalState<CounterQueueSnapshot, CounterCache>(
       scope,
@@ -389,7 +403,17 @@ export class PharmacyCounterRuntime {
       const next = nextCounterReplay(this.queue(), this.scope.deviceId);
       if (next.status !== 'READY') return { state: next.status, discarded: null };
 
-      const request = buildCounterReplayRequest(this.queue(), next.command);
+      const unsignedBody = {
+        ...next.command.payload,
+        sequence: next.command.sequence,
+        idempotencyKey: next.command.idempotencyKey,
+        action: next.command.action,
+      };
+      const signatures = await this.replaySigner.sign({
+        body: unsignedBody,
+        leasedReceipt: unsignedBody.leasedReceipt,
+      });
+      const request = buildCounterReplayRequest(next.command, signatures);
       await this.commit({
         ...this.state,
         queue: beginCounterReplay(this.queue(), next.command.commandId),

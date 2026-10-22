@@ -363,27 +363,39 @@ export function nextCounterReplay(
 export type CounterReplayRequest = {
   path: string;
   method: 'POST';
-  headers: { 'Idempotency-Key': string };
+  headers: {
+    'Idempotency-Key': string;
+    'X-Command-Signature': string;
+    'X-Receipt-Signature': string;
+  };
   body: Record<string, unknown>;
 };
 
+export type CounterReplaySignatures = {
+  commandSignature: string;
+  receiptSignature: string;
+};
+
 export function buildCounterReplayRequest(
-  snapshot: CounterQueueSnapshot,
-  command: CounterQueuedCommand
+  command: CounterQueuedCommand,
+  signatures: CounterReplaySignatures
 ): CounterReplayRequest {
   return {
-    path: '/api/pharmacy/offline/commands',
+    path: '/api/pharmacy/counter/replay',
     method: 'POST',
-    headers: { 'Idempotency-Key': command.idempotencyKey },
+    headers: {
+      'Idempotency-Key': command.idempotencyKey,
+      'X-Command-Signature': signatures.commandSignature,
+      'X-Receipt-Signature': signatures.receiptSignature,
+    },
     body: {
-      deviceId: snapshot.deviceId,
+      // Replay is a strict, flat server contract. The sale material captured at
+      // tender (leasedReceipt, snapshots, lines and totals) therefore remains at
+      // the top level rather than being wrapped in a client-only payload key.
+      ...command.payload,
       sequence: command.sequence,
+      idempotencyKey: command.idempotencyKey,
       action: command.action,
-      payload: command.payload,
-      clientOriginAt: command.clientOriginAt,
-      // The number this counter ALREADY printed. The server records it; it never
-      // assigns a different one (§8A invariant 16).
-      receiptNumber: command.receiptNumber,
     },
   };
 }

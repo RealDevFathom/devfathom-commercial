@@ -39,9 +39,18 @@ const SNAPSHOT_KINDS: PharmacyOfflineSnapshotKind[] = [
   'CUSTOMER_CREDIT',
 ];
 const verifier: SnapshotVerifier = { verify: () => true };
+const replaySigner = {
+  sign: () => ({ commandSignature: 'command-hmac', receiptSignature: 'receipt-hmac' }),
+};
 
 function runtime(driver: TerminalStorageDriver, deviceId = SCOPE.deviceId) {
-  return new PharmacyCounterRuntime({ ...SCOPE, deviceId }, driver, verifier, PUBLIC_KEY);
+  return new PharmacyCounterRuntime(
+    { ...SCOPE, deviceId },
+    driver,
+    verifier,
+    PUBLIC_KEY,
+    replaySigner
+  );
 }
 
 async function readyCounter(
