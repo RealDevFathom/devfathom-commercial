@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
+import { Prisma } from '@/generated/prisma/client';
 import { appUrl, sendEmail, templates } from '@/lib/email';
 import { emailSchema } from '@/lib/email-address';
 import { generateInviteToken } from '@/lib/invite-token';
@@ -13,6 +14,7 @@ import { provisionRestaurantOrganization } from '@/lib/restaurant/organization-p
 import {
   CommercialLimitError,
   createStaffProfileWithinCommercialLimit,
+  createStaffProfileWithinCommercialLimitInTransaction,
   setStaffProfileStatusWithinCommercialLimit,
   updateStaffProfileWithinCommercialLimit,
 } from '@/lib/restaurant/commercial-limits';
@@ -186,30 +188,42 @@ export const restaurantStaffRouter = router({
         });
       }
 
-      const existing = await ctx.db.user.findFirst({
-        where: { organizationId, email: input.email },
-        select: {
-          id: true,
-          status: true,
-          restaurantStaffProfiles: { select: { id: true }, take: 1 },
-        },
-      });
-      if (
-        existing &&
-        (existing.status !== 'INVITED' || existing.restaurantStaffProfiles.length > 0)
-      ) {
-        throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists.' });
-      }
-      if (!existing && ctx.entitlements.activeSeats >= ctx.entitlements.seatLimit) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'The organization seat limit has been reached.',
-        });
-      }
-
       const { token, tokenHash } = generateInviteToken();
       const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
       const result = await ctx.db.$transaction(async (tx) => {
+        // Serialize both commercial-limit checks on the tenant row. Entitlement
+        // counts are a request-time snapshot and cannot safely authorize a write.
+        await tx.$queryRaw(
+          Prisma.sql`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`
+        );
+        const existing = await tx.user.findFirst({
+          where: { organizationId, email: input.email },
+          select: {
+            id: true,
+            status: true,
+            restaurantStaffProfiles: { select: { id: true }, take: 1 },
+          },
+        });
+        if (
+          existing &&
+          (existing.status !== 'INVITED' || existing.restaurantStaffProfiles.length > 0)
+        ) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'A user with this email already exists.',
+          });
+        }
+        if (!existing) {
+          const occupiedSeats = await tx.user.count({
+            where: { organizationId, status: { in: ['ACTIVE', 'ON_LEAVE', 'INVITED'] } },
+          });
+          if (occupiedSeats >= ctx.entitlements.seatLimit) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'The organization seat limit has been reached.',
+            });
+          }
+        }
         const profile = {
           name: input.name,
           title: jobRole.name,
@@ -220,13 +234,19 @@ export const restaurantStaffRouter = router({
         };
         const user = existing
           ? await tx.user.update({ where: { id: existing.id }, data: profile })
-          : await tx.user.create({ data: { ...profile, email: input.email } });
-        const staff = await createStaffProfileWithinCommercialLimit(tx, ctx.entitlements.limits, {
-          displayName: input.name,
-          email: input.email,
-          userId: user.id,
-          primaryBranchId: input.primaryBranchId,
-        });
+          : await tx.user.create({
+              data: { ...profile, organizationId, email: input.email },
+            });
+        const staff = await createStaffProfileWithinCommercialLimitInTransaction(
+          tx as unknown as typeof ctx.db,
+          ctx.entitlements.limits,
+          {
+            displayName: input.name,
+            email: input.email,
+            userId: user.id,
+            primaryBranchId: input.primaryBranchId,
+          }
+        );
         await setStaffJobRoles(tx, {
           staffProfileId: staff.id,
           branchId: input.primaryBranchId,

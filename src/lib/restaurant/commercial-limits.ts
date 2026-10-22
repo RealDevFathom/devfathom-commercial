@@ -126,13 +126,25 @@ export async function createStaffProfileWithinCommercialLimit(
   if (input.status !== undefined && input.status !== 'ACTIVE') {
     return createStaffProfile(db, input);
   }
-  const operatorsMax = configuredLimit(limits, RESTAURANT_OPERATORS_LIMIT);
   return db.$transaction(async (tx) => {
     const scopedTx = transactionScopedDb(db, tx);
-    await lockOrganization(tx);
-    await assertOperatorCapacity(scopedTx, operatorsMax);
-    return createStaffProfile(scopedTx, input);
+    return createStaffProfileWithinCommercialLimitInTransaction(scopedTx, limits, input);
   });
+}
+
+/** Use when profile creation must be atomic with other writes in the caller's transaction. */
+export async function createStaffProfileWithinCommercialLimitInTransaction(
+  tx: ScopedDb,
+  limits: Readonly<Record<string, number>>,
+  input: CreateStaffProfileInput
+) {
+  if (input.status !== undefined && input.status !== 'ACTIVE') {
+    return createStaffProfile(tx, input);
+  }
+  const operatorsMax = configuredLimit(limits, RESTAURANT_OPERATORS_LIMIT);
+  await lockOrganization(tx as unknown as Prisma.TransactionClient);
+  await assertOperatorCapacity(tx, operatorsMax);
+  return createStaffProfile(tx, input);
 }
 
 export async function updateStaffProfileWithinCommercialLimit(

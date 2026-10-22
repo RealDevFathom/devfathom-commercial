@@ -5,6 +5,7 @@ vi.mock('server-only', () => ({}));
 import {
   CommercialLimitError,
   createStaffProfileWithinCommercialLimit,
+  createStaffProfileWithinCommercialLimitInTransaction,
   enrollDeviceWithinCommercialLimits,
   setStaffProfileStatusWithinCommercialLimit,
   updateStaffProfileWithinCommercialLimit,
@@ -148,6 +149,25 @@ describe('operator commercial ceiling', () => {
         primaryBranchId: 'branch_1',
       })
     ).resolves.toMatchObject({ id: 'staff_new', status: 'ACTIVE' });
+  });
+
+  it('supports composing the capacity check inside an existing transaction', async () => {
+    const transaction = vi.fn();
+    await expect(
+      createStaffProfileWithinCommercialLimitInTransaction(
+        { ...db, $transaction: transaction } as unknown as ScopedDb,
+        limits,
+        { displayName: 'Invited operator', primaryBranchId: 'branch_1' }
+      )
+    ).resolves.toMatchObject({ id: 'staff_new' });
+
+    expect(transaction).not.toHaveBeenCalled();
+    expect(mocks.raw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.staffCount.mock.invocationCallOrder[0]
+    );
+    expect(mocks.staffCount.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.staffCreate.mock.invocationCallOrder[0]
+    );
   });
 
   it('denies exact-limit creation and zero/missing/invalid configuration without writing', async () => {

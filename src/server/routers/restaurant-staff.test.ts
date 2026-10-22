@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   deviceFindUnique: vi.fn(),
   userFindMany: vi.fn(),
   userFindFirst: vi.fn(),
+  userCount: vi.fn(),
   userCreate: vi.fn(),
   roleFindFirst: vi.fn(),
   roleFindUnique: vi.fn(),
@@ -88,7 +89,12 @@ const db = {
   },
   restaurantBranch: { findMany: mocks.branchFindMany, findUnique: mocks.branchFindUnique },
   restaurantRegisteredDevice: { findUnique: mocks.deviceFindUnique },
-  user: { findMany: mocks.userFindMany, findFirst: mocks.userFindFirst, create: mocks.userCreate },
+  user: {
+    findMany: mocks.userFindMany,
+    findFirst: mocks.userFindFirst,
+    count: mocks.userCount,
+    create: mocks.userCreate,
+  },
   restaurantJobRole: { findFirst: mocks.roleFindFirst, findUnique: mocks.roleFindUnique },
   restaurantStaffJobRole: {
     findMany: mocks.staffRoleFindMany,
@@ -148,6 +154,7 @@ beforeEach(() => {
   mocks.deviceFindUnique.mockResolvedValue({ branchId: 'branch_1' });
   mocks.userFindFirst.mockResolvedValue({ id: 'user_1' });
   mocks.userFindMany.mockResolvedValue([]);
+  mocks.userCount.mockResolvedValue(1);
   mocks.userCreate.mockResolvedValue({ id: 'user_invited', name: 'New Waiter' });
   mocks.roleFindFirst.mockResolvedValue({
     id: 'role_waiter', key: 'server', name: 'Waiter',
@@ -217,10 +224,41 @@ describe('staff CRUD', () => {
     })).resolves.toMatchObject({ id: 'staff_new', userId: 'user_invited' });
 
     expect(mocks.userCreate).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ email: 'waiter@example.com', status: 'INVITED', password: null }),
+      data: expect.objectContaining({
+        organizationId: 'org_workspace',
+        email: 'waiter@example.com',
+        status: 'INVITED',
+        password: null,
+      }),
     }));
+    expect(mocks.raw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.userFindFirst.mock.invocationCallOrder[0]
+    );
     expect(mocks.staffRoleCreate).toHaveBeenCalled();
     expect(mocks.invitationUpsert).toHaveBeenCalled();
+  });
+
+  it('checks current occupied seats under the tenant lock instead of trusting the snapshot', async () => {
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.userCount.mockResolvedValue(50);
+
+    await expect(
+      caller().invite({
+        name: 'New Waiter',
+        email: 'waiter@example.com',
+        jobRoleId: 'role_waiter',
+        primaryBranchId: 'branch_1',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.userCount).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_workspace',
+        status: { in: ['ACTIVE', 'ON_LEAVE', 'INVITED'] },
+      },
+    });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+    expect(mocks.staffCreate).not.toHaveBeenCalled();
   });
 
   it('prevents assigning a role with capabilities the inviter does not have', async () => {
