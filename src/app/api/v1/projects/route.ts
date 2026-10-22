@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
+import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
-import { PROJECT_DATE_ORDER_MESSAGE, projectDatesAreOrdered } from '@/lib/project-dates';
+import { assertInOrganization } from '@/server/org-refs';
 
 export const GET = withApiAuth('projects:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -54,6 +55,16 @@ export const POST = withApiAuth('projects:write', async (ctx, request) => {
   }
   const { memberIds, startDate, endDate, ...data } = parsed.data;
   const allMembers = [...new Set([ctx.userId, ...memberIds])];
+
+  try {
+    await assertInOrganization(ctx.db.user, ctx.organizationId, allMembers);
+    await assertInOrganization(ctx.db.client, ctx.organizationId, [data.clientId]);
+  } catch (error) {
+    if (error instanceof TRPCError && error.code === 'BAD_REQUEST') {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    throw error;
+  }
 
   const project = await ctx.db.project.create({
     data: {

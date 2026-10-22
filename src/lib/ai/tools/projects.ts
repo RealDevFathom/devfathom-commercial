@@ -22,7 +22,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { matchScore, norm } from '@/lib/ai/context';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
-import { lockProjectMembership } from '@/lib/projects/membership-lock';
+import { assertInOrganization } from '@/server/org-refs';
 
 export function buildProjectsTools(h: AssistantHelpers): ToolSet {
   const { db } = h;
@@ -297,6 +297,9 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
         clientId = cr.value.id;
         resolvedClient = cr.value.name;
       }
+
+      await assertInOrganization(db.user, h.ctx.organizationId, [userId]);
+      await assertInOrganization(db.client, h.ctx.organizationId, [clientId]);
 
       const project = await db.project.create({
         data: {
