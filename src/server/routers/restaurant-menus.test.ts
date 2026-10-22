@@ -31,9 +31,17 @@ const mocks = vi.hoisted(() => ({
   pubCreate: vi.fn(),
   pubUpdate: vi.fn(),
   windowFindMany: vi.fn(),
+  windowFindUnique: vi.fn(),
+  windowCreate: vi.fn(),
+  windowDelete: vi.fn(),
   exceptionFindMany: vi.fn(),
+  exceptionFindUnique: vi.fn(),
+  exceptionUpsert: vi.fn(),
+  exceptionDelete: vi.fn(),
   overrideFindMany: vi.fn(),
+  overrideFindUnique: vi.fn(),
   overrideUpsert: vi.fn(),
+  overrideDelete: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -76,11 +84,23 @@ const db = {
     create: mocks.pubCreate,
     update: mocks.pubUpdate,
   },
-  restaurantMenuAvailabilityWindow: { findMany: mocks.windowFindMany },
-  restaurantMenuAvailabilityException: { findMany: mocks.exceptionFindMany },
+  restaurantMenuAvailabilityWindow: {
+    findMany: mocks.windowFindMany,
+    findUnique: mocks.windowFindUnique,
+    create: mocks.windowCreate,
+    delete: mocks.windowDelete,
+  },
+  restaurantMenuAvailabilityException: {
+    findMany: mocks.exceptionFindMany,
+    findUnique: mocks.exceptionFindUnique,
+    upsert: mocks.exceptionUpsert,
+    delete: mocks.exceptionDelete,
+  },
   restaurantBranchMenuItemOverride: {
     findMany: mocks.overrideFindMany,
+    findUnique: mocks.overrideFindUnique,
     upsert: mocks.overrideUpsert,
+    delete: mocks.overrideDelete,
   },
 } as unknown as ScopedDb;
 
@@ -135,6 +155,7 @@ beforeEach(() => {
   mocks.windowFindMany.mockResolvedValue([]);
   mocks.exceptionFindMany.mockResolvedValue([]);
   mocks.overrideFindMany.mockResolvedValue([]);
+  mocks.overrideFindUnique.mockResolvedValue(null);
   mocks.pubCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
     id: 'pub_new',
     ...data,
@@ -292,6 +313,41 @@ describe('publication lifecycle (menu:publish)', () => {
     });
   });
 
+  it('rejects republishing a retired publication', async () => {
+    mocks.pubFindUnique.mockResolvedValue({
+      id: 'pub_1',
+      status: 'RETIRED',
+      branchId: 'b',
+      menuId: 'm',
+    });
+    await expect(caller().publishPublication({ id: 'pub_1' })).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(mocks.pubUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not allow a published publication to be reconfigured', async () => {
+    mocks.pubFindUnique.mockResolvedValue({
+      id: 'pub_1',
+      status: 'PUBLISHED',
+      branchId: 'b',
+      menuId: 'm',
+    });
+    await expect(
+      caller().setPublicationChannels({ id: 'pub_1', channels: ['TAKEAWAY'] })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(
+      caller().addAvailabilityWindow({
+        publicationId: 'pub_1',
+        daysOfWeek: [1],
+        startMinutes: 540,
+        endMinutes: 600,
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(mocks.pubUpdate).not.toHaveBeenCalled();
+    expect(mocks.windowCreate).not.toHaveBeenCalled();
+  });
+
   it('publishes a delivery draft as an operational channel', async () => {
     mocks.pubFindUnique.mockResolvedValue({
       id: 'pub_legacy',
@@ -390,6 +446,35 @@ describe('setItemOverride (menu:price, C2 — availability + price only)', () =>
     expect(mocks.overrideUpsert.mock.calls[0][0].create.isAvailable).toBe(true);
   });
 
+  it('preserves availability for a price-only update without requiring menu:publish', async () => {
+    mocks.can.mockImplementation((_subject, action) => Promise.resolve(action === 'menu:price'));
+    mocks.overrideFindUnique.mockResolvedValue({ isAvailable: false });
+
+    await expect(
+      caller().setItemOverride({
+        publicationId: 'pub_1',
+        menuItemId: 'item_1',
+        priceOverride: '4.50',
+      })
+    ).resolves.toMatchObject({ priceOverride: '4.5' });
+    expect(mocks.overrideUpsert.mock.calls[0][0].update.isAvailable).toBe(false);
+    expect(mocks.can.mock.calls.map((call) => call[1])).toEqual(['menu:price']);
+  });
+
+  it('requires menu:publish when a price user changes availability', async () => {
+    mocks.can.mockImplementation((_subject, action) => Promise.resolve(action === 'menu:price'));
+
+    await expect(
+      caller().setItemOverride({
+        publicationId: 'pub_1',
+        menuItemId: 'item_1',
+        isAvailable: false,
+        priceOverride: '4.50',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.overrideUpsert).not.toHaveBeenCalled();
+  });
+
   it('rejects a malformed override price (C4)', async () => {
     await expect(
       caller().setItemOverride({
@@ -398,6 +483,35 @@ describe('setItemOverride (menu:price, C2 — availability + price only)', () =>
         priceOverride: '1.234',
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+});
+
+describe('availability exception calendar dates', () => {
+  it('normalizes a YYYY-MM-DD branch-local date without browser timezone conversion', async () => {
+    mocks.exceptionUpsert.mockImplementation(
+      async ({ create }: { create: Record<string, unknown> }) => ({ id: 'exception_1', ...create })
+    );
+
+    await caller().setAvailabilityException({
+      publicationId: 'pub_1',
+      date: '2026-10-22',
+      isClosed: true,
+    });
+
+    expect(mocks.exceptionUpsert.mock.calls[0][0].create.date).toEqual(
+      new Date('2026-10-22T00:00:00.000Z')
+    );
+  });
+
+  it('rejects impossible calendar dates', async () => {
+    await expect(
+      caller().setAvailabilityException({
+        publicationId: 'pub_1',
+        date: '2026-02-30',
+        isClosed: true,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.exceptionUpsert).not.toHaveBeenCalled();
   });
 });
 

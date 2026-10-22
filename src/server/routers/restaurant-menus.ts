@@ -2,11 +2,11 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
 import type { Prisma } from '@/generated/prisma/client';
-import type { Action } from '@/lib/abac';
+import { can, subjectFromSession, type Action } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { orderChannelSchema } from '@/lib/restaurant/order-channels';
 import { assertInOrganization } from '../org-refs';
-import { router, capabilityProcedure } from '../trpc';
+import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
 import {
   MenuError,
@@ -82,6 +82,18 @@ const LOCALIZED = z.record(z.string(), z.string());
 const MONEY = z.string().min(1);
 const MINUTE_OF_DAY = z.number().int().min(0).max(1440);
 const DAY_OF_WEEK = z.number().int().min(0).max(6);
+const CALENDAR_DATE = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a calendar date in YYYY-MM-DD format.')
+  .refine((value) => {
+    const [year, month, day] = value.split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return (
+      date.getUTCFullYear() === year &&
+      date.getUTCMonth() === month - 1 &&
+      date.getUTCDate() === day
+    );
+  }, 'Use a valid calendar date.');
 
 /** Translate a menu-domain error into the right tRPC status; rethrow anything else. */
 function mapDomainError(err: unknown): never {
@@ -123,6 +135,22 @@ async function run<T>(op: () => Promise<T>): Promise<T> {
 
 function serializePrice(price: Prisma.Decimal | null): string | null {
   return price == null ? null : price.toString();
+}
+
+function calendarDate(value: string): Date {
+  const [year, month, day] = value.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+async function requireAdditionalCapability(ctx: TRPCContext, action: Action) {
+  const allowed = await can(subjectFromSession(ctx.session!.user), action, undefined, {
+    db: ctx.db as Prisma.TransactionClient,
+    source: 'TRPC',
+    ip: ctx.requestMeta.ip,
+  });
+  if (!allowed) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: `Missing required capability: ${action}` });
+  }
 }
 
 // A publication error surface distinct from the menu/price-list domain errors.
@@ -616,11 +644,11 @@ export const restaurantMenusRouter = router({
     .input(z.object({ id: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       const publication = await loadPublication(ctx.db, input.id);
-      if (publication.status === 'PUBLISHED') {
-        publicationError('INVALID_STATE', 'The publication is already published.');
+      if (publication.status !== 'DRAFT') {
+        publicationError('INVALID_STATE', 'Only a draft publication can be published.');
       }
       const updated = await ctx.db.restaurantBranchMenuPublication.update({
-        where: { id: input.id },
+        where: { id: input.id, status: 'DRAFT' },
         data: { status: 'PUBLISHED', publishedAt: new Date(), retiredAt: null },
       });
       annotateAudit(ctx, {
@@ -640,7 +668,7 @@ export const restaurantMenusRouter = router({
         publicationError('INVALID_STATE', 'Only a published publication can be retired.');
       }
       const updated = await ctx.db.restaurantBranchMenuPublication.update({
-        where: { id: input.id },
+        where: { id: input.id, status: 'PUBLISHED' },
         data: { status: 'RETIRED', retiredAt: new Date() },
       });
       annotateAudit(ctx, {
@@ -654,7 +682,8 @@ export const restaurantMenusRouter = router({
   setPublicationChannels: publishProcedure
     .input(z.object({ id: z.string().min(1), channels: z.array(orderChannelSchema) }))
     .mutation(async ({ ctx, input }) => {
-      await loadPublication(ctx.db, input.id);
+      const publication = await loadPublication(ctx.db, input.id);
+      assertDraftPublication(publication);
       const updated = await ctx.db.restaurantBranchMenuPublication.update({
         where: { id: input.id },
         data: { channels: input.channels },
@@ -681,6 +710,7 @@ export const restaurantMenusRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const publication = await loadPublication(ctx.db, input.publicationId);
+      assertDraftPublication(publication);
       if (input.menuItemId) await assertItemOnMenu(ctx.db, publication.menuId, input.menuItemId);
       const window = await ctx.db.restaurantMenuAvailabilityWindow.create({
         data: {
@@ -706,10 +736,11 @@ export const restaurantMenusRouter = router({
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.db.restaurantMenuAvailabilityWindow.findUnique({
         where: { id: input.windowId },
-        select: { id: true },
+        select: { id: true, publication: { select: { status: true } } },
       });
       if (!existing)
         publicationError('PUBLICATION_NOT_FOUND', 'The availability window does not exist.');
+      assertDraftPublication(existing.publication);
       await ctx.db.restaurantMenuAvailabilityWindow.delete({ where: { id: input.windowId } });
       annotateAudit(ctx, {
         targetType: 'RestaurantMenuAvailabilityWindow',
@@ -723,21 +754,23 @@ export const restaurantMenusRouter = router({
     .input(
       z.object({
         publicationId: z.string().min(1),
-        date: z.date(),
+        date: CALENDAR_DATE,
         isClosed: z.boolean(),
         label: z.string().max(120).nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      await loadPublication(ctx.db, input.publicationId);
+      const publication = await loadPublication(ctx.db, input.publicationId);
+      assertDraftPublication(publication);
+      const date = calendarDate(input.date);
       // One exception per (publication, date): upsert on the unique key.
       const exception = await ctx.db.restaurantMenuAvailabilityException.upsert({
         where: {
-          publicationId_date: { publicationId: input.publicationId, date: input.date },
+          publicationId_date: { publicationId: input.publicationId, date },
         },
         create: {
           publicationId: input.publicationId,
-          date: input.date,
+          date,
           isClosed: input.isClosed,
           label: input.label ?? null,
         },
@@ -757,10 +790,11 @@ export const restaurantMenusRouter = router({
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.db.restaurantMenuAvailabilityException.findUnique({
         where: { id: input.exceptionId },
-        select: { id: true },
+        select: { id: true, publication: { select: { status: true } } },
       });
       if (!existing)
         publicationError('PUBLICATION_NOT_FOUND', 'The availability exception does not exist.');
+      assertDraftPublication(existing.publication);
       await ctx.db.restaurantMenuAvailabilityException.delete({ where: { id: input.exceptionId } });
       annotateAudit(ctx, {
         targetType: 'RestaurantMenuAvailabilityException',
@@ -772,7 +806,6 @@ export const restaurantMenusRouter = router({
 
   // ── Per-publication item overrides (menu:price) ─────────────────────────────
   // C2: an override carries ONLY availability + an optional price — never content.
-  // BUILD-ASSUMPTIONS: a price override is gated by `menu:price` alone (no co-auth).
   setItemOverride: priceProcedure
     .input(
       z
@@ -786,13 +819,26 @@ export const restaurantMenusRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const publication = await loadPublication(ctx.db, input.publicationId);
+      assertDraftPublication(publication);
       await assertItemOnMenu(ctx.db, publication.menuId, input.menuItemId);
+      if (input.isAvailable !== undefined) {
+        await requireAdditionalCapability(ctx, MENU_PUBLISH);
+      }
       // A price override obeys the same C4 decimal rules as a price-list entry;
       // `normalizePrice` throws PriceListError (mapped to 400) on a malformed value.
       const price = await run(async () =>
         input.priceOverride == null ? null : normalizePrice(input.priceOverride).toString()
       );
-      const isAvailable = input.isAvailable ?? true;
+      const existing = await ctx.db.restaurantBranchMenuItemOverride.findUnique({
+        where: {
+          publicationId_menuItemId: {
+            publicationId: input.publicationId,
+            menuItemId: input.menuItemId,
+          },
+        },
+        select: { isAvailable: true },
+      });
+      const isAvailable = input.isAvailable ?? existing?.isAvailable ?? true;
       const override = await ctx.db.restaurantBranchMenuItemOverride.upsert({
         where: {
           publicationId_menuItemId: {
@@ -827,9 +873,11 @@ export const restaurantMenusRouter = router({
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.db.restaurantBranchMenuItemOverride.findUnique({
         where: { id: input.overrideId },
-        select: { id: true },
+        select: { id: true, publication: { select: { status: true } } },
       });
       if (!existing) publicationError('ITEM_NOT_FOUND', 'The override does not exist.');
+      assertDraftPublication(existing.publication);
+      await requireAdditionalCapability(ctx, MENU_PUBLISH);
       await ctx.db.restaurantBranchMenuItemOverride.delete({ where: { id: input.overrideId } });
       annotateAudit(ctx, {
         targetType: 'RestaurantBranchMenuItemOverride',
@@ -867,6 +915,15 @@ async function loadPublication(db: ScopedDb, id: string) {
     publicationError('PUBLICATION_NOT_FOUND', 'The publication does not exist.');
   }
   return publication;
+}
+
+function assertDraftPublication(publication: { status: string }) {
+  if (publication.status !== 'DRAFT') {
+    publicationError(
+      'INVALID_STATE',
+      'Published and retired publications are immutable; create a new draft to make changes.'
+    );
+  }
 }
 
 /** A window/override may only target a menu item that belongs to the published menu. */

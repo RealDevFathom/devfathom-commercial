@@ -176,7 +176,16 @@ describe('Restaurant menus console', () => {
   });
 
   it('allows delivery in publication channel controls', () => {
-    renderConsole();
+    renderConsole({
+      snapshot: {
+        ...snapshot,
+        publications: snapshot.publications.map((publication) => ({
+          ...publication,
+          status: 'DRAFT' as const,
+          publishedAt: null,
+        })),
+      },
+    });
 
     fireEvent.click(screen.getByRole('tab', { name: /Publications/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Manage' }));
@@ -187,6 +196,18 @@ describe('Restaurant menus console', () => {
     ).toBe(true);
     expect(screen.getByLabelText('DINE IN')).toBeEnabled();
     expect(screen.getByLabelText('TAKEAWAY')).toBeEnabled();
+  });
+
+  it('keeps published publication configuration controls read-only', () => {
+    renderConsole();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Publications/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage' }));
+
+    expect(screen.getByRole('button', { name: 'Channels' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add window' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add exception' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Add override' })).toBeDisabled();
   });
 
   it('renders price-list money with two decimal places', () => {

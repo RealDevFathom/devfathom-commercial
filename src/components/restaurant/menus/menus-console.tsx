@@ -244,6 +244,10 @@ function dateLabel(value: string | null) {
     : '—';
 }
 
+function calendarDateLabel(value: string) {
+  return value.slice(0, 10);
+}
+
 function statusTone(status: VersionStatus | PublicationStatus | Brand['status']) {
   if (status === 'ACTIVE' || status === 'PUBLISHED') return 'success' as const;
   if (status === 'DRAFT') return 'warning' as const;
@@ -566,13 +570,13 @@ export function RestaurantMenusConsole({
         if (!canPublish) return;
         setAvailabilityException.mutate({
           publicationId: editor.publicationId,
-          date: new Date(`${text(data, 'date')}T00:00:00`),
+          date: text(data, 'date'),
           isClosed: data.has('isClosed'),
           label: text(data, 'label') || null,
         });
         break;
       case 'override':
-        if (!canPrice) return;
+        if (!canPrice || !canPublish) return;
         setItemOverride.mutate({
           publicationId: editor.publicationId,
           menuItemId: text(data, 'menuItemId'),
@@ -1304,7 +1308,7 @@ export function RestaurantMenusConsole({
                     <div className="flex flex-wrap justify-end gap-2">
                       <Button
                         variant="outline"
-                        disabled={!canPublish || busy || selectedPublication.status === 'RETIRED'}
+                        disabled={!canPublish || busy || selectedPublication.status !== 'DRAFT'}
                         onClick={() =>
                           openEditor({ kind: 'channels', publication: selectedPublication })
                         }
@@ -1365,7 +1369,7 @@ export function RestaurantMenusConsole({
                         <h4 className="font-display font-semibold text-text-strong">Dayparts</h4>
                         <Button
                           size="sm"
-                          disabled={!canPublish || busy || selectedPublication.status === 'RETIRED'}
+                          disabled={!canPublish || busy || selectedPublication.status !== 'DRAFT'}
                           onClick={() =>
                             openEditor({
                               kind: 'window',
@@ -1400,7 +1404,9 @@ export function RestaurantMenusConsole({
                               <Button
                                 size="sm"
                                 variant="destructive"
-                                disabled={!canPublish || busy}
+                                disabled={
+                                  !canPublish || busy || selectedPublication.status !== 'DRAFT'
+                                }
                                 onClick={() =>
                                   ask({
                                     title: 'Remove availability window?',
@@ -1425,7 +1431,7 @@ export function RestaurantMenusConsole({
                         <h4 className="font-display font-semibold text-text-strong">Exceptions</h4>
                         <Button
                           size="sm"
-                          disabled={!canPublish || busy || selectedPublication.status === 'RETIRED'}
+                          disabled={!canPublish || busy || selectedPublication.status !== 'DRAFT'}
                           onClick={() =>
                             openEditor({
                               kind: 'exception',
@@ -1447,7 +1453,7 @@ export function RestaurantMenusConsole({
                             >
                               <div className="text-sm">
                                 <p className="font-medium text-text-strong">
-                                  {new Date(exception.date).toLocaleDateString()}
+                                  {calendarDateLabel(exception.date)}
                                 </p>
                                 <p className="text-xs text-text-muted">
                                   {exception.isClosed ? 'Closed' : 'Forced open'}
@@ -1457,7 +1463,9 @@ export function RestaurantMenusConsole({
                               <Button
                                 size="sm"
                                 variant="destructive"
-                                disabled={!canPublish || busy}
+                                disabled={
+                                  !canPublish || busy || selectedPublication.status !== 'DRAFT'
+                                }
                                 onClick={() =>
                                   ask({
                                     title: 'Remove availability exception?',
@@ -1486,9 +1494,10 @@ export function RestaurantMenusConsole({
                           size="sm"
                           disabled={
                             !canPrice ||
+                            !canPublish ||
                             busy ||
                             publicationItems.length === 0 ||
-                            selectedPublication.status === 'RETIRED'
+                            selectedPublication.status !== 'DRAFT'
                           }
                           onClick={() =>
                             openEditor({
@@ -1530,7 +1539,12 @@ export function RestaurantMenusConsole({
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    disabled={!canPrice || busy}
+                                    disabled={
+                                      !canPrice ||
+                                      !canPublish ||
+                                      busy ||
+                                      selectedPublication.status !== 'DRAFT'
+                                    }
                                     onClick={() =>
                                       openEditor({
                                         kind: 'override',
@@ -1545,7 +1559,12 @@ export function RestaurantMenusConsole({
                                   <Button
                                     size="sm"
                                     variant="destructive"
-                                    disabled={!canPrice || busy}
+                                    disabled={
+                                      !canPrice ||
+                                      !canPublish ||
+                                      busy ||
+                                      selectedPublication.status !== 'DRAFT'
+                                    }
                                     onClick={() =>
                                       ask({
                                         title: 'Clear item override?',
