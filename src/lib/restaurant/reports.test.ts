@@ -556,6 +556,11 @@ function queryText(query: unknown): string {
 }
 
 const boundedRange = { branchIds: ['b1'], from: '2026-01-01', to: '2026-01-31' };
+const pktBranchLookup = () => ({
+  restaurantBranch: {
+    findMany: vi.fn(async () => [{ id: 'b1', timezone: 'Asia/Karachi' }]),
+  },
+});
 
 describe('restaurant wastage and stock movement reports', () => {
   const aggregate = {
@@ -570,6 +575,7 @@ describe('restaurant wastage and stock movement reports', () => {
   it('values and groups wastage with complete totals, shares, and bounded ingredients', async () => {
     const queries: string[] = [];
     const db = {
+      ...pktBranchLookup(),
       $queryRaw: vi.fn(async (query: unknown) => {
         const text = queryText(query);
         queries.push(text);
@@ -649,6 +655,17 @@ describe('restaurant wastage and stock movement reports', () => {
     expect(
       rawQueries.every(
         (query) => query.values.includes('location-1') && query.values.includes('b1')
+      )
+    ).toBe(true);
+    expect(
+      rawQueries.every(
+        (query) =>
+          query.values.some(
+            (value) => value instanceof Date && value.toISOString() === '2025-12-31T19:00:00.000Z'
+          ) &&
+          query.values.some(
+            (value) => value instanceof Date && value.toISOString() === '2026-01-31T19:00:00.000Z'
+          )
       )
     ).toBe(true);
     for (const sql of queries) {
@@ -750,6 +767,7 @@ describe('restaurant wastage and stock movement reports', () => {
     async ({ status, ...counts }) => {
       const row = { ...aggregate, ...counts };
       const db = {
+        ...pktBranchLookup(),
         $queryRaw: vi.fn(async (query: unknown) => {
           const text = queryText(query);
           if (text.includes('GROUP BY "reason"')) return [{ ...row, reason: 'WASTAGE' }];
@@ -848,6 +866,7 @@ describe('restaurant wastage and stock movement reports', () => {
 
   it('exports formula-safe wastage detail with the same stock-location filter', async () => {
     const db = {
+      ...pktBranchLookup(),
       $queryRaw: vi.fn(async () =>
         Array.from({ length: 5_001 }, (_, index) => ({
           id: `movement-${index}`,
@@ -998,6 +1017,7 @@ describe('restaurant complete summaries with bounded details', () => {
       },
     }));
     const db = {
+      ...pktBranchLookup(),
       $queryRaw: vi.fn(async (query: unknown) => {
         const text = queryText(query);
         if (text.includes('"purchaseOrderCount"'))
@@ -1033,6 +1053,33 @@ describe('restaurant complete summaries with bounded details', () => {
       truncated: true,
     });
     expect(report.discrepancies).toHaveLength(200);
+    expect(db.restaurantReceivingDiscrepancy.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          purchaseReceipt: {
+            OR: [
+              {
+                branchId: 'b1',
+                receivedAt: {
+                  gte: new Date('2025-12-31T19:00:00.000Z'),
+                  lt: new Date('2026-01-31T19:00:00.000Z'),
+                },
+              },
+            ],
+          },
+        },
+      })
+    );
+    for (const [query] of (db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls) {
+      const values = (query as { values: unknown[] }).values;
+      expect(values).toEqual(
+        expect.arrayContaining([
+          'b1',
+          new Date('2025-12-31T19:00:00.000Z'),
+          new Date('2026-01-31T19:00:00.000Z'),
+        ])
+      );
+    }
   });
 
   it('aggregates every scheduled shift and labour fact without loading detail rows', async () => {
