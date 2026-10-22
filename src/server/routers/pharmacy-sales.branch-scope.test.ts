@@ -4,11 +4,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // the same drawer, take their branch from the input. `scopeFor` refuses a branch
 // that is not an active pharmacy branch of the caller's organization (one
 // `assertInOrganization` lookup); the counter's cash tender reaches it through
-// `branchScopeOrForbidden`, which words that refusal as a scope denial. Every one
-// of these nine procedures must refuse such a branch before the settlement
-// library takes a lock, reads a drawer or writes anything. The close procedures
-// keep their administrator gate in front of that check; no capability is added
-// for the counter.
+// `branchScopeOrForbidden`, which words that refusal as a scope denial, and so
+// does the refund (#521), ahead of its counter capability and branch assignment
+// checks. Every one of these nine procedures must refuse such a branch before the
+// settlement library takes a lock, reads a drawer or writes anything. The close
+// procedures keep their administrator gate in front of that check; no capability
+// is added for the counter.
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -114,7 +115,7 @@ const procedures: Array<[string, (caller: Caller) => Promise<unknown>, Refusal]>
         reason: 'Returned medicine',
         idempotencyKey: 'refund-1',
       }),
-    NOT_IN_WORKSPACE,
+    OUTSIDE,
   ],
 ];
 const closeProcedures = procedures.filter(([name]) =>

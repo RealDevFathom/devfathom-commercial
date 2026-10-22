@@ -33,10 +33,12 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
+  returnSaleLine: vi.fn(async () => ({ returnId: 'return-line-1' })),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
+  refundPharmacyTender: vi.fn(async () => ({ refundId: 'refund-1' })),
 }));
 vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),
@@ -64,8 +66,8 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { readReturnHistory } from '@/lib/pharmacy/sales';
-import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import { readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
+import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
@@ -125,6 +127,7 @@ function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOY
       ]),
     },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
+    pharmacyTender: { findFirst: vi.fn(async () => ({ type: 'CASH' })) },
     $transaction: vi.fn(),
   };
   db.$transaction.mockImplementation(async (fn: (inner: typeof db) => Promise<unknown>) => fn(db));
@@ -530,5 +533,164 @@ describe('counter receipt authorization', () => {
         }),
       })
     );
+  });
+});
+
+describe('return and refund authorization (#521)', () => {
+  const refundInput = {
+    branchId: 'branch-a',
+    originalTenderId: 'tender-1',
+    deviceId: 'device-a',
+    businessDate: new Date('2026-10-01T00:00:00.000Z'),
+    amountMinor: 100,
+    reason: 'Customer return',
+    manualCashFallback: true,
+    idempotencyKey: 'refund-1',
+  };
+  const returnInput = {
+    branchId: 'branch-a',
+    saleLineId: 'line-1',
+    canonicalUnits: 1,
+    reason: 'Customer return',
+    integrityDecision: 'Sealed strip',
+    idempotencyKey: 'return-1',
+  };
+  const counter: Permission[] = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }];
+
+  async function expectRefused(f: ReturnType<typeof fixture>, message: string | RegExp) {
+    await expect(f.caller().refundTender(refundInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message,
+    });
+    await expect(f.caller().returnLine(returnInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message,
+    });
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(returnSaleLine).not.toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  }
+
+  it('lets an assigned counter user refund and record a return on that branch', async () => {
+    const f = fixture(counter);
+    assign(f, ['branch-a']);
+    await expect(f.caller().refundTender(refundInput)).resolves.toEqual({ refundId: 'refund-1' });
+    await expect(f.caller().returnLine(returnInput)).resolves.toEqual({
+      returnId: 'return-line-1',
+    });
+    const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
+    expect(refundPharmacyTender).toHaveBeenCalledWith(f.db, scope, refundInput);
+    expect(returnSaleLine).toHaveBeenCalledWith(
+      f.db,
+      scope,
+      expect.objectContaining({ saleLineId: 'line-1' })
+    );
+    // The assignment is read for this exact branch, active, in the session organization.
+    expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org-a',
+          userId: 'user-a',
+          branchId: 'branch-a',
+          active: true,
+        }),
+      })
+    );
+  });
+
+  it('refuses a counter user who is not assigned to the branch', async () => {
+    await expectRefused(
+      fixture(counter),
+      'You must be assigned to this branch to record returns and refunds.'
+    );
+    const elsewhere = fixture(counter);
+    assign(elsewhere, ['branch-b']);
+    await expectRefused(
+      elsewhere,
+      'You must be assigned to this branch to record returns and refunds.'
+    );
+  });
+
+  it('gives a session ADMIN no branch exception', async () => {
+    // Receipt reads let an organization ADMIN reach any active branch. Cash out does not.
+    await expectRefused(
+      fixture(counter, 'ADMIN'),
+      'You must be assigned to this branch to record returns and refunds.'
+    );
+    const assignedElsewhere = fixture(counter, 'ADMIN');
+    assign(assignedElsewhere, ['branch-b']);
+    await expectRefused(
+      assignedElsewhere,
+      'You must be assigned to this branch to record returns and refunds.'
+    );
+
+    const assigned = fixture(counter, 'ADMIN');
+    assign(assigned, ['branch-a']);
+    await expect(assigned.caller().refundTender(refundInput)).resolves.toEqual({
+      refundId: 'refund-1',
+    });
+  });
+
+  it('requires the counter capability, not orders, dispense or receipt reads', async () => {
+    for (const capability of [
+      'pharmacy:orders',
+      'pharmacy:dispense',
+      'pharmacy:receipt',
+      // Legacy dotted grants are not canonical; the #163 migration converted them.
+      'pharmacy.counter',
+    ]) {
+      vi.clearAllMocks();
+      const f = fixture([{ capability, effect: 'ALLOW' }]);
+      assign(f, ['branch-a']);
+      await expectRefused(f, 'Counter permission is required to record returns and refunds.');
+    }
+  });
+
+  it('lets a counter DENY win over a wildcard ALLOW', async () => {
+    const roleDeny = fixture([
+      { capability: 'pharmacy:*', effect: 'ALLOW' },
+      { capability: 'pharmacy:counter', effect: 'DENY' },
+    ]);
+    assign(roleDeny, ['branch-a']);
+    await expectRefused(roleDeny, 'Counter permission is required to record returns and refunds.');
+
+    vi.clearAllMocks();
+    const overrideDeny = fixture(counter);
+    overrideDeny.db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-a',
+      organizationRole: { permissions: counter },
+      permissionOverrides: [{ capability: 'pharmacy:counter', effect: 'DENY' }],
+    });
+    assign(overrideDeny, ['branch-a']);
+    await expectRefused(
+      overrideDeny,
+      'Counter permission is required to record returns and refunds.'
+    );
+  });
+
+  it('refuses an inactive member and a branch outside the organization before anything is read', async () => {
+    const inactive = fixture(counter);
+    assign(inactive, ['branch-a']);
+    inactive.db.user.findUnique.mockResolvedValue({
+      status: 'INACTIVE',
+      organizationId: 'org-a',
+      organizationRole: { permissions: counter },
+      permissionOverrides: [],
+    });
+    await expectRefused(inactive, 'Branch is outside your scope.');
+
+    vi.clearAllMocks();
+    const foreign = fixture(counter);
+    assign(foreign, ['foreign-branch']);
+    await expect(
+      foreign.caller().refundTender({ ...refundInput, branchId: 'foreign-branch' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    await expect(
+      foreign.caller().returnLine({ ...returnInput, branchId: 'foreign-branch' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    expect(foreign.db.user.findUnique).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(returnSaleLine).not.toHaveBeenCalled();
   });
 });

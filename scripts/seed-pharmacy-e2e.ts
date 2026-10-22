@@ -120,7 +120,7 @@ async function seedCatalog() {
       // register a module row the application disagrees with.
       const definition = moduleDefinitionForKey(key);
       if (!definition) throw new Error(`Unknown module key: ${key}`);
-      const module = await tx.platformModule.upsert({
+      const platformModule = await tx.platformModule.upsert({
         where: { key },
         update: {
           name: definition.name,
@@ -143,13 +143,13 @@ async function seedCatalog() {
       });
       await tx.platformPackageModule.upsert({
         where: {
-          packageId_moduleId: { packageId: PHARMACY_E2E.packageId, moduleId: module.id },
+          packageId_moduleId: { packageId: PHARMACY_E2E.packageId, moduleId: platformModule.id },
         },
         update: { enabled: true },
         create: {
           id: `package_module_pharmacy_counter_e2e_${key}`,
           packageId: PHARMACY_E2E.packageId,
-          moduleId: module.id,
+          moduleId: platformModule.id,
           enabled: true,
         },
       });
@@ -303,6 +303,34 @@ async function seedBranch() {
     await tx.pharmacyBranch.update({
       where: { id: PHARMACY_E2E.branchId },
       data: { defaultStockLocationId: PHARMACY_E2E.stockLocationId },
+    });
+  });
+}
+
+/**
+ * #521: returns and refunds need an assignment to the branch, with no session-ADMIN exception.
+ * The browser spec records its return and refund as the administrator, so assign them here.
+ */
+async function seedAdminAssignment() {
+  await asTenant(async (tx) => {
+    await tx.pharmacyBranchAssignment.upsert({
+      where: {
+        organizationId_branchId_userId: {
+          organizationId: PHARMACY_E2E.organizationId,
+          branchId: PHARMACY_E2E.branchId,
+          userId: PHARMACY_E2E.adminId,
+        },
+      },
+      update: { active: true },
+      create: {
+        id: PHARMACY_E2E.adminAssignmentId,
+        organizationId: PHARMACY_E2E.organizationId,
+        branchId: PHARMACY_E2E.branchId,
+        userId: PHARMACY_E2E.adminId,
+        active: true,
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
     });
   });
 }
@@ -964,6 +992,7 @@ async function main() {
     if (process.env.PHARMACY_E2E_GRANTS_ONLY === '1') {
       if (!stagingDemo) throw new Error('PHARMACY_E2E_GRANTS_ONLY is staging-demo only.');
       await seedStagingDemoSensitiveGrants();
+      await seedAdminAssignment();
       const pw = process.env.PHARMACY_E2E_ADMIN_PASSWORD?.trim();
       if (!pw) throw new Error('PHARMACY_E2E_ADMIN_PASSWORD is required for the demo pharmacist.');
       await seedStagingDemoPharmacist(hashSync(pw, 10), { keepExistingPassword: true });
@@ -976,6 +1005,7 @@ async function main() {
     await seedCatalog();
     await seedWorkspace(email, passwordHash);
     await seedBranch();
+    await seedAdminAssignment();
     await seedCashier(passwordHash);
     await seedMedicines();
     await seedStock();

@@ -402,6 +402,62 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
 }
 
+/**
+ * #521: a return restores stock and a refund pays money out of the drawer, so both need the
+ * canonical counter capability (central ABAC over the persisted role and overrides; a DENY
+ * wins) and an active assignment to this exact branch. Unlike the receipt reads above there
+ * is no session-ADMIN branch exception: an administrator is assigned to a branch to refund
+ * or record a return there.
+ */
+async function requireCounterCashAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await branchScopeOrForbidden(ctx, branch);
+  const user = ctx.session!.user;
+  if (!user.organizationId || user.organizationId !== scope.organizationId) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  const member = await ctx.db.user.findUnique({
+    where: { id: user.id },
+    select: { status: true, organizationId: true },
+  });
+  if (
+    !member ||
+    member.organizationId !== scope.organizationId ||
+    !member.status ||
+    !ACTIVE_STATUSES.has(member.status)
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  if (
+    !(await can(subjectFromSession(user), 'pharmacy:counter', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }))
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Counter permission is required to record returns and refunds.',
+    });
+  }
+  const assignments = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      branchId: branch,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  if (!assignments.some((row) => row.branchId === branch)) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You must be assigned to this branch to record returns and refunds.',
+    });
+  }
+  return scope;
+}
+
 const closeDate = z
   .date()
   .refine(
@@ -792,9 +848,9 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await requireCounterCashAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
           const tender = await db.pharmacyTender.findFirst({
             where: {
               id: input.originalTenderId,
@@ -1278,9 +1334,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await requireCounterCashAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => {
           try {
-            return await returnSaleLine(txDb(tx), await scopeFor(ctx, input.branchId), input);
+            return await returnSaleLine(txDb(tx), scope, input);
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
               return { blocked: error.message };

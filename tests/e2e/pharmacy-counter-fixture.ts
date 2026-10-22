@@ -9,6 +9,7 @@ export const PHARMACY_E2E = {
   packageId: 'package_pharmacy_counter_e2e',
   roleId: 'role_pharmacy_counter_e2e_admin',
   adminId: 'user_pharmacy_counter_e2e_admin',
+  adminAssignmentId: 'pba_pharmacy_counter_e2e_admin',
   cashierRoleId: 'role_pharmacy_counter_e2e_cashier',
   cashierId: 'user_pharmacy_counter_e2e_cashier',
   cashierEmail: 'cashier.counter@pharmacy-counter-e2e.devfathom.invalid',

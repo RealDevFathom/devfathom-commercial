@@ -236,7 +236,8 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
             reason: 'Returned medicine',
             idempotencyKey: `refund-${branchId}`,
           }),
-        NOT_IN_WORKSPACE,
+        // #521: the refund's branch check is worded as a scope denial, like the tender's.
+        OUTSIDE,
       ],
     ] as Array<[string, (c: Awaited<ReturnType<typeof sales>>) => Promise<unknown>, Refusal]>;
 

@@ -51,6 +51,18 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
         where.id.in.map((id) => ({ id }))
       ),
     },
+    // #521: the refund caller holds the counter capability and is assigned to the branch.
+    user: {
+      findUnique: vi.fn(async () => ({
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: { permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }] },
+        permissionOverrides: [],
+      })),
+    },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn(async () => [{ branchId: 'branch-1' }]),
+    },
     $executeRaw: vi.fn(async (query: { values: unknown[] }) => {
       payloadHash = String(query.values[5]);
       return 1;

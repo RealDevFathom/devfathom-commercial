@@ -51,6 +51,13 @@ function fixture() {
       ),
     },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue({ type: 'CREDIT' }) },
+    // #521: refunds read the member and an assignment to this branch.
+    user: {
+      findUnique: vi.fn().mockResolvedValue({ status: 'ACTIVE', organizationId: 'org-a' }),
+    },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-a' }]),
+    },
     pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
     pharmacyFamilyAccount: {
       findMany: vi.fn().mockResolvedValue([
