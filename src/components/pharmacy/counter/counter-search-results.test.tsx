@@ -52,7 +52,12 @@ describe('CounterSearchResults safety flags', () => {
       />
     );
 
-    expect(screen.getByText('پیراسٹامول')).toHaveAttribute('dir', 'auto');
+    const medicineName = screen.getByText('پیراسٹامول');
+    expect(medicineName).toHaveAttribute('dir', 'auto');
+    expect(medicineName).toHaveClass('text-start');
+    expect(medicineName).not.toHaveClass('text-left');
+    expect(screen.getByText('500 mg')).toHaveClass('ms-1');
+    expect(screen.getByText('500 mg')).not.toHaveClass('ml-1');
   });
 
   it('keeps controlled, prescription, high-alert, and cold-chain badges off the truncated stock line', () => {

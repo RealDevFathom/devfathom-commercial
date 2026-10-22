@@ -169,11 +169,11 @@ export function CounterSearchResults({
             >
               <span
                 dir="auto"
-                className="min-w-0 truncate text-sm font-semibold text-text-strong"
+                className="min-w-0 truncate text-start text-sm font-semibold text-text-strong"
               >
                 {row.displayName}
                 {row.strength ? (
-                  <span className="ml-1 font-normal text-text-body">{row.strength}</span>
+                  <span className="ms-1 font-normal text-text-body">{row.strength}</span>
                 ) : null}
               </span>
               <span className="w-full text-right font-mono text-sm tabular-nums text-text-strong">
