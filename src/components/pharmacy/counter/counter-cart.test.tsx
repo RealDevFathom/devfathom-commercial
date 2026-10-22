@@ -65,6 +65,12 @@ describe('nearExpiryDays', () => {
   ])('%i days out → %s', (days, expected) => {
     expect(nearExpiryDays(inDays(days), NOW)).toBe(expected);
   });
+
+  it('counts Karachi calendar days rather than elapsed UTC periods', () => {
+    expect(
+      nearExpiryDays('2026-09-30T00:00:00.000Z', new Date('2026-09-29T18:00:00.000Z'))
+    ).toBe(1);
+  });
 });
 
 describe('CounterCartPanel FEFO chips', () => {

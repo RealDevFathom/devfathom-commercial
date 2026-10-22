@@ -61,7 +61,6 @@ export async function findSubstituteProposals(
     medicineId: string;
     presentationId: string;
     quantityCanonicalUnits: number;
-    referencePriceMinor?: number;
     at?: Date;
   }
 ): Promise<SubstituteProposal[]> {
@@ -75,27 +74,24 @@ export async function findSubstituteProposals(
   );
   if (!requested || !requestedPresentation) throw new PharmacySubstituteError('NOT_FOUND');
 
-  const historicalReference =
-    input.referencePriceMinor === undefined
-      ? await db.pharmacyInventoryLot.findFirst({
-          where: {
-            organizationId: scope.organizationId,
-            branchId: scope.branchId,
-            receivedAt: { not: null },
-            batch: { medicineId: input.medicineId },
-          },
-          select: { printedMrpMinor: true, unitsPerPack: true },
-          orderBy: { receivedAt: 'desc' },
-        })
-      : null;
-  const referencePriceMinor =
-    input.referencePriceMinor ??
-    (historicalReference
-      ? Math.floor(
-          (historicalReference.printedMrpMinor * input.quantityCanonicalUnits) /
-            historicalReference.unitsPerPack
-        )
-      : null);
+  // Price comparisons are server facts. In particular, never accept a caller-supplied
+  // reference that could make an otherwise more expensive substitute look cheaper.
+  const historicalReference = await db.pharmacyInventoryLot.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      receivedAt: { not: null },
+      batch: { medicineId: input.medicineId },
+    },
+    select: { printedMrpMinor: true, unitsPerPack: true },
+    orderBy: { receivedAt: 'desc' },
+  });
+  const referencePriceMinor = historicalReference
+    ? Math.floor(
+        (historicalReference.printedMrpMinor * input.quantityCanonicalUnits) /
+          historicalReference.unitsPerPack
+      )
+    : null;
   if (referencePriceMinor === null) return [];
 
   const lots: CandidateLot[] = await db.pharmacyInventoryLot.findMany({

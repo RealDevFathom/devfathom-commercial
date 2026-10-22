@@ -18,9 +18,21 @@ export const NEAR_EXPIRY_DAYS = 90;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+function karachiCalendarDay(value: Date): number {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Karachi',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((item) => item.type === type)?.value);
+  return Date.UTC(part('year'), part('month') - 1, part('day'));
+}
+
 /** Whole days until `expiresAt` when under {@link NEAR_EXPIRY_DAYS}; otherwise null. */
 export function nearExpiryDays(expiresAt: string, now: Date): number | null {
-  const days = Math.floor((new Date(expiresAt).getTime() - now.getTime()) / DAY_MS);
+  const days = (karachiCalendarDay(new Date(expiresAt)) - karachiCalendarDay(now)) / DAY_MS;
   return days >= 0 && days < NEAR_EXPIRY_DAYS ? days : null;
 }
 

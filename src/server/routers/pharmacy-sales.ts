@@ -1330,7 +1330,6 @@ export const pharmacySalesRouter = router({
           medicineId: z.string().min(1),
           presentationId: z.string().min(1),
           quantityCanonicalUnits: z.number().int().positive(),
-          referencePriceMinor: z.number().int().positive().optional(),
         })
         .strict()
     )

@@ -590,7 +590,6 @@ function ScopedPharmacyCounterConsole({
           medicineId: activeRow.medicineId,
           presentationId: activeRow.presentationId,
           quantityCanonicalUnits: requestedCanonicalUnits,
-          ...(preview ? { referencePriceMinor: preview.unitPriceMinor } : {}),
         }
       : null;
   const substitutesQuery = trpc.pharmacySales.substituteProposals.useQuery(

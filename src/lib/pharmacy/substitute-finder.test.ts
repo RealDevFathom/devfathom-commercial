@@ -37,7 +37,10 @@ function lot(overrides: Record<string, unknown> = {}) {
 function dbWith(lots: unknown[]) {
   return {
     medicine: { findFirst: async () => requested },
-    pharmacyInventoryLot: { findMany: async () => lots },
+    pharmacyInventoryLot: {
+      findFirst: async () => ({ printedMrpMinor: 1_000, unitsPerPack: 10 }),
+      findMany: async () => lots,
+    },
   };
 }
 
@@ -61,7 +64,6 @@ describe('AI-05 deterministic substitute finder', () => {
         medicineId: 'requested',
         presentationId: 'presentation-requested',
         quantityCanonicalUnits: 10,
-        referencePriceMinor: 1_000,
       }
     );
     expect(rows).toEqual([]);
@@ -72,6 +74,7 @@ describe('AI-05 deterministic substitute finder', () => {
     const db = {
       medicine: { findFirst: async () => requested },
       pharmacyInventoryLot: {
+        findFirst: async () => ({ printedMrpMinor: 1_000, unitsPerPack: 10 }),
         findMany: async (args: { where: unknown }) => {
           where = args.where;
           return [];
@@ -83,7 +86,6 @@ describe('AI-05 deterministic substitute finder', () => {
         medicineId: 'requested',
         presentationId: 'presentation-requested',
         quantityCanonicalUnits: 10,
-        referencePriceMinor: 1_000,
         at: new Date('2026-09-05T00:00:00Z'),
       })
     ).toEqual([]);
@@ -111,7 +113,6 @@ describe('AI-05 deterministic substitute finder', () => {
         medicineId: 'requested',
         presentationId: 'presentation-requested',
         quantityCanonicalUnits: 10,
-        referencePriceMinor: 1_000,
       }
     );
     expect(
@@ -120,6 +121,37 @@ describe('AI-05 deterministic substitute finder', () => {
       ['lot-a', 800, 200],
       ['lot-z', 900, 100],
     ]);
+  });
+
+  it('derives the comparison price from the latest same-tenant branch lot', async () => {
+    let referenceQuery: unknown;
+    const db = {
+      medicine: { findFirst: async () => requested },
+      pharmacyInventoryLot: {
+        findFirst: async (args: unknown) => {
+          referenceQuery = args;
+          return { printedMrpMinor: 900, unitsPerPack: 10 };
+        },
+        findMany: async () => [lot({ printedMrpMinor: 800 })],
+      },
+    };
+
+    const rows = await findSubstituteProposals(db as never, scope, {
+      medicineId: 'requested',
+      presentationId: 'presentation-requested',
+      quantityCanonicalUnits: 10,
+    });
+
+    expect(referenceQuery).toMatchObject({
+      where: {
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        receivedAt: { not: null },
+        batch: { medicineId: 'requested' },
+      },
+      orderBy: { receivedAt: 'desc' },
+    });
+    expect(rows[0]).toMatchObject({ priceMinor: 800, priceDifferenceMinor: 100 });
   });
 
   it('closes a declined POS-10 event with reason substitute declined', async () => {
