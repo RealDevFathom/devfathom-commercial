@@ -164,6 +164,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
   });
 
   it('rejects a cross-tenant pack level ID substitution when receiving a lot', async () => {
+    grant([allow('pharmacy:inventory')]);
     await expect(
       caller().receiveLot({
         branchId: 'branch_a',
@@ -384,16 +385,60 @@ describe.each(GATED_MUTATIONS)(
       for (const write of writes()) expect(write).not.toHaveBeenCalled();
     });
 
-    // Needs fix/abac-deny-precedence (6b120a50): can() on this base reads user
-    // overrides before role rules, so a user ALLOW still beats a role DENY. This
-    // case passes on a local merge with 6b120a50; make it a plain `it` once merged.
-    it.fails('lets a role DENY beat a user ALLOW override', async () => {
+    it('lets a role DENY beat a user ALLOW override', async () => {
       grant([deny(capability)], [allow(capability)]);
       await expect(run()).rejects.toMatchObject(CAPABILITY_REFUSAL);
       for (const write of writes()) expect(write).not.toHaveBeenCalled();
     });
   }
 );
+
+describe('#355 — remaining stock mutations require pharmacy:inventory', () => {
+  it.each([
+    [
+      'receiveLot',
+      {
+        branchId: 'branch_a',
+        manufacturingBatchId: 'batch_1',
+        packLevelId: 'pack_level_1',
+        stockLocationId: 'location_1',
+        unitsPerPack: 10,
+        supplierName: 'Distributor Ltd',
+        supplierInvoiceRef: 'INV-1',
+        unitCostMinor: 1200,
+        printedMrpMinor: 2000,
+        printedExpiry: new Date('2027-06-15T00:00:00.000Z'),
+        expiryPrecision: 'DAY',
+        quantityUnits: 100,
+        idempotencyKey: 'receipt-1',
+      },
+    ],
+    [
+      'receiveTransferLine',
+      {
+        branchId: 'branch_a',
+        transferId: 'transfer_1',
+        lineId: 'line_1',
+        receivedUnits: 10,
+        idempotencyKeyPrefix: 'transfer-receipt-1',
+      },
+    ],
+    [
+      'reserveSupplierClaim',
+      {
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        reservedUnits: 10,
+        returnBy: new Date('2026-11-22T00:00:00.000Z'),
+      },
+    ],
+  ] as const)('refuses %s before resolving its branch', async (procedure, input) => {
+    grant([allow('pharmacy:counter'), allow('pharmacy:orders')]);
+
+    await expect(caller()[procedure](input as never)).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+  });
+});
 
 describe('#355 — wildcard grants', () => {
   it.each(GATED_MUTATIONS.filter((gated) => gated.capability === 'pharmacy:inventory'))(

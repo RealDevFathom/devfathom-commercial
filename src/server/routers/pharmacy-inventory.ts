@@ -803,7 +803,7 @@ export const pharmacyInventoryRouter = router({
       });
     }),
 
-  receiveLot: protectedProcedure
+  receiveLot: inventoryControl
     .input(
       z
         .object({
@@ -1131,7 +1131,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  receiveTransferLine: protectedProcedure
+  receiveTransferLine: inventoryControl
     .input(
       z
         .object({
@@ -1212,7 +1212,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  reserveSupplierClaim: protectedProcedure
+  reserveSupplierClaim: inventoryControl
     .input(
       z
         .object({
