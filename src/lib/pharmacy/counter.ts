@@ -654,7 +654,10 @@ export async function readCounterReceipt(
   const sale = await saleInScope(db, scope, saleId);
   if (sale.lines.length === 0) throw new PharmacyCounterError('NOT_FOUND');
 
-  const events = await db.pharmacySaleEvent.findMany({
+  const voucherStore = db.pharmacyVoucher as unknown as { findFirst(args: unknown): Promise<{
+    code: string; valueMinor: number; expiresAt: Date; minNextBasketMinor: number;
+  } | null> };
+  const [events, issuedVoucher] = await Promise.all([db.pharmacySaleEvent.findMany({
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
@@ -662,7 +665,10 @@ export async function readCounterReceipt(
       kind: 'COMPLETED',
     },
     select: { payload: true },
-  });
+  }), voucherStore.findFirst({
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, issuedSaleId: saleId },
+    select: { code: true, valueMinor: true, expiresAt: true, minNextBasketMinor: true },
+  })]);
   const snapshot = readReceiptIdentity(events, sale);
   const lines = sale.lines.map((line) => {
     const identity = snapshot?.lines.find((row) => row.saleLineId === line.id);
@@ -712,6 +718,7 @@ export async function readCounterReceipt(
     currency: branch.currency,
     lines,
     tenders,
+    issuedVoucher: issuedVoucher ? { ...issuedVoucher, expiresAt: issuedVoucher.expiresAt.toISOString() } : null,
     totals: counterReceiptTotals({ lines, tenders }),
   };
 }

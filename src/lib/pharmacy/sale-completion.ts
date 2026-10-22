@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
 import { postSaleLineEntry } from './finance-postings';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
+import { issueSpendVoucherForCompletedSale } from './spend-vouchers';
 
 export const completionSaleInclude = {
   lines: {
@@ -123,6 +124,7 @@ export async function completePaidPharmacySale(
   for (const line of sale.lines) {
     await postSaleLineEntry(db, scope, { saleLineId: line.id, at: issuedAt });
   }
+  await issueSpendVoucherForCompletedSale(db, scope, sale.id, issuedAt);
 
   return receiptNumber;
 }

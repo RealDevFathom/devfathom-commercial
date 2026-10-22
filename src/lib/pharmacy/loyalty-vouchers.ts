@@ -31,6 +31,8 @@ export type LoyaltySettings = {
   voucherScope: VoucherScope; voucherValidityDays: number; maxIssuedPerCustomerPerPeriod: number;
   maxIssuedPerPhonePerPeriod: number; maxRedeemedPerCustomerPerPeriod: number;
   maxRedeemedPerPhonePerPeriod: number; abusePeriodDays: number; expiryOverrideGraceDays: number;
+  spendVoucherTiers?: readonly { thresholdMinor: number; valueMinor: number }[];
+  spendVoucherMinBasketMinor?: number;
 };
 
 export async function updateLoyaltySettings(

@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('server-only', () => ({}));
 vi.mock('./finance-postings', () => ({ postSaleLineEntry: mocks.post }));
+vi.mock('./spend-vouchers', () => ({ issueSpendVoucherForCompletedSale: vi.fn() }));
 vi.mock('./receipt-identity', () => {
   class PharmacyReceiptIdentityError extends Error {
     constructor() {

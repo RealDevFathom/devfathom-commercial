@@ -13,6 +13,7 @@ import { returnedLineValue } from './sales';
 import { postTenderEntry, postTenderRefundEntry } from './finance-postings';
 import { firstCloseIsFinal } from './migration/first-close';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
+import { voidUnredeemedSpendVoucherForRefund } from './spend-vouchers';
 import type { LedgerScope } from './stock-ledger';
 import { paymentSandboxAdmitted } from './payment-sandbox-admission';
 import { authenticatePharmacyCommand, validateLeasedReceiptReplay } from './sales';
@@ -584,6 +585,7 @@ export async function refundPharmacyTender(
   }
   if (tender.type !== 'LOYALTY' && tender.sale.customerId)
     await reverseRefundedEarnedPoints(db, scope, refund.id);
+  await voidUnredeemedSpendVoucherForRefund(db, scope, tender.saleId);
   if (drawerSessionId)
     await db.pharmacyDrawerMovement.create({
       data: {

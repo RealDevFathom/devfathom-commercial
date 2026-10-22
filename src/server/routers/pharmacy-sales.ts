@@ -29,6 +29,7 @@ import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-sour
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
+import { validateSpendVoucherTiers } from '@/lib/pharmacy/spend-vouchers';
 import {
   authorizeKhataCharge,
   FamilyKhataError,
@@ -437,6 +438,11 @@ export const pharmacySalesRouter = router({
       maxRedeemedPerPhonePerPeriod: z.number().int().nonnegative(),
       abusePeriodDays: z.number().int().min(1).max(3650),
       expiryOverrideGraceDays: z.number().int().min(0).max(365),
+      spendVoucherTiers: z.array(z.object({
+        thresholdMinor: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+        valueMinor: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+      }).strict()).min(1).max(20),
+      spendVoucherMinBasketMinor: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
     }).strict())
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements?.organizationId;
@@ -446,6 +452,7 @@ export const pharmacySalesRouter = router({
         db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip,
       }))) throw new TRPCError({ code: 'FORBIDDEN' });
       return ctx.db.$transaction(async (tx) => {
+        const spendVoucherTiers = validateSpendVoucherTiers(input.spendVoucherTiers);
         const rows = await tx.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
           SELECT * FROM pharmacy_loyalty_settings WHERE "organizationId"=${organizationId} FOR UPDATE`);
         const oldValue = rows[0] ?? {
@@ -453,15 +460,18 @@ export const pharmacySalesRouter = router({
           maxIssuedPerCustomerPerPeriod: 5, maxIssuedPerPhonePerPeriod: 5,
           maxRedeemedPerCustomerPerPeriod: 5, maxRedeemedPerPhonePerPeriod: 5,
           abusePeriodDays: 30, expiryOverrideGraceDays: 0,
+          spendVoucherTiers: [{ thresholdMinor: 1000000, valueMinor: 50000 },
+            { thresholdMinor: 2000000, valueMinor: 100000 }], spendVoucherMinBasketMinor: 0,
         };
         await tx.$executeRaw(Prisma.sql`INSERT INTO pharmacy_loyalty_settings
           (id,"organizationId","voucherScope","voucherValidityDays","maxIssuedPerCustomerPerPeriod",
            "maxIssuedPerPhonePerPeriod","maxRedeemedPerCustomerPerPeriod","maxRedeemedPerPhonePerPeriod",
-           "abusePeriodDays","expiryOverrideGraceDays","createdAt","updatedAt")
+           "abusePeriodDays","expiryOverrideGraceDays","spendVoucherTiers","spendVoucherMinBasketMinor","createdAt","updatedAt")
           VALUES (${randomUUID()},${organizationId},${input.voucherScope}::"PharmacyVoucherScope",
             ${input.voucherValidityDays},${input.maxIssuedPerCustomerPerPeriod},${input.maxIssuedPerPhonePerPeriod},
             ${input.maxRedeemedPerCustomerPerPeriod},${input.maxRedeemedPerPhonePerPeriod},
-            ${input.abusePeriodDays},${input.expiryOverrideGraceDays},now(),now())
+            ${input.abusePeriodDays},${input.expiryOverrideGraceDays},${JSON.stringify(spendVoucherTiers)}::jsonb,
+            ${input.spendVoucherMinBasketMinor},now(),now())
           ON CONFLICT ("organizationId") DO UPDATE SET "voucherScope"=EXCLUDED."voucherScope",
             "voucherValidityDays"=EXCLUDED."voucherValidityDays",
             "maxIssuedPerCustomerPerPeriod"=EXCLUDED."maxIssuedPerCustomerPerPeriod",
@@ -469,11 +479,13 @@ export const pharmacySalesRouter = router({
             "maxRedeemedPerCustomerPerPeriod"=EXCLUDED."maxRedeemedPerCustomerPerPeriod",
             "maxRedeemedPerPhonePerPeriod"=EXCLUDED."maxRedeemedPerPhonePerPeriod",
             "abusePeriodDays"=EXCLUDED."abusePeriodDays",
-            "expiryOverrideGraceDays"=EXCLUDED."expiryOverrideGraceDays","updatedAt"=now()`);
+            "expiryOverrideGraceDays"=EXCLUDED."expiryOverrideGraceDays",
+            "spendVoucherTiers"=EXCLUDED."spendVoucherTiers",
+            "spendVoucherMinBasketMinor"=EXCLUDED."spendVoucherMinBasketMinor","updatedAt"=now()`);
         await tx.$executeRaw(Prisma.sql`INSERT INTO pharmacy_loyalty_settings_audits
           (id,"organizationId","actorId","oldValue","newValue","occurredAt") VALUES
           (${randomUUID()},${organizationId},${actorId},${JSON.stringify(oldValue)}::jsonb,
-           ${JSON.stringify(input)}::jsonb,now())`);
+           ${JSON.stringify({ ...input, spendVoucherTiers })}::jsonb,now())`);
         annotateAudit(ctx, { action: 'pharmacy.loyalty.settings.update', targetId: organizationId });
         return input;
       });

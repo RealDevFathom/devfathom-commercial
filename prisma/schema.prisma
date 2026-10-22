@@ -1024,6 +1024,8 @@ model PharmacyLoyaltySettings {
   maxRedeemedPerPhonePerPeriod  Int                  @default(5)
   abusePeriodDays               Int                  @default(30)
   expiryOverrideGraceDays       Int                  @default(0)
+  spendVoucherTiers             Json                 @default("[{\"thresholdMinor\":1000000,\"valueMinor\":50000},{\"thresholdMinor\":2000000,\"valueMinor\":100000}]")
+  spendVoucherMinBasketMinor    Int                  @default(0)
   createdAt                     DateTime              @default(now())
   updatedAt                     DateTime              @updatedAt
 
@@ -1060,6 +1062,7 @@ model PharmacyVoucher {
   minNextBasketMinor Int                   @default(0)
   redeemedAt         DateTime?
   redeemedSaleId     String?
+  issuedSaleId       String?
   issuedByActorId    String
   redeemedByActorId  String?
   createdAt          DateTime              @default(now())
@@ -1068,6 +1071,7 @@ model PharmacyVoucher {
   @@unique([organizationId, code])
   @@unique([organizationId, id])
   @@unique([organizationId, redeemedSaleId])
+  @@unique([organizationId, issuedSaleId])
   @@index([organizationId, branchId, status, expiresAt])
   @@index([organizationId, customerId, issuedAt])
   @@index([organizationId, phone, issuedAt])

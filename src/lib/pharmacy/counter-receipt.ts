@@ -67,6 +67,12 @@ export type CounterReceipt = {
   currency: string;
   lines: CounterReceiptLine[];
   tenders: CounterReceiptTender[];
+  issuedVoucher?: {
+    code: string;
+    valueMinor: number;
+    expiresAt: string;
+    minNextBasketMinor: number;
+  } | null;
   totals: {
     grossMinor: number;
     discountMinor: number;
@@ -95,6 +101,7 @@ type Strings = {
   tendered: string;
   change: string;
   tenders: string;
+  voucher: string;
   saleUnit: Record<SaleUnitKind, string>;
   noReceiptNumber: string;
 };
@@ -124,6 +131,7 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     tendered: 'Tendered',
     change: 'Change',
     tenders: 'Payments',
+    voucher: 'Voucher earned',
     saleUnit: { PACK: 'pack', STRIP: 'strip', UNIT: 'unit' },
     noReceiptNumber: 'This bill is not settled, so no receipt number has been issued.',
   },
@@ -146,6 +154,7 @@ export const COUNTER_RECEIPT_STRINGS: Readonly<Record<CounterReceiptLocale, Stri
     tendered: 'ادا شدہ',
     change: 'واپسی',
     tenders: 'ادائیگیاں',
+    voucher: 'حاصل شدہ واؤچر',
     saleUnit: { PACK: 'پیک', STRIP: 'پتّا', UNIT: 'یونٹ' },
     noReceiptNumber: 'یہ بل ادا نہیں ہوا، اس لیے رسید نمبر جاری نہیں ہوا۔',
   },
@@ -232,6 +241,10 @@ function footerFor(
     `${strings.change} ${formatMinor(receipt.totals.changeMinor)}`,
   ];
   if (receipt.receiptNumber === null) parts.push(strings.noReceiptNumber);
+  if (receipt.issuedVoucher) {
+    const voucher = receipt.issuedVoucher;
+    parts.push(`${strings.voucher}: ${voucher.code} · ${formatMinor(voucher.valueMinor)} · ${strings.expiry} ${formatReceiptDate(voucher.expiresAt)} · Min basket ${formatMinor(voucher.minNextBasketMinor)}`);
+  }
   if (reprint) parts.push(strings.reprint);
   const footer = parts.join(' · ');
   return footer.length <= 500 ? footer : footer.slice(0, 500);

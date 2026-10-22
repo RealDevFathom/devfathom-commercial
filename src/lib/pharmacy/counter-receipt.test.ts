@@ -127,6 +127,17 @@ describe('buildCounterReceiptDocument (printing seam)', () => {
     expect(document.footer).toContain('Tendered 50.00');
   });
 
+  it('prints an issued spend voucher code, value, expiry, and minimum basket', () => {
+    const document = buildCounterReceiptDocument(receipt({ issuedVoucher: {
+      code: 'ABCDEFGH2345', valueMinor: 50_000,
+      expiresAt: '2026-10-22T00:00:00.000Z', minNextBasketMinor: 100_000,
+    } }), 'en');
+    expect(document.footer).toContain('ABCDEFGH2345');
+    expect(document.footer).toContain('500.00');
+    expect(document.footer).toContain('2026-10-22');
+    expect(document.footer).toContain('Min basket 1000.00');
+  });
+
   it('omits fiscal fields when integration is off', () => {
     const source = { ...receipt(), fiscal: undefined } as CounterReceipt & { fiscal?: unknown };
     expect(JSON.stringify(buildCounterReceiptDocument(source, 'en'))).not.toContain('fiscal');
