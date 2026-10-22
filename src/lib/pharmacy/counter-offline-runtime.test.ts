@@ -286,14 +286,14 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
     });
     const driver: TerminalStorageDriver = {
       ...storage,
-      write: async (scopeKey, record) => {
+      compareAndSwap: async (scopeKey, expected, record) => {
         const commandCount = (record as { queue?: { commands?: unknown[] } }).queue?.commands
           ?.length;
         if (commandCount) {
           saleWrites += 1;
           if (saleWrites === 1) await firstSaleBlocked;
         }
-        await storage.write(scopeKey, record);
+        return storage.compareAndSwap(scopeKey, expected, record);
       },
     };
     const counter = await readyCounter(driver);
@@ -314,6 +314,49 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
     const reloaded = runtime(storage);
     expect(await reloaded.hydrate()).toBe('ready');
     expect(reloaded.snapshot().queue?.commands).toHaveLength(2);
+  });
+
+  it('atomically retries concurrent sales from two runtimes sharing a scope', async () => {
+    const storage = createMemoryDriver();
+    const firstCounter = await readyCounter(storage);
+    const secondCounter = runtime(storage);
+    expect(await secondCounter.hydrate()).toBe('ready');
+
+    const results = await Promise.all([
+      firstCounter.enqueue(cashSale(1), MATRIX),
+      secondCounter.enqueue(cashSale(1), MATRIX),
+    ]);
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(
+      results.map((result) => (result.ok ? result.command.receiptNumber : null)).sort()
+    ).toEqual([900, 901]);
+    expect(results.map((result) => (result.ok ? result.command.sequence : null)).sort()).toEqual([
+      1, 2,
+    ]);
+
+    const reloaded = runtime(storage);
+    expect(await reloaded.hydrate()).toBe('ready');
+    expect(reloaded.snapshot().queue?.commands).toHaveLength(2);
+  });
+
+  it('does not drop a sale when lease adoption races it from another runtime', async () => {
+    const storage = createMemoryDriver();
+    const seller = await readyCounter(storage);
+    const leaseUpdater = runtime(storage);
+    expect(await leaseUpdater.hydrate()).toBe('ready');
+
+    await Promise.all([
+      seller.enqueue(cashSale(1), MATRIX),
+      leaseUpdater.adoptLeases([
+        { leaseId: 'lease_2', blockStart: 1000, blockEnd: 1002, nextNumber: 1000 },
+      ]),
+    ]);
+
+    const reloaded = runtime(storage);
+    expect(await reloaded.hydrate()).toBe('ready');
+    expect(reloaded.snapshot().queue?.commands).toHaveLength(1);
+    expect(reloaded.snapshot().queue?.leases).toHaveLength(1);
+    expect(reloaded.snapshot().queue?.leases[0]).toMatchObject({ leaseId: 'lease_2' });
   });
 
   it('refuses a denied action and queues nothing', async () => {

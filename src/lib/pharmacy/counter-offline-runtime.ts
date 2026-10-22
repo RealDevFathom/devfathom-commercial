@@ -25,6 +25,7 @@
  * enforcement is the guard on every write, not a promise in a comment.
  */
 import {
+  compareAndSwapTerminalState,
   createMemoryDriver,
   createTerminalIndexedDbDriver,
   emptyTerminalState,
@@ -128,8 +129,9 @@ type ReplayResult = {
 
 export class PharmacyCounterRuntime {
   private state: CounterRuntimeState;
+  private persistedState: CounterRuntimeState | undefined = undefined;
   private activeReplay: Promise<ReplayResult> | null = null;
-  private enqueueTransition: Promise<void> = Promise.resolve();
+  private queueTransition: Promise<void> = Promise.resolve();
 
   constructor(
     readonly scope: TerminalScope,
@@ -170,6 +172,9 @@ export class PharmacyCounterRuntime {
         queue: result.state.queue ?? createCounterQueue(this.scope.deviceId),
         catalog: result.state.catalog ?? this.cache(),
       };
+      this.persistedState = this.state;
+    } else {
+      this.persistedState = undefined;
     }
     return 'ready';
   }
@@ -311,12 +316,16 @@ export class PharmacyCounterRuntime {
 
   /** Record the receipt-number blocks this counter reserved before going offline. */
   async adoptLeases(leases: readonly CounterLeaseCursor[]): Promise<void> {
-    await this.commit({ ...this.state, queue: { ...this.queue(), leases: [...leases] } });
+    await this.serializeQueueMutation(async () => {
+      await this.commitQueueChange((queue) => ({ ...queue, leases: [...leases] }));
+    });
   }
 
   /** Record the OFF-03 quotas this counter was granted before going offline. */
   async adoptQuotas(quotas: readonly CounterQuota[]): Promise<void> {
-    await this.commit({ ...this.state, queue: { ...this.queue(), quotas: [...quotas] } });
+    await this.serializeQueueMutation(async () => {
+      await this.commitQueueChange((queue) => ({ ...queue, quotas: [...quotas] }));
+    });
   }
 
   /**
@@ -328,11 +337,15 @@ export class PharmacyCounterRuntime {
     input: CounterCommandInput,
     matrix: Omit<CounterMatrixInputs, 'snapshots'>
   ): Promise<CounterEnqueueResult> {
-    const result = this.enqueueTransition.then(() => this.runEnqueue(input, matrix));
+    return this.serializeQueueMutation(() => this.runEnqueue(input, matrix));
+  }
+
+  private serializeQueueMutation<T>(transition: () => Promise<T>): Promise<T> {
+    const result = this.queueTransition.then(transition);
     // Keep the tail fulfilled so a failed persistence attempt does not prevent
     // later sales from reaching the transition. Each transition reads state
     // only after the preceding whole-document write has published it.
-    this.enqueueTransition = result.then(
+    this.queueTransition = result.then(
       () => undefined,
       () => undefined
     );
@@ -343,42 +356,47 @@ export class PharmacyCounterRuntime {
     input: CounterCommandInput,
     matrix: Omit<CounterMatrixInputs, 'snapshots'>
   ): Promise<CounterEnqueueResult> {
-    const leaseState = this.safetyLeaseState();
-    const leaseCheck = checkSafetyLease(leaseState, matrix.nowMs);
-    if (!leaseCheck.ok && leaseCheck.reason === 'EXPIRED') {
-      const alreadyLogged = this.queue().safetyLeaseEvents.some(
-        (event) => event.type === 'EXPIRED' && event.lease.expiresAt === leaseState.lease?.expiresAt
-      );
-      if (leaseState.lease && !alreadyLogged) {
-        const nextState: CounterRuntimeState = {
-          ...this.state,
-          queue: {
-            ...this.queue(),
-            safetyLeaseEvents: [
-              ...this.queue().safetyLeaseEvents,
-              {
-                type: 'EXPIRED',
-                occurredAt: new Date(matrix.nowMs).toISOString(),
-                lease: leaseState.lease,
-                recallVersion: leaseState.appliedRecallVersion,
-                recalledBatchIds: [],
-              },
-            ],
-          },
-        };
-        await this.commit(nextState);
+    for (;;) {
+      const leaseState = this.safetyLeaseState();
+      const leaseCheck = checkSafetyLease(leaseState, matrix.nowMs);
+      if (!leaseCheck.ok && leaseCheck.reason === 'EXPIRED') {
+        const alreadyLogged = this.queue().safetyLeaseEvents.some(
+          (event) => event.type === 'EXPIRED' && event.lease.expiresAt === leaseState.lease?.expiresAt
+        );
+        if (leaseState.lease && !alreadyLogged) {
+          const nextState: CounterRuntimeState = {
+            ...this.state,
+            queue: {
+              ...this.queue(),
+              safetyLeaseEvents: [
+                ...this.queue().safetyLeaseEvents,
+                {
+                  type: 'EXPIRED',
+                  occurredAt: new Date(matrix.nowMs).toISOString(),
+                  lease: leaseState.lease,
+                  recallVersion: leaseState.appliedRecallVersion,
+                  recalledBatchIds: [],
+                },
+              ],
+            },
+          };
+          if (!(await this.commitIfCurrent(nextState))) {
+            await this.refreshState();
+            continue;
+          }
+        }
       }
+      const batchId = input.bucket?.inventoryLotId ?? null;
+      const result = enqueueCounterCommand(this.queue(), input, {
+        ...matrix,
+        snapshots: this.cachedSnapshotStates(),
+        safetyLeaseOk: leaseCheck.ok,
+        batchRecalled: batchId !== null && leaseState.recalledBatchIds.includes(batchId),
+      });
+      if (!result.ok) return result;
+      if (await this.commitIfCurrent({ ...this.state, queue: result.snapshot })) return result;
+      await this.refreshState();
     }
-    const batchId = input.bucket?.inventoryLotId ?? null;
-    const result = enqueueCounterCommand(this.queue(), input, {
-      ...matrix,
-      snapshots: this.cachedSnapshotStates(),
-      safetyLeaseOk: leaseCheck.ok,
-      batchRecalled: batchId !== null && leaseState.recalledBatchIds.includes(batchId),
-    });
-    if (!result.ok) return result;
-    await this.commit({ ...this.state, queue: result.snapshot });
-    return result;
   }
 
   async resume(): Promise<void> {
@@ -457,7 +475,43 @@ export class PharmacyCounterRuntime {
 
   /** Publish a state transition only after its whole-document write succeeds. */
   private async commit(nextState: CounterRuntimeState): Promise<void> {
-    await writeTerminalState(this.driver, nextState, COUNTER_STORE_SCHEMA_VERSION);
+    if (!(await this.commitIfCurrent(nextState))) {
+      throw new Error('Concurrent terminal state change; retry the operation.');
+    }
+  }
+
+  private async commitQueueChange(
+    change: (queue: CounterQueueSnapshot) => CounterQueueSnapshot
+  ): Promise<void> {
+    for (;;) {
+      if (await this.commitIfCurrent({ ...this.state, queue: change(this.queue()) })) return;
+      await this.refreshState();
+    }
+  }
+
+  private async commitIfCurrent(nextState: CounterRuntimeState): Promise<boolean> {
+    const swapped = await compareAndSwapTerminalState(
+      this.driver,
+      this.persistedState,
+      nextState,
+      COUNTER_STORE_SCHEMA_VERSION
+    );
+    if (!swapped) return false;
     this.state = nextState;
+    this.persistedState = nextState;
+    return true;
+  }
+
+  private async refreshState(): Promise<void> {
+    const result = await readTerminalState<CounterQueueSnapshot, CounterCache>(
+      this.driver,
+      this.scope,
+      COUNTER_STORE_SCHEMA_VERSION
+    );
+    if (result.status !== 'ok' || !result.state.queue) {
+      throw new Error('Concurrent terminal state could not be recovered.');
+    }
+    this.state = result.state;
+    this.persistedState = result.state;
   }
 }
