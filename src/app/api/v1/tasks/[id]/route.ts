@@ -2,7 +2,12 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
-import { canAccessProject, canManageProject, projectIdOfTask } from '@/lib/authz';
+import {
+  areProjectMembers,
+  canAccessProject,
+  canManageProject,
+  projectIdOfTask,
+} from '@/lib/authz';
 import { logActivity } from '@/server/activity';
 
 export const GET = withApiAuth(
@@ -91,7 +96,10 @@ export const PATCH = withApiAuth(
     // Load the existing task so we can detect a column move and reorder properly.
     const existing = await authCtx.db.task.findUnique({
       where: { id },
-      include: { column: { select: { id: true, name: true } } },
+      include: {
+        column: { select: { id: true, name: true } },
+        assignees: { select: { userId: true } },
+      },
     });
     if (!existing) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
 
@@ -123,6 +131,27 @@ export const PATCH = withApiAuth(
       ))
     ) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    // Validate the complete post-update assignment set against the project the
+    // task will belong to. This covers replace/add operations, column defaults,
+    // and existing assignees carried across a cross-project column move.
+    const changesAssignees =
+      assigneeIds !== undefined || addAssigneeIds !== undefined || removeAssigneeIds !== undefined;
+    if (changesAssignees || isColumnMove) {
+      const assignmentProjectId = targetColumn?.board.project.id ?? projectId;
+      const nextAssigneeIds = new Set(
+        assigneeIds ?? existing.assignees.map((assignee) => assignee.userId)
+      );
+      addAssigneeIds?.forEach((userId) => nextAssigneeIds.add(userId));
+      removeAssigneeIds?.forEach((userId) => nextAssigneeIds.delete(userId));
+      targetColumn?.defaultAssignees.forEach((assignee) => nextAssigneeIds.add(assignee.userId));
+      if (!(await areProjectMembers(authCtx.db, assignmentProjectId, [...nextAssigneeIds]))) {
+        return NextResponse.json(
+          { error: 'All assignees must be members of the project.' },
+          { status: 400 }
+        );
+      }
     }
 
     // Do the mutation in a transaction so reorder + update + defaults are atomic.

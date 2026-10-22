@@ -84,6 +84,21 @@ export async function canManageProject(
   return isLead;
 }
 
+/** Every distinct user id is an explicit member of the project. */
+export async function areProjectMembers(
+  db: AuthzDb,
+  projectId: string,
+  userIds: string[]
+): Promise<boolean> {
+  const uniqueUserIds = [...new Set(userIds)];
+  if (uniqueUserIds.length === 0) return true;
+
+  const memberCount = await db.projectMember.count({
+    where: { projectId, userId: { in: uniqueUserIds } },
+  });
+  return memberCount === uniqueUserIds.length;
+}
+
 // --- Resolve a child entity up to its owning projectId (null if not found) ---
 
 export async function projectIdOfBoard(db: AuthzDb, boardId: string): Promise<string | null> {

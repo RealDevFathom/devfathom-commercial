@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
-import { canAccessProject } from '@/lib/authz';
+import { areProjectMembers, canAccessProject } from '@/lib/authz';
 import { logActivity } from '@/server/activity';
 import { readJson } from '@/lib/api-json';
 
@@ -89,14 +89,22 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     return NextResponse.json({ error: 'You do not have access to that project.' }, { status: 403 });
   }
 
-  // REST-07: validate referenced FKs exist BEFORE the create, so a bad assignee/
-  // label id is a clean 400 instead of a raw Prisma FK violation (500).
-  if (input.assigneeIds.length > 0) {
-    const found = await ctx.db.user.count({ where: { id: { in: input.assigneeIds } } });
-    if (found !== new Set(input.assigneeIds).size) {
-      return NextResponse.json({ error: 'One or more assigneeIds do not exist.' }, { status: 400 });
-    }
+  // Merge explicit assignees with the column's default owners (deduped).
+  const mergedAssignees = [
+    ...new Set([...input.assigneeIds, ...column.defaultAssignees.map((d) => d.userId)]),
+  ];
+
+  // Assignees must belong to this project. This also validates their existence,
+  // while the projectId predicate preserves tenant/project isolation.
+  if (!(await areProjectMembers(ctx.db, column.board.project.id, mergedAssignees))) {
+    return NextResponse.json(
+      { error: 'All assignees must be members of the project.' },
+      { status: 400 }
+    );
   }
+
+  // REST-07: validate referenced label FKs before create, so a bad id is a
+  // clean 400 instead of a raw Prisma FK violation (500).
   if (input.labelIds.length > 0) {
     const found = await ctx.db.label.count({ where: { id: { in: input.labelIds } } });
     if (found !== new Set(input.labelIds).size) {
@@ -108,11 +116,6 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     _max: { order: true },
     where: { columnId: input.columnId },
   });
-
-  // Merge explicit assignees with the column's default owners (deduped)
-  const mergedAssignees = [
-    ...new Set([...input.assigneeIds, ...column.defaultAssignees.map((d) => d.userId)]),
-  ];
 
   const task = await ctx.db.task.create({
     data: {
