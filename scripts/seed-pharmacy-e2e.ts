@@ -43,6 +43,18 @@ const PHARMACY_E2E_ADMIN_CAPABILITIES = [
   'reports:financial',
 ] as const;
 
+/**
+ * Staging demo only: the sensitive pharmacy capabilities that wildcards no longer confer
+ * (capabilityMatches('*' | 'pharmacy:*', these) === false). The demo Owner/Admin needs them to
+ * dispense, run safety actions, review the catalogue and (at the khataScope gate, which asks for
+ * pharmacy:dispense until #300 lands) use Khata at the counter. Never granted to the cashier.
+ */
+const STAGING_DEMO_ADMIN_SENSITIVE_CAPABILITIES = [
+  'pharmacy:dispense',
+  'pharmacy:safety',
+  'pharmacy:catalogue-review',
+] as const;
+
 const FIXED_AT = new Date('2026-09-01T00:00:00.000Z');
 /** Received well in the past, so nothing is blocked as UNRECEIVED. */
 const RECEIVED_AT = new Date('2026-08-01T00:00:00.000Z');
@@ -296,6 +308,32 @@ async function seedBranch() {
 }
 
 /** Demo cashier for the counter. Assigned to the seeded branch so receipt reads are not empty-set denies. */
+/** Idempotent ALLOW top-up for the demo administrator role. Staging demo only. */
+async function seedStagingDemoSensitiveGrants() {
+  await asTenant(async (tx) => {
+    const role = await tx.organizationRole.findFirst({
+      where: { id: PHARMACY_E2E.roleId, organizationId: PHARMACY_E2E.organizationId },
+      select: { id: true },
+    });
+    if (!role) throw new Error('Demo pharmacy administrator role not found; run the full seed first.');
+    for (const capability of STAGING_DEMO_ADMIN_SENSITIVE_CAPABILITIES) {
+      await tx.organizationRolePermission.upsert({
+        where: { organizationRoleId_capability: { organizationRoleId: role.id, capability } },
+        update: { effect: 'ALLOW' },
+        create: {
+          organizationId: PHARMACY_E2E.organizationId,
+          organizationRoleId: role.id,
+          capability,
+          effect: 'ALLOW',
+        },
+      });
+    }
+  });
+  console.log(
+    `Staging demo admin grants ensured: ${STAGING_DEMO_ADMIN_SENSITIVE_CAPABILITIES.join(', ')}.`
+  );
+}
+
 async function seedCashier(passwordHash: string) {
   await asTenant(async (tx) => {
     const role = await tx.organizationRole.upsert({
@@ -831,6 +869,13 @@ async function main() {
       throw new Error('Pharmacy E2E seed requires LOGIN NOSUPERUSER NOBYPASSRLS.');
     }
 
+    const stagingDemo = process.env.STAGING_DEMO_SEED === '1';
+    if (process.env.PHARMACY_E2E_GRANTS_ONLY === '1') {
+      if (!stagingDemo) throw new Error('PHARMACY_E2E_GRANTS_ONLY is staging-demo only.');
+      await seedStagingDemoSensitiveGrants();
+      return;
+    }
+
     const email = process.env.PHARMACY_E2E_ADMIN_EMAIL!.trim().toLowerCase();
     const passwordHash = hashSync(process.env.PHARMACY_E2E_ADMIN_PASSWORD!, 10);
 
@@ -841,6 +886,7 @@ async function main() {
     await seedMedicines();
     await seedStock();
     await seedPrescription();
+    if (stagingDemo) await seedStagingDemoSensitiveGrants();
 
     console.log('Pharmacy counter E2E seed complete.');
   } finally {

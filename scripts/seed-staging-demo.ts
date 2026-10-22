@@ -90,7 +90,8 @@ function run(label: string, cmd: string[], extra: Record<string, string>): void 
 }
 
 async function main(): Promise<void> {
-  writeLogins();
+  // --grants-only must not rewrite the logins file (passwords may be random without SEED_PASSWORD).
+  if (!args.has('--grants-only')) writeLogins();
   if (args.has('--logins-only')) return;
 
   const adminUrl = env.MIGRATION_DATABASE_URL?.trim() || env.DATABASE_URL;
@@ -99,6 +100,19 @@ async function main(): Promise<void> {
   // Fail closed before touching anything unless both URLs are the staging database.
   assertStagingDemoTarget(adminUrl, env);
   assertStagingDemoTarget(appUrl, env);
+
+  if (args.has('--grants-only')) {
+    // Idempotent top-up of the demo pharmacy admin's explicit ALLOW grants for capabilities
+    // wildcards no longer confer. Touches nothing else; still behind assertStagingDemoTarget.
+    run('Pharmacy demo admin grants (top-up)', ['bun', 'scripts/seed-pharmacy-e2e.ts'], {
+      STAGING_DEMO_SEED: '1',
+      STAGING_DEMO_DATABASE_URL: appUrl,
+      DATABASE_URL: appUrl,
+      PHARMACY_E2E_GRANTS_ONLY: '1',
+    });
+    console.log('\n✓ Staging demo grants top-up complete.');
+    return;
+  }
 
   if (!args.has('--skip-base')) {
     // SuperAdmin + agency (org_devfathom) + the full platform catalog, which
