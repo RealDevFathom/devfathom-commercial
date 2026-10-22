@@ -349,12 +349,9 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
 
   const overrides = member.permissionOverrides;
   const roleRules = member.organizationRole?.permissions ?? [];
-  const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
-    const override = capabilityDecision(overrides, action);
-    if (override === 'DENY') return false;
-    if (override === 'ALLOW') return true;
-    return capabilityDecision(roleRules, action) === 'ALLOW';
-  });
+  const capable = RECEIPT_READ_CAPABILITIES.some(
+    (action) => capabilityDecision([...overrides, ...roleRules], action) === 'ALLOW'
+  );
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -1213,7 +1210,7 @@ export const pharmacySalesRouter = router({
           try {
             return await changeSaleStatus(
               txDb(tx),
-              await scopeFor(ctx, input.branchId),
+              await requireCounterReceiptAccess(ctx, input.branchId),
               input.saleId,
               input.action,
               input.reason,

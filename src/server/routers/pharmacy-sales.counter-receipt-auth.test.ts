@@ -32,6 +32,7 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 }));
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
+  changeSaleStatus: vi.fn(async () => ({ id: 'sale-a', status: 'HELD' })),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
@@ -64,7 +65,7 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { readReturnHistory } from '@/lib/pharmacy/sales';
+import { changeSaleStatus, readReturnHistory } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -442,6 +443,35 @@ describe('counter receipt authorization', () => {
         reason: 'org-admin-receipt-access-without-branch-assignment',
       },
     });
+  });
+
+  it.each([
+    {
+      source: 'user override',
+      rolePermissions: dispense,
+      overrides: [{ capability: 'pharmacy:dispense', effect: 'DENY' as const }],
+    },
+    {
+      source: 'role',
+      rolePermissions: [{ capability: 'pharmacy:dispense', effect: 'DENY' as const }],
+      overrides: dispense,
+    },
+  ])('does not let the administrator branch shortcut bypass a $source denial', async (rules) => {
+    const f = fixture(dispense, 'ADMIN');
+    f.db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-a',
+      organizationRole: { permissions: rules.rolePermissions },
+      permissionOverrides: rules.overrides,
+    });
+
+    await expect(
+      f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'hold' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(changeSaleStatus).not.toHaveBeenCalled();
   });
 
   it('does not treat a custom organization role as an administrator', async () => {
