@@ -1,9 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/server/audit', () => ({ recordAudit: vi.fn() }));
+
+import { recordAudit } from '@/server/audit';
 import {
   getSupplierActionPage,
   issueSupplierActionLink,
   submitSupplierEvidence,
   supplierLinkId,
+  uploadSupplierDocument,
 } from './supplier-action-links';
 import { structuralSupplierFileScanner } from './supplier-file-scanner';
 
@@ -73,7 +78,77 @@ async function issued() {
 
 describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     process.env.AUTH_SECRET = 'test-only-secret-at-least-32-characters';
+  });
+
+  it('audits successful and failed signed-link submissions without recording secrets', async () => {
+    const state = await issued();
+    await submitSupplierEvidence(state.db, {
+      token: state.token,
+      kind: 'ACKNOWLEDGEMENT',
+      idempotencyKey: 'audit-success',
+      payload: {},
+      now: NOW,
+    });
+    await expect(
+      submitSupplierEvidence(state.db, {
+        token: state.token,
+        kind: 'PARTIAL_ACCEPTANCE',
+        idempotencyKey: 'audit-failure',
+        payload: { quantities: { line_other: 1 } },
+        now: NOW,
+      })
+    ).rejects.toMatchObject({ reason: 'MISMATCH' });
+
+    expect(recordAudit).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        organizationId: 'org_a',
+        action: 'pharmacySupplierLinks.submit',
+        targetId: state.stored[0]!.id,
+        metadata: { branchId: 'branch_a', kind: 'ACKNOWLEDGEMENT' },
+        outcome: 'SUCCESS',
+      })
+    );
+    expect(recordAudit).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        organizationId: 'org_a',
+        targetId: state.stored[0]!.id,
+        metadata: { branchId: 'branch_a', kind: 'PARTIAL_ACCEPTANCE' },
+        outcome: 'FAILURE',
+        errorCode: 'MISMATCH',
+      })
+    );
+    expect(JSON.stringify(vi.mocked(recordAudit).mock.calls)).not.toContain(state.token);
+    expect(JSON.stringify(vi.mocked(recordAudit).mock.calls)).not.toContain('audit-success');
+  });
+
+  it('audits a rejected document upload against the resolved tenant, branch, and link', async () => {
+    const state = await issued();
+    await expect(
+      uploadSupplierDocument(state.db, {
+        token: state.token,
+        idempotencyKey: 'document-secret',
+        fileName: 'spoofed.pdf',
+        declaredMimeType: 'application/pdf',
+        content: Buffer.from('not a PDF'),
+        now: NOW,
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_UPLOAD' });
+
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: 'org_a',
+        action: 'pharmacySupplierLinks.uploadDocument',
+        targetId: state.stored[0]!.id,
+        metadata: { branchId: 'branch_a', kind: 'DOCUMENT' },
+        outcome: 'FAILURE',
+        errorCode: 'INVALID_UPLOAD',
+      })
+    );
+    expect(JSON.stringify(vi.mocked(recordAudit).mock.calls)).not.toContain('document-secret');
   });
 
   it('24: rejects a relationship/PO supplier mismatch and exposes only the linked PO projection', async () => {
