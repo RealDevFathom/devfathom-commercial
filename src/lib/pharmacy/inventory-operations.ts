@@ -590,25 +590,20 @@ export async function reserveSupplierClaim(
   input: { inventoryLotId: string; reservedUnits: number; returnBy: Date }
 ) {
   assertPositive(input.reservedUnits);
-  // Serialize every reservation for the lot. The caller must keep this lock and
-  // the availability check/create below in the same transaction. Locking the
-  // parent is sufficient even when the lot has no existing claim rows yet.
-  await db.$queryRaw(Prisma.sql`
-    SELECT id FROM "pharmacy_inventory_lots"
+  // Serialize against sales, transfers and purchase returns: lock EVERY AVAILABLE
+  // balance row of the lot (the same rows sale allocation and purchase returns
+  // lock) FOR UPDATE in key (stockLocationId) order, exactly like purchase returns, then measure availability from the locked rows.
+  // The caller must keep this lock and the check/create below in one transaction.
+  const locked = await db.$queryRaw<Array<{ onHandUnits: number }>>(Prisma.sql`
+    SELECT "onHandUnits" FROM "pharmacy_stock_balances"
     WHERE "organizationId" = ${scope.organizationId}
       AND "branchId" = ${scope.branchId}
-      AND id = ${input.inventoryLotId}
+      AND "inventoryLotId" = ${input.inventoryLotId}
+      AND "disposition" = 'AVAILABLE'
+    ORDER BY "stockLocationId" ASC
     FOR UPDATE
   `);
-  const balance = await db.pharmacyStockBalance.aggregate({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      inventoryLotId: input.inventoryLotId,
-      disposition: 'AVAILABLE',
-    },
-    _sum: { onHandUnits: true },
-  });
+  const onHand = locked.reduce((total, row) => total + Number(row.onHandUnits), 0);
   const already = await db.pharmacySupplierClaim.aggregate({
     where: {
       organizationId: scope.organizationId,
@@ -618,7 +613,7 @@ export async function reserveSupplierClaim(
     },
     _sum: { reservedUnits: true },
   });
-  if ((balance._sum.onHandUnits ?? 0) - (already._sum.reservedUnits ?? 0) < input.reservedUnits)
+  if (onHand - (already._sum.reservedUnits ?? 0) < input.reservedUnits)
     throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
   return db.pharmacySupplierClaim.create({
     data: {
