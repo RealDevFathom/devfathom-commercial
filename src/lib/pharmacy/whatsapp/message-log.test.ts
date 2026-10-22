@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ claim: vi.fn(), update: vi.fn() }));
+const mocks = vi.hoisted(() => ({ claim: vi.fn(), update: vi.fn(), customer: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: (_organizationId: string, fn: (db: unknown) => unknown) =>
     fn({
+      $queryRaw: vi.fn().mockResolvedValue([{ patientId: 'patient-a' }]),
+      pharmacyCustomer: { findFirst: mocks.customer },
       pharmacyMessageLog: { createManyAndReturn: mocks.claim, update: mocks.update },
     }),
 }));
@@ -15,6 +17,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.claim.mockResolvedValue([{ id: 'log-a' }]);
   mocks.update.mockResolvedValue({});
+  mocks.customer.mockResolvedValue({ patientId: 'patient-a', active: true, whatsappOptIn: true });
 });
 
 describe('outbound evidence and safe replay', () => {
@@ -91,6 +94,19 @@ describe('outbound evidence and safe replay', () => {
     expect(await sendAndLog(entry, send)).toBe('DUPLICATE');
     expect(send).not.toHaveBeenCalled();
     expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it('cancels a claimed message when the customer opts out before send', async () => {
+    mocks.customer.mockResolvedValueOnce({ patientId: 'patient-a' }).mockResolvedValueOnce({
+      active: true,
+      whatsappOptIn: false,
+    });
+    const send = vi.fn();
+    expect(await sendAndLog({ ...entry, customerId: 'customer-a' }, send)).toBe('CANCELLED');
+    expect(send).not.toHaveBeenCalled();
+    expect(mocks.update).toHaveBeenCalledWith({
+      where: { id: 'log-a' },
+      data: { status: 'IGNORED', error: 'OPTED_OUT' },
+    });
   });
   it('treats an unclassified adapter response as unknown', async () => {
     expect(await sendAndLog(entry, async () => ({ providerMessageId: 'legacy' }))).toBe('UNKNOWN');

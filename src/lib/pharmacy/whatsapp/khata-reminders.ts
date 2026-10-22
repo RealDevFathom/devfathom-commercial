@@ -256,7 +256,7 @@ export async function processDueWhatsAppKhataReminders(
     else if (outcome === 'PREPARED') result.prepared += 1;
     else if (outcome === 'UNKNOWN') result.unknown += 1;
     else if (outcome === 'FAILED') result.failed += 1;
-    else result.duplicate += 1;
+    else result.skippedNoConsent += 1;
   }
   return result;
 }

@@ -30,8 +30,12 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     },
     pharmacyBranch: { findFirst: async () => ({ id: 'branch-1' }) },
     pharmacyCustomer: {
-      findFirst: async ({ where }: { where: { patientId: string } }) =>
-        store.customers.find((customer) => customer.patientId === where.patientId) ?? null,
+      findFirst: async ({ where }: { where: { patientId?: string; id?: string } }) =>
+        store.customers.find(
+          (customer) =>
+            (where.patientId && customer.patientId === where.patientId) ||
+            (where.id && customer.id === where.id)
+        ) ?? null,
     },
     patientConsent: {
       findFirst: async ({ where }: { where: { patientId: string } }) =>

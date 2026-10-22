@@ -2,6 +2,7 @@ import 'server-only';
 
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { lockCustomerConsent } from '../consent-writer';
 import { WhatsAppProviderError, type WhatsAppSendResult } from './provider';
 
 export type MessageLogKind =
@@ -75,7 +76,7 @@ export async function updateMessageLog(
 export async function sendAndLog(
   entry: MessageLogEntry,
   send: () => Promise<WhatsAppSendResult>
-): Promise<'SENT' | 'PREPARED' | 'UNKNOWN' | 'FAILED' | 'DUPLICATE'> {
+): Promise<'SENT' | 'PREPARED' | 'UNKNOWN' | 'FAILED' | 'CANCELLED' | 'DUPLICATE'> {
   const logId = await claimMessageLog({ ...entry, direction: 'OUTBOUND', status: 'PENDING' });
   if (!logId) return 'DUPLICATE';
   return sendClaimedMessage(entry, logId, send);
@@ -86,10 +87,11 @@ export async function sendClaimedMessage(
   entry: MessageLogEntry,
   logId: string,
   send: () => Promise<WhatsAppSendResult>
-): Promise<'SENT' | 'PREPARED' | 'UNKNOWN' | 'FAILED'> {
+): Promise<'SENT' | 'PREPARED' | 'UNKNOWN' | 'FAILED' | 'CANCELLED'> {
   let result: WhatsAppSendResult;
   try {
-    result = await send();
+    result = await sendWithFreshOptIn(entry, logId, send);
+    if (!result) return 'CANCELLED';
   } catch (error) {
     const definitive = error instanceof WhatsAppProviderError && error.definitive;
     await updateMessageLog(entry.organizationId, logId, {
@@ -117,4 +119,33 @@ export async function sendClaimedMessage(
         : {}),
   });
   return outcome;
+}
+
+/**
+ * Re-check consent after the durable claim and hold the consent lock until the
+ * provider call finishes. This closes the claim/opt-out race: a committed STOP
+ * is observed before sending, while a concurrent STOP cannot commit midway
+ * through the provider call. Consent acknowledgements are the sole exception.
+ */
+async function sendWithFreshOptIn(
+  entry: MessageLogEntry,
+  logId: string,
+  send: () => Promise<WhatsAppSendResult>
+): Promise<WhatsAppSendResult | null> {
+  if (!entry.customerId || entry.kind === 'CONSENT_ACK') return send();
+  return withTenantDb(entry.organizationId, async (db) => {
+    await lockCustomerConsent(db, entry.organizationId, entry.customerId!);
+    const customer = await db.pharmacyCustomer.findFirst({
+      where: { organizationId: entry.organizationId, id: entry.customerId },
+      select: { active: true, whatsappOptIn: true },
+    });
+    if (!customer?.active || customer.whatsappOptIn !== true) {
+      await db.pharmacyMessageLog.update({
+        where: { id: logId },
+        data: { status: 'IGNORED', error: 'OPTED_OUT' },
+      });
+      return null;
+    }
+    return send();
+  });
 }
