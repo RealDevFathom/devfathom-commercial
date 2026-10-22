@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-225-isolated
+Branch: wha-225-lane
+HEAD: f8433904f0388136780bef582b0d51a3dbb68097
+Mode: applied
+Excluded (secrets): 1
