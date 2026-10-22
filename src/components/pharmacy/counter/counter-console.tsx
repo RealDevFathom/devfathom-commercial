@@ -1012,7 +1012,7 @@ function ScopedPharmacyCounterConsole({
   ]);
 
   const runTransition = useCallback(
-    async (action: 'hold' | 'resume' | 'complete' | 'void', reason?: string) => {
+    async (action: 'hold' | 'resume' | 'void', reason?: string) => {
       const target = action === 'resume' ? heldSaleId : saleId;
       if (!target || busy) return;
       setPending(action);
@@ -1023,7 +1023,6 @@ function ScopedPharmacyCounterConsole({
           saleId: target,
           action,
           reason,
-          deviceId: readCounterDeviceId() ?? undefined,
         });
         if (action === 'hold') {
           setHeldSaleId(target);

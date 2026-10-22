@@ -709,7 +709,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(after).toEqual(before);
     });
 
-    it('comps a bill line with manager co-authorization (payments:collect)', async () => {
+    it('comps a bill line with manager co-authorization (orders:complimentary)', async () => {
       const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['8.00']);
       const cut = await call(deps.routes.bill, {
         secret: ctx.posA.secret,
@@ -735,6 +735,20 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       });
       expect(res.status).toBe(200);
       expect(res.json.billId).toBe(billId);
+
+      const evidence = await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantCoAuthorization.findFirst({
+          where: { targetType: 'RestaurantBillLine', targetId: line!.id },
+          select: {
+            terminalSessionId: true,
+            terminalSession: { select: { deviceId: true, endedAt: true } },
+          },
+        })
+      );
+      expect(evidence).toMatchObject({
+        terminalSessionId: expect.any(String),
+        terminalSession: { deviceId: ctx.posA.deviceId, endedAt: null },
+      });
     });
 
     it('re-cuts an order by item with manager co-authorization (split)', async () => {

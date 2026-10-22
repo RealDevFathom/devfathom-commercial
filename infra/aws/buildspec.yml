@@ -21,7 +21,9 @@ phases:
     commands:
       # The repository's own Dockerfile, unchanged: the same image the existing
       # deployments build, including its `tsc --noEmit` gate.
-      - docker build --progress=plain -t "devfathom-base:${IMAGE_TAG}" .
+      # NEXT_PUBLIC_APP_URL is inlined at build time; pass it per start-build (staging:
+      # --environment-variables-override name=NEXT_PUBLIC_APP_URL,value=https://staging.devfathom.com).
+      - docker build --progress=plain --build-arg "NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL:-}" -t "devfathom-base:${IMAGE_TAG}" .
       - docker build --progress=plain --build-arg "BASE_IMAGE=devfathom-base:${IMAGE_TAG}" -t "${ECR_REPOSITORY_URI}:${IMAGE_TAG}" -f infra/aws/Dockerfile.rds-ca infra/aws
   post_build:
     on-failure: ABORT

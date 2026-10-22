@@ -464,8 +464,13 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
               title="Composed order"
               className="shrink-0"
               actions={
-                <span className="inline-block min-w-24 text-right font-mono text-sm tabular-nums text-text-strong">
-                  {draftCheckTotal(pos)}
+                <span className="flex min-w-24 flex-col items-end text-right">
+                  <span className="font-mono text-[10px] uppercase tracking-wide text-text-muted">
+                    Cash total
+                  </span>
+                  <span className="font-mono text-sm tabular-nums text-text-strong">
+                    {draftCheckTotal(pos)}
+                  </span>
                 </span>
               }
             >

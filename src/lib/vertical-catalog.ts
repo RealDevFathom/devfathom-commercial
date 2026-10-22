@@ -232,7 +232,12 @@ export const VERTICALS: Record<OrganizationVertical, VerticalDefinition> = {
   },
 };
 
-export const ALL_VERTICALS: readonly OrganizationVertical[] = ['AGENCY', 'RESTAURANT', 'PHARMACY', 'HOSPITALITY'];
+export const ALL_VERTICALS: readonly OrganizationVertical[] = [
+  'AGENCY',
+  'RESTAURANT',
+  'PHARMACY',
+  'HOSPITALITY',
+];
 
 export type DepartmentDefinition = {
   key: string;
@@ -786,7 +791,7 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'manager',
     name: 'Manager',
     isSystem: true,
-    capabilities: ['pharmacy:manage', 'pharmacy:orders'],
+    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
   },
   {
     key: 'cashier',
@@ -1024,6 +1029,7 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'sop:complete',
       'sop:verify',
       'sop:manage',
+      'staff:manage',
       'customers:read',
       'customers:manage',
       'loyalty:redeem',
@@ -1065,6 +1071,7 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'purchasing:create',
       'sop:complete',
       'sop:verify',
+      'staff:manage',
       'customers:read',
       'customers:manage',
       'loyalty:redeem',
@@ -1601,11 +1608,15 @@ export function isRestaurantModuleKey(key: string): boolean {
 /** Commercial packages offered for a vertical (§2.3 onboarding filter). Agency
  * packages are not modeled here; only their compatibility rule is. */
 export function packagesForVertical(vertical: OrganizationVertical): readonly PackageDefinition[] {
-  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].filter((pkg) => pkg.vertical === vertical);
+  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].filter(
+    (pkg) => pkg.vertical === vertical
+  );
 }
 
 export function packageByKey(key: string): PackageDefinition | undefined {
-  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].find((pkg) => pkg.key === key);
+  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].find(
+    (pkg) => pkg.key === key
+  );
 }
 
 /** The §7 limit key that caps a vertical's licensed users. The `defaultSeats`

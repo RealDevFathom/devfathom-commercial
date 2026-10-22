@@ -342,7 +342,10 @@ async function completedSaleLine(
     approvalPolicy: options.discountMinor ? 'branch-manager' : undefined,
     idempotencyKey: `sale-${tag(options.label)}`,
   });
-  await deps.sales.changeSaleStatus(db, scopeOf(f), sale.id, 'complete');
+  await db.pharmacySale.update({
+    where: { id: sale.id },
+    data: { status: 'COMPLETED', completedAt: new Date() },
+  });
   return { sale, line, allocation };
 }
 

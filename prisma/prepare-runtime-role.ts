@@ -97,6 +97,10 @@ export async function prepareRuntimeRole(
       `GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ${ROLE_NAME}`,
     ],
     [
+      'medicine search similarity operator',
+      `GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO ${ROLE_NAME}`,
+    ],
+    [
       'future tables',
       `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${ROLE_NAME}`,
     ],

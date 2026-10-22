@@ -10,7 +10,10 @@ import { getOrderForBranch } from './terminal-orders';
 const at = new Date('2026-10-21T00:00:00.000Z');
 const D = (value: string) => new Prisma.Decimal(value);
 
-function dbFor(channel: 'DINE_IN' | 'TAKEAWAY') {
+function dbFor(
+  channel: 'DINE_IN' | 'TAKEAWAY',
+  options: { serviceChargeRate?: string; billedServiceCharges?: string[] } = {}
+) {
   const tax = {
     findMany: vi.fn(async () => [
       {
@@ -111,12 +114,17 @@ function dbFor(channel: 'DINE_IN' | 'TAKEAWAY') {
         ],
         orderTables: [],
         kitchenTickets: [],
+        bills: (options.billedServiceCharges ?? []).map((serviceChargeTotal) => ({
+          serviceChargeTotal: D(serviceChargeTotal),
+        })),
         deliveryFulfillment: null,
       })),
     },
     restaurantTaxProfileVersion: tax,
     restaurantServiceChargePolicyVersion: {
-      findFirst: vi.fn(async () => ({ rate: { toString: () => '0.100000' } })),
+      findFirst: vi.fn(async () => ({
+        rate: { toString: () => options.serviceChargeRate ?? '0.100000' },
+      })),
     },
   };
 }
@@ -146,5 +154,28 @@ describe('order totals ignore stored tax and service', () => {
     );
     expect(detail?.totals.tax).toBe('0.23');
     expect(detail?.totals.serviceCharge).toBe('0.00');
+  });
+
+  it('shows the live bills pinned service after a line comp instead of gross draft service', async () => {
+    const detail = await getOrderForBranch(
+      dbFor('DINE_IN', { billedServiceCharges: ['6.00'] }) as unknown as ScopedDb,
+      'order-1',
+      'branch-1'
+    );
+
+    expect(detail?.totals.serviceCharge).toBe('6');
+  });
+
+  it('shows the bill pinned service when the published rate changes after bill cut', async () => {
+    const detail = await getOrderForBranch(
+      dbFor('DINE_IN', {
+        serviceChargeRate: '0.200000',
+        billedServiceCharges: ['10.00'],
+      }) as unknown as ScopedDb,
+      'order-1',
+      'branch-1'
+    );
+
+    expect(detail?.totals.serviceCharge).toBe('10');
   });
 });

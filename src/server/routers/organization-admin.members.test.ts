@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   userFindFirst: vi.fn(),
   userCreate: vi.fn(),
+  userUpdate: vi.fn(),
   userCount: vi.fn(),
   queryRaw: vi.fn(),
   branchFindMany: vi.fn(),
@@ -41,6 +42,7 @@ type MemberDb = {
   user: {
     findFirst: typeof mocks.userFindFirst;
     create: typeof mocks.userCreate;
+    update: typeof mocks.userUpdate;
     count: typeof mocks.userCount;
   };
   organizationDepartment: { findFirst: typeof mocks.departmentFindFirst };
@@ -52,7 +54,12 @@ type MemberDb = {
 };
 
 const db: MemberDb = {
-  user: { findFirst: mocks.userFindFirst, create: mocks.userCreate, count: mocks.userCount },
+  user: {
+    findFirst: mocks.userFindFirst,
+    create: mocks.userCreate,
+    update: mocks.userUpdate,
+    count: mocks.userCount,
+  },
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
   organizationRole: { findFirst: mocks.roleFindFirst },
   pharmacyBranch: { findMany: mocks.branchFindMany },
@@ -92,6 +99,15 @@ const input = {
   organizationRoleId: null,
 };
 
+const updateInput = {
+  id: 'admin_b',
+  role: 'EMPLOYEE' as const,
+  status: 'ACTIVE' as const,
+  organizationRoleId: null,
+  title: 'Cashier',
+  department: 'COUNTER',
+};
+
 describe('organization member creation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -110,12 +126,19 @@ describe('organization member creation', () => {
     });
   });
 
-  it.each(['aaaaaaaaaaaa', 'AAAAAAAAAAAA', 'PasswordOnly'])('rejects weak staff passwords: %s', async (password) => {
-    await expect(caller().createMember({ ...input, password })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    await expect(caller().resetMemberPassword({ id: 'member', password })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(mocks.userCreate).not.toHaveBeenCalled();
-    expect(mocks.userFindFirst).not.toHaveBeenCalled();
-  });
+  it.each(['aaaaaaaaaaaa', 'AAAAAAAAAAAA', 'PasswordOnly'])(
+    'rejects weak staff passwords: %s',
+    async (password) => {
+      await expect(caller().createMember({ ...input, password })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      await expect(caller().resetMemberPassword({ id: 'member', password })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      expect(mocks.userCreate).not.toHaveBeenCalled();
+      expect(mocks.userFindFirst).not.toHaveBeenCalled();
+    }
+  );
 
   it('creates an ACTIVE member scoped to the caller tenant with a hashed password', async () => {
     await caller('org_a').createMember(input);
@@ -228,5 +251,106 @@ describe('organization member creation', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Choose an active pharmacy branch.' });
     expect(mocks.userCreate).not.toHaveBeenCalled();
     expect(mocks.assignmentCreateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('organization member last-admin guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_counter' });
+    mocks.userFindFirst.mockResolvedValue({
+      id: 'admin_b',
+      email: 'admin@example.test',
+      role: 'ADMIN',
+      status: 'ACTIVE',
+    });
+    mocks.userCount.mockResolvedValue(1);
+    mocks.queryRaw.mockResolvedValue([{ id: 'org_a' }]);
+    mocks.userUpdate.mockResolvedValue({ id: 'admin_b', email: 'admin@example.test' });
+  });
+
+  it('refuses to demote the last active admin under the organization row lock', async () => {
+    await expect(caller().updateMember(updateInput)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Cannot demote or deactivate the last active admin.',
+    });
+
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.userCount).toHaveBeenCalledWith({
+      where: { organizationId: 'org_a', role: 'ADMIN', status: 'ACTIVE' },
+    });
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.userCount.mock.invocationCallOrder[0]!
+    );
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses to deactivate the last active admin', async () => {
+    await expect(
+      caller().updateMember({ ...updateInput, role: 'ADMIN', status: 'INACTIVE' })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Cannot demote or deactivate the last active admin.',
+    });
+
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+
+  it('serializes concurrent two-admin demotions so one active admin remains', async () => {
+    let activeAdmins = 2;
+    let transactionTail = Promise.resolve();
+    const concurrentDb = {
+      ...db,
+      user: {
+        ...db.user,
+        count: vi.fn(async () => activeAdmins),
+        update: vi.fn(async ({ data }: { data: { role: string; status: string } }) => {
+          if (data.role !== 'ADMIN' || data.status !== 'ACTIVE') activeAdmins -= 1;
+          return { id: 'updated', email: 'admin@example.test' };
+        }),
+      },
+      $transaction: async (fn: (tx: MemberDb) => Promise<unknown>) => {
+        const prior = transactionTail;
+        let release!: () => void;
+        transactionTail = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        await prior;
+        try {
+          return await fn(concurrentDb as MemberDb);
+        } finally {
+          release();
+        }
+      },
+    };
+    const concurrentCaller = (memberId: string) =>
+      organizationAdminRouter
+        .createCaller({
+          db: concurrentDb,
+          entitlements: { enabledModules: [], activeSeats: 2, seatLimit: 10 },
+          session: {
+            expires: 'later',
+            user: {
+              id: 'admin_a',
+              organizationId: 'org_a',
+              role: 'ADMIN',
+              department: 'COUNTER',
+              status: 'ACTIVE',
+            },
+          },
+          organization: null,
+          support: null,
+          requestMeta: { ip: null, userAgent: null },
+          audit: { detail: {} },
+        } as unknown as TRPCContext)
+        .updateMember({ ...updateInput, id: memberId });
+
+    const results = await Promise.allSettled([
+      concurrentCaller('admin_b'),
+      concurrentCaller('admin_c'),
+    ]);
+
+    expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(activeAdmins).toBe(1);
   });
 });

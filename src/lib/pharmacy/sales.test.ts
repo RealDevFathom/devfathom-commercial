@@ -124,48 +124,6 @@ describe('POS sale voiding', () => {
     expect(reversals).toHaveLength(2);
   });
 
-  it('gives a completed sale a receipt number', async () => {
-    const sale = {
-      id: 'sale-a',
-      status: 'OPEN',
-      receiptNumber: null as number | null,
-      receiptDeviceId: null as string | null,
-      businessDate: null as Date | null,
-    };
-    const db = {
-      pharmacySale: {
-        findFirst: async () => sale,
-        updateMany: async () => {
-          sale.status = 'COMPLETED';
-          return { count: 1 };
-        },
-        update: async ({
-          data,
-        }: {
-          data: { receiptNumber: number; receiptDeviceId: string; businessDate: Date };
-        }) => {
-          Object.assign(sale, data);
-          return sale;
-        },
-      },
-      $queryRaw: async () => [{ receipt_number: 7 }],
-      pharmacySaleEvent: { create: async ({ data }: { data: Record<string, unknown> }) => data },
-    };
-    const completed = await changeSaleStatus(
-      db as never,
-      scope,
-      'sale-a',
-      'complete',
-      undefined,
-      'counter-1'
-    );
-    expect(completed).toMatchObject({
-      status: 'COMPLETED',
-      receiptNumber: 7,
-      receiptDeviceId: 'counter-1',
-    });
-  });
-
   it('stops a losing add-line race before stock allocation', async () => {
     let medicineReads = 0;
     const db = {

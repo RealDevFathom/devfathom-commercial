@@ -201,7 +201,7 @@ function fail(error: unknown): never {
       code:
         error.reason === 'CUSTOMER_NOT_FOUND'
           ? 'NOT_FOUND'
-          : error.reason === 'CONSENT_REQUIRED' || error.reason === 'SALE_NOT_LINKED'
+          : error.reason === 'LOYALTY_CONSENT_REQUIRED' || error.reason === 'SALE_NOT_LINKED'
             ? 'FORBIDDEN'
             : 'BAD_REQUEST',
       message: error.reason,
@@ -1197,13 +1197,12 @@ export const pharmacySalesRouter = router({
         .object({
           branchId,
           saleId: z.string().min(1),
-          action: z.enum(['hold', 'resume', 'convertQuotation', 'complete', 'void']),
+          action: z.enum(['hold', 'resume', 'convertQuotation', 'void']),
           reason: z.string().trim().min(1).optional(),
           controlledWitness: z
             .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
             .strict()
             .optional(),
-          deviceId: z.string().trim().min(1).max(200).optional(),
         })
         .strict()
     )
@@ -1217,7 +1216,6 @@ export const pharmacySalesRouter = router({
               input.saleId,
               input.action,
               input.reason,
-              input.deviceId,
               input.controlledWitness
             );
           } catch (error) {

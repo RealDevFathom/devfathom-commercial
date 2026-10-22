@@ -22,6 +22,14 @@ describe('counterErrorMessage', () => {
     );
   });
 
+  it('names loyalty consent without referring to dispensing', () => {
+    const message = counterErrorMessage(new Error('LOYALTY_CONSENT_REQUIRED'));
+    expect(message).toBe(
+      'Loyalty consent is required before linking this customer or redeeming loyalty points.'
+    );
+    expect(message).not.toContain('dispensing');
+  });
+
   it('never returns a raw reason code for an unmapped failure', () => {
     // Deliberately not in the map: a reason a later lane might add.
     const message = counterErrorMessage(new Error('SOME_FUTURE_REASON'));

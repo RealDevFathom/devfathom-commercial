@@ -92,7 +92,9 @@ describe('ordinary loyalty settlement completion (held policy fixtures excluded)
   it('refuses revoked consent before tender or point writes', async () => {
     const { db } = fixture();
     db.patientConsent.findFirst.mockResolvedValue({ granted: false, revokedAt: null });
-    await expect(redeemSalePoints(db as never, scope, input)).rejects.toThrow('CONSENT_REQUIRED');
+    await expect(redeemSalePoints(db as never, scope, input)).rejects.toThrow(
+      'LOYALTY_CONSENT_REQUIRED'
+    );
     expect(db.pharmacyTender.create).not.toHaveBeenCalled();
     expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
   });

@@ -178,16 +178,83 @@ describe('prescription capture and private delivery', () => {
     });
     expect(mocks.can).toHaveBeenCalledWith(
       expect.anything(),
-      'pharmacy:orders',
+      'pharmacy:dispense',
       undefined,
       expect.objectContaining({ source: 'TRPC' })
     );
   });
 
-  it('allows dispensing capability without granting clinical decisions', async () => {
+  it('allows pharmacists with dispensing capability', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:dispense');
     await expect(upload()).resolves.toHaveProperty('url');
     expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('allows tenant administrators only when central ABAC finds an explicit dispense grant', async () => {
+    mocks.can.mockResolvedValue(true);
+    const admin = context();
+    admin.session!.user.role = 'ADMIN';
+    await expect(
+      caller(admin).uploadSource({
+        patientId: 'patient-a',
+        contentType: 'image/png',
+        dataBase64: (
+          await sharp({ create: { width: 2, height: 2, channels: 3, background: 'white' } })
+            .png()
+            .toBuffer()
+        ).toString('base64'),
+      })
+    ).resolves.toHaveProperty('url');
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'ADMIN' }),
+      'pharmacy:dispense',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+  });
+
+  it('refuses a tenant administrator when central ABAC finds no exact dispense grant', async () => {
+    mocks.can.mockResolvedValue(false);
+    const admin = context();
+    admin.session!.user.role = 'ADMIN';
+
+    await expect(caller(admin).workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'ADMIN' }),
+      'pharmacy:dispense',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+  });
+
+  it('refuses to record a prescription fill without an exact dispense grant', async () => {
+    mocks.can.mockResolvedValue(false);
+    const ctx = context();
+    const create = vi.fn();
+    (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
+    await expect(
+      caller(ctx).fill({
+        id: 'fill-a',
+        prescriptionLineId: 'line-a',
+        fillSequence: 1,
+        quantityCanonicalUnits: 1,
+        idempotencyKey: 'fill-key-a',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(create).not.toHaveBeenCalled();
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:dispense',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+  });
+
+  it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:orders');
+    await expect(caller().workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(upload()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.putUpload).not.toHaveBeenCalled();
   });
 
   it.each(['capture://rx.png', '/api/files/foreign.png', 'https://foreign.test/image.png'])(
@@ -354,7 +421,7 @@ describe('prescription capture and private delivery', () => {
     const receipt = await upload();
     mocks.actor.mockResolvedValueOnce(null);
     expect((await GET(new Request(`http://localhost${receipt.url}`))).status).toBe(401);
-    mocks.can.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+    mocks.can.mockResolvedValueOnce(false);
     expect((await GET(new Request(`http://localhost${receipt.url}`))).status).toBe(403);
     expect(
       (await GET(new Request('http://localhost/api/pharmacy/prescription-files?id=../secret')))
