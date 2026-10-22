@@ -493,15 +493,24 @@ export async function postWriteOffEntry(
       occurredAt: input.at,
       idempotencyKey: postingKey('PHARMACY_STOCK_WRITE_OFF', movement.id),
       branchId: movement.branchId,
-      lines: nonZero([
-        {
-          ...dimensions,
-          accountCode: 'INVENTORY_WRITE_OFF',
-          side: 'DEBIT',
-          amountMinor,
-        },
-        { ...dimensions, accountCode: 'INVENTORY', side: 'CREDIT', amountMinor },
-      ]),
+      // Free/sample stock has no inventory value to expense, but still needs a
+      // journal receipt so the write-off and its accounting completeness remain
+      // atomic and idempotent. A same-account marker records no net value.
+      lines:
+        amountMinor > 0
+          ? [
+              {
+                ...dimensions,
+                accountCode: 'INVENTORY_WRITE_OFF',
+                side: 'DEBIT',
+                amountMinor,
+              },
+              { ...dimensions, accountCode: 'INVENTORY', side: 'CREDIT', amountMinor },
+            ]
+          : [
+              { ...dimensions, accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: 1 },
+              { ...dimensions, accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 1 },
+            ],
     }
   );
 }

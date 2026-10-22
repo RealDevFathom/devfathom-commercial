@@ -737,6 +737,37 @@ describeIfDatabase('FIN-01 — expiry/damage write-off', () => {
     expect(totalFor(entry, 'INVENTORY_WRITE_OFF', 'DEBIT')).toBe(12_500);
     expect(totalFor(entry, 'INVENTORY', 'CREDIT')).toBe(12_500);
   });
+
+  it('records a balanced net-zero journal receipt for zero-cost stock', async () => {
+    const f = await fixture(ORG_A, branch('free-writeoff'), 'free-writeoff');
+    const entry = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, f, {
+        label: 'free-writeoff',
+        units: 5,
+        unitCostMinor: 0,
+        expiresAt: EXPIRY_SOON,
+      });
+      const written = await deps.operations.writeOff(db, scopeOf(f), {
+        inventoryLotId: lot.id,
+        stockLocationId: f.storeId,
+        units: 5,
+        witnessId: WITNESS,
+        reason: 'Expired free sample destroyed',
+        evidenceRef: `DEST-${tag('free-writeoff')}`,
+        idempotencyKey: `free-writeoff-${tag('free-writeoff')}`,
+      });
+      return deps.postings.postWriteOffEntry(db, scopeOf(f), {
+        stockMovementId: written.movement.id,
+        at: LATER,
+      });
+    });
+
+    expectBalanced(entry);
+    expect(totalFor(entry, 'INVENTORY_WRITE_OFF', 'DEBIT')).toBe(0);
+    expect(totalFor(entry, 'INVENTORY', 'CREDIT')).toBe(0);
+    expect(totalFor(entry, 'SALES_CLEARING', 'DEBIT')).toBe(1);
+    expect(totalFor(entry, 'SALES_CLEARING', 'CREDIT')).toBe(1);
+  });
 });
 
 describeIfDatabase('FIN-01 — supplier claim', () => {

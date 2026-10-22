@@ -14,7 +14,8 @@ const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
   const postWriteOffEntry = vi.fn();
-  return { hasModule, postWriteOffEntry };
+  const can = vi.fn(async () => true);
+  return { hasModule, postWriteOffEntry, can };
 });
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -30,6 +31,10 @@ vi.mock('@/server/audit', () => ({
 }));
 vi.mock('@/lib/pharmacy/finance-postings', () => ({
   postWriteOffEntry: mocks.postWriteOffEntry,
+}));
+vi.mock('@/lib/abac', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
+  can: mocks.can,
 }));
 
 import { moduleForProcedure } from '@/lib/module-catalog';
@@ -116,6 +121,8 @@ beforeEach(() => {
   db = makeDb();
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
   mocks.postWriteOffEntry.mockReset();
+  mocks.can.mockReset();
+  mocks.can.mockResolvedValue(true);
 });
 
 describe('pharmacy inventory entitlement and tenant boundaries', () => {
@@ -260,6 +267,32 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       { stockMovementId: 'new', at: expect.any(Date) }
     );
     expect(result.journalEntry).toEqual({ id: 'journal_1' });
+  });
+
+  it('denies a write-off when the central inventory capability decision denies it', async () => {
+    mocks.can.mockResolvedValue(false);
+
+    await expect(
+      caller().writeOff({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 5,
+        witnessId: 'user_b',
+        reason: 'Expired stock destroyed',
+        evidenceRef: 'DEST-617-DENIED',
+        idempotencyKey: 'writeoff-617-denied',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_a' }),
+      'pharmacy:inventory',
+      undefined,
+      expect.objectContaining({ db })
+    );
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(mocks.postWriteOffEntry).not.toHaveBeenCalled();
   });
 });
 
