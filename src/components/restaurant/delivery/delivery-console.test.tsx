@@ -10,7 +10,11 @@ const mocks = vi.hoisted(() => ({
   createZone: vi.fn(),
   createAddress: vi.fn(),
   mutate: vi.fn(),
+  reactivateZone: vi.fn(),
+  setDefaultAddress: vi.fn(),
   invalidate: vi.fn(),
+  zones: [] as Array<Record<string, unknown>>,
+  addresses: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -61,13 +65,13 @@ vi.mock('@/lib/trpc', () => ({
         listZones: {
           useQuery: (input: unknown, options: { enabled: boolean }) => {
             mocks.zoneCalls.push({ input, enabled: options.enabled });
-            return { data: [], error: null, isLoading: false, refetch: vi.fn() };
+            return { data: mocks.zones, error: null, isLoading: false, refetch: vi.fn() };
           },
         },
         listAddresses: {
           useQuery: (input: unknown, options: { enabled: boolean }) => {
             mocks.addressCalls.push({ input, enabled: options.enabled });
-            return { data: [], error: null, isLoading: false, refetch: vi.fn() };
+            return { data: mocks.addresses, error: null, isLoading: false, refetch: vi.fn() };
           },
         },
       },
@@ -82,7 +86,11 @@ vi.mock('@/lib/trpc', () => ({
                       ? mocks.createZone
                       : procedure === 'createAddress'
                         ? mocks.createAddress
-                        : mocks.mutate,
+                        : procedure === 'reactivateZone'
+                          ? mocks.reactivateZone
+                          : procedure === 'setDefaultAddress'
+                            ? mocks.setDefaultAddress
+                            : mocks.mutate,
                   isPending: false,
                 }),
               },
@@ -120,6 +128,8 @@ describe('DeliveryConsole', () => {
     mocks.zoneCalls.length = 0;
     mocks.addressCalls.length = 0;
     mocks.customerCalls.length = 0;
+    mocks.zones.length = 0;
+    mocks.addresses.length = 0;
   });
 
   it('gates reads and uses friendly selectors instead of raw identifiers', () => {
@@ -205,5 +215,75 @@ describe('DeliveryConsole', () => {
       })
     );
     expect(window.location.href).not.toContain('Canal');
+  });
+
+  it('reactivates an inactive delivery zone after confirmation', () => {
+    mocks.zones.push({
+      id: 'zone_1',
+      name: 'Central',
+      fixedFee: '3.50',
+      minimumSubtotal: '20.00',
+      promisedMinutes: 35,
+      sortOrder: 0,
+      areaPostalLabel: null,
+      active: false,
+    });
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Reactivate' }));
+    const dialog = screen.getByRole('dialog', { name: 'Confirm reactivation' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reactivate' }));
+
+    expect(mocks.reactivateZone).toHaveBeenCalledWith({ branchId: 'branch_1', zoneId: 'zone_1' });
+  });
+
+  it('makes a non-default address default without resubmitting PII', () => {
+    mocks.addresses.push({
+      id: 'address_1',
+      label: 'Home',
+      recipientName: 'Ayesha Khan',
+      normalizedPhone: '+923001234567',
+      addressLine1: '42 Canal Road',
+      addressLine2: null,
+      locality: 'Lahore',
+      administrativeArea: null,
+      postalCode: null,
+      countryCode: 'PK',
+      latitude: null,
+      longitude: null,
+      isDefault: false,
+    });
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'customer_1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Make default' }));
+
+    expect(mocks.setDefaultAddress).toHaveBeenCalledWith({
+      customerId: 'customer_1',
+      addressId: 'address_1',
+    });
+  });
+
+  it('does not offer an uncheck transition while editing the current default address', () => {
+    mocks.addresses.push({
+      id: 'address_1',
+      label: 'Home',
+      recipientName: 'Ayesha Khan',
+      normalizedPhone: '+923001234567',
+      addressLine1: '42 Canal Road',
+      addressLine2: null,
+      locality: 'Lahore',
+      administrativeArea: null,
+      postalCode: null,
+      countryCode: 'PK',
+      latitude: null,
+      longitude: null,
+      isDefault: true,
+    });
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'customer_1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    expect(screen.getByRole('checkbox', { name: 'Use as default address' })).toBeDisabled();
+    expect(screen.getByText(/use Make default on another saved address/i)).toBeInTheDocument();
   });
 });
