@@ -26,6 +26,7 @@ import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
 
 import { Button } from '@/components/ui/button';
+import { PendingLegalReviewNotice } from '@/components/pharmacy/pending-legal-review-notice';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -91,7 +92,9 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [evidenceRef, setEvidenceRef] = useState('');
   const [provinceCode, setProvinceCode] = useState<string>(
-    initial.jurisdictions[0]?.provinceCode ?? ''
+    initial.versions.find((version) => version.inForce)?.provinceCode ??
+      initial.jurisdictions[0]?.provinceCode ??
+      ''
   );
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -99,7 +102,14 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const refresh = (nextBranchId = branchId) => {
     void utils.pharmacyOnboarding.regulatory
       .fetch({ branchId: nextBranchId || undefined })
-      .then(setData)
+      .then((next) => {
+        setData(next);
+        setProvinceCode(
+          next.versions.find((version) => version.inForce)?.provinceCode ??
+            next.jurisdictions[0]?.provinceCode ??
+            ''
+        );
+      })
       .catch(() => setErrors({ form: 'That branch could not be loaded. Try again.' }));
   };
 
@@ -273,6 +283,12 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
         )}
       </SectionCard>
 
+      {jurisdiction?.provisional ? (
+        <PendingLegalReviewNotice
+          message={`${jurisdiction.provinceName} rules are not legally confirmed and cannot authorize regulated operations until review is complete.`}
+        />
+      ) : null}
+
       <SectionCard
         eyebrow="Effective-dated"
         title={inForce ? 'Record the next version' : 'Record the first version'}
@@ -326,7 +342,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               htmlFor="provinceCode"
               hint={
                 jurisdiction?.provisional
-                  ? 'These rules are still provisional, so this branch cannot operate on them yet.'
+                  ? 'These rules are pending legal review and cannot authorize regulated operations yet.'
                   : 'Only provinces with published rules appear here.'
               }
               label="Province"

@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { PendingLegalReviewNotice } from '@/components/pharmacy/pending-legal-review-notice';
 import { formatKarachiDateTime } from '@/lib/pharmacy/karachi-time';
 import { registerPrintTotals } from '@/lib/pharmacy/register-print';
 import { trpc } from '@/lib/trpc';
@@ -120,6 +121,9 @@ export function ControlledRegisterConsole() {
         <WorkspaceState title="Controlled register could not be loaded" tone="danger">
           {register.error.message}
         </WorkspaceState>
+      ) : null}
+      {register.data?.pendingLegalReview ? (
+        <PendingLegalReviewNotice message="This branch’s province rules are not legally confirmed. The register remains visible, but these rules cannot authorize regulated operations until review is complete." />
       ) : null}
       {register.data ? (
         <SectionCard title="Register" titleLevel={2}>

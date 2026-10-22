@@ -37,6 +37,7 @@ import {
   fieldError,
   provinceName,
   regulatoryProfileInput,
+  rulesPendingLegalReview,
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
@@ -155,10 +156,7 @@ async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
       // Provisional anywhere is provisional everywhere: the regulatory guard
       // refuses the branch if *any* of the three fields it reads is unconfirmed,
       // so the surface must report the same thing rather than a rosier subset.
-      provisional:
-        categories.provisional ||
-        schedules.provisional ||
-        ruleSetOptions(ruleSet.pharmacistCoverageRule).provisional,
+      provisional: rulesPendingLegalReview(ruleSet),
     };
   });
 }

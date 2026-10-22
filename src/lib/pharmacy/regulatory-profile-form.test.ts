@@ -6,6 +6,7 @@ import {
   fieldError,
   provinceName,
   regulatoryProfileInput,
+  rulesPendingLegalReview,
   ruleSetOptions,
 } from './regulatory-profile-form';
 
@@ -119,6 +120,24 @@ describe('branch regulatory profile input', () => {
     expect(ruleSetOptions({ values: [], provisional: true }).provisional).toBe(true);
     expect(ruleSetOptions(null)).toEqual({ values: [], provisional: true });
     expect(ruleSetOptions({ values: [1, 2] }).values).toEqual([]);
+  });
+
+  it('keeps the province pending legal review until every operational rule is confirmed', () => {
+    const confirmed = { values: [], provisional: false };
+    expect(
+      rulesPendingLegalReview({
+        licenceCategories: confirmed,
+        permittedSchedules: confirmed,
+        pharmacistCoverageRule: confirmed,
+      })
+    ).toBe(false);
+    expect(
+      rulesPendingLegalReview({
+        licenceCategories: confirmed,
+        permittedSchedules: { values: [], provisional: true },
+        pharmacistCoverageRule: confirmed,
+      })
+    ).toBe(true);
   });
 
   it('prints a province name rather than its code, and falls back to the code it does not know', () => {

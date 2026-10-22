@@ -162,3 +162,16 @@ export function ruleSetOptions(field: unknown): {
   // choices that cannot be acted on.
   return { values, provisional: rule.provisional !== false };
 }
+
+/** Mirrors the regulatory guard: one unconfirmed operational rule keeps the province pending. */
+export function rulesPendingLegalReview(ruleSet: {
+  licenceCategories: unknown;
+  permittedSchedules: unknown;
+  pharmacistCoverageRule: unknown;
+}): boolean {
+  return [
+    ruleSet.licenceCategories,
+    ruleSet.permittedSchedules,
+    ruleSet.pharmacistCoverageRule,
+  ].some((field) => ruleSetOptions(field).provisional);
+}

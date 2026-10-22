@@ -12,6 +12,7 @@ import { maskCnic } from '@/lib/pharmacy/patient-prescriptions';
 import { createInspectionPack } from '@/lib/pharmacy/inspection-pack';
 import { installPharmacySopLibrary } from '@/lib/pharmacy/sop-library';
 import { activeLegalHoldKeys } from '@/lib/pharmacy/retention';
+import { rulesPendingLegalReview } from '@/lib/pharmacy/regulatory-profile-form';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   clearLockout,
@@ -80,20 +81,41 @@ export const pharmacySafetyRouter = router({
     .input(z.object({ branchId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       const organizationId = await organizationBranch(ctx, input.branchId);
-      const entries = await ctx.db.pharmacyControlledRegisterEntry.findMany({
-        where: { organizationId, branchId: input.branchId },
-        orderBy: { serial: 'asc' },
-        include: {
-          patient: { select: { displayName: true, cnic: true } },
-          prescriber: true,
-          prescription: true,
-          medicine: { select: { productName: true, manufacturer: true } },
-          line: { include: { medicine: true } },
-          correctsEntry: { select: { serial: true } },
-          refEntry: { select: { serial: true } },
-          incidents: { include: { approvals: true } },
-        },
-      });
+      const now = new Date();
+      const [entries, regulatoryProfile] = await Promise.all([
+        ctx.db.pharmacyControlledRegisterEntry.findMany({
+          where: { organizationId, branchId: input.branchId },
+          orderBy: { serial: 'asc' },
+          include: {
+            patient: { select: { displayName: true, cnic: true } },
+            prescriber: true,
+            prescription: true,
+            medicine: { select: { productName: true, manufacturer: true } },
+            line: { include: { medicine: true } },
+            correctsEntry: { select: { serial: true } },
+            refEntry: { select: { serial: true } },
+            incidents: { include: { approvals: true } },
+          },
+        }),
+        ctx.db.branchRegulatoryProfile.findFirst({
+          where: {
+            organizationId,
+            branchId: input.branchId,
+            effectiveFrom: { lte: now },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+          },
+          orderBy: { version: 'desc' },
+          select: {
+            jurisdictionRuleSet: {
+              select: {
+                licenceCategories: true,
+                permittedSchedules: true,
+                pharmacistCoverageRule: true,
+              },
+            },
+          },
+        }),
+      ]);
       const witnessIds = [...new Set(entries.map((entry) => entry.witnessedByUserId))];
       const [witnesses, staff] = witnessIds.length
         ? await Promise.all([
@@ -116,6 +138,9 @@ export const pharmacySafetyRouter = router({
         staffNames.set(profile.userId, names);
       }
       return {
+        pendingLegalReview: regulatoryProfile
+          ? rulesPendingLegalReview(regulatoryProfile.jurisdictionRuleSet)
+          : false,
         entries: entries.map((entry) => ({
           ...entry,
           patient: entry.patient
