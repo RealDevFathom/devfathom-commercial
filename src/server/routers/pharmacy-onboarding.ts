@@ -41,6 +41,7 @@ import {
   branchProvinceMismatch,
   fieldError,
   provinceName,
+  regulatoryGrantAllowed,
   regulatoryProfileShape,
   regulatoryProfileSchema,
   ruleSetOptions,
@@ -435,19 +436,14 @@ export const pharmacyOnboardingRouter = router({
       if (provinceMismatch) {
         throw badRequest(provinceMismatch.field, provinceMismatch.message);
       }
-      if (
-        jurisdiction.licenceCategories.length > 0 &&
-        !jurisdiction.licenceCategories.includes(input.licenceCategory)
-      ) {
+      if (!regulatoryGrantAllowed(jurisdiction.licenceCategories, input.licenceCategory)) {
         throw badRequest(
           'licenceCategory',
           `Choose one of the licence categories ${jurisdiction.provinceName} publishes.`
         );
       }
       const unpermitted = input.permittedSchedules.filter(
-        (schedule) =>
-          jurisdiction.permittedSchedules.length > 0 &&
-          !jurisdiction.permittedSchedules.includes(schedule)
+        (schedule) => !regulatoryGrantAllowed(jurisdiction.permittedSchedules, schedule)
       );
       if (unpermitted.length > 0) {
         throw badRequest(
@@ -476,10 +472,22 @@ export const pharmacyOnboardingRouter = router({
 
       await ctx.db.$transaction(async (tx) => {
         if (latest && latest.effectiveTo === null) {
-          await tx.branchRegulatoryProfile.update({
-            where: { id: latest.id },
+          const closed = await tx.branchRegulatoryProfile.updateMany({
+            where: {
+              id: latest.id,
+              organizationId,
+              branchId: branch.id,
+              effectiveTo: null,
+            },
             data: { effectiveTo: effectiveFrom },
           });
+          if (closed.count !== 1) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message:
+                'The regulatory profile changed while you were saving. Reload and try again.',
+            });
+          }
         }
         await tx.branchRegulatoryProfile.create({
           data: {

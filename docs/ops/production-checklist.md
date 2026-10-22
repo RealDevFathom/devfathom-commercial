@@ -15,7 +15,9 @@ Run through before any production deploy (go-ahead comes from Saad via Inky).
 
 ## Migration history
 
-- [ ] For databases that already applied `20261021110000_pharmacy_sindh_published_rules`, set its `_prisma_migrations.checksum` to `0c3ec2b4291aaf13075152b6073599b8ba0aa5122b9994317070c52a7609fdfb` before deployment.
+- [ ] Keep `20261021110000_pharmacy_sindh_published_rules` byte-for-byte as originally
+      deployed (SHA-256 `694a324e4b2d054d5346c7a2d355449ec4d75508a5d9772ca705fcf6492f1a24`).
+      Do not rename migration history or rewrite recorded checksums.
 - [ ] Deploy `20261021153500_pharmacy_sindh_v2_pending_legal_review`. It appends flagged
       PK-SD v2 under FORCE RLS using a transaction-local platform-admin statement;
       v1 remains unchanged. The overlap constraint now includes version, so immutable

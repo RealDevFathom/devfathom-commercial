@@ -250,3 +250,11 @@ export function ruleSetOptions(field: unknown): {
   // choices that cannot be acted on.
   return { values, provisional: rule.provisional !== false };
 }
+
+/**
+ * Regulatory capabilities are an allow-list, never a default allow. An absent,
+ * malformed, or empty rule therefore grants nothing.
+ */
+export function regulatoryGrantAllowed(grants: readonly string[], requested: string): boolean {
+  return grants.includes(requested);
+}

@@ -8,6 +8,7 @@ import {
   FISCAL_STATUSES,
   fieldError,
   provinceName,
+  regulatoryGrantAllowed,
   regulatoryProfileInput,
   regulatoryProfileSchema,
   ruleSetOptions,
@@ -162,6 +163,19 @@ describe('branch regulatory profile input', () => {
     expect(canonicalProvinceCode('AJK')).toBe('PK-AJK');
     expect(canonicalProvinceCode('PK-SD')).toBe('PK-SD');
     expect(canonicalProvinceCode('UNKNOWN')).toBe('UNKNOWN');
+  });
+});
+
+describe('regulatoryGrantAllowed', () => {
+  it('requires an exact published grant', () => {
+    expect(regulatoryGrantAllowed(['RETAIL', 'WHOLESALE'], 'RETAIL')).toBe(true);
+    expect(regulatoryGrantAllowed(['RETAIL'], 'retail')).toBe(false);
+    expect(regulatoryGrantAllowed(['RETAIL'], 'WHOLESALE')).toBe(false);
+  });
+
+  it('fails closed when the published grant list is empty', () => {
+    expect(regulatoryGrantAllowed([], 'RETAIL')).toBe(false);
+    expect(regulatoryGrantAllowed([], 'G')).toBe(false);
   });
 });
 
