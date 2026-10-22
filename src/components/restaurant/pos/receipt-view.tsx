@@ -40,6 +40,7 @@ export type Receipt = {
     serviceChargeTotal: string;
     deliveryFeeTotal: string;
     compTotal: string;
+    discountTotal: string;
     roundingAdjustment: string;
     grandTotal: string;
   };
@@ -156,6 +157,7 @@ export function ReceiptView({ billId, request }: ReceiptViewProps) {
           ['Service charge', receipt.totals.serviceChargeTotal],
           ['Tax', receipt.totals.taxTotal],
           ['Comp', receipt.totals.compTotal],
+          ['Discount', receipt.totals.discountTotal],
           ['Rounding', receipt.totals.roundingAdjustment],
           ['Total', receipt.totals.grandTotal],
         ].map(([label, value]) => (
