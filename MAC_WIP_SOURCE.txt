@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-587-add-durable-authenticated-browser-acceptance-for-physical-stock-counts
+Branch: WHA-587-add-durable-authenticated-browser-acceptance-for-physical-stock-counts
+HEAD: 061b679841eebd3e80e251a6769c0f2c1ed3561f
+Mode: applied
+Excluded (secrets): 1

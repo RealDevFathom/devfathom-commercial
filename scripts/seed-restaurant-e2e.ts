@@ -33,8 +33,11 @@ const IDS = {
   alexStaff: 'staff_chai_chowk_alex',
   operatorUser: 'user_restaurant_e2e_operator',
   managerUser: 'user_restaurant_e2e_manager',
+  inventoryAdminUser: 'staff_restaurant_e2e_inventory_admin',
+  inventoryReaderUser: 'user_restaurant_e2e_inventory_reader',
   operatorRole: 'role_restaurant_e2e_operator',
   managerRole: 'role_restaurant_e2e_manager',
+  inventoryReaderRole: 'role_restaurant_e2e_inventory_reader',
   operatorCredential: 'credential_restaurant_e2e_operator',
   managerCredential: 'credential_restaurant_e2e_manager',
   drawer: 'drawer_restaurant_e2e',
@@ -130,6 +133,42 @@ async function main() {
           updatedAt: FIXED_AT,
         },
       });
+      const restaurantCoreModule = await tx.platformModule.upsert({
+        where: { key: 'restaurant-core' },
+        update: {
+          name: 'Restaurant Core',
+          category: 'Core',
+          routePrefix: '/restaurant',
+          active: true,
+        },
+        create: {
+          id: 'module_restaurant_e2e_core',
+          key: 'restaurant-core',
+          name: 'Restaurant Core',
+          category: 'Core',
+          routePrefix: '/restaurant',
+          active: true,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
+      await tx.organizationModule.upsert({
+        where: {
+          organizationId_moduleId: {
+            organizationId: RESTAURANT_E2E.organizationId,
+            moduleId: restaurantCoreModule.id,
+          },
+        },
+        update: { status: 'ENABLED' },
+        create: {
+          id: 'organization_module_restaurant_e2e_core',
+          organizationId: RESTAURANT_E2E.organizationId,
+          moduleId: restaurantCoreModule.id,
+          status: 'ENABLED',
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
       // WHA-290: `User.department` is a composite foreign key onto
       // `organization_departments`, so this RESTAURANT organization's own
       // catalog (KITCHEN, FRONT_OF_HOUSE — it has no LEADERSHIP) must exist
@@ -208,6 +247,27 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        await tx.organizationRole.upsert({
+          where: { id: IDS.inventoryReaderRole },
+          update: { name: 'Inventory reader' },
+          create: {
+            id: IDS.inventoryReaderRole,
+            key: 'restaurant-e2e-inventory-reader',
+            name: 'Inventory reader',
+            permissions: {
+              create: [
+                {
+                  id: 'permission_restaurant_e2e_inventory_read',
+                  capability: 'inventory:read',
+                  effect: 'ALLOW',
+                  createdAt: FIXED_AT,
+                },
+              ],
+            },
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
         for (const user of [
           {
             id: IDS.alexUser,
@@ -232,6 +292,24 @@ async function main() {
             email: 'manager@restaurant-e2e.test',
             title: 'Manager',
             password: null,
+          },
+          {
+            id: IDS.inventoryAdminUser,
+            roleId: IDS.managerRole,
+            name: 'Inventory Administrator',
+            email: 'inventory-admin@restaurant-e2e.test',
+            title: 'Inventory administrator',
+            // Reuse the already-hashed disposable seed password; plaintext never
+            // enters this fixture or Playwright artifacts.
+            password: devFathomAlexPassword,
+          },
+          {
+            id: IDS.inventoryReaderUser,
+            roleId: IDS.inventoryReaderRole,
+            name: 'Inventory Observer',
+            email: 'inventory-reader@restaurant-e2e.test',
+            title: 'Inventory observer',
+            password: devFathomAlexPassword,
           },
         ]) {
           await tx.user.upsert({
@@ -272,6 +350,13 @@ async function main() {
           });
         }
         for (const staff of [
+          {
+            id: IDS.inventoryAdminUser,
+            userId: IDS.inventoryAdminUser,
+            name: 'Inventory Administrator',
+            pin: RESTAURANT_E2E.managerPin,
+            credentialId: 'credential_restaurant_e2e_inventory_admin',
+          },
           {
             id: IDS.alexStaff,
             userId: IDS.alexUser,
