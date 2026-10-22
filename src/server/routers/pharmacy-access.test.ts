@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { can, subjectFromSession, type CustomPermissionRule } from '@/lib/abac';
+
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -13,12 +15,33 @@ vi.mock('@/server/audit', () => ({
   recordTrpcAudit: vi.fn(),
 }));
 
-import type { TRPCContext } from '../trpc';
-import { pharmacyAccessRouter } from './pharmacy-access';
+import { protectedProcedure, router, type TRPCContext } from '../trpc';
 
-type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
+const PHARMACY_RAIL_CAPABILITIES = [
+  'pharmacy:counter',
+  'pharmacy:procurement',
+  'pharmacy:inventory',
+  'pharmacy:orders',
+  'pharmacy:dispense',
+  'pharmacy:safety',
+  'reports:operational',
+  'reports:financial',
+] as const;
 
-function caller(overrides: Permission[], rolePermissions: Permission[]) {
+const pharmacyAccessRouter = router({
+  navigation: protectedProcedure.query(async ({ ctx }) => {
+    const subject = subjectFromSession(ctx.session.user);
+    const decisions = await Promise.all(
+      PHARMACY_RAIL_CAPABILITIES.map(async (capability) => ({
+        capability,
+        allowed: await can(subject, capability, undefined, { db: ctx.db, source: 'TRPC' }),
+      }))
+    );
+    return decisions.flatMap(({ capability, allowed }) => (allowed ? [capability] : []));
+  }),
+});
+
+function caller(overrides: CustomPermissionRule[], rolePermissions: CustomPermissionRule[]) {
   const db = {
     user: {
       findUnique: vi.fn().mockResolvedValue({
@@ -28,13 +51,25 @@ function caller(overrides: Permission[], rolePermissions: Permission[]) {
     },
   };
 
-  return pharmacyAccessRouter.createCaller({
-    db,
+  const context: TRPCContext = {
+    db: db as unknown as TRPCContext['db'],
     entitlements: {
       organizationId: 'org-1',
       vertical: 'PHARMACY',
+      seatLimit: 10,
+      activeSeats: 1,
       enabledModules: ['pharmacy-core'],
-      modules: [{ key: 'pharmacy-core', name: 'Pharmacy Core', enabled: true }],
+      modules: [
+        {
+          key: 'pharmacy-core',
+          name: 'Pharmacy Core',
+          enabled: true,
+          source: 'BASELINE',
+          seatLimit: null,
+          expiresAt: null,
+        },
+      ],
+      limits: {},
     },
     session: {
       expires: 'later',
@@ -45,11 +80,26 @@ function caller(overrides: Permission[], rolePermissions: Permission[]) {
         organizationId: 'org-1',
       },
     },
-    organization: { id: 'org-1', vertical: 'PHARMACY' },
+    organization: {
+      id: 'org-1',
+      slug: 'pharmacy',
+      displayName: 'Pharmacy',
+      legalName: 'Pharmacy',
+      status: 'ACTIVE',
+      deploymentMode: 'SHARED',
+      timezone: 'UTC',
+      locale: 'en',
+      currency: 'USD',
+      seatLimit: 10,
+      isDemo: false,
+      vertical: 'PHARMACY',
+    },
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
-  } as unknown as TRPCContext);
+  };
+
+  return pharmacyAccessRouter.createCaller(context);
 }
 
 describe('pharmacyAccess.navigation', () => {
@@ -69,9 +119,10 @@ describe('pharmacyAccess.navigation', () => {
   });
 
   it('does not turn wildcard ALLOWs into exact-only dispense or safety grants', async () => {
-    const navigation = await caller([], [
-      { capability: 'pharmacy:*', effect: 'ALLOW' },
-    ]).navigation();
+    const navigation = await caller(
+      [],
+      [{ capability: 'pharmacy:*', effect: 'ALLOW' }]
+    ).navigation();
 
     expect(navigation).toEqual([
       'pharmacy:counter',

@@ -4,14 +4,12 @@ import type { AuthzDb } from '@/lib/authz';
 import { isAdmin } from '@/lib/authz';
 import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
 
-import { can, resolveCustomDecision, subjectFromSession } from '.';
+import { can, resolveCustomDecision, subjectFromSession, type CustomPermissionRule } from '.';
 import { ALL_ACTIONS, POLICIES, type Action } from './policies';
 
-type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
-
 function authorizationDb(options: {
-  overrides?: Permission[];
-  rolePermissions?: Permission[];
+  overrides?: CustomPermissionRule[];
+  rolePermissions?: CustomPermissionRule[];
   throws?: boolean;
 }): AuthzDb {
   return {
@@ -45,7 +43,7 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     'pharmacy:safety',
   ] as const satisfies readonly Action[];
   const proprietor = { ...employee, role: 'ADMIN' };
-  const permissionsFor = (key: string): Permission[] =>
+  const permissionsFor = (key: string): CustomPermissionRule[] =>
     roleTemplatesForVertical('PHARMACY')
       .find((role) => role.key === key)!
       .capabilities.map((capability) => ({ capability, effect: 'ALLOW' }));
