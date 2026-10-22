@@ -104,9 +104,12 @@ export class PosOfflineRuntime {
     await this.persist();
   }
 
-  replay(send: (request: PosReplayRequest) => Promise<PosReplayResponse>): Promise<ReplayResult> {
+  replay(
+    activeStaffProfileId: string,
+    send: (request: PosReplayRequest) => Promise<PosReplayResponse>
+  ): Promise<ReplayResult> {
     if (this.activeReplay) return this.activeReplay;
-    const replay = this.runReplay(send);
+    const replay = this.runReplay(activeStaffProfileId, send);
     this.activeReplay = replay;
     const clear = () => {
       if (this.activeReplay === replay) this.activeReplay = null;
@@ -116,11 +119,17 @@ export class PosOfflineRuntime {
   }
 
   private async runReplay(
+    activeStaffProfileId: string,
     send: (request: PosReplayRequest) => Promise<PosReplayResponse>
   ): Promise<ReplayResult> {
     for (;;) {
       const next = nextReplayCommand(this.queue(), this.scope.deviceId);
       if (next.status !== 'READY') return { state: next.status, discarded: null };
+      // Never adopt persisted work into the current session implicitly. This also
+      // safely refuses legacy drafts that predate the composer field.
+      if (next.draft.composerStaffProfileId !== activeStaffProfileId) {
+        return { state: 'OPERATOR_MISMATCH' as const, discarded: null };
+      }
       const built = buildReplayRequest(next.draft, next.command);
       if (!built.ok) return { state: 'REFUSED' as const, discarded: null };
 
@@ -168,6 +177,6 @@ export class PosOfflineRuntime {
 }
 
 type ReplayResult = {
-  state: 'IDLE' | 'PAUSED' | 'STOPPED' | 'REFUSED';
+  state: 'IDLE' | 'PAUSED' | 'STOPPED' | 'REFUSED' | 'OPERATOR_MISMATCH';
   discarded: { drafts: number; commands: number } | null;
 };
