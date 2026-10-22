@@ -23,7 +23,7 @@ follow-up. The original archived commit IDs (`d4d28461`, `4e6032b7`, and
 
 | Archived work | Disposition | Current implementation |
 | --- | --- | --- |
-| `GrowthSettings` | **Ported.** Added branch-exact, tenant-keyed settings with explicit `ALLOW`/`DENY` effects. Resolution is default-deny and any `DENY` wins over all `ALLOW` rules. | `prisma/schema.prisma`, `prisma/migrations/20261022170000_growth_nightly_metrics/migration.sql`, `src/lib/growth/nightly-metrics.ts` |
+| `GrowthSettings` | **Ported.** Added branch-exact, tenant-keyed settings with explicit `ALLOW`/`DENY` effects. Resolution is default-deny and any `DENY` wins over all `ALLOW` rules. | `prisma/schema.prisma`, `prisma/migrations/20261023000460_growth_nightly_metrics/migration.sql`, `src/lib/growth/nightly-metrics.ts` |
 | Nightly growth metrics job | **Ported.** Added a daily idempotent platform job, exact-tenant/exact-branch aggregate queries, an aggregate-only snapshot, retry-safe conflict handling, and daily enqueue keys. | `src/lib/platform/jobs.ts`, `src/lib/growth/nightly-metrics.ts` |
 | Isolation and recovery coverage | **Ported.** Added unit coverage for default deny and DENY-over-ALLOW, plus migration contract coverage for forced exact-branch RLS and daily uniqueness. | `src/lib/growth/nightly-metrics.test.ts`, `tests/growth-nightly-metrics-migration.test.ts` |
 

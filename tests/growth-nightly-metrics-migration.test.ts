@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
 const migrationPath =
-  'prisma/migrations/20261022170000_growth_nightly_metrics/migration.sql';
+  'prisma/migrations/20261023000460_growth_nightly_metrics/migration.sql';
 
 describe('growth nightly metrics migration', () => {
   it('forces exact organization and branch RLS on settings and snapshots', async () => {
