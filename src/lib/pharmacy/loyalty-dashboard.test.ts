@@ -60,6 +60,35 @@ describe('pharmacy loyalty dashboard metric math', () => {
     );
   });
 
+  it('rejects negative rate inputs instead of turning corrupt counts into a dashboard rate', () => {
+    expect(() => rateBasisPoints(-1n, 8n)).toThrow(
+      'Rate inputs must be non-negative integers.'
+    );
+    expect(() => rateBasisPoints(1n, -8n)).toThrow(
+      'Rate inputs must be non-negative integers.'
+    );
+  });
+
+  it('keeps paisa exact above the PostgreSQL 32-bit integer range', () => {
+    expect(
+      composeLoyaltyDashboardMetrics({
+        issued: { count: 3n, amountMinor: 2_147_483_648n },
+        redeemed: { count: 1n, amountMinor: 715_827_883n },
+        visitors: { total: 3n, repeat: 1n },
+        churnedCustomersCount: 0n,
+        churnDays: 30,
+        customerPointBalances: [21_474_837n],
+        redeemedMarginMinor: 715_827_884n,
+      })
+    ).toMatchObject({
+      vouchersIssuedMinor: 2_147_483_648,
+      vouchersRedeemedMinor: 715_827_883,
+      redemptionRateBasisPoints: 3333,
+      pointsLiabilityMinor: 2_147_483_700,
+      netMarginImpactMinor: 1,
+    });
+  });
+
   it('converts bigint database aggregates without losing minor-unit precision', async () => {
     const queryRaw = vi
       .fn()
@@ -82,5 +111,51 @@ describe('pharmacy loyalty dashboard metric math', () => {
       netMarginImpactMinor: 15_000,
     });
     expect(queryRaw).toHaveBeenCalledTimes(6);
+  });
+
+  it('puts an RLS-compatible organization predicate and selected branches in every source query', async () => {
+    const queries: Array<{ strings: readonly string[]; values: readonly unknown[] }> = [];
+    const siblingSources = {
+      $queryRaw: vi.fn(async (query: { strings: readonly string[]; values: readonly unknown[] }) => {
+        queries.push(query);
+        const sql = query.strings.join(' ');
+        if (sql.includes('AS "amountMinor"')) return [{ count: 0n, amountMinor: 0n }];
+        if (sql.includes('AS total')) return [{ total: 0n, repeat: 0n }];
+        if (sql.includes('churned')) return [{ count: 0n }];
+        if (sql.includes('customer_balances')) return [];
+        return [{ marginMinor: 0n }];
+      }),
+    };
+
+    await readPharmacyLoyaltyDashboard(
+      siblingSources as never,
+      {
+        branchIds: ['branch-a', 'branch-b'],
+        from: '2026-10-01',
+        to: '2026-10-22',
+      },
+      45
+    );
+
+    expect(queries).toHaveLength(6);
+    for (const query of queries) {
+      expect(query.strings.join(' ')).toContain(
+        `current_setting('app.current_organization_id', true)`
+      );
+      expect(query.values).toEqual(expect.arrayContaining(['branch-a', 'branch-b']));
+      expect(query.values).not.toContain('org-from-client');
+    }
+  });
+
+  it.each([0, 3651, 1.5])('rejects churnDays %s before reading sibling sources', async (churnDays) => {
+    const siblingSources = { $queryRaw: vi.fn() };
+    await expect(
+      readPharmacyLoyaltyDashboard(
+        siblingSources as never,
+        { branchIds: ['branch-a'], from: '2026-10-01', to: '2026-10-22' },
+        churnDays
+      )
+    ).rejects.toThrow('Churn days must be between 1 and 3650.');
+    expect(siblingSources.$queryRaw).not.toHaveBeenCalled();
   });
 });

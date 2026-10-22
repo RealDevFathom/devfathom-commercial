@@ -277,6 +277,12 @@ describe('pharmacy owner digest capability boundary', () => {
 describe('pharmacy loyalty dashboard access boundary', () => {
   const input = { from: '2026-10-01', to: '2026-10-22', churnDays: 45 };
 
+  beforeEach(() => {
+    mocks.can.mockReset();
+    mocks.branchFindMany.mockReset();
+    mocks.loyaltyRead.mockReset();
+  });
+
   it('denies an explicit loyalty capability denial before branch or metric reads', async () => {
     mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     await expect(caller().loyaltyDashboard(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -296,6 +302,25 @@ describe('pharmacy loyalty dashboard access boundary', () => {
     await expect(caller().loyaltyDashboard({ ...input, branchId: 'branch_2' }))
       .rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.loyaltyRead).not.toHaveBeenCalled();
+  });
+
+  it('passes only server-authorized branches to the stubbed loyalty sources', async () => {
+    mocks.can.mockResolvedValue(true);
+    mocks.branchFindMany.mockResolvedValue([
+      { id: 'branch_1', name: 'Main' },
+      { id: 'branch_2', name: 'Satellite' },
+    ]);
+    mocks.loyaltyRead.mockResolvedValue({ vouchersIssuedMinor: 0, pointsLiabilityMinor: 0 });
+
+    await expect(caller().loyaltyDashboard(input)).resolves.toMatchObject({
+      vouchersIssuedMinor: 0,
+      pointsLiabilityMinor: 0,
+    });
+    expect(mocks.loyaltyRead).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ branchIds: ['branch_1', 'branch_2'] }),
+      45
+    );
   });
 });
 
