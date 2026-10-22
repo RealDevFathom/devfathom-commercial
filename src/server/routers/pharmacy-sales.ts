@@ -23,7 +23,7 @@ import {
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
-import { workspaceTimezone } from '@/lib/timezone';
+import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -420,6 +420,22 @@ function requireCloseAccess(ctx: TRPCContext) {
     });
 }
 
+async function scopeForClose(ctx: TRPCContext, branch: string, businessDate: Date) {
+  const scope = await scopeFor(ctx, branch);
+  const organization = await ctx.db.organization.findUnique({
+    where: { id: scope.organizationId },
+    select: { timezone: true },
+  });
+  const requestedDay = businessDate.toISOString().slice(0, 10);
+  if (requestedDay > workspaceToday(organization?.timezone)) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'A future business day cannot be closed.',
+    });
+  }
+  return scope;
+}
+
 export const pharmacySalesRouter = router({
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
@@ -502,7 +518,11 @@ export const pharmacySalesRouter = router({
       requireCloseAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
-          readPharmacyClose(txDb(tx), await scopeFor(ctx, input.branchId), input.businessDate)
+          readPharmacyClose(
+            txDb(tx),
+            await scopeForClose(ctx, input.branchId, input.businessDate),
+            input.businessDate
+          )
         );
       } catch (error) {
         fail(error);
@@ -533,7 +553,11 @@ export const pharmacySalesRouter = router({
       requireCloseAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
-          closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          closePharmacyDay(
+            txDb(tx),
+            await scopeForClose(ctx, input.branchId, input.businessDate),
+            input
+          )
         );
       } catch (error) {
         fail(error);
@@ -696,7 +720,11 @@ export const pharmacySalesRouter = router({
       requireCloseAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
-          cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          cutPharmacyDailyClose(
+            txDb(tx),
+            await scopeForClose(ctx, input.branchId, input.businessDate),
+            input
+          )
         );
       } catch (error) {
         fail(error);

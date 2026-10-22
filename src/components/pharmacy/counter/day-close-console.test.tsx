@@ -122,10 +122,24 @@ describe('day-close console', () => {
     expect(workspaceToday(WORKSPACE_ZONE)).toBe('2026-10-22');
     render(<PharmacyDayCloseConsole />);
     expect(screen.getByLabelText('Business date')).toHaveValue('2026-10-22');
+    expect(screen.getByLabelText('Business date')).toHaveAttribute('max', '2026-10-22');
     expect(mocks.previewInput).toHaveBeenLastCalledWith({
       branchId: 'b',
       businessDate: new Date('2026-10-22T00:00:00.000Z'),
     });
+  });
+  it('does not preview a future workspace business day', () => {
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-21T16:30:00.000Z') });
+    render(<PharmacyDayCloseConsole />);
+    mocks.previewInput.mockClear();
+    fireEvent.change(screen.getByLabelText('Business date'), {
+      target: { value: '2026-10-23' },
+    });
+    expect(mocks.previewInput).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Choose today or an earlier business date.'
+    );
+    expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
   });
   it.each(['PKT', 'UTC+5'])(
     'still renders, in UTC, for a stored zone Intl refuses (%s)',

@@ -103,6 +103,7 @@ function DayCloseBranches() {
             <Input
               className="min-h-11"
               type="date"
+              max={today}
               value={date}
               onChange={(e) => setPicked(e.target.value)}
             />
@@ -120,8 +121,9 @@ function DayCloseBranches() {
         {branches.isSuccess && !branches.data.branches.length && (
           <p>No active pharmacy branches are available.</p>
         )}
+        {date > today && <p role="alert">Choose today or an earlier business date.</p>}
       </SectionCard>
-      {branchId && /^\d{4}-\d{2}-\d{2}$/.test(date) && (
+      {branchId && /^\d{4}-\d{2}-\d{2}$/.test(date) && date <= today && (
         <DayCloseForm key={`${branchId}:${date}`} branchId={branchId} date={date} />
       )}
     </div>

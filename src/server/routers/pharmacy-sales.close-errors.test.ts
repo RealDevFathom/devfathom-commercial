@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The close family (`dailyClose`, `closePreview`, `closeDay`) calls the same
 // settlement library as the drawer family, which raises typed
@@ -93,8 +93,38 @@ let f: ReturnType<typeof fixture>;
 beforeEach(() => {
   f = fixture();
 });
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('pharmacy close family refusals', () => {
+  it.each(['closePreview', 'closeDay', 'dailyClose'] as const)(
+    'refuses a future workspace day through %s before reading or writing close data',
+    async (procedure) => {
+      vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-10-22T18:30:00.000Z') });
+      f.db.organization.findUnique.mockResolvedValue({ timezone: 'Asia/Karachi' });
+      const futureDate = new Date('2026-10-24T00:00:00.000Z');
+      const call =
+        procedure === 'closePreview'
+          ? f.caller.closePreview({ branchId: BRANCH, businessDate: futureDate })
+          : procedure === 'dailyClose'
+            ? f.caller.dailyClose({ branchId: BRANCH, businessDate: futureDate })
+            : f.caller.closeDay({
+                branchId: BRANCH,
+                businessDate: futureDate,
+                sourceHash: previewHash,
+                counts: [],
+                varianceNote: '',
+              });
+      await expect(call).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'A future business day cannot be closed.',
+      });
+      expect(f.db.pharmacyDailyClose.findFirst).not.toHaveBeenCalled();
+      expect(f.db.pharmacyDailyClose.create).not.toHaveBeenCalled();
+    }
+  );
+
   it('answers a daily close with a drawer still open as a CONFLICT, writing no close', async () => {
     f.db.pharmacyDrawerSession.count.mockResolvedValue(1);
     await expect(f.caller.dailyClose({ branchId: BRANCH, businessDate })).rejects.toMatchObject({
