@@ -234,7 +234,10 @@ export const POLICIES: Record<Action, Policy[]> = {
   'pharmacy:manage': [],
   'pharmacy:procurement': [],
   'pharmacy:inventory': [],
-  'pharmacy:dispense': [],
+  // Tenant administrators retain the default dispensing access expected by
+  // legacy role gates, but the grant lives here so custom DENY rules evaluated
+  // by `can()` can revoke it before static policies run.
+  'pharmacy:dispense': [isAdmin],
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],
   'pharmacy:orders': [],

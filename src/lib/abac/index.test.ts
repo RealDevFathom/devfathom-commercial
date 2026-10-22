@@ -110,9 +110,9 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     }
   );
 
-  it('grants owners pharmacy actions and both report actions, but not exact-grant-only ones', async () => {
+  it('grants admins default dispense access but keeps the other exact-grant actions opt-in', async () => {
     const db = authorizationDb({ rolePermissions: permissionsFor('owner') });
-    const exactOnly = ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:safety'];
+    const exactOnly = ['pharmacy:catalogue-review', 'pharmacy:safety'];
     for (const action of grantedActions) {
       await expect(can(proprietor, action, undefined, { db })).resolves.toBe(
         !exactOnly.includes(action)
@@ -197,9 +197,8 @@ describe('custom ABAC decisions', () => {
       // capability instead of inheriting broad administrator authority.
       'devices:manage',
       // Pharmacy RX-03/04 and RX-05: pharmacist dispense decisions, substitution
-      // evidence, controlled register and incident approval. Org-role-driven
-      // through the DB customDecision path with no static agency-role policy,
-      // so they stay default-deny like the restaurant capabilities above.
+      // evidence, controlled register and incident approval. Dispensing retains
+      // the tenant-admin fallback; the other actions remain org-role-driven.
       'pharmacy:dispense',
       'pharmacy:safety',
       'pharmacy:catalogue-review',
@@ -209,7 +208,7 @@ describe('custom ABAC decisions', () => {
     expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
-      expect(POLICIES[action]).toEqual([]);
+      expect(POLICIES[action]).toHaveLength(action === 'pharmacy:dispense' ? 1 : 0);
       await expect(can(employee, action, undefined, { db: authorizationDb({}) })).resolves.toBe(
         false
       );
