@@ -10,7 +10,10 @@ ALTER TABLE "restaurant_delivery_fulfillments"
 DO $$
 DECLARE tenant RECORD;
 BEGIN
-  FOR tenant IN SELECT id FROM "organizations" LOOP
+  FOR tenant IN
+    SELECT id FROM "organizations"
+    WHERE "vertical" = 'RESTAURANT'::"OrganizationVertical"
+  LOOP
     PERFORM set_config('app.current_organization_id', tenant.id, true);
     UPDATE "restaurant_delivery_fulfillments"
     SET "paymentMode" = NULL

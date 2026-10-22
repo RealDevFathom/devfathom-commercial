@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 
 const url = process.env.MIGSWEEP_DATABASE_URL;
 const repairs = [
-  '20261021180900_repair_canonical_pharmacy_capabilities',
   '20261021180800_repair_package_module_cleanup',
   '20261021180100_repair_pharmacy_reference_permissions',
   '20261021180200_repair_pharmacy_branch_assignments',
@@ -28,9 +27,14 @@ describe('migration #218 repair contracts', () => {
         /^--[^\n]*\n(?:--[^\n]*\n)*BEGIN;\nSELECT set_config\('app\.is_platform_admin', 'true', true\);[\s\S]*\nCOMMIT;\s*$/,
       );
     }
+  });
 
-    expect(sql('20261021110000_canonical_pharmacy_capabilities')).toMatch(
-      /^--[^\n]*\nBEGIN;\nSELECT set_config\('app\.is_platform_admin', 'true', true\);[\s\S]*\nCOMMIT;\s*$/,
+  it('does not rewrite exact pharmacy grants or restore a removed narrow grant', () => {
+    const referenceRepair = sql('20261021180100_repair_pharmacy_reference_permissions');
+
+    expect(referenceRepair).not.toContain('INSERT INTO "organization_role_permissions"');
+    expect(readdirSync('prisma/migrations')).not.toContain(
+      '20261021180900_repair_canonical_pharmacy_capabilities',
     );
   });
 });
@@ -117,7 +121,7 @@ describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
           "recipientNameSnapshot","normalizedPhoneSnapshot","addressLine1Snapshot","localitySnapshot","countryCodeSnapshot",
           "deliveryFeeSnapshot","promisedMinutesSnapshot","promisedAt","updatedAt")
           VALUES ('sweep218_delivery','sweep218_b','sweep218_restbranch','sweep218_customer','sweep218_order','COD',
-            'Test','+12025550123','Test','Test','US',0,30,now(),now());
+            'Test','+12025550123','Test','Test','US',12.34,30,now(),now());
         COMMIT;`);
 
       // Separate queries model the autocommit execution path that loses LOCAL scope.
@@ -135,6 +139,7 @@ describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
           const result = await db.query(`SELECT
             (SELECT count(*)::int FROM invitations WHERE id='sweep218_invite' AND email='invite@example.invalid') AS invitations,
             (SELECT count(*)::int FROM restaurant_delivery_fulfillments WHERE id='sweep218_delivery' AND "paymentMode" IS NOT NULL) AS pending_modes,
+            (SELECT count(*)::int FROM restaurant_delivery_fulfillments WHERE id='sweep218_delivery' AND "deliveryFeeSnapshot"=12.34) AS money_snapshots,
             (SELECT count(*)::int FROM organization_modules WHERE id='sweep218_override') AS pins,
             (SELECT count(*)::int FROM platform_users WHERE id='sweep218_unenrolled' AND "mfaRequired") AS unenrolled_required,
             (SELECT count(*)::int FROM platform_users WHERE id='sweep218_enrolled' AND "mfaRequired") AS enrolled_required,
@@ -142,12 +147,12 @@ describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
             (SELECT count(*)::int FROM organization_modules WHERE id='sweep218_copy') AS copies,
             (SELECT count(*)::int FROM organization_modules WHERE id='sweep218_override') AS overrides,
             (SELECT count(*)::int FROM organization_role_permissions WHERE "organizationRoleId"='sweep218_role_a' AND capability='pharmacy:catalogue-review') AS permissions,
-            (SELECT count(*)::int FROM organization_role_permissions WHERE id LIKE 'sweep218_rp_%' AND capability LIKE 'pharmacy.%') AS legacy_role_grants,
-            (SELECT count(*)::int FROM organization_role_permissions WHERE id LIKE 'sweep218_rp_%' AND capability LIKE 'pharmacy:%' AND effect='ALLOW') AS canonical_role_allows,
-            (SELECT count(*)::int FROM organization_role_permissions WHERE id LIKE 'sweep218_rp_%' AND capability LIKE 'pharmacy:%' AND effect='DENY') AS canonical_role_denies,
-            (SELECT count(*)::int FROM user_permission_overrides WHERE id LIKE 'sweep218_up_%' AND capability LIKE 'pharmacy.%') AS legacy_user_overrides,
-            (SELECT count(*)::int FROM user_permission_overrides WHERE id LIKE 'sweep218_up_%' AND capability LIKE 'pharmacy:%' AND effect='ALLOW') AS canonical_user_allows,
-            (SELECT count(*)::int FROM user_permission_overrides WHERE id LIKE 'sweep218_up_%' AND capability LIKE 'pharmacy:%' AND effect='DENY') AS canonical_user_denies,
+            (SELECT count(*)::int FROM organization_role_permissions WHERE id LIKE 'sweep218_rp_%' AND capability LIKE 'pharmacy.%') AS exact_role_grants,
+            (SELECT count(*)::int FROM organization_role_permissions WHERE id LIKE 'sweep218_rp_%' AND capability LIKE 'pharmacy:%' AND effect='ALLOW') AS colon_role_allows,
+            (SELECT count(*)::int FROM organization_role_permissions WHERE id LIKE 'sweep218_rp_%' AND capability LIKE 'pharmacy:%' AND effect='DENY') AS colon_role_denies,
+            (SELECT count(*)::int FROM user_permission_overrides WHERE id LIKE 'sweep218_up_%' AND capability LIKE 'pharmacy.%') AS exact_user_overrides,
+            (SELECT count(*)::int FROM user_permission_overrides WHERE id LIKE 'sweep218_up_%' AND capability LIKE 'pharmacy:%' AND effect='ALLOW') AS colon_user_allows,
+            (SELECT count(*)::int FROM user_permission_overrides WHERE id LIKE 'sweep218_up_%' AND capability LIKE 'pharmacy:%' AND effect='DENY') AS colon_user_denies,
             (SELECT count(*)::int FROM organization_role_permissions WHERE "organizationRoleId"='sweep218_role_b') AS other_permissions,
             (SELECT count(*)::int FROM pharmacy_branch_assignments WHERE "organizationId"='sweep218_a') AS assignments,
             (SELECT count(*)::int FROM outbound_effects WHERE id='sweep218_failed') AS failed,
@@ -155,10 +160,10 @@ describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
           return result.rows[0];
         } finally { await db.query('COMMIT'); }
       }
-      expect(await counts()).toEqual({ unenrolled_required: 1, enrolled_required: 1, defaults: 0, copies: 1, overrides: 1, invitations: 0, pending_modes: 1, pins: 1, permissions: 0, legacy_role_grants: 3, canonical_role_allows: 1, canonical_role_denies: 1, legacy_user_overrides: 3, canonical_user_allows: 1, canonical_user_denies: 1, other_permissions: 0, assignments: 0, failed: 1, sanitized: 0 });
+      expect(await counts()).toEqual({ unenrolled_required: 1, enrolled_required: 1, defaults: 0, copies: 1, overrides: 1, invitations: 0, pending_modes: 1, money_snapshots: 1, pins: 1, permissions: 0, exact_role_grants: 3, colon_role_allows: 1, colon_role_denies: 1, exact_user_overrides: 3, colon_user_allows: 1, colon_user_denies: 1, other_permissions: 0, assignments: 0, failed: 1, sanitized: 0 });
       for (let pass = 0; pass < 2; pass++) {
         for (const name of repairs) await db.query(sql(name));
-        expect(await counts()).toEqual({ unenrolled_required: 1, enrolled_required: 1, defaults: 2, copies: 0, overrides: 1, invitations: 1, pending_modes: 0, pins: 1, permissions: 0, legacy_role_grants: 0, canonical_role_allows: 1, canonical_role_denies: 2, legacy_user_overrides: 0, canonical_user_allows: 0, canonical_user_denies: 3, other_permissions: 0, assignments: 2, failed: 0, sanitized: 1 });
+        expect(await counts()).toEqual({ unenrolled_required: 1, enrolled_required: 1, defaults: 2, copies: 0, overrides: 1, invitations: 1, pending_modes: 0, money_snapshots: 1, pins: 1, permissions: 0, exact_role_grants: 3, colon_role_allows: 1, colon_role_denies: 1, exact_user_overrides: 3, colon_user_allows: 1, colon_user_denies: 1, other_permissions: 0, assignments: 2, failed: 0, sanitized: 1 });
         if (pass === 0) await db.query(`BEGIN;
           SELECT set_config('app.is_platform_admin', 'true', true);
           INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,status,"updatedAt")
