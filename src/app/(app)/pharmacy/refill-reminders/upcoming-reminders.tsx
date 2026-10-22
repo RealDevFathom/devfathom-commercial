@@ -2,6 +2,8 @@ import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 
+import { REFILL_REMINDER_COPY, type RefillReminderLocale } from './refill-reminder-copy';
+
 export type UpcomingReminder = {
   id: string;
   customerName: string;
@@ -10,21 +12,29 @@ export type UpcomingReminder = {
   draftText: string;
 };
 
-export function UpcomingReminders({ reminders }: { reminders: readonly UpcomingReminder[] }) {
+export function UpcomingReminders({
+  reminders,
+  locale,
+}: {
+  reminders: readonly UpcomingReminder[];
+  locale: RefillReminderLocale;
+}) {
+  const copy = REFILL_REMINDER_COPY[locale];
+
   return (
-    <SectionCard title="Upcoming reminders" titleLevel={2}>
+    <SectionCard title={copy.upcomingTitle} titleLevel={2}>
       <div className="mb-4 flex items-center gap-3">
-        <StatusPill status="AI" label="DevFathom AI" />
+        <StatusPill status="AI" label={copy.aiLabel} />
         <p className="text-sm text-text-muted">
-          Drafts use purchase history only. Review and approve each message before sending.
+          {copy.reviewGuidance}
         </p>
       </div>
       {reminders.length === 0 ? (
         <p className="rounded-md border border-border-subtle bg-surface-sunken p-4 text-sm text-text-body">
-          No reminders are ready for review.
+          {copy.emptyState}
         </p>
       ) : (
-        <ul className="divide-y divide-border-subtle" aria-label="Upcoming AI refill reminders">
+        <ul className="divide-y divide-border-subtle" aria-label={copy.reminderListLabel}>
           {reminders.map((reminder) => (
             <li key={reminder.id} className="py-5 first:pt-0 last:pb-0">
               <div className="flex flex-wrap items-start justify-between gap-4">
@@ -33,17 +43,18 @@ export function UpcomingReminders({ reminders }: { reminders: readonly UpcomingR
                     {reminder.customerName} · {reminder.medicineName}
                   </p>
                   <p className="text-xs font-mono text-text-muted">
-                    Suggested {reminder.reminderAt.toLocaleDateString()}
+                    {copy.suggestedDate}{' '}
+                    {reminder.reminderAt.toLocaleDateString(locale === 'ur' ? 'ur-PK' : 'en-PK')}
                   </p>
                   <p className="max-w-3xl text-sm text-text-body">{reminder.draftText}</p>
                 </div>
                 <form className="flex gap-2">
                   <input type="hidden" name="reminderId" value={reminder.id} />
                   <Button type="submit" name="decision" value="APPROVED">
-                    Approve
+                    {copy.approve}
                   </Button>
                   <Button type="submit" name="decision" value="SKIPPED" variant="secondary">
-                    Skip
+                    {copy.skip}
                   </Button>
                 </form>
               </div>

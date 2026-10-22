@@ -1,18 +1,38 @@
+import type { Metadata } from 'next';
+
 import { PageHeader } from '@/components/ui/page-header';
+import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+
+import { REFILL_REMINDER_COPY, refillReminderLocale } from './refill-reminder-copy';
 import { UpcomingReminders } from './upcoming-reminders';
 
-export const metadata = { title: 'Refill reminders · Pharmacy' };
+async function activeCopy() {
+  const actor = await resolveTenantActor();
+  const locale = refillReminderLocale(actor?.organization.locale);
+  return { copy: REFILL_REMINDER_COPY[locale], locale };
+}
 
-export default function RefillRemindersPage() {
+export async function generateMetadata(): Promise<Metadata> {
+  const { copy } = await activeCopy();
+  return { title: copy.metadataTitle };
+}
+
+export default async function RefillRemindersPage() {
+  const { copy, locale } = await activeCopy();
+
   return (
-    <main className="min-w-0 space-y-6">
+    <main
+      className="min-w-0 space-y-6"
+      lang={locale}
+      dir={locale === 'ur' ? 'rtl' : 'ltr'}
+    >
       <PageHeader
-        eyebrow="Pharmacy"
+        eyebrow={copy.eyebrow}
         eyebrowMuted
-        heading="Refill reminders"
-        description="Review upcoming purchase-cadence reminders before any opted-in customer is contacted."
+        heading={copy.heading}
+        description={copy.description}
       />
-      <UpcomingReminders reminders={[]} />
+      <UpcomingReminders reminders={[]} locale={locale} />
     </main>
   );
 }
