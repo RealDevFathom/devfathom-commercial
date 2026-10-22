@@ -288,16 +288,6 @@ function capabilityCovers(rule: string, action: string): boolean {
   return false;
 }
 
-function capabilityDecision(
-  rules: { capability: string; effect: string }[],
-  action: string
-): 'ALLOW' | 'DENY' | null {
-  const matched = rules.filter((rule) => capabilityCovers(rule.capability, action));
-  if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
-  if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
-  return null;
-}
-
 /**
  * Dispense, receipt, or counter capability, then an active pharmacy branch
  * assignment in the session organization. Restaurant staff profiles are not
@@ -347,14 +337,13 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const overrides = member.permissionOverrides;
-  const roleRules = member.organizationRole?.permissions ?? [];
-  const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
-    const override = capabilityDecision(overrides, action);
-    if (override === 'DENY') return false;
-    if (override === 'ALLOW') return true;
-    return capabilityDecision(roleRules, action) === 'ALLOW';
-  });
+  const matched = [...member.permissionOverrides, ...(member.organizationRole?.permissions ?? [])]
+    .filter((rule) =>
+      RECEIPT_READ_CAPABILITIES.some((action) => capabilityCovers(rule.capability, action))
+    );
+  const capable =
+    !matched.some((rule) => rule.effect === 'DENY') &&
+    matched.some((rule) => rule.effect === 'ALLOW');
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',

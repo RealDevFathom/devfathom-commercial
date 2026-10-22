@@ -26,6 +26,25 @@ export type CanOptions = {
   db?: AuthzDb;
 };
 
+export type CustomPermissionRule = {
+  capability: string;
+  effect: 'ALLOW' | 'DENY';
+};
+
+/** Resolve matching user and role rules as one deny-overrides set. */
+export function resolveCustomDecision(
+  overrides: readonly CustomPermissionRule[],
+  roleRules: readonly CustomPermissionRule[],
+  action: string
+): boolean | null {
+  const matching = [...overrides, ...roleRules].filter((rule) =>
+    capabilityMatches(rule.capability, action, rule.effect)
+  );
+  if (matching.some((rule) => rule.effect === 'DENY')) return false;
+  if (matching.some((rule) => rule.effect === 'ALLOW')) return true;
+  return null;
+}
+
 async function customDecision(
   db: AuthzDb,
   userId: string,
@@ -45,17 +64,11 @@ async function customDecision(
     },
   });
   if (!user) return false;
-  const overrides = user.permissionOverrides.filter((rule) =>
-    capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
+  return resolveCustomDecision(
+    user.permissionOverrides,
+    user.organizationRole?.permissions ?? [],
+    action
   );
-  if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
-  const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
-    capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
-  );
-  if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
-  if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
-  return null;
 }
 
 /** True iff some policy registered for `action` allows the subject + resource. */

@@ -4,7 +4,7 @@ import type { AuthzDb } from '@/lib/authz';
 import { isAdmin } from '@/lib/authz';
 import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
 
-import { can, subjectFromSession } from '.';
+import { can, resolveCustomDecision, subjectFromSession } from '.';
 import { ALL_ACTIONS, POLICIES, type Action } from './policies';
 
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
@@ -133,6 +133,52 @@ describe('opt-in pharmacy Owner / Operator access', () => {
 });
 
 describe('custom ABAC decisions', () => {
+  it.each([
+    {
+      name: 'role DENY beats override ALLOW',
+      overrides: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+      role: [{ capability: 'pharmacy:dispense', effect: 'DENY' }],
+      expected: false,
+    },
+    {
+      name: 'override DENY beats role ALLOW',
+      overrides: [{ capability: 'pharmacy:dispense', effect: 'DENY' }],
+      role: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+      expected: false,
+    },
+    {
+      name: 'wildcard role DENY beats exact override ALLOW',
+      overrides: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+      role: [{ capability: 'pharmacy:*', effect: 'DENY' }],
+      expected: false,
+    },
+    {
+      name: 'override ALLOW alone allows',
+      overrides: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+      role: [],
+      expected: true,
+    },
+    {
+      name: 'role ALLOW alone allows',
+      overrides: [],
+      role: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+      expected: true,
+    },
+    { name: 'no rules returns no custom decision', overrides: [], role: [], expected: null },
+  ] as const)('$name', ({ overrides, role, expected }) => {
+    expect(resolveCustomDecision(overrides, role, 'pharmacy:dispense')).toBe(expected);
+  });
+
+  it('denies instead of preserving the old override-ALLOW-wins behavior', async () => {
+    const db = authorizationDb({
+      overrides: [{ capability: 'finance:read', effect: 'ALLOW' }],
+      rolePermissions: [{ capability: 'finance:read', effect: 'DENY' }],
+    });
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'finance:read', undefined, { db })
+    ).resolves.toBe(false);
+  });
+
   it('allows exact and namespace wildcard capabilities from a custom role', async () => {
     const db = authorizationDb({
       rolePermissions: [

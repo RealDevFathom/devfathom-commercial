@@ -110,6 +110,20 @@ describe('operatorHasCapability — SOP-1 job-role path (QA-145)', () => {
     ).resolves.toBe(true);
   });
 
+  it('denies linked-user access when a role DENY conflicts with an override ALLOW', async () => {
+    const db = fakeDb({
+      user: {
+        organizationRole: {
+          permissions: [{ capability: 'coauth:approve', effect: 'DENY' }],
+        },
+        permissionOverrides: [{ capability: 'coauth:approve', effect: 'ALLOW' }],
+      },
+    });
+    await expect(
+      operatorHasCapability(db, 'staff_linked', 'coauth:approve', NOW, BRANCH)
+    ).resolves.toBe(false);
+  });
+
   it('denies when a per-staff DENY override removes an inherited capability', async () => {
     const db = fakeDb({
       user: null,

@@ -1,3 +1,4 @@
+import { resolveCustomDecision } from '@/lib/abac';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import 'server-only';
 
@@ -206,8 +207,6 @@ export const dayCorrectBody = z
 export type MoneyCapability =
   'payments:collect' | 'payments:refund' | 'cash:open' | 'cash:adjust' | 'cash:close';
 
-type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
-
 /** Resolve branch-bound active staff access. Any matching DENY across linked-user
  * rules and staff overrides wins over all grants, including wildcard grants.
  * A branch binding is a primary branch, held job role, or direct staff override. */
@@ -249,28 +248,20 @@ export async function operatorHasCapability(
     return false;
   const user = profile.user;
 
-  const decide = (rules: readonly CapabilityRule[]): boolean | null => {
-    const matching = rules.filter((rule) =>
-      capabilityMatches(rule.capability, capability, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
-    );
-    if (matching.some((rule) => rule.effect === 'DENY')) return false;
-    if (matching.some((rule) => rule.effect === 'ALLOW')) return true;
-    return null;
-  };
-
   const staff = await resolveStaffCapabilityDecision(db, staffProfileId, branchId);
-  const overrides = decide(user?.permissionOverrides ?? []);
-  const role = decide(user?.organizationRole?.permissions ?? []);
+  const custom = resolveCustomDecision(
+    user?.permissionOverrides ?? [],
+    user?.organizationRole?.permissions ?? [],
+    capability
+  );
   if (
-    overrides === false ||
-    role === false ||
+    custom === false ||
     [...staff.denied].some((rule) => capabilityMatches(rule, capability, 'DENY'))
   )
     return false;
 
   return (
-    overrides === true ||
-    role === true ||
+    custom === true ||
     [...staff.effective].some((rule) => capabilityMatches(rule, capability, 'ALLOW'))
   );
 }

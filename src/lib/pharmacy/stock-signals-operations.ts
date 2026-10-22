@@ -1,4 +1,4 @@
-import { capabilityMatches } from '@/lib/abac/capabilities';
+import { resolveCustomDecision } from '@/lib/abac';
 /**
  * PUR-07 — the database half of the stock action centre: reading exact ledger
  * facts, persisting the deduplicated signals `stock-signals.evaluateStockSignals`
@@ -48,6 +48,14 @@ import type {
 
 /** Statuses a signal can still be refreshed, closed or acted on from. */
 const LIVE_STATUSES = ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'STALE'] as const;
+
+export function draftCapabilityGranted(
+  overrides: readonly { capability: string; effect: 'ALLOW' | 'DENY' }[],
+  roleRules: readonly { capability: string; effect: 'ALLOW' | 'DENY' }[],
+  capability: 'pharmacy:inventory' | 'pharmacy:procurement'
+): boolean {
+  return resolveCustomDecision(overrides, roleRules, capability) === true;
+}
 
 type LotRow = {
   inventoryLotId: string;
@@ -696,18 +704,15 @@ async function authorizeDraftIntent(
     throw new PharmacyDraftIntentError('FORBIDDEN', 'Draft actor is not authorized.');
 
   // These are the native PHARMACY_ROLE_TEMPLATES grants, not Restaurant actions.
-  // Preserve the established override-before-role, deny-before-allow precedence.
+  // User and role rules form one set: any explicit deny wins.
   const capability =
     input.kind === 'DRAFT_TRANSFER' ? 'pharmacy:inventory' : 'pharmacy:procurement';
-  const matches = (rule: { capability: string; effect: string }) =>
-    capabilityMatches(rule.capability, capability, rule.effect === 'DENY' ? 'DENY' : 'ALLOW');
-  const overrides = user.permissionOverrides.filter(matches);
-  const rules = overrides.length
-    ? overrides
-    : (user.organizationRole?.permissions ?? []).filter(matches);
   if (
-    rules.some((rule) => rule.effect === 'DENY') ||
-    !rules.some((rule) => rule.effect === 'ALLOW')
+    !draftCapabilityGranted(
+      user.permissionOverrides,
+      user.organizationRole?.permissions ?? [],
+      capability
+    )
   ) {
     throw new PharmacyDraftIntentError('FORBIDDEN', 'Draft capability is not authorized.');
   }
