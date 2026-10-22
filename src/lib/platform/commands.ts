@@ -249,16 +249,18 @@ function capabilityFor(action: string): string {
   return capability;
 }
 
-const auditId = z
-  .string()
-  .min(3)
-  .max(128)
-  .regex(/^[a-zA-Z0-9_-]+$/);
-const requestId = z
-  .string()
-  .min(1)
-  .max(128)
-  .regex(/^[a-zA-Z0-9._:-]+$/);
+function safeAuditIdentifier(
+  value: unknown,
+  minimumLength: number,
+  pattern: RegExp
+): string | undefined {
+  return typeof value === 'string' &&
+    value.length >= minimumLength &&
+    value.length <= 128 &&
+    pattern.test(value)
+    ? value
+    : undefined;
+}
 
 type FailureCategory = 'capability_denied' | 'validation_failed' | 'command_failed';
 
@@ -282,9 +284,8 @@ function failureCategory(error: unknown): FailureCategory {
 function safeFailureTarget(action: string, payload: unknown) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return {};
   const candidate = payload as Record<string, unknown>;
-  const organizationId = auditId.safeParse(candidate.organizationId);
   return {
-    organizationId: organizationId.success ? organizationId.data : undefined,
+    organizationId: safeAuditIdentifier(candidate.organizationId, 3, /^[a-zA-Z0-9_-]+$/),
     targetType: action === 'platform.command.invalid' ? undefined : action.split('.')[0],
   };
 }
@@ -297,9 +298,13 @@ async function persistCommandFailure(
   error: unknown
 ) {
   const category = failureCategory(error);
-  const correlation = requestId.safeParse(request.headers.get('x-devfathom-request-id'));
-  const correlationId = correlation.success
-    ? `pcorr_${createHash('sha256').update(correlation.data).digest('hex').slice(0, 32)}`
+  const requestIdentifier = safeAuditIdentifier(
+    request.headers.get('x-devfathom-request-id'),
+    1,
+    /^[a-zA-Z0-9._:-]+$/
+  );
+  const correlationId = requestIdentifier
+    ? `pcorr_${createHash('sha256').update(requestIdentifier).digest('hex').slice(0, 32)}`
     : undefined;
   const deterministicId = correlationId
     ? `pcfail_${createHash('sha256')

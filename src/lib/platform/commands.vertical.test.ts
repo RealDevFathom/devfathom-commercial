@@ -528,6 +528,41 @@ describe('organization.create vertical + package compatibility', () => {
     expect(mocks.pharmacyBranchCreate).not.toHaveBeenCalled();
   });
 
+  it('preserves validation errors when optional audit identifiers are malformed', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_p',
+      active: true,
+      vertical: 'PHARMACY',
+      moduleLinks: [],
+    });
+    const malformedRequest = new Request(request, {
+      headers: { 'x-devfathom-request-id': 'not a valid request id' },
+    });
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.create',
+      {
+        ...pharmacyCreatePayload({ firstBranchProvinceCode: 'PK-ZZ' }),
+        organizationId: '../foreign_org',
+      },
+      malformedRequest
+    ).catch((cause: unknown) => cause);
+
+    expect((error as ZodError).issues.map((issue) => issue.path.join('.'))).toContain(
+      'firstBranchProvinceCode'
+    );
+    expect(mocks.organizationExists).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: undefined,
+        requestId: undefined,
+        metadata: { outcomeCategory: 'validation_failed' },
+      }),
+    });
+    expect(mocks.pharmacyBranchCreate).not.toHaveBeenCalled();
+  });
+
   it('leaves the AGENCY path untouched: no branch of either kind, no template roles', async () => {
     // The guard this fix widened. `AGENCY_ROLE_TEMPLATES` repeats the bootstrap
     // `admin` role and adds `member`; seeding it would collide on the
