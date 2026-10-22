@@ -5,10 +5,7 @@ const ACTION_FAILURE_MESSAGES = {
 
 /** Return user-safe copy without exposing details from an unexpected server failure. */
 export function pharmacyActionErrorMessage(
-  surface: keyof typeof ACTION_FAILURE_MESSAGES,
-  error: unknown
+  surface: keyof typeof ACTION_FAILURE_MESSAGES
 ): string {
-  // Deliberately discard the thrown value: server and provider messages are not user-safe copy.
-  void error;
   return ACTION_FAILURE_MESSAGES[surface];
 }

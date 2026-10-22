@@ -383,7 +383,10 @@ export default async function PharmacyInventoryPage({
       else throw new Error('Choose a supported inventory action.');
       destination = url(branchId, 'Inventory action completed.');
     } catch (error) {
-      destination = url(branchId, pharmacyActionErrorMessage('inventory', error), 'error');
+      // Keep the thrown value out of the URL entirely: it can contain database, provider,
+      // authorization, or validation details that are not safe to return to the browser.
+      void error;
+      destination = url(branchId, pharmacyActionErrorMessage('inventory'), 'error');
     }
     redirect(destination);
   }
