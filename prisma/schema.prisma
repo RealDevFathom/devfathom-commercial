@@ -2848,7 +2848,6 @@ model User {
   leaveBalances               LeaveBalance[]                 @relation("UserLeaveBalances")
   recoveryCodes               TwoFactorRecoveryCode[]
   webhooksCreated             Webhook[]                      @relation("WebhookCreator")
-  auditLogs                   AuditLog[]                     @relation("UserAuditLogs")
   resignations                Resignation[]                  @relation("UserResignations")
   resignationsReviewed        Resignation[]                  @relation("ResignationsReviewed")
   // Email integration: connected Gmail/Outlook mailboxes feeding the unified inbox.
@@ -4086,7 +4085,7 @@ model Notification {
 /// Extreme-granular, admin-only audit trail. Every mutation (tRPC + REST),
 /// every authentication event, and every sensitive read appends one immutable
 /// row here. Actor identity is *snapshotted* (name/email/role) so the trail
-/// stays meaningful even after the user is deleted (actor relation is SetNull).
+/// stays meaningful even after the actor is deleted (actor ids are durable snapshots).
 /// Sensitive input fields (passwords, tokens) are redacted before storage.
 model AuditLog {
   id             String   @id @default(cuid())
@@ -4095,12 +4094,12 @@ model AuditLog {
 
   // WHO — snapshotted at the time of the action for durability
   actorType           AuditActorType @default(USER)
-  actorId             String? // the acting User (FK -> users). null for anonymous (e.g. failed login)
+  actorId             String? // durable User id snapshot; null for anonymous (e.g. failed login)
   // A restaurant terminal operator is a staff profile, NOT a User (C2/C3), so its
   // audit rows attribute here instead of `actorId` — the two are mutually exclusive
   // and a RESTAURANT_OPERATOR row must set this one (enforced by a DB CHECK). Used
   // by the M2 terminal mutations (unlock/switch/co-authorize/lock).
-  actorStaffProfileId String? // the acting RestaurantStaffProfile, when actorType = RESTAURANT_OPERATOR
+  actorStaffProfileId String? // durable staff-profile id snapshot for a RESTAURANT_OPERATOR
   actorName           String?
   actorEmail          String?
   actorRole           String?
@@ -4137,9 +4136,6 @@ model AuditLog {
   errorCode    String?
   errorMessage String?
   durationMs   Int?
-
-  actor             User?                   @relation("UserAuditLogs", fields: [actorId], references: [id], onDelete: SetNull)
-  actorStaffProfile RestaurantStaffProfile? @relation("StaffProfileAuditLogs", fields: [actorStaffProfileId], references: [id], onDelete: SetNull)
 
   @@index([createdAt])
   @@index([actorId, createdAt])
@@ -5398,7 +5394,6 @@ model RestaurantStaffProfile {
   terminalSessions       RestaurantTerminalSession[]         @relation("TerminalSessionActiveStaff")
   actingCoAuths          RestaurantCoAuthorization[]         @relation("CoAuthActingStaff")
   approvingCoAuths       RestaurantCoAuthorization[]         @relation("CoAuthApprovingStaff")
-  auditLogs              AuditLog[]                          @relation("StaffProfileAuditLogs")
   // M4-L1: section assignments (per business date) and order/kitchen attribution
   // (the operator who opened an order, the assigned server, and the acting
   // operator on an order event). Attribution is preserved on archival (§11.6).
