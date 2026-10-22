@@ -10,17 +10,18 @@
  * field-level validation message and would publish internal schema field names
  * in `data.validation`. These cases pin both halves.
  *
- * In production, an unexpected failure — anything a procedure throws that is not
- * a TRPCError, which tRPC wraps in an INTERNAL_SERVER_ERROR carrying the thrown
- * error's own message — reaches the client with a generic message instead.
- * Deliberate TRPCErrors keep their words, internal ones included, and every
- * other code is untouched; outside production the pass-through stays as pinned.
+ * Known Prisma failures are mapped to stable public errors in every environment,
+ * and unknown Prisma failures are withheld. In production, every other unexpected
+ * failure reaches the client with a generic message instead. Deliberate TRPCErrors
+ * keep their words, internal ones included; outside production the non-Prisma
+ * pass-through stays as pinned.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import superjson from 'superjson';
 import { z } from 'zod';
+import { Prisma } from '@/generated/prisma/client';
 
 // Same stubs `anonymous-fallback.test.ts` uses: `@/server/trpc` is imported for
 // its REAL tRPC instance, so only its unrelated server-side dependencies are
@@ -84,6 +85,30 @@ const testRouter = router({
   notFound: publicProcedure.query(() => {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'That version no longer exists.' });
   }),
+  staleUpdate: publicProcedure.query(() => {
+    throw new Prisma.PrismaClientKnownRequestError(
+      '\nInvalid `prisma.client.update()` invocation: record does not exist',
+      { code: 'P2025', clientVersion: 'test' }
+    );
+  }),
+  duplicate: publicProcedure.query(() => {
+    throw new Prisma.PrismaClientKnownRequestError('Unique constraint failed on Client_name_key', {
+      code: 'P2002',
+      clientVersion: 'test',
+    });
+  }),
+  foreignKey: publicProcedure.query(() => {
+    throw new Prisma.PrismaClientKnownRequestError('Foreign key constraint failed', {
+      code: 'P2003',
+      clientVersion: 'test',
+    });
+  }),
+  unknownPrisma: publicProcedure.query(() => {
+    throw new Prisma.PrismaClientKnownRequestError('Unknown prisma.client.delete() failure', {
+      code: 'P2999',
+      clientVersion: 'test',
+    });
+  }),
 });
 
 async function call(path: string, input?: unknown) {
@@ -110,6 +135,27 @@ async function call(path: string, input?: unknown) {
 }
 
 describe('trpc errorFormatter', () => {
+  it.each([
+    ['staleUpdate', 'NOT_FOUND', 404, 'Record not found.'],
+    ['duplicate', 'CONFLICT', 409, 'A record with those details already exists.'],
+    ['foreignKey', 'BAD_REQUEST', 400, 'This change conflicts with a related record.'],
+  ])(
+    'maps Prisma errors without exposing ORM details (%s)',
+    async (path, code, status, message) => {
+      const error = await call(path);
+
+      expect(error).toMatchObject({ message, data: { code, httpStatus: status } });
+      expect(JSON.stringify(error)).not.toMatch(/prisma\.|Invalid .*invocation|Client_name_key/i);
+    }
+  );
+
+  it('withholds unrecognised Prisma errors outside production too', async () => {
+    const error = await call('unknownPrisma');
+
+    expect(error.message).toBe(GENERIC);
+    expect(JSON.stringify(error)).not.toMatch(/prisma\.|client\.delete/i);
+  });
+
   it('reformats input-validation failures', async () => {
     const error = await call('validated', { key: 'NOPE' });
 

@@ -1,6 +1,6 @@
 import { initTRPC, TRPCError } from '@trpc/server';
 import type { Session } from 'next-auth';
-import type { Prisma } from '@/generated/prisma/client';
+import { Prisma } from '@/generated/prisma/client';
 import superjson from 'superjson';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
 import {
@@ -82,8 +82,24 @@ export const createTRPCContext = async (opts?: {
 
 export type TRPCContext = Awaited<ReturnType<typeof createTRPCContext>>;
 
-/** What a production client is told instead of an unexpected failure's own message. */
+/** What a client is told instead of an unexpected failure's own message. */
 const INTERNAL_ERROR_MESSAGE = 'Something went wrong on our side. Please try again.';
+
+const PRISMA_ERROR_MESSAGES = {
+  P2025: { code: -32004, trpcCode: 'NOT_FOUND', httpStatus: 404, message: 'Record not found.' },
+  P2002: {
+    code: -32009,
+    trpcCode: 'CONFLICT',
+    httpStatus: 409,
+    message: 'A record with those details already exists.',
+  },
+  P2003: {
+    code: -32600,
+    trpcCode: 'BAD_REQUEST',
+    httpStatus: 400,
+    message: 'This change conflicts with a related record.',
+  },
+} as const;
 
 /**
  * An INTERNAL_SERVER_ERROR that tRPC made out of something a procedure threw
@@ -121,17 +137,33 @@ const t = initTRPC.context<TRPCContext>().create({
     const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
     // In production an unexpected failure (that ZodError included) keeps its own
     // message on the server, where the tRPC route's `onError` logs it, and the
-    // client is told only that something went wrong. Deliberate errors and every
-    // other code are untouched; outside production the pass-through is unchanged.
-    const withheld = process.env.NODE_ENV === 'production' && isUnexpectedInternalError(error);
+    // client is told only that something went wrong. Known Prisma failures are
+    // safe and actionable in every environment; unknown ones are always withheld.
+    // Other deliberate errors are untouched, as is the development pass-through.
+    const prismaError =
+      error.cause instanceof Prisma.PrismaClientKnownRequestError
+        ? PRISMA_ERROR_MESSAGES[error.cause.code as keyof typeof PRISMA_ERROR_MESSAGES]
+        : undefined;
+    const isUnmappedPrismaError =
+      error.cause instanceof Prisma.PrismaClientKnownRequestError && !prismaError;
+    const withheld =
+      isUnmappedPrismaError ||
+      (process.env.NODE_ENV === 'production' && isUnexpectedInternalError(error));
     // Never publish the server stack. tRPC attaches `data.stack` outside
     // production, which leaks file paths and bundle chunk names onto ordinary
     // client errors (e.g. an intentional 403). Drop it for every error code.
     const data = { ...shape.data, validation: validation?.fields ?? null };
     delete data.stack;
+    if (prismaError) {
+      data.code = prismaError.trpcCode;
+      data.httpStatus = prismaError.httpStatus;
+    }
     return {
       ...shape,
-      message: withheld ? INTERNAL_ERROR_MESSAGE : (validation?.message ?? shape.message),
+      code: prismaError?.code ?? shape.code,
+      message:
+        prismaError?.message ??
+        (withheld ? INTERNAL_ERROR_MESSAGE : (validation?.message ?? shape.message)),
       data,
     };
   },

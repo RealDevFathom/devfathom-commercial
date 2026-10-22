@@ -283,6 +283,8 @@ export const clientsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      const client = await ctx.db.client.findUnique({ where: { id }, select: { id: true } });
+      if (!client) throw new TRPCError({ code: 'NOT_FOUND', message: 'Client not found' });
       return ctx.db.client.update({ where: { id }, data });
     }),
 
