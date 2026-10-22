@@ -6,6 +6,16 @@ import type { NormalizedMeetingEvent } from './types';
 
 type OccurrenceRef = { id: string; organizationId: string };
 
+function participantLookup(identity: string) {
+  if (identity.startsWith('usr:') && identity.length > 4) {
+    return { userId: identity.slice(4) };
+  }
+  if (identity.startsWith('gst:') && identity.length > 4) {
+    return { id: identity.slice(4) };
+  }
+  return null;
+}
+
 export async function resolveProviderRoom(roomName: string): Promise<OccurrenceRef | null> {
   return withPlatformDb((db) =>
     db.meetingOccurrence.findUnique({
@@ -45,13 +55,13 @@ async function applyEvent(db: ScopedDb, occurrence: OccurrenceRef, event: Normal
     throw new Error('Normalized participant event is missing participant identity');
   }
 
-  const grant = await db.meetingOccurrenceParticipant.findFirst({
-    where: {
-      occurrenceId: occurrence.id,
-      OR: [{ id: event.participantIdentity }, { userId: event.participantIdentity }],
-    },
-    select: { id: true, userId: true },
-  });
+  const lookup = participantLookup(event.participantIdentity);
+  const grant = lookup
+    ? await db.meetingOccurrenceParticipant.findFirst({
+        where: { occurrenceId: occurrence.id, ...lookup },
+        select: { id: true, userId: true },
+      })
+    : null;
 
   if (event.type === 'participant.joined') {
     await db.$executeRaw(Prisma.sql`
