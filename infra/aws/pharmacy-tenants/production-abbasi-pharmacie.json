@@ -1,0 +1,50 @@
+[
+  {
+    "ParameterKey": "EnvironmentName",
+    "ParameterValue": "production"
+  },
+  {
+    "ParameterKey": "TenantSlug",
+    "ParameterValue": "abbasi-pharmacie"
+  },
+  {
+    "ParameterKey": "Hostnames",
+    "ParameterValue": "abbasi-pharmacie.devfathom.com"
+  },
+  {
+    "ParameterKey": "DesiredCount",
+    "ParameterValue": "0"
+  },
+  {
+    "ParameterKey": "ImageUri",
+    "ParameterValue": "REPLACE_WITH_IMMUTABLE_IMAGE_URI"
+  },
+  {
+    "ParameterKey": "VpcId",
+    "ParameterValue": "REPLACE_WITH_PRODUCTION_VPC_ID"
+  },
+  {
+    "ParameterKey": "PublicSubnetIds",
+    "ParameterValue": "REPLACE_WITH_PRODUCTION_PUBLIC_SUBNET_A,REPLACE_WITH_PRODUCTION_PUBLIC_SUBNET_B"
+  },
+  {
+    "ParameterKey": "DatabaseSubnetIds",
+    "ParameterValue": "REPLACE_WITH_PRODUCTION_DB_SUBNET_A,REPLACE_WITH_PRODUCTION_DB_SUBNET_B"
+  },
+  {
+    "ParameterKey": "ClusterArn",
+    "ParameterValue": "REPLACE_WITH_PRODUCTION_CLUSTER_ARN"
+  },
+  {
+    "ParameterKey": "HttpsListenerArn",
+    "ParameterValue": "REPLACE_WITH_PRODUCTION_HTTPS_LISTENER_ARN"
+  },
+  {
+    "ParameterKey": "LoadBalancerSecurityGroupId",
+    "ParameterValue": "REPLACE_WITH_PRODUCTION_ALB_SECURITY_GROUP_ID"
+  },
+  {
+    "ParameterKey": "ListenerRulePriority",
+    "ParameterValue": "110"
+  }
+]

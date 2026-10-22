@@ -1,0 +1,306 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  One isolated DevFathom pharmacy tenant on an existing shared ECS/ALB network.
+  Creates no DNS records and defaults the service to zero tasks.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    AllowedValues: [staging, production]
+  TenantSlug:
+    Type: String
+    AllowedPattern: '^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$'
+    Description: Stable tenant identifier used in names and application tenant scoping.
+  Hostnames:
+    Type: CommaDelimitedList
+    Description: DNS names already pointed at the shared ALB.
+  DesiredCount:
+    Type: Number
+    Default: 0
+    MinValue: 0
+  ImageUri:
+    Type: String
+    Description: Immutable application image URI, preferably addressed by digest.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least two subnets used by Fargate tasks.
+  DatabaseSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least two private subnets in distinct Availability Zones.
+  ClusterArn:
+    Type: String
+    Description: ARN of the existing shared ECS cluster.
+  HttpsListenerArn:
+    Type: String
+    Description: ARN of the existing shared ALB HTTPS listener.
+  LoadBalancerSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  ListenerRulePriority:
+    Type: Number
+    MinValue: 1
+    MaxValue: 50000
+    Description: Unique priority allocated by the owner of the shared listener.
+
+Conditions:
+  IsProduction: !Equals [!Ref EnvironmentName, production]
+
+Resources:
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${EnvironmentName}/${TenantSlug} pharmacy tasks'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroupId
+      Tags:
+        - {Key: devfathom:environment, Value: !Ref EnvironmentName}
+        - {Key: devfathom:tenant, Value: !Ref TenantSlug}
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub '${EnvironmentName}/${TenantSlug} pharmacy PostgreSQL'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref TaskSecurityGroup
+
+  DatabaseCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub 'devfathom/${EnvironmentName}/pharmacy/${TenantSlug}/database-credentials'
+      Description: !Sub 'Generated PostgreSQL credentials for ${EnvironmentName}/${TenantSlug}'
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"devfathomadmin"}'
+        GenerateStringKey: password
+        PasswordLength: 40
+        ExcludePunctuation: true
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub '${EnvironmentName}/${TenantSlug} private database subnets'
+      SubnetIds: !Ref DatabaseSubnetIds
+
+  DatabaseParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: !Sub '${EnvironmentName}/${TenantSlug} PostgreSQL 16 TLS settings'
+      Family: postgres16
+      Parameters:
+        rds.force_ssl: '1'
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub 'devfathom-${EnvironmentName}-${TenantSlug}'
+      Engine: postgres
+      EngineVersion: '16.12'
+      DBInstanceClass: db.t4g.micro
+      AllocatedStorage: 20
+      MaxAllocatedStorage: 50
+      StorageType: gp3
+      StorageEncrypted: true
+      DBName: devfathom
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DatabaseCredentialsSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DatabaseCredentialsSecret}:SecretString:password}}'
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      DBParameterGroupName: !Ref DatabaseParameterGroup
+      VPCSecurityGroups: [!Ref DatabaseSecurityGroup]
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: !If [IsProduction, 14, 7]
+      CopyTagsToSnapshot: true
+      DeletionProtection: !If [IsProduction, true, false]
+      AutoMinorVersionUpgrade: true
+      EnablePerformanceInsights: false
+      Tags:
+        - {Key: devfathom:environment, Value: !Ref EnvironmentName}
+        - {Key: devfathom:tenant, Value: !Ref TenantSlug}
+
+  # ECS needs a complete URL while RDS needs separate username/password fields.
+  # This derived secret avoids exposing the generated password in task metadata.
+  DatabaseUrlSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub 'devfathom/${EnvironmentName}/pharmacy/${TenantSlug}/database-url'
+      SecretString: !Sub
+        - '{"value":"postgresql://devfathomadmin:{{resolve:secretsmanager:${DatabaseCredentialsSecret}:SecretString:password}}@${Host}:5432/devfathom?sslmode=verify-full&sslrootcert=/opt/devfathom/rds-global-bundle.pem"}'
+        - Host: !GetAtt Database.Endpoint.Address
+
+  AuthSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'devfathom/${EnvironmentName}/pharmacy/${TenantSlug}/auth-secret'
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: value
+        PasswordLength: 64
+        ExcludePunctuation: true
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/devfathom/${EnvironmentName}/pharmacy/${TenantSlug}'
+      RetentionInDays: !If [IsProduction, 30, 7]
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-tenant-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: [!Ref DatabaseUrlSecret, !Ref AuthSecret]
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Application role; intentionally grants no AWS API permissions.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ecs-tasks.amazonaws.com}
+            Action: sts:AssumeRole
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'devfathom-${EnvironmentName}-${TenantSlug}'
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: '512'
+      Memory: '1024'
+      RuntimePlatform: {CpuArchitecture: X86_64, OperatingSystemFamily: LINUX}
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: web
+          Image: !Ref ImageUri
+          Essential: true
+          PortMappings: [{ContainerPort: 3000, Protocol: tcp}]
+          StopTimeout: 30
+          Environment:
+            - {Name: NODE_ENV, Value: production}
+            - {Name: TENANT_SLUG, Value: !Ref TenantSlug}
+            - {Name: DEFAULT_ORGANIZATION_ID, Value: !Ref TenantSlug}
+            - Name: AUTH_URL
+              Value: !Sub
+                - 'https://${PrimaryHostname}'
+                - PrimaryHostname: !Select [0, !Ref Hostnames]
+            - Name: NEXTAUTH_URL
+              Value: !Sub
+                - 'https://${PrimaryHostname}'
+                - PrimaryHostname: !Select [0, !Ref Hostnames]
+            - Name: NEXT_PUBLIC_APP_URL
+              Value: !Sub
+                - 'https://${PrimaryHostname}'
+                - PrimaryHostname: !Select [0, !Ref Hostnames]
+            - {Name: AI_PROVIDER, Value: disabled}
+            - {Name: AUTH_TRUST_HOST, Value: 'true'}
+            - {Name: TRUSTED_PROXY_HOPS, Value: '1'}
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom: !Sub '${DatabaseUrlSecret}:value::'
+            - Name: AUTH_SECRET
+              ValueFrom: !Sub '${AuthSecret}:value::'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: web
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VpcId
+      TargetType: ip
+      Protocol: HTTP
+      Port: 3000
+      HealthCheckPath: /api/live
+      HealthCheckIntervalSeconds: 15
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 4
+      Matcher: {HttpCode: '200'}
+      TargetGroupAttributes:
+        - {Key: deregistration_delay.timeout_seconds, Value: '30'}
+
+  HostRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref HttpsListenerArn
+      Priority: !Ref ListenerRulePriority
+      Conditions:
+        - Field: host-header
+          HostHeaderConfig:
+            Values: !Ref Hostnames
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: HostRule
+    Properties:
+      ServiceName: !Sub 'pharmacy-${TenantSlug}'
+      Cluster: !Ref ClusterArn
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      CapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+      HealthCheckGracePeriodSeconds: 120
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker: {Enable: true, Rollback: true}
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Ref PublicSubnetIds
+          SecurityGroups: [!Ref TaskSecurityGroup]
+      LoadBalancers:
+        - ContainerName: web
+          ContainerPort: 3000
+          TargetGroupArn: !Ref TargetGroup
+      PropagateTags: SERVICE
+      Tags:
+        - {Key: devfathom:environment, Value: !Ref EnvironmentName}
+        - {Key: devfathom:tenant, Value: !Ref TenantSlug}
+
+Outputs:
+  ServiceArn:
+    Value: !Ref Service
+  DatabaseEndpoint:
+    Value: !GetAtt Database.Endpoint.Address
+  DatabaseCredentialsSecretArn:
+    Value: !Ref DatabaseCredentialsSecret
+  TargetGroupArn:
+    Value: !Ref TargetGroup
