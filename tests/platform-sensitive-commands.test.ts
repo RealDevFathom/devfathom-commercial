@@ -6,9 +6,12 @@ const state = vi.hoisted(() => ({
   remaining: 0,
   organization: { id: 'org_1', vertical: 'AGENCY', status: 'ONBOARDING' } as any,
   placeholderActive: false,
+  latestProfile: null as any,
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('bcryptjs', () => ({ hash: async () => 'hashed' }));
+vi.mock('@/lib/secret-crypto', () => ({ decryptSecret: () => 'totp-secret' }));
+vi.mock('@/lib/totp', () => ({ verifyTotp: (_secret: string, code: string) => code === '123456' }));
 const db = {
   $queryRawUnsafe: vi.fn(async (sql: string) =>
     sql.startsWith('SELECT id FROM organizations') ? [{ id: state.organization.id }] : []
@@ -35,9 +38,16 @@ const db = {
     findMany: vi.fn(async () => [{ id: 'branch_1', provinceCode: 'PB', active: true }]),
   },
   branchRegulatoryProfile: {
-    findFirst: vi.fn(async ({ where }: any) =>
-      where?.isPlaceholder && state.placeholderActive ? { id: 'placeholder_profile' } : null
-    ),
+    findFirst: vi.fn(async ({ where }: any) => {
+      if (where?.isPlaceholder) {
+        return state.placeholderActive ? { id: 'placeholder_profile', effectiveTo: null } : null;
+      }
+      return state.latestProfile;
+    }),
+    update: vi.fn(async ({ data }: any) => {
+      state.latestProfile = { ...state.latestProfile, ...data };
+      return state.latestProfile;
+    }),
     create: vi.fn(async ({ data }: any) => {
       state.placeholderActive = true;
       return { id: 'placeholder_profile', ...data };
@@ -72,10 +82,17 @@ const actions = [
 beforeEach(() => {
   vi.clearAllMocks();
   state.audits = [];
-  state.operator = { id: 'target_1', role: 'SUPER_ADMIN', active: true };
+  state.operator = {
+    id: 'target_1',
+    role: 'SUPER_ADMIN',
+    active: true,
+    encryptedTotpSecret: 'encrypted',
+    mfaEnabledAt: new Date(),
+  };
   state.remaining = 0;
   state.organization = { id: 'org_1', vertical: 'AGENCY', status: 'ONBOARDING' };
   state.placeholderActive = false;
+  state.latestProfile = null;
 });
 
 describe('pharmacy placeholder commands', () => {
@@ -89,7 +106,7 @@ describe('pharmacy placeholder commands', () => {
         'organization.pharmacy.placeholder.lock',
       ]) {
         await expect(
-          execute(action, { organizationId: 'org_1', reason }, role)
+          execute(action, { organizationId: 'org_1', reason, authenticationCode: '123456' }, role)
         ).rejects.toMatchObject({ status: 403 });
       }
       expect(db.jurisdictionRuleSet.upsert).not.toHaveBeenCalled();
@@ -97,10 +114,25 @@ describe('pharmacy placeholder commands', () => {
     }
   );
 
+  it('refuses a tenant administrator identity before any placeholder write', async () => {
+    await expect(
+      execute(
+        'organization.pharmacy.placeholder.apply',
+        { organizationId: 'org_1', reason, authenticationCode: '123456' },
+        'ADMIN'
+      )
+    ).rejects.toMatchObject({ status: 403 });
+    expect(db.jurisdictionRuleSet.upsert).not.toHaveBeenCalled();
+  });
+
   it('creates only flagged, non-provisional wildcard rules and labelled branch fields', async () => {
     state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ONBOARDING' };
 
-    await execute('organization.pharmacy.placeholder.apply', { organizationId: 'org_1', reason });
+    await execute('organization.pharmacy.placeholder.apply', {
+      organizationId: 'org_1',
+      reason,
+      authenticationCode: '123456',
+    });
 
     const rule = db.jurisdictionRuleSet.upsert.mock.calls[0]![0].create;
     expect(rule).toMatchObject({
@@ -140,8 +172,9 @@ describe('pharmacy placeholder commands', () => {
     state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ACTIVE' };
     state.placeholderActive = true;
 
-    await execute('organization.pharmacy.placeholder.lock', { organizationId: 'org_1', reason });
-    await execute('organization.pharmacy.placeholder.lock', { organizationId: 'org_1', reason });
+    const payload = { organizationId: 'org_1', reason, authenticationCode: '123456' };
+    await execute('organization.pharmacy.placeholder.lock', payload);
+    await execute('organization.pharmacy.placeholder.lock', payload);
 
     expect(db.branchRegulatoryProfile.deleteMany).toHaveBeenCalledTimes(2);
     expect(db.organization.update).toHaveBeenCalledWith({
@@ -149,6 +182,43 @@ describe('pharmacy placeholder commands', () => {
       data: { status: 'ONBOARDING', activatedAt: null },
     });
     expect(state.audits.at(-1)).toMatchObject({ metadata: { placeholder: true } });
+  });
+
+  it.each(['organization.pharmacy.placeholder.apply', 'organization.pharmacy.placeholder.lock'])(
+    '%s requires a fresh per-command MFA code',
+    async (action) => {
+      state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ONBOARDING' };
+      for (const authenticationCode of ['', '000000']) {
+        await expect(
+          execute(action, { organizationId: 'org_1', reason, authenticationCode })
+        ).rejects.toMatchObject({ status: 403 });
+      }
+      expect(db.branchRegulatoryProfile.create).not.toHaveBeenCalled();
+      expect(db.branchRegulatoryProfile.deleteMany).not.toHaveBeenCalled();
+    }
+  );
+
+  it('supersedes an open real licence profile before applying the placeholder', async () => {
+    state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ONBOARDING' };
+    state.latestProfile = {
+      id: 'real_profile',
+      version: 7,
+      effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+      effectiveTo: null,
+      isPlaceholder: false,
+    };
+
+    await execute('organization.pharmacy.placeholder.apply', {
+      organizationId: 'org_1',
+      reason,
+      authenticationCode: '123456',
+    });
+
+    expect(db.branchRegulatoryProfile.update).toHaveBeenCalledWith({
+      where: { id: 'real_profile' },
+      data: { effectiveTo: expect.any(Date) },
+    });
+    expect(db.branchRegulatoryProfile.create.mock.calls[0]![0].data.version).toBe(8);
   });
 
   it('flags failed platform commands while the placeholder is active', async () => {
@@ -159,6 +229,7 @@ describe('pharmacy placeholder commands', () => {
       execute('organization.pharmacy.placeholder.apply', {
         organizationId: 'org_1',
         reason: 'short',
+        authenticationCode: '123456',
       })
     ).rejects.toThrow();
 

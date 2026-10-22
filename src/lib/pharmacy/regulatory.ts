@@ -27,6 +27,7 @@ export type BranchRegulatoryState = {
   licenceCategory: string;
   licenceValidFrom: Date;
   licenceValidTo: Date;
+  licenceEvidenceFileRef: string;
   permittedSchedules: readonly string[];
   qualifiedPersonRegistration: string;
   qualifiedPersonValidFrom: Date;
@@ -80,6 +81,7 @@ export function assertBranchMayOperate(
 
   if (
     !branch.licenceCategory.trim() ||
+    !branch.licenceEvidenceFileRef.trim() ||
     !permits(stringValues(branch.ruleSet.licenceCategories), branch.licenceCategory) ||
     at < branch.licenceValidFrom ||
     at >= branch.licenceValidTo

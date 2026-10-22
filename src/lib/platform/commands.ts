@@ -15,11 +15,12 @@ import type { PlatformIdentity } from '@/lib/platform/auth';
 import { assertPlatformCapability } from '@/lib/platform/auth';
 import { ActivationPreflightError, PlatformSecurityError } from '@/lib/platform/security';
 import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activation-gates';
+import { decryptSecret, encryptSecret } from '@/lib/secret-crypto';
+import { verifyTotp } from '@/lib/totp';
 import { type ScopedDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
 import type { DemoSeatIdentity } from '@/lib/platform/command-types';
 import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
-import { encryptSecret } from '@/lib/secret-crypto';
 import { emailSchema } from '@/lib/email-address';
 import { ianaTimezone } from '@/lib/timezone';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
@@ -1514,6 +1515,37 @@ export async function activateDemoRestaurantOrganizationInTransaction(
   });
 }
 
+async function assertFreshPlaceholderMfa(
+  db: PrismaClient,
+  actor: PlatformIdentity,
+  authenticationCode: string
+) {
+  const code = authenticationCode.trim();
+  const operator = await db.platformUser.findUnique({
+    where: { id: actor.id },
+    select: { active: true, encryptedTotpSecret: true, mfaEnabledAt: true },
+  });
+  let valid = false;
+  if (
+    operator?.active &&
+    operator.mfaEnabledAt &&
+    operator.encryptedTotpSecret &&
+    /^\d{6}$/.test(code)
+  ) {
+    try {
+      valid = verifyTotp(decryptSecret(operator.encryptedTotpSecret), code);
+    } catch {
+      valid = false;
+    }
+  }
+  if (!valid) {
+    throw new PlatformSecurityError(
+      'A fresh MFA authentication code is required for this command.',
+      403
+    );
+  }
+}
+
 async function runCommand(
   db: PrismaClient,
   actor: PlatformIdentity,
@@ -1524,7 +1556,10 @@ async function runCommand(
     case 'organization.pharmacy.placeholder.apply': {
       if (actor.role !== 'SUPER_ADMIN')
         throw new PlatformSecurityError('Only a SuperAdmin may apply a placeholder rule set.', 403);
-      const input = z.object({ organizationId: id, reason: sensitiveReason }).parse(payload);
+      const input = z
+        .object({ organizationId: id, reason: sensitiveReason, authenticationCode: z.string() })
+        .parse(payload);
+      await assertFreshPlaceholderMfa(db, actor, input.authenticationCode);
       const organization = await db.organization.findUnique({
         where: { id: input.organizationId },
         select: { id: true, vertical: true },
@@ -1561,24 +1596,34 @@ async function runCommand(
       });
       for (const branch of branches) {
         const existing = await db.branchRegulatoryProfile.findFirst({
-          where: { organizationId: input.organizationId, branchId: branch.id, isPlaceholder: true },
+          where: {
+            organizationId: input.organizationId,
+            branchId: branch.id,
+            isPlaceholder: true,
+            effectiveTo: null,
+          },
         });
         if (existing) continue;
         const latest = await db.branchRegulatoryProfile.findFirst({
           where: { organizationId: input.organizationId, branchId: branch.id },
           orderBy: { version: 'desc' },
         });
-        if (latest?.effectiveTo === null)
-          throw new PlatformSecurityError(
-            'Lock the current regulatory profile before applying the placeholder.',
-            409
-          );
+        const branchEffectiveFrom =
+          latest && effectiveFrom <= latest.effectiveFrom
+            ? new Date(latest.effectiveFrom.getTime() + 1)
+            : effectiveFrom;
+        if (latest?.effectiveTo === null) {
+          await db.branchRegulatoryProfile.update({
+            where: { id: latest.id },
+            data: { effectiveTo: branchEffectiveFrom },
+          });
+        }
         await db.branchRegulatoryProfile.create({
           data: {
             organizationId: input.organizationId,
             branchId: branch.id,
             version: (latest?.version ?? 0) + 1,
-            effectiveFrom,
+            effectiveFrom: branchEffectiveFrom,
             provinceCode: branch.provinceCode,
             jurisdictionRuleSetId: ruleSet.id,
             premises: { label },
@@ -1611,7 +1656,10 @@ async function runCommand(
     case 'organization.pharmacy.placeholder.lock': {
       if (actor.role !== 'SUPER_ADMIN')
         throw new PlatformSecurityError('Only a SuperAdmin may lock a placeholder rule set.', 403);
-      const input = z.object({ organizationId: id, reason: sensitiveReason }).parse(payload);
+      const input = z
+        .object({ organizationId: id, reason: sensitiveReason, authenticationCode: z.string() })
+        .parse(payload);
+      await assertFreshPlaceholderMfa(db, actor, input.authenticationCode);
       const removed = await db.branchRegulatoryProfile.deleteMany({
         where: { organizationId: input.organizationId, isPlaceholder: true },
       });
@@ -4054,6 +4102,7 @@ export function applyPlaceholderRuleSet(
   organizationId: string,
   actor: PlatformIdentity,
   reason: string,
+  authenticationCode: string,
   request = new Request('http://platform.internal/commands/pharmacy-placeholder', {
     method: 'POST',
   })
@@ -4061,7 +4110,7 @@ export function applyPlaceholderRuleSet(
   return executePlatformCommand(
     actor,
     'organization.pharmacy.placeholder.apply',
-    { organizationId, reason },
+    { organizationId, reason, authenticationCode },
     request
   );
 }
@@ -4070,6 +4119,7 @@ export function lockPlaceholderRuleSet(
   organizationId: string,
   actor: PlatformIdentity,
   reason: string,
+  authenticationCode: string,
   request = new Request('http://platform.internal/commands/pharmacy-placeholder', {
     method: 'POST',
   })
@@ -4077,7 +4127,7 @@ export function lockPlaceholderRuleSet(
   return executePlatformCommand(
     actor,
     'organization.pharmacy.placeholder.lock',
-    { organizationId, reason },
+    { organizationId, reason, authenticationCode },
     request
   );
 }

@@ -11,6 +11,9 @@ describe('#631 placeholder migration contract', () => {
   const originalRulesMigration = read(
     'prisma/migrations/20260902130000_pharmacy_regulatory_profiles/migration.sql'
   );
+  const restoredTriggerMigration = read(
+    'prisma/migrations/20261022235900_restore_regulatory_delete_exceptions/migration.sql'
+  );
 
   it('adds detectable placeholder flags without seeding any data', () => {
     expect(placeholderMigration).toContain(
@@ -27,6 +30,17 @@ describe('#631 placeholder migration contract', () => {
     expect(originalRulesMigration.match(/pk_pb_provisional_v1/g)).toHaveLength(1);
     expect(originalRulesMigration).toContain(
       '\'{"values":[],"provisional":true,"toConfirm":"PHARM-P0-COUNSEL-001 C-01..C-08"}\''
+    );
+  });
+
+  it('restores purge, orphan cleanup and platform placeholder delete exceptions', () => {
+    expect(restoredTriggerMigration).toContain("current_setting('app.purging_organization_id'");
+    expect(restoredTriggerMigration).toContain(
+      'NOT EXISTS (SELECT 1 FROM "organizations" WHERE "id" = OLD."organizationId")'
+    );
+    expect(restoredTriggerMigration).toContain('OLD."isPlaceholder" = true');
+    expect(restoredTriggerMigration).toContain(
+      "TG_TABLE_NAME = 'pharmacy_branch_regulatory_profiles'"
     );
   });
 });
