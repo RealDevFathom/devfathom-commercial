@@ -164,12 +164,6 @@ export const teamRouter = router({
       if (existing && existing.status !== 'INVITED') {
         throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists' });
       }
-      if (!existing && ctx.entitlements.activeSeats >= ctx.entitlements.seatLimit) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: `Seat limit reached (${ctx.entitlements.activeSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
-        });
-      }
 
       const { token, tokenHash } = generateInviteToken();
       const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
@@ -184,6 +178,29 @@ export const teamRouter = router({
       };
 
       const user = await ctx.db.$transaction(async (tx) => {
+        if (!existing) {
+          const organizationId = ctx.session.user.organizationId;
+          if (!organizationId) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+          }
+          // Serialize seat-consuming writes for this tenant, then use a live
+          // count in the same transaction. The entitlement snapshot alone can
+          // let concurrent invitations exceed the licensed seat limit.
+          await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
+          const activeSeats = await tx.user.count({
+            where: {
+              organizationId,
+              status: { in: ['ACTIVE', 'ON_LEAVE', 'INVITED'] },
+            },
+          });
+          if (activeSeats >= ctx.entitlements.seatLimit) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: `Seat limit reached (${activeSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
+            });
+          }
+        }
+
         // Upsert the user (re-invite refreshes the seeded details), then replace
         // any prior invitation with a fresh single-use token.
         const u = existing

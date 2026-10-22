@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   findFirst: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  count: vi.fn(),
+  queryRaw: vi.fn(),
   invitationUpsert: vi.fn(),
   departmentFindFirst: vi.fn(),
   sendEmail: vi.fn(),
@@ -43,13 +45,19 @@ import { teamRouter } from './team';
 import { router, type TRPCContext } from '../trpc';
 
 const db = {
-  user: { findFirst: mocks.findFirst, create: mocks.create, update: mocks.update },
+  user: {
+    findFirst: mocks.findFirst,
+    create: mocks.create,
+    update: mocks.update,
+    count: mocks.count,
+  },
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
   invitation: { upsert: mocks.invitationUpsert },
   $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
     run({
-      user: { create: mocks.create, update: mocks.update },
+      user: { create: mocks.create, update: mocks.update, count: mocks.count },
       invitation: { upsert: mocks.invitationUpsert },
+      $queryRaw: mocks.queryRaw,
     }),
 };
 
@@ -59,7 +67,13 @@ function caller(activeSeats = 1) {
     entitlements: { enabledModules: [], modules: [], activeSeats, seatLimit: 50 },
     session: {
       expires: 'later',
-      user: { id: 'user_admin', role: 'ADMIN', department: 'LEADERSHIP', status: 'ACTIVE' },
+      user: {
+        id: 'user_admin',
+        organizationId: 'org_a',
+        role: 'ADMIN',
+        department: 'LEADERSHIP',
+        status: 'ACTIVE',
+      },
     },
     organization: null,
     support: null,
@@ -80,6 +94,8 @@ describe('team.inviteMember duplicate guard', () => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_engineering' });
+    mocks.count.mockResolvedValue(1);
+    mocks.queryRaw.mockResolvedValue([{ id: 'org_a' }]);
   });
 
   it.each([['ALEX@COMPANY.COM'], ['Alex@Company.com'], ['  alex@company.com  ']])(
@@ -122,9 +138,45 @@ describe('team.inviteMember duplicate guard', () => {
 
   it('retains seat limits without HR', async () => {
     mocks.findFirst.mockResolvedValue(null);
+    mocks.count.mockResolvedValue(50);
     await expect(caller(50).inviteMember({ ...invite, email: 'cashier@example.com' }))
       .rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining('Seat limit reached') });
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
     expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('locks the tenant and checks a live seat count before creating a new invite', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+
+    await caller().inviteMember({ ...invite, email: 'new.person@company.com' });
+
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.count).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        status: { in: ['ACTIVE', 'ON_LEAVE', 'INVITED'] },
+      },
+    });
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.count.mock.invocationCallOrder[0]!
+    );
+    expect(mocks.count.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.create.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('does not consume or lock another seat when refreshing a pending invite', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_invited', status: 'INVITED' });
+    mocks.update.mockResolvedValue({ id: 'user_invited', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+
+    await caller().inviteMember({ ...invite, email: 'alex@company.com' });
+
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
+    expect(mocks.count).not.toHaveBeenCalled();
+    expect(mocks.update).toHaveBeenCalledOnce();
   });
 
   it('rejects a department outside the tenant catalog', async () => {
