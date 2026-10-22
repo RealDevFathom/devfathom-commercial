@@ -40,13 +40,14 @@ vi.mock('@/server/trpc', async () => ({
 
 import type { TRPCContext } from '../trpc';
 import { pharmacyPrescriptionsRouter } from './pharmacy-prescriptions';
+import { moduleForProcedure } from '@/lib/module-catalog';
 import { GET } from '@/app/api/pharmacy/prescription-files/route';
 import { GET as sharedFileGET } from '@/app/api/files/[name]/route';
 
 function context(userId = 'user-a', organizationId = 'org-a', status = 'ACTIVE') {
   return {
     db: {
-      pharmacyPatient: { findFirst: mocks.patient },
+      pharmacyPatient: { findFirst: mocks.patient, findMany: mocks.patient },
       pharmacyPrescriber: { findFirst: mocks.prescriber },
       prescription: { findFirst: mocks.find, create: mocks.create },
       medicine: { findMany: mocks.medicines },
@@ -372,6 +373,61 @@ describe('prescription capture and private delivery', () => {
     expect(response.status).toBe(400);
     expect(mocks.getUpload).not.toHaveBeenCalled();
   });
+});
+
+describe('counter patient authorization (#477)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.hasModule.mockReturnValue(true);
+    mocks.patient.mockResolvedValue(null);
+  });
+
+  it.each(['counterPatients', 'counterPatientPanel'] as const)(
+    'keeps %s in the Dispensing module',
+    (procedure) => {
+      expect(moduleForProcedure(`pharmacyPrescriptions.${procedure}`)).toBe(
+        'pharmacy-dispensing'
+      );
+    }
+  );
+
+  it.each([
+    ['counterPatients', () => caller().counterPatients({ query: 'ali' })],
+    ['counterPatientPanel', () => caller().counterPatientPanel({ patientId: 'patient-a' })],
+  ] as const)(
+    'denies %s before reading patient data without either capability',
+    async (_name, run) => {
+      mocks.can.mockResolvedValue(false);
+
+      await expect(run()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.anything(),
+        'pharmacy:counter',
+        undefined,
+        expect.objectContaining({ db: expect.anything(), source: 'TRPC' })
+      );
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.anything(),
+        'pharmacy:dispense',
+        undefined,
+        expect.objectContaining({ db: expect.anything(), source: 'TRPC' })
+      );
+      expect(mocks.patient).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['pharmacy:counter', 'pharmacy:dispense'] as const)(
+    'admits an exact %s decision while preserving tenant predicates',
+    async (allowedAction) => {
+      mocks.can.mockImplementation(async (_subject, action) => action === allowedAction);
+      mocks.patient.mockResolvedValueOnce([]);
+
+      await expect(caller().counterPatients({ query: 'ali' })).resolves.toEqual({ patients: [] });
+      expect(mocks.patient).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ organizationId: 'org-a' }) })
+      );
+    }
+  );
 });
 
 describe('PH-A3 prescription OCR prefill', () => {

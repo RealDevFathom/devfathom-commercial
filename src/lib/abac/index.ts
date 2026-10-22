@@ -48,13 +48,14 @@ async function customDecision(
   const overrides = user.permissionOverrides.filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
-  if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
-  if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
-  if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
+  // DENY is global across both custom-rule sources. In particular, a user
+  // ALLOW must never outrank a role DENY merely because overrides were read
+  // first (and the inverse is equally important).
+  if ([...overrides, ...roleRules].some((rule) => rule.effect === 'DENY')) return false;
+  if ([...overrides, ...roleRules].some((rule) => rule.effect === 'ALLOW')) return true;
   return null;
 }
 
