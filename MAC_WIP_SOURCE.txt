@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1374-verify-ph-growth-independently-verify-supplier-credit-follow-up-8057582f
+Branch: codex/WHA-1374-verify-ph-growth-independently-verify-supplier-credit-follow-up-8057582f
+HEAD: 8057582fbc890c51bfe354c620f08e9e34338c55
+Mode: applied
+Excluded (secrets): 6

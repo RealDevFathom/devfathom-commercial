@@ -1,0 +1,39 @@
+[
+  {
+    "command": [
+      "node_modules/.bin/eslint",
+      "tests/verification/wha1374-follow-up.test.tsx"
+    ],
+    "rc": 0,
+    "output": ""
+  },
+  {
+    "command": [
+      "node_modules/.bin/prettier",
+      "--check",
+      "tests/verification/wha1374-follow-up.test.tsx"
+    ],
+    "rc": 0,
+    "output": "Checking formatting...\nAll matched files use Prettier code style!\n"
+  },
+  {
+    "command": [
+      "git",
+      "diff",
+      "HEAD^",
+      "HEAD",
+      "--check"
+    ],
+    "rc": 0,
+    "output": ""
+  },
+  {
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "rc": 0,
+    "output": ""
+  }
+]
