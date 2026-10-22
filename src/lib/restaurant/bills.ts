@@ -901,8 +901,9 @@ export type CompLineResult = {
 
 /**
  * Comp a bill line to zero (C4). The line KEEPS its original snapshot unit price and
- * `lineSubtotal`; `compAmount` is set to that subtotal so the effective `lineTotal`
- * nets to zero, and the comp records a reason + manager co-authorization. The bill's
+ * `lineSubtotal`; `compAmount` is set to that subtotal so the merchandise nets to
+ * zero while frozen tax/service evidence remains payable, and the comp records a
+ * reason + manager co-authorization. The bill's
  * `compTotal`/`grandTotal` are recomputed. Only a bill that is still OPEN can be
  * comped. The comp amount flows to the daily close. Idempotent on the money key.
  *
@@ -953,7 +954,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
 
     const line = await tx.restaurantBillLine.findUnique({
       where: { id: input.billLineId },
-      select: { id: true, billId: true, lineSubtotal: true, compAmount: true },
+      select: { id: true, billId: true, lineSubtotal: true, lineTotal: true, compAmount: true },
     });
     if (!line || line.billId !== bill.id) {
       throw new BillCommandError('The bill line does not belong to this bill.', 'LINE_NOT_FOUND');
@@ -1003,7 +1004,10 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       where: { id: line.id },
       data: {
         compAmount: line.lineSubtotal,
-        lineTotal: ZERO,
+        // A comp removes the merchandise subtotal, not separately frozen tax or
+        // service-charge evidence. In particular, comping the last merchandise
+        // line must not erase a service charge that remains payable.
+        lineTotal: sub(line.lineTotal, line.lineSubtotal),
         compReason: reason,
         compCoAuthorizationId: coAuthorizationId,
       },
@@ -1782,14 +1786,20 @@ export async function evaluateOrderSettlement(
     tx,
     liveBills.map((bill) => bill.id)
   );
-  const accountedTotal = sum(
+  // Reconcile the independently rounded bill snapshots in their storage unit.
+  // Summing fractional decimal intermediates can manufacture a mismatch even
+  // though every persisted payable component is an exact currency cent.
+  const accountedCents = sum(
     liveBills.map((bill) =>
-      sub(
-        add(add(bill.grandTotal, bill.compTotal), bill.discountTotal),
-        exclusiveTaxByBill.get(bill.id) ?? ZERO
-      )
+      roundMoney(
+        sub(
+          add(add(bill.grandTotal, bill.compTotal), bill.discountTotal),
+          exclusiveTaxByBill.get(bill.id) ?? ZERO
+        )
+      ).mul(100)
     )
   );
+  const accountedTotal = accountedCents.div(100);
 
   const coveredItemIds = new Set<string>();
   for (const bill of liveBills) {

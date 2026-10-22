@@ -280,6 +280,53 @@ describe('exclusiveTaxFromSettlementSnapshots', () => {
     expect(settlement.accountedTotal.toString()).toBe(settlement.derivedOrderTotal.toString());
   });
 
+  it('reconciles independently rounded bill payables in integer cents', async () => {
+    const db = {
+      restaurantOrder: {
+        findFirst: async () => ({
+          id: 'order-1',
+          branchId: 'branch-1',
+          status: 'PAYMENT_PENDING',
+          businessDate: new Date('2026-08-01T00:00:00.000Z'),
+          serviceChargePolicyVersion: null,
+          deliveryFulfillment: null,
+          items: [
+            {
+              id: 'item-1',
+              status: 'SERVED',
+              seatNumber: null,
+              name: 'Rounding item',
+              unitPrice: D('0.02'),
+              quantity: 1,
+              modifiers: [],
+            },
+          ],
+        }),
+      },
+      restaurantBill: {
+        findMany: async () =>
+          ['bill-1', 'bill-2'].map((id) => ({
+            id,
+            status: 'SETTLED',
+            splitKind: 'FRACTIONAL',
+            grandTotal: D('0.005'),
+            deliveryFeeTotal: D('0'),
+            compTotal: D('0'),
+            discountTotal: D('0'),
+            taxTotal: D('0'),
+            receiptNumber: id === 'bill-1' ? 1 : 2,
+            lines: [],
+            tenders: [{ amount: D('0.01') }],
+          })),
+      },
+      restaurantTaxTransactionSnapshot: { findMany: async () => [] },
+    } as unknown as ScopedDb;
+
+    const settlement = await evaluateOrderSettlement(db, 'order-1');
+    expect(settlement.accountedTotal.toFixed(2)).toBe('0.02');
+    expect(settlement.settled).toBe(true);
+  });
+
   it('uses only the latest live snapshot when two freezes are both still in force', () => {
     const totals = exclusiveTaxFromSettlementSnapshots([
       settlementSnapshot({
@@ -880,7 +927,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
     expect(settlement.blocker).toBe('BILLS_OPEN'); // bills exist, not yet settled
   });
 
-  it('comps a line to zero: retains snapshot price, records reason + co-auth, updates totals', async () => {
+  it('comps merchandise while retaining frozen service evidence, reason and co-auth', async () => {
     const { orderId, db } = await openWithItems([{}, {}]);
     const { billIds } = await deps.bills.cutBills(db, {
       orderId,
@@ -911,16 +958,17 @@ describeIfDatabase('bills command layer (real DB)', () => {
           lineSubtotal: true,
           compAmount: true,
           lineTotal: true,
+          serviceChargeAmount: true,
           compReason: true,
           compCoAuthorization: { select: { approvingStaffProfileId: true, reason: true } },
         },
       })
     );
-    // Original snapshot price + subtotal retained; comp nets the line to zero.
+    // Original snapshot price + subtotal retained; only merchandise nets to zero.
     expect(after?.unitPrice.toString()).toBe(line!.unitPrice.toString());
     expect(after?.lineSubtotal.toString()).toBe(line!.lineSubtotal.toString());
     expect(after?.compAmount.toString()).toBe(line!.lineSubtotal.toString());
-    expect(after?.lineTotal.toString()).toBe('0');
+    expect(after?.lineTotal.toString()).toBe(after?.serviceChargeAmount.toString());
     expect(after?.compReason).toBe('guest complaint');
     expect(after?.compCoAuthorization?.approvingStaffProfileId).toBe(ids.manager);
 
