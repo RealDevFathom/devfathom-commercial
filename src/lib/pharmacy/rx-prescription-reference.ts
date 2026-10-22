@@ -52,6 +52,13 @@ export async function resolvePrescriptionReference(
   },
   now: Date = new Date()
 ): Promise<{ prescriptionLineId: string; patientId: string }> {
+  // Lock order is sale first, then prescription line, matching linkCustomerToSale and sale
+  // completion. Holding the sale lock to commit means a concurrent customer link either commits
+  // before us (and the customer read below, a fresh statement, sees it) or waits and then sees
+  // the referenced line we attach.
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+  );
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${input.prescriptionLineId} FOR UPDATE`
   );

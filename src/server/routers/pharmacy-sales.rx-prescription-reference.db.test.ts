@@ -449,6 +449,36 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     );
   });
 
+  it('serializes a referenced addLine against a concurrent customer link (#518 F-01)', async () => {
+    const saleId = await newSale(ids.pharmacist);
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const add = act(ids.pharmacist, async (api) => {
+      await api.addLine(line(saleId, rx, withReference(lines.bilal, patients.bilal)));
+      await held;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const link = act(ids.pharmacist, (api) =>
+      api.linkCustomer({
+        branchId: ids.branch,
+        saleId,
+        patientId: patients.ayesha,
+        displayName: 'Ayesha Khan',
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    release();
+    const [addOutcome, linkOutcome] = await Promise.allSettled([add, link]);
+    expect(addOutcome.status).toBe('fulfilled');
+    expect(linkOutcome.status).toBe('rejected');
+    const sale = await withTenantDb(ids.org, (tx) =>
+      tx.pharmacySale.findFirst({ where: { id: saleId }, select: { customerId: true } })
+    );
+    expect(sale?.customerId ?? null).toBeNull();
+  });
+
   it('refuses the invented reference inside a controlled authorization on a non-controlled line', async () => {
     await expectRefused(
       ids.pharmacist,
