@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-91-m8-customers-loyalty-insights-restaurant-v1
+Branch: WHA-91-m8-customers-loyalty-insights-restaurant-v1
+HEAD: 5c4b48cfc208a7bf321ce9e42de7a2f8f67e1ab6
+Mode: applied
+Excluded (secrets): 1
