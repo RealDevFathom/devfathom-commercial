@@ -78,6 +78,7 @@ beforeEach(() => {
     id: 'station_1',
     branchId: 'branch_1',
     isDefault: false,
+    active: true,
   });
   mocks.stationFindFirst.mockResolvedValue(null); // no default yet by default
   mocks.stationCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -203,6 +204,7 @@ describe('setDefaultStation', () => {
       id: 'station_2',
       branchId: 'branch_1',
       isDefault: false,
+      active: true,
     });
     await setDefaultStation(db, 'station_2');
     expect(mocks.stationUpdateMany).toHaveBeenCalledWith({
@@ -220,6 +222,7 @@ describe('setDefaultStation', () => {
       id: 'station_1',
       branchId: 'branch_1',
       isDefault: true,
+      active: true,
     });
     await setDefaultStation(db, 'station_1');
     expect(mocks.transaction).not.toHaveBeenCalled();
@@ -231,11 +234,24 @@ describe('setDefaultStation', () => {
       id: 'station_2',
       branchId: 'branch_1',
       isDefault: false,
+      active: true,
     });
     mocks.stationUpdate.mockRejectedValueOnce(P2002);
     await expect(setDefaultStation(db, 'station_2')).rejects.toMatchObject({
       reason: 'DEFAULT_CONFLICT',
     });
+  });
+
+  it('refuses to promote an inactive station without clearing the live default', async () => {
+    mocks.stationFindUnique.mockResolvedValue({
+      id: 'station_2',
+      branchId: 'branch_1',
+      isDefault: false,
+      active: false,
+    });
+    await expect(setDefaultStation(db, 'station_2')).rejects.toMatchObject({ reason: 'INVALID' });
+    expect(mocks.transaction).not.toHaveBeenCalled();
+    expect(mocks.stationUpdateMany).not.toHaveBeenCalled();
   });
 });
 
@@ -254,7 +270,7 @@ describe('deleteStation', () => {
   });
 });
 
-describe('createRoutingRule (product XOR category, same-org refs)', () => {
+describe('createRoutingRule (product/category/course XOR, same-org refs)', () => {
   it('rejects a rule with neither target', async () => {
     await expect(createRoutingRule(db, { stationId: 'station_1' })).rejects.toMatchObject({
       reason: 'RULE_TARGET_INVALID',
@@ -292,15 +308,42 @@ describe('createRoutingRule (product XOR category, same-org refs)', () => {
   it('creates a product rule with a default priority of 0', async () => {
     await createRoutingRule(db, { stationId: 'station_1', productId: 'product_1' });
     expect(mocks.ruleCreate).toHaveBeenCalledWith({
-      data: { stationId: 'station_1', productId: 'product_1', categoryId: null, priority: 0 },
+      data: {
+        stationId: 'station_1',
+        productId: 'product_1',
+        categoryId: null,
+        course: null,
+        priority: 0,
+      },
     });
   });
 
   it('creates a category rule with the given priority', async () => {
     await createRoutingRule(db, { stationId: 'station_1', categoryId: 'category_1', priority: 5 });
     expect(mocks.ruleCreate).toHaveBeenCalledWith({
-      data: { stationId: 'station_1', productId: null, categoryId: 'category_1', priority: 5 },
+      data: {
+        stationId: 'station_1',
+        productId: null,
+        categoryId: 'category_1',
+        course: null,
+        priority: 5,
+      },
     });
+  });
+
+  it('creates a positive course rule without a catalog lookup', async () => {
+    await createRoutingRule(db, { stationId: 'station_1', course: 3 });
+    expect(mocks.ruleCreate).toHaveBeenCalledWith({
+      data: {
+        stationId: 'station_1',
+        productId: null,
+        categoryId: null,
+        course: 3,
+        priority: 0,
+      },
+    });
+    expect(mocks.productFindUnique).not.toHaveBeenCalled();
+    expect(mocks.categoryFindUnique).not.toHaveBeenCalled();
   });
 });
 
