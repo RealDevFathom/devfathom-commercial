@@ -1,9 +1,19 @@
+import { readFileSync } from 'node:fs';
 import { TRPCError } from '@trpc/server';
 import { describe, expect, it } from 'vitest';
 
 import { failDayClose } from './pharmacy-sales';
 
+const routerSource = readFileSync('src/server/routers/pharmacy-sales.ts', 'utf8');
+
 describe('pharmacy day-close error mapping', () => {
+  it.each(['closePreview', 'closeDay', 'dailyClose'])(
+    'routes %s authorization through the central admin capability guard',
+    (procedure) => {
+      expect(routerSource).toMatch(new RegExp(`\\b${procedure}: adminProcedure\\b`));
+    }
+  );
+
   it.each([
     { code: 'P2010', message: 'Raw query failed', meta: { code: '55000' } },
     new Error('pharmacy_daily_closes is append-only'),
