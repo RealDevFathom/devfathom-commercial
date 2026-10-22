@@ -38,6 +38,7 @@ function model() {
     update: vi
       .fn()
       .mockImplementation(async ({ data }: { data: object }) => ({ id: 'new', ...data })),
+    updateMany: vi.fn().mockResolvedValue({ count: 1 }),
   };
 }
 
@@ -316,6 +317,22 @@ describe('PUR-02 approval', () => {
     orderableSupplier();
   });
 
+  it('gates the mutation through central pharmacy procurement authorization', async () => {
+    mocks.can.mockResolvedValue(false);
+
+    await expect(
+      caller('user_c').approvePurchaseOrder({ purchaseOrderId: 'po_a', decision: 'APPROVED' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_c' }),
+      'pharmacy:procurement',
+      undefined,
+      expect.objectContaining({ db, source: 'TRPC' })
+    );
+    expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
+  });
+
   it('refuses approval by the person who drafted the order', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
       id: 'po_a',
@@ -390,6 +407,47 @@ describe('PUR-02 approval', () => {
       reason: 'Price above the last landed cost.',
     });
     expect(db.pharmacyPurchaseOrder.update.mock.calls[0]![0].data).toEqual({ status: 'DRAFT' });
+  });
+
+  it('claims SUBMITTED with a compare-and-swap before recording the decision', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      status: 'SUBMITTED',
+      supplierId: 'supplier_a',
+      createdByUserId: 'user_a',
+      requisition: null,
+    });
+
+    await caller('user_c').approvePurchaseOrder({
+      purchaseOrderId: 'po_a',
+      decision: 'APPROVED',
+    });
+
+    expect(db.pharmacyPurchaseOrder.updateMany).toHaveBeenCalledWith({
+      where: { id: 'po_a', status: 'SUBMITTED' },
+      data: expect.objectContaining({ status: 'APPROVED', approvedByUserId: 'user_c' }),
+    });
+    expect(db.pharmacyPurchaseOrder.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacyPurchaseOrderApproval.create.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('records no decision when another transaction already claimed SUBMITTED', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      status: 'SUBMITTED',
+      supplierId: 'supplier_a',
+      createdByUserId: 'user_a',
+      requisition: null,
+    });
+    db.pharmacyPurchaseOrder.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      caller('user_c').approvePurchaseOrder({ purchaseOrderId: 'po_a', decision: 'REJECTED' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+
+    expect(db.pharmacyPurchaseOrderApproval.create).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
   });
 
   it('refuses to approve an order that was never submitted', async () => {

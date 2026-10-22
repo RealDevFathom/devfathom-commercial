@@ -56,7 +56,6 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
-import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import {
   assertDirectPurchaseAuthorized,
   PharmacyReceivingError,
@@ -185,7 +184,14 @@ function serialUniqueViolation(error: unknown): boolean {
 
 async function assertProcurement(ctx: TRPCContext) {
   const actorId = ctx.session?.user?.id;
-  if (!actorId || !(await actorCanProcure(ctx.db, actorId))) {
+  if (
+    !actorId ||
+    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:procurement', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }))
+  ) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
@@ -746,6 +752,7 @@ const purchasingRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        await assertProcurement(ctx);
         return await ctx.db.$transaction(async (tx) => {
           const order = await tx.pharmacyPurchaseOrder.findFirst({
             where: { id: input.purchaseOrderId },
@@ -771,6 +778,26 @@ const purchasingRouter = router({
             );
           }
 
+          const approvedAt = input.decision === 'APPROVED' ? new Date() : undefined;
+          const transition =
+            input.decision === 'APPROVED'
+              ? {
+                  status: 'APPROVED' as const,
+                  approvedAt,
+                  approvedByUserId: ctx.session.user.id,
+                }
+              : { status: 'DRAFT' as const };
+          const claimed = await tx.pharmacyPurchaseOrder.updateMany({
+            where: { id: order.id, status: 'SUBMITTED' },
+            data: transition,
+          });
+          if (claimed.count !== 1) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'Purchase order has already been decided.',
+            });
+          }
+
           await tx.pharmacyPurchaseOrderApproval.create({
             data: {
               purchaseOrderId: order.id,
@@ -784,14 +811,7 @@ const purchasingRouter = router({
           });
           return tx.pharmacyPurchaseOrder.update({
             where: { id: order.id },
-            data:
-              input.decision === 'APPROVED'
-                ? {
-                    status: 'APPROVED',
-                    approvedAt: new Date(),
-                    approvedByUserId: ctx.session.user.id,
-                  }
-                : { status: 'DRAFT' },
+            data: transition,
           });
         });
       } catch (error) {
