@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1415
+Branch: WHA-1415
+HEAD: b5a39fe969b01bd46f889cfce787ad189816905f
+Mode: applied
+Excluded (secrets): 18

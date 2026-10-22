@@ -5,13 +5,15 @@
  * claim to record, so no fixture and no seed can move a step. Each test builds
  * property facts and asks what the checklist makes of them.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { PrismaClient } from '@/generated/prisma/client';
 
 import {
   HOTEL_ONBOARDING_STEPS,
   evaluateHotelOnboarding,
   hotelActivationSummary,
   hotelEvidence,
+  evaluateHotelReadiness,
   type HotelOnboardingEvidence,
 } from './onboarding-checklist';
 
@@ -163,4 +165,24 @@ describe('hotelEvidence', () => {
     expect(hotelEvidence(completeProperty, 15, 15, 0).ROOM_TYPES).toBe(false);
     expect(hotelEvidence(completeProperty, 15, 15, 1).ROOM_TYPES).toBe(true);
   });
+});
+
+it('counts actual room types only inside the resolved property and tenant', async () => {
+  const count = vi.fn(async () => 1);
+  const queryRaw = vi.fn(async () => []);
+  const database = {
+    hotelProperty: {
+      findFirst: vi.fn(async () => ({ ...completeProperty, branchId: 'property_1' })),
+    },
+    organizationRole: { count: vi.fn(async () => 15) },
+    $transaction: async (run: (tx: unknown) => unknown) =>
+      run({ $queryRaw: queryRaw, hotelRoomType: { count } }),
+  } as unknown as PrismaClient;
+  const result = await evaluateHotelReadiness(database, ORG);
+  expect(result.items.find((item) => item.key === 'ROOM_TYPES')?.state).toBe('DONE');
+  expect(count).toHaveBeenCalledWith({ where: { organizationId: ORG, branchId: 'property_1' } });
+  expect(queryRaw.mock.calls[0].slice(1)).toEqual(['property_1']);
+  count.mockResolvedValue(0);
+  const empty = await evaluateHotelReadiness(database, ORG);
+  expect(empty.items.find((item) => item.key === 'ROOM_TYPES')?.state).toBe('NEEDS_YOU');
 });

@@ -214,8 +214,7 @@ export function hotelEvidence(
       property && nonEmpty(property.auditTime) && policyRecorded(property.businessDatePolicy)
     ),
     ROLES_ASSIGNED: requiredRoleKeyCount > 0 && seededRoleKeyCount >= requiredRoleKeyCount,
-    // H1-03 owns room types. Until it ships there is nothing to count, and
-    // `null` reports pending rather than being quietly read as satisfied.
+    // Only actual room-type evidence satisfies this step; absent evidence fails closed.
     ROOM_TYPES: roomTypeCount !== null && roomTypeCount > 0,
   };
 }
@@ -240,6 +239,7 @@ export async function evaluateHotelReadiness(
       where: { organizationId, active: true },
       orderBy: { createdAt: 'asc' },
       select: {
+        branchId: true,
         mode: true,
         name: true,
         addressLine: true,
@@ -255,9 +255,15 @@ export async function evaluateHotelReadiness(
     db.organizationRole.count({ where: { organizationId, key: { in: requiredRoleKeys } } }),
   ]);
 
+  const roomTypeCount = property
+    ? await db.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT set_config('app.current_branch_id', ${property.branchId}, true)`;
+        return tx.hotelRoomType.count({ where: { organizationId, branchId: property.branchId } });
+      })
+    : 0;
   return evaluateHotelOnboarding(
     organizationId,
-    hotelEvidence(property, seededRoleKeys, requiredRoleKeys.length, null)
+    hotelEvidence(property, seededRoleKeys, requiredRoleKeys.length, roomTypeCount)
   );
 }
 
