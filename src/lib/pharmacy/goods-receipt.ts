@@ -25,7 +25,10 @@
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
-import { appendControlledPurchaseEntries } from './controlled-register';
+import {
+  appendControlledPurchaseEntries,
+  appendControlledPurchaseReversals,
+} from './controlled-register';
 import {
   clearLockout,
   isLockedOut,
@@ -498,6 +501,27 @@ export async function reverseGoodsReceipt(
     movementIds: posted.map((movement) => movement.id),
     reason: input.reason,
     at: input.at,
+  });
+
+  const movements = await db.pharmacyStockMovement.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      id: { in: posted.map((movement) => movement.id) },
+    },
+    select: { id: true, quantityUnits: true, disposition: true },
+  });
+  await appendControlledPurchaseReversals(db, {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    recordedByUserId: scope.actorId,
+    reason: input.reason,
+    lines: movements.map((movement) => ({
+      sourceMovementId: movement.id,
+      reversalMovementId: reversals.find((row) => row.reversesMovementId === movement.id)!.id,
+      quantityCanonicalUnits: movement.quantityUnits,
+      reverseSellable: movement.disposition !== 'QUARANTINE',
+    })),
   });
 
   await db.pharmacyGoodsReceipt.update({

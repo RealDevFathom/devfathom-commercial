@@ -268,6 +268,82 @@ export async function appendControlledPurchaseEntries(
   }
 }
 
+/** Append stock-backed corrections for controlled purchases that were reversed. */
+export async function appendControlledPurchaseReversals(
+  db: ScopedDb,
+  input: {
+    organizationId: string;
+    branchId: string;
+    recordedByUserId: string;
+    reason: string;
+    lines: readonly {
+      sourceMovementId: string;
+      reversalMovementId: string;
+      quantityCanonicalUnits: number;
+      reverseSellable: boolean;
+    }[];
+  }
+) {
+  const sourceIds = input.lines.map((line) => line.sourceMovementId).filter(Boolean);
+  if (sourceIds.length === 0) return;
+  const sources = await db.pharmacyControlledRegisterEntry.findMany({
+    where: {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      entryKind: 'PURCHASE',
+      stockMovementId: { in: sourceIds },
+    },
+  });
+  if (sources.length === 0) return;
+  await lockRegister(db, input.organizationId, input.branchId);
+  for (const line of input.lines) {
+    const source = sources.find((entry) => entry.stockMovementId === line.sourceMovementId);
+    if (!source?.medicineId || !Number.isSafeInteger(line.quantityCanonicalUnits)) continue;
+    if (line.quantityCanonicalUnits <= 0) throw new Error('BALANCE');
+    const balanceDelta = line.reverseSellable ? -line.quantityCanonicalUnits : 0;
+    const runningBalance = await runningFromLot(
+      db,
+      {
+        organizationId: input.organizationId,
+        branchId: input.branchId,
+        medicineId: source.medicineId,
+        inventoryLotId: source.inventoryLotId,
+      },
+      balanceDelta
+    );
+    const sellable = await sellableOnHand(db, {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      inventoryLotId: source.inventoryLotId,
+    });
+    if (runningBalance !== sellable) throw new Error('BALANCE');
+    const serial = await nextSerial(db, input.organizationId, input.branchId);
+    await createRegisterRow(db, {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      serial,
+      entryKind: 'CORRECTION',
+      medicineId: source.medicineId,
+      manufacturer: source.manufacturer,
+      inventoryLotId: source.inventoryLotId,
+      stockMovementId: null,
+      restorationMovementId: line.reversalMovementId,
+      batchNumber: source.batchNumber,
+      quantityCanonicalUnits: line.quantityCanonicalUnits,
+      balanceDelta,
+      runningBalance,
+      recordedByUserId: input.recordedByUserId,
+      witnessedByUserId: source.witnessedByUserId,
+      signatureRef: source.signatureRef,
+      rxSerialWritten: false,
+      emergency: false,
+      counterpartyName: source.counterpartyName,
+      correctionReason: input.reason,
+      correctsEntryId: source.id,
+    });
+  }
+}
+
 export async function earlierRegisterEntry(
   db: ScopedDb,
   scope: { organizationId: string; branchId: string },

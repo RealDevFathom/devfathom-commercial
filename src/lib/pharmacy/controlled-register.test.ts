@@ -4,11 +4,80 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   appendControlledCorrection,
   appendControlledPurchaseEntries,
+  appendControlledPurchaseReversals,
   appendControlledSaleEntries,
   derivedCorrectionDelta,
   emergencyNoRxDecision,
   registerBalanceAfter,
 } from './controlled-register';
+
+describe('appendControlledPurchaseReversals', () => {
+  it('appends a tenant-scoped negative correction backed by the reversal movement', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'correction' });
+    const findMany = vi.fn().mockResolvedValue([
+      {
+        id: 'purchase-entry',
+        medicineId: 'medicine',
+        manufacturer: 'Maker',
+        inventoryLotId: 'lot',
+        stockMovementId: 'receipt-movement',
+        batchNumber: 'B-1',
+        witnessedByUserId: 'witness',
+        signatureRef: 'pin:witness',
+        counterpartyName: 'Supplier',
+      },
+    ]);
+    const db = {
+      $queryRaw: vi.fn(),
+      pharmacyControlledRegisterEntry: {
+        findMany,
+        findFirst: vi.fn().mockResolvedValue({ runningBalance: 10 }),
+        aggregate: vi.fn().mockResolvedValue({ _max: { serial: 7 } }),
+        create,
+      },
+      pharmacyStockBalance: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { onHandUnits: 0 } }),
+      },
+    } as unknown as ScopedDb;
+
+    await appendControlledPurchaseReversals(db, {
+      organizationId: 'org',
+      branchId: 'branch',
+      recordedByUserId: 'receiver',
+      reason: 'Wrong consignment',
+      lines: [
+        {
+          sourceMovementId: 'receipt-movement',
+          reversalMovementId: 'reversal-movement',
+          quantityCanonicalUnits: 10,
+          reverseSellable: true,
+        },
+      ],
+    });
+
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org',
+        branchId: 'branch',
+        entryKind: 'PURCHASE',
+        stockMovementId: { in: ['receipt-movement'] },
+      },
+    });
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org',
+        branchId: 'branch',
+        entryKind: 'CORRECTION',
+        correctsEntryId: 'purchase-entry',
+        restorationMovementId: 'reversal-movement',
+        quantityCanonicalUnits: 10,
+        balanceDelta: -10,
+        runningBalance: 0,
+        correctionReason: 'Wrong consignment',
+      }),
+    });
+  });
+});
 
 describe('registerBalanceAfter', () => {
   it('adds a signed delta and refuses a negative balance', () => {
