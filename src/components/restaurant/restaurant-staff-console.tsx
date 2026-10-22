@@ -83,6 +83,7 @@ export function RestaurantStaffConsole() {
   const [statusFilter, setStatusFilter] = useState<'ALL' | StaffStatus>('ALL');
   const [branchFilter, setBranchFilter] = useState('');
   const [staffFormOpen, setStaffFormOpen] = useState(false);
+  const [inviteBranchId, setInviteBranchId] = useState('');
   const [editingStaff, setEditingStaff] = useState<StaffProfile | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<StaffProfile | null>(null);
   // SOP-1: the job-role multi-select target (separate from the credentials dialog).
@@ -92,8 +93,12 @@ export function RestaurantStaffConsole() {
     null
   );
   const eligibleUsersQuery = trpc.restaurantStaff.listEligibleUsers.useQuery(undefined, {
-    enabled: restaurantEnabled && staffFormOpen,
+    enabled: restaurantEnabled && staffFormOpen && Boolean(editingStaff),
   });
+  const inviteRolesQuery = trpc.restaurantStaff.listAssignableJobRoles.useQuery(
+    { branchId: inviteBranchId },
+    { enabled: restaurantEnabled && staffFormOpen && !editingStaff && Boolean(inviteBranchId) }
+  );
 
   const credentialsQuery = trpc.restaurantStaff.listCredentials.useQuery(
     { staffProfileId: selectedStaff?.id ?? '', includeRevoked: true },
@@ -116,6 +121,14 @@ export function RestaurantStaffConsole() {
       refreshStaff();
       setStaffFormOpen(false);
       toast.success('Staff profile created.');
+    },
+    onError: mutationFailure,
+  });
+  const inviteStaff = trpc.restaurantStaff.invite.useMutation({
+    onSuccess: () => {
+      refreshStaff();
+      setStaffFormOpen(false);
+      toast.success('Staff invitation sent.');
     },
     onError: mutationFailure,
   });
@@ -185,13 +198,15 @@ export function RestaurantStaffConsole() {
   }, [branchFilter, search, staffQuery.data, statusFilter]);
 
   const permissionDenied = isPermissionError(staffQuery.error);
-  const staffFormPending = createStaff.isPending || updateStaff.isPending;
+  const staffFormPending = createStaff.isPending || updateStaff.isPending || inviteStaff.isPending;
   const credentialsPending = issueCredential.isPending || rotateCredential.isPending;
 
   const openCreate = () => {
     setEditingStaff(null);
     createStaff.reset();
     updateStaff.reset();
+    inviteStaff.reset();
+    setInviteBranchId('');
     setStaffFormOpen(true);
   };
 
@@ -213,7 +228,13 @@ export function RestaurantStaffConsole() {
       status: formText(data, 'status') as StaffStatus,
     };
     if (editingStaff) updateStaff.mutate({ id: editingStaff.id, ...payload });
-    else createStaff.mutate(payload);
+    else
+      inviteStaff.mutate({
+        name: payload.displayName,
+        email: payload.email ?? '',
+        jobRoleId: formText(data, 'jobRoleId'),
+        primaryBranchId: payload.primaryBranchId ?? '',
+      });
   };
 
   const submitCredential = (event: FormEvent<HTMLFormElement>) => {
@@ -455,13 +476,15 @@ export function RestaurantStaffConsole() {
           <DialogHeader>
             <DialogTitle>{editingStaff ? 'Edit staff member' : 'Add staff member'}</DialogTitle>
             <DialogDescription>
-              Profile details control restaurant access and branch assignment.
+              {editingStaff
+                ? 'Profile details control restaurant access and branch assignment.'
+                : 'Invite a new person to set their password and join this restaurant team.'}
             </DialogDescription>
           </DialogHeader>
           <form key={editingStaff?.id ?? 'new-staff'} className="space-y-4" onSubmit={submitStaff}>
-            {(createStaff.error || updateStaff.error) && (
+            {(createStaff.error || inviteStaff.error || updateStaff.error) && (
               <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                {(createStaff.error ?? updateStaff.error)?.message}
+                {(createStaff.error ?? inviteStaff.error ?? updateStaff.error)?.message}
               </p>
             )}
             <label className="space-y-1.5">
@@ -482,12 +505,29 @@ export function RestaurantStaffConsole() {
                   type="email"
                   defaultValue={editingStaff?.email ?? ''}
                   className="h-11"
+                  required={!editingStaff}
                 />
               </label>
-              <div className="space-y-1.5">
-                <label htmlFor="staff-organization-user" className={labelClass}>
-                  Organization user
+              {!editingStaff ? (
+                <label className="space-y-1.5">
+                  <span className={labelClass}>Restaurant role</span>
+                  <select name="jobRoleId" className={selectClass} required defaultValue="">
+                    <option value="" disabled>
+                      {inviteBranchId ? 'Select a role' : 'Select a branch first'}
+                    </option>
+                    {(inviteRolesQuery.data ?? []).map((role) => (
+                      <option key={role.id} value={role.id}>
+                        {role.name}
+                      </option>
+                    ))}
+                  </select>
                 </label>
+              ) : null}
+              {editingStaff ? (
+                <div className="space-y-1.5">
+                  <label htmlFor="staff-organization-user" className={labelClass}>
+                  Organization user
+                  </label>
                 <select
                   id="staff-organization-user"
                   name="userId"
@@ -509,10 +549,11 @@ export function RestaurantStaffConsole() {
                     const linkedProfile = user.restaurantStaffProfiles[0];
                     const isCurrent = user.id === editingStaff?.userId;
                     const unavailable =
-                      user.status !== 'ACTIVE' || (Boolean(linkedProfile) && !isCurrent);
+                      !['ACTIVE', 'INVITED'].includes(user.status) ||
+                      (Boolean(linkedProfile) && !isCurrent);
                     const state = isCurrent
                       ? ' — currently linked'
-                      : user.status !== 'ACTIVE'
+                      : !['ACTIVE', 'INVITED'].includes(user.status)
                         ? ' — inactive'
                         : linkedProfile
                           ? ` — linked to ${linkedProfile.displayName}`
@@ -528,13 +569,14 @@ export function RestaurantStaffConsole() {
                 <span id="staff-user-help" className="block text-xs text-text-muted">
                   {eligibleUsersQuery.data?.every(
                     (user) =>
-                      user.status !== 'ACTIVE' ||
+                      !['ACTIVE', 'INVITED'].includes(user.status) ||
                       (user.restaurantStaffProfiles.length > 0 && user.id !== editingStaff?.userId)
                   )
                     ? 'No active, unlinked organization users are available.'
                     : 'Unavailable users remain visible for context but cannot be selected.'}
                 </span>
-              </div>
+                </div>
+              ) : null}
               <div className="space-y-1.5">
                 <label htmlFor="staff-primary-branch" className={labelClass}>
                   Primary branch
@@ -543,27 +585,27 @@ export function RestaurantStaffConsole() {
                   id="staff-primary-branch"
                   name="primaryBranchId"
                   defaultValue={editingStaff?.primaryBranchId ?? ''}
+                  value={editingStaff ? undefined : inviteBranchId}
+                  onChange={editingStaff ? undefined : setInviteBranchId}
                   branches={branches}
                   loading={branchesQuery.isLoading}
                   error={Boolean(branchesQuery.error)}
-                  allowEmpty
-                  emptyLabel="No primary branch"
+                  allowEmpty={Boolean(editingStaff)}
+                  emptyLabel={editingStaff ? 'No primary branch' : 'Select a branch'}
                 />
               </div>
-              <label className="space-y-1.5">
-                <span className={labelClass}>Status</span>
-                <select
-                  name="status"
-                  defaultValue={editingStaff?.status ?? 'ACTIVE'}
-                  className={selectClass}
-                >
-                  {statuses.map((status) => (
-                    <option key={status} value={status}>
-                      {status}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {editingStaff ? (
+                <label className="space-y-1.5">
+                  <span className={labelClass}>Status</span>
+                  <select name="status" defaultValue={editingStaff.status} className={selectClass}>
+                    {statuses.map((status) => (
+                      <option key={status} value={status}>
+                        {status}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
             </div>
             <DialogFooter>
               <Button

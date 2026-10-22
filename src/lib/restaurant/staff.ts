@@ -91,7 +91,7 @@ async function assertUserInScope(
   const user = await db.user.findFirst({
     where: {
       id: userId,
-      status: 'ACTIVE',
+      status: { in: ['ACTIVE', 'INVITED'] },
       restaurantStaffProfiles: currentProfileId
         ? { every: { id: currentProfileId } }
         : { none: {} },

@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
+import { appUrl, sendEmail, templates } from '@/lib/email';
+import { emailSchema } from '@/lib/email-address';
+import { generateInviteToken } from '@/lib/invite-token';
 
 import { router, capabilityProcedure, protectedProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
@@ -66,6 +69,7 @@ import {
 
 const STAFF_STATUS = z.enum(['ACTIVE', 'SUSPENDED', 'ARCHIVED']);
 const CREDENTIAL_TYPE = z.enum(['PIN', 'BADGE']);
+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Translate a staff-domain error into the right tRPC status; rethrow anything else. */
 function mapStaffError(err: unknown): never {
@@ -131,6 +135,153 @@ function workspaceOrganizationId(ctx: {
 }
 
 export const restaurantStaffRouter = router({
+  invite: staffProcedure
+    .input(
+      z
+        .object({
+          name: z.string().trim().min(1).max(200),
+          email: emailSchema,
+          jobRoleId: z.string().min(1),
+          primaryBranchId: z.string().min(1),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = workspaceOrganizationId(ctx);
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
+      assertAuthorizedBranch(authorization, input.primaryBranchId);
+      if (!authorization.actorStaffProfileId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'A restaurant staff identity is required.',
+        });
+      }
+
+      const jobRole = await ctx.db.restaurantJobRole.findFirst({
+        where: { id: input.jobRoleId, organizationId, active: true },
+        include: { capabilities: { select: { capability: true } } },
+      });
+      if (!jobRole) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Restaurant role not found.' });
+      }
+      if (['owner', 'admin'].includes(jobRole.key)) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'This restaurant role cannot be assigned.',
+        });
+      }
+      const decision = await resolveStaffCapabilityDecision(
+        ctx.db,
+        authorization.actorStaffProfileId,
+        input.primaryBranchId
+      );
+      if (jobRole.capabilities.some(({ capability }) => !decision.effective.has(capability))) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You cannot assign a restaurant role above your own access.',
+        });
+      }
+
+      const existing = await ctx.db.user.findFirst({
+        where: { organizationId, email: input.email },
+        select: {
+          id: true,
+          status: true,
+          restaurantStaffProfiles: { select: { id: true }, take: 1 },
+        },
+      });
+      if (
+        existing &&
+        (existing.status !== 'INVITED' || existing.restaurantStaffProfiles.length > 0)
+      ) {
+        throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists.' });
+      }
+      if (!existing && ctx.entitlements.activeSeats >= ctx.entitlements.seatLimit) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'The organization seat limit has been reached.',
+        });
+      }
+
+      const { token, tokenHash } = generateInviteToken();
+      const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
+      const result = await ctx.db.$transaction(async (tx) => {
+        const profile = {
+          name: input.name,
+          title: jobRole.name,
+          role: 'EMPLOYEE' as const,
+          department: ctx.session!.user.department,
+          password: null,
+          status: 'INVITED' as const,
+        };
+        const user = existing
+          ? await tx.user.update({ where: { id: existing.id }, data: profile })
+          : await tx.user.create({ data: { ...profile, email: input.email } });
+        const staff = await createStaffProfileWithinCommercialLimit(tx, ctx.entitlements.limits, {
+          displayName: input.name,
+          email: input.email,
+          userId: user.id,
+          primaryBranchId: input.primaryBranchId,
+        });
+        await setStaffJobRoles(tx, {
+          staffProfileId: staff.id,
+          branchId: input.primaryBranchId,
+          jobRoleIds: [jobRole.id],
+          actorStaffProfileId: authorization.actorStaffProfileId,
+        });
+        await tx.invitation.upsert({
+          where: { userId: user.id },
+          create: {
+            userId: user.id,
+            email: input.email,
+            tokenHash,
+            invitedById: ctx.session!.user.id,
+            expiresAt,
+          },
+          update: {
+            email: input.email,
+            tokenHash,
+            expiresAt,
+            acceptedAt: null,
+            invitedById: ctx.session!.user.id,
+          },
+        });
+        return { user, staff };
+      });
+
+      const inviteUrl = `${appUrl()}/invite/${token}`;
+      const mail = templates.inviteMember({
+        name: result.user.name,
+        inviterName: ctx.session!.user.name ?? undefined,
+        role: jobRole.name,
+        workspace: 'DevFathom',
+        acceptUrl: inviteUrl,
+        expiresLabel: 'in 7 days',
+      });
+      try {
+        await sendEmail({
+          to: { email: input.email, name: result.user.name },
+          subject: mail.subject,
+          html: mail.html,
+          text: mail.text,
+        });
+      } catch {
+        // Provisioning succeeded; return the URL so it can still be shared manually.
+      }
+      annotateAudit(ctx, {
+        targetType: 'RestaurantStaffProfile',
+        targetId: result.staff.id,
+        targetLabel: result.staff.displayName,
+        description: `Invited restaurant staff member "${result.staff.displayName}"`,
+        metadata: { jobRoleId: jobRole.id, primaryBranchId: input.primaryBranchId },
+      });
+      return { id: result.staff.id, userId: result.user.id, inviteUrl };
+    }),
+
   /**
    * WHA-1181 — does the signed-in user own the staff profile every restaurant
    * procedure resolves them to? Organizations activated before the onboarding
@@ -594,6 +745,28 @@ export const restaurantStaffRouter = router({
   // immediately effective (nothing caches a capability set) and audited twice
   // over: through `annotateAudit` for the back-office trail, and through the
   // append-only `restaurant_staff_job_role_audits` table inside the domain module.
+
+  listAssignableJobRoles: staffProcedure
+    .input(z.object({ branchId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
+      assertAuthorizedBranch(authorization, input.branchId);
+      if (!authorization.actorStaffProfileId) return [];
+      const decision = await resolveStaffCapabilityDecision(
+        ctx.db,
+        authorization.actorStaffProfileId,
+        input.branchId
+      );
+      return (await listJobRoles(ctx.db, { activeOnly: true })).filter(
+        (role) =>
+          !['owner', 'admin'].includes(role.key) &&
+          role.capabilities.every(({ capability }) => decision.effective.has(capability))
+      );
+    }),
 
   listJobRoles: staffProcedure
     .input(z.object({ activeOnly: z.boolean().default(false) }).strict())

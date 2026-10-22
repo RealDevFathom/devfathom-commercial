@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => ({
   issueReset: vi.fn(),
   noopMutate: vi.fn(),
   noopReset: vi.fn(),
+  inviteMutate: vi.fn(),
   invalidate: vi.fn(),
   roleSave: vi.fn(),
   roleSaveOptions: undefined as MutationOptions | undefined,
@@ -97,6 +98,13 @@ vi.mock('@/lib/trpc', () => ({
       listEligibleUsers: {
         useQuery: () => ({ data: mocks.eligibleUsers, error: null, isLoading: false }),
       },
+      listAssignableJobRoles: {
+        useQuery: () => ({
+          data: [{ id: 'role_server', key: 'server', name: 'Waiter', capabilities: [] }],
+          error: null,
+          isLoading: false,
+        }),
+      },
       listBranches: {
         useQuery: () => ({
           data: [
@@ -139,6 +147,14 @@ vi.mock('@/lib/trpc', () => ({
       create: {
         useMutation: () => ({
           mutate: mocks.noopMutate,
+          reset: mocks.noopReset,
+          isPending: false,
+          error: null,
+        }),
+      },
+      invite: {
+        useMutation: () => ({
+          mutate: mocks.inviteMutate,
           reset: mocks.noopReset,
           isPending: false,
           error: null,
@@ -248,8 +264,8 @@ describe('Restaurant staff credential UI', () => {
         <RestaurantStaffConsole />
       </EntitlementsProvider>
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
-    const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const dialog = screen.getByRole('dialog', { name: 'Edit staff member' });
     const selector = within(dialog).getByLabelText('Organization user');
     expect(
       within(selector).getByRole('option', { name: 'Ayesha Khan — ayesha@example.com' })
@@ -260,6 +276,36 @@ describe('Restaurant staff credential UI', () => {
       })
     ).toBeDisabled();
     expect(within(dialog).queryByText(/linked user id/i)).not.toBeInTheDocument();
+  });
+
+  it('submits a staff invitation with its branch-scoped restaurant role', () => {
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
+    const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+    fireEvent.change(within(dialog).getByLabelText('Display name'), {
+      target: { value: 'Noor Ali' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Email'), {
+      target: { value: 'noor@example.com' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Primary branch'), {
+      target: { value: 'branch_1' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Restaurant role'), {
+      target: { value: 'role_server' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save staff member' }));
+
+    expect(mocks.inviteMutate).toHaveBeenCalledWith({
+      name: 'Noor Ali',
+      email: 'noor@example.com',
+      jobRoleId: 'role_server',
+      primaryBranchId: 'branch_1',
+    });
   });
   beforeEach(() => {
     vi.clearAllMocks();

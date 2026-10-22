@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   can: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true),
   resolveStaffCapabilities: vi.fn(),
+  resolveStaffCapabilityDecision: vi.fn(),
   annotateAudit: vi.fn(),
   // db delegate methods
   staffFindMany: vi.fn(),
@@ -24,6 +25,14 @@ const mocks = vi.hoisted(() => ({
   deviceFindUnique: vi.fn(),
   userFindMany: vi.fn(),
   userFindFirst: vi.fn(),
+  userCreate: vi.fn(),
+  roleFindFirst: vi.fn(),
+  roleFindUnique: vi.fn(),
+  staffRoleFindMany: vi.fn(),
+  staffRoleFindUnique: vi.fn(),
+  staffRoleCreate: vi.fn(),
+  staffRoleAuditCreate: vi.fn(),
+  invitationUpsert: vi.fn(),
   credFindMany: vi.fn(),
   credFindFirst: vi.fn(),
   credFindUnique: vi.fn(),
@@ -54,6 +63,12 @@ vi.mock('@/lib/restaurant/job-roles', async () => ({
     '@/lib/restaurant/job-roles'
   )),
   resolveStaffCapabilities: mocks.resolveStaffCapabilities,
+  resolveStaffCapabilityDecision: mocks.resolveStaffCapabilityDecision,
+}));
+vi.mock('@/lib/email', () => ({
+  appUrl: () => 'https://example.test',
+  sendEmail: vi.fn(async () => undefined),
+  templates: { inviteMember: () => ({ subject: 'Invite', html: 'Invite', text: 'Invite' }) },
 }));
 
 import { restaurantStaffRouter } from './restaurant-staff';
@@ -73,7 +88,15 @@ const db = {
   },
   restaurantBranch: { findMany: mocks.branchFindMany, findUnique: mocks.branchFindUnique },
   restaurantRegisteredDevice: { findUnique: mocks.deviceFindUnique },
-  user: { findMany: mocks.userFindMany, findFirst: mocks.userFindFirst },
+  user: { findMany: mocks.userFindMany, findFirst: mocks.userFindFirst, create: mocks.userCreate },
+  restaurantJobRole: { findFirst: mocks.roleFindFirst, findUnique: mocks.roleFindUnique },
+  restaurantStaffJobRole: {
+    findMany: mocks.staffRoleFindMany,
+    findUnique: mocks.staffRoleFindUnique,
+    create: mocks.staffRoleCreate,
+  },
+  restaurantStaffJobRoleAudit: { create: mocks.staffRoleAuditCreate },
+  invitation: { upsert: mocks.invitationUpsert },
   restaurantOperatorCredential: {
     findMany: mocks.credFindMany,
     findFirst: mocks.credFindFirst,
@@ -109,6 +132,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
   mocks.resolveStaffCapabilities.mockResolvedValue(new Set(['staff:manage']));
+  mocks.resolveStaffCapabilityDecision.mockResolvedValue({
+    effective: new Set(['staff:manage', 'pos:operate']),
+  });
   mocks.staffFindMany.mockResolvedValue([]);
   mocks.staffCount.mockResolvedValue(0);
   mocks.raw.mockResolvedValue([{ id: 'org_1' }]);
@@ -122,6 +148,17 @@ beforeEach(() => {
   mocks.deviceFindUnique.mockResolvedValue({ branchId: 'branch_1' });
   mocks.userFindFirst.mockResolvedValue({ id: 'user_1' });
   mocks.userFindMany.mockResolvedValue([]);
+  mocks.userCreate.mockResolvedValue({ id: 'user_invited', name: 'New Waiter' });
+  mocks.roleFindFirst.mockResolvedValue({
+    id: 'role_waiter', key: 'server', name: 'Waiter',
+    capabilities: [{ capability: 'pos:operate' }],
+  });
+  mocks.roleFindUnique.mockResolvedValue({ id: 'role_waiter', key: 'server', active: true });
+  mocks.staffRoleFindMany.mockResolvedValue([]);
+  mocks.staffRoleFindUnique.mockResolvedValue(null);
+  mocks.staffRoleCreate.mockResolvedValue({ id: 'holding_1' });
+  mocks.staffRoleAuditCreate.mockResolvedValue({ id: 'audit_1' });
+  mocks.invitationUpsert.mockResolvedValue({ id: 'invite_1' });
   mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', status: 'ACTIVE' });
   mocks.staffCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
     id: 'staff_new',
@@ -169,6 +206,41 @@ describe('capability gating', () => {
 });
 
 describe('staff CRUD', () => {
+  it('atomically provisions an invited user, staff profile, role, and invitation', async () => {
+    mocks.userFindFirst.mockResolvedValue(null);
+
+    await expect(caller().invite({
+      name: 'New Waiter',
+      email: 'WAITER@EXAMPLE.COM',
+      jobRoleId: 'role_waiter',
+      primaryBranchId: 'branch_1',
+    })).resolves.toMatchObject({ id: 'staff_new', userId: 'user_invited' });
+
+    expect(mocks.userCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ email: 'waiter@example.com', status: 'INVITED', password: null }),
+    }));
+    expect(mocks.staffRoleCreate).toHaveBeenCalled();
+    expect(mocks.invitationUpsert).toHaveBeenCalled();
+  });
+
+  it('prevents assigning a role with capabilities the inviter does not have', async () => {
+    mocks.roleFindFirst.mockResolvedValue({
+      id: 'role_manager',
+      key: 'manager',
+      name: 'Manager',
+      capabilities: [{ capability: 'payments:refund' }],
+    });
+    await expect(
+      caller().invite({
+        name: 'Manager',
+        email: 'manager@example.com',
+        jobRoleId: 'role_manager',
+        primaryBranchId: 'branch_1',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+  });
+
   it('organization-scopes both staff-dialog directories', async () => {
     await caller().listBranches();
     expect(mocks.branchFindMany).toHaveBeenLastCalledWith(
