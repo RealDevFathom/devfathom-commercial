@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { Prisma } from '@/generated/prisma/client';
 import { router, protectedProcedure } from '../trpc';
 import { TRPCError } from '@trpc/server';
 import { logActivity } from '../activity';
@@ -41,6 +42,17 @@ const hoursInput = z
 // Prisma returns Decimal; rollups are computed as Number and rounded back to the
 // same 2-decimal precision the column stores.
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Serialize every mutation that can reduce a project's lead set. */
+async function lockProjectMembership(
+  tx: { $queryRaw: (query: Prisma.Sql) => Promise<unknown> },
+  organizationId: string,
+  projectId: string
+) {
+  await tx.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${organizationId}:project-members:${projectId}`}, 0))`
+  );
+}
 
 export const projectsRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {
@@ -212,11 +224,12 @@ export const projectsRouter = router({
       }
       await assertInOrganization(ctx.db.user, workspaceId(ctx), [input.userId]);
 
-      // Idempotent — if already a member, just update the role
+      // Idempotent. Re-adding can promote an existing member, but demotions must
+      // use setMemberRole so they cannot bypass its serialized last-lead check.
       const membership = await ctx.db.projectMember.upsert({
         where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
         create: { projectId: input.projectId, userId: input.userId, role: input.role },
-        update: { role: input.role },
+        update: input.role === 'LEAD' ? { role: 'LEAD' } : {},
       });
       const [project, targetUser] = await Promise.all([
         ctx.db.project.findUnique({ where: { id: input.projectId }, select: { name: true } }),
@@ -250,39 +263,37 @@ export const projectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const isAdmin = ctx.session.user.role === 'ADMIN';
       const isSelf = input.userId === ctx.session.user.id;
+      await ctx.db.$transaction(async (tx) => {
+        await lockProjectMembership(tx, workspaceId(ctx), input.projectId);
+        const [target, callerMembership, leadCount] = await Promise.all([
+          tx.projectMember.findUnique({
+            where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+          }),
+          tx.projectMember.findUnique({
+            where: {
+              projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id },
+            },
+          }),
+          tx.projectMember.count({ where: { projectId: input.projectId, role: 'LEAD' } }),
+        ]);
 
-      const [target, callerMembership, leadCount] = await Promise.all([
-        ctx.db.projectMember.findUnique({
+        if (!target)
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not on this project.' });
+        if (!isAdmin && callerMembership?.role !== 'LEAD' && !isSelf) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the project lead or an admin can remove other members.',
+          });
+        }
+        if (target.role === 'LEAD' && leadCount <= 1) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Cannot remove the last lead. Promote another member to lead first.',
+          });
+        }
+        await tx.projectMember.delete({
           where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        }),
-        ctx.db.projectMember.findUnique({
-          where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
-        }),
-        ctx.db.projectMember.count({
-          where: { projectId: input.projectId, role: 'LEAD' },
-        }),
-      ]);
-
-      if (!target)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not on this project.' });
-
-      const callerIsLead = callerMembership?.role === 'LEAD';
-      if (!isAdmin && !callerIsLead && !isSelf) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Only the project lead or an admin can remove other members.',
         });
-      }
-
-      if (target.role === 'LEAD' && leadCount <= 1) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Cannot remove the last lead. Promote another member to lead first.',
-        });
-      }
-
-      await ctx.db.projectMember.delete({
-        where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
       });
       const [project, targetUser] = await Promise.all([
         ctx.db.project.findUnique({ where: { id: input.projectId }, select: { name: true } }),
@@ -315,35 +326,41 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const isAdmin = ctx.session.user.role === 'ADMIN';
-      const callerMembership = await ctx.db.projectMember.findUnique({
-        where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
-      });
-      if (!isAdmin && callerMembership?.role !== 'LEAD') {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Only the project lead or an admin can change roles.',
+      return ctx.db.$transaction(async (tx) => {
+        await lockProjectMembership(tx, workspaceId(ctx), input.projectId);
+        const callerMembership = await tx.projectMember.findUnique({
+          where: {
+            projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id },
+          },
         });
-      }
-
-      // Block demoting the last lead
-      if (input.role === 'MEMBER') {
-        const leadCount = await ctx.db.projectMember.count({
-          where: { projectId: input.projectId, role: 'LEAD' },
-        });
-        const target = await ctx.db.projectMember.findUnique({
-          where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        });
-        if (target?.role === 'LEAD' && leadCount <= 1) {
+        if (!isAdmin && callerMembership?.role !== 'LEAD') {
           throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Cannot demote the last lead. Promote another member first.',
+            code: 'FORBIDDEN',
+            message: 'Only the project lead or an admin can change roles.',
           });
         }
-      }
 
-      return ctx.db.projectMember.update({
-        where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        data: { role: input.role },
+        // Re-check after taking the project lock, so a concurrent lead removal or
+        // demotion commits before this invariant is evaluated.
+        if (input.role === 'MEMBER') {
+          const [leadCount, target] = await Promise.all([
+            tx.projectMember.count({ where: { projectId: input.projectId, role: 'LEAD' } }),
+            tx.projectMember.findUnique({
+              where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+            }),
+          ]);
+          if (target?.role === 'LEAD' && leadCount <= 1) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Cannot demote the last lead. Promote another member first.',
+            });
+          }
+        }
+
+        return tx.projectMember.update({
+          where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+          data: { role: input.role },
+        });
       });
     }),
 
