@@ -57,6 +57,10 @@ export const createInvoiceInputSchema = z.object({
 // caller-supplied subtotal/total are never trusted (FIN-01).
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+// Aggregate balances as integer minor units so partial payments are subtracted
+// without introducing floating-point drift into the finance summary.
+const toMinorUnits = (amount: unknown) => Math.round(Number(amount) * 100);
+
 // IMP-FIN-04: money is Decimal(12,2), so a partial payment can legitimately pay an
 // invoice off to the exact cent. Compare paid-vs-total with a half-cent tolerance
 // so a sub-cent float artifact never tips an exact payoff into "overpayment" — and
@@ -832,11 +836,13 @@ export const financeRouter = router({
         _count: true,
         where: { status: 'PAID' },
       }),
-      ctx.db.invoice.groupBy({
-        by: ['currency'],
-        _sum: { total: true },
-        _count: true,
+      ctx.db.invoice.findMany({
         where: { status: { in: ['SENT', 'OVERDUE'] } },
+        select: {
+          total: true,
+          currency: true,
+          payments: { select: { amount: true } },
+        },
       }),
       ctx.db.recurringExpense.findMany({
         where: { active: true },
@@ -888,8 +894,21 @@ export const financeRouter = router({
       yearlyProfit: diffByCurrency(yearlyIncome, yearlyExpense),
       totalPaid: fromCurrencyGroups(paidInvoicesG, 'total'),
       paidCount: paidInvoicesG.reduce((s, g) => s + g._count, 0),
-      totalOutstanding: fromCurrencyGroups(outstandingInvoicesG, 'total'),
-      outstandingCount: outstandingInvoicesG.reduce((s, g) => s + g._count, 0),
+      totalOutstanding: Array.from(
+        outstandingInvoicesG.reduce((byCurrency, invoice) => {
+          const paid = invoice.payments.reduce(
+            (sum, payment) => sum + toMinorUnits(payment.amount),
+            0
+          );
+          byCurrency.set(
+            invoice.currency,
+            (byCurrency.get(invoice.currency) ?? 0) + toMinorUnits(invoice.total) - paid
+          );
+          return byCurrency;
+        }, new Map<string, number>()),
+        ([currency, minorUnits]) => ({ currency, amount: minorUnits / 100 })
+      ),
+      outstandingCount: outstandingInvoicesG.length,
     };
   }),
 
