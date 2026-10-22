@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   creditsRead: vi.fn(),
   refresh: vi.fn(),
   createDraft: vi.fn(),
+  loyaltyRead: vi.fn(),
 }));
 
 vi.mock('@/lib/pharmacy/stock-signals-operations', () => ({
@@ -45,6 +46,9 @@ vi.mock('@/lib/pharmacy/repeat-purchasing', async () => ({
     '@/lib/pharmacy/repeat-purchasing'
   )),
   readRepeatPurchasing: mocks.repeatRead,
+}));
+vi.mock('@/lib/pharmacy/loyalty-dashboard', () => ({
+  readPharmacyLoyaltyDashboard: mocks.loyaltyRead,
 }));
 
 vi.mock('server-only', () => ({}));
@@ -267,6 +271,31 @@ describe('pharmacy owner digest capability boundary', () => {
       caller().proposeExpiryReturn({ branchId: 'branch_1', lotId: 'lot_1' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('pharmacy loyalty dashboard access boundary', () => {
+  const input = { from: '2026-10-01', to: '2026-10-22', churnDays: 45 };
+
+  it('denies an explicit loyalty capability denial before branch or metric reads', async () => {
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await expect(caller().loyaltyDashboard(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: 'user_admin' }),
+      'pharmacy:loyalty-manage',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+    expect(mocks.loyaltyRead).not.toHaveBeenCalled();
+  });
+
+  it('rejects a branch outside the server-derived scope before metric reads', async () => {
+    mocks.can.mockResolvedValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    await expect(caller().loyaltyDashboard({ ...input, branchId: 'branch_2' }))
+      .rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.loyaltyRead).not.toHaveBeenCalled();
   });
 });
 

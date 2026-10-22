@@ -28,6 +28,7 @@ import {
   readPharmacyOwnerCommandCentre,
 } from '@/lib/pharmacy/reports';
 import { nextDigestDueAt, WhatsAppChannel } from '@/lib/pharmacy/owner-digest';
+import { readPharmacyLoyaltyDashboard } from '@/lib/pharmacy/loyalty-dashboard';
 import {
   acknowledgePharmacyAnomalySignal,
   readPharmacyAnomalySignals,
@@ -74,6 +75,10 @@ const filters = z
     ingredientId: z.string().trim().min(1).max(128).optional(),
     batchId: z.string().trim().min(1).max(128).optional(),
   })
+  .strict();
+const loyaltyFilters = filters
+  .pick({ branchId: true, from: true, to: true })
+  .extend({ churnDays: z.number().int().min(1).max(3650).default(45) })
   .strict();
 const digestSetting = z
   .object({
@@ -470,6 +475,33 @@ export const pharmacyReportsRouter = router({
       throw new TRPCError({
         code: 'BAD_REQUEST',
         message: error instanceof Error ? error.message : 'Invalid report filters.',
+      });
+    }
+  }),
+  loyaltyDashboard: reports.input(loyaltyFilters).query(async ({ ctx, input }) => {
+    const allowed = await can(
+      subjectFromSession(ctx.session!.user),
+      'pharmacy:loyalty-manage',
+      undefined,
+      { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+    );
+    if (!allowed)
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner loyalty access is required.' });
+    const available = await scope(ctx);
+    const branchIds = input.branchId
+      ? [input.branchId]
+      : available.branches.map((branch) => branch.id);
+    if (
+      !branchIds.length ||
+      branchIds.some((id) => !available.branches.some((branch) => branch.id === id))
+    )
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+    try {
+      return await readPharmacyLoyaltyDashboard(ctx.db, { ...input, branchIds }, input.churnDays);
+    } catch (error) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: error instanceof Error ? error.message : 'Invalid loyalty dashboard filters.',
       });
     }
   }),

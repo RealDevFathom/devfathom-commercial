@@ -21,6 +21,8 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
 const today = () => new Date().toISOString().slice(0, 10);
+const daysAgo = (days: number) =>
+  new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 const definition = new Map(PHARMACY_WIDGET_REGISTRY.map((item) => [item.key, item]));
 type CommandQuery = {
   data?: {
@@ -32,6 +34,30 @@ type CommandQuery = {
   isLoading: boolean;
   refetch: () => unknown;
 };
+type LoyaltyQuery = {
+  data?: {
+    vouchersIssuedCount: number;
+    vouchersIssuedMinor: number;
+    vouchersRedeemedCount: number;
+    vouchersRedeemedMinor: number;
+    redemptionRateBasisPoints: number;
+    repeatVisitRateBasisPoints: number;
+    churnedCustomersCount: number;
+    churnDays: number;
+    pointsLiabilityMinor: number;
+    netMarginImpactMinor: number;
+  };
+  error: { data?: { code?: string | null } | null } | null;
+  isLoading: boolean;
+  refetch: () => unknown;
+};
+const formatPaisa = (minor: number) => {
+  const sign = minor < 0 ? '−' : '';
+  const absolute = Math.abs(minor);
+  return `${sign}PKR ${Math.floor(absolute / 100).toLocaleString()}.${String(absolute % 100).padStart(2, '0')}`;
+};
+const formatBasisPoints = (basisPoints: number) =>
+  `${Math.floor(basisPoints / 100)}.${String(basisPoints % 100).padStart(2, '0')}%`;
 const formatMetric = (key: string, value: number | null) =>
   value == null
     ? '—'
@@ -190,15 +216,21 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
   const preferences = trpc.pharmacyReports.getPreferences.useQuery(undefined, { retry: false });
   const update = trpc.pharmacyReports.updatePreferences.useMutation();
   const [branchId, setBranchId] = useState('');
+  const [from, setFrom] = useState(() => daysAgo(29));
+  const [to, setTo] = useState(today);
   const [editing, setEditing] = useState(false);
   const fallback = useMemo(() => pharmacyDashboardDefault(role), [role]);
   const [draft, setDraft] = useState<PharmacyDashboardPreference>(fallback);
   const draftRef = useRef(draft);
-  const input = { ...(branchId ? { branchId } : {}), from: today(), to: today() };
+  const input = { ...(branchId ? { branchId } : {}), from, to };
   const command = trpc.pharmacyReports.commandCentre.useQuery(input, {
     enabled: Boolean(branches.data?.branches.length),
     retry: false,
   }) as unknown as CommandQuery;
+  const loyalty = trpc.pharmacyReports.loyaltyDashboard.useQuery(
+    { ...input, churnDays: 45 },
+    { enabled: Boolean(branches.data?.branches.length), retry: false }
+  ) as unknown as LoyaltyQuery;
   const layout = editing ? draft : (preferences.data ?? fallback);
   const begin = () => {
     const next = structuredClone(preferences.data ?? fallback);
@@ -244,27 +276,52 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
       />
       <SectionCard
         eyebrow="Scope"
-        title="Today at a glance"
+        title="Insights range"
         titleLevel={2}
         actions={command.data ? <StatusPill status="Current" tone="success" /> : null}
       >
-        <label className="block max-w-sm space-y-1.5">
-          <span className="eyebrow">Branch</span>
-          <select
-            aria-label="Dashboard branch"
-            value={branchId}
-            onChange={(event) => setBranchId(event.target.value)}
-            disabled={branches.isLoading || Boolean(branches.error)}
-            className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <option value="">All available</option>
-            {branches.data?.branches.map((branch) => (
-              <option key={branch.id} value={branch.id}>
-                {branch.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <label className="block space-y-1.5">
+            <span className="eyebrow">From</span>
+            <input
+              aria-label="Dashboard start date"
+              type="date"
+              value={from}
+              max={to}
+              onChange={(event) => setFrom(event.target.value)}
+              className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="eyebrow">To</span>
+            <input
+              aria-label="Dashboard end date"
+              type="date"
+              value={to}
+              min={from}
+              max={today()}
+              onChange={(event) => setTo(event.target.value)}
+              className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="eyebrow">Branch</span>
+            <select
+              aria-label="Dashboard branch"
+              value={branchId}
+              onChange={(event) => setBranchId(event.target.value)}
+              disabled={branches.isLoading || Boolean(branches.error)}
+              className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="">All available</option>
+              {branches.data?.branches.map((branch) => (
+                <option key={branch.id} value={branch.id}>
+                  {branch.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         <p className="mt-3 font-mono text-xs text-text-muted">
           {command.data
             ? `As of ${new Date(command.data.freshness.asOf).toLocaleString()} · ${command.data.freshness.source}`
@@ -274,6 +331,81 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                 ? 'Waiting for a reportable branch.'
                 : 'Loading today’s figures…'}
         </p>
+      </SectionCard>
+      <SectionCard eyebrow="pharmacy:loyalty-manage" title="Loyalty performance" titleLevel={2}>
+        {loyalty.isLoading || (!loyalty.data && !loyalty.error) ? (
+          <div
+            role="status"
+            aria-label="Loading loyalty performance"
+            className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4"
+          >
+            {Array.from({ length: 8 }, (_, index) => (
+              <Skeleton key={index} className="h-20 w-full" />
+            ))}
+          </div>
+        ) : loyalty.error ? (
+          <div
+            role={
+              ['FORBIDDEN', 'UNAUTHORIZED'].includes(loyalty.error.data?.code ?? '')
+                ? 'status'
+                : 'alert'
+            }
+            className="space-y-3"
+          >
+            <StatusPill
+              status={loyalty.error.data?.code === 'FORBIDDEN' ? 'Restricted' : 'Unavailable'}
+              tone="warning"
+            />
+            <p className="text-sm text-text-body">
+              {loyalty.error.data?.code === 'FORBIDDEN'
+                ? 'pharmacy:loyalty-manage is required. No loyalty values are shown.'
+                : 'Loyalty performance could not be loaded. Other dashboard signals remain available.'}
+            </p>
+            {loyalty.error.data?.code !== 'FORBIDDEN' ? (
+              <Button variant="outline" onClick={() => void loyalty.refetch()}>
+                Retry
+              </Button>
+            ) : null}
+          </div>
+        ) : loyalty.data ? (
+          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            <Stat
+              label="Vouchers issued"
+              value={loyalty.data.vouchersIssuedCount}
+              sub={formatPaisa(loyalty.data.vouchersIssuedMinor)}
+            />
+            <Stat
+              label="Vouchers redeemed"
+              value={loyalty.data.vouchersRedeemedCount}
+              sub={formatPaisa(loyalty.data.vouchersRedeemedMinor)}
+            />
+            <Stat
+              label="Redemption rate"
+              value={formatBasisPoints(loyalty.data.redemptionRateBasisPoints)}
+              sub="Redeemed ÷ issued in range"
+            />
+            <Stat
+              label="Repeat-visit rate"
+              value={formatBasisPoints(loyalty.data.repeatVisitRateBasisPoints)}
+              sub="Visitors with an earlier completed visit"
+            />
+            <Stat
+              label="Churned customers"
+              value={loyalty.data.churnedCustomersCount}
+              sub={`No completed visit in ${loyalty.data.churnDays} days`}
+            />
+            <Stat
+              label="Points liability"
+              value={formatPaisa(loyalty.data.pointsLiabilityMinor)}
+              sub="Positive points balance at PKR 1 per point"
+            />
+            <Stat
+              label="Net margin impact"
+              value={formatPaisa(loyalty.data.netMarginImpactMinor)}
+              sub="Category-basis-point margin less voucher value"
+            />
+          </div>
+        ) : null}
       </SectionCard>
       {editing ? (
         <SectionCard

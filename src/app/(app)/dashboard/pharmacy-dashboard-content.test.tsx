@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   branches: undefined as unknown,
   catalog: undefined as unknown,
   command: undefined as unknown,
+  loyalty: undefined as unknown,
   preferences: undefined as unknown,
   enabledModules: [] as string[],
 }));
@@ -46,6 +47,7 @@ vi.mock('@/lib/trpc', () => ({
           }),
       },
       commandCentre: { useQuery: () => mounted.record('commandCentre', state.command) },
+      loyaltyDashboard: { useQuery: () => mounted.record('loyaltyDashboard', state.loyalty) },
     },
   },
 }));
@@ -83,6 +85,7 @@ const REPORT_HOOKS = [
   'getPreferences',
   'updatePreferences',
   'commandCentre',
+  'loyaltyDashboard',
 ];
 
 beforeEach(() => {
@@ -99,6 +102,13 @@ beforeEach(() => {
     freshness: { asOf: '2026-09-04T10:00:00Z', source: 'transactional pharmacy ledgers' },
     permissions: { operational: true, financial: false },
     metrics: {},
+  });
+  state.loyalty = query({
+    vouchersIssuedCount: 8, vouchersIssuedMinor: 80_000,
+    vouchersRedeemedCount: 3, vouchersRedeemedMinor: 30_000,
+    redemptionRateBasisPoints: 3750, repeatVisitRateBasisPoints: 4000,
+    churnedCustomersCount: 4, churnDays: 45, pointsLiabilityMinor: 12_300,
+    netMarginImpactMinor: 15_000,
   });
 });
 
@@ -135,6 +145,15 @@ describe('PharmacyDashboardContent states', () => {
     expect(screen.getByText('Open stock signals')).toBeInTheDocument();
     expect(screen.getByText('Recommended orders')).toBeInTheDocument();
     expect(screen.queryByText('openStockSignals')).not.toBeInTheDocument();
+  });
+
+  it('renders loyalty money, rates, churn, and liability without floating-point money', () => {
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(screen.getByText('Loyalty performance')).toBeVisible();
+    expect(screen.getByText('37.50%')).toBeVisible();
+    expect(screen.getByText('40.00%')).toBeVisible();
+    expect(screen.getByText('PKR 123.00')).toBeVisible();
+    expect(screen.getByText('No completed visit in 45 days')).toBeVisible();
   });
 
   it('waits for the catalog before printing a metric key, showing loading meanwhile', () => {
