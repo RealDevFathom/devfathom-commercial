@@ -17,6 +17,7 @@ import {
   SESSION_ENDED_MESSAGE,
   WORKSPACE_UNAVAILABLE_MESSAGE,
 } from '@/lib/auth/session-state';
+import { SkipLink } from '@/components/ui/skip-link';
 
 export const metadata: Metadata = {
   title: 'Sign in',
@@ -81,11 +82,15 @@ export default async function LoginPage(props: LoginPageProps) {
 
   return (
     <div className="min-h-dvh bg-background text-foreground lg:grid lg:grid-cols-[minmax(0,1.08fr)_minmax(26rem,0.92fr)]">
+      <SkipLink targetId="login-content" />
       {/* Blueprint field panel — desktop only */}
       <LoginHero />
 
       {/* Sign-in sheet */}
-      <div className="relative flex min-h-dvh items-center justify-center px-5 py-10 sm:px-10">
+      <main
+        id="login-content"
+        className="relative flex min-h-dvh items-center justify-center px-5 py-10 sm:px-10"
+      >
         <div className="w-full max-w-[25rem] animate-slide-up">
           <div className="mb-8 flex items-center gap-3 lg:hidden">
             <Logo variant="auto" size="md" textClassName="text-foreground" />
@@ -138,7 +143,7 @@ export default async function LoginPage(props: LoginPageProps) {
             Need access? Contact your workspace admin.
           </p>
         </div>
-      </div>
+      </main>
     </div>
   );
 }
