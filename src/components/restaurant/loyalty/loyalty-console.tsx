@@ -3,7 +3,7 @@
 import { browserUuid } from '@/lib/browser-uuid';
 
 import type { inferRouterOutputs } from '@trpc/server';
-import { Download, Search, ShieldAlert } from 'lucide-react';
+import { Download, Pencil, Plus, Search, ShieldAlert } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
 
 import { useEntitlements } from '@/components/entitlements-provider';
@@ -187,12 +187,15 @@ export function LoyaltyConsole() {
   const [actionError, setActionError] = useState('');
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmation, setConfirmation] = useState('');
+  const [customerForm, setCustomerForm] = useState<'create' | 'correct' | null>(null);
+  const [customerCursors, setCustomerCursors] = useState<string[]>([]);
 
   const customersQuery = trpc.restaurantCustomers.list.useQuery(
     {
       ...(search.trim() ? { query: search.trim() } : {}),
       ...(tagId ? { tagId } : {}),
       limit: 50,
+      ...(customerCursors.at(-1) ? { cursor: customerCursors.at(-1) } : {}),
     },
     { enabled: moduleEnabled }
   );
@@ -258,6 +261,21 @@ export function LoyaltyConsole() {
     onSuccess: () => success('Tag removed.'),
     onError: fail,
   });
+  const createCustomer = trpc.restaurantCustomers.create.useMutation({
+    onSuccess: (customer) => {
+      setCustomerForm(null);
+      setSelectedCustomerId(customer.id);
+      success('Customer created.');
+    },
+    onError: fail,
+  });
+  const correctCustomer = trpc.restaurantCustomers.correct.useMutation({
+    onSuccess: () => {
+      setCustomerForm(null);
+      success('Customer corrected.');
+    },
+    onError: fail,
+  });
   const appendConsent = trpc.restaurantCustomers.appendConsent.useMutation({
     onSuccess: () => success('Consent event appended.'),
     onError: fail,
@@ -306,6 +324,8 @@ export function LoyaltyConsole() {
 
   const busy =
     assignTag.isPending ||
+    createCustomer.isPending ||
+    correctCustomer.isPending ||
     unassignTag.isPending ||
     appendConsent.isPending ||
     appendInteraction.isPending ||
@@ -342,6 +362,35 @@ export function LoyaltyConsole() {
     const data = new FormData(event.currentTarget);
     const nextTagId = String(data.get('tagId') ?? '');
     if (nextTagId) assignTag.mutate({ customerId: activeCustomerId, tagId: nextTagId });
+  };
+  const submitCustomer = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!customerForm || busy) return;
+    const data = new FormData(event.currentTarget);
+    const value = (name: string) => String(data.get(name) ?? '').trim();
+    const identifiers = [
+      ...(value('email') ? [{ kind: 'EMAIL' as const, value: value('email') }] : []),
+      ...(value('phone') ? [{ kind: 'PHONE' as const, value: value('phone') }] : []),
+    ];
+    const profile = {
+      displayName: value('displayName') || null,
+      givenName: value('givenName') || null,
+      familyName: value('familyName') || null,
+      birthDate: value('birthDate') ? new Date(`${value('birthDate')}T00:00:00.000Z`) : null,
+      notes: value('notes') || null,
+      identifiers,
+    };
+    if (customerForm === 'create') createCustomer.mutate(profile);
+    else if (detailQuery.data) {
+      correctCustomer.mutate({
+        customerId: detailQuery.data.id,
+        ...profile,
+        identifiers: identifiers.map((identifier) => ({
+          ...identifier,
+          id: detailQuery.data.identifiers.find((current) => current.kind === identifier.kind)?.id,
+        })),
+      });
+    }
   };
   const submitConsent = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -398,6 +447,16 @@ export function LoyaltyConsole() {
       eyebrow="Restaurant operations"
       heading="Customers & Loyalty"
       description="Search customer history, record consent and interactions, and operate append-only loyalty ledgers."
+      actions={
+        <Button
+          type="button"
+          className="min-h-11"
+          disabled={!moduleEnabled || readDenied}
+          onClick={() => setCustomerForm('create')}
+        >
+          <Plus aria-hidden className="size-4" /> New customer
+        </Button>
+      }
     />
   );
 
@@ -532,7 +591,10 @@ export function LoyaltyConsole() {
                 />
                 <Input
                   value={search}
-                  onChange={(event) => setSearch(event.target.value)}
+                  onChange={(event) => {
+                    setSearch(event.target.value);
+                    setCustomerCursors([]);
+                  }}
                   placeholder="Name, email, or phone"
                   className="min-h-11 pl-9"
                 />
@@ -541,7 +603,10 @@ export function LoyaltyConsole() {
             <Field label="Filter by tag">
               <select
                 value={tagId}
-                onChange={(event) => setTagId(event.target.value)}
+                onChange={(event) => {
+                  setTagId(event.target.value);
+                  setCustomerCursors([]);
+                }}
                 className={selectClass}
               >
                 <option value="">All tags</option>
@@ -584,7 +649,7 @@ export function LoyaltyConsole() {
                         <TableCell className="font-medium text-text-strong">
                           {customerName(customer)}
                         </TableCell>
-                        <TableCell>{customer.identifiers.length}</TableCell>
+                        <TableCell>{customer.identifierCount}</TableCell>
                         <TableCell>
                           {customer.tags.map((tag) => tag.name).join(', ') || '—'}
                         </TableCell>
@@ -613,6 +678,30 @@ export function LoyaltyConsole() {
                 </p>
               </div>
             )}
+          </div>
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <p className="text-xs text-text-muted">Page {customerCursors.length + 1}</p>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!customerCursors.length}
+                onClick={() => setCustomerCursors((value) => value.slice(0, -1))}
+              >
+                Previous
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!customersQuery.data?.nextCursor}
+                onClick={() => {
+                  const cursor = customersQuery.data?.nextCursor;
+                  if (cursor) setCustomerCursors((value) => [...value, cursor]);
+                }}
+              >
+                Next
+              </Button>
+            </div>
           </div>
         </SectionCard>
 
@@ -667,6 +756,7 @@ export function LoyaltyConsole() {
               branches={branchesQuery.data ?? []}
               branchesLoading={branchesQuery.isLoading}
               branchesError={Boolean(branchesQuery.error)}
+              onCorrect={() => setCustomerForm('correct')}
             />
           )}
         </SectionCard>
@@ -1082,7 +1172,124 @@ export function LoyaltyConsole() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <CustomerFormDialog
+        mode={customerForm}
+        customer={customerForm === 'correct' ? detailQuery.data : undefined}
+        busy={busy}
+        onClose={() => setCustomerForm(null)}
+        onSubmit={submitCustomer}
+      />
     </div>
+  );
+}
+
+function CustomerFormDialog({
+  mode,
+  customer,
+  busy,
+  onClose,
+  onSubmit,
+}: {
+  mode: 'create' | 'correct' | null;
+  customer?: Customer;
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const email = customer?.identifiers.find((identifier) => identifier.kind === 'EMAIL');
+  const phone = customer?.identifiers.find((identifier) => identifier.kind === 'PHONE');
+  return (
+    <Dialog open={mode !== null} onOpenChange={(open) => !open && !busy && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{mode === 'correct' ? 'Correct customer' : 'New customer'}</DialogTitle>
+          <DialogDescription>
+            {mode === 'correct'
+              ? 'Correct profile and contact fields without creating a duplicate customer.'
+              : 'Create a customer profile. Email and phone are optional, but must be unique.'}
+          </DialogDescription>
+        </DialogHeader>
+        <form key={`${mode}-${customer?.id ?? 'new'}`} onSubmit={onSubmit} className="space-y-4">
+          <Field label="Display name">
+            <Input
+              name="displayName"
+              maxLength={200}
+              defaultValue={customer?.displayName ?? ''}
+              className="mt-1 min-h-11"
+              disabled={busy}
+            />
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Given name">
+              <Input
+                name="givenName"
+                maxLength={100}
+                defaultValue={customer?.givenName ?? ''}
+                className="mt-1 min-h-11"
+                disabled={busy}
+              />
+            </Field>
+            <Field label="Family name">
+              <Input
+                name="familyName"
+                maxLength={100}
+                defaultValue={customer?.familyName ?? ''}
+                className="mt-1 min-h-11"
+                disabled={busy}
+              />
+            </Field>
+            <Field label="Email">
+              <Input
+                name="email"
+                type="email"
+                maxLength={320}
+                defaultValue={email?.normalizedValue ?? ''}
+                className="mt-1 min-h-11"
+                disabled={busy}
+              />
+            </Field>
+            <Field label="Phone" detail="Use E.164 format, for example +15551234567.">
+              <Input
+                name="phone"
+                type="tel"
+                pattern="\+[1-9][0-9]{7,14}"
+                defaultValue={phone?.normalizedValue ?? ''}
+                className="mt-1 min-h-11"
+                disabled={busy}
+              />
+            </Field>
+            <Field label="Birth date">
+              <Input
+                name="birthDate"
+                type="date"
+                defaultValue={
+                  customer?.birthDate ? new Date(customer.birthDate).toISOString().slice(0, 10) : ''
+                }
+                className="mt-1 min-h-11"
+                disabled={busy}
+              />
+            </Field>
+          </div>
+          <Field label="Notes">
+            <textarea
+              name="notes"
+              maxLength={5000}
+              defaultValue={customer?.notes ?? ''}
+              className={`${selectClass} min-h-24 py-2`}
+              disabled={busy}
+            />
+          </Field>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={busy}>
+              {mode === 'correct' ? 'Save corrections' : 'Create customer'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1097,6 +1304,7 @@ function CustomerDetail({
   branches,
   branchesLoading,
   branchesError,
+  onCorrect,
 }: {
   customer: Customer;
   availableTags: RouterOutputs['restaurantCustomers']['listTags'];
@@ -1108,6 +1316,7 @@ function CustomerDetail({
   branches: Array<{ id: string; name: string; active: boolean; isDefault: boolean }>;
   branchesLoading: boolean;
   branchesError: boolean;
+  onCorrect: () => void;
 }) {
   const [interactionBranchId, setInteractionBranchId] = useState('');
   const [interactionOrderId, setInteractionOrderId] = useState('');
@@ -1124,10 +1333,15 @@ function CustomerDetail({
             Created {formatDate(customer.createdAt)}
           </p>
         </div>
-        <StatusPill
-          status={customer.loyaltySummary?.active ? 'Loyalty active' : 'No active loyalty'}
-          tone={customer.loyaltySummary?.active ? 'success' : 'neutral'}
-        />
+        <div className="flex items-center gap-2">
+          <StatusPill
+            status={customer.loyaltySummary?.active ? 'Loyalty active' : 'No active loyalty'}
+            tone={customer.loyaltySummary?.active ? 'success' : 'neutral'}
+          />
+          <Button type="button" variant="secondary" onClick={onCorrect} disabled={busy}>
+            <Pencil aria-hidden className="size-4" /> Correct
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-5 lg:grid-cols-2">

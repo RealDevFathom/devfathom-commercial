@@ -92,22 +92,10 @@ const mocks = vi.hoisted(() => {
     displayName: customer.displayName,
     givenName: customer.givenName,
     familyName: customer.familyName,
-    birthDate: customer.birthDate,
-    notes: customer.notes,
     anonymizedAt: customer.anonymizedAt,
     createdAt: customer.createdAt,
     updatedAt: customer.updatedAt,
-    identifiers: customer.identifiers,
-    interactions: customer.interactions.map(
-      ({ orderId, order, payload, idempotencyKey, createdAt, ...row }) => {
-        void orderId;
-        void order;
-        void payload;
-        void idempotencyKey;
-        void createdAt;
-        return row;
-      }
-    ),
+    identifierCount: customer.identifiers.length,
     tags: customer.tags,
   };
   const program = {
@@ -191,6 +179,8 @@ const mocks = vi.hoisted(() => {
   const mutations = Object.fromEntries(
     [
       'assignTag',
+      'create',
+      'correct',
       'unassignTag',
       'appendConsent',
       'appendInteraction',
@@ -256,6 +246,8 @@ vi.mock('@/lib/trpc', () => {
         list: query('customers'),
         detail: query('detail'),
         listTags: query('tags'),
+        create: mutation('create', { id: 'customer_created' }),
+        correct: mutation('correct', { id: 'customer_1' }),
         assignTag: mutation('assignTag'),
         unassignTag: mutation('unassignTag'),
         appendConsent: mutation('appendConsent'),
@@ -415,6 +407,54 @@ describe('Customers & Loyalty console', () => {
 
     fireEvent.keyDown(rows[1], { key: ' ' });
     expect(rows[1]).toHaveAttribute('data-state', 'selected');
+  });
+
+  it('creates and corrects customer profiles through the administrative mutations', () => {
+    renderConsole();
+
+    fireEvent.click(screen.getByRole('button', { name: 'New customer' }));
+    const createDialog = screen.getByRole('dialog', { name: 'New customer' });
+    fireEvent.change(within(createDialog).getByLabelText('Display name'), {
+      target: { value: 'Grace Hopper' },
+    });
+    fireEvent.change(within(createDialog).getByLabelText('Email'), {
+      target: { value: 'grace@example.com' },
+    });
+    fireEvent.click(within(createDialog).getByRole('button', { name: 'Create customer' }));
+    expect(mocks.mutations.create).toEqual([
+      expect.objectContaining({
+        displayName: 'Grace Hopper',
+        identifiers: [{ kind: 'EMAIL', value: 'grace@example.com' }],
+      }),
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Correct' }));
+    const correctDialog = screen.getByRole('dialog', { name: 'Correct customer' });
+    fireEvent.change(within(correctDialog).getByLabelText('Display name'), {
+      target: { value: 'Ada Byron' },
+    });
+    fireEvent.click(within(correctDialog).getByRole('button', { name: 'Save corrections' }));
+    expect(mocks.mutations.correct).toEqual([
+      expect.objectContaining({ customerId: 'customer_1', displayName: 'Ada Byron' }),
+    ]);
+  });
+
+  it('offers cursor pagination without rendering list-level contact PII', () => {
+    mocks.customers.data = {
+      customers: [mocks.initial.customers.customers[0]!],
+      nextCursor: 'customer_next',
+    };
+    renderConsole();
+
+    expect(screen.getByText('Page 1')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
+    expect(screen.getByRole('region', { name: 'Customer search results' })).not.toHaveTextContent(
+      'ada@example.com'
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByText('Page 2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous' })).toBeEnabled();
   });
 
   it('renders the route loading state without exposing stale records', () => {

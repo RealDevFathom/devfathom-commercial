@@ -267,15 +267,14 @@ describeIfDatabase('M8 customer service (real PostgreSQL)', () => {
       deps.customers.listCustomers(tx, { query: 'grace', tagId: tag.id, limit: 1 })
     );
     expect(page.customers.map(({ id }) => id)).toEqual([customer.id]);
-    expect(page.customers[0]?.interactions).toHaveLength(5);
-    expect(page.customers[0]?.interactions[0]).toMatchObject({
-      branch: { id: ids.branch, name: 'Main' },
-      type: 'VISIT_5',
-    });
+    expect(page.customers[0]?.identifierCount).toBe(1);
+    expect(page.customers[0]).not.toHaveProperty('birthDate');
+    expect(page.customers[0]).not.toHaveProperty('notes');
+    expect(page.customers[0]).not.toHaveProperty('identifiers');
+    expect(page.customers[0]).not.toHaveProperty('interactions');
     expect(page.customers[0]).not.toHaveProperty('orders');
     expect(page.customers[0]).not.toHaveProperty('consentEvents');
     expect(page.customers[0]).not.toHaveProperty('loyaltySummary');
-    expect(page.customers[0]?.interactions[0]).not.toHaveProperty('payload');
   });
 
   it('atomically attaches only unassigned OPEN orders and preserves domain errors', async () => {

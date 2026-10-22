@@ -114,6 +114,7 @@ const CUSTOMER_SELECT = {
   },
   interactions: {
     orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+    take: 100,
     select: {
       id: true,
       branchId: true,
@@ -129,6 +130,7 @@ const CUSTOMER_SELECT = {
   },
   orders: {
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: 100,
     select: {
       id: true,
       branchId: true,
@@ -144,6 +146,7 @@ const CUSTOMER_SELECT = {
   },
   consentEvents: {
     orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+    take: 100,
     select: {
       id: true,
       channel: true,
@@ -162,7 +165,6 @@ const CUSTOMER_SELECT = {
       active: true,
       enrolledAt: true,
       deactivatedAt: true,
-      pointsEntries: { select: { points: true } },
     },
   },
 } satisfies Prisma.RestaurantCustomerSelect;
@@ -174,23 +176,10 @@ const CUSTOMER_LIST_SELECT = {
   displayName: true,
   givenName: true,
   familyName: true,
-  birthDate: true,
-  notes: true,
   anonymizedAt: true,
   createdAt: true,
   updatedAt: true,
-  identifiers: CUSTOMER_SELECT.identifiers,
-  interactions: {
-    orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
-    take: 5,
-    select: {
-      id: true,
-      branchId: true,
-      branch: { select: { id: true, name: true } },
-      type: true,
-      occurredAt: true,
-    },
-  },
+  _count: { select: { identifiers: true } },
   tagAssignments: CUSTOMER_SELECT.tagAssignments,
 } satisfies Prisma.RestaurantCustomerSelect;
 
@@ -198,7 +187,7 @@ type ListedCustomer = Prisma.RestaurantCustomerGetPayload<{
   select: typeof CUSTOMER_LIST_SELECT;
 }>;
 
-function projectCustomer(customer: LoadedCustomer) {
+function projectCustomer(customer: LoadedCustomer, loyaltyBalance: number | null) {
   const currentConsent: Partial<
     Record<CustomerConsentChannel, LoadedCustomer['consentEvents'][number]>
   > = {};
@@ -214,16 +203,17 @@ function projectCustomer(customer: LoadedCustomer) {
           active: loyaltyAccount.active,
           enrolledAt: loyaltyAccount.enrolledAt,
           deactivatedAt: loyaltyAccount.deactivatedAt,
-          balance: loyaltyAccount.pointsEntries.reduce((sum, entry) => sum + entry.points, 0),
+          balance: loyaltyBalance ?? 0,
         }
       : null,
   };
 }
 
 function projectListedCustomer(customer: ListedCustomer) {
-  const { tagAssignments, ...profile } = customer;
+  const { tagAssignments, _count, ...profile } = customer;
   return {
     ...profile,
+    identifierCount: _count.identifiers,
     tags: tagAssignments.map(({ tag, createdAt }) => ({ ...tag, assignedAt: createdAt })),
   };
 }
@@ -341,7 +331,13 @@ export async function getCustomer(db: ScopedDb, customerId: string) {
     select: CUSTOMER_SELECT,
   });
   if (!customer) throw new CustomerError('Customer does not exist.', 'NOT_FOUND');
-  return projectCustomer(customer);
+  const balance = customer.loyaltyAccount
+    ? await db.loyaltyPointsEntry.aggregate({
+        where: { accountId: customer.loyaltyAccount.id },
+        _sum: { points: true },
+      })
+    : null;
+  return projectCustomer(customer, balance?._sum.points ?? null);
 }
 
 export type ListCustomersInput = {
