@@ -3380,7 +3380,7 @@ model TimeEntry {
 model Invoice {
   id             String        @id @default(cuid())
   organizationId String        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  invoiceNumber  String        @unique
+  invoiceNumber  String
   clientId       String
   projectId      String?
   items          Json // [{description, quantity, rate, amount}]
@@ -3404,7 +3404,22 @@ model Invoice {
   @@index([clientId])
   @@index([projectId])
   @@index([organizationId])
+  @@unique([organizationId, invoiceNumber])
   @@map("invoices")
+}
+
+/// Last invoice number allocated for one organization and calendar year.
+/// Allocation uses a transactional INSERT ... ON CONFLICT DO UPDATE so concurrent
+/// invoice creates cannot receive the same human-readable number.
+model InvoiceNumberSequence {
+  organizationId String
+  year           Int
+  lastNumber     Int
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@id([organizationId, year])
+  @@map("invoice_number_sequences")
 }
 
 // IMP-FIN-04: a (partial) payment against an invoice. Invoice flips to PAID when
