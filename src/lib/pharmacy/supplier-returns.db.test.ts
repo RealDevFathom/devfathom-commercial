@@ -248,13 +248,38 @@ describeIfDatabase('PUR-06 — a claimed quantity leaves saleable stock', () => 
         reference: `RET-${tag('submit-reserves')}`,
         lines: [line(fixture, lot.id, 30, 36_000)],
       });
-      return deps.returns.submitPurchaseReturn(db, scopeOf(fixture), {
+      const result = await deps.returns.submitPurchaseReturn(db, scopeOf(fixture), {
         purchaseReturnId: created.id,
         at: NOW,
       });
+      const claimId = result.lines[0]!.supplierClaimId!;
+      const claimJournal = await db.financeJournalEntry.findFirstOrThrow({
+        where: {
+          organizationId: fixture.organizationId,
+          sourceKind: 'PHARMACY_SUPPLIER_CLAIM',
+          sourceId: claimId,
+        },
+        include: { lines: true },
+      });
+      return { result, claimJournal };
     });
-    expect(submitted.status).toBe('SUBMITTED');
-    expect(submitted.lines[0]!.supplierClaimId).not.toBeNull();
+    expect(submitted.result.status).toBe('SUBMITTED');
+    expect(submitted.result.lines[0]!.supplierClaimId).not.toBeNull();
+    expect(submitted.claimJournal.lines).toHaveLength(2);
+    expect(submitted.claimJournal.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountCode: 'SUPPLIER_CLAIM_RECEIVABLE',
+          side: 'DEBIT',
+          amountMinor: 36_000,
+        }),
+        expect.objectContaining({
+          accountCode: 'INVENTORY',
+          side: 'CREDIT',
+          amountMinor: 36_000,
+        }),
+      ])
+    );
 
     // 40 on hand, 30 claimed: 11 is one more than what is left.
     await expect(
