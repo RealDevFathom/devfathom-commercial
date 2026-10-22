@@ -1371,11 +1371,13 @@ model PharmacyDrawerMovement {
   kind            PharmacyDrawerMovementKind
   amountMinor     Int
   reason          String?
+  operationKey    String?
   actorId         String
   createdAt       DateTime                   @default(now())
   drawerSession   PharmacyDrawerSession      @relation(fields: [organizationId, drawerSessionId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id])
+  @@unique([organizationId, operationKey], map: "pharmacy_drawer_movements_org_operation_key")
   @@index([organizationId, drawerSessionId, createdAt])
   @@map("pharmacy_drawer_movements")
 }

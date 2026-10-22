@@ -724,10 +724,14 @@ export async function recordPharmacyCashMovement(
     kind: 'PAID_IN' | 'PAID_OUT';
     amountMinor: number;
     reason: string;
+    operationKey: string;
   }
 ) {
   assertPositiveMinor(input.amountMinor);
   if (!input.reason.trim()) throw new PharmacySettlementError('INVALID_AMOUNT');
+  const operationKey = input.operationKey.trim();
+  if (!operationKey || operationKey.length > 160)
+    throw new PharmacySettlementError('IDEMPOTENCY_CONFLICT');
   await lockDrawerDay(db, scope, input.drawerSessionId);
   const drawer = await db.pharmacyDrawerSession.findFirst({
     where: {
@@ -738,16 +742,58 @@ export async function recordPharmacyCashMovement(
     },
   });
   if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
-  return db.pharmacyDrawerMovement.create({
-    data: {
-      organizationId: scope.organizationId,
-      drawerSessionId: drawer.id,
-      kind: input.kind,
-      amountMinor: input.amountMinor,
-      reason: input.reason.trim(),
-      actorId: scope.actorId,
-    },
-  });
+  const reason = input.reason.trim();
+  // The operation key is tenant-wide and locked separately from the drawer day so
+  // a retry cannot move the same logical operation to a different drawer.
+  await db.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:drawer-movement:${operationKey}`}))`
+  );
+  const [prior] = await db.$queryRaw<
+    Array<{
+      id: string;
+      organizationId: string;
+      drawerSessionId: string;
+      kind: 'PAID_IN' | 'PAID_OUT';
+      amountMinor: number;
+      reason: string | null;
+      actorId: string;
+      createdAt: Date;
+    }>
+  >(Prisma.sql`
+    SELECT id, "organizationId", "drawerSessionId", kind, "amountMinor", reason, "actorId", "createdAt"
+      FROM pharmacy_drawer_movements
+     WHERE "organizationId" = ${scope.organizationId}
+       AND "operationKey" = ${operationKey}`);
+  if (prior) {
+    if (
+      prior.drawerSessionId !== drawer.id ||
+      prior.kind !== input.kind ||
+      prior.amountMinor !== input.amountMinor ||
+      prior.reason !== reason
+    )
+      throw new PharmacySettlementError('IDEMPOTENCY_CONFLICT');
+    return prior;
+  }
+
+  const [movement] = await db.$queryRaw<
+    Array<{
+      id: string;
+      organizationId: string;
+      drawerSessionId: string;
+      kind: 'PAID_IN' | 'PAID_OUT';
+      amountMinor: number;
+      reason: string;
+      actorId: string;
+      createdAt: Date;
+    }>
+  >(Prisma.sql`
+    INSERT INTO pharmacy_drawer_movements
+      (id, "organizationId", "drawerSessionId", kind, "amountMinor", reason, "operationKey", "actorId", "createdAt")
+    VALUES
+      (${randomUUID()}, ${scope.organizationId}, ${drawer.id}, ${input.kind}::"PharmacyDrawerMovementKind",
+       ${input.amountMinor}, ${reason}, ${operationKey}, ${scope.actorId}, now())
+    RETURNING id, "organizationId", "drawerSessionId", kind, "amountMinor", reason, "actorId", "createdAt"`);
+  return movement!;
 }
 
 export async function closePharmacyDrawer(

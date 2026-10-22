@@ -65,6 +65,7 @@ const procedures: Array<[string, (caller: Caller) => Promise<unknown>, Refusal]>
         kind: 'PAID_IN',
         amountMinor: 100,
         reason: 'Float top-up',
+        operationKey: 'movement-1',
       }),
     NOT_IN_WORKSPACE,
   ],

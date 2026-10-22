@@ -186,6 +186,7 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
             kind: 'PAID_OUT',
             amountMinor: 200,
             reason: 'Courier',
+            operationKey: `movement-${branchId}`,
           }),
         NOT_IN_WORKSPACE,
       ],
@@ -273,15 +274,40 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
     await expect(
       asAdmin((c) => c.drawerStatus({ branchId: ACTIVE, deviceId: DEVICE }))
     ).resolves.toMatchObject({ openDrawer: { id: drawer!.id, openingFloatMinor: 1000 } });
-    await asAdmin((c) =>
+    const movement = await asAdmin((c) =>
       c.drawerMovement({
         branchId: ACTIVE,
         drawerSessionId: drawer!.id,
         kind: 'PAID_IN',
         amountMinor: 250,
         reason: 'Float top-up',
+        operationKey: 'active-float-top-up',
       })
     );
+    await expect(
+      asAdmin((c) =>
+        c.drawerMovement({
+          branchId: ACTIVE,
+          drawerSessionId: drawer!.id,
+          kind: 'PAID_IN',
+          amountMinor: 250,
+          reason: 'Float top-up',
+          operationKey: 'active-float-top-up',
+        })
+      )
+    ).resolves.toMatchObject({ id: movement!.id });
+    await expect(
+      asAdmin((c) =>
+        c.drawerMovement({
+          branchId: ACTIVE,
+          drawerSessionId: drawer!.id,
+          kind: 'PAID_IN',
+          amountMinor: 251,
+          reason: 'Float top-up',
+          operationKey: 'active-float-top-up',
+        })
+      )
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'IDEMPOTENCY_CONFLICT' });
     await expect(
       asAdmin((c) =>
         c.closeDrawer({ branchId: ACTIVE, drawerSessionId: drawer!.id, countedCashMinor: 1250 })

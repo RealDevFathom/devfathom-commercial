@@ -649,6 +649,7 @@ export const pharmacySalesRouter = router({
           kind: z.enum(['PAID_IN', 'PAID_OUT']),
           amountMinor: z.number().int().positive(),
           reason: z.string().trim().min(1),
+          operationKey: z.string().trim().min(1).max(160),
         })
         .strict()
     )
