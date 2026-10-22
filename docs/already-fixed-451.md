@@ -43,8 +43,13 @@ No archive change is ported:
 - Historical retest receipts are not copied: they would duplicate executable
   evidence without changing runtime behavior.
 
-The archive tag named by the issue could not be fetched in this checkout because
-the repository remote is intentionally absent and outbound GitHub access returns
-HTTP 403. This does not weaken the code-level conclusion above: the current tree
-contains both the fixes and focused regression evidence, so there is no valuable
-runtime fix to recover.
+## Archive comparison availability
+
+The supplied archive commit `bf957d98` is not present in this checkout's object
+database, and this checkout has no configured Git remote. A direct fetch of the
+named tag from the repository URL was attempted, but the environment's GitHub
+CONNECT tunnel returned HTTP 403. Consequently, a literal archive-to-main diff
+cannot be reproduced here. The disposition above is instead based on the issue's
+description of the archive as retest work for #144, #145, and #146, checked
+against the current production paths and focused regression coverage cited
+above. Those checks establish that there is no missing runtime fix to port.
