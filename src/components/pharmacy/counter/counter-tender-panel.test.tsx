@@ -263,8 +263,8 @@ describe('family Khata tender', () => {
     balanceMinor: 500,
     creditLimitMinor: 1000,
   };
-  it('blocks over-limit payment until an approver supplies a reason and reauthenticates', async () => {
-    const reauthenticateOwner = vi.fn().mockResolvedValue(undefined);
+  it('blocks over-limit payment until owner password re-entry succeeds', async () => {
+    const reauthenticateOwner = vi.fn().mockResolvedValue('11111111-1111-4111-8111-111111111111');
     const { props } = setup({
       loadKhataAccounts: vi.fn().mockResolvedValue([account]),
       reauthenticateOwner,
@@ -281,15 +281,12 @@ describe('family Khata tender', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await screen.findByText('Payment recorded.');
-    expect(reauthenticateOwner).toHaveBeenCalledWith('test-only-password', '');
+    expect(reauthenticateOwner).toHaveBeenCalledWith('test-only-password', '', {
+      familyAccountId: 'family-a', amountMinor: 25000, reason: 'Long-standing customer',
+    });
     expect(props.onTender).toHaveBeenCalledWith(
-      {
-        type: 'KHATA',
-        amountMinor: 25000,
-        familyAccountId: 'family-a',
-        ownerOverride: true,
-        overrideReason: 'Long-standing customer',
-      },
+      { type: 'KHATA', amountMinor: 25000, familyAccountId: 'family-a', ownerOverride: true,
+        overrideReason: 'Long-standing customer', approvalId: '11111111-1111-4111-8111-111111111111' },
       { amount: '', cashReceived: '' }
     );
   });
@@ -304,9 +301,7 @@ describe('family Khata tender', () => {
     fireEvent.change(screen.getByLabelText('Approver password (current account)'), {
       target: { value: 'wrong' },
     });
-    fireEvent.change(screen.getByLabelText('Reason for limit increase'), {
-      target: { value: 'Requested exception' },
-    });
+    fireEvent.change(screen.getByLabelText('Reason for limit increase'), { target: { value: 'Exception' } });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await screen.findByText(/Approver re-authentication failed/);
     expect(props.onTender).not.toHaveBeenCalled();
