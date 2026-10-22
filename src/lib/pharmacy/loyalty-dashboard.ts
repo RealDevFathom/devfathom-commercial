@@ -20,56 +20,102 @@ export type LoyaltyDashboardMetrics = {
   netMarginImpactMinor: number;
 };
 
-type CountMoney = { count: number; amountMinor: number };
-type CustomerCounts = { total: number; repeat: number };
+type CountMoney = { count: bigint; amountMinor: bigint };
+type CustomerCounts = { total: bigint; repeat: bigint };
 
-export function rateBasisPoints(numerator: number, denominator: number) {
-  return denominator === 0 ? 0 : Math.floor((numerator * BASIS_POINTS) / denominator);
+function exactDashboardInteger(value: bigint, label: string) {
+  const result = Number(value);
+  if (!Number.isSafeInteger(result))
+    throw new RangeError(`${label} exceeds the safe integer range.`);
+  return result;
+}
+
+export function rateBasisPoints(numerator: bigint, denominator: bigint) {
+  if (numerator < 0n || denominator < 0n)
+    throw new RangeError('Rate inputs must be non-negative integers.');
+  return denominator === 0n
+    ? 0
+    : exactDashboardInteger((numerator * BigInt(BASIS_POINTS)) / denominator, 'Rate');
+}
+
+export function customerPointsLiabilityMinor(customerBalances: readonly bigint[]) {
+  const positivePoints = customerBalances.reduce(
+    (total, balance) => total + (balance > 0n ? balance : 0n),
+    0n
+  );
+  return exactDashboardInteger(
+    positivePoints * BigInt(LOYALTY_POINT_VALUE_MINOR),
+    'Points liability'
+  );
 }
 
 export function composeLoyaltyDashboardMetrics(input: {
   issued: CountMoney;
   redeemed: CountMoney;
   visitors: CustomerCounts;
-  churnedCustomersCount: number;
+  churnedCustomersCount: bigint;
   churnDays: number;
-  pointsBalance: number;
-  redeemedMarginMinor: number;
+  customerPointBalances: readonly bigint[];
+  redeemedMarginMinor: bigint;
 }): LoyaltyDashboardMetrics {
   return {
-    vouchersIssuedCount: input.issued.count,
-    vouchersIssuedMinor: input.issued.amountMinor,
-    vouchersRedeemedCount: input.redeemed.count,
-    vouchersRedeemedMinor: input.redeemed.amountMinor,
+    vouchersIssuedCount: exactDashboardInteger(input.issued.count, 'Issued voucher count'),
+    vouchersIssuedMinor: exactDashboardInteger(input.issued.amountMinor, 'Issued voucher total'),
+    vouchersRedeemedCount: exactDashboardInteger(input.redeemed.count, 'Redeemed voucher count'),
+    vouchersRedeemedMinor: exactDashboardInteger(
+      input.redeemed.amountMinor,
+      'Redeemed voucher total'
+    ),
     redemptionRateBasisPoints: rateBasisPoints(input.redeemed.count, input.issued.count),
     repeatVisitRateBasisPoints: rateBasisPoints(input.visitors.repeat, input.visitors.total),
-    churnedCustomersCount: input.churnedCustomersCount,
+    churnedCustomersCount: exactDashboardInteger(
+      input.churnedCustomersCount,
+      'Churned customer count'
+    ),
     churnDays: input.churnDays,
-    pointsLiabilityMinor: Math.max(0, input.pointsBalance) * LOYALTY_POINT_VALUE_MINOR,
-    netMarginImpactMinor: input.redeemedMarginMinor - input.redeemed.amountMinor,
+    pointsLiabilityMinor: customerPointsLiabilityMinor(input.customerPointBalances),
+    netMarginImpactMinor: exactDashboardInteger(
+      input.redeemedMarginMinor - input.redeemed.amountMinor,
+      'Net margin impact'
+    ),
   };
 }
 
-async function readIssuedVouchers(db: ScopedDb, branchIds: readonly string[], from: Date, to: Date) {
+async function readIssuedVouchers(
+  db: ScopedDb,
+  branchIds: readonly string[],
+  from: Date,
+  to: Date
+) {
   const rows = await db.$queryRaw<CountMoney[]>(Prisma.sql`
-    SELECT COUNT(*)::int AS count, COALESCE(SUM("valueMinor"), 0)::int AS "amountMinor"
+    SELECT COUNT(*)::bigint AS count, COALESCE(SUM("valueMinor"), 0)::bigint AS "amountMinor"
     FROM pharmacy_vouchers
     WHERE "organizationId"=current_setting('app.current_organization_id', true)
       AND "branchId" IN (${Prisma.join(branchIds)}) AND "issuedAt">=${from} AND "issuedAt"<${to}`);
-  return rows[0] ?? { count: 0, amountMinor: 0 };
+  return rows[0] ?? { count: 0n, amountMinor: 0n };
 }
 
-async function readRedeemedVouchers(db: ScopedDb, branchIds: readonly string[], from: Date, to: Date) {
+async function readRedeemedVouchers(
+  db: ScopedDb,
+  branchIds: readonly string[],
+  from: Date,
+  to: Date
+) {
   const rows = await db.$queryRaw<CountMoney[]>(Prisma.sql`
-    SELECT COUNT(*)::int AS count, COALESCE(SUM("valueMinor"), 0)::int AS "amountMinor"
+    SELECT COUNT(*)::bigint AS count, COALESCE(SUM("valueMinor"), 0)::bigint AS "amountMinor"
     FROM pharmacy_vouchers
     WHERE "organizationId"=current_setting('app.current_organization_id', true)
       AND "branchId" IN (${Prisma.join(branchIds)}) AND "status"='REDEEMED'
       AND "redeemedAt">=${from} AND "redeemedAt"<${to}`);
-  return rows[0] ?? { count: 0, amountMinor: 0 };
+  return rows[0] ?? { count: 0n, amountMinor: 0n };
 }
 
-async function readRepeatVisitors(db: ScopedDb, branchIds: readonly string[], from: Date, to: Date) {
+async function readRepeatVisitors(
+  db: ScopedDb,
+  branchIds: readonly string[],
+  from: Date,
+  to: Date
+) {
   const rows = await db.$queryRaw<CustomerCounts[]>(Prisma.sql`
     WITH visits AS (
       SELECT "customerId", MIN("completedAt") AS first_in_period
@@ -78,13 +124,13 @@ async function readRepeatVisitors(db: ScopedDb, branchIds: readonly string[], fr
         AND "branchId" IN (${Prisma.join(branchIds)}) AND status='COMPLETED' AND "customerId" IS NOT NULL
         AND "completedAt">=${from} AND "completedAt"<${to} GROUP BY "customerId"
     )
-    SELECT COUNT(*)::int AS total,
+    SELECT COUNT(*)::bigint AS total,
       COUNT(*) FILTER (WHERE EXISTS (
         SELECT 1 FROM pharmacy_sales prior WHERE prior."organizationId"=current_setting('app.current_organization_id', true)
           AND prior."branchId" IN (${Prisma.join(branchIds)}) AND prior.status='COMPLETED'
           AND prior."customerId"=visits."customerId" AND prior."completedAt"<visits.first_in_period
-      ))::int AS repeat FROM visits`);
-  return rows[0] ?? { total: 0, repeat: 0 };
+      ))::bigint AS repeat FROM visits`);
+  return rows[0] ?? { total: 0n, repeat: 0n };
 }
 
 async function readChurnedCustomers(
@@ -93,23 +139,26 @@ async function readChurnedCustomers(
   asOf: Date,
   churnDays: number
 ) {
-  const rows = await db.$queryRaw<Array<{ count: number }>>(Prisma.sql`
-    SELECT COUNT(*)::int AS count FROM (
+  const rows = await db.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+    SELECT COUNT(*)::bigint AS count FROM (
       SELECT "customerId", MAX("completedAt") AS last_visit FROM pharmacy_sales
       WHERE "organizationId"=current_setting('app.current_organization_id', true)
         AND "branchId" IN (${Prisma.join(branchIds)}) AND status='COMPLETED' AND "customerId" IS NOT NULL
         AND "completedAt"<${asOf} GROUP BY "customerId"
       HAVING MAX("completedAt") < ${new Date(asOf.getTime() - churnDays * 86_400_000)}
     ) churned`);
-  return rows[0]?.count ?? 0;
+  return rows[0]?.count ?? 0n;
 }
 
-async function readPointsBalance(db: ScopedDb, branchIds: readonly string[]) {
-  const rows = await db.$queryRaw<Array<{ points: number }>>(Prisma.sql`
-    SELECT COALESCE(SUM(points), 0)::int AS points FROM pharmacy_loyalty_points_entries
-    WHERE "organizationId"=current_setting('app.current_organization_id', true)
-      AND "branchId" IN (${Prisma.join(branchIds)})`);
-  return rows[0]?.points ?? 0;
+async function readCustomerPointBalances(db: ScopedDb, branchIds: readonly string[]) {
+  const rows = await db.$queryRaw<Array<{ points: bigint }>>(Prisma.sql`
+    SELECT COALESCE(SUM(balance), 0)::bigint AS points FROM (
+      SELECT SUM(points)::bigint AS balance FROM pharmacy_loyalty_points_entries
+      WHERE "organizationId"=current_setting('app.current_organization_id', true)
+        AND "branchId" IN (${Prisma.join(branchIds)})
+      GROUP BY "customerId" HAVING SUM(points) > 0
+    ) customer_balances`);
+  return rows.map((row) => row.points);
 }
 
 async function readRedeemedVoucherMargin(
@@ -118,9 +167,9 @@ async function readRedeemedVoucherMargin(
   from: Date,
   to: Date
 ) {
-  const rows = await db.$queryRaw<Array<{ marginMinor: number }>>(Prisma.sql`
-    SELECT COALESCE(SUM((line."quantity" * line."unitPriceMinor" - line."discountMinor")::bigint
-      * COALESCE(category."marginBasisPoints", settings."winBackDefaultMarginBasisPoints", 1450) / ${BASIS_POINTS}), 0)::int AS "marginMinor"
+  const rows = await db.$queryRaw<Array<{ marginMinor: bigint }>>(Prisma.sql`
+    SELECT COALESCE(SUM((line."quantity"::bigint * line."unitPriceMinor"::bigint - line."discountMinor"::bigint)
+      * COALESCE(category."marginBasisPoints", settings."winBackDefaultMarginBasisPoints", 1450) / ${BASIS_POINTS}), 0)::bigint AS "marginMinor"
     FROM pharmacy_vouchers voucher
     JOIN pharmacy_sales sale ON sale."organizationId"=voucher."organizationId" AND sale.id=voucher."redeemedSaleId"
     JOIN pharmacy_sale_lines line ON line."organizationId"=sale."organizationId" AND line."saleId"=sale.id
@@ -131,7 +180,7 @@ async function readRedeemedVoucherMargin(
     WHERE voucher."organizationId"=current_setting('app.current_organization_id', true)
       AND voucher."branchId" IN (${Prisma.join(branchIds)}) AND voucher.status='REDEEMED'
       AND voucher."redeemedAt">=${from} AND voucher."redeemedAt"<${to}`);
-  return rows[0]?.marginMinor ?? 0;
+  return rows[0]?.marginMinor ?? 0n;
 }
 
 export async function readPharmacyLoyaltyDashboard(
@@ -142,22 +191,28 @@ export async function readPharmacyLoyaltyDashboard(
   const { from, to } = validatePharmacyReportFilters(filters);
   if (!Number.isSafeInteger(churnDays) || churnDays < 1 || churnDays > 3650)
     throw new Error('Churn days must be between 1 and 3650.');
-  const [issued, redeemed, visitors, churnedCustomersCount, pointsBalance, redeemedMarginMinor] =
-    await Promise.all([
-      readIssuedVouchers(db, filters.branchIds, from, to),
-      readRedeemedVouchers(db, filters.branchIds, from, to),
-      readRepeatVisitors(db, filters.branchIds, from, to),
-      readChurnedCustomers(db, filters.branchIds, to, churnDays),
-      readPointsBalance(db, filters.branchIds),
-      readRedeemedVoucherMargin(db, filters.branchIds, from, to),
-    ]);
+  const [
+    issued,
+    redeemed,
+    visitors,
+    churnedCustomersCount,
+    customerPointBalances,
+    redeemedMarginMinor,
+  ] = await Promise.all([
+    readIssuedVouchers(db, filters.branchIds, from, to),
+    readRedeemedVouchers(db, filters.branchIds, from, to),
+    readRepeatVisitors(db, filters.branchIds, from, to),
+    readChurnedCustomers(db, filters.branchIds, to, churnDays),
+    readCustomerPointBalances(db, filters.branchIds),
+    readRedeemedVoucherMargin(db, filters.branchIds, from, to),
+  ]);
   return composeLoyaltyDashboardMetrics({
     issued,
     redeemed,
     visitors,
     churnedCustomersCount,
     churnDays,
-    pointsBalance,
+    customerPointBalances,
     redeemedMarginMinor,
   });
 }

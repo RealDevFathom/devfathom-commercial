@@ -50,6 +50,17 @@ describe('opt-in pharmacy Owner / Operator access', () => {
       .find((role) => role.key === key)!
       .capabilities.map((capability) => ({ capability, effect: 'ALLOW' }));
 
+  it('registers loyalty dashboard access as default-deny and grants it to the owner template', async () => {
+    await expect(
+      can(employee, 'pharmacy:loyalty-manage', undefined, { db: authorizationDb({}) })
+    ).resolves.toBe(false);
+    await expect(
+      can(employee, 'pharmacy:loyalty-manage', undefined, {
+        db: authorizationDb({ rolePermissions: permissionsFor('owner') }),
+      })
+    ).resolves.toBe(true);
+  });
+
   it.each(grantedActions)('grants %s to the explicitly assigned proprietor', async (action) => {
     await expect(
       can(proprietor, action, undefined, {
@@ -242,9 +253,10 @@ describe('custom ABAC decisions', () => {
       'pharmacy:safety',
       'pharmacy:catalogue-review',
       'pharmacy:orders',
+      'pharmacy:loyalty-manage',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);
