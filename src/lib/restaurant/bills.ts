@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -112,6 +113,24 @@ const BILLABLE_STATUSES = new Set([
   'SERVED',
   'PAYMENT_PENDING',
 ]);
+
+/**
+ * Runtime boundary for a service-charge basis. Prisma Decimal accepts signed values,
+ * so checking only that conversion succeeds lets a negative derived line subtotal
+ * reach the database CHECK and turn a client mistake into a 500.
+ */
+const serviceChargeBasisSchema = z.custom<Prisma.Decimal>(
+  (value) => value instanceof Prisma.Decimal && value.isFinite() && !value.isNegative(),
+  'Service-charge basis must be a non-negative decimal.'
+);
+
+function requireNonNegativeServiceChargeBasis(value: Prisma.Decimal): Prisma.Decimal {
+  const parsed = serviceChargeBasisSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new BillCommandError(parsed.error.issues[0]!.message, 'INVALID_SPLIT');
+  }
+  return parsed.data;
+}
 
 // ── Transaction + idempotency helpers (C11) ──────────────────────────────────
 
@@ -292,7 +311,7 @@ function lineFor(item: LoadedBillItem): PlannedLine {
     name: item.name,
     quantity: item.quantity,
     unitPrice: item.unitPrice,
-    lineSubtotal: itemLineSubtotal(item),
+    lineSubtotal: requireNonNegativeServiceChargeBasis(itemLineSubtotal(item)),
     serviceChargeAmount: ZERO,
   };
 }
@@ -304,7 +323,9 @@ function itemBill(
   items: readonly LoadedBillItem[]
 ): PlannedBill {
   const lines = items.map(lineFor);
-  const subtotal = sum(lines.map((l) => l.lineSubtotal));
+  const subtotal = requireNonNegativeServiceChargeBasis(
+    sum(lines.map((l) => l.lineSubtotal))
+  );
   return {
     splitKind,
     fractionNumerator: null,
@@ -1028,7 +1049,9 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       },
     });
     const serviceChargeTotal = sub(bill.serviceChargeTotal, line.serviceChargeAmount);
-    const serviceChargeBasis = sub(bill.serviceChargeBasis, line.lineSubtotal);
+    const serviceChargeBasis = requireNonNegativeServiceChargeBasis(
+      sub(bill.serviceChargeBasis, line.lineSubtotal)
+    );
     const clearedServiceCharge = serviceChargeBasis.isZero();
     await tx.restaurantBill.update({
       where: { id: bill.id },

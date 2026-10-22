@@ -103,6 +103,17 @@ describe('tender tax allocation validation', () => {
   });
 });
 
+describe('service-charge basis validation', () => {
+  it('rejects a negative basis before bill persistence can surface a database error', () => {
+    expect(() =>
+      planBills(
+        order([{ id: 'negative-line', unitPrice: '-0.01' }]),
+        { kind: 'NONE' }
+      )
+    ).toThrow('Service-charge basis must be a non-negative decimal.');
+  });
+});
+
 /** Build a minimal LoadedBillOrder-shaped literal for the pure planners. */
 function order(
   items: Array<{
