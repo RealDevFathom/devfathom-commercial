@@ -108,7 +108,7 @@ export async function prepareRuntimeRole(
          LOOP
            EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO ${ROLE_NAME}', extension_function);
          END LOOP;
-       END
+       END;
        $grant_pg_trgm$`,
     ],
     [

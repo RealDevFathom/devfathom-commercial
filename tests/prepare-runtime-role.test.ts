@@ -60,6 +60,7 @@ describe('runtime role preparation', () => {
     expect(pgTrgmGrant).toContain("extension.extname = 'pg_trgm'");
     expect(pgTrgmGrant).toContain('dependency.deptype = \'e\'');
     expect(pgTrgmGrant).toContain('GRANT EXECUTE ON FUNCTION %s TO devfathom_app');
+    expect(pgTrgmGrant).toMatch(/END LOOP;\s+END;\s+\$grant_pg_trgm\$$/);
     expect(pgTrgmGrant).not.toContain('ALL FUNCTIONS IN SCHEMA');
     expect(pgTrgmGrant).not.toContain(' TO PUBLIC');
     expect([...output.log.mock.calls, ...output.warn.mock.calls].flat().join('\n')).not.toContain(
