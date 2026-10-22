@@ -49,14 +49,12 @@ export const MAX_QUEUED_COUNTER_COMMANDS = 200;
 
 export type CounterCommandStatus = 'PENDING' | 'IN_FLIGHT' | 'ACKNOWLEDGED' | 'QUARANTINED';
 
-export type CounterQueuedCommand = {
+type CounterQueuedCommandBase = {
   commandId: string;
   /** Always `commandId`: one stable device-scoped key per command, every attempt. */
   idempotencyKey: string;
   /** Per-device monotonic FIFO position. Never derived from a clock. */
   sequence: number;
-  action: PharmacyOfflineAction;
-  payload: Record<string, unknown>;
   /** Client-origin UTC instant, metadata only. */
   clientOriginAt: string;
   /** The lease number ALREADY PRINTED for this command, or null when it printed none. */
@@ -67,6 +65,18 @@ export type CounterQueuedCommand = {
   /** Set when the server refused this command outright. */
   rejection: string | null;
 };
+
+export type CounterQueuedCommand = CounterQueuedCommandBase &
+  (
+    | {
+        action: 'CASH_OTC_SALE' | 'CONTROLLED_MEDICINE_SALE';
+        payload: CounterReplaySalePayload;
+      }
+    | {
+        action: Exclude<PharmacyOfflineAction, 'CASH_OTC_SALE' | 'CONTROLLED_MEDICINE_SALE'>;
+        payload: Record<string, unknown>;
+      }
+  );
 
 /** One reserved block of receipt numbers as the counter carries it. */
 export type CounterLeaseCursor = {
@@ -132,7 +142,7 @@ export function remainingReceiptNumbers(snapshot: CounterQueueSnapshot): number 
  */
 export function issueReceiptNumber(
   leases: readonly CounterLeaseCursor[]
-): { receiptNumber: number; leases: CounterLeaseCursor[] } | null {
+): { leaseId: string; receiptNumber: number; leases: CounterLeaseCursor[] } | null {
   let chosen: CounterLeaseCursor | null = null;
   for (const lease of leases) {
     if (lease.nextNumber > lease.blockEnd) continue;
@@ -141,6 +151,7 @@ export function issueReceiptNumber(
   if (!chosen) return null;
   const receiptNumber = chosen.nextNumber;
   return {
+    leaseId: chosen.leaseId,
     receiptNumber,
     leases: leases.map((lease) =>
       lease.leaseId === chosen.leaseId ? { ...lease, nextNumber: receiptNumber + 1 } : lease
@@ -180,10 +191,56 @@ function consumeQuota(
 
 // ── Enqueue ──────────────────────────────────────────────────────────────────
 
-export type CounterCommandInput = {
+export type CounterReplayEnvelope = {
+  organizationId: string;
+  branchId: string;
   deviceId: string;
-  action: PharmacyOfflineAction;
-  payload: Record<string, unknown>;
+  kind: CachedSnapshotState['kind'];
+  version: number;
+  payloadHash: string;
+  issuedAt: string;
+  expiresAt: string;
+  safetyLease: {
+    issuedAt: string;
+    expiresAt: string;
+    recallVersion: number;
+    licenceVersion: number;
+    ruleVersion: number;
+  };
+  signingKeyId: string;
+};
+
+/** Sale material accepted by the strict `/counter/replay` server schema. */
+export type CounterReplaySalePayload = {
+  leasedReceipt: {
+    leaseId: string;
+    receiptNumber: number;
+    originalSaleAt: string;
+    envelope: CounterReplayEnvelope;
+    signature: string;
+  };
+  snapshots: Array<{
+    id?: string;
+    envelope: CounterReplayEnvelope;
+    signature: string;
+    payload: unknown;
+  }>;
+  lines: Array<{
+    medicineId: string;
+    presentationId: string;
+    packLevelId: string;
+    saleUnit: 'PACK' | 'STRIP' | 'UNIT';
+    quantity: number;
+    canonicalUnitsPerSaleUnit: number;
+    inventoryLotId: string;
+    stockLocationId: string;
+  }>;
+  amountMinor: number;
+  cashReceivedMinor: number;
+};
+
+type CounterCommandInputBase = {
+  deviceId: string;
   /** Client-origin UTC instant, metadata only. */
   clientOriginAt: string;
   /** The bucket this command draws stock from, and how much. */
@@ -193,6 +250,18 @@ export type CounterCommandInput = {
   /** Defaults true for sale actions, keeping older callers fail closed. */
   medicineSale?: boolean;
 };
+
+export type CounterCommandInput = CounterCommandInputBase &
+  (
+    | {
+        action: 'CASH_OTC_SALE' | 'CONTROLLED_MEDICINE_SALE';
+        payload: CounterReplaySalePayload;
+      }
+    | {
+        action: Exclude<PharmacyOfflineAction, 'CASH_OTC_SALE' | 'CONTROLLED_MEDICINE_SALE'>;
+        payload: Record<string, unknown>;
+      }
+  );
 
 /** What the matrix needs that the queue does not itself hold. */
 export type CounterMatrixInputs = {
@@ -282,6 +351,7 @@ export function enqueueCounterCommand(
 
   let leases = snapshot.leases;
   let receiptNumber: number | null = null;
+  let payload = input.payload;
   if (decision.rule.requires.includes('RECEIPT_NUMBER')) {
     const issued = issueReceiptNumber(leases);
     // `decideOfflineAction` already refused an empty runway; this is the
@@ -295,6 +365,18 @@ export function enqueueCounterCommand(
       };
     }
     receiptNumber = issued.receiptNumber;
+    if (input.action === 'CASH_OTC_SALE' || input.action === 'CONTROLLED_MEDICINE_SALE') {
+      // The queue owns allocation. Replace caller previews with the number and
+      // lease it atomically consumed, before the receipt-specific HMAC is made.
+      payload = {
+        ...input.payload,
+        leasedReceipt: {
+          ...input.payload.leasedReceipt,
+          leaseId: issued.leaseId,
+          receiptNumber,
+        },
+      };
+    }
     leases = issued.leases;
   }
 
@@ -304,19 +386,19 @@ export function enqueueCounterCommand(
       : snapshot.quotas;
 
   const commandId = newId();
-  const command: CounterQueuedCommand = {
+  const command = {
     commandId,
     idempotencyKey: commandId,
     sequence: snapshot.nextSequence,
     action: input.action,
-    payload: input.payload,
+    payload,
     clientOriginAt: input.clientOriginAt,
     receiptNumber,
     status: 'PENDING',
     attempts: 0,
     serverRef: null,
     rejection: null,
-  };
+  } as CounterQueuedCommand;
 
   return {
     ok: true,
@@ -367,6 +449,8 @@ export type CounterReplayRequest = {
     'Idempotency-Key': string;
     'X-Command-Signature': string;
     'X-Receipt-Signature': string;
+    Authorization: string;
+    'X-Terminal-Session': string;
   };
   body: Record<string, unknown>;
 };
@@ -374,6 +458,9 @@ export type CounterReplayRequest = {
 export type CounterReplaySignatures = {
   commandSignature: string;
   receiptSignature: string;
+  /** Kept only in the in-memory transport adapter; never persisted with the queue. */
+  authorization: string;
+  terminalSession: string;
 };
 
 export function buildCounterReplayRequest(
@@ -387,6 +474,8 @@ export function buildCounterReplayRequest(
       'Idempotency-Key': command.idempotencyKey,
       'X-Command-Signature': signatures.commandSignature,
       'X-Receipt-Signature': signatures.receiptSignature,
+      Authorization: signatures.authorization,
+      'X-Terminal-Session': signatures.terminalSession,
     },
     body: {
       // Replay is a strict, flat server contract. The sale material captured at

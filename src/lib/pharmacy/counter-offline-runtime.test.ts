@@ -38,7 +38,12 @@ const nodeVerifier: SnapshotVerifier = {
     signing.verifySnapshotSignature(envelope, signature, key),
 };
 const replaySigner = {
-  sign: () => ({ commandSignature: 'command-hmac', receiptSignature: 'receipt-hmac' }),
+  sign: () => ({
+    commandSignature: 'command-hmac',
+    receiptSignature: 'receipt-hmac',
+    authorization: 'Bearer pcd_test',
+    terminalSession: 'session-test',
+  }),
 };
 
 beforeAll(async () => {
@@ -129,10 +134,34 @@ const MATRIX = {
 };
 
 function cashSale(units = 1) {
+  const receiptEnvelope = envelopeFor('RULES', { kind: 'RULES' });
   return {
     deviceId: SCOPE.deviceId,
     action: 'CASH_OTC_SALE' as const,
-    payload: { lines: [{ medicineId: 'med_1', units }] },
+    payload: {
+      leasedReceipt: {
+        leaseId: 'lease_1',
+        receiptNumber: 900,
+        originalSaleAt: '2026-09-02T12:05:00.000Z',
+        envelope: receiptEnvelope,
+        signature: signing.signSnapshotEnvelope(receiptEnvelope),
+      },
+      snapshots: [],
+      lines: [
+        {
+          medicineId: 'med_1',
+          presentationId: 'presentation_1',
+          packLevelId: 'pack_1',
+          saleUnit: 'UNIT' as const,
+          quantity: units,
+          canonicalUnitsPerSaleUnit: 1,
+          inventoryLotId: 'lot_1',
+          stockLocationId: 'loc_1',
+        },
+      ],
+      amountMinor: 100 * units,
+      cashReceivedMinor: 100 * units,
+    },
     clientOriginAt: '2026-09-02T12:05:00.000Z',
     bucket: { inventoryLotId: 'lot_1', stockLocationId: 'loc_1' },
     requestedUnits: units,
@@ -425,14 +454,17 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
     const outcome = await reconnected.replay(async (request) => {
       sent.push({
         key: request.headers['Idempotency-Key'],
-        receiptNumber: request.body.receiptNumber,
+        receiptNumber: (request.body.leasedReceipt as { receiptNumber: number }).receiptNumber,
         sequence: request.body.sequence,
       });
       if (failFirst) {
         failFirst = false;
         return { status: 0 };
       }
-      return { status: 200, serverRef: `sale_${String(request.body.receiptNumber)}` };
+      return {
+        status: 200,
+        serverRef: `sale_${String((request.body.leasedReceipt as { receiptNumber: number }).receiptNumber)}`,
+      };
     });
     expect(outcome.state).toBe('PAUSED');
 
@@ -440,10 +472,13 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
     const drained = await reconnected.replay(async (request) => {
       sent.push({
         key: request.headers['Idempotency-Key'],
-        receiptNumber: request.body.receiptNumber,
+        receiptNumber: (request.body.leasedReceipt as { receiptNumber: number }).receiptNumber,
         sequence: request.body.sequence,
       });
-      return { status: 200, serverRef: `sale_${String(request.body.receiptNumber)}` };
+      return {
+        status: 200,
+        serverRef: `sale_${String((request.body.leasedReceipt as { receiptNumber: number }).receiptNumber)}`,
+      };
     });
     expect(drained.state).toBe('IDLE');
 
@@ -546,7 +581,7 @@ describe('PH-OFF OFF-01 — storage minimization is enforced on every write', ()
   it('refuses a device secret anywhere in the document', async () => {
     const counter = await readyCounter(createMemoryDriver());
     await expect(
-      counter.enqueue({ ...cashSale(1), payload: { deviceSecret: 'pcd_x' } }, MATRIX)
+      counter.enqueue({ ...cashSale(1), payload: { deviceSecret: 'pcd_x' } as never }, MATRIX)
     ).rejects.toMatchObject({ reason: 'FORBIDDEN_FIELD' });
   });
 });

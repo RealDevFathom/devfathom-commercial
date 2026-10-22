@@ -40,7 +40,12 @@ const SNAPSHOT_KINDS: PharmacyOfflineSnapshotKind[] = [
 ];
 const verifier: SnapshotVerifier = { verify: () => true };
 const replaySigner = {
-  sign: () => ({ commandSignature: 'command-hmac', receiptSignature: 'receipt-hmac' }),
+  sign: () => ({
+    commandSignature: 'command-hmac',
+    receiptSignature: 'receipt-hmac',
+    authorization: 'Bearer pcd_test',
+    terminalSession: 'session-test',
+  }),
 };
 
 function runtime(driver: TerminalStorageDriver, deviceId = SCOPE.deviceId) {
@@ -109,10 +114,51 @@ async function readyCounter(
 }
 
 function sale(deviceId = SCOPE.deviceId, clientOriginAt = new Date().toISOString()) {
+  const envelope = {
+    organizationId: SCOPE.organizationId,
+    branchId: SCOPE.branchId,
+    deviceId,
+    kind: 'RULES' as const,
+    version: 1,
+    payloadHash: HASH,
+    issuedAt: START.toISOString(),
+    expiresAt: new Date(START.getTime() + FOUR_HOURS_MS + 1).toISOString(),
+    safetyLease: {
+      issuedAt: START.toISOString(),
+      expiresAt: new Date(START.getTime() + FOUR_HOURS_MS + 1).toISOString(),
+      recallVersion: 0,
+      licenceVersion: 1,
+      ruleVersion: 1,
+    },
+    signingKeyId: 'test-key',
+  };
   return {
     deviceId,
     action: 'CASH_OTC_SALE' as const,
-    payload: { lines: [{ inventoryLotId: 'last_lot', units: 1 }] },
+    payload: {
+      leasedReceipt: {
+        leaseId: `lease_${deviceId}`,
+        receiptNumber: 1,
+        originalSaleAt: clientOriginAt,
+        envelope,
+        signature: 'valid',
+      },
+      snapshots: [],
+      lines: [
+        {
+          medicineId: 'medicine_1',
+          presentationId: 'presentation_1',
+          packLevelId: 'pack_1',
+          saleUnit: 'UNIT' as const,
+          quantity: 1,
+          canonicalUnitsPerSaleUnit: 1,
+          inventoryLotId: 'last_lot',
+          stockLocationId: 'dispensary',
+        },
+      ],
+      amountMinor: 100,
+      cashReceivedMinor: 100,
+    },
     clientOriginAt,
     bucket: { inventoryLotId: 'last_lot', stockLocationId: 'dispensary' },
     requestedUnits: 1,
