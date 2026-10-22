@@ -8,6 +8,7 @@
  */
 
 export type CurrencyAmount = { currency: string; amount: number };
+export type CurrencyMinorAmount = { currency: string; amountMinor: number };
 
 // USD first, then PKR, then anything else alphabetically — a stable display order.
 const CURRENCY_ORDER = ['USD', 'PKR'];
@@ -40,6 +41,20 @@ export function moneyListLabel(rows: CurrencyAmount[]): string {
   const nonZero = rows.filter((r) => r.amount !== 0);
   const list = nonZero.length ? sortCurrencies(nonZero) : [{ currency: 'USD', amount: 0 }];
   return list.map((r) => moneyLabel(r.amount, r.currency)).join(' · ');
+}
+
+/** Format integer minor-unit totals without allowing floating-point summation in the UI. */
+export function moneyMinorListLabel(
+  rows: CurrencyMinorAmount[],
+  fallbackCurrency = 'USD'
+): string {
+  const nonZero = rows.filter((row) => row.amountMinor !== 0);
+  const list = nonZero.length ? nonZero : [{ currency: fallbackCurrency, amountMinor: 0 }];
+  return sortCurrencies(
+    list.map(({ currency, amountMinor }) => ({ currency, amount: amountMinor }))
+  )
+    .map(({ currency, amount }) => moneyLabel(amount / 100, currency))
+    .join(' · ');
 }
 
 /**

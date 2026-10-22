@@ -28,7 +28,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
-import { moneyListLabel, baseEquivalentLabel, moneyLabel } from '@/lib/finance/currency';
+import {
+  moneyListLabel,
+  moneyMinorListLabel,
+  baseEquivalentLabel,
+  moneyLabel,
+} from '@/lib/finance/currency';
 import { InvoicesTab } from './invoices-tab';
 import { InvoiceManagePanel } from '@/components/finance/invoice-manage-panel';
 
@@ -92,8 +97,10 @@ export function FinanceContent() {
           <div className="grid grid-cols-1 gap-px overflow-hidden rounded-lg border border-border-subtle bg-border-subtle sm:grid-cols-2 lg:grid-cols-4">
             <FinanceKPI
               title="Monthly Revenue"
-              value={moneyListLabel(summary.data.monthlyIncome)}
-              subtitle={baseEquivalentLabel(summary.data.monthlyIncome) ?? undefined}
+              value={moneyMinorListLabel(
+                summary.data.monthlyRevenue,
+                summary.data.tenantCurrency
+              )}
               icon={TrendingUp}
             />
             <FinanceKPI

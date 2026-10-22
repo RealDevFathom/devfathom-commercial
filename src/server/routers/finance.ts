@@ -15,6 +15,7 @@ import {
   type CurrencyAmount,
 } from '@/lib/finance/currency';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
+import { tenantMonthRange } from '@/lib/finance/month-range';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -804,6 +805,9 @@ export const financeRouter = router({
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfYear = new Date(now.getFullYear(), 0, 1);
+    const organizationId = workspaceId(ctx);
+    const tenantCurrency = ctx.organization?.currency ?? 'USD';
+    const tenantMonth = tenantMonthRange(now, ctx.organization?.timezone);
 
     // FIN-02: group every aggregate BY currency. Summing USD + PKR into one
     // scalar misstates totals (a hardcoded "$" on Rs hundreds of thousands), so
@@ -816,6 +820,7 @@ export const financeRouter = router({
       monthlyExpenseG,
       yearlyIncomeG,
       yearlyExpenseG,
+      monthlyPaymentsG,
       paidInvoicesG,
       outstandingInvoicesG,
       recurring,
@@ -826,6 +831,16 @@ export const financeRouter = router({
       txGroup({ type: 'EXPENSE', date: { gte: startOfMonth, lte: now } }),
       txGroup({ type: 'INCOME', date: { gte: startOfYear, lte: now } }),
       txGroup({ type: 'EXPENSE', date: { gte: startOfYear, lte: now } }),
+      // Cash revenue follows payments, not the invoice status/issue date. Use the
+      // tenant's local calendar month and a half-open UTC range at its boundary.
+      ctx.db.payment.groupBy({
+        by: ['currency'],
+        _sum: { amount: true },
+        where: {
+          organizationId,
+          paidAt: { gte: tenantMonth.start, lt: tenantMonth.end, lte: now },
+        },
+      }),
       ctx.db.invoice.groupBy({
         by: ['currency'],
         _sum: { total: true },
@@ -845,6 +860,10 @@ export const financeRouter = router({
     ]);
 
     const monthlyIncome = fromCurrencyGroups(monthlyIncomeG, 'amount');
+    const monthlyRevenue = monthlyPaymentsG.map((group) => ({
+      currency: group.currency,
+      amountMinor: Math.round(Number(group._sum.amount ?? 0) * 100),
+    }));
     const yearlyIncome = fromCurrencyGroups(yearlyIncomeG, 'amount');
 
     // FIN-05: recurring expenses are never posted as transactions, so burn and
@@ -880,6 +899,8 @@ export const financeRouter = router({
     );
 
     return {
+      monthlyRevenue,
+      tenantCurrency,
       monthlyIncome,
       monthlyExpense,
       monthlyProfit: diffByCurrency(monthlyIncome, monthlyExpense),
