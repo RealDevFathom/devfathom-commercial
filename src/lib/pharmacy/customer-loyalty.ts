@@ -109,8 +109,13 @@ export async function accrueSalePoints(db: ScopedDb, scope: LedgerScope, saleId:
   const yearAgo = new Date();
   yearAgo.setUTCFullYear(yearAgo.getUTCFullYear() - 1);
   const spend = policy.goldTierEnabled ? await db.pharmacyLoyaltyPointsEntry.aggregate({
-    where: { organizationId: scope.organizationId, customerId: sale.customerId, kind: 'EARN',
-      occurredAt: { gte: yearAgo } }, _sum: { netPaidMinor: true },
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      customerId: sale.customerId,
+      kind: 'EARN',
+      occurredAt: { gte: yearAgo },
+    }, _sum: { netPaidMinor: true },
   }) : null;
   const goldTierMultiplier = policy.goldTierEnabled &&
     (spend?._sum.netPaidMinor ?? 0) >= policy.goldTierThresholdMinor ? policy.goldTierMultiplier : 1;

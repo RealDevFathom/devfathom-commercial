@@ -65,6 +65,60 @@ describe('CRM-L01 pharmacy loyalty', () => {
     });
   });
 
+  it('qualifies Gold spend within the current tenant branch only', async () => {
+    const aggregate = vi.fn().mockResolvedValue({ _sum: { netPaidMinor: 5_000_000 } });
+    const create = vi.fn().mockImplementation(async ({ data }) => ({ id: 'earn-a', ...data }));
+    const db = {
+      $queryRaw: vi.fn().mockResolvedValue([
+        {
+          medicineEarnPoints: 1,
+          nonDrugEarnPoints: 3,
+          earnBlockMinor: 10_000,
+          pointValueMinor: 100,
+          minimumRedemptionPoints: 200,
+          pointsExpiryMonths: 6,
+          goldTierEnabled: true,
+          goldTierThresholdMinor: 5_000_000,
+          goldTierMultiplier: 2,
+        },
+      ]),
+      pharmacyLoyaltyPointsEntry: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        aggregate,
+        create,
+      },
+      pharmacySale: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'sale-a',
+          customerId: 'customer-a',
+          tenders: [{ type: 'CASH', amountMinor: 10_000 }],
+          lines: [{
+            quantity: 1,
+            unitPriceMinor: 10_000,
+            discountMinor: 0,
+            medicine: { productFamily: 'PHARMACEUTICAL' },
+          }],
+        }),
+      },
+    };
+
+    await accrueSalePoints(db as never, scope, 'sale-a');
+
+    expect(aggregate).toHaveBeenCalledWith({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        customerId: 'customer-a',
+        kind: 'EARN',
+        occurredAt: { gte: expect.any(Date) },
+      },
+      _sum: { netPaidMinor: true },
+    });
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ points: 2, branchId: scope.branchId }),
+    });
+  });
+
   it('replays an existing earn without appending another ledger row', async () => {
     const prior = { id: 'earn-a', points: 12, idempotencyKey: 'loyalty:earn:sale-a' };
     const create = vi.fn();
