@@ -129,20 +129,13 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const organizationId = workspaceId(ctx);
       const email = input.email;
       const department = await ctx.db.organizationDepartment.findFirst({
-        where: { key: input.department, active: true },
+        where: { organizationId, key: input.department, active: true },
         select: { id: true },
       });
       if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
-      const existing = await ctx.db.user.findFirst({
-        where: { email },
-        select: { id: true, status: true },
-      });
-      // Only a still-pending invite may be re-sent; an active/real account blocks.
-      if (existing && existing.status !== 'INVITED') {
-        throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists' });
-      }
       const { token, tokenHash } = generateInviteToken();
       const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
       const profile = {
@@ -156,11 +149,23 @@ export const teamRouter = router({
       };
 
       const user = await ctx.db.$transaction(async (tx) => {
+        // The organization row is the per-tenant mutex for seat-consuming writes.
+        // Find the member only after taking it so a concurrent invite cannot turn
+        // this request's earlier "not found" result into a stale decision.
+        await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
+        const existing = await tx.user.findFirst({
+          where: { organizationId, email },
+          select: { id: true, status: true },
+        });
+
+        // Only a still-pending invite may be re-sent; an active/real account blocks.
+        if (existing && existing.status !== 'INVITED') {
+          throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists' });
+        }
+
         if (!existing) {
-          const organizationId = workspaceId(ctx);
-          await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
           const activeSeats = await tx.user.count({
-            where: { status: { in: [...OCCUPIED_SEAT_STATUSES] } },
+            where: { organizationId, status: { in: [...OCCUPIED_SEAT_STATUSES] } },
           });
           if (activeSeats >= ctx.entitlements.seatLimit) {
             throw new TRPCError({
@@ -174,11 +179,11 @@ export const teamRouter = router({
         // any prior invitation with a fresh single-use token.
         const u = existing
           ? await tx.user.update({
-              where: { id: existing.id },
+              where: { organizationId_id: { organizationId, id: existing.id } },
               data: { ...profile, password: null, status: 'INVITED' },
             })
           : await tx.user.create({
-              data: { ...profile, email, password: null, status: 'INVITED' },
+              data: { organizationId, ...profile, email, password: null, status: 'INVITED' },
             });
 
         await tx.invitation.upsert({
