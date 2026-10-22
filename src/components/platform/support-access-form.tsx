@@ -76,7 +76,7 @@ export function SupportAccessForm({ organizationId }: { organizationId: string }
           type="button"
           onClick={start}
           disabled={pending || reason.trim().length < 10}
-          className="inline-flex h-11 items-center gap-2 rounded-[3px] bg-primary px-3 text-xs font-semibold text-primary-foreground disabled:opacity-50"
+          className="inline-flex h-11 items-center gap-2 rounded-sm bg-primary px-3 text-xs font-semibold text-primary-foreground disabled:opacity-50"
         >
           {pending ? (
             <LoaderCircle className="h-3.5 w-3.5 animate-spin" />

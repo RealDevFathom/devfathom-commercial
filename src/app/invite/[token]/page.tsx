@@ -25,7 +25,7 @@ export default async function InvitePage(props: { params: Promise<{ token: strin
           Already activated your account?{' '}
           <a
             href="/login"
-            className="font-medium text-foreground underline-offset-4 hover:text-brass hover:underline"
+            className="font-medium text-foreground underline-offset-4 hover:text-accent-brand hover:underline"
           >
             Sign in
           </a>

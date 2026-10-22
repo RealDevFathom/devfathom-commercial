@@ -333,7 +333,7 @@ export function SopAdminView({
           <span
             ref={headingRef}
             tabIndex={-1}
-            className="rounded-[3px] outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            className="rounded-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
           >
             SOP administration
           </span>

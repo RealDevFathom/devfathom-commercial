@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 import { Eyebrow } from '@/components/ui/eyebrow';
 
 interface SectionCardProps extends Omit<React.ComponentProps<'div'>, 'title'> {
-  /** Optional mono uppercase eyebrow above the title. Brass when `eyebrowAccent`. */
+  /** Optional mono uppercase eyebrow above the title. Accent when `eyebrowAccent`. */
   eyebrow?: React.ReactNode;
   eyebrowAccent?: boolean;
   /** Optional Oxanium section title. */

@@ -4,9 +4,9 @@ import { cn } from '@/lib/utils';
 import { Eyebrow } from '@/components/ui/eyebrow';
 
 interface PageHeaderProps extends Omit<React.ComponentProps<'div'>, 'title'> {
-  /** Mono uppercase eyebrow (e.g. "WORKSPACE" / "FIRM"). Brass by default. */
+  /** Mono uppercase eyebrow (e.g. "WORKSPACE" / "FIRM"). Accent by default. */
   eyebrow?: React.ReactNode;
-  /** Render the eyebrow in muted slate instead of brass. */
+  /** Render the eyebrow in muted slate instead of accent. */
   eyebrowMuted?: boolean;
   /** Oxanium display heading — the page title. */
   heading: React.ReactNode;

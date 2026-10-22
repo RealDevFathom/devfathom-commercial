@@ -18,7 +18,7 @@ interface FilterChipsProps extends Omit<React.ComponentProps<'div'>, 'onChange'>
 
 /**
  * FilterChips — segmented filter row (proto-02 / proto-08).
- * Active chip = abyss fill + paper text; inactive = hairline-bordered with a
+ * Active chip = primary fill + paper text; inactive = hairline-bordered with a
  * muted mono count.
  */
 function FilterChips({ items, value, onChange, className, ...props }: FilterChipsProps) {

@@ -12,7 +12,7 @@ interface UtilizationBarProps extends Omit<React.ComponentProps<'div'>, 'childre
 }
 
 /**
- * UtilizationBar — label + right-aligned mono %, with an abyss fill on a sunken
+ * UtilizationBar — label + right-aligned mono %, with an primary fill on a sunken
  * track. See proto-08 (People).
  */
 function UtilizationBar({

@@ -9,7 +9,7 @@ import { passwordRules, passwordMeetsPolicy } from '@/lib/password-policy';
 import { cn } from '@/lib/utils';
 
 const inputClass =
-  'flex h-11 w-full rounded-lg border border-input bg-background px-4 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-brass focus:outline-none focus:ring-2 focus:ring-brass/30';
+  'flex h-11 w-full rounded-lg border border-input bg-background px-4 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-accent-brand focus:outline-none focus:ring-2 focus:ring-accent-brand/30';
 
 function titleCase(value: string): string {
   return value.charAt(0) + value.slice(1).toLowerCase();
@@ -33,7 +33,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
-        <Loader2 className="h-6 w-6 animate-spin text-brass" />
+        <Loader2 className="h-6 w-6 animate-spin text-accent-brand" />
         <p className="text-sm text-muted-foreground">Verifying your invitation...</p>
       </div>
     );
@@ -175,7 +175,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
         {/* Password */}
         <div className="space-y-2">
           <label htmlFor="password" className="block text-sm font-medium text-foreground">
-            New Password <span className="text-brass">*</span>
+            New Password <span className="text-accent-brand">*</span>
           </label>
           <div className="relative">
             <input
@@ -227,7 +227,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
         {/* Confirm Password */}
         <div className="space-y-2">
           <label htmlFor="confirm" className="block text-sm font-medium text-foreground">
-            Confirm Password <span className="text-brass">*</span>
+            Confirm Password <span className="text-accent-brand">*</span>
           </label>
           <input
             id="confirm"
@@ -246,7 +246,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
         {/* Phone */}
         <div className="space-y-2">
           <label htmlFor="phone" className="block text-sm font-medium text-foreground">
-            Phone <span className="text-brass">*</span>
+            Phone <span className="text-accent-brand">*</span>
           </label>
           <input
             id="phone"

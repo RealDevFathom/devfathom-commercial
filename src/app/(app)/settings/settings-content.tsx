@@ -324,7 +324,7 @@ function AppearanceSection() {
           />
         </PreferenceRow>
 
-        <PreferenceRow label="Accent" description="How much brass the interface uses.">
+        <PreferenceRow label="Accent" description="How much accent the interface uses.">
           <SegmentedControl<Accent>
             aria-label="Accent"
             value={accent}
