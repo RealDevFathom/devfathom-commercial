@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-66-m6-inventory-purchasing-restaurant-vertical-restaurant-v1
+Branch: restaurant/m6-inventory-purchasing
+HEAD: 15311a8fe9a514d0eec44bb22fa016f0e0056a95
+Mode: applied
+Excluded (secrets): 0

@@ -6,7 +6,6 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { evaluateOrderSettlement } from './bills';
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { buildCoAuthorizationRecord } from './co-authorization';
-import { postOrderRecipeConsumption } from './inventory';
 import { generateKitchenTickets, type FiredItem, type GeneratedTicket } from './kitchen-tickets';
 import type { OrderChannel } from './menu-availability';
 import { allocateOrderNumber } from './order-numbers';
@@ -191,7 +190,6 @@ type LoadedItem = {
   taxAmount: Prisma.Decimal;
   serviceChargeAmount: Prisma.Decimal;
   seatNumber: number | null;
-  wastageDisposition: string | null;
   product: { categoryId: string | null };
 };
 
@@ -228,7 +226,6 @@ async function loadOrder(tx: ScopedDb, orderId: string): Promise<LoadedOrder> {
           taxAmount: true,
           serviceChargeAmount: true,
           seatNumber: true,
-          wastageDisposition: true,
           product: { select: { categoryId: true } },
         },
       },
@@ -1113,21 +1110,11 @@ export async function closeOrder(
       );
     }
     assertOrderStatusChange(status, 'CLOSED', itemStatuses);
-    const closedAt = new Date();
     await tx.restaurantOrder.update({
       where: { id: order.id },
-      data: { status: 'CLOSED', closedAt },
+      data: { status: 'CLOSED', closedAt: new Date() },
     });
     await record(tx, order, input.actor, 'order.closed', {});
-    // M6-L2: recipe consumption at order close (C6 disposition applied per item).
-    await postOrderRecipeConsumption(
-      tx,
-      order.id,
-      order.branchId,
-      order.items,
-      { staffProfileId: input.actor.staffProfileId, deviceId: input.actor.deviceId },
-      closedAt
-    );
     await recordIdempotentResult(tx, input.actor, order.id);
     return { orderId: order.id, replayed: false };
   });
