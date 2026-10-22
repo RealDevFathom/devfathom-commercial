@@ -5,6 +5,7 @@ import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
 import { assertInOrganization } from '@/server/org-refs';
+import { can, subjectFromSession } from '@/lib/abac';
 
 export const GET = withApiAuth('projects:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -38,6 +39,14 @@ const createProjectSchema = z.object({
 });
 
 export const POST = withApiAuth('projects:write', async (ctx, request) => {
+  const allowed = await can(
+    subjectFromSession({ id: ctx.userId, role: ctx.userRole, status: ctx.userStatus }),
+    'projects:write',
+    undefined,
+    { source: 'REST', db: ctx.db }
+  );
+  if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
   const __j = await readJson(request); // REST-05
   if (!__j.ok) return __j.response;
   const body = __j.data;

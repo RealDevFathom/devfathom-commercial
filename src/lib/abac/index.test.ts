@@ -35,6 +35,19 @@ const employee = {
   status: 'ACTIVE',
 };
 
+describe('global deny precedence', () => {
+  it('lets a role DENY override a user ALLOW', async () => {
+    await expect(
+      can(employee, 'projects:write', undefined, {
+        db: authorizationDb({
+          overrides: [{ capability: 'projects:write', effect: 'ALLOW' }],
+          rolePermissions: [{ capability: 'projects:write', effect: 'DENY' }],
+        }),
+      })
+    ).resolves.toBe(false);
+  });
+});
+
 describe('opt-in pharmacy Owner / Operator access', () => {
   const grantedActions = [
     'reports:operational',
@@ -206,7 +219,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toEqual([]);

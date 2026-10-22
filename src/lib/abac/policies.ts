@@ -21,6 +21,7 @@ export const ALL_ACTIONS = [
   'admin:access', // the legacy "is this person an admin" gate
   'hr:access', // HR console: people-ops surfaces
   'team:view', // read the team directory
+  'projects:write', // create and mutate Agency projects
   'team:layoff', // terminate / deactivate a member (resource: { targetRole })
   'team:setRole', // change a member's role (privilege escalation — admin only)
   'leave:approve', // approve/decline leave requests
@@ -117,6 +118,7 @@ export const POLICIES: Record<Action, Policy[]> = {
   'hr:access': [isHrOrAdmin],
   'finance:read': [isAdmin], // HR does NOT get finance
   'team:view': [isActiveMember],
+  'projects:write': [isActiveMember],
   'team:setRole': [isAdmin], // only admins may grant/revoke roles
   'leave:approve': [isHrOrAdmin],
   'resignation:readAll': [isHrOrAdmin],

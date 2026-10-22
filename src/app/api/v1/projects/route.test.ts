@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 const mocks = vi.hoisted(() => ({
   assertInOrganization: vi.fn(),
   create: vi.fn(),
+  can: vi.fn(),
 }));
 
 vi.mock('@/lib/api-auth', () => ({
@@ -13,6 +14,10 @@ vi.mock('@/lib/api-auth', () => ({
       handler(ctx, request),
 }));
 vi.mock('@/server/activity', () => ({ logActivity: vi.fn() }));
+vi.mock('@/lib/abac', () => ({
+  can: mocks.can,
+  subjectFromSession: (user: unknown) => user,
+}));
 vi.mock('@/server/org-refs', () => ({
   assertInOrganization: mocks.assertInOrganization,
 }));
@@ -22,6 +27,8 @@ import { POST } from './route';
 const ctx = {
   organizationId: 'org_1',
   userId: 'user_creator',
+  userRole: 'EMPLOYEE',
+  userStatus: 'ACTIVE',
   db: {
     user: { findMany: vi.fn() },
     client: { findMany: vi.fn() },
@@ -38,8 +45,25 @@ const request = (body: Record<string, unknown>) =>
 describe('POST /api/v1/projects organization references', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
     mocks.assertInOrganization.mockResolvedValue(undefined);
     mocks.create.mockResolvedValue({ id: 'project_1', name: 'Tenant-safe project' });
+  });
+
+  it('requires the central projects:write decision before parsing or writing', async () => {
+    mocks.can.mockResolvedValue(false);
+
+    const response = await POST(request({ clientId: 'client_1' }), ctx as never);
+
+    expect(mocks.can).toHaveBeenCalledWith(
+      { id: 'user_creator', role: 'EMPLOYEE', status: 'ACTIVE' },
+      'projects:write',
+      undefined,
+      { source: 'REST', db: ctx.db }
+    );
+    expect(response.status).toBe(403);
+    expect(mocks.assertInOrganization).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 
   it('validates every member and the client in the token organization before creating', async () => {

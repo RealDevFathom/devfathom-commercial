@@ -285,6 +285,10 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       budget,
       createDefaultBoard,
     }) => {
+      if (!(await h.can('projects:write'))) {
+        return { error: 'You do not have permission to create projects.' };
+      }
+
       // Resolve an optional client by name.
       let clientId: string | null = null;
       let resolvedClient: string | undefined;

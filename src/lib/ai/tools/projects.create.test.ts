@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   assertInOrganization: vi.fn(),
   create: vi.fn(),
+  can: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -31,6 +32,7 @@ const helpers = {
   }),
   activity: vi.fn(),
   audit: vi.fn(),
+  can: mocks.can,
 } as unknown as AssistantHelpers;
 
 const input = {
@@ -43,6 +45,7 @@ const input = {
 describe('assistant createProject organization references', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
     db.client.findMany.mockResolvedValue([{ id: 'client_1', name: 'Acme' }]);
     mocks.assertInOrganization.mockResolvedValue(undefined);
     mocks.create.mockResolvedValue({
@@ -51,6 +54,21 @@ describe('assistant createProject organization references', () => {
       type: 'CLIENT',
       status: 'ACTIVE',
     });
+  });
+
+  it('requires the central projects:write decision before resolving references or writing', async () => {
+    mocks.can.mockResolvedValue(false);
+    const execute = buildProjectsTools(helpers).createProject.execute as (
+      value: typeof input
+    ) => Promise<unknown>;
+
+    await expect(execute(input)).resolves.toEqual({
+      error: 'You do not have permission to create projects.',
+    });
+    expect(mocks.can).toHaveBeenCalledWith('projects:write');
+    expect(db.client.findMany).not.toHaveBeenCalled();
+    expect(mocks.assertInOrganization).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 
   it('validates the creator and resolved client before creating', async () => {

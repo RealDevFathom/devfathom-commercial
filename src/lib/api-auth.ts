@@ -18,6 +18,7 @@ export type ApiContext = {
   organizationId: string;
   userId: string;
   userRole: 'ADMIN' | 'EMPLOYEE' | 'HR';
+  userStatus: string;
   scopes: string[];
   tokenId: string;
   db: ScopedDb;
@@ -115,6 +116,7 @@ export async function authenticateApiRequest(request: Request): Promise<ApiConte
       organizationId: candidate.organizationId,
       userId: candidate.userId,
       userRole: candidate.user.role,
+      userStatus: candidate.user.status,
       scopes: candidate.scopes,
       tokenId: candidate.id,
       db: createTenantDb(candidate.organizationId),
