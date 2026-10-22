@@ -232,7 +232,10 @@ export const POLICIES: Record<Action, Policy[]> = {
   'menu:import': [],
   'pharmacy:counter': [],
   'pharmacy:manage': [],
-  'pharmacy:procurement': [],
+  // Tenant administrators retain the operational purchasing access they had
+  // before pharmacy capabilities became explicit. A matching custom DENY is
+  // still resolved first by `can()` and therefore takes precedence.
+  'pharmacy:procurement': [isAdmin],
   'pharmacy:inventory': [],
   // Tenant administrators retain the default dispensing access expected by
   // legacy role gates, but the grant lives here so custom DENY rules evaluated

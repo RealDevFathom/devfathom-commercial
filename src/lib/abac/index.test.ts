@@ -133,6 +133,33 @@ describe('opt-in pharmacy Owner / Operator access', () => {
 });
 
 describe('custom ABAC decisions', () => {
+  it('preserves procurement access for managers and tenant admins without a role', async () => {
+    const managerPermissions = roleTemplatesForVertical('PHARMACY')
+      .find((role) => role.key === 'manager')!
+      .capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }));
+
+    await expect(
+      can(employee, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: managerPermissions }),
+      })
+    ).resolves.toBe(true);
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({}),
+      })
+    ).resolves.toBe(true);
+  });
+
+  it('lets an explicit deny revoke tenant admin procurement access', async () => {
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({
+          overrides: [{ capability: 'pharmacy:procurement', effect: 'DENY' }],
+        }),
+      })
+    ).resolves.toBe(false);
+  });
+
   it('allows exact and namespace wildcard capabilities from a custom role', async () => {
     const db = authorizationDb({
       rolePermissions: [
