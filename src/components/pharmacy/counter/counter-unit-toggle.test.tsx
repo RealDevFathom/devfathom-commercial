@@ -34,6 +34,7 @@ function previewFor(kind: SaleUnitKind, quantity: number, availableUnits = 500) 
 function renderToggle(overrides: Partial<React.ComponentProps<typeof CounterUnitToggle>> = {}) {
   const props = {
     options: OPTIONS,
+    onHandUnits: 500,
     selected: 'STRIP' as SaleUnitKind | null,
     quantity: 2,
     preview: previewFor('STRIP', 2),
@@ -152,8 +153,15 @@ describe('CounterUnitToggle (POS-03)', () => {
   });
 
   it('explains itself when the lot has no priceable sale unit', () => {
-    renderToggle({ options: [], selected: null, preview: null });
+    renderToggle({ options: [], onHandUnits: 10, selected: null, preview: null });
     expect(screen.queryAllByRole('radio')).toHaveLength(0);
     expect(screen.getByRole('status').textContent).toContain('No sale unit is available');
+  });
+
+  it('reports an exhausted medicine as out of stock instead of a pack hierarchy problem', () => {
+    renderToggle({ options: [], onHandUnits: 0, selected: null, preview: null });
+    const status = screen.getByRole('status');
+    expect(status.textContent).toBe('This medicine is out of stock at this branch.');
+    expect(status.textContent).not.toContain('pack hierarchy');
   });
 });

@@ -1972,6 +1972,7 @@ function ScopedPharmacyCounterConsole({
               <div className="space-y-2">
                 <CounterUnitToggle
                   options={activeRow.saleUnits}
+                  onHandUnits={activeRow.onHandUnits}
                   selected={saleUnit}
                   quantity={quantity}
                   preview={preview}

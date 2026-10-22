@@ -10,6 +10,7 @@ import type { SaleLinePreview, SaleUnitKind, SaleUnitOption } from '@/lib/pharma
 
 export type CounterUnitToggleProps = {
   options: readonly SaleUnitOption[];
+  onHandUnits: number;
   selected: SaleUnitKind | null;
   quantity: number;
   preview: SaleLinePreview | null;
@@ -26,6 +27,10 @@ const KIND_LABEL: Record<SaleUnitKind, string> = {
   UNIT: 'Unit',
 };
 
+const OUT_OF_STOCK_MESSAGE = 'This medicine is out of stock at this branch.';
+const UNPRICEABLE_MESSAGE =
+  'No sale unit is available for this medicine. Its pack hierarchy does not match the received lot, so no price can be derived.';
+
 /**
  * POS-03 — the pack/strip/unit toggle with an exact quantity and price preview.
  *
@@ -40,6 +45,7 @@ const KIND_LABEL: Record<SaleUnitKind, string> = {
  */
 export function CounterUnitToggle({
   options,
+  onHandUnits,
   selected,
   quantity,
   preview,
@@ -53,8 +59,7 @@ export function CounterUnitToggle({
   if (options.length === 0) {
     return (
       <p className="text-sm text-text-muted" role="status">
-        No sale unit is available for this medicine. Its pack hierarchy does not match the received
-        lot, so no price can be derived.
+        {onHandUnits === 0 ? OUT_OF_STOCK_MESSAGE : UNPRICEABLE_MESSAGE}
       </p>
     );
   }
