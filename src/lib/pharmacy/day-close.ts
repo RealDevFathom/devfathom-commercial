@@ -2,6 +2,7 @@ import { TRPCError } from '@trpc/server';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 import type { LedgerScope } from './stock-ledger';
+import { readWalletLiability } from './wallet-reporting';
 import {
   closePharmacyDrawer,
   computePharmacyClose,
@@ -20,7 +21,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     select: { name: true },
   });
   if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
-  const [close, drawers, sales, refunds, organization] = await Promise.all([
+  const [close, drawers, sales, refunds, organization, wallet] = await Promise.all([
     db.pharmacyDailyClose.findFirst({ where, orderBy: { sequence: 'desc' } }),
     db.pharmacyDrawerSession.findMany({
       where,
@@ -39,6 +40,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
       where: { id: scope.organizationId },
       select: { timezone: true },
     }),
+    readWalletLiability(db, scope.organizationId, scope.branchId, businessDate),
   ]);
   // Who opened each drawer, so the close screen can name the drawer by its
   // opener and time rather than by the counter's device identifier.
@@ -75,6 +77,9 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     businessDate,
     drawers: rows,
     totals,
+    // Separate cash-in/liability disclosure. Neither value is fed to computePharmacyClose,
+    // so top-ups cannot inflate sale, revenue, refund, or tax totals.
+    wallet,
     close,
     timezone: workspaceTimezone(organization?.timezone),
   };

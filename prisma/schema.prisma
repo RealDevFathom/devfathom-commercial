@@ -999,6 +999,136 @@ enum PharmacyLoyaltyEntryKind {
   REFUND
 }
 
+enum StoredValueAccountKind {
+  CUSTOMER_LIABILITY
+  CASH_CLEARING
+  SALES_CLEARING
+}
+
+enum StoredValueEntryKind {
+  TOP_UP
+  SPEND
+  REFUND
+  EXPIRY
+  ADJUSTMENT
+}
+
+/// Vertical-neutral stored value. This is intentionally separate from restaurant
+/// Wallet passes (presentation) and pharmacy khata (a customer receivable).
+model StoredValueAccount {
+  id               String                 @id @default(cuid())
+  organizationId   String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId       String?
+  kind             StoredValueAccountKind
+  currency         String                 @default("PKR")
+  balanceMinor     Int                    @default(0)
+  cnicLast4        String?
+  cnicHmac         String?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, customerId, kind])
+  @@index([organizationId, kind])
+  @@map("stored_value_accounts")
+}
+
+/// Journal header. Every mutation has one tenant-scoped idempotency key.
+model StoredValueJournal {
+  id               String               @id @default(cuid())
+  organizationId   String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String?
+  kind             StoredValueEntryKind
+  idempotencyKey   String
+  saleId           String?
+  actorId          String
+  tender           PharmacyTenderType?
+  reason           String?
+  occurredAt       DateTime             @default(now())
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, branchId, occurredAt])
+  @@map("stored_value_journals")
+}
+
+/// Signed postings in integer paisa. Each journal is constrained by PostgreSQL
+/// to sum to zero before commit, making this an append-only double-entry ledger.
+model StoredValueEntry {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  journalId        String
+  accountId        String
+  amountMinor      Int
+  occurredAt       DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, journalId, accountId])
+  @@index([organizationId, accountId, occurredAt, id])
+  @@map("stored_value_entries")
+}
+
+model PharmacyWalletTier {
+  id                  String   @id @default(cuid())
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name                String
+  qualifyingTopUpMinor Int
+  discountBps         Int
+  sortOrder           Int
+  active              Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, name])
+  @@index([organizationId, qualifyingTopUpMinor])
+  @@map("pharmacy_wallet_tiers")
+}
+
+model PharmacyWalletSettings {
+  id                    String   @id @default(cuid())
+  organizationId        String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  expiryDays            Int?
+  allowUnusedRefund     Boolean  @default(false)
+  allowBenefitStacking  Boolean  @default(false)
+  requireOtp            Boolean  @default(false)
+  cnicFailureLimit      Int      @default(5)
+  cnicLockoutMinutes    Int      @default(15)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([organizationId])
+  @@unique([organizationId, id])
+  @@map("pharmacy_wallet_settings")
+}
+
+model PharmacyWalletAudit {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  actorId        String
+  action         String
+  oldValue       Json?
+  newValue       Json?
+  occurredAt     DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@index([organizationId, occurredAt])
+  @@map("pharmacy_wallet_audits")
+}
+
+model PharmacyWalletCnicFailure {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId     String
+  cashierId      String
+  occurredAt     DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@index([organizationId, customerId, occurredAt])
+  @@index([organizationId, cashierId, occurredAt])
+  @@map("pharmacy_wallet_cnic_failures")
+}
+
 enum PharmacyVoucherStatus {
   ISSUED
   REDEEMED

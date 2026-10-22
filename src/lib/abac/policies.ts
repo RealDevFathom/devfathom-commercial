@@ -78,6 +78,8 @@ export const ALL_ACTIONS = [
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
   'pharmacy:orders', // MKT-03/05: staff acceptance and fulfilment of customer proposals
   'pharmacy:loyalty-manage', // owner-controlled voucher policy and exceptional redemption
+  'pharmacy:wallet-topup', // attributed counter wallet top-ups
+  'pharmacy:wallet-adjust', // manager-only stored-value corrections with a reason
   // H1-01: hospitality capabilities use explicit organization-role grants.
   // Property scope is enforced separately by the consuming procedures.
   'hotel:reservations',
@@ -246,6 +248,8 @@ export const POLICIES: Record<Action, Policy[]> = {
   'pharmacy:catalogue-review': [],
   'pharmacy:orders': [],
   'pharmacy:loyalty-manage': [],
+  'pharmacy:wallet-topup': [],
+  'pharmacy:wallet-adjust': [],
 
   // H1-01: no static agency-role policy grants hospitality capabilities.
   // Explicit capabilities and wildcards use the existing customDecision path.

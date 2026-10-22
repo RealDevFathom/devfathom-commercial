@@ -739,6 +739,8 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:inventory',
   'pharmacy:orders',
   'pharmacy:loyalty-manage',
+  'pharmacy:wallet-topup',
+  'pharmacy:wallet-adjust',
   'reports:operational',
   'reports:financial',
   'pharmacy:safety',
@@ -755,6 +757,8 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:catalogue-review',
   'pharmacy:orders',
   'pharmacy:loyalty-manage',
+  'pharmacy:wallet-topup',
+  'pharmacy:wallet-adjust',
   'reports:operational',
   'reports:financial',
 ] as const;
@@ -793,13 +797,13 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'manager',
     name: 'Manager',
     isSystem: true,
-    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement', 'pharmacy:wallet-topup', 'pharmacy:wallet-adjust'],
   },
   {
     key: 'cashier',
     name: 'Cashier',
     isSystem: true,
-    capabilities: ['pharmacy:counter', 'pharmacy:orders'],
+    capabilities: ['pharmacy:counter', 'pharmacy:orders', 'pharmacy:wallet-topup'],
   },
   {
     key: 'procurement',
