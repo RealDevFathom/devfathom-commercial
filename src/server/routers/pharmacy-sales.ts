@@ -51,6 +51,7 @@ import {
   PharmacyLoyaltyError,
   readCustomerSnapshot,
   redeemSalePoints,
+  setCustomerWhatsAppOptIn,
 } from '@/lib/pharmacy/customer-loyalty';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
@@ -556,6 +557,28 @@ export const pharmacySalesRouter = router({
           await scopeFor(ctx, input.branchId),
           input.customerId,
           input.page
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  setCustomerWhatsAppOptIn: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          customerId: z.string().min(1),
+          optedIn: z.boolean(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await setCustomerWhatsAppOptIn(
+          ctx.db,
+          await scopeFor(ctx, input.branchId),
+          input.customerId,
+          input.optedIn
         );
       } catch (error) {
         fail(error);

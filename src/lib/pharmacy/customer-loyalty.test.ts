@@ -10,6 +10,7 @@ import {
   PharmacyLoyaltyError,
   readCustomerSnapshot,
   restoreRefundedLoyaltyPoints,
+  setCustomerWhatsAppOptIn,
 } from './customer-loyalty';
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'cashier-a' };
@@ -60,6 +61,40 @@ describe('CRM-L01 pharmacy loyalty', () => {
     expect(create).toHaveBeenCalledWith({
       data: expect.objectContaining({ points: 100, netPaidMinor: 10_099, kind: 'EARN' }),
     });
+  });
+
+  it('updates WhatsApp consent on the matching tenant pharmacy customer', async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const result = await setCustomerWhatsAppOptIn(
+      { pharmacyCustomer: { updateMany } } as never,
+      scope,
+      'customer-a',
+      true
+    );
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: 'customer-a', organizationId: 'org-a', active: true },
+      data: { whatsappOptIn: true, whatsappOptInChangedAt: expect.any(Date) },
+    });
+    expect(result).toMatchObject({ whatsappOptIn: true });
+  });
+
+  it('fails closed when no tenant pharmacy customer matches WhatsApp consent', async () => {
+    const updateMany = vi.fn().mockResolvedValue({ count: 0 });
+
+    await expect(
+      setCustomerWhatsAppOptIn(
+        { pharmacyCustomer: { updateMany } } as never,
+        scope,
+        'customer-from-another-tenant',
+        false
+      )
+    ).rejects.toEqual(new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND'));
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'customer-from-another-tenant', organizationId: 'org-a', active: true },
+      })
+    );
   });
 
   it('replays an existing earn without appending another ledger row', async () => {
@@ -128,6 +163,7 @@ describe('CRM-L01 pharmacy loyalty', () => {
           displayName: 'Retail name',
           phoneLast4: '1234',
           creditLimitMinor: 20_000,
+          whatsappOptIn: false,
         }),
       },
       pharmacyLoyaltyPointsEntry: {
@@ -152,6 +188,7 @@ describe('CRM-L01 pharmacy loyalty', () => {
       pointsBalance: 35,
       creditBalanceMinor: 800,
       availableCreditMinor: 19_200,
+      customer: { whatsappOptIn: false },
       history: [{ receiptNumber: 7, totalMinor: 900 }],
     });
     expect(JSON.stringify(snapshot)).not.toMatch(/patient|cnic|prescription/i);

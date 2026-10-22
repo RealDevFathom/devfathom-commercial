@@ -302,6 +302,7 @@ function ScopedPharmacyCounterConsole({
   const [patientId, setPatientId] = useState<string | null>(null);
   const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
+  const [whatsappOptInDraft, setWhatsAppOptInDraft] = useState<boolean | null>(null);
   const [redeemPoints, setRedeemPoints] = useState(0);
   const [receiptLocale, setReceiptLocale] = useState<CounterReceiptLocale>('en');
   const [receiptFormat, setReceiptFormat] = useState<CounterReceiptFormat>('THERMAL');
@@ -513,6 +514,7 @@ function ScopedPharmacyCounterConsole({
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
   const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
   const redeemLoyalty = trpc.pharmacySales.redeemPoints.useMutation();
+  const setCustomerWhatsAppOptIn = trpc.pharmacySales.setCustomerWhatsAppOptIn.useMutation();
   const authenticatePack = trpc.pharmacySales.authenticatePack.useMutation();
 
   const refreshCart = useCallback(async () => {
@@ -539,6 +541,10 @@ function ScopedPharmacyCounterConsole({
   const cart = cartQuery.data ?? null;
   const patient = patientPanelQuery.data ?? null;
   const patientAddress = patientAddressDraft ?? patient?.address ?? '';
+
+  useEffect(() => {
+    setWhatsAppOptInDraft(customerQuery.data?.customer.whatsappOptIn ?? null);
+  }, [customerQuery.data?.customer.id, customerQuery.data?.customer.whatsappOptIn]);
 
   const selectedOption = useMemo(
     () => activeRow?.saleUnits.find((option) => option.kind === saleUnit) ?? null,
@@ -1348,6 +1354,24 @@ function ScopedPharmacyCounterConsole({
     saleId,
     todayBusinessDate,
   ]);
+
+  const saveWhatsAppConsent = useCallback(async () => {
+    if (!customerId || whatsappOptInDraft === null || busy) return;
+    setPending('whatsapp-consent');
+    try {
+      await setCustomerWhatsAppOptIn.mutateAsync({
+        branchId,
+        customerId,
+        optedIn: whatsappOptInDraft,
+      });
+      await customerQuery.refetch();
+      setNotice({ tone: 'success', message: 'WhatsApp consent updated.' });
+    } catch (error) {
+      setNotice({ tone: 'warning', message: messageFrom(error) });
+    } finally {
+      setPending(null);
+    }
+  }, [branchId, busy, customerId, customerQuery, setCustomerWhatsAppOptIn, whatsappOptInDraft]);
 
   const captureShortfall = useCallback(async () => {
     if (busy || !branchAuthorized) return;
@@ -2235,6 +2259,47 @@ function ScopedPharmacyCounterConsole({
                   <p className="text-text-muted">
                     Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
                   </p>
+                </div>
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="counter-whatsapp-consent">WhatsApp consent</Label>
+                    <select
+                      id="counter-whatsapp-consent"
+                      className="h-8 rounded-[3px] border border-border-subtle bg-surface px-2 text-sm text-text-strong"
+                      value={
+                        whatsappOptInDraft === null
+                          ? 'NOT_RECORDED'
+                          : whatsappOptInDraft
+                            ? 'OPTED_IN'
+                            : 'OPTED_OUT'
+                      }
+                      disabled={busy}
+                      onChange={(event) =>
+                        setWhatsAppOptInDraft(
+                          event.target.value === 'NOT_RECORDED'
+                            ? null
+                            : event.target.value === 'OPTED_IN'
+                        )
+                      }
+                    >
+                      <option value="NOT_RECORDED">Not recorded</option>
+                      <option value="OPTED_IN">Opted in</option>
+                      <option value="OPTED_OUT">Opted out</option>
+                    </select>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                    disabled={
+                      busy ||
+                      whatsappOptInDraft === null ||
+                      whatsappOptInDraft === customerQuery.data.customer.whatsappOptIn
+                    }
+                    onClick={() => void saveWhatsAppConsent()}
+                  >
+                    {pending === 'whatsapp-consent' ? 'Saving…' : 'Save consent'}
+                  </Button>
                 </div>
                 <div className="flex gap-2">
                   <Label htmlFor="counter-redeem-points" className="sr-only">

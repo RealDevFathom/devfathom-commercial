@@ -300,7 +300,13 @@ export async function readCustomerSnapshot(
 ) {
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: customerId, organizationId: scope.organizationId, active: true },
-    select: { id: true, displayName: true, phoneLast4: true, creditLimitMinor: true },
+    select: {
+      id: true,
+      displayName: true,
+      phoneLast4: true,
+      creditLimitMinor: true,
+      whatsappOptIn: true,
+    },
   });
   if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
   const [points, sales, pointsHistory, pointsCount] = await Promise.all([
@@ -374,6 +380,21 @@ export async function readCustomerSnapshot(
       ),
     })),
   };
+}
+
+export async function setCustomerWhatsAppOptIn(
+  db: ScopedDb,
+  scope: LedgerScope,
+  customerId: string,
+  optedIn: boolean
+) {
+  const changedAt = new Date();
+  const result = await db.pharmacyCustomer.updateMany({
+    where: { id: customerId, organizationId: scope.organizationId, active: true },
+    data: { whatsappOptIn: optedIn, whatsappOptInChangedAt: changedAt },
+  });
+  if (result.count !== 1) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
+  return { whatsappOptIn: optedIn, whatsappOptInChangedAt: changedAt };
 }
 
 // Ordinary history consumers only. Accounting and counter snapshot contracts stay separate.
