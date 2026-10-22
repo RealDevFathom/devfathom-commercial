@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1116-compose-the-final-accepted-restaurant-artifacts-into-one-clean-private-candidate
+Branch: WHA-1116-compose-the-final-accepted-restaurant-artifacts-into-one-clean-private-candidate
+HEAD: fe1e3e383c8b966cdb68669ba5366db00fe2320a
+Mode: applied
+Excluded (secrets): 0
