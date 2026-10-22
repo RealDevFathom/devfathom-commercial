@@ -36,6 +36,7 @@ import type { TRPCContext } from '../trpc';
 function model() {
   return {
     findFirst: vi.fn().mockResolvedValue(null),
+    findUnique: vi.fn().mockResolvedValue(null),
     create: vi
       .fn()
       .mockImplementation(async ({ data }: { data: object }) => ({ id: 'new', ...data })),
@@ -46,6 +47,7 @@ function model() {
 
 function makeDb() {
   const db = {
+    user: model(),
     medicine: model(),
     packLevel: model(),
     pharmacyStockLocation: model(),
@@ -82,7 +84,9 @@ function makeDb() {
 }
 
 let db = makeDb();
-function caller(overrides: { enabledModules?: string[]; userId?: string | null } = {}) {
+function caller(
+  overrides: { enabledModules?: string[]; userId?: string | null; role?: string } = {}
+) {
   return pharmacyInventoryRouter.createCaller({
     db,
     entitlements: {
@@ -98,7 +102,11 @@ function caller(overrides: { enabledModules?: string[]; userId?: string | null }
         ? null
         : {
             expires: 'later',
-            user: { id: overrides.userId ?? 'user_a', role: 'ADMIN', status: 'ACTIVE' },
+            user: {
+              id: overrides.userId ?? 'user_a',
+              role: overrides.role ?? 'ADMIN',
+              status: 'ACTIVE',
+            },
           },
     organization: null,
     support: null,
@@ -113,6 +121,25 @@ beforeEach(() => {
 });
 
 describe('pharmacy inventory entitlement and tenant boundaries', () => {
+  it('requires the exact pharmacy safety grant to quarantine stock', async () => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: { permissions: [{ capability: 'pharmacy:*', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    });
+
+    await expect(
+      caller({ role: 'EMPLOYEE' }).quarantinePart({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_a',
+        stockLocationId: 'location_a',
+        units: 1,
+        reason: 'Manual recall',
+        idempotencyKeyPrefix: 'quarantine-1',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+
   it('maps the public router prefix to the pharmacy-inventory entitlement', () => {
     expect(moduleForProcedure('pharmacyInventory.allocateForSale')).toBe('pharmacy-inventory');
     // Not the mandatory Core module the medicine identity lane maps to.
