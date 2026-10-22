@@ -4,11 +4,12 @@ import { generateText } from 'ai';
 import { z } from 'zod';
 import type { Action } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { CASH_CLOSE_ANOMALY_I18N } from '@/lib/pharmacy/cashclose-anomaly-i18n';
 import { getDefaultModelId, type TieredAIProviderName } from '../model-defaults';
 import { getModelForTier } from '../provider';
 import { getTierForFeature } from '../tiers';
 
-export const CASH_ANOMALY_LABEL = 'DevFathom AI';
+export const CASH_ANOMALY_LABEL = CASH_CLOSE_ANOMALY_I18N.en.messages.productLabel;
 const RATE_SCALE = 10_000;
 
 const cashierSchema = z.object({
