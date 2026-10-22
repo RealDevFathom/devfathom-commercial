@@ -401,17 +401,13 @@ describe('counter receipt authorization', () => {
     expect(readCounterCart).not.toHaveBeenCalled();
   });
 
-  it('allows pharmacy.dispense and pharmacy:receipt when the branch is assigned', async () => {
-    for (const capability of [
-      'pharmacy.dispense',
-      'pharmacy:receipt',
-      'pharmacy.receipt',
-    ] as const) {
+  it('denies legacy or unknown receipt capability names', async () => {
+    for (const capability of ['pharmacy.dispense', 'pharmacy:receipt', 'pharmacy.receipt'] as const) {
       const f = fixture([{ capability, effect: 'ALLOW' }]);
       assign(f, ['branch-a']);
       await expect(
         f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
-      ).resolves.toMatchObject({ receiptNumber: 7 });
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     }
   });
 
@@ -603,6 +599,28 @@ describe('cash drawer authorization (#343)', () => {
       },
       permissionOverrides: [{ capability: 'pharmacy:counter', effect: 'DENY' }],
     });
+    assign(f, ['branch-a']);
+    await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(drawerPaths)('$name keeps a role DENY stronger than an override ALLOW', async (path) => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'DENY' }]);
+    f.db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-a',
+      organizationRole: {
+        permissions: [{ capability: 'pharmacy:counter', effect: 'DENY' }],
+      },
+      permissionOverrides: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+    });
+    assign(f, ['branch-a']);
+    await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(drawerPaths)('$name does not accept dispense authority as counter authority', async (path) => {
+    const f = fixture([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
     assign(f, ['branch-a']);
     await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(f.db.$transaction).not.toHaveBeenCalled();
