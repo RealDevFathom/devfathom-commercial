@@ -39,7 +39,7 @@ import {
   acknowledgePackAuthenticationFlag,
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
-import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
 const widget = z
@@ -176,7 +176,7 @@ export const pharmacyReportsRouter = router({
       }
       return readPharmacyMarketingReport(ctx.db, ctx.entitlements.organizationId, scoped);
     }),
-  createPharmacovigilanceReport: auditedProtectedProcedure
+  createPharmacovigilanceReport: reports
     .input(
       z
         .object({
@@ -222,7 +222,7 @@ export const pharmacyReportsRouter = router({
         data: { ...input, organizationId, createdByUserId: ctx.session.user.id },
       });
     }),
-  transitionPharmacovigilanceReport: auditedProtectedProcedure
+  transitionPharmacovigilanceReport: reports
     .input(
       z.object({ id: z.string().min(1), branchId: z.string().min(1), state: pvState }).strict()
     )
@@ -242,7 +242,7 @@ export const pharmacyReportsRouter = router({
         data: { state: input.state, reviewedByUserId: ctx.session.user.id },
       });
     }),
-  recordPharmacovigilanceSubmission: auditedProtectedProcedure
+  recordPharmacovigilanceSubmission: reports
     .input(
       z
         .object({
@@ -284,7 +284,7 @@ export const pharmacyReportsRouter = router({
         },
       });
     }),
-  exportPharmacovigilanceDrap: auditedProtectedProcedure
+  exportPharmacovigilanceDrap: reports
     .input(
       z
         .object({ branchId: z.string().min(1), from: z.date(), to: z.date() })

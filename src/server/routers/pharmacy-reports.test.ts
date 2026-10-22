@@ -271,6 +271,65 @@ describe('pharmacy owner digest capability boundary', () => {
 });
 
 describe('RX-08 pharmacovigilance state boundaries', () => {
+  beforeEach(() => {
+    mocks.can.mockResolvedValue(true);
+  });
+
+  it.each([
+    [
+      'createPharmacovigilanceReport',
+      () =>
+        caller().createPharmacovigilanceReport({
+          branchId: 'branch_1',
+          kind: 'ADVERSE_DRUG_REACTION',
+          occurredAt: new Date('2026-09-15'),
+          assertedDescription: 'Patient-reported reaction',
+        }),
+    ],
+    [
+      'transitionPharmacovigilanceReport',
+      () =>
+        caller().transitionPharmacovigilanceReport({
+          id: 'pv_1',
+          branchId: 'branch_1',
+          state: 'UNDER_REVIEW',
+        }),
+    ],
+    [
+      'recordPharmacovigilanceSubmission',
+      () =>
+        caller().recordPharmacovigilanceSubmission({
+          id: 'pv_1',
+          branchId: 'branch_1',
+          state: 'PENDING',
+        }),
+    ],
+    [
+      'exportPharmacovigilanceDrap',
+      () =>
+        caller().exportPharmacovigilanceDrap({
+          branchId: 'branch_1',
+          from: new Date('2026-09-01'),
+          to: new Date('2026-09-30'),
+        }),
+    ],
+  ] as const)('denies %s without reports:operational before branch access', async (_name, call) => {
+    mocks.can.mockResolvedValue(false);
+
+    await expect(call()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_admin' }),
+      'reports:operational',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+    expect(mocks.branchFindFirst).not.toHaveBeenCalled();
+    expect(mocks.reportFindFirst).not.toHaveBeenCalled();
+    expect(mocks.reportFindMany).not.toHaveBeenCalled();
+    expect(mocks.reportUpdate).not.toHaveBeenCalled();
+  });
+
   it('completing internal review does not mark the report externally submitted', async () => {
     mocks.reportFindFirst.mockResolvedValue({ id: 'pv_1', state: 'UNDER_REVIEW' });
     mocks.reportUpdate.mockResolvedValue({
