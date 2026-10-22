@@ -14117,6 +14117,39 @@ model GrowthInsight {
   @@map("growth_insights")
 }
 
+/// Tenant-owned controls for unattended growth metric collection. Campaign
+/// delivery remains separately review-gated; enabling this row only permits
+/// the nightly, read-only aggregation job.
+model GrowthSettings {
+  organizationId       String   @id
+  enabled              Boolean  @default(false)
+  nightlyMetricsEnabled Boolean @default(false)
+  lookbackDays         Int      @default(90)
+  minimumAudienceSize  Int      @default(10)
+  createdAt            DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime @updatedAt @db.Timestamptz(6)
+
+  @@map("growth_settings")
+}
+
+/// One replaceable daily RFM-style fact per tenant/customer. `customerId` is
+/// the vertical's opaque identifier and is never exposed across tenant scope.
+model GrowthCustomerMetric {
+  organizationId String
+  vertical       String
+  customerId     String
+  metricDate     DateTime @db.Date
+  lastActivityAt DateTime @db.Timestamptz(6)
+  orderCount     Int
+  grossAmount    Decimal  @db.Decimal(14, 2)
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(6)
+
+  @@id([organizationId, vertical, customerId, metricDate])
+  @@index([organizationId, metricDate])
+  @@map("growth_customer_metrics")
+}
+
 model PharmacyGrowthReview {
   id             String   @id
   organizationId String

@@ -126,6 +126,9 @@ export function SettingsContent() {
       {/* Appearance */}
       <AppearanceSection />
 
+      {/* Growth data collection (admin only). */}
+      {isAdmin && <GrowthSettingsSection />}
+
       {/* API Tokens (admin only) */}
       {isAdmin && <ApiTokensSection />}
 
@@ -180,6 +183,66 @@ export function SettingsContent() {
       {/* Leave the company */}
       <ResignationSection />
     </div>
+  );
+}
+
+export function GrowthSettingsSection() {
+  const utils = trpc.useUtils();
+  const settings = trpc.organizationAdmin.growthSettings.useQuery();
+  const save = trpc.organizationAdmin.setGrowthSettings.useMutation({
+    onSuccess: async () => {
+      await utils.organizationAdmin.growthSettings.invalidate();
+      toast.success('Growth settings saved');
+    },
+    onError: () => toast.error('Growth settings could not be saved'),
+  });
+
+  if (settings.isLoading) {
+    return <Card className="min-h-32 animate-pulse border-border/60" aria-label="Loading growth settings" />;
+  }
+  if (settings.error || !settings.data) {
+    return (
+      <Card className="border-border/60 p-6" role="alert">
+        Growth settings are unavailable. No nightly collection has been enabled.
+      </Card>
+    );
+  }
+
+  const value = settings.data;
+  return (
+    <Card className="border-border/60">
+      <CardHeader>
+        <CardTitle className="text-[15px] font-semibold text-foreground">Growth metrics</CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Build tenant-isolated customer aggregates nightly. This does not send messages or approve campaigns.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <label className="flex min-h-11 items-center justify-between gap-4">
+          <span className="text-sm text-foreground">Enable growth features</span>
+          <Switch
+            aria-label="Enable growth features"
+            checked={value.enabled}
+            disabled={save.isPending}
+            onCheckedChange={(enabled) => save.mutate({ ...value, enabled })}
+          />
+        </label>
+        <label className="flex min-h-11 items-center justify-between gap-4">
+          <span>
+            <span className="block text-sm text-foreground">Nightly customer metrics</span>
+            <span className="block text-xs text-muted-foreground">Requires growth features to remain enabled.</span>
+          </span>
+          <Switch
+            aria-label="Enable nightly customer metrics"
+            checked={value.nightlyMetricsEnabled}
+            disabled={!value.enabled || save.isPending}
+            onCheckedChange={(nightlyMetricsEnabled) =>
+              save.mutate({ ...value, nightlyMetricsEnabled })
+            }
+          />
+        </label>
+      </CardContent>
+    </Card>
   );
 }
 

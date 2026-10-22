@@ -73,6 +73,62 @@ function organizationId(ctx: { session: { user: { organizationId?: string } } })
 }
 
 export const organizationAdminRouter = router({
+  growthSettings: adminProcedure.query(async ({ ctx }) => {
+    const id = organizationId(ctx);
+    const rows = await ctx.db.$queryRaw<
+      Array<{
+        enabled: boolean;
+        nightlyMetricsEnabled: boolean;
+        lookbackDays: number;
+        minimumAudienceSize: number;
+      }>
+    >`SELECT enabled, "nightlyMetricsEnabled", "lookbackDays", "minimumAudienceSize"
+       FROM growth_settings WHERE "organizationId" = ${id}`;
+    return (
+      rows[0] ?? {
+        enabled: false,
+        nightlyMetricsEnabled: false,
+        lookbackDays: 90,
+        minimumAudienceSize: 10,
+      }
+    );
+  }),
+
+  setGrowthSettings: adminProcedure
+    .input(
+      z.strictObject({
+        enabled: z.boolean(),
+        nightlyMetricsEnabled: z.boolean(),
+        lookbackDays: z.number().int().min(7).max(365),
+        minimumAudienceSize: z.number().int().min(10).max(10_000),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Preserve the stronger role boundary even if a capability ALLOW is added.
+      if (ctx.session.user.role !== 'ADMIN') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Administrator access is required.' });
+      }
+      const id = organizationId(ctx);
+      const [saved] = await ctx.db.$queryRaw<Array<typeof input>>`
+        INSERT INTO growth_settings
+          ("organizationId", enabled, "nightlyMetricsEnabled", "lookbackDays", "minimumAudienceSize")
+        VALUES (${id}, ${input.enabled}, ${input.nightlyMetricsEnabled}, ${input.lookbackDays}, ${input.minimumAudienceSize})
+        ON CONFLICT ("organizationId") DO UPDATE SET
+          enabled = EXCLUDED.enabled,
+          "nightlyMetricsEnabled" = EXCLUDED."nightlyMetricsEnabled",
+          "lookbackDays" = EXCLUDED."lookbackDays",
+          "minimumAudienceSize" = EXCLUDED."minimumAudienceSize",
+          "updatedAt" = now()
+        RETURNING enabled, "nightlyMetricsEnabled", "lookbackDays", "minimumAudienceSize"`;
+      annotateAudit(ctx, {
+        targetType: 'GrowthSettings',
+        targetId: id,
+        operation: 'UPDATE',
+        description: 'Updated growth metric collection settings',
+      });
+      return saved;
+    }),
+
   askFathomSettings: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
     const settings = await readAskFathomSettings(ctx.db, organizationId(ctx));
     if (!settings) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });

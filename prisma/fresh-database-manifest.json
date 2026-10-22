@@ -1,5 +1,5 @@
 {
-  "schemaSha256": "b07948b1c7fad7da8effc99931765c7b8a9e5d2742f53161a6636b313226d827",
+  "schemaSha256": "e7476ab1cf443e6730cb4503111125259deba71c542e203980536a889cdfa3f3",
   "migrations": [
     {
       "name": "20260728000000_baseline",
@@ -508,6 +508,10 @@
     {
       "name": "20261012120000_visibility_context_anchors",
       "sha256": "0f9ed8587329beff27cc88770969b7eabac696293cd6872c1e6b0f5875c4a7c9"
+    },
+    {
+      "name": "20261023000436_archive_436_growth_recovery",
+      "sha256": "3f74754fcca568c8e886eb4a779c7b0fd8eafd87201162ebbbd69a8ec790303e"
     }
   ]
 }
