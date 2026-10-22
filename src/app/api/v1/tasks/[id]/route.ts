@@ -126,88 +126,91 @@ export const PATCH = withApiAuth(
     }
 
     // Do the mutation in a transaction so reorder + update + defaults are atomic.
-    const updated = await (async (tx) => {
-      // Assignee operations — process in order: full replace, then partial add, then partial remove.
-      // Mutual exclusivity between full-replace and partials is enforced at schema level.
-      if (assigneeIds) {
-        await tx.taskAssignee.deleteMany({ where: { taskId: id } });
-        if (assigneeIds.length > 0) {
+    const updated = await authCtx.db.$transaction(
+      async (tx) => {
+        // Assignee operations — process in order: full replace, then partial add, then partial remove.
+        // Mutual exclusivity between full-replace and partials is enforced at schema level.
+        if (assigneeIds) {
+          await tx.taskAssignee.deleteMany({ where: { taskId: id } });
+          if (assigneeIds.length > 0) {
+            await tx.taskAssignee.createMany({
+              data: assigneeIds.map((userId) => ({ taskId: id, userId })),
+            });
+          }
+        }
+        if (addAssigneeIds && addAssigneeIds.length > 0) {
           await tx.taskAssignee.createMany({
-            data: assigneeIds.map((userId) => ({ taskId: id, userId })),
+            data: addAssigneeIds.map((userId) => ({ taskId: id, userId })),
+            skipDuplicates: true, // no-op if already assigned
           });
         }
-      }
-      if (addAssigneeIds && addAssigneeIds.length > 0) {
-        await tx.taskAssignee.createMany({
-          data: addAssigneeIds.map((userId) => ({ taskId: id, userId })),
-          skipDuplicates: true, // no-op if already assigned
-        });
-      }
-      if (removeAssigneeIds && removeAssigneeIds.length > 0) {
-        await tx.taskAssignee.deleteMany({
-          where: { taskId: id, userId: { in: removeAssigneeIds } },
-        });
-      }
+        if (removeAssigneeIds && removeAssigneeIds.length > 0) {
+          await tx.taskAssignee.deleteMany({
+            where: { taskId: id, userId: { in: removeAssigneeIds } },
+          });
+        }
 
-      // Column move: reorder source + target, then move the task to end of target
-      let newOrder = existing.order;
-      if (isColumnMove && targetColumn) {
-        // Close gap in source column
-        await tx.task.updateMany({
-          where: { columnId: existing.columnId, order: { gt: existing.order } },
-          data: { order: { decrement: 1 } },
-        });
-        // Put task at end of target column
-        const maxOrder = await tx.task.aggregate({
-          _max: { order: true },
-          where: { columnId: targetColumn.id },
-        });
-        newOrder = (maxOrder._max.order ?? -1) + 1;
-      }
+        // Column move: reorder source + target, then move the task to end of target
+        let newOrder = existing.order;
+        if (isColumnMove && targetColumn) {
+          // Close gap in source column
+          await tx.task.updateMany({
+            where: { columnId: existing.columnId, order: { gt: existing.order } },
+            data: { order: { decrement: 1 } },
+          });
+          // Put task at end of target column
+          const maxOrder = await tx.task.aggregate({
+            _max: { order: true },
+            where: { columnId: targetColumn.id },
+          });
+          newOrder = (maxOrder._max.order ?? -1) + 1;
+        }
 
-      // Apply the primary update
-      const task = await tx.task.update({
-        where: { id },
-        data: {
-          ...data,
-          ...(dueDate !== undefined && { dueDate: dueDate ? new Date(dueDate) : null }),
-          ...(isColumnMove && columnId && { columnId, order: newOrder }),
-        },
-      });
+        // Apply the primary update
+        const task = await tx.task.update({
+          where: { id },
+          data: {
+            ...data,
+            ...(dueDate !== undefined && { dueDate: dueDate ? new Date(dueDate) : null }),
+            ...(isColumnMove && columnId && { columnId, order: newOrder }),
+          },
+        });
 
-      // A task moved to another project must not remain assigned to users who
-      // cannot access that project. Do this after all requested assignee edits
-      // so a PATCH cannot reintroduce a source-project-only assignee.
-      if (isColumnMove && targetColumn && targetColumn.board.project.id !== projectId) {
-        await tx.taskAssignee.deleteMany({
-          where: {
-            taskId: id,
-            user: {
-              projectMembers: { none: { projectId: targetColumn.board.project.id } },
+        // A task moved to another project must not remain assigned to users who
+        // cannot access that project. Do this after all requested assignee edits
+        // so a PATCH cannot reintroduce a source-project-only assignee.
+        if (isColumnMove && targetColumn && targetColumn.board.project.id !== projectId) {
+          await tx.taskAssignee.deleteMany({
+            where: {
+              taskId: id,
+              user: {
+                projectMembers: { none: { projectId: targetColumn.board.project.id } },
+              },
             },
-          },
-        });
-      }
-
-      // Additive column default assignees on move (skipDuplicates keeps existing intact)
-      if (isColumnMove && targetColumn && targetColumn.defaultAssignees.length > 0) {
-        const destinationMembers = await tx.projectMember.findMany({
-          where: {
-            projectId: targetColumn.board.project.id,
-            userId: { in: targetColumn.defaultAssignees.map((assignee) => assignee.userId) },
-          },
-          select: { userId: true },
-        });
-        if (destinationMembers.length > 0) {
-          await tx.taskAssignee.createMany({
-            data: destinationMembers.map((member) => ({ taskId: id, userId: member.userId })),
-            skipDuplicates: true,
           });
         }
-      }
 
-      return task;
-    })(authCtx.db);
+        // Additive column default assignees on move (skipDuplicates keeps existing intact)
+        if (isColumnMove && targetColumn && targetColumn.defaultAssignees.length > 0) {
+          const destinationMembers = await tx.projectMember.findMany({
+            where: {
+              projectId: targetColumn.board.project.id,
+              userId: { in: targetColumn.defaultAssignees.map((assignee) => assignee.userId) },
+            },
+            select: { userId: true },
+          });
+          if (destinationMembers.length > 0) {
+            await tx.taskAssignee.createMany({
+              data: destinationMembers.map((member) => ({ taskId: id, userId: member.userId })),
+              skipDuplicates: true,
+            });
+          }
+        }
+
+        return task;
+      },
+      { isolationLevel: 'Serializable' }
+    );
 
     // Activity log: task_completed fires only when entering Done from a different column
     if (

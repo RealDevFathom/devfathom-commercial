@@ -17,6 +17,13 @@ The reported cross-project task-move leak is already fixed:
   regression test proving that unauthorized assignees are removed.
 - `src/server/routers/projects.move-task.test.ts:98-107` proves that moves
   between boards in the same project preserve assignees.
+- `src/app/api/v1/tasks/[id]/route.ts:129-213` performs the equivalent REST
+  move, assignee cleanup, and destination-default assignment in a serializable
+  transaction so a failure cannot persist a partial move and concurrent moves
+  cannot silently interleave.
+- `src/app/api/v1/tasks/[id]/route.test.ts:68-131` verifies both the
+  destination-membership cleanup and that move writes do not escape an aborted
+  serializable transaction.
 
 Together, these checks prevent a source-project-only assignee from remaining on
 a task after it moves to another project, so that user can no longer receive the

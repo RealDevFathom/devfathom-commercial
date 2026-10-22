@@ -31,7 +31,11 @@ const mocks = vi.hoisted(() => {
     projectMember: {
       findMany: vi.fn(async () => [{ userId: 'destination-member' }]),
     },
+    $transaction: vi.fn(),
   };
+  db.$transaction.mockImplementation(
+    async (callback: (tx: Omit<typeof db, '$transaction'>) => Promise<unknown>) => callback(db)
+  );
   return { db, taskAssignee };
 });
 
@@ -61,6 +65,10 @@ import { PATCH } from './route';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.db.$transaction.mockImplementation(
+    async (callback: (tx: Omit<typeof mocks.db, '$transaction'>) => Promise<unknown>) =>
+      callback(mocks.db)
+  );
 });
 
 describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
@@ -78,6 +86,9 @@ describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
     );
 
     expect(response.status).toBe(200);
+    expect(mocks.db.$transaction).toHaveBeenCalledWith(expect.any(Function), {
+      isolationLevel: 'Serializable',
+    });
     expect(mocks.taskAssignee.deleteMany).toHaveBeenCalledWith({
       where: {
         taskId: 'task-1',
@@ -97,5 +108,24 @@ describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
       data: [{ taskId: 'task-1', userId: 'destination-member' }],
       skipDuplicates: true,
     });
+  });
+
+  it('does not run any move writes when the serializable transaction cannot start', async () => {
+    mocks.db.$transaction.mockRejectedValueOnce(new Error('serialization conflict'));
+
+    await expect(
+      PATCH(
+        new Request('https://example.test/api/v1/tasks/task-1', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ columnId: 'target-column' }),
+        }),
+        { params: Promise.resolve({ id: 'task-1' }) }
+      )
+    ).rejects.toThrow('serialization conflict');
+
+    expect(mocks.db.task.updateMany).not.toHaveBeenCalled();
+    expect(mocks.db.task.update).not.toHaveBeenCalled();
+    expect(mocks.taskAssignee.deleteMany).not.toHaveBeenCalled();
   });
 });
