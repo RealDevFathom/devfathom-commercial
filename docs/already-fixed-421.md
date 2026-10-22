@@ -1,4 +1,4 @@
-# GitHub issue #421 is already fixed
+# GitHub issue #421 verification and follow-up
 
 Issue #421 reports that agency projects accept an end date before their start date through tRPC
 create, tRPC partial update, and REST create. The current code already rejects all three cases:
@@ -16,5 +16,16 @@ create, tRPC partial update, and REST create. The current code already rejects a
   inverted tRPC create range, a partial tRPC update checked against the stored start date, and an
   inverted REST create range.
 
-These protections were already present at the start of this issue verification, so no production
-code or tests were changed.
+These date protections were already present at the start of this issue verification. The follow-up
+security review found that both tRPC writes and REST create also needed the central ABAC decision:
+
+- `src/server/routers/projects.ts:71` and `src/server/routers/projects.ts:148` declare
+  `projects:write` capability middleware before their create/update resolvers; update retains the
+  project membership check as its object-level constraint.
+- `src/app/api/v1/projects/route.ts:45-52` evaluates the token-bound user through `can()` before
+  parsing or persisting a REST create request.
+- `src/lib/abac/policies.ts` registers `projects:write` for active agency members, preserving the
+  former baseline while the central engine continues to give an explicit DENY precedence over an
+  ALLOW.
+- `src/server/routers/projects-dates.test.ts` checks both tRPC write declarations, and
+  `src/lib/project-authorization.test.ts` covers the baseline grant and DENY-over-ALLOW behavior.

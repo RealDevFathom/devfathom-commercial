@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { router, protectedProcedure } from '../trpc';
+import { capabilityProcedure, router, protectedProcedure } from '../trpc';
 import { TRPCError } from '@trpc/server';
 import { logActivity } from '../activity';
 import { emitEvent } from '@/lib/webhooks';
@@ -68,7 +68,7 @@ export const projectsRouter = router({
     });
   }),
 
-  create: protectedProcedure
+  create: capabilityProcedure('projects:write')
     .input(
       z
         .object({
@@ -145,7 +145,7 @@ export const projectsRouter = router({
       return project;
     }),
 
-  update: protectedProcedure
+  update: capabilityProcedure('projects:write')
     .input(
       z.object({
         id: z.string(),

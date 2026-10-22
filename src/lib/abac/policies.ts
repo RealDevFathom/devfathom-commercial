@@ -25,6 +25,7 @@ export const ALL_ACTIONS = [
   'team:setRole', // change a member's role (privilege escalation — admin only)
   'leave:approve', // approve/decline leave requests
   'finance:read', // view finance & invoices
+  'projects:write', // create projects or mutate a project the subject may access
   'resignation:request', // submit your own resignation
   'resignation:readAll', // see the company-wide resignation queue
   'resignation:review', // approve/decline a resignation (resource: { userId, status, targetRole })
@@ -116,6 +117,7 @@ export const POLICIES: Record<Action, Policy[]> = {
   'admin:access': [isAdmin],
   'hr:access': [isHrOrAdmin],
   'finance:read': [isAdmin], // HR does NOT get finance
+  'projects:write': [isActiveMember],
   'team:view': [isActiveMember],
   'team:setRole': [isAdmin], // only admins may grant/revoke roles
   'leave:approve': [isHrOrAdmin],
