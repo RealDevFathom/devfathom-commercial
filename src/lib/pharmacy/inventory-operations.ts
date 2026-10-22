@@ -590,6 +590,16 @@ export async function reserveSupplierClaim(
   input: { inventoryLotId: string; reservedUnits: number; returnBy: Date }
 ) {
   assertPositive(input.reservedUnits);
+  // Serialize every reservation for the lot. The caller must keep this lock and
+  // the availability check/create below in the same transaction. Locking the
+  // parent is sufficient even when the lot has no existing claim rows yet.
+  await db.$queryRaw(Prisma.sql`
+    SELECT id FROM "pharmacy_inventory_lots"
+    WHERE "organizationId" = ${scope.organizationId}
+      AND "branchId" = ${scope.branchId}
+      AND id = ${input.inventoryLotId}
+    FOR UPDATE
+  `);
   const balance = await db.pharmacyStockBalance.aggregate({
     where: {
       organizationId: scope.organizationId,

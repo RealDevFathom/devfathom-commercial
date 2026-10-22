@@ -738,7 +738,7 @@ export const pharmacyInventoryRouter = router({
       });
     }),
 
-  registerBatch: protectedProcedure
+  registerBatch: inventoryControl
     .input(
       z
         .object({
@@ -857,7 +857,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  allocateForSale: protectedProcedure
+  allocateForSale: inventoryControl
     .input(
       z
         .object({
@@ -901,7 +901,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  breakPack: protectedProcedure
+  breakPack: inventoryControl
     .input(
       z
         .object({
@@ -927,7 +927,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  transfer: protectedProcedure
+  transfer: inventoryControl
     .input(
       z
         .object({
@@ -962,7 +962,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  createCount: protectedProcedure
+  createCount: inventoryControl
     .input(
       z
         .object({
@@ -993,7 +993,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  approveCount: protectedProcedure
+  approveCount: inventoryControl
     .input(
       z
         .object({
@@ -1018,7 +1018,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  writeOff: protectedProcedure
+  writeOff: inventoryControl
     .input(
       z
         .object({
@@ -1043,7 +1043,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  quarantinePart: protectedProcedure
+  quarantinePart: inventoryControl
     .input(
       z
         .object({
@@ -1067,7 +1067,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  allocateTransfer: protectedProcedure
+  allocateTransfer: inventoryControl
     .input(
       z
         .object({
@@ -1096,7 +1096,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  approveTransfer: protectedProcedure
+  approveTransfer: inventoryControl
     .input(z.object({ branchId, transferId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -1106,7 +1106,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  dispatchTransfer: protectedProcedure
+  dispatchTransfer: inventoryControl
     .input(
       z
         .object({
@@ -1225,7 +1225,10 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await reserveSupplierClaim(ctx.db, await scopeFor(ctx, input.branchId), input);
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) =>
+          reserveSupplierClaim(txDb(tx), scope, input)
+        );
       } catch (error) {
         domainError(error);
       }
@@ -1252,7 +1255,7 @@ export const pharmacyInventoryRouter = router({
   // ── PUR-07 — the deterministic stock action centre ────────────────────────
 
   /** The approved threshold a stock-level signal is measured against. */
-  approveSafetyStock: auditedProtectedProcedure
+  approveSafetyStock: inventoryControl
     .input(
       z
         .object({
@@ -1295,7 +1298,7 @@ export const pharmacyInventoryRouter = router({
     }),
 
   /** Recompute the branch's signals from current ledger facts. */
-  refreshStockSignals: auditedProtectedProcedure
+  refreshStockSignals: inventoryControl
     .input(z.object({ branchId }).strict())
     .mutation(async ({ ctx, input }) => {
       const scope = await scopeFor(ctx, input.branchId);
@@ -1308,13 +1311,13 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  markStaleSignals: auditedProtectedProcedure
+  markStaleSignals: inventoryControl
     .input(z.object({ branchId }).strict())
     .mutation(async ({ ctx, input }) =>
       markStaleSignals(ctx.db, await scopeFor(ctx, input.branchId), new Date())
     ),
 
-  acknowledgeSignal: auditedProtectedProcedure
+  acknowledgeSignal: inventoryControl
     .input(z.object({ branchId, signalId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -1328,7 +1331,7 @@ export const pharmacyInventoryRouter = router({
     }),
 
   /** §8A invariant 29: a snooze is only auditable with its reason attached. */
-  snoozeSignal: auditedProtectedProcedure
+  snoozeSignal: inventoryControl
     .input(
       z
         .object({
@@ -1352,7 +1355,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  dismissSignal: auditedProtectedProcedure
+  dismissSignal: inventoryControl
     .input(
       z
         .object({
@@ -1378,7 +1381,7 @@ export const pharmacyInventoryRouter = router({
    * §8A invariant 29: the one-click action. Creates a DRAFT requisition,
    * transfer or claim — never an order, never a stock movement.
    */
-  createDraftAction: auditedProtectedProcedure
+  createDraftAction: inventoryControl
     .input(
       z.discriminatedUnion('kind', [
         z
@@ -1668,7 +1671,7 @@ export const pharmacyInventoryRouter = router({
    * NEAR_EXPIRY signal. It changes no price — the counter keeps selling at the
    * printed MRP until a person applies the mark-down through pricing.
    */
-  draftExpiryMarkdown: auditedProtectedProcedure
+  draftExpiryMarkdown: inventoryControl
     .input(
       z
         .object({
@@ -1803,7 +1806,7 @@ export const pharmacyInventoryRouter = router({
    * A supplier return DRAFT (EXPIRY_CLAIM) for one near-expiry lot position. It
    * reserves nothing; submitting it in Purchasing → Returns is what holds stock.
    */
-  draftExpiryReturn: auditedProtectedProcedure
+  draftExpiryReturn: inventoryControl
     .input(
       z
         .object({
@@ -1896,7 +1899,7 @@ export const pharmacyInventoryRouter = router({
    * (AVAILABLE out, QUARANTINE in). `requestKey` is minted when the board is
    * rendered, so a double-submitted form replays instead of moving stock twice.
    */
-  quarantineExpiring: auditedProtectedProcedure
+  quarantineExpiring: inventoryControl
     .input(
       z
         .object({
@@ -1955,7 +1958,7 @@ export const pharmacyInventoryRouter = router({
     .query(async ({ ctx, input }) => transferBoard(ctx.db, await scopeFor(ctx, input.branchId))),
 
   /** WHA-1603 INV-07: close a transfer, posting any shortfall as a custody write-off. */
-  receiveTransferWithVariance: protectedProcedure
+  receiveTransferWithVariance: inventoryControl
     .input(
       z
         .object({

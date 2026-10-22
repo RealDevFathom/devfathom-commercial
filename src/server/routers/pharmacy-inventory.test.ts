@@ -186,6 +186,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
   });
 
   it('takes the organization from the session, never from the payload', async () => {
+    grant([allow('pharmacy:inventory')]);
     db.medicine.findFirst.mockResolvedValue({ id: 'medicine_1' });
     await caller().registerBatch({
       medicineId: 'medicine_1',
@@ -199,6 +200,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
   });
 
   it('normalises a MONTH-precision expiry to the first instant after the month', async () => {
+    grant([allow('pharmacy:inventory')]);
     db.medicine.findFirst.mockResolvedValue({ id: 'medicine_1' });
     await caller().registerBatch({
       medicineId: 'medicine_1',
@@ -257,6 +259,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
   });
 
   it('refuses a transfer whose source and destination are the same location', async () => {
+    grant([allow('pharmacy:inventory')]);
     await expect(
       caller().transfer({
         branchId: 'branch_a',
@@ -396,6 +399,53 @@ describe.each(GATED_MUTATIONS)(
 describe('#355 — remaining stock mutations require pharmacy:inventory', () => {
   it.each([
     [
+      'registerBatch',
+      {
+        medicineId: 'medicine_1',
+        batchNumber: 'B-1',
+        printedExpiry: new Date('2027-06-15T00:00:00.000Z'),
+        expiryPrecision: 'DAY',
+      },
+    ],
+    [
+      'allocateForSale',
+      {
+        branchId: 'branch_a',
+        medicineId: 'medicine_1',
+        requiredUnits: 1,
+        idempotencyKeyPrefix: 'sale-1',
+      },
+    ],
+    ['acknowledgeSignal', { branchId: 'branch_a', signalId: 'signal_1' }],
+    [
+      'draftExpiryMarkdown',
+      {
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        markdownPercent: 10,
+        reason: 'Near expiry',
+      },
+    ],
+    [
+      'receiveTransferWithVariance',
+      {
+        branchId: 'branch_a',
+        transferId: 'transfer_1',
+        lines: [{ lineId: 'line_1', receivedUnits: 1 }],
+        idempotencyKeyPrefix: 'receive-1',
+      },
+    ],
+  ] as const)('honours an explicit DENY for %s before handler access', async (procedure, input) => {
+    grant([allow('pharmacy:inventory')], [deny('pharmacy:inventory')]);
+
+    await expect(caller()[procedure](input as never)).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
       'receiveLot',
       {
         branchId: 'branch_a',
@@ -472,6 +522,7 @@ describe('PUR-07 — the stock action centre transport', () => {
   });
 
   it('records the SESSION actor as the safety-stock approver, never a payload field', async () => {
+    grant([allow('pharmacy:inventory')]);
     db.medicine.findFirst.mockResolvedValue({ id: 'medicine_1' });
     await caller({ userId: 'user_pharmacist_in_charge' }).approveSafetyStock({
       branchId: 'branch_a',
@@ -490,6 +541,7 @@ describe('PUR-07 — the stock action centre transport', () => {
   });
 
   it('rejects a cross-tenant medicine ID when approving a safety stock', async () => {
+    grant([allow('pharmacy:inventory')]);
     await expect(
       caller().approveSafetyStock({
         branchId: 'branch_a',
