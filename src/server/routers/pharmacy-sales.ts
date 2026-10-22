@@ -281,6 +281,7 @@ const RECEIPT_READ_CAPABILITIES = [
   'pharmacy:counter',
   'pharmacy.counter',
 ] as const;
+const COUNTER_MUTATION_CAPABILITIES = ['pharmacy:counter', 'pharmacy.counter'] as const;
 
 function capabilityCovers(rule: string, action: string): boolean {
   if (rule === '*' || rule === action) return true;
@@ -320,7 +321,11 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
 async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
-  if (!user.organizationId || user.organizationId !== scope.organizationId) {
+  if (
+    !hasModule(ctx.entitlements, 'pharmacy-counter') ||
+    !user.organizationId ||
+    user.organizationId !== scope.organizationId
+  ) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
@@ -400,6 +405,45 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     return scope;
   }
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+}
+
+/** Returns and reimbursements are counter mutations, not receipt reads. */
+async function requireCounterMutationAccess(
+  ctx: TRPCContext,
+  branch: string
+): Promise<LedgerScope> {
+  const scope = await requireCounterReceiptAccess(ctx, branch);
+  const member = await ctx.db.user.findUnique({
+    where: { id: ctx.session!.user.id },
+    select: {
+      organizationRole: {
+        select: { permissions: { select: { capability: true, effect: true } } },
+      },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        select: { capability: true, effect: true },
+      },
+    },
+  });
+  const decision = (rules: { capability: string; effect: string }[]) => {
+    const matched = rules.filter((rule) =>
+      COUNTER_MUTATION_CAPABILITIES.some((action) => capabilityCovers(rule.capability, action))
+    );
+    if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
+    if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
+    return null;
+  };
+  const override = decision(member?.permissionOverrides ?? []);
+  const role = decision(member?.organizationRole?.permissions ?? []);
+  const allowed =
+    override !== 'DENY' && role !== 'DENY' && (override === 'ALLOW' || role === 'ALLOW');
+  if (!allowed) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+  return scope;
 }
 
 const closeDate = z
@@ -792,9 +836,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const authorizedScope = await requireCounterMutationAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
+          const scope = authorizedScope;
           const tender = await db.pharmacyTender.findFirst({
             where: {
               id: input.originalTenderId,
@@ -1278,9 +1323,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await requireCounterMutationAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => {
           try {
-            return await returnSaleLine(txDb(tx), await scopeFor(ctx, input.branchId), input);
+            return await returnSaleLine(txDb(tx), scope, input);
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
               return { blocked: error.message };

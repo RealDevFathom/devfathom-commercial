@@ -33,10 +33,12 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
+  returnSaleLine: vi.fn(async () => ({ id: 'return-line-1' })),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
+  refundPharmacyTender: vi.fn(async () => ({ refundId: 'refund-1' })),
 }));
 vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),
@@ -64,8 +66,8 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { readReturnHistory } from '@/lib/pharmacy/sales';
-import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import { readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
+import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
@@ -124,6 +126,7 @@ function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOY
         },
       ]),
     },
+    pharmacyTender: { findFirst: vi.fn(async () => ({ type: 'CASH' })) },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     $transaction: vi.fn(),
   };
@@ -373,6 +376,81 @@ describe('counter receipt authorization', () => {
     expect(readReturnHistory).not.toHaveBeenCalled();
     expect(applyPharmacyTender).not.toHaveBeenCalled();
     expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('requires counter capability and this branch assignment before returns or refunds', async () => {
+    const input = {
+      branchId: 'branch-a',
+      deviceId: 'device-a',
+      businessDate: new Date('2026-10-01T00:00:00.000Z'),
+      reason: 'Customer return',
+      idempotencyKey: 'refund-1',
+    };
+    const unassigned = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    await expect(
+      unassigned.caller().refundTender({ ...input, originalTenderId: 'tender-1', amountMinor: 100 })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      unassigned.caller().returnLine({
+        branchId: 'branch-a',
+        saleLineId: 'line-1',
+        canonicalUnits: 1,
+        reason: 'Customer return',
+        integrityDecision: 'Sealed',
+        idempotencyKey: 'return-1',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    const noCounter = fixture([{ capability: 'pharmacy:orders', effect: 'ALLOW' }]);
+    assign(noCounter, ['branch-a']);
+    await expect(
+      noCounter.caller().refundTender({ ...input, originalTenderId: 'tender-1', amountMinor: 100 })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(returnSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('allows assigned counter staff to return and refund, while a counter DENY wins', async () => {
+    const cashier = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(cashier, ['branch-a']);
+    await expect(
+      cashier.caller().returnLine({
+        branchId: 'branch-a',
+        saleLineId: 'line-1',
+        canonicalUnits: 1,
+        reason: 'Customer return',
+        integrityDecision: 'Sealed',
+        idempotencyKey: 'return-allowed',
+      })
+    ).resolves.toEqual({ id: 'return-line-1' });
+    await expect(
+      cashier.caller().refundTender({
+        branchId: 'branch-a',
+        originalTenderId: 'tender-1',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        amountMinor: 100,
+        reason: 'Customer return',
+        manualCashFallback: true,
+        idempotencyKey: 'refund-allowed',
+      })
+    ).resolves.toEqual({ refundId: 'refund-1' });
+
+    const denied = fixture([
+      { capability: 'pharmacy:*', effect: 'ALLOW' },
+      { capability: 'pharmacy:counter', effect: 'DENY' },
+    ]);
+    assign(denied, ['branch-a']);
+    await expect(
+      denied.caller().returnLine({
+        branchId: 'branch-a',
+        saleLineId: 'line-1',
+        canonicalUnits: 1,
+        reason: 'Customer return',
+        integrityDecision: 'Sealed',
+        idempotencyKey: 'return-denied',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
   it('keeps Khata tender off the branch-assignment guard', async () => {
