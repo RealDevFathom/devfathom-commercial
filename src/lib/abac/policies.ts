@@ -76,7 +76,7 @@ export const ALL_ACTIONS = [
   'pharmacy:dispense', // RX-03/04: pharmacist decisions and substitution evidence
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
-  'pharmacy:catalog-settings', // owner-only catalogue defaults and bulk price application
+  'pharmacy:catalog-settings', // bundled-catalogue default prices, pack prices and availability (Owner via pharmacy:*)
   'pharmacy:orders', // MKT-03/05: staff acceptance and fulfilment of customer proposals
   // H1-01: hospitality capabilities use explicit organization-role grants.
   // Property scope is enforced separately by the consuming procedures.

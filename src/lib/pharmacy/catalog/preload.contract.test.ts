@@ -10,7 +10,9 @@ describe('bundled pharmacy catalogue asset', () => {
   const digestPath = path.join(process.cwd(), 'prisma/seed-assets/pharmacy-catalog-v1.sha256');
 
   it('has the declared shape and contains no inventory or supplier facts', () => {
-    const catalog = parsePharmacyCatalog(JSON.parse(gunzipSync(readFileSync(assetPath)).toString('utf8')));
+    const catalog = parsePharmacyCatalog(
+      JSON.parse(gunzipSync(readFileSync(assetPath)).toString('utf8'))
+    );
     expect(catalog.version).toBe(PHARMACY_CATALOG_VERSION);
     expect(catalog.count).toBe(catalog.items.length);
     expect(catalog.count).toBeGreaterThan(0);

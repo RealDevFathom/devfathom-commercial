@@ -11,7 +11,6 @@ export const EXACT_GRANT_ONLY_ACTIONS: ReadonlySet<string> = new Set([
   'pharmacy:dispense',
   'pharmacy:safety',
   'pharmacy:catalogue-review',
-  'pharmacy:catalog-settings',
 ]);
 
 export function capabilityMatches(

@@ -1,4 +1,5 @@
 # pharmacy-catalog-v1.json.gz
+
 Preloaded medicine catalog for new pharmacy tenants (version `pharmacy-catalog-v1`, 18,924 items).
 Private: never publish, log item contents, or paste into PRs/issues beyond counts.
 Fields: name, alias (legacy item code, NOT a barcode), active, packUnits, packQty, class (generic only), category,

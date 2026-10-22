@@ -764,12 +764,7 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: [
-      'pharmacy:*',
-      'pharmacy:catalog-settings',
-      'reports:operational',
-      'reports:financial',
-    ],
+    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN

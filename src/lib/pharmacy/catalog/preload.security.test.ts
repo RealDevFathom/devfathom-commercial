@@ -1,75 +1,121 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Subject } from '@/lib/abac';
-import { PHARMACY_CATALOG_VERSION, seedPharmacyCatalog, setCatalogDefaultPrices } from './preload';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { PHARMACY_CATALOG_VERSION, seedPharmacyCatalog, type PharmacyCatalog } from './preload';
 
-const subject: Subject = { id: 'owner-a', role: 'ADMIN', status: 'ACTIVE' };
-function priceDb(
-  effect?: 'ALLOW' | 'ROLE_DENY' | 'USER_DENY',
-  concurrentSale = false
-) {
-  const updates: unknown[] = [];
-  const db = {
-    user: {
-      findUnique: vi.fn(async () => ({
-        permissionOverrides:
-          effect === 'USER_DENY'
-            ? [{ capability: 'pharmacy:catalog-settings', effect: 'DENY' }]
-            : [],
-        organizationRole: effect
-          ? {
-              permissions: [
-                {
-                  capability: 'pharmacy:catalog-settings',
-                  effect: effect === 'ROLE_DENY' ? 'DENY' : 'ALLOW',
-                },
-              ],
-            }
-          : null,
-      })),
+type Row = Record<string, unknown>;
+
+/** Every source row says `active: true`, exactly like the bundled asset. */
+const catalog: PharmacyCatalog = {
+  version: PHARMACY_CATALOG_VERSION,
+  count: 2,
+  items: [
+    {
+      name: 'Synthetic A',
+      alias: 'A-1',
+      active: true,
+      packUnits: 'tablet',
+      packQty: 10,
+      class: 'GENERAL',
+      category: 'test',
+      defaultSalePriceMinor: 1200,
+      defaultPurchasePriceMinor: 900,
     },
-    pharmacyCatalogSetting: { upsert: vi.fn() },
-    packLevel: {
-      findMany: vi.fn(async () => [{ id: 'pack-a', sellingPriceMinor: null, purchasePriceMinor: null, catalogDefaultSalePriceMinor: 1200, catalogDefaultPurchasePriceMinor: 900 }]),
-      updateMany: vi.fn(async (args) => { updates.push(args); return { count: concurrentSale && 'sellingPriceMinor' in (args as any).where ? 0 : 1 }; }),
+    {
+      name: 'Synthetic B',
+      alias: 'B-1',
+      active: true,
+      packUnits: 'capsule',
+      packQty: 20,
+      class: 'NARCOTICS',
+      category: 'test',
+      defaultSalePriceMinor: null,
+      defaultPurchasePriceMinor: 400,
     },
-    auditLog: { create: vi.fn() },
-  };
-  return { db: db as never, updates };
+  ],
+};
+
+function seedDb(useCatalogDefaultPrices: boolean) {
+  const writes = new Map<string, Row[]>();
+  const order: string[] = [];
+  const delegate = (name: string) => ({
+    findUnique: vi.fn(async () => null),
+    upsert: vi.fn(async () => ({})),
+    update: vi.fn(async () => ({})),
+    count: vi.fn(async () => (name === 'medicine' ? catalog.count : 0)),
+    createMany: vi.fn(async ({ data }: { data: Row[] }) => {
+      order.push(`createMany:${name}`);
+      writes.set(name, [...(writes.get(name) ?? []), ...data]);
+      return { count: data.length };
+    }),
+  });
+  const db = new Proxy(
+    {},
+    {
+      get: (_target, name: string) => {
+        if (name === '$executeRaw') return vi.fn(async () => 1);
+        if (name === '$queryRaw') {
+          return vi.fn(async (query: { strings: readonly string[] }) => {
+            if (query.strings.join('?').includes('FOR UPDATE')) order.push('lock:setting');
+            return [{ useCatalogDefaultPrices }];
+          });
+        }
+        return delegate(name);
+      },
+    }
+  ) as ScopedDb;
+  return { db, writes, order };
 }
 
-describe('catalogue price authorization and compare-and-set', () => {
-  it.each([undefined, 'ROLE_DENY', 'USER_DENY'] as const)('rejects %s capability without making settings writes', async (effect) => {
-    const { db } = priceDb(effect);
-    await expect(setCatalogDefaultPrices(db, 'org-a', subject, true)).rejects.toThrow('Forbidden');
-    expect((db as any).pharmacyCatalogSetting.upsert).not.toHaveBeenCalled();
+describe('catalogue seed review quarantine (finding 3)', () => {
+  it('creates every medicine unsaleable with its catalogue origin, even when the source says active', async () => {
+    const { db, writes } = seedDb(false);
+    await seedPharmacyCatalog(db, 'org-a', catalog);
+    expect(writes.get('medicine')).toEqual(
+      catalog.items.map(() =>
+        expect.objectContaining({
+          organizationId: 'org-a',
+          saleable: false,
+          catalogVersion: PHARMACY_CATALOG_VERSION,
+        })
+      )
+    );
+    expect(writes.get('medicineProvenance')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ field: 'catalog', status: 'UNREVIEWED' }),
+        expect.objectContaining({ field: 'classHint', status: 'UNREVIEWED' }),
+      ])
+    );
+    expect(writes.get('medicineProvenance')!.every((row) => row.status === 'UNREVIEWED')).toBe(
+      true
+    );
   });
 
-  it('allows an owner grant only through its tenant-scoped database', async () => {
-    const { db, updates } = priceDb('ALLOW');
-    await expect(setCatalogDefaultPrices(db, 'org-a', subject, true)).resolves.toEqual({ enabled: true, saleApplied: 1, purchaseApplied: 1 });
-    expect(updates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ where: { organizationId: 'org-a', id: 'pack-a', sellingPriceMinor: null } }),
-      expect.objectContaining({ where: { organizationId: 'org-a', id: 'pack-a', purchasePriceMinor: null } }),
-    ]));
+  it('leaves tenant prices empty while catalogue default prices are off', async () => {
+    const { db, writes } = seedDb(false);
+    await seedPharmacyCatalog(db, 'org-a', catalog);
+    expect(writes.get('packLevel')).toEqual([
+      expect.objectContaining({
+        catalogDefaultSalePriceMinor: 1200,
+        sellingPriceMinor: null,
+        purchasePriceMinor: null,
+      }),
+      expect.objectContaining({
+        catalogDefaultPurchasePriceMinor: 400,
+        sellingPriceMinor: null,
+        purchasePriceMinor: null,
+      }),
+    ]);
   });
 
-  it('does not overwrite or count a concurrent owner sale price', async () => {
-    const { db } = priceDb('ALLOW', true);
-    await expect(setCatalogDefaultPrices(db, 'org-a', subject, true)).resolves.toMatchObject({ saleApplied: 0, purchaseApplied: 1 });
-  });
-});
-
-describe('catalogue seed review quarantine', () => {
-  it('creates every imported medicine unsaleable with unreviewed provenance', async () => {
-    const writes = new Map<string, any[]>();
-    const delegate = (name: string) => ({
-      findUnique: vi.fn(async () => null), upsert: vi.fn(async () => ({})), update: vi.fn(async () => ({})),
-      count: vi.fn(async () => name === 'medicine' ? 1 : 0),
-      createMany: vi.fn(async ({ data }: any) => { writes.set(name, data); return { count: data.length }; }),
-    });
-    const db = new Proxy({}, { get: (_target, name: string) => delegate(name) }) as never;
-    await seedPharmacyCatalog(db, 'org-a', { version: PHARMACY_CATALOG_VERSION, count: 1, items: [{ name: 'A', alias: 'A-1', active: true, packUnits: 'tablet', packQty: 10, class: 'GENERAL', category: 'test', defaultSalePriceMinor: null, defaultPurchasePriceMinor: null }] });
-    expect(writes.get('medicine')).toEqual([expect.objectContaining({ organizationId: 'org-a', saleable: false })]);
-    expect(writes.get('medicineProvenance')).toEqual([expect.objectContaining({ organizationId: 'org-a', status: 'UNREVIEWED' })]);
+  it('seeds the defaults when the tenant already turned them on (finding 2: no stale state)', async () => {
+    const { db, writes, order } = seedDb(true);
+    await seedPharmacyCatalog(db, 'org-a', catalog);
+    expect(writes.get('packLevel')).toEqual([
+      expect.objectContaining({ sellingPriceMinor: 1200, purchasePriceMinor: 900 }),
+      expect.objectContaining({ sellingPriceMinor: null, purchasePriceMinor: 400 }),
+    ]);
+    // The setting row is held before any pack is written, serializing with the toggle.
+    expect(order.indexOf('lock:setting')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('lock:setting')).toBeLessThan(order.indexOf('createMany:packLevel'));
   });
 });

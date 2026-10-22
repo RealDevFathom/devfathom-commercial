@@ -7,16 +7,9 @@ ALTER TABLE "pharmacy_pack_levels"
   ADD COLUMN "sellingPriceMinor" INTEGER,
   ADD COLUMN "purchasePriceMinor" INTEGER;
 
--- This high-impact setting is intentionally outside pharmacy:* and belongs only
--- to the system Owner template. Preserve an existing explicit DENY.
-SELECT set_config('app.is_platform_admin', 'true', true);
-INSERT INTO organization_role_permissions
-  (id, "organizationId", "organizationRoleId", capability, effect, "createdAt")
-SELECT 'cat_settings_' || md5(r.id), r."organizationId", r.id,
-       'pharmacy:catalog-settings', 'ALLOW'::"PermissionEffect", now()
-FROM organization_roles r
-WHERE r.key = 'owner' AND r."isSystem" = true
-ON CONFLICT ("organizationRoleId", capability) DO NOTHING;
+-- `pharmacy:catalog-settings` is an ordinary pharmacy capability: the system
+-- Owner template already reaches it through `pharmacy:*` (the CEO-fixed Owner
+-- grants of 20261021110000), so no role-permission backfill is needed here.
 
 CREATE TABLE "pharmacy_catalog_seed_runs" (
   "id" TEXT NOT NULL,

@@ -469,6 +469,10 @@ model Medicine {
   lasa                         Boolean                              @default(false)
   coldChain                    Boolean                              @default(false)
   saleable                     Boolean                              @default(false)
+  /// Bundled-catalogue origin (e.g. `pharmacy-catalog-v1`), set only by the catalogue
+  /// seed and immutable. A trigger keeps such a medicine unsaleable until an explicit
+  /// change with a positive current-pack selling price (20261023150200).
+  catalogVersion               String?
   createdAt                    DateTime                             @default(now())
   updatedAt                    DateTime                             @updatedAt
   strengths                    MedicineStrengthComponent[]
