@@ -92,12 +92,21 @@ export function normalizeHeader(header: string): string {
 }
 
 const LOOKUP = new Map<string, PresetTargetField>();
+const AMBIGUOUS_HEADERS = new Set<string>();
 for (const [target, aliases] of Object.entries(HEADER_SYNONYMS)) {
-  LOOKUP.set(normalizeHeader(target), target as PresetTargetField);
-  for (const alias of aliases) LOOKUP.set(normalizeHeader(alias), target as PresetTargetField);
+  for (const header of [target, ...aliases]) {
+    const normalized = normalizeHeader(header);
+    const existing = LOOKUP.get(normalized);
+    if (existing && existing !== target) {
+      LOOKUP.delete(normalized);
+      AMBIGUOUS_HEADERS.add(normalized);
+    } else if (!AMBIGUOUS_HEADERS.has(normalized)) {
+      LOOKUP.set(normalized, target as PresetTargetField);
+    }
+  }
 }
 
-/** Resolve one source header. Ambiguous words deliberately have a deterministic target. */
+/** Resolve one unambiguous source header; domain-crossing aliases require explicit review. */
 export function lookupHeaderSynonym(header: string): PresetTargetField | undefined {
   return LOOKUP.get(normalizeHeader(header));
 }

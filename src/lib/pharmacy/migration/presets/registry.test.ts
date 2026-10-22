@@ -86,6 +86,21 @@ describe('pharmacy import preset registry', () => {
       status: 'VERIFIED',
       forceMappingReview: false,
     });
+
+    expect(() => applyPreset('marg-erp', ['Item Name', 'Balance'])).toThrow(
+      'requires mapping review'
+    );
+    expect(
+      applyPreset('marg-erp', ['Item Name', 'Balance'], { provisionalMappingReviewed: true })
+    ).toEqual({ 'Item Name': 'product_name' });
+  });
+
+  it('does not guess whether an ambiguous balance is stock or money', () => {
+    expect(lookupHeaderSynonym('balance')).toBeUndefined();
+    expect(applyPreset('generic-register', ['Balance', 'Opening Qty', 'Balance Owed'])).toEqual({
+      'Opening Qty': 'opening_qty',
+      'Balance Owed': 'balance_owed',
+    });
   });
 
   it('uses the existing exact readers for mapped values', () => {

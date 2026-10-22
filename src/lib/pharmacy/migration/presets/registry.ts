@@ -15,6 +15,7 @@ export type { ColumnMapping, PresetTargetField } from './synonyms';
 export { parseMappedRow, parseTallyXml } from './parsers';
 
 export type PresetStatus = 'VERIFIED' | 'PROVISIONAL';
+export type ApplyPresetOptions = Readonly<{ provisionalMappingReviewed?: boolean }>;
 export const PROVISIONAL_NOTE =
   'built from inferred columns; to be finalised from real sample exports';
 export type PresetDescriptor = Readonly<{
@@ -160,9 +161,16 @@ export function detectPreset(headers: string[]): { presetId: string; confidence:
   return { presetId: winner.id, confidence: Number(confidence.toFixed(3)) };
 }
 
-export function applyPreset(presetId: string, headers: string[]): ColumnMapping {
+export function applyPreset(
+  presetId: string,
+  headers: string[],
+  options: ApplyPresetOptions = {}
+): ColumnMapping {
   const preset = DEFINITIONS.find(({ id }) => id === presetId);
   if (!preset) throw new RangeError(`Unknown pharmacy migration preset: ${presetId}`);
+  if (preset.forceMappingReview && options.provisionalMappingReviewed !== true) {
+    throw new Error(`Provisional pharmacy migration preset requires mapping review: ${presetId}`);
+  }
   const mapping = { ...mapHeadersBySynonym(headers) } as Record<string, PresetTargetField>;
   for (const header of headers) {
     const override = preset.overrides?.[normalizeHeader(header)];
