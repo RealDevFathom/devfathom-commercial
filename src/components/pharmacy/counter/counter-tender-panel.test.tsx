@@ -233,7 +233,7 @@ describe('family Khata tender', () => {
     creditLimitMinor: 1000,
   };
   it('blocks over-limit payment until owner password re-entry succeeds', async () => {
-    const reauthenticateOwner = vi.fn().mockResolvedValue(undefined);
+    const reauthenticateOwner = vi.fn().mockResolvedValue('11111111-1111-4111-8111-111111111111');
     const { props } = setup({
       loadKhataAccounts: vi.fn().mockResolvedValue([account]),
       reauthenticateOwner,
@@ -241,15 +241,21 @@ describe('family Khata tender', () => {
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
     await screen.findByText(/Ledger balance/);
     expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
-    fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
-    fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
+    fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+    fireEvent.change(screen.getByLabelText('Approver password (current account)'), {
       target: { value: 'test-only-password' },
+    });
+    fireEvent.change(screen.getByLabelText('Reason for limit increase'), {
+      target: { value: 'Long-standing customer' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await screen.findByText('Payment recorded.');
-    expect(reauthenticateOwner).toHaveBeenCalledWith('test-only-password', '');
+    expect(reauthenticateOwner).toHaveBeenCalledWith('test-only-password', '', {
+      familyAccountId: 'family-a', amountMinor: 25000, reason: 'Long-standing customer',
+    });
     expect(props.onTender).toHaveBeenCalledWith(
-      { type: 'KHATA', amountMinor: 25000, familyAccountId: 'family-a', ownerOverride: true },
+      { type: 'KHATA', amountMinor: 25000, familyAccountId: 'family-a', ownerOverride: true,
+        overrideReason: 'Long-standing customer', approvalId: '11111111-1111-4111-8111-111111111111' },
       { amount: '', cashReceived: '' }
     );
   });
@@ -260,14 +266,15 @@ describe('family Khata tender', () => {
     });
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
     await screen.findByText(/Ledger balance/);
-    fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
-    fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
+    fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+    fireEvent.change(screen.getByLabelText('Approver password (current account)'), {
       target: { value: 'wrong' },
     });
+    fireEvent.change(screen.getByLabelText('Reason for limit increase'), { target: { value: 'Exception' } });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
-    await screen.findByText(/Owner re-authentication failed/);
+    await screen.findByText(/Approver re-authentication failed/);
     expect(props.onTender).not.toHaveBeenCalled();
-    expect(screen.getByLabelText('Owner password (current account)')).toHaveValue('');
+    expect(screen.getByLabelText('Approver password (current account)')).toHaveValue('');
   });
   it('allows an exact-limit charge and requests only the selected statement', async () => {
     const printKhataStatement = vi.fn().mockResolvedValue(undefined);
