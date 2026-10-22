@@ -942,6 +942,94 @@ describeIfDatabase('bills command layer (real DB)', () => {
     ).rejects.toMatchObject({ reason: 'ALREADY_COMPED' });
   });
 
+  it('clears pinned service-charge evidence after the last service-bearing line is comped', async () => {
+    const { orderId, itemIds, db } = await openWithItems([{}, {}]);
+    const policy = await read((tx) =>
+      tx.restaurantServiceChargePolicyVersion.create({
+        data: {
+          branchId: ids.branch,
+          rate: '0.100000',
+          effectiveFrom: new Date('2026-08-18T00:00:00.000Z'),
+          effectiveTo: AT,
+          acknowledgedAt: AT,
+          acknowledgementRef: 'issue-271',
+          idempotencyKey: `service_comp_${suffix}`,
+          payloadHash: `service-comp-${suffix}`,
+        },
+      })
+    );
+    await read(async (tx) => {
+      await tx.restaurantOrderItem.update({
+        where: { id: itemIds[0]! },
+        data: { unitPrice: '40.00' },
+      });
+      await tx.restaurantOrderItem.update({
+        where: { id: itemIds[1]! },
+        data: { unitPrice: '60.00' },
+      });
+      await tx.restaurantOrder.update({
+        where: { id: orderId },
+        data: { serviceChargePolicyVersionId: policy.id },
+      });
+    });
+
+    const { billIds } = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: actor(),
+    });
+    const billId = billIds[0]!;
+    const lines = await read((tx) =>
+      tx.restaurantBillLine.findMany({ where: { billId }, orderBy: { lineSubtotal: 'asc' } })
+    );
+
+    await deps.bills.compLine(db, {
+      billId,
+      branchId: ids.branch,
+      billLineId: lines[0]!.id,
+      reason: 'guest complaint',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+    const partial = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } })
+    );
+    expect({
+      service: partial.serviceChargeTotal.toFixed(2),
+      basis: partial.serviceChargeBasis.toFixed(2),
+      policy: partial.serviceChargePolicyVersionId,
+      total: partial.grandTotal.toFixed(2),
+    }).toEqual({ service: '6.00', basis: '60.00', policy: policy.id, total: '66.00' });
+
+    await deps.bills.compLine(db, {
+      billId,
+      branchId: ids.branch,
+      billLineId: lines[1]!.id,
+      reason: 'guest complaint',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+    const fullyComped = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } })
+    );
+    expect({
+      service: fullyComped.serviceChargeTotal.toFixed(2),
+      basis: fullyComped.serviceChargeBasis.toFixed(2),
+      policy: fullyComped.serviceChargePolicyVersionId,
+      rate: fullyComped.serviceChargeRate,
+      taxTreatment: fullyComped.serviceChargeTaxTreatment,
+      total: fullyComped.grandTotal.toFixed(2),
+    }).toEqual({
+      service: '0.00',
+      basis: '0.00',
+      policy: null,
+      rate: null,
+      taxTreatment: null,
+      total: '0.00',
+    });
+  });
+
   it('re-split guard: blocks without recut, voids-and-recuts with co-auth, locks after tender/settle', async () => {
     const { orderId, db } = await openWithItems([{}, {}]);
     const firstCut = await deps.bills.cutBills(db, {
