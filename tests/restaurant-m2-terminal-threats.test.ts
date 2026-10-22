@@ -494,6 +494,10 @@ describe('KDS unlock authorization', () => {
     const { token } = await establish(secret);
     addOperator(ACTING, device.id, ['kitchen:operate']);
 
+    const invalidCredential = await unlock(secret, token, ACTING, '0000');
+    expect(invalidCredential.response.status).toBe(401);
+    expect(invalidCredential.body).toEqual({ error: 'Invalid operator credential.' });
+
     expect((await unlock(secret, token, ACTING, PINS[ACTING])).response.status).toBe(200);
   });
 
