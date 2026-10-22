@@ -1016,7 +1016,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  writeOff: protectedProcedure
+  writeOff: regulatory
     .input(
       z
         .object({

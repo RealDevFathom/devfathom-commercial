@@ -132,6 +132,17 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     ).resolves.toBe(false);
   });
 
+  it('lets a role DENY override a user ALLOW', async () => {
+    await expect(
+      can(proprietor, 'pharmacy:safety', undefined, {
+        db: authorizationDb({
+          overrides: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
+          rolePermissions: [{ capability: 'pharmacy:*', effect: 'DENY' }],
+        }),
+      })
+    ).resolves.toBe(false);
+  });
+
   it('does not grant unrelated capabilities through wildcard or platform authority', async () => {
     const db = authorizationDb({ rolePermissions: permissionsFor('owner-operator') });
     expect(proprietor.role).toBe('ADMIN');

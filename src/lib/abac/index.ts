@@ -48,13 +48,14 @@ async function customDecision(
   const overrides = user.permissionOverrides.filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
-  if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
-  if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
-  if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
+  const matchingRules = [...overrides, ...roleRules];
+  // A DENY is absolute across both sources. In particular, a user ALLOW must
+  // never return before an organization-role DENY has been considered.
+  if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
+  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
   return null;
 }
 

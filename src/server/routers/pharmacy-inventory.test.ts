@@ -37,6 +37,7 @@ function model() {
   return {
     findFirst: vi.fn().mockResolvedValue(null),
     findUnique: vi.fn().mockResolvedValue(null),
+    findMany: vi.fn().mockResolvedValue([]),
     create: vi
       .fn()
       .mockImplementation(async ({ data }: { data: object }) => ({ id: 'new', ...data })),
@@ -139,6 +140,65 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
   });
+
+  it.each(['writeOff', 'quarantinePart', 'releaseQuarantine'] as const)(
+    'gates %s with an exact safety ALLOW and honors a role DENY over a user ALLOW',
+    async (procedure) => {
+      db.user.findUnique.mockResolvedValue({
+        organizationRole: { permissions: [{ capability: 'pharmacy:*', effect: 'DENY' }] },
+        permissionOverrides: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
+      });
+      const inputs = {
+        writeOff: {
+          branchId: 'branch_a',
+          inventoryLotId: 'lot_a',
+          stockLocationId: 'location_a',
+          units: 1,
+          witnessId: 'witness_b',
+          reason: 'Recall destruction',
+          evidenceRef: 'certificate-1',
+          idempotencyKey: 'write-off-1',
+          disposition: 'QUARANTINE' as const,
+        },
+        quarantinePart: {
+          branchId: 'branch_a',
+          inventoryLotId: 'lot_a',
+          stockLocationId: 'location_a',
+          units: 1,
+          reason: 'Manual recall',
+          idempotencyKeyPrefix: 'quarantine-1',
+        },
+        releaseQuarantine: {
+          branchId: 'branch_a',
+          inventoryLotId: 'lot_a',
+          stockLocationId: 'location_a',
+          units: 1,
+          reason: 'Recall cleared',
+          idempotencyKeyPrefix: 'release-1',
+        },
+      };
+
+      const deniedCall = caller({ role: 'EMPLOYEE' })[procedure] as (
+        input: never
+      ) => Promise<unknown>;
+      await expect(deniedCall(inputs[procedure] as never)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(db.$transaction).not.toHaveBeenCalled();
+
+      db.user.findUnique.mockResolvedValue({
+        organizationRole: { permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }] },
+        permissionOverrides: [],
+      });
+      const allowedCall = caller({ role: 'EMPLOYEE' })[procedure] as (
+        input: never
+      ) => Promise<unknown>;
+      await expect(allowedCall(inputs[procedure] as never)).rejects.not.toMatchObject({
+        message: 'You do not have permission for this action.',
+      });
+      expect(db.$transaction).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it('maps the public router prefix to the pharmacy-inventory entitlement', () => {
     expect(moduleForProcedure('pharmacyInventory.allocateForSale')).toBe('pharmacy-inventory');

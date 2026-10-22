@@ -9,6 +9,44 @@ function assertPositive(units: number) {
   if (!Number.isSafeInteger(units) || units <= 0) throw new PharmacyInventoryError('INVALID_UNITS');
 }
 
+type DispositionTransfer = {
+  disposition: 'AVAILABLE' | 'QUARANTINE' | 'DAMAGED';
+  quantityUnits: number;
+  idempotencyKey: string;
+};
+
+/** Serialize retries and return an already committed, exact transfer. */
+async function lockAndFindTransferReplay(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: { inventoryLotId: string; stockLocationId: string; idempotencyKeyPrefix: string },
+  expected: readonly [DispositionTransfer, DispositionTransfer]
+) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${scope.organizationId}:inventory-disposition:${input.idempotencyKeyPrefix}`}, 0))`
+  );
+  const existing = await db.pharmacyStockMovement.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      idempotencyKey: { in: expected.map((movement) => movement.idempotencyKey) },
+    },
+  });
+  if (existing.length === 0) return null;
+  const matches = expected.every((wanted) =>
+    existing.some(
+      (movement) =>
+        movement.branchId === scope.branchId &&
+        movement.inventoryLotId === input.inventoryLotId &&
+        movement.stockLocationId === input.stockLocationId &&
+        movement.disposition === wanted.disposition &&
+        movement.quantityUnits === wanted.quantityUnits &&
+        movement.idempotencyKey === wanted.idempotencyKey
+    )
+  );
+  if (existing.length !== 2 || !matches) throw new PharmacyInventoryError('INVALID_STATE');
+  return expected.map((wanted) => existing.find((row) => row.idempotencyKey === wanted.idempotencyKey)!);
+}
+
 async function removalArrangement(
   db: ScopedDb,
   scope: LedgerScope,
@@ -227,6 +265,20 @@ export async function releaseQuarantine(
   }
 ) {
   assertPositive(input.units);
+  const expected = [
+    {
+      disposition: 'QUARANTINE' as const,
+      quantityUnits: -input.units,
+      idempotencyKey: `${input.idempotencyKeyPrefix}:out`,
+    },
+    {
+      disposition: 'AVAILABLE' as const,
+      quantityUnits: input.units,
+      idempotencyKey: `${input.idempotencyKeyPrefix}:in`,
+    },
+  ] as const;
+  const replay = await lockAndFindTransferReplay(db, scope, input, expected);
+  if (replay) return { removed: replay[0], released: replay[1] };
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: {
       id: input.inventoryLotId,
@@ -289,6 +341,21 @@ export async function quarantinePart(
   }
 ) {
   assertPositive(input.units);
+  const heldDisposition = input.damaged ? ('DAMAGED' as const) : ('QUARANTINE' as const);
+  const expected = [
+    {
+      disposition: 'AVAILABLE' as const,
+      quantityUnits: -input.units,
+      idempotencyKey: `${input.idempotencyKeyPrefix}:out`,
+    },
+    {
+      disposition: heldDisposition,
+      quantityUnits: input.units,
+      idempotencyKey: `${input.idempotencyKeyPrefix}:in`,
+    },
+  ] as const;
+  const replay = await lockAndFindTransferReplay(db, scope, input, expected);
+  if (replay) return { removed: replay[0], held: replay[1] };
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: {
       id: input.inventoryLotId,
@@ -327,7 +394,7 @@ export async function quarantinePart(
   const held = await db.pharmacyStockMovement.create({
     data: {
       ...common,
-      disposition: input.damaged ? 'DAMAGED' : 'QUARANTINE',
+      disposition: heldDisposition,
       quantityUnits: input.units,
       sealedPackDelta: a.sealedPacks,
       looseUnitDelta: a.looseUnits,

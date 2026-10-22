@@ -14,13 +14,14 @@ function fixture(onHandUnits = 12) {
       ...data,
     }));
   const db = {
+    $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyInventoryLot: {
       findFirst: vi.fn().mockResolvedValue({ id: 'lot_a', unitsPerPack: 10 }),
     },
     pharmacyStockBalance: {
       findFirst: vi.fn().mockResolvedValue({ onHandUnits, sealedPacks: 1, looseUnits: 2 }),
     },
-    pharmacyStockMovement: { create: createMovement },
+    pharmacyStockMovement: { create: createMovement, findMany: vi.fn().mockResolvedValue([]) },
     pharmacyCustodyRecord: {
       create: vi
         .fn()
@@ -103,5 +104,75 @@ describe('manual quarantine disposition', () => {
         idempotencyKey: 'release-1:in',
       }),
     });
+  });
+
+  it('returns an exact committed release on replay without posting again', async () => {
+    const { db, raw, createMovement } = fixture();
+    raw.pharmacyStockMovement.findMany.mockResolvedValue([
+      {
+        id: 'out',
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_a',
+        stockLocationId: 'location_a',
+        disposition: 'QUARANTINE',
+        quantityUnits: -12,
+        idempotencyKey: 'release-1:out',
+      },
+      {
+        id: 'in',
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_a',
+        stockLocationId: 'location_a',
+        disposition: 'AVAILABLE',
+        quantityUnits: 12,
+        idempotencyKey: 'release-1:in',
+      },
+    ]);
+
+    await expect(
+      releaseQuarantine(db, scope, {
+        inventoryLotId: 'lot_a',
+        stockLocationId: 'location_a',
+        units: 12,
+        reason: 'Recall cleared',
+        idempotencyKeyPrefix: 'release-1',
+      })
+    ).resolves.toMatchObject({ removed: { id: 'out' }, released: { id: 'in' } });
+    expect(createMovement).not.toHaveBeenCalled();
+    expect(raw.pharmacyInventoryLot.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('rejects replay-key reuse across branches before returning movements', async () => {
+    const { db, raw } = fixture();
+    raw.pharmacyStockMovement.findMany.mockResolvedValue([
+      {
+        branchId: 'branch_b',
+        inventoryLotId: 'lot_a',
+        stockLocationId: 'location_a',
+        disposition: 'QUARANTINE',
+        quantityUnits: -12,
+        idempotencyKey: 'release-1:out',
+      },
+      {
+        branchId: 'branch_b',
+        inventoryLotId: 'lot_a',
+        stockLocationId: 'location_a',
+        disposition: 'AVAILABLE',
+        quantityUnits: 12,
+        idempotencyKey: 'release-1:in',
+      },
+    ]);
+
+    await expect(
+      releaseQuarantine(db, scope, {
+        inventoryLotId: 'lot_a',
+        stockLocationId: 'location_a',
+        units: 12,
+        reason: 'Recall cleared',
+        idempotencyKeyPrefix: 'release-1',
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
   });
 });
