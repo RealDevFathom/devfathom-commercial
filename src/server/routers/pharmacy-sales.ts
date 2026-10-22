@@ -1,5 +1,10 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
+import {
+  PharmacyRxReferenceError,
+  recordPrescriptionReference,
+  resolvePrescriptionReference,
+} from '@/lib/pharmacy/rx-prescription-reference';
 import { hasModule } from '@/lib/entitlements';
 import {
   executeSandboxPayment,
@@ -179,6 +184,11 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
 function fail(error: unknown): never {
   if (error instanceof PharmacyRxSaleDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  if (error instanceof PharmacyRxReferenceError)
+    throw new TRPCError({
+      code: error.reason === 'PRESCRIPTION_NEEDS_PHARMACIST' ? 'FORBIDDEN' : 'BAD_REQUEST',
+      message: error.message,
+    });
   if (error instanceof ControlledRestorationDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyPaymentSandboxError)
@@ -882,6 +892,15 @@ export const pharmacySalesRouter = router({
               path: ['prescriberName'],
             })
             .optional(),
+          // #518: the prescription a pharmacist dispenses a non-controlled line against. It must
+          // resolve to a real, current prescription line for this patient and medicine.
+          prescription: z
+            .object({
+              prescriptionLineId: z.string().trim().min(1).max(128),
+              patientId: z.string().trim().min(1).max(128),
+            })
+            .strict()
+            .optional(),
           branchId,
           saleId: z.string().min(1),
           medicineId: z.string().min(1),
@@ -937,10 +956,46 @@ export const pharmacySalesRouter = router({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
           if (!medicine?.controlled) {
+            // #518: a controlled authorization, and the prescription reference inside it, means
+            // nothing on this line, so it is refused instead of being silently ignored.
+            if (input.controlledAuthorization)
+              throw new PharmacyRxReferenceError('CONTROLLED_AUTHORIZATION_NOT_APPLICABLE');
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
-            return addSaleLine(db, scope, input);
+            const { prescription, ...lineInput } = input;
+            if (!prescription) return addSaleLine(db, scope, lineInput);
+            // Recording a prescription fill is a pharmacist's act, whatever the medicine.
+            if (
+              !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+                db,
+              }))
+            )
+              throw new PharmacyRxReferenceError('PRESCRIPTION_NEEDS_PHARMACIST');
+            const units = input.quantity * input.canonicalUnitsPerSaleUnit;
+            const reference = await resolvePrescriptionReference(db, scope, {
+              ...prescription,
+              saleId: input.saleId,
+              medicineId: input.medicineId,
+              presentationId: input.presentationId,
+              units,
+            });
+            const result = await addSaleLine(db, scope, lineInput);
+            await recordPrescriptionReference(db, scope, {
+              ...reference,
+              saleLineId: result.line.id,
+              units,
+            });
+            annotateAudit(ctx, {
+              metadata: {
+                prescriptionLineId: reference.prescriptionLineId,
+                prescriptionSaleLineId: result.line.id,
+              },
+            });
+            return result;
           }
+          // #518: a controlled line takes its prescription only through controlledAuthorization.
+          if (input.prescription)
+            throw new PharmacyRxReferenceError('CONTROLLED_PRESCRIPTION_IN_AUTHORIZATION');
           if (
             !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
               db,
