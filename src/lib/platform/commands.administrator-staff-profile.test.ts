@@ -242,7 +242,7 @@ function createPayload(vertical: 'RESTAURANT' | 'AGENCY') {
     primaryContactEmail: 'ops@acme.test',
     adminName: 'Restaurant Owner',
     adminEmail: 'owner@example.test',
-    adminPassword: 'A-strong-password1',
+    adminPassword: 'a-strong-password',
     ...(vertical === 'RESTAURANT'
       ? {
           firstBranchName: 'Gulberg Flagship',

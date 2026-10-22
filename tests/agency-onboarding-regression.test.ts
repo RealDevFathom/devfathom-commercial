@@ -98,7 +98,7 @@ function agencyPayload(overrides: Record<string, unknown> = {}) {
     primaryContactEmail: 'admin@acme.com',
     adminName: 'Acme Admin',
     adminEmail: 'admin@acme.com',
-    adminPassword: 'A-strong-password1',
+    adminPassword: 'a-strong-password',
     ...overrides,
   };
 }

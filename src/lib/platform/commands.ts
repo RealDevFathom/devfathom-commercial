@@ -21,7 +21,6 @@ import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { emailSchema } from '@/lib/email-address';
-import { passwordSchema } from '@/lib/password-policy';
 import { ianaTimezone } from '@/lib/timezone';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
 import { OrganizationVertical } from '@/generated/prisma/enums';
@@ -665,7 +664,7 @@ const organizationInput = z
     notes: optionalText.optional(),
     adminName: requiredText,
     adminEmail: email,
-    adminPassword: passwordSchema.min(12).max(256),
+    adminPassword: z.string().min(12).max(256),
     opportunityId: optionalId.optional(),
     firstBranchName: z.string().trim().min(2).max(120).optional(),
     firstBranchAddress: z.string().trim().min(1).max(300).optional(),

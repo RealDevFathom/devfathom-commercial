@@ -191,7 +191,7 @@ function restaurantPayload(overrides: Record<string, unknown> = {}) {
     primaryContactEmail: 'ops@burger.co',
     adminName: 'Restaurant Admin',
     adminEmail: 'admin@burger.co',
-    adminPassword: 'A-strong-password1',
+    adminPassword: 'a-strong-password',
     vertical: 'RESTAURANT',
     firstBranchName: 'Downtown',
     firstBranchAddress: '1 Market Street',
@@ -319,7 +319,7 @@ describe('§2.3 contract item 3 — mismatched package rejected', () => {
       primaryContactEmail: 'admin@acme.com',
       adminName: 'Admin',
       adminEmail: 'admin@acme.com',
-      adminPassword: 'A-strong-password1',
+      adminPassword: 'a-strong-password',
     };
 
     const error = await caught(run('organization.create', agencyPayload));
