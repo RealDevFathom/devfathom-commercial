@@ -7,6 +7,7 @@ export type AIFeature =
   | 'restaurant-growth'
   | 'pharmacy-marketing-assistance'
   | 'whatsapp'
+  | 'pharmacy-refill-reminders'
   | 'retention'
   | 'analytics'
   | 'periodic-owner-reports';
@@ -17,6 +18,7 @@ const FEATURE_TIERS: Readonly<Partial<Record<AIFeature, AITier>>> = {
   'restaurant-growth': 'standard',
   'pharmacy-marketing-assistance': 'standard',
   whatsapp: 'standard',
+  'pharmacy-refill-reminders': 'standard',
   retention: 'standard',
   analytics: 'standard',
   'periodic-owner-reports': 'deep',

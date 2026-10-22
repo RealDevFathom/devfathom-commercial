@@ -77,6 +77,7 @@ export const ALL_ACTIONS = [
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
   'pharmacy:orders', // MKT-03/05: staff acceptance and fulfilment of customer proposals
+  'pharmacy:refill-reminders', // AI drafts and owner-controlled WhatsApp sends
   // H1-01: hospitality capabilities use explicit organization-role grants.
   // Property scope is enforced separately by the consuming procedures.
   'hotel:reservations',
@@ -244,6 +245,8 @@ export const POLICIES: Record<Action, Policy[]> = {
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],
   'pharmacy:orders': [],
+  // Owners may operate reminders, unless a role/override DENY matched first.
+  'pharmacy:refill-reminders': [isAdmin],
 
   // H1-01: no static agency-role policy grants hospitality capabilities.
   // Explicit capabilities and wildcards use the existing customDecision path.
