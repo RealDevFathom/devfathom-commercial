@@ -56,6 +56,7 @@ import {
   provisionRestaurantOrganization,
   type RestaurantProvisioningResult,
 } from '@/lib/restaurant/organization-provisioning';
+import { PHARMACY_RULE_SET_COMMANDS } from '@/lib/platform/pharmacy-rule-set-commands';
 
 const id = z
   .string()
@@ -121,6 +122,7 @@ const COMMAND_CAPABILITY: Record<string, string> = {
   job: 'jobs:write',
   operator: 'operators:write',
   setting: 'settings:write',
+  pharmacy: 'pharmacy:rules:confirm',
 };
 
 const TRANSITIONS: Record<OrganizationStatus, readonly OrganizationStatus[]> = {
@@ -233,6 +235,7 @@ function sensitiveCommand(action: string): boolean {
       'organization.scim.token',
       'organization.scim.revoke',
       'organization.transition',
+      PHARMACY_RULE_SET_COMMANDS.confirm,
     ].includes(action) ||
     action === 'organization.identity' ||
     action.startsWith('organization.identity.') ||
@@ -1504,6 +1507,71 @@ async function runCommand(
   payload: unknown
 ): Promise<CommandResult> {
   switch (action) {
+    case PHARMACY_RULE_SET_COMMANDS.confirm: {
+      // A platform capability is still checked at the common command boundary;
+      // this role check keeps the unusually powerful regulatory command
+      // SuperAdmin-only even if capabilities are expanded later.
+      if (actor.role !== 'SUPER_ADMIN') {
+        throw new PlatformSecurityError('You do not have permission for this action.', 403);
+      }
+      // Platform sessions with this flag were authenticated with TOTP or a
+      // one-time recovery code. This is the current step-up seam; a dedicated
+      // short-lived step-up assertion can replace it without changing the
+      // command payload or the sibling revert interface.
+      if (!actor.mfaEnabled) {
+        throw new PlatformSecurityError('MFA step-up is required for this action.', 403);
+      }
+      const input = z
+        .object({
+          code: z.string().trim().min(2).max(32).regex(/^[A-Z0-9]+(?:-[A-Z0-9]+)*$/),
+          effectiveFrom: date,
+          reason: sensitiveReason,
+          licenceCategories: z.json(),
+          permittedSchedules: z.json(),
+          prescriptionOnlyClasses: z.json(),
+          prescriptionRetentionDays: z.json(),
+          controlledRegisterFlags: z.json(),
+          pharmacistCoverageRule: z.json(),
+          recordRetentionByClass: z.json(),
+        })
+        .parse(payload);
+
+      // Serialize version allocation by jurisdiction. Unlike closing an old
+      // interval, this lock and insert do not rewrite regulatory history.
+      await db.$queryRawUnsafe('SELECT pg_advisory_xact_lock(hashtext($1))', input.code);
+      const previous = await db.jurisdictionRuleSet.findFirst({
+        where: { code: input.code },
+        orderBy: [{ version: 'desc' }],
+        select: { version: true, effectiveFrom: true },
+      });
+      if (previous && input.effectiveFrom <= previous.effectiveFrom) {
+        throw new PlatformSecurityError(
+          'The effective timestamp must be later than every existing rule-set version.',
+          400
+        );
+      }
+      const confirmed = (values: unknown) => ({ values: toJson(values), provisional: false });
+      const saved = await db.jurisdictionRuleSet.create({
+        data: {
+          code: input.code,
+          version: (previous?.version ?? 0) + 1,
+          effectiveFrom: input.effectiveFrom,
+          licenceCategories: confirmed(input.licenceCategories),
+          permittedSchedules: confirmed(input.permittedSchedules),
+          prescriptionOnlyClasses: confirmed(input.prescriptionOnlyClasses),
+          prescriptionRetentionDays: confirmed(input.prescriptionRetentionDays),
+          controlledRegisterFlags: confirmed(input.controlledRegisterFlags),
+          pharmacistCoverageRule: confirmed(input.pharmacistCoverageRule),
+          recordRetentionByClass: confirmed(input.recordRetentionByClass),
+        },
+      });
+      return {
+        targetType: 'JurisdictionRuleSet',
+        targetId: saved.id,
+        data: saved,
+        audit: { ...saved, reason: input.reason },
+      };
+    }
     case 'organization.create': {
       const input = organizationInput.parse(payload);
       const organization = await bootstrapOrganization(db, actor, input);
