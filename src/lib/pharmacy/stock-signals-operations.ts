@@ -1,4 +1,4 @@
-import { resolveCustomDecision } from '@/lib/abac';
+import { can, subjectFromSession } from '@/lib/abac';
 /**
  * PUR-07 — the database half of the stock action centre: reading exact ledger
  * facts, persisting the deduplicated signals `stock-signals.evaluateStockSignals`
@@ -48,14 +48,6 @@ import type {
 
 /** Statuses a signal can still be refreshed, closed or acted on from. */
 const LIVE_STATUSES = ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'STALE'] as const;
-
-export function draftCapabilityGranted(
-  overrides: readonly { capability: string; effect: 'ALLOW' | 'DENY' }[],
-  roleRules: readonly { capability: string; effect: 'ALLOW' | 'DENY' }[],
-  capability: 'pharmacy:inventory' | 'pharmacy:procurement'
-): boolean {
-  return resolveCustomDecision(overrides, roleRules, capability) === true;
-}
 
 type LotRow = {
   inventoryLotId: string;
@@ -665,7 +657,7 @@ function normalizeDraftInput(input: DraftActionInput): DraftActionInput {
   };
 }
 
-async function authorizeDraftIntent(
+export async function authorizeDraftIntent(
   db: ScopedDb,
   scope: LedgerScope,
   input: DraftActionInput,
@@ -686,13 +678,11 @@ async function authorizeDraftIntent(
   const user = await db.user.findFirst({
     where: { id: scope.actorId, organizationId: scope.organizationId },
     select: {
+      id: true,
+      role: true,
+      department: true,
       status: true,
       organization: { select: { status: true, vertical: true } },
-      organizationRole: { select: { permissions: { select: { capability: true, effect: true } } } },
-      permissionOverrides: {
-        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: at } }] },
-        select: { capability: true, effect: true },
-      },
     },
   });
   if (
@@ -708,11 +698,7 @@ async function authorizeDraftIntent(
   const capability =
     input.kind === 'DRAFT_TRANSFER' ? 'pharmacy:inventory' : 'pharmacy:procurement';
   if (
-    !draftCapabilityGranted(
-      user.permissionOverrides,
-      user.organizationRole?.permissions ?? [],
-      capability
-    )
+    !(await can(subjectFromSession(user), capability, undefined, { db, now: at }))
   ) {
     throw new PharmacyDraftIntentError('FORBIDDEN', 'Draft capability is not authorized.');
   }

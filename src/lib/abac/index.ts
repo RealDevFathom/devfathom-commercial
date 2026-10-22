@@ -24,6 +24,8 @@ export type CanOptions = {
   source?: Environment['source'];
   ip?: string | null;
   db?: AuthzDb;
+  /** Additional, already-scoped grants (for example restaurant staff job roles). */
+  additionalRules?: readonly CustomPermissionRule[];
 };
 
 export type CustomPermissionRule = {
@@ -49,7 +51,8 @@ async function customDecision(
   db: AuthzDb,
   userId: string,
   action: string,
-  now: Date
+  now: Date,
+  additionalRules: readonly CustomPermissionRule[] = []
 ): Promise<boolean | null> {
   const user = await db.user.findUnique({
     where: { id: userId },
@@ -63,9 +66,9 @@ async function customDecision(
       },
     },
   });
-  if (!user) return false;
+  if (!user) return resolveCustomDecision(additionalRules, [], action);
   return resolveCustomDecision(
-    user.permissionOverrides,
+    [...user.permissionOverrides, ...additionalRules],
     user.organizationRole?.permissions ?? [],
     action
   );
@@ -74,7 +77,7 @@ async function customDecision(
 /** True iff some policy registered for `action` allows the subject + resource. */
 export async function can(
   subject: Subject,
-  action: Action,
+  action: Action | string,
   resource?: ResourceAttributes,
   opts: CanOptions = {}
 ): Promise<boolean> {
@@ -89,19 +92,45 @@ export async function can(
     return false;
   }
   try {
-    const decision = await customDecision(db, subject.id, action, env.now);
+    const decision = await customDecision(db, subject.id, action, env.now, opts.additionalRules);
     if (decision !== null) return decision;
   } catch (err) {
     console.error(`[abac] custom permission lookup for "${action}" threw:`, err);
     return false;
   }
-  for (const policy of POLICIES[action] ?? []) {
+  for (const policy of POLICIES[action as Action] ?? []) {
     try {
       if (await policy({ subject, resource, env, db })) return true;
     } catch (err) {
       // A policy that throws denies (fail-closed) but never crashes the request.
       console.error(`[abac] policy for "${action}" threw:`, err);
     }
+  }
+  return false;
+}
+
+/** Authorize one of several equivalent capabilities while preserving deny precedence
+ * across the complete set. This is intended for compatibility gates that accept more
+ * than one canonical capability. */
+export async function canAny(
+  subject: Subject,
+  actions: readonly string[],
+  opts: CanOptions = {}
+): Promise<boolean> {
+  const db = opts.db;
+  if (!db || actions.length === 0) return false;
+  const now = opts.now ?? new Date();
+  try {
+    const decisions = await Promise.all(
+      actions.map((action) =>
+        customDecision(db, subject.id, action, now, opts.additionalRules)
+      )
+    );
+    if (decisions.some((decision) => decision === false)) return false;
+    if (decisions.some((decision) => decision === true)) return true;
+  } catch (err) {
+    console.error('[abac] custom permission lookup for capability set threw:', err);
+    return false;
   }
   return false;
 }

@@ -50,6 +50,16 @@ function fakeDb(options: {
 }): ScopedDb {
   const { user = null, jobRoleCapabilities = [], overrides = [], hidden = false } = options;
   return {
+    user: {
+      findUnique: vi.fn(async () =>
+        user
+          ? {
+              organizationRole: user.organizationRole ?? null,
+              permissionOverrides: user.permissionOverrides ?? [],
+            }
+          : null
+      ),
+    },
     restaurantStaffProfile: {
       findUnique: vi.fn(async () =>
         hidden
@@ -64,8 +74,10 @@ function fakeDb(options: {
               })),
               user: user
                 ? {
-                    organizationRole: user.organizationRole ?? null,
-                    permissionOverrides: user.permissionOverrides ?? [],
+                    id: 'user-linked',
+                    role: 'EMPLOYEE',
+                    department: null,
+                    status: 'ACTIVE',
                   }
                 : null,
             }
@@ -122,6 +134,23 @@ describe('operatorHasCapability — SOP-1 job-role path (QA-145)', () => {
     await expect(
       operatorHasCapability(db, 'staff_linked', 'coauth:approve', NOW, BRANCH)
     ).resolves.toBe(false);
+  });
+
+  it('denies linked-user access when an override DENY conflicts with a role ALLOW', async () => {
+    const db = fakeDb({
+      user: {
+        organizationRole: { permissions: [{ capability: 'coauth:approve', effect: 'ALLOW' }] },
+        permissionOverrides: [{ capability: 'coauth:approve', effect: 'DENY' }],
+      },
+    });
+    await expect(operatorHasCapability(db, 'staff_linked', 'coauth:approve', NOW, BRANCH))
+      .resolves.toBe(false);
+  });
+
+  it('does not let wildcard staff ALLOW grant an exact-only pharmacy action', async () => {
+    const db = fakeDb({ user: null, jobRoleCapabilities: ['*'] });
+    await expect(operatorHasCapability(db, 'staff', 'pharmacy:dispense', NOW, BRANCH))
+      .resolves.toBe(false);
   });
 
   it('denies when a per-staff DENY override removes an inherited capability', async () => {

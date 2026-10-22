@@ -1,26 +1,40 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { draftCapabilityGranted } from './stock-signals-operations';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { authorizeDraftIntent, type DraftActionInput } from './stock-signals-operations';
 
-describe('draftCapabilityGranted', () => {
-  it('denies when an override ALLOW conflicts with a role DENY', () => {
-    expect(
-      draftCapabilityGranted(
-        [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
-        [{ capability: 'pharmacy:*', effect: 'DENY' }],
-        'pharmacy:procurement'
-      )
-    ).toBe(false);
-  });
+type Rule = { capability: string; effect: 'ALLOW' | 'DENY' };
+const input = {
+  kind: 'DRAFT_REQUISITION',
+  signalId: 'signal-1',
+  lines: [],
+} as unknown as DraftActionInput;
+const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'user-1' };
 
-  it('allows a sole matching rule and denies when no rule matches', () => {
-    expect(
-      draftCapabilityGranted(
-        [],
-        [{ capability: 'pharmacy:inventory', effect: 'ALLOW' }],
-        'pharmacy:inventory'
-      )
-    ).toBe(true);
-    expect(draftCapabilityGranted([], [], 'pharmacy:inventory')).toBe(false);
+function fixture(overrides: Rule[], role: Rule[]) {
+  const actor = {
+    id: 'user-1', role: 'EMPLOYEE', department: null, status: 'ACTIVE',
+    organization: { status: 'ACTIVE', vertical: 'PHARMACY' },
+  };
+  return {
+    $queryRaw: vi.fn(async () => [{ organizationId: 'org-1', branchId: 'branch-1' }]),
+    user: {
+      findFirst: vi.fn(async () => actor),
+      findUnique: vi.fn(async () => ({
+        organizationRole: { permissions: role }, permissionOverrides: overrides,
+      })),
+    },
+    pharmacyBranch: { findFirst: vi.fn(async () => ({ id: 'branch-1' })) },
+  } as unknown as ScopedDb;
+}
+
+describe('authorizeDraftIntent', () => {
+  it.each([
+    { overrides: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }], role: [{ capability: 'pharmacy:procurement', effect: 'DENY' }] },
+    { overrides: [{ capability: 'pharmacy:procurement', effect: 'DENY' }], role: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }] },
+    { overrides: [{ capability: 'pharmacy:*', effect: 'DENY' }], role: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }] },
+  ] as const)('rejects a draft when any matching rule denies', async ({ overrides, role }) => {
+    await expect(authorizeDraftIntent(fixture(overrides, role), scope, input, new Date()))
+      .rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });

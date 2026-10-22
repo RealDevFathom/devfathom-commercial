@@ -240,6 +240,19 @@ describe('counter receipt authorization', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
+  it('denies when an override DENY conflicts with a role ALLOW', async () => {
+    const f = fixture([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+    f.db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-a',
+      organizationRole: { permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }] },
+      permissionOverrides: [{ capability: 'pharmacy:dispense', effect: 'DENY' }],
+    });
+    assign(f, ['branch-a']);
+    await expect(f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' }))
+      .rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
   it.each(paths)('$name denies another branch before the receipt is read', async (path) => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);

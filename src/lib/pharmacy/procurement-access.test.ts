@@ -1,47 +1,31 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { procurementCapabilityGranted } from './procurement-access';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { actorCanProcure } from './procurement-access';
 
-describe('procurementCapabilityGranted', () => {
-  it('allows the procurement capability and refuses a cashier', () => {
-    expect(
-      procurementCapabilityGranted({
-        overrides: [],
-        role: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
-      })
-    ).toBe(true);
-    expect(
-      procurementCapabilityGranted({
-        overrides: [],
-        role: [
-          { capability: 'pharmacy.counter', effect: 'ALLOW' },
-          { capability: 'pharmacy:orders', effect: 'ALLOW' },
-        ],
-      })
-    ).toBe(false);
+type Rule = { capability: string; effect: 'ALLOW' | 'DENY' };
+
+function dbWith(overrides: Rule[], role: Rule[]) {
+  const member = { id: 'user-1', role: 'EMPLOYEE', department: null, status: 'ACTIVE' };
+  return {
+    user: {
+      findUnique: vi.fn()
+        .mockResolvedValueOnce(member)
+        .mockResolvedValueOnce({ organizationRole: { permissions: role }, permissionOverrides: overrides }),
+    },
+  } as unknown as ScopedDb;
+}
+
+describe('actorCanProcure', () => {
+  it.each([
+    { overrides: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }], role: [{ capability: 'pharmacy:procurement', effect: 'DENY' }] },
+    { overrides: [{ capability: 'pharmacy:procurement', effect: 'DENY' }], role: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }] },
+    { overrides: [{ capability: 'pharmacy:*', effect: 'DENY' }], role: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }] },
+  ] as const)('denies conflicting rules with a DENY', async ({ overrides, role }) => {
+    await expect(actorCanProcure(dbWith(overrides, role), 'user-1')).resolves.toBe(false);
   });
 
-  it('lets a pharmacy wildcard through and lets DENY win', () => {
-    expect(
-      procurementCapabilityGranted({
-        overrides: [],
-        role: [{ capability: 'pharmacy.*', effect: 'ALLOW' }],
-      })
-    ).toBe(true);
-    expect(
-      procurementCapabilityGranted({
-        overrides: [{ capability: 'pharmacy.procurement', effect: 'DENY' }],
-        role: [{ capability: 'pharmacy.*', effect: 'ALLOW' }],
-      })
-    ).toBe(false);
-  });
-
-  it('denies when an override ALLOW conflicts with a role DENY', () => {
-    expect(
-      procurementCapabilityGranted({
-        overrides: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
-        role: [{ capability: 'pharmacy:*', effect: 'DENY' }],
-      })
-    ).toBe(false);
+  it('allows a pharmacy wildcard because procurement is not exact-grant-only', async () => {
+    await expect(actorCanProcure(dbWith([], [{ capability: 'pharmacy:*', effect: 'ALLOW' }]), 'user-1')).resolves.toBe(true);
   });
 });

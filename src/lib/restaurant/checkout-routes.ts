@@ -1,5 +1,4 @@
-import { resolveCustomDecision } from '@/lib/abac';
-import { capabilityMatches } from '@/lib/abac/capabilities';
+import { can } from '@/lib/abac';
 import 'server-only';
 
 import { NextResponse } from 'next/server';
@@ -227,13 +226,10 @@ export async function operatorHasCapability(
       directCapabilityGrants: { where: { branchId }, select: { branchId: true } },
       user: {
         select: {
-          organizationRole: {
-            select: { permissions: { select: { capability: true, effect: true } } },
-          },
-          permissionOverrides: {
-            where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
-            select: { capability: true, effect: true },
-          },
+          id: true,
+          role: true,
+          department: true,
+          status: true,
         },
       },
     },
@@ -246,23 +242,20 @@ export async function operatorHasCapability(
       !profile.directCapabilityGrants.some((row) => row.branchId === branchId))
   )
     return false;
-  const user = profile.user;
-
   const staff = await resolveStaffCapabilityDecision(db, staffProfileId, branchId);
-  const custom = resolveCustomDecision(
-    user?.permissionOverrides ?? [],
-    user?.organizationRole?.permissions ?? [],
-    capability
-  );
-  if (
-    custom === false ||
-    [...staff.denied].some((rule) => capabilityMatches(rule, capability, 'DENY'))
-  )
-    return false;
-
-  return (
-    custom === true ||
-    [...staff.effective].some((rule) => capabilityMatches(rule, capability, 'ALLOW'))
+  const user = profile.user;
+  return can(
+    user ?? { id: `staff:${staffProfileId}`, role: 'EMPLOYEE', status: 'ACTIVE' },
+    capability,
+    undefined,
+    {
+      db,
+      now,
+      additionalRules: [
+        ...[...staff.effective].map((rule) => ({ capability: rule, effect: 'ALLOW' as const })),
+        ...[...staff.denied].map((rule) => ({ capability: rule, effect: 'DENY' as const })),
+      ],
+    }
   );
 }
 

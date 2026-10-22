@@ -7,7 +7,7 @@ import {
 } from '@/lib/pharmacy/payment-sandbox';
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
-import { can, subjectFromSession } from '@/lib/abac';
+import { can, canAny, subjectFromSession } from '@/lib/abac';
 import {
   appendControlledSaleEntries,
   earlierRegisterEntry,
@@ -272,21 +272,11 @@ async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: 
   });
 }
 
-// Canonical names (#163) beside the legacy dotted ones, which still cover un-migrated grants.
 const RECEIPT_READ_CAPABILITIES = [
   'pharmacy:dispense',
-  'pharmacy.dispense',
   'pharmacy:receipt',
-  'pharmacy.receipt',
   'pharmacy:counter',
-  'pharmacy.counter',
 ] as const;
-
-function capabilityCovers(rule: string, action: string): boolean {
-  if (rule === '*' || rule === action) return true;
-  if (rule.endsWith(':*') || rule.endsWith('.*')) return action.startsWith(rule.slice(0, -1));
-  return false;
-}
 
 /**
  * Dispense, receipt, or counter capability, then an active pharmacy branch
@@ -319,13 +309,6 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     select: {
       status: true,
       organizationId: true,
-      organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
-      },
-      permissionOverrides: {
-        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
-        select: { capability: true, effect: true },
-      },
     },
   });
   if (
@@ -337,13 +320,9 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const matched = [...member.permissionOverrides, ...(member.organizationRole?.permissions ?? [])]
-    .filter((rule) =>
-      RECEIPT_READ_CAPABILITIES.some((action) => capabilityCovers(rule.capability, action))
-    );
-  const capable =
-    !matched.some((rule) => rule.effect === 'DENY') &&
-    matched.some((rule) => rule.effect === 'ALLOW');
+  const capable = await canAny(subjectFromSession(user), RECEIPT_READ_CAPABILITIES, {
+    db: ctx.db,
+  });
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
