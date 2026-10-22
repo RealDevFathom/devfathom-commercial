@@ -90,6 +90,22 @@ describe('assistant tool routing', () => {
     );
   });
 
+  it('requires the Clients entitlement for every Notes tool', () => {
+    const withoutClients = {
+      ...adminCtx,
+      enabledModules: ['notes', 'projects'],
+    };
+
+    expect(buildAssistantTools(withoutClients)).toEqual({});
+    expect(buildAssistantTools(withoutClients, { hint: 'search notes for client Acme' })).toEqual(
+      {}
+    );
+
+    const withClients = { ...withoutClients, enabledModules: ['notes', 'projects', 'clients'] };
+    expect(buildAssistantTools(withClients)).toHaveProperty('searchNotes');
+    expect(buildAssistantTools(withClients)).toHaveProperty('createNote');
+  });
+
   it('retains execute authorization on pharmacy reports', async () => {
     const tools = buildAssistantTools({
       ...ctx,
