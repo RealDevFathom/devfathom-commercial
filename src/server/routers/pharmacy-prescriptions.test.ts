@@ -190,8 +190,8 @@ describe('prescription capture and private delivery', () => {
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
-  it('allows tenant administrators without capability rows', async () => {
-    mocks.can.mockResolvedValue(false);
+  it('allows tenant administrators when the central ABAC decision permits it', async () => {
+    mocks.can.mockResolvedValue(true);
     const admin = context();
     admin.session.user.role = 'ADMIN';
     await expect(
@@ -205,7 +205,26 @@ describe('prescription capture and private delivery', () => {
         ).toString('base64'),
       })
     ).resolves.toHaveProperty('url');
-    expect(mocks.can).not.toHaveBeenCalled();
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'ADMIN' }),
+      'pharmacy:dispense',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+  });
+
+  it('refuses a tenant administrator when central ABAC returns an explicit DENY', async () => {
+    mocks.can.mockResolvedValue(false);
+    const admin = context();
+    admin.session.user.role = 'ADMIN';
+
+    await expect(caller(admin).workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ role: 'ADMIN' }),
+      'pharmacy:dispense',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
   });
 
   it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
