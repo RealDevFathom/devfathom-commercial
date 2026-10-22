@@ -175,7 +175,7 @@ export const restaurantNotificationsRouter = router({
     }),
 
   webhookStatus: webhookProcedure.input(z.object({}).strict()).query(async ({ ctx }) => {
-    const [config, deliveries] = await Promise.all([
+    const [config, deliveries, deadLetters] = await Promise.all([
       ctx.db.restaurantNotificationWebhook.findFirst({
         select: {
           id: true,
@@ -188,7 +188,7 @@ export const restaurantNotificationsRouter = router({
         },
       }),
       ctx.db.restaurantJob.findMany({
-        where: { type: NOTIFICATION_WEBHOOK_JOB_TYPE },
+        where: { type: NOTIFICATION_WEBHOOK_JOB_TYPE, status: { not: 'DEAD' } },
         select: {
           id: true,
           status: true,
@@ -200,8 +200,24 @@ export const restaurantNotificationsRouter = router({
         orderBy: { createdAt: 'desc' },
         take: 20,
       }),
+      ctx.db.restaurantJob.findMany({
+        where: { type: NOTIFICATION_WEBHOOK_JOB_TYPE, status: 'DEAD' },
+        select: {
+          id: true,
+          status: true,
+          attempts: true,
+          nextAttemptAt: true,
+          lastError: true,
+          createdAt: true,
+        },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      }),
     ]);
-    return { config: config ? { ...config, signingSecretConfigured: true } : null, deliveries };
+    return {
+      config: config ? { ...config, signingSecretConfigured: true } : null,
+      deliveries,
+      deadLetters,
+    };
   }),
 
   configureWebhook: webhookProcedure
@@ -259,6 +275,33 @@ export const restaurantNotificationsRouter = router({
             select: { id: true, endpointUrl: true, enabled: true, updatedAt: true },
           });
       return { ...saved, signingSecretConfigured: true };
+    }),
+
+  deleteWebhook: webhookProcedure
+    .input(z.object({ confirmation: z.literal('DELETE') }).strict())
+    .mutation(async ({ ctx }) => {
+      const existing = await ctx.db.restaurantNotificationWebhook.findFirst({
+        select: { id: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Webhook configuration not found.' });
+      }
+      annotateAudit(ctx, {
+        action: 'DELETE_RESTAURANT_NOTIFICATION_WEBHOOK',
+        targetType: 'RestaurantNotificationWebhook',
+        targetId: existing.id,
+      });
+      return ctx.db.$transaction(async (tx) => {
+        const stopped = await tx.restaurantJob.updateMany({
+          where: { type: NOTIFICATION_WEBHOOK_JOB_TYPE, status: 'QUEUED' },
+          data: {
+            status: 'DEAD',
+            lastError: 'Webhook endpoint was deleted before delivery.',
+          },
+        });
+        await tx.restaurantNotificationWebhook.delete({ where: { id: existing.id } });
+        return { id: existing.id, stoppedDeliveries: stopped.count };
+      });
     }),
 
   testWebhook: webhookProcedure.input(z.object({}).strict()).mutation(async ({ ctx }) => {

@@ -14,9 +14,11 @@ const mocks = vi.hoisted(() => ({
   webhookFindFirst: vi.fn(),
   webhookUpdate: vi.fn(),
   webhookCreate: vi.fn(),
+  webhookDelete: vi.fn(),
   jobFindMany: vi.fn(),
   jobFindFirst: vi.fn(),
   jobCreate: vi.fn(),
+  jobUpdateMany: vi.fn(),
   queryRaw: vi.fn(),
   annotateAudit: vi.fn(),
   recordTrpcAudit: vi.fn(),
@@ -79,11 +81,13 @@ const db = {
     findFirst: mocks.webhookFindFirst,
     update: mocks.webhookUpdate,
     create: mocks.webhookCreate,
+    delete: mocks.webhookDelete,
   },
   restaurantJob: {
     findMany: mocks.jobFindMany,
     findFirst: mocks.jobFindFirst,
     create: mocks.jobCreate,
+    updateMany: mocks.jobUpdateMany,
   },
   $queryRaw: mocks.queryRaw,
   $transaction: vi.fn(async (work) => work(db)),
@@ -128,6 +132,7 @@ beforeEach(() => {
   mocks.jobFindMany.mockResolvedValue([]);
   mocks.jobFindFirst.mockResolvedValue(null);
   mocks.jobCreate.mockImplementation(async ({ data }) => ({ id: 'job_new', ...data }));
+  mocks.jobUpdateMany.mockResolvedValue({ count: 2 });
   mocks.queryRaw.mockResolvedValue([{ id: 'job_retry', status: 'QUEUED' }]);
   mocks.settingCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
     id: 'setting_1',
@@ -269,9 +274,54 @@ describe('signed webhook administration', () => {
       lastFailure: null,
       updatedAt: new Date(),
     });
+    mocks.jobFindMany
+      .mockResolvedValueOnce([{ id: 'recent_1', status: 'SUCCEEDED' }])
+      .mockResolvedValueOnce([{ id: 'dead_older_than_recent_window', status: 'DEAD' }]);
     const status = await caller().webhookStatus({});
     expect(status.config).toMatchObject({ signingSecretConfigured: true });
+    expect(status.deadLetters).toEqual([
+      { id: 'dead_older_than_recent_window', status: 'DEAD' },
+    ]);
     expect(JSON.stringify(status)).not.toContain('ciphertext-only');
+    expect(mocks.jobFindMany).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: {
+          type: 'notification.webhook.deliver.v1',
+          status: { not: 'DEAD' },
+        },
+        take: 20,
+      })
+    );
+    expect(mocks.jobFindMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: { type: 'notification.webhook.deliver.v1', status: 'DEAD' },
+      })
+    );
+  });
+
+  it('deletes the secret-bearing endpoint and dead-letters queued work atomically', async () => {
+    mocks.webhookFindFirst.mockResolvedValue({ id: 'config_1' });
+    mocks.webhookDelete.mockResolvedValue({ id: 'config_1' });
+
+    await expect(caller().deleteWebhook({ confirmation: 'DELETE' })).resolves.toEqual({
+      id: 'config_1',
+      stoppedDeliveries: 2,
+    });
+    expect(mocks.jobUpdateMany).toHaveBeenCalledWith({
+      where: { type: 'notification.webhook.deliver.v1', status: 'QUEUED' },
+      data: {
+        status: 'DEAD',
+        lastError: 'Webhook endpoint was deleted before delivery.',
+      },
+    });
+    expect(mocks.webhookDelete).toHaveBeenCalledWith({ where: { id: 'config_1' } });
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), {
+      action: 'DELETE_RESTAURANT_NOTIFICATION_WEBHOOK',
+      targetType: 'RestaurantNotificationWebhook',
+      targetId: 'config_1',
+    });
   });
 
   it('rejects a non-HTTPS endpoint as a 400 with an actionable message', async () => {

@@ -419,6 +419,30 @@ function NotificationsView(props: NotificationsViewProps) {
                 </Button>
               </form>
             </div>
+            {webhook.config ? (
+              <form
+                action={action}
+                className="space-y-3 rounded-[var(--radius-sm)] border border-destructive bg-destructive-background p-4"
+              >
+                <HiddenRouteState filter={filter} cursor={cursor} branch={matrixBranch?.id} />
+                <input type="hidden" name="intent" value="delete-webhook" />
+                <input type="hidden" name="confirmation" value="DELETE" />
+                <div>
+                  <p className="font-semibold text-destructive-foreground">Remove webhook</p>
+                  <p className="mt-1 text-sm text-text-muted">
+                    This permanently deletes the encrypted signing secret. Queued deliveries become
+                    dead letters so they can be retried after a new endpoint is configured.
+                  </p>
+                </div>
+                <label className="flex items-start gap-2 text-sm text-text-body">
+                  <input className="mt-1" name="confirmed" required type="checkbox" />
+                  I understand that the endpoint and signing secret will be deleted.
+                </label>
+                <Button type="submit" variant="destructive">
+                  Remove webhook
+                </Button>
+              </form>
+            ) : null}
             <dl className="grid gap-3 text-sm sm:grid-cols-2">
               <div>
                 <dt className="font-mono text-xs uppercase text-text-muted">Last success</dt>
@@ -433,6 +457,36 @@ function NotificationsView(props: NotificationsViewProps) {
                 </dd>
               </div>
             </dl>
+            {webhook.deadLetters.length ? (
+              <div className="space-y-2 border-t border-border-subtle pt-4">
+                <h3 className="font-semibold text-text-strong">Dead letters requiring action</h3>
+                <ul className="divide-y divide-border-subtle">
+                  {webhook.deadLetters.map((event) => (
+                    <li className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center" key={event.id}>
+                      <div className="min-w-0 flex-1">
+                        <StatusPill status="DEAD" label="Dead letter" tone="danger" />
+                        <p className="mt-1 font-mono text-xs break-all text-text-muted">
+                          {event.id} · {event.attempts} attempt{event.attempts === 1 ? '' : 's'}
+                        </p>
+                        {event.lastError ? (
+                          <p className="mt-1 text-sm break-words text-destructive-foreground">
+                            {event.lastError}
+                          </p>
+                        ) : null}
+                      </div>
+                      <form action={action}>
+                        <HiddenRouteState filter={filter} cursor={cursor} branch={matrixBranch?.id} />
+                        <input type="hidden" name="intent" value="retry-webhook" />
+                        <input type="hidden" name="eventId" value={event.id} />
+                        <Button disabled={!webhook.config?.enabled} type="submit" variant="secondary">
+                          Retry
+                        </Button>
+                      </form>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             {webhook.deliveries.length ? (
               <ul className="divide-y divide-border-subtle border-t border-border-subtle">
                 {webhook.deliveries.map((event) => (
@@ -461,20 +515,6 @@ function NotificationsView(props: NotificationsViewProps) {
                         </p>
                       ) : null}
                     </div>
-                    {event.status === 'DEAD' ? (
-                      <form action={action}>
-                        <HiddenRouteState
-                          filter={filter}
-                          cursor={cursor}
-                          branch={matrixBranch?.id}
-                        />
-                        <input type="hidden" name="intent" value="retry-webhook" />
-                        <input type="hidden" name="eventId" value={event.id} />
-                        <Button type="submit" variant="secondary">
-                          Retry
-                        </Button>
-                      </form>
-                    ) : null}
                   </li>
                 ))}
               </ul>
@@ -869,6 +909,14 @@ export default async function RestaurantNotificationsPage({
           await caller.testWebhook({});
           success = 'Webhook test delivery queued.';
           break;
+        case 'delete-webhook': {
+          if (field(form, 'confirmed') !== 'on') {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: 'Confirm webhook removal.' });
+          }
+          const result = await caller.deleteWebhook({ confirmation: 'DELETE' });
+          success = `Webhook removed. ${result.stoppedDeliveries} queued deliver${result.stoppedDeliveries === 1 ? 'y is' : 'ies are'} available as dead letters.`;
+          break;
+        }
         case 'retry-webhook': {
           const result = await caller.retryWebhook({ eventId: field(form, 'eventId') });
           success = retryWebhookNotice(result.status);
