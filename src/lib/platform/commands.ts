@@ -21,6 +21,7 @@ import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { emailSchema } from '@/lib/email-address';
+import { organizationRolePermissionsSchema } from '@/lib/organization-role-permissions';
 import { ianaTimezone } from '@/lib/timezone';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
 import { OrganizationVertical } from '@/generated/prisma/enums';
@@ -2353,39 +2354,47 @@ async function runCommand(
             .regex(/^[a-z0-9._-]+$/),
           name: requiredText,
           description: optionalText.optional(),
-          permissions: z
-            .array(
-              z.object({
-                capability: z.string().trim().min(1).max(150),
-                effect: z.enum(['ALLOW', 'DENY']),
-              })
-            )
-            .max(250)
-            .default([]),
+          permissions: organizationRolePermissionsSchema.default([]),
         })
         .parse(payload);
       const { id: roleId, permissions, ...role } = input;
-      const existing = roleId
-        ? await db.organizationRole.findUnique({ where: { id: roleId } })
-        : null;
-      if (existing?.isSystem) {
-        throw new PlatformSecurityError('System roles cannot be modified.', 400);
-      }
-      const saved = roleId
-        ? await db.organizationRole.update({ where: { id: roleId }, data: role })
-        : await db.organizationRole.create({ data: role });
-      await db.organizationRolePermission.deleteMany({
-        where: { organizationRoleId: saved.id },
-      });
-      if (permissions.length) {
-        await db.organizationRolePermission.createMany({
-          data: permissions.map((permission) => ({
-            organizationId: input.organizationId,
-            organizationRoleId: saved.id,
-            ...permission,
-          })),
+      const saved = await db.$transaction(async (tx) => {
+        const existing = roleId
+          ? await (async () => {
+              await tx.$queryRaw`SELECT "id" FROM "organization_roles" WHERE "id" = ${roleId} AND "organizationId" = ${input.organizationId} FOR UPDATE`;
+              return tx.organizationRole.findFirst({
+                where: { id: roleId, organizationId: input.organizationId },
+              });
+            })()
+          : null;
+        if (roleId && !existing) {
+          throw new PlatformSecurityError('Organization role not found.', 400);
+        }
+        if (existing?.isSystem) {
+          throw new PlatformSecurityError('System roles cannot be modified.', 400);
+        }
+        const result = roleId
+          ? await tx.organizationRole.update({
+              where: {
+                organizationId_id: { organizationId: input.organizationId, id: roleId },
+              },
+              data: role,
+            })
+          : await tx.organizationRole.create({ data: role });
+        await tx.organizationRolePermission.deleteMany({
+          where: { organizationRoleId: result.id, organizationId: input.organizationId },
         });
-      }
+        if (permissions.length) {
+          await tx.organizationRolePermission.createMany({
+            data: permissions.map((permission) => ({
+              organizationId: input.organizationId,
+              organizationRoleId: result.id,
+              ...permission,
+            })),
+          });
+        }
+        return result;
+      });
       return {
         targetType: 'OrganizationRole',
         targetId: saved.id,
