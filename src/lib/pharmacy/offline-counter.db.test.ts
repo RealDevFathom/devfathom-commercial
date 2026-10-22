@@ -736,6 +736,40 @@ describeIfDatabase('PH-OFF OFF-01 — the append-only command log', () => {
     expect(message).toBe('SEQUENCE_CONFLICT');
   });
 
+  it('requires contiguous per-device sequences and refuses late lower commands', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'log-fifo');
+
+    const gap = await refusal(ORG_A, (db) =>
+      deps.log.recordOfflineCommand(
+        db,
+        scopeOf(fixture),
+        command(fixture, { sequence: 2, idempotencyKey: 'gap-key' })
+      )
+    );
+    expect(gap).toContain('OFFLINE_COMMAND_SEQUENCE_OUT_OF_ORDER');
+
+    await inOrg(ORG_A, (db) =>
+      deps.log.recordOfflineCommand(db, scopeOf(fixture), command(fixture))
+    );
+    const late = await refusal(ORG_A, (db) =>
+      deps.log.recordOfflineCommand(
+        db,
+        scopeOf(fixture),
+        command(fixture, { idempotencyKey: 'late-key' })
+      )
+    );
+    expect(late).toContain('OFFLINE_COMMAND_SEQUENCE_OUT_OF_ORDER');
+
+    const second = await inOrg(ORG_A, (db) =>
+      deps.log.recordOfflineCommand(
+        db,
+        scopeOf(fixture),
+        command(fixture, { sequence: 2, idempotencyKey: 'second-key' })
+      )
+    );
+    expect(second.command.sequence).toBe(2);
+  });
+
   it('the identity of a recorded command is immutable and it is never deleted', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'log-immutable');
     const recorded = await inOrg(ORG_A, (db) =>

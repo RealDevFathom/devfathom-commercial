@@ -56,6 +56,16 @@ export class PharmacyOfflineCommandError extends Error {
   }
 }
 
+function assertSameCommand(
+  stored: { action: string; payloadHash: string },
+  action: PharmacyOfflineAction,
+  payloadHash: string
+) {
+  if (stored.action !== action || stored.payloadHash !== payloadHash) {
+    throw new PharmacyOfflineCommandError('IDEMPOTENCY_CONFLICT');
+  }
+}
+
 export type OfflineCommandScope = {
   organizationId: string;
   branchId: string;
@@ -105,6 +115,21 @@ export async function recordOfflineCommand(
 
   const payloadHash = commandPayloadHash(input.payload);
 
+  // Read an idempotent retry before inserting. The database FIFO trigger runs
+  // before uniqueness conflict handling, so a late retry must not be mistaken
+  // for a new, out-of-order command after the durable cursor has advanced.
+  const existing = await db.pharmacyOfflineCommand.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      deviceId: input.deviceId,
+      idempotencyKey: input.idempotencyKey,
+    },
+  });
+  if (existing) {
+    assertSameCommand(existing, input.action, payloadHash);
+    return { command: existing, replayed: existing.attempts > 0 || existing.status !== 'PENDING' };
+  }
+
   // One statement, so two concurrent replays of the same key cannot both pass a
   // read-then-write gap. The read-back afterwards is what turns "did nothing"
   // into either a legitimate replay or a conflict.
@@ -138,9 +163,7 @@ export async function recordOfflineCommand(
     // counter already used this sequence for a different command.
     throw new PharmacyOfflineCommandError('SEQUENCE_CONFLICT');
   }
-  if (stored.action !== input.action || stored.payloadHash !== payloadHash) {
-    throw new PharmacyOfflineCommandError('IDEMPOTENCY_CONFLICT');
-  }
+  assertSameCommand(stored, input.action, payloadHash);
 
   const replayed = stored.attempts > 0 || stored.status !== 'PENDING';
   return { command: stored, replayed };
