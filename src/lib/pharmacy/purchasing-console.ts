@@ -248,6 +248,7 @@ function conversionLabel(
   chain: readonly { level: string; unitsPerParent: number }[],
   units: number
 ) {
+  if (level === 'UNIT' && units === 1) return '1 unit';
   if (chain.length <= 1) return `1 ${level} = ${units} units`;
   const steps: string[] = [];
   let running = 1;

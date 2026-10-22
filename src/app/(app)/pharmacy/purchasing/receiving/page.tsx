@@ -14,6 +14,7 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { describeCanonicalUnits } from '@/lib/pharmacy/pack-conversion';
 import type {
   GoodsReceiptDetail,
   MedicineOption,
@@ -999,7 +1000,14 @@ function CaptureFieldset({
         <p className="mt-1 text-xs text-text-muted">{prefill.warnings.join(' ')}</p>
       ) : null}
       {unitsPerPack ? (
-        <Derived label="Pack conversion" value={`1 pack = ${unitsPerPack} units`} />
+        <Derived
+          label="Pack conversion"
+          value={
+            unitsPerPack === 1
+              ? describeCanonicalUnits(1)
+              : `1 pack = ${describeCanonicalUnits(unitsPerPack)}`
+          }
+        />
       ) : null}
       <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <TextField

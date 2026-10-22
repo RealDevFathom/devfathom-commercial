@@ -100,8 +100,9 @@ export function packConversions(
  */
 export function describePackConversion(conversion: PackConversion, packs = 1): string {
   const units = conversion.canonicalUnitsPerPack * packs;
+  if (conversion.level === 'UNIT' && units === 1) return '1 unit';
   const label = `${packs} ${conversion.level}${packs === 1 ? '' : 's'}`;
-  if (conversion.chain.length <= 1) return `${label} = ${units} units`;
+  if (conversion.chain.length <= 1) return `${label} = ${describeCanonicalUnits(units)}`;
   const inner = conversion.chain
     .slice(1)
     .map((step, index) => {
@@ -111,5 +112,10 @@ export function describePackConversion(conversion: PackConversion, packs = 1): s
       return `${multiplier} ${step.level}${multiplier === 1 ? '' : 's'}`;
     })
     .join(' = ');
-  return `${label} = ${inner} = ${units} units`;
+  return `${label} = ${inner} = ${describeCanonicalUnits(units)}`;
+}
+
+/** Human-readable canonical-unit count for purchasing surfaces. */
+export function describeCanonicalUnits(units: number): string {
+  return `${units} ${units === 1 ? 'unit' : 'units'}`;
 }

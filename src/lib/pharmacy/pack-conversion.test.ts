@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  describeCanonicalUnits,
   describePackConversion,
   isEffective,
   packConversions,
@@ -128,6 +129,17 @@ describe('isEffective', () => {
 });
 
 describe('describePackConversion', () => {
+  it('collapses a single UNIT to the grammatically correct canonical count', () => {
+    const [unit] = packConversions(
+      [level({ id: 'unit', level: 'UNIT', unitsPerParent: 1 })],
+      AT
+    );
+
+    expect(describePackConversion(unit!)).toBe('1 unit');
+    expect(describeCanonicalUnits(1)).toBe('1 unit');
+    expect(describeCanonicalUnits(2)).toBe('2 units');
+  });
+
   it('states the whole chain for a nested pack', () => {
     const [carton] = packConversions(
       [
