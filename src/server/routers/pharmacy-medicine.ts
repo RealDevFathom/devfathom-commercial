@@ -507,7 +507,7 @@ export const pharmacyMedicineRouter = router({
     .input(z.object({ name: z.string().trim().min(1).max(200) }).strict())
     .mutation(({ ctx, input }) => ctx.db.ingredient.create({ data: input })),
 
-  createMedicine: protectedProcedure
+  createMedicine: capabilityProcedure('pharmacy:catalogue-review')
     .input(
       z
         .object({
@@ -956,7 +956,7 @@ export const pharmacyMedicineRouter = router({
     })
   ),
 
-  publishAssertions: adminProcedure
+  publishAssertions: capabilityProcedure('pharmacy:catalogue-review')
     .input(z.object({ assertionIds: z.array(z.string().min(1).max(200)).min(1).max(20) }).strict())
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {

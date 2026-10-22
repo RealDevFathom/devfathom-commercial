@@ -76,7 +76,12 @@ import {
 import type { ReceivingScope } from '@/lib/pharmacy/goods-receipt';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import {
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  protectedProcedure,
+  router,
+} from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 /**
@@ -430,7 +435,7 @@ const purchasingRouter = router({
 
   // ----- PUR-02 requisition -----
 
-  createRequisition: protectedProcedure
+  createRequisition: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({

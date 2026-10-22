@@ -127,6 +127,23 @@ describe('requisition input bounds', () => {
     canonicalUnitsPerPack: 10,
   };
 
+  it('requires procurement permission before catalog lookups or writes', async () => {
+    mocks.can.mockResolvedValue(false);
+
+    await expect(
+      caller().createRequisition({ reference: 'REQ-1', lines: [line] })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:procurement',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+    expect(db.medicine.findFirst).not.toHaveBeenCalled();
+    expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
+  });
+
   it('rejects oversized line collections and identifiers before catalog lookups', async () => {
     for (const lines of [
       Array.from({ length: 101 }, () => line),

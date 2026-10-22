@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
-  return { hasModule };
+  return { hasModule, can: vi.fn() };
 });
+vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -67,10 +68,33 @@ function caller(enabledModules = ['pharmacy-core']) {
 
 beforeEach(() => {
   db = makeDb();
+  mocks.can.mockReset().mockResolvedValue(true);
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 
 describe('pharmacy medicine tenant and entitlement boundaries', () => {
+  it.each([
+    [
+      'createMedicine',
+      () =>
+        caller().createMedicine({ productName: 'Medicine', productFamily: 'PHARMACEUTICAL' }),
+    ],
+    ['publishAssertions', () => caller().publishAssertions({ assertionIds: ['assertion_a'] })],
+  ])('requires the exact catalogue-review grant before %s does DB work', async (_name, invoke) => {
+    mocks.can.mockResolvedValue(false);
+
+    await expect(invoke()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:catalogue-review',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+    expect(db.ingredient.findFirst).not.toHaveBeenCalled();
+    expect(db.medicine.create).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
   it('rejects oversized medicine arrays before ingredient lookups or writes', async () => {
     const strength = { ingredientId: 'ingredient_a', value: 500, unit: 'mg' };
     const assertion = {
