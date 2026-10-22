@@ -1,0 +1,6 @@
+sku,name,generic,strength,packing,batch,expiry,quantity
+,Missing SKU,Paracetamol,500 mg,10x10,B-1,02/27,2
+BAD-DATE,Impossible expiry,Example,10 mg,10x10,B-2,31/02/2027,1
+BAD-PACK,Ambiguous pack,Example,10 mg,ten by ten,B-3,03/27,1
+BAD-QTY,Fractional stock,Example,10 mg,10x10,B-4,03/27,1.5
+SHORT,Short row,Example
