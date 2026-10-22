@@ -47,7 +47,11 @@ export async function isOptedIn(
   customerId: string
 ): Promise<boolean> {
   const event = await store.latestConsent(organizationId, customerId);
-  return event?.organizationId === organizationId && event.customerId === customerId && event.optedIn;
+  return Boolean(
+    event?.organizationId === organizationId &&
+      event.customerId === customerId &&
+      event.optedIn
+  );
 }
 
 type Can = (subject: Subject, action: Action) => Promise<boolean>;
@@ -87,7 +91,13 @@ export class WhatsAppConsentService {
   }
 
   async recordConsent(input: Omit<WhatsAppConsentEvent, 'occurredAt'>): Promise<void> {
-    const oldValue = await this.isOptedIn(input.organizationId, input.customerId);
+    const latest = await this.store.latestConsent(input.organizationId, input.customerId);
+    const tenantLatest =
+      latest?.organizationId === input.organizationId && latest.customerId === input.customerId
+        ? latest
+        : null;
+    if (tenantLatest?.optedIn === input.optedIn) return;
+    const oldValue = tenantLatest?.optedIn ?? false;
     const occurredAt = this.now();
     await this.store.appendConsent({ ...input, occurredAt });
     await this.store.appendAudit({
@@ -130,7 +140,9 @@ export class WhatsAppConsentService {
     if (input.enabled && !(await this.adapter.isProviderConfigured(input.organizationId))) {
       throw new Error('AI_PROVIDER_NOT_CONFIGURED');
     }
-    const oldValue = (await this.store.settings(input.organizationId))?.ownerEnabled ?? false;
+    const settings = await this.store.settings(input.organizationId);
+    const oldValue =
+      settings?.organizationId === input.organizationId ? settings.ownerEnabled : false;
     await this.store.setOwnerEnabled(input.organizationId, input.enabled);
     await this.store.appendAudit({
       organizationId: input.organizationId,
@@ -141,7 +153,8 @@ export class WhatsAppConsentService {
   }
 
   async aiEnabled(organizationId: string): Promise<boolean> {
-    const enabled = (await this.store.settings(organizationId))?.ownerEnabled ?? false;
+    const settings = await this.store.settings(organizationId);
+    const enabled = settings?.organizationId === organizationId && settings.ownerEnabled;
     return enabled && this.adapter.isProviderConfigured(organizationId);
   }
 

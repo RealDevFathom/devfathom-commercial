@@ -1,0 +1,29 @@
+[
+  {
+    "name": "new Abbasi Pharmacie tenant is AI-off by default",
+    "input": {
+      "organizationId": "abbasi-pharmacie",
+      "ownerEnabled": false,
+      "providerConfigured": true
+    },
+    "expected": { "aiEnabled": false }
+  },
+  {
+    "name": "owner toggle cannot compensate for a missing server secret",
+    "input": {
+      "organizationId": "abbasi-pharmacie",
+      "ownerEnabled": true,
+      "providerConfigured": false
+    },
+    "expected": { "aiEnabled": false }
+  },
+  {
+    "name": "configured provider and explicit owner opt-in enable AI",
+    "input": {
+      "organizationId": "abbasi-pharmacie",
+      "ownerEnabled": true,
+      "providerConfigured": true
+    },
+    "expected": { "aiEnabled": true }
+  }
+]

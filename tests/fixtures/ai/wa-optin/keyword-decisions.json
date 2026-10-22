@@ -1,0 +1,27 @@
+[
+  {
+    "name": "Pakistani customer sends a plain STOP",
+    "input": { "text": "STOP" },
+    "expected": { "stopKeyword": true }
+  },
+  {
+    "name": "customer stop request is whitespace and case insensitive",
+    "input": { "text": "  Stop   All  " },
+    "expected": { "stopKeyword": true }
+  },
+  {
+    "name": "explicit English unsubscribe is a denial",
+    "input": { "text": "Unsubscribe" },
+    "expected": { "stopKeyword": true }
+  },
+  {
+    "name": "ordinary refill request is not treated as consent withdrawal",
+    "input": { "text": "Please refill amoxicillin 500mg" },
+    "expected": { "stopKeyword": false }
+  },
+  {
+    "name": "substring containing stop is not treated as withdrawal",
+    "input": { "text": "Do not stop my refill" },
+    "expected": { "stopKeyword": false }
+  }
+]
