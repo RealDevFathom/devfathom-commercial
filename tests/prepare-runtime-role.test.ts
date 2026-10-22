@@ -54,7 +54,7 @@ describe('runtime role preparation', () => {
       'secret-value',
     ]);
     expect(queries.filter(({ sql }) => /^(GRANT|ALTER DEFAULT PRIVILEGES)/.test(sql))).toHaveLength(
-      6
+      7
     );
     expect([...output.log.mock.calls, ...output.warn.mock.calls].flat().join('\n')).not.toContain(
       'secret-value'
@@ -79,7 +79,7 @@ describe('runtime role preparation', () => {
     await prepareRuntimeRole(client, secret, output);
 
     expect(queries.filter(({ sql }) => /^(GRANT|ALTER DEFAULT PRIVILEGES)/.test(sql))).toHaveLength(
-      6
+      7
     );
     expect(output.warn).toHaveBeenCalledWith(
       'password: skipped (permission denied; final posture verified)'
@@ -118,5 +118,21 @@ describe('runtime role preparation', () => {
     const { client, queries } = clientWithRoles([privileged, privileged]);
     await expect(prepareRuntimeRole(client, undefined, logger())).rejects.toThrow();
     expect(queries.filter(({ sql }) => /^(CREATE|ALTER) ROLE/.test(sql))).toEqual([]);
+  });
+
+  it('grants only the exact pg_trgm function used by catalogue search', async () => {
+    const { client, queries } = clientWithRoles([correctRole, correctRole]);
+
+    await prepareRuntimeRole(client, undefined, logger());
+
+    const functionGrants = queries
+      .map(({ sql }) => sql)
+      .filter((sql) => /^GRANT EXECUTE ON FUNCTION/.test(sql));
+    expect(functionGrants).toEqual([
+      'GRANT EXECUTE ON FUNCTION public.similarity_op(text, text) TO devfathom_app',
+    ]);
+    expect(queries.map(({ sql }) => sql).join('\n')).not.toMatch(
+      /GRANT\s+EXECUTE\s+ON\s+ALL\s+FUNCTIONS|\bTO\s+PUBLIC\b/i
+    );
   });
 });

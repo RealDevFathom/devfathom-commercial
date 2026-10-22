@@ -9,9 +9,11 @@ and compared each substantive change with the current code.
 
 - `f09ced61` (`fix(pharmacy): grant app role pg_trgm search execution (#233)`) remained valuable.
   Extension preparation revokes `PUBLIC EXECUTE` from `pg_trgm`, while the medicine RLS test had to
-  grant `public.similarity_op(text,text)` to its disposable runtime role explicitly. The new
-  migration now gives the production runtime role that same exact privilege. It deliberately does
-  not grant all extension functions, grant `PUBLIC`, or alter default privileges.
+  grant `public.similarity_op(text,text)` to its disposable runtime role explicitly. Runtime-role
+  preparation now gives the production runtime role that same exact privilege, after ensuring the
+  role exists. It deliberately does not grant all extension functions, grant `PUBLIC`, or alter
+  default function privileges. Keeping this grant out of a migration also preserves fresh-database
+  deployment order: migrations run before runtime-role preparation creates `devfathom_app`.
 
 ## Skipped
 
