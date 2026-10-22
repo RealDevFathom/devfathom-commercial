@@ -14,7 +14,6 @@ const suffix = randomUUID().replaceAll('-', '');
 const org = `qa130_${suffix}`;
 const other = `${org}_other`;
 const third = `${org}_third`;
-const runtimeRole = `qa130_${suffix}`;
 const id = (key: string) => `${org}_${key}`;
 const migration = readFileSync(
   'prisma/migrations/20261021110000_canonical_pharmacy_capabilities/migration.sql',
@@ -40,11 +39,9 @@ const legacy: Record<string, string[]> = {
     assertDisposableRlsDatabase(url!);
     await client.connect();
     await client.query('BEGIN');
-    await client.query(`SELECT set_config('app.is_platform_admin','true',true)`);
-    await client.query(`CREATE ROLE "${runtimeRole}" NOSUPERUSER NOBYPASSRLS`);
-    await client.query(`GRANT USAGE ON SCHEMA public TO "${runtimeRole}"`);
     await client.query(
-      `GRANT SELECT ON organization_roles, organization_role_permissions, user_permission_overrides, users TO "${runtimeRole}"`
+      `SELECT set_config('app.is_platform_admin','true',true),set_config('app.current_organization_id',$1,true)`,
+      [org]
     );
     for (const organizationId of [org, other, third]) {
       await client.query(
@@ -238,7 +235,8 @@ const legacy: Record<string, string[]> = {
   });
 
   it('enforces tenant RLS and authorizes migrated grants without coarse ADMIN authority', async () => {
-    await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
+    // The disposable database owner is intentionally used directly: FORCE RLS keeps it subject to
+    // tenant policies, without making the test depend on CREATEROLE merely to manufacture a probe.
     await client.query(
       `SELECT set_config('app.is_platform_admin','false',true),set_config('app.current_organization_id',$1,true)`,
       [org]
@@ -284,6 +282,5 @@ const legacy: Record<string, string[]> = {
     );
     expect(forced.rows).toHaveLength(2);
     expect(forced.rows.every((r) => r.relforcerowsecurity)).toBe(true);
-    await client.query('RESET ROLE');
   });
 });
