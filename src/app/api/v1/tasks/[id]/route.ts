@@ -183,6 +183,7 @@ export const PATCH = withApiAuth(
           where: {
             taskId: id,
             user: {
+              role: { not: 'ADMIN' },
               projectMembers: { none: { projectId: targetColumn.board.project.id } },
             },
           },
@@ -191,16 +192,19 @@ export const PATCH = withApiAuth(
 
       // Additive column default assignees on move (skipDuplicates keeps existing intact)
       if (isColumnMove && targetColumn && targetColumn.defaultAssignees.length > 0) {
-        const destinationMembers = await tx.projectMember.findMany({
+        const authorizedDefaults = await tx.user.findMany({
           where: {
-            projectId: targetColumn.board.project.id,
-            userId: { in: targetColumn.defaultAssignees.map((assignee) => assignee.userId) },
+            id: { in: targetColumn.defaultAssignees.map((assignee) => assignee.userId) },
+            OR: [
+              { role: 'ADMIN' },
+              { projectMembers: { some: { projectId: targetColumn.board.project.id } } },
+            ],
           },
-          select: { userId: true },
+          select: { id: true },
         });
-        if (destinationMembers.length > 0) {
+        if (authorizedDefaults.length > 0) {
           await tx.taskAssignee.createMany({
-            data: destinationMembers.map((member) => ({ taskId: id, userId: member.userId })),
+            data: authorizedDefaults.map((user) => ({ taskId: id, userId: user.id })),
             skipDuplicates: true,
           });
         }

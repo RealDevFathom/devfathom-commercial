@@ -24,12 +24,16 @@ const mocks = vi.hoisted(() => {
         id: 'target-column',
         name: 'In Progress',
         board: { project: { id: 'destination-project', name: 'Destination' } },
-        defaultAssignees: [{ userId: 'stale-default' }, { userId: 'destination-member' }],
+        defaultAssignees: [
+          { userId: 'stale-default' },
+          { userId: 'admin-default' },
+          { userId: 'destination-member' },
+        ],
       })),
     },
     taskAssignee,
-    projectMember: {
-      findMany: vi.fn(async () => [{ userId: 'destination-member' }]),
+    user: {
+      findMany: vi.fn(async () => [{ id: 'admin-default' }, { id: 'destination-member' }]),
     },
   };
   return { db, taskAssignee };
@@ -64,7 +68,7 @@ beforeEach(() => {
 });
 
 describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
-  it('drops destination non-members and only applies authorized column defaults', async () => {
+  it('keeps admins and members eligible when cleaning assignees and applying defaults', async () => {
     const response = await PATCH(
       new Request('https://example.test/api/v1/tasks/task-1', {
         method: 'PATCH',
@@ -82,19 +86,26 @@ describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
       where: {
         taskId: 'task-1',
         user: {
+          role: { not: 'ADMIN' },
           projectMembers: { none: { projectId: 'destination-project' } },
         },
       },
     });
-    expect(mocks.db.projectMember.findMany).toHaveBeenCalledWith({
+    expect(mocks.db.user.findMany).toHaveBeenCalledWith({
       where: {
-        projectId: 'destination-project',
-        userId: { in: ['stale-default', 'destination-member'] },
+        id: { in: ['stale-default', 'admin-default', 'destination-member'] },
+        OR: [
+          { role: 'ADMIN' },
+          { projectMembers: { some: { projectId: 'destination-project' } } },
+        ],
       },
-      select: { userId: true },
+      select: { id: true },
     });
     expect(mocks.taskAssignee.createMany).toHaveBeenLastCalledWith({
-      data: [{ taskId: 'task-1', userId: 'destination-member' }],
+      data: [
+        { taskId: 'task-1', userId: 'admin-default' },
+        { taskId: 'task-1', userId: 'destination-member' },
+      ],
       skipDuplicates: true,
     });
   });
