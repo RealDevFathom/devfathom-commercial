@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-99-m8-l6-restaurant-insights-dashboard-reports-console-codex-product-engineer-2-after-l4
+Branch: WHA-99-m8-l6-restaurant-insights-dashboard-reports-console-codex-product-engineer-2-after-l4
+HEAD: d0f8ff4dfb3e87824ebe3c3db14bd86a53954459
+Mode: applied
+Excluded (secrets): 0
