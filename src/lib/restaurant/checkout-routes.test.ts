@@ -274,18 +274,7 @@ describe('checkout money serialization', () => {
       restaurantOrder: {
         findFirst: vi.fn().mockResolvedValue({ id: 'order-1', deliveryFulfillment: null }),
       },
-      restaurantBillLine: {
-        findMany: vi.fn().mockResolvedValue([
-          {
-            id: 'line-1',
-            billId: 'bill-1',
-            name: 'Item',
-            quantity: 1,
-            lineSubtotal: decimal('970.00'),
-            compAmount: decimal('0.00'),
-          },
-        ]),
-      },
+      restaurantBillLine: { findMany: vi.fn().mockResolvedValue([]) },
     } as unknown as ScopedDb;
     const summary = await getOrderSettlementForBranch(summaryDb, 'order-1', 'branch-1');
 

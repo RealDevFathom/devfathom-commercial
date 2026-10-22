@@ -737,63 +737,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(after).toEqual(before);
     });
 
-    it.each(['manager', 'job-role approver', 'invalid PIN'])(
-      'denies the public MVP comp endpoint with a %s and leaves persistence unchanged',
-      async (approval) => {
-        const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['8.00']);
-        const cut = await call(deps.routes.bill, {
-          secret: ctx.posA.secret,
-          session: token,
-          key: uniqueKey('mvp-comp-cut'),
-          body: { orderId, split: { kind: 'NONE' } },
-        });
-        expect(cut.status).toBe(200);
-        const billId = (cut.json.billIds as string[])[0]!;
-        const snapshot = async () => ({
-          counts: await moneyCounts(),
-          ...(await deps.withTenantDb(orgA, async (tx) => ({
-            bill: await tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } }),
-            lines: await tx.restaurantBillLine.findMany({
-              where: { billId },
-              orderBy: { id: 'asc' },
-            }),
-            device: await tx.restaurantRegisteredDevice.findUniqueOrThrow({
-              where: { id: ctx.posA.deviceId },
-            }),
-            credentials: await tx.restaurantOperatorCredential.findMany({ orderBy: { id: 'asc' } }),
-          }))),
-        });
-        const before = await snapshot();
-        const key = uniqueKey('mvp-comp');
-        const body = {
-          billId,
-          billLineId: before.lines[0]!.id,
-          reason: 'kitchen error',
-          approving: {
-            staffProfileId: approval === 'job-role approver' ? ctx.floorApprover : ctx.managerA,
-            type: 'PIN',
-            secret: approval === 'invalid PIN' ? '000000' : PIN,
-          },
-        };
-
-        // A retry with the same key must also deny without consuming it or authenticating.
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-          const denied = await call(deps.routes.comp, {
-            secret: ctx.posA.secret,
-            session: token,
-            key,
-            body,
-          });
-          expect(denied).toEqual({
-            status: 403,
-            json: { error: 'Complimentary items are not available in this version.' },
-          });
-          expect(await snapshot()).toEqual(before);
-        }
-      }
-    );
-
-    it('retains domain comp and manager co-authorization coverage through the test adapter', async () => {
+    it('comps a bill line with manager co-authorization (orders:complimentary)', async () => {
       const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['8.00']);
       const cut = await call(deps.routes.bill, {
         secret: ctx.posA.secret,

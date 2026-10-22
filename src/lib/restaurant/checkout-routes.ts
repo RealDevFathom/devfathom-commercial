@@ -707,6 +707,17 @@ export async function getOrderSettlementForBranch(
       // otherwise the register hides tax and shows a due that cannot settle the bill
       // (QA-143). A SETTLED bill already carries its frozen tax/total.
       const quote = b.status === 'OPEN' ? await quoteOpenBillSettlement(db, b.id, at) : null;
+      const lines = await db.restaurantBillLine.findMany({
+        where: { billId: b.id },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          name: true,
+          quantity: true,
+          lineSubtotal: true,
+          compAmount: true,
+        },
+      });
       return {
         id: b.id,
         status: b.status,
@@ -717,7 +728,7 @@ export async function getOrderSettlementForBranch(
         deliveryFeeTotal: money(b.deliveryFeeTotal),
         compTotal: money(b.compTotal),
         receiptNumber: b.receiptNumber,
-        lines: (linesByBill.get(b.id) ?? []).map((line) => ({
+        lines: lines.map((line) => ({
           id: line.id,
           name: line.name,
           quantity: line.quantity,

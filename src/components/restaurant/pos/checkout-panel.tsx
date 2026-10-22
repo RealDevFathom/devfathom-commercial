@@ -6,7 +6,6 @@ import {
   RestaurantStaffSelect,
   type RestaurantStaffOption,
 } from '@/components/restaurant/restaurant-staff-select';
-
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -109,9 +108,7 @@ function CompControl({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const eligibleLines = lines.filter((line) => Number(line.compAmount) === 0);
-  const managers = operators.filter(
-    (operator) => operator.id !== actingOperatorId || operator.canSelfApprove
-  );
+  const managers = operators.filter((operator) => operator.id !== actingOperatorId);
 
   function reset() {
     setLineId('');
@@ -124,17 +121,12 @@ function CompControl({
   async function submit(event: FormEvent) {
     event.preventDefault();
     const trimmedReason = reason.trim();
-    if (!lineId || !trimmedReason || !managerId || !/^\d{4,8}$/.test(managerPin) || submitting) {
-      setError(
-        'Select an item and an eligible approver, enter a reason, and enter their 4–8 digit PIN.'
-      );
-      return;
-    }
+    if (!lineId || !trimmedReason || !managerId || submitting) return;
     const body = {
       billId,
       billLineId: lineId,
       reason: trimmedReason,
-      approving: { staffProfileId: managerId, type: 'PIN' as const, secret: managerPin },
+      approving: { staffProfileId: managerId, type: 'PIN', secret: managerPin },
     };
     setSubmitting(true);
     setError(null);
@@ -142,20 +134,12 @@ function CompControl({
       await request('/api/restaurant/checkout/comp', {
         method: 'POST',
         body,
-        // Never retain a manager credential in the idempotency intent cache.
-        intent: `checkout-comp:${JSON.stringify({
-          billId,
-          billLineId: lineId,
-          reason: trimmedReason,
-          approvingStaffProfileId: managerId,
-        })}`,
+        intent: `checkout-comp:${JSON.stringify(body)}`,
       });
-      setManagerPin('');
       setOpen(false);
       reset();
       await onComped();
     } catch (caught) {
-      setManagerPin('');
       setError(errorDetails(caught).message);
     } finally {
       setSubmitting(false);
@@ -175,7 +159,7 @@ function CompControl({
         type="button"
         variant="outline"
         className="mb-4 h-11"
-        disabled={disabled || eligibleLines.length === 0 || managers.length === 0}
+        disabled={disabled || eligibleLines.length === 0}
         onClick={() => setOpen(true)}
       >
         Comp item
@@ -185,8 +169,8 @@ function CompControl({
           <DialogHeader>
             <DialogTitle>Comp bill item</DialogTitle>
             <DialogDescription>
-              Select an item and verify the approving manager PIN. The original price remains in the
-              audit record.
+              Select an item and record distinct manager approval. The original price remains in
+              the audit record.
             </DialogDescription>
           </DialogHeader>
           <div className="my-4 space-y-3">
@@ -197,7 +181,7 @@ function CompControl({
                 required
                 value={lineId}
                 onChange={(event) => setLineId(event.target.value)}
-                className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
               >
                 <option value="">Select an item</option>
                 {eligibleLines.map((line) => (
@@ -212,7 +196,6 @@ function CompControl({
               <Textarea
                 id={`comp-reason-${billId}`}
                 required
-                maxLength={240}
                 value={reason}
                 onChange={(event) => setReason(event.target.value)}
               />
@@ -238,36 +221,17 @@ function CompControl({
                 pattern="[0-9]{4,8}"
                 minLength={4}
                 maxLength={8}
-                autoComplete="off"
                 value={managerPin}
                 onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, ''))}
               />
             </div>
-            {error ? (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            ) : null}
+            {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
           </div>
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={submitting}
-              onClick={() => setOpen(false)}
-            >
+            <Button type="button" variant="outline" disabled={submitting} onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button
-              type="submit"
-              disabled={
-                submitting ||
-                !lineId ||
-                !reason.trim() ||
-                !managerId ||
-                !/^\d{4,8}$/.test(managerPin)
-              }
-            >
+            <Button type="submit" disabled={submitting || !reason.trim()}>
               {submitting ? 'Comping…' : 'Confirm comp'}
             </Button>
           </DialogFooter>
@@ -985,17 +949,15 @@ export function CheckoutPanel({
                 </dl>
                 {bill.status === 'OPEN' ? (
                   <>
-                    {COMPLIMENTARY_ITEMS_AVAILABLE ? (
-                      <CompControl
-                        billId={bill.id}
-                        lines={bill.lines ?? []}
-                        request={request}
-                        operators={operators}
-                        actingOperatorId={actingOperatorId}
-                        disabled={busy || tenderPending}
-                        onComped={loadSummary}
-                      />
-                    ) : null}
+                    <CompControl
+                      billId={bill.id}
+                      lines={bill.lines ?? []}
+                      request={request}
+                      operators={operators}
+                      actingOperatorId={actingOperatorId}
+                      disabled={busy || tenderPending}
+                      onComped={loadSummary}
+                    />
                     <TenderPad
                       billId={bill.id}
                       amountDue={bill.remainingDue}
