@@ -95,7 +95,7 @@ describe('team.inviteMember duplicate guard', () => {
     mocks.can.mockResolvedValue(true);
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_engineering' });
     mocks.count.mockResolvedValue(1);
-    mocks.queryRaw.mockResolvedValue([{ id: 'org_a' }]);
+    mocks.queryRaw.mockResolvedValue([{ seatLimit: 50 }]);
   });
 
   it.each([['ALEX@COMPANY.COM'], ['Alex@Company.com'], ['  alex@company.com  ']])(
@@ -165,6 +165,20 @@ describe('team.inviteMember duplicate guard', () => {
     expect(mocks.count.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.create.mock.invocationCallOrder[0]!
     );
+  });
+
+  it('uses a seat limit lowered while the invitation waited for the tenant lock', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.count.mockResolvedValue(5);
+    mocks.queryRaw.mockResolvedValue([{ seatLimit: 5 }]);
+
+    await expect(
+      caller(50).inviteMember({ ...invite, email: 'new.person@company.com' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Seat limit reached (5/5). Increase the organization license before inviting another member.',
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 
   it('does not consume or lock another seat when refreshing a pending invite', async () => {

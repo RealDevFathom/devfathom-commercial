@@ -186,17 +186,26 @@ export const teamRouter = router({
           // Serialize seat-consuming writes for this tenant, then use a live
           // count in the same transaction. The entitlement snapshot alone can
           // let concurrent invitations exceed the licensed seat limit.
-          await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
+          const [organization] = await tx.$queryRaw<Array<{ seatLimit: number }>>`
+            SELECT "seatLimit" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE
+          `;
+          if (!organization) {
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+          }
           const activeSeats = await tx.user.count({
             where: {
               organizationId,
               status: { in: ['ACTIVE', 'ON_LEAVE', 'INVITED'] },
             },
           });
-          if (activeSeats >= ctx.entitlements.seatLimit) {
+          // Read the limit from the locked row rather than the request-time
+          // entitlement snapshot. A platform update may have lowered it while
+          // this transaction was waiting for the lock.
+          const seatLimit = organization.seatLimit;
+          if (activeSeats >= seatLimit) {
             throw new TRPCError({
               code: 'FORBIDDEN',
-              message: `Seat limit reached (${activeSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
+              message: `Seat limit reached (${activeSeats}/${seatLimit}). Increase the organization license before inviting another member.`,
             });
           }
         }
