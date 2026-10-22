@@ -15,18 +15,46 @@ const recoveryFlowFiles = [
   'invite/[token]/accept-invite-form.tsx',
 ];
 
+const recoveryShellPath = '../components/auth/auth-recovery-shell.tsx';
+
 const source = (path: string) => readFileSync(resolve(process.cwd(), 'src/app', path), 'utf8');
+const recoveryShell = () => source(recoveryShellPath);
 
 describe('Studio account-recovery composition', () => {
   it.each(routePages)('%s uses the shared split authentication shell', (path) => {
     expect(source(path)).toContain('<AuthRecoveryShell');
   });
 
-  it.each(recoveryFlowFiles)('%s does not restore legacy or decorative styling', (path) => {
-    expect(source(path)).not.toMatch(/#[\da-f]{3,8}/i);
-    expect(source(path)).not.toMatch(
-      /(?:text|bg|border|ring)-brass|backdrop-blur|blur-\[120px\]|shadow-2xl/
-    );
+  it.each([...recoveryFlowFiles, recoveryShellPath])(
+    '%s does not restore legacy or decorative styling',
+    (path) => {
+      expect(source(path)).not.toMatch(/#[\da-f]{3,8}/i);
+      expect(source(path)).not.toMatch(
+        /(?:text|bg|border|ring)-(?:brass|teal)|backdrop-blur|blur-\[120px\]|shadow-(?:lg|xl|2xl)/
+      );
+    }
+  );
+
+  it('keeps the recovery form panel geometry aligned with sign-in', () => {
+    const login = source('login/page.tsx');
+    const shell = recoveryShell();
+
+    for (const layoutClass of [
+      'lg:grid-cols-[minmax(0,1.08fr)_minmax(26rem,0.92fr)]',
+      'w-full max-w-[25rem] animate-slide-up',
+      'border-l-2 border-primary pl-5 sm:pl-6',
+    ]) {
+      expect(login).toContain(layoutClass);
+      expect(shell).toContain(layoutClass);
+    }
+
+    expect(shell).not.toMatch(/max-w-\[30rem\]|rounded-md border|shadow-xs|\bwide\b/);
+  });
+
+  it('provides a keyboard-visible skip link to the recovery form', () => {
+    expect(recoveryShell()).toContain('href="#recovery-form"');
+    expect(recoveryShell()).toContain('id="recovery-form"');
+    expect(recoveryShell()).toContain('focus:not-sr-only');
   });
 
   it('gives every async recovery state a page heading', () => {
