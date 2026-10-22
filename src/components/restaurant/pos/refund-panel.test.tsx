@@ -92,6 +92,44 @@ describe('RefundPanel', () => {
     expect(submission?.[1]?.intent).not.toContain('1234');
   });
 
+  it('offers and submits a remaining tip when no principal remains', async () => {
+    const tipOnlyTender = {
+      ...tender,
+      refundedAmount: '24.00',
+      remainingAmount: '0.00',
+    };
+    const request = mockRequest(async (_path, options) =>
+      options?.method === 'POST'
+        ? {
+            amount: '0.00',
+            tipRefundAmount: '2.00',
+            businessDate: '2026-08-30',
+            paymentStatus: 'REFUNDED',
+            taxRefundAmount: '0.00',
+            serviceChargeRefundAmount: '0.00',
+            replayed: false,
+          }
+        : { tenders: [tipOnlyTender] }
+    );
+    await open(request);
+    fireEvent.change(screen.getByLabelText('Settled receipt'), {
+      target: { value: tipOnlyTender.tenderId },
+    });
+    expect(screen.getByLabelText('Refund amount')).toHaveValue('0.00');
+    expect(screen.getByLabelText('Tip refund')).toHaveValue('2.00');
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Return remaining tip' } });
+    fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
+    fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+    await screen.findByText('refund recorded');
+
+    const submission = vi
+      .mocked(request)
+      .mock.calls.find(([, options]) => options?.method === 'POST');
+    expect(submission?.[1]?.body).toMatchObject({ amount: '0.00', tipRefundAmount: '2.00' });
+  });
+
   it('uses the explicit server-side approval mode for a demo without exposing a PIN', async () => {
     const demoApproval = {
       staffProfileId: 'manager',
@@ -102,7 +140,7 @@ describe('RefundPanel', () => {
       options?.method === 'POST'
         ? {
             amount: '20.00',
-            tipRefundAmount: '0.00',
+            tipRefundAmount: '2.00',
             businessDate: '2026-08-30',
             paymentStatus: 'REFUNDED',
             taxRefundAmount: '2.50',
@@ -141,6 +179,7 @@ describe('RefundPanel', () => {
     expect(submission?.[1]?.body).toEqual({
       originalTenderId: tender.tenderId,
       amount: '20.00',
+      tipRefundAmount: '2.00',
       reason: 'Demo walkthrough',
       approving: { staffProfileId: 'manager', type: 'DEMO' },
     });

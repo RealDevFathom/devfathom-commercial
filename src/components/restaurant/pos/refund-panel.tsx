@@ -170,7 +170,7 @@ export function RefundPanel({
     setError(null);
     const next = tenders.find((tender) => tender.tenderId === id);
     setAmount(next?.remainingAmount ?? '');
-    setTipAmount('0.00');
+    setTipAmount(next?.tipRemainingAmount ?? '0.00');
   }
 
   function validate() {
@@ -180,11 +180,7 @@ export function RefundPanel({
       return demoApprovalExpiredMessage;
     }
     if (!selected) return 'Choose a refundable receipt.';
-    if (
-      !amountPattern.test(amount) ||
-      moneyNumber(amount) <= 0 ||
-      moneyNumber(amount) > moneyNumber(selected.remainingAmount)
-    )
+    if (!amountPattern.test(amount) || moneyNumber(amount) > moneyNumber(selected.remainingAmount))
       return 'Enter an amount within the remaining refundable balance.';
     if (
       !amountPattern.test(tipAmount) ||
@@ -192,6 +188,8 @@ export function RefundPanel({
       moneyNumber(tipAmount) > moneyNumber(selected.tipRemainingAmount)
     )
       return 'Enter a tip amount within the remaining tip balance.';
+    if (moneyNumber(amount) === 0 && moneyNumber(tipAmount) === 0)
+      return 'Enter a principal or tip amount to refund.';
     if (!reason.trim() || reason.trim().length > 240)
       return 'Enter a reason between 1 and 240 characters.';
     if (!managerId || managerId === actingOperatorId) return 'Select a distinct approving manager.';
