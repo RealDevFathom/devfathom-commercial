@@ -45,11 +45,12 @@ describe('PH-RPT metric contract', () => {
     expect(sql).not.toContain('SUM(t."amountMinor" - COALESCE(t."changeGivenMinor",0))');
   });
 
-  it('excludes expired qualified-person coverage from the command centre count', async () => {
+  it('counts only currently valid qualified-person coverage in the command centre', async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-03-10T12:00:00.000Z'));
+    const asOf = new Date('2026-03-10T12:00:00.000Z');
+    vi.setSystemTime(asOf);
     const queryRaw = vi.fn().mockResolvedValue([]);
-    const count = vi.fn().mockResolvedValue(0);
+    const coverageCount = vi.fn().mockResolvedValue(0);
 
     try {
       await readPharmacyOwnerCommandCentre(
@@ -58,15 +59,19 @@ describe('PH-RPT metric contract', () => {
           pharmacyRecallNotice: { count },
           pharmacySupplierClaim: { count },
           pharmacyReceivingException: { count },
-          branchRegulatoryProfile: { count },
+          branchRegulatoryProfile: { count: coverageCount },
         } as never,
         { branchIds: ['branch_1'], from: '2026-03-10', to: '2026-03-10' }
       );
 
-      expect(count).toHaveBeenCalledWith({
-        where: expect.objectContaining({
-          qualifiedPersonValidTo: { gt: new Date('2026-03-10T12:00:00.000Z') },
-        }),
+      expect(coverageCount).toHaveBeenCalledExactlyOnceWith({
+        where: {
+          branchId: { in: ['branch_1'] },
+          effectiveFrom: { lte: asOf },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: asOf } }],
+          qualifiedPersonValidFrom: { lte: asOf },
+          qualifiedPersonValidTo: { gt: asOf },
+        },
       });
     } finally {
       vi.useRealTimers();
