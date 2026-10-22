@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1368-verify-hw-independently-accept-or-reject-pharmacy-issued-receipt-identity-repair-c49b1afa
+Branch: WHA-1368-verify-hw-independently-accept-or-reject-pharmacy-issued-receipt-identity-repair-c49b1afa
+HEAD: c49b1afa252f20905269a044d09bdb0406eb7b60
+Mode: applied
+Excluded (secrets): 2
