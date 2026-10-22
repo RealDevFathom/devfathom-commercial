@@ -26,6 +26,7 @@ function record(model: string) {
 }
 
 const platformDb = {
+  $queryRawUnsafe: vi.fn(async () => [] as Array<{ id: string }>),
   platformPackage: {
     findUnique: vi.fn(async () => ({
       id: 'pkg_1',
@@ -44,6 +45,12 @@ const platformDb = {
   organizationDeployment: { create: record('deployment') },
   platformJob: { create: record('job') },
   organizationLifecycleEvent: { create: record('lifecycle') },
+  platformOpportunity: {
+    findUnique: vi.fn(),
+    update: record('opportunity'),
+  },
+  platformOpportunityStageEvent: { create: record('opportunityStageEvent') },
+  platformAccount: { update: record('account') },
   platformAuditLog: { create: record('audit') },
 };
 
@@ -341,6 +348,38 @@ describe('organization.create duplicate slug', () => {
     expect(error).toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
     expect(error).toMatchObject({ code: 'P2002' });
     expect(error).not.toBeInstanceOf(PlatformSecurityError);
+  });
+});
+
+describe('crm.opportunity.convert source validation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.userCreate.mockResolvedValue({ id: 'user_new' });
+  });
+
+  it('locks and rejects a missing opportunity before any onboarding write', async () => {
+    platformDb.$queryRawUnsafe.mockResolvedValueOnce([]);
+
+    const error = await executePlatformCommand(
+      actor,
+      'crm.opportunity.convert',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_missing' },
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect(error).toMatchObject({ status: 400, message: 'Opportunity not found.' });
+    expect(platformDb.$queryRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('FROM platform_opportunities'),
+      'opp_missing'
+    );
+    expect(platformDb.$queryRawUnsafe.mock.calls[0]?.[0]).toContain('FOR UPDATE');
+    expect(platformDb.platformPackage.findUnique).not.toHaveBeenCalled();
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+    expect(platformDb.organizationDeployment.create).not.toHaveBeenCalled();
+    expect(platformDb.platformJob.create).not.toHaveBeenCalled();
+    expect(platformDb.organizationLifecycleEvent.create).not.toHaveBeenCalled();
   });
 });
 

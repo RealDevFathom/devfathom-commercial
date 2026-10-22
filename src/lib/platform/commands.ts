@@ -839,6 +839,22 @@ async function createOrganizationRecord(
   }
 }
 
+/**
+ * Conversion must establish that its source still exists before onboarding can
+ * write anything. The row lock is held by withPlatformDb's transaction through
+ * the later opportunity/account association, preventing a concurrent delete or
+ * conversion from changing that premise midway through provisioning.
+ */
+async function lockOpportunityForConversion(db: PrismaClient, opportunityId: string) {
+  const opportunities = await db.$queryRawUnsafe<Array<{ id: string }>>(
+    'SELECT id FROM platform_opportunities WHERE id = $1 FOR UPDATE',
+    opportunityId
+  );
+  if (opportunities.length === 0) {
+    throw new PlatformSecurityError('Opportunity not found.', 400);
+  }
+}
+
 async function bootstrapOrganization(
   db: PrismaClient,
   actor: PlatformIdentity | null,
@@ -2813,6 +2829,7 @@ async function runCommand(
       if (!input.opportunityId) {
         throw new PlatformSecurityError('An opportunity is required for conversion.', 400);
       }
+      await lockOpportunityForConversion(db, input.opportunityId);
       const organization = await bootstrapOrganization(db, actor, input);
       return {
         targetType: 'Organization',
