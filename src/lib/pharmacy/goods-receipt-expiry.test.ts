@@ -75,6 +75,10 @@ function receiptDb(line: {
       create: vi.fn().mockResolvedValue({ id: 'batch' }),
     },
     pharmacyGoodsReceiptLine: { update: lineUpdate },
+    pharmacyPurchaseOrder: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      update: vi.fn().mockResolvedValue({}),
+    },
     pharmacyReceivingException: {
       create: vi.fn().mockResolvedValue({ id: 'ex', kind: 'DAMAGE', detail: '' }),
     },
@@ -91,6 +95,27 @@ beforeEach(() => {
 });
 
 describe('postGoodsReceipt expiry', () => {
+  it('rejects a legacy draft tied to an unsent order before creating stock', async () => {
+    const { db, batchFind } = receiptDb({ accepted: 10, rejected: 0, expiry: '2027-12-31' });
+    const receipt = await db.pharmacyGoodsReceipt.findFirst({ where: { id: 'gr' } });
+    expect(receipt).not.toBeNull();
+    vi.mocked(db.pharmacyGoodsReceipt.findFirst).mockResolvedValueOnce({
+      ...receipt!,
+      purchaseOrderId: 'po',
+    } as never);
+    vi.mocked(db.pharmacyPurchaseOrder.findFirst).mockResolvedValue({
+      id: 'po',
+      branchId: 'branch_a',
+      status: 'APPROVED',
+    } as never);
+
+    await expect(
+      postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT })
+    ).rejects.toMatchObject({ reason: 'INVALID_TRANSITION' });
+    expect(batchFind).not.toHaveBeenCalled();
+    expect(receiveLot).not.toHaveBeenCalled();
+  });
+
   it('does not put accepted units of an expired pack into stock', async () => {
     const { db, batchFind } = receiptDb({ accepted: 10, rejected: 0, expiry: '2025-12-31' });
     await expect(
