@@ -56,6 +56,9 @@ type Deps = {
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
   revokeDevice: (typeof import('@/lib/restaurant/devices'))['revokeDevice'];
   hashOperatorCredential: (typeof import('@/lib/restaurant/operator-credentials'))['hashOperatorCredential'];
+  bills: typeof import('@/lib/restaurant/bills');
+  orders: typeof import('@/lib/restaurant/orders');
+  tenders: typeof import('@/lib/restaurant/tenders');
   routes: Record<string, RouteModule>;
   terminal: { establish: RouteModule; unlock: RouteModule };
 };
@@ -242,28 +245,32 @@ async function moneyCounts() {
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, credentials, ...routeMods] = await Promise.all([
-    import('@/lib/tenancy/scoped-db'),
-    import('@/lib/restaurant/devices'),
-    import('@/lib/restaurant/operator-credentials'),
-    import('@/app/api/restaurant/checkout/bill/route'),
-    import('@/app/api/restaurant/checkout/comp/route'),
-    import('@/app/api/restaurant/checkout/tender/route'),
-    import('@/app/api/restaurant/checkout/refund/route'),
-    import('@/app/api/restaurant/checkout/summary/route'),
-    import('@/app/api/restaurant/checkout/receipt/route'),
-    import('@/app/api/restaurant/cash/drawer/open/route'),
-    import('@/app/api/restaurant/cash/drawer/current/route'),
-    import('@/app/api/restaurant/cash/drawer/movement/route'),
-    import('@/app/api/restaurant/cash/drawer/close/route'),
-    import('@/app/api/restaurant/cash/day/preview/route'),
-    import('@/app/api/restaurant/cash/day/current/route'),
-    import('@/app/api/restaurant/cash/day/close/route'),
-    import('@/app/api/restaurant/cash/day/correct/route'),
-    import('@/app/api/restaurant/terminal/establish/route'),
-    import('@/app/api/restaurant/terminal/unlock/route'),
-    import('@/app/api/restaurant/orders/close/route'),
-  ]);
+  const [scopedDb, devices, credentials, bills, orders, tenders, ...routeMods] =
+    await Promise.all([
+      import('@/lib/tenancy/scoped-db'),
+      import('@/lib/restaurant/devices'),
+      import('@/lib/restaurant/operator-credentials'),
+      import('@/lib/restaurant/bills'),
+      import('@/lib/restaurant/orders'),
+      import('@/lib/restaurant/tenders'),
+      import('@/app/api/restaurant/checkout/bill/route'),
+      import('@/app/api/restaurant/checkout/comp/route'),
+      import('@/app/api/restaurant/checkout/tender/route'),
+      import('@/app/api/restaurant/checkout/refund/route'),
+      import('@/app/api/restaurant/checkout/summary/route'),
+      import('@/app/api/restaurant/checkout/receipt/route'),
+      import('@/app/api/restaurant/cash/drawer/open/route'),
+      import('@/app/api/restaurant/cash/drawer/current/route'),
+      import('@/app/api/restaurant/cash/drawer/movement/route'),
+      import('@/app/api/restaurant/cash/drawer/close/route'),
+      import('@/app/api/restaurant/cash/day/preview/route'),
+      import('@/app/api/restaurant/cash/day/current/route'),
+      import('@/app/api/restaurant/cash/day/close/route'),
+      import('@/app/api/restaurant/cash/day/correct/route'),
+      import('@/app/api/restaurant/terminal/establish/route'),
+      import('@/app/api/restaurant/terminal/unlock/route'),
+      import('@/app/api/restaurant/orders/close/route'),
+    ]);
 
   const [
     bill,
@@ -291,6 +298,9 @@ beforeAll(async () => {
     enrollDevice: devices.enrollDevice,
     revokeDevice: devices.revokeDevice,
     hashOperatorCredential: credentials.hashOperatorCredential,
+    bills,
+    orders,
+    tenders,
     routes: {
       bill,
       comp,
@@ -510,6 +520,114 @@ beforeAll(async () => {
 // Today's UTC business date (branches default to UTC + a 00:00 cutoff).
 const TODAY = new Date().toISOString().slice(0, 10);
 const uniqueKey = (label: string) => `${label}-${suffix}-${randomBytes(3).toString('hex')}`;
+
+describeIfDatabase('Issue #404 — final tender closes a dine-in order (real DB)', () => {
+  it('atomically settles the bill, closes the order, releases its table, and replays exactly', async () => {
+    const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['10.00']);
+    const tableId = `table_paid_${suffix}`;
+    await deps.withTenantDb(orgA, async (tx) => {
+      const floor = await tx.restaurantFloor.create({
+        data: { branchId: ctx.branchA, name: `Paid floor ${suffix}` },
+      });
+      await tx.restaurantTable.create({
+        data: { id: tableId, floorId: floor.id, code: `P-${suffix}`, capacity: 2 },
+      });
+      await tx.restaurantOrderTable.create({
+        data: { orderId, tableId, active: true, linkReason: 'SEATED' },
+      });
+    });
+
+    const cutActor = {
+      staffProfileId: ctx.staffA,
+      deviceId: ctx.posA.deviceId,
+      idempotencyKey: uniqueKey('paid-cut'),
+    };
+    const cut = await deps.withTenantDb(orgA, (tx) =>
+      deps.bills.cutBills(tx, {
+        orderId,
+        branchId: ctx.branchA,
+        split: { kind: 'NONE' },
+        actor: cutActor,
+      })
+    );
+    const billId = cut.billIds[0]!;
+    await deps.withTenantDb(orgA, (tx) =>
+      deps.orders.closeOrder(tx, {
+        orderId,
+        actor: { ...cutActor, idempotencyKey: uniqueKey('paid-pending') },
+      })
+    );
+    expect(
+      await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantOrder.findUniqueOrThrow({ where: { id: orderId }, select: { status: true } })
+      )
+    ).toEqual({ status: 'PAYMENT_PENDING' });
+
+    const tenderActor = { ...cutActor, idempotencyKey: uniqueKey('paid-tender') };
+    const first = await deps.withTenantDb(orgA, (tx) =>
+      deps.tenders.applyTender(tx, {
+        billId,
+        tender: { type: 'OTHER', amount: '10.00' },
+        actor: tenderActor,
+      })
+    );
+    expect(first).toMatchObject({ settled: true, replayed: false });
+
+    const afterFirst = await deps.withTenantDb(orgA, async (tx) => ({
+      order: await tx.restaurantOrder.findUniqueOrThrow({
+        where: { id: orderId },
+        select: { status: true, closedAt: true },
+      }),
+      bill: await tx.restaurantBill.findUniqueOrThrow({
+        where: { id: billId },
+        select: { status: true },
+      }),
+      tableLink: await tx.restaurantOrderTable.findFirstOrThrow({
+        where: { orderId, tableId },
+        select: { active: true, unlinkedAt: true },
+      }),
+      tenderCount: await tx.restaurantTender.count({ where: { billId } }),
+      closedEventCount: await tx.restaurantOrderEvent.count({
+        where: { orderId, eventType: 'order.closed' },
+      }),
+    }));
+    expect(afterFirst.order.status).toBe('CLOSED');
+    expect(afterFirst.order.closedAt).not.toBeNull();
+    expect(afterFirst.bill.status).toBe('SETTLED');
+    expect(afterFirst.tableLink).toMatchObject({ active: false });
+    expect(afterFirst.tableLink.unlinkedAt).toEqual(afterFirst.order.closedAt);
+    expect(afterFirst.tenderCount).toBe(1);
+    expect(afterFirst.closedEventCount).toBe(1);
+
+    const replay = await deps.withTenantDb(orgA, (tx) =>
+      deps.tenders.applyTender(tx, {
+        billId,
+        tender: { type: 'OTHER', amount: '10.00' },
+        actor: tenderActor,
+      })
+    );
+    expect(replay).toEqual({ ...first, replayed: true });
+    const afterReplay = await deps.withTenantDb(orgA, async (tx) => ({
+      order: await tx.restaurantOrder.findUniqueOrThrow({
+        where: { id: orderId },
+        select: { status: true, closedAt: true },
+      }),
+      bill: await tx.restaurantBill.findUniqueOrThrow({
+        where: { id: billId },
+        select: { status: true },
+      }),
+      tableLink: await tx.restaurantOrderTable.findFirstOrThrow({
+        where: { orderId, tableId },
+        select: { active: true, unlinkedAt: true },
+      }),
+      tenderCount: await tx.restaurantTender.count({ where: { billId } }),
+      closedEventCount: await tx.restaurantOrderEvent.count({
+        where: { orderId, eventType: 'order.closed' },
+      }),
+    }));
+    expect(afterReplay).toEqual(afterFirst);
+  });
+});
 
 describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
   // ── Happy path per route (a real service flow on branch A) ──────────────────

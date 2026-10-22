@@ -1278,6 +1278,43 @@ export async function cancelOrder(
 
 export type CloseOrderInput = { orderId: string; actor: CommandActor; now?: Date };
 
+/** Complete the paid-order transition inside an existing money transaction.
+ * The final tender uses this seam so bill settlement, order close, table release,
+ * and close side effects commit (or roll back) as one unit. */
+export async function closeSettledOrderInTransaction(
+  tx: ScopedDb,
+  input: CloseOrderInput
+): Promise<boolean> {
+  const closedAt = input.now ?? new Date();
+  const order = await loadOrder(tx, input.orderId);
+  if (order.status !== 'PAYMENT_PENDING') return false;
+
+  const settlement = await evaluateOrderSettlement(tx, order.id);
+  if (!settlement.settled) return false;
+
+  const itemStatuses = order.items.map((item) => item.status);
+  assertOrderStatusChange(order.status, 'CLOSED', itemStatuses);
+  await tx.restaurantOrder.update({
+    where: { id: order.id },
+    data: { status: 'CLOSED', closedAt },
+  });
+  await tx.restaurantOrderTable.updateMany({
+    where: { orderId: order.id, active: true },
+    data: { active: false, unlinkedAt: closedAt },
+  });
+  await record(tx, order, input.actor, 'order.closed', {});
+  await earnLoyaltyForClosedOrder(tx, order.id, closedAt);
+  await postOrderRecipeConsumption(
+    tx,
+    order.id,
+    order.branchId,
+    order.items,
+    { staffProfileId: input.actor.staffProfileId, deviceId: input.actor.deviceId },
+    closedAt
+  );
+  return true;
+}
+
 /** Close an order. Guarded: every item must be resolved (served or voided) and no
  * remake may remain unresolved (§11.1). Walks SERVED→PAYMENT_PENDING→CLOSED
  * (pay-before-fulfilment is disabled in M4, C5); an order not yet fully served is
@@ -1347,26 +1384,7 @@ export async function closeOrder(
         'NOT_SETTLED'
       );
     }
-    assertOrderStatusChange(status, 'CLOSED', itemStatuses);
-    await tx.restaurantOrder.update({
-      where: { id: order.id },
-      data: { status: 'CLOSED', closedAt },
-    });
-    await tx.restaurantOrderTable.updateMany({
-      where: { orderId: order.id, active: true },
-      data: { active: false, unlinkedAt: closedAt },
-    });
-    await record(tx, order, input.actor, 'order.closed', {});
-    await earnLoyaltyForClosedOrder(tx, order.id, closedAt);
-    // M6-L2: recipe consumption at order close (C6 disposition applied per item).
-    await postOrderRecipeConsumption(
-      tx,
-      order.id,
-      order.branchId,
-      order.items,
-      { staffProfileId: input.actor.staffProfileId, deviceId: input.actor.deviceId },
-      closedAt
-    );
+    await closeSettledOrderInTransaction(tx, { ...input, now: closedAt });
     await recordIdempotentResult(tx, input.actor, order.id);
     return { orderId: order.id, replayed: false };
   });

@@ -31,6 +31,7 @@ import {
   ZERO,
 } from './money';
 import { appendPaymentEvent, getPaymentProvider } from './payment-adapter';
+import { closeSettledOrderInTransaction } from './orders';
 import {
   quoteTaxSettlement,
   splitFractionalMoney,
@@ -430,6 +431,11 @@ export async function applyTenderInTransaction(
     );
     settled = true;
     receiptNumber = result.receiptNumber;
+    await closeSettledOrderInTransaction(tx, {
+      orderId: bill.orderId,
+      actor: input.actor,
+      now: at,
+    });
   }
 
   if (input.tender.type === 'CARD' && input.tender.terminalConfirmation) {
