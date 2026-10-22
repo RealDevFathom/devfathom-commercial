@@ -72,7 +72,15 @@ function fixture() {
     pharmacyDrawerMovement: { create: vi.fn() },
     pharmacySale: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyRefund: { findMany: vi.fn().mockResolvedValue([]) },
-    user: { findMany: vi.fn().mockResolvedValue([{ id: 'actor-1', name: 'Ayesha Karim' }]) },
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+      findMany: vi.fn().mockResolvedValue([{ id: 'actor-1', name: 'Ayesha Karim' }]),
+    },
   };
   const caller = app.createCaller({
     db,
@@ -98,6 +106,45 @@ afterEach(() => {
 });
 
 describe('pharmacy close family refusals', () => {
+  it.each(['closePreview', 'closeDay', 'dailyClose'] as const)(
+    'honors an explicit pharmacy:manage DENY through %s',
+    async (procedure) => {
+      f.db.user.findUnique.mockResolvedValue({
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [{ capability: 'pharmacy:manage', effect: 'DENY' }],
+      });
+      const call =
+        procedure === 'closePreview'
+          ? f.caller.closePreview({ branchId: BRANCH, businessDate })
+          : procedure === 'dailyClose'
+            ? f.caller.dailyClose({ branchId: BRANCH, businessDate })
+            : f.caller.closeDay({
+                branchId: BRANCH,
+                businessDate,
+                sourceHash: previewHash,
+                counts: [],
+                varianceNote: '',
+              });
+
+      await expect(call).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.pharmacyDailyClose.findFirst).not.toHaveBeenCalled();
+      expect(f.db.pharmacyDailyClose.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects a daily close date containing a time before reading close data', async () => {
+    await expect(
+      f.caller.dailyClose({
+        branchId: BRANCH,
+        businessDate: new Date('2026-10-20T12:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.db.pharmacyDailyClose.findFirst).not.toHaveBeenCalled();
+    expect(f.db.pharmacyDailyClose.create).not.toHaveBeenCalled();
+  });
+
   it.each(['closePreview', 'closeDay', 'dailyClose'] as const)(
     'refuses a future workspace day through %s before reading or writing close data',
     async (procedure) => {

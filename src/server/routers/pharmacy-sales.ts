@@ -412,8 +412,11 @@ const closeDate = z
       date.getUTCMilliseconds() === 0,
     'Choose a date without a time.'
   );
-function requireCloseAccess(ctx: TRPCContext) {
-  if (ctx.session?.user.role !== 'ADMIN')
+async function requireCloseAccess(ctx: TRPCContext) {
+  if (
+    ctx.session?.user.role !== 'ADMIN' ||
+    !(await can(subjectFromSession(ctx.session.user), 'pharmacy:manage', undefined, { db: ctx.db }))
+  )
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'Administrator access is required to reconcile and close a day.',
@@ -515,7 +518,7 @@ export const pharmacySalesRouter = router({
   closePreview: protectedProcedure
     .input(z.object({ branchId, businessDate: closeDate }).strict())
     .query(async ({ ctx, input }) => {
-      requireCloseAccess(ctx);
+      await requireCloseAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
           readPharmacyClose(
@@ -550,7 +553,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      requireCloseAccess(ctx);
+      await requireCloseAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
           closePharmacyDay(
@@ -710,14 +713,14 @@ export const pharmacySalesRouter = router({
       z
         .object({
           branchId,
-          businessDate: z.date(),
+          businessDate: closeDate,
           reopenReason: z.string().trim().min(1).optional(),
           controlledCountHook: z.record(z.string(), z.unknown()).optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      requireCloseAccess(ctx);
+      await requireCloseAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
           cutPharmacyDailyClose(
