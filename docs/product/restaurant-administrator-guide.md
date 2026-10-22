@@ -528,6 +528,25 @@ their scheduled times, Delivered on time is `2 ÷ 3 × 100 = 66.67%`.
 - **Browser validation:** Finance denial before protected ledger reads is browser-proven on
   `f2c59457`; authorized finance reconciliation remains pending.
 
+### 18. Recover background operations
+
+- **Navigate:** Restaurant → Operations. The operator route is not shipped yet; until it is, do not
+  substitute database access or ask an operator to type a job ID. Escalate to an authorized service
+  administrator who can use the tenant-scoped operations contract.
+- **Required:** The `restaurant-sop` module and `reports:operational` capability. Queue, execution,
+  dead-letter, outbox, and webhook-inbox views remain restricted to the current organization.
+- **Inspect first:** Match the failed job to its execution attempts and review its redacted error.
+  Check outbox/inbox state to determine whether an external effect already occurred. Never copy raw
+  provider payloads or secrets into support notes.
+- **Retry decision:** Requeue only a `DEAD` job, only after establishing that repeating its handler is
+  safe. The explicit action retains the dead row, returns the same successor if the request is
+  replayed, and records the old/new job relationship in the audit trail. Do not retry `RUNNING`,
+  `QUEUED`, `SUCCEEDED`, or permanently `FAILED` work.
+- **Expected result:** A new queued successor appears; the original stays `DEAD` as evidence. Refresh
+  before repeating an uncertain request, then follow the successor and its execution history.
+- **Escalate:** Escalate an unexplained crash loop, a delivery whose external outcome is uncertain,
+  missing authorization, or any workflow that exposes only an internal ID.
+
 ## Recovery checklist
 
 1. Preserve the error and do not repeat a financial mutation blindly.

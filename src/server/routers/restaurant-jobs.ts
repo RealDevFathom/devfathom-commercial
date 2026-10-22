@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 
 import { Prisma } from '@/generated/prisma/client';
 import { SchedulerError, enqueue } from '@/lib/restaurant/scheduler';
+import { annotateAudit } from '../audit';
 import { capabilityProcedure, router } from '../trpc';
 
 /**
@@ -215,14 +216,26 @@ export const restaurantJobsRouter = router({
         });
       }
       try {
-        // Create a fresh job (no idempotency key) — the dead row stays as an audit
-        // record; the requeue is a NEW unit of work, not a resurrection.
-        const { job } = await enqueue(ctx.db, {
+        // The stable key makes response loss/browser replay safe and durably links
+        // the successor to the retained dead row without resurrecting that row.
+        const { job, deduplicated } = await enqueue(ctx.db, {
           type: dead.type,
           payload: (dead.payload ?? {}) as Prisma.InputJsonValue,
           maxAttempts: dead.maxAttempts,
+          idempotencyKey: `dead-job-requeue:${dead.id}`,
         });
-        return { requeuedFrom: dead.id, jobId: job.id, status: job.status };
+        annotateAudit(ctx, {
+          category: 'SYSTEM',
+          operation: 'EXECUTE',
+          action: 'restaurant.job.requeue',
+          description: deduplicated
+            ? 'Returned the existing retry for a dead restaurant job.'
+            : 'Queued a retry for a dead restaurant job.',
+          targetType: 'RestaurantJob',
+          targetId: dead.id,
+          metadata: { requeuedFrom: dead.id, successorJobId: job.id, deduplicated },
+        });
+        return { requeuedFrom: dead.id, jobId: job.id, status: job.status, deduplicated };
       } catch (error) {
         if (error instanceof SchedulerError) {
           throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
