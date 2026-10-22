@@ -100,34 +100,74 @@ function caller(role = 'ADMIN') {
 
 describe('pharmacy administrator bootstrap reads', () => {
   beforeEach(() => {
-    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:manage');
+    mocks.can.mockResolvedValue(false);
     mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
-    mocks.userFindUnique.mockResolvedValue({ preferences: null });
+    mocks.userFindUnique.mockImplementation(async (args) =>
+      'preferences' in args.select
+        ? { preferences: null }
+        : {
+            organizationRole: {
+              permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }],
+            },
+            permissionOverrides: [],
+          }
+    );
   });
 
-  it('allows an Owner pharmacy namespace grant to read branches', async () => {
+  it('allows an Administrator exact pharmacy grant to read branches', async () => {
     await expect(caller().branches()).resolves.toMatchObject({
       organizationId: 'org_1',
       branches: [{ id: 'branch_1', name: 'Main' }],
     });
-    expect(mocks.can).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'user_admin', role: 'ADMIN' }),
-      'pharmacy:manage',
-      undefined,
-      expect.objectContaining({ source: 'TRPC' })
-    );
+    expect(mocks.can).not.toHaveBeenCalled();
   });
 
-  it('allows an Owner pharmacy namespace grant to read the report catalog', async () => {
+  it('allows an Administrator exact pharmacy grant to read the report catalog', async () => {
     await expect(caller().catalog()).resolves.toEqual(
       expect.objectContaining({ reports: expect.any(Array), metrics: expect.anything() })
     );
   });
 
-  it('allows an Owner pharmacy namespace grant to read dashboard preferences', async () => {
+  it('allows an Administrator exact pharmacy grant to read dashboard preferences', async () => {
     await expect(caller().getPreferences()).resolves.toEqual(
       pharmacyDashboardDefault('ADMIN')
     );
+  });
+
+  it('lets an exact active user deny override the role allow and reports fallback', async () => {
+    mocks.can.mockResolvedValue(true);
+    mocks.userFindUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [{ capability: 'pharmacy:manage', effect: 'DENY' }],
+    });
+
+    await expect(caller().branches()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).not.toHaveBeenCalled();
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
+
+  it('does not treat wildcard pharmacy grants as pharmacy-administrator grants', async () => {
+    mocks.userFindUnique.mockResolvedValue({
+      organizationRole: { permissions: [{ capability: 'pharmacy:*', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    });
+
+    await expect(caller().catalog()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_admin', role: 'ADMIN' }),
+      'reports:operational',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+  });
+
+  it('preserves access for an existing operational-reports grant when no exact pharmacy rule exists', async () => {
+    mocks.can.mockResolvedValue(true);
+    mocks.userFindUnique.mockResolvedValue({ organizationRole: null, permissionOverrides: [] });
+
+    await expect(caller().catalog()).resolves.toMatchObject({ reports: expect.any(Array) });
   });
 });
 
