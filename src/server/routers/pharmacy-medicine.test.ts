@@ -3,8 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
-  return { hasModule };
+  return { hasModule, can: vi.fn(async () => false) };
 });
+vi.mock('@/lib/abac', () => ({
+  can: mocks.can,
+  subjectFromSession: (user: unknown) => user,
+}));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -67,10 +71,42 @@ function caller(enabledModules = ['pharmacy-core']) {
 
 beforeEach(() => {
   db = makeDb();
+  mocks.can.mockResolvedValue(false);
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 
 describe('pharmacy medicine tenant and entitlement boundaries', () => {
+  it.each(['no exact grant', 'exact allow plus wildcard deny'])(
+    'does not create a saleable or provenance-bearing medicine after ABAC denies: %s',
+    async () => {
+      await expect(
+        caller().createMedicine({
+          productName: 'Reviewed medicine',
+          productFamily: 'PHARMACEUTICAL',
+          saleable: true,
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.medicine.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('allows the exact catalogue-review decision to reach saleability validation', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(
+      caller().createMedicine({
+        productName: 'Reviewed medicine',
+        productFamily: 'PHARMACEUTICAL',
+        saleable: true,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_a' }),
+      'pharmacy:catalogue-review',
+      undefined,
+      expect.objectContaining({ db, source: 'TRPC' })
+    );
+  });
+
   it('rejects a cross-tenant ingredient ID substitution', async () => {
     await expect(
       caller().createMedicine({

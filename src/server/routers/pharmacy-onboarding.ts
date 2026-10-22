@@ -41,6 +41,7 @@ import {
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
 import { assertBranchMayOperate, BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
+import { can, subjectFromSession } from '@/lib/abac';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
 /** The gates an operator may attest to; the rest are answered from data. */
@@ -54,6 +55,24 @@ const gateInput = z.enum(
     ...PharmacyOnboardingGate[],
   ]
 );
+
+// Regulatory profile changes require both tenant administration and the
+// exact-grant-only pharmacy safety capability.
+const regulatoryAdminProcedure = adminProcedure.use(async ({ ctx, next }) => {
+  const allowed = await can(
+    subjectFromSession(ctx.session.user),
+    'pharmacy:safety',
+    undefined,
+    { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+  );
+  if (!allowed) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy safety permission is required for regulatory profile changes.',
+    });
+  }
+  return next({ ctx });
+});
 
 function badRequest(field: string, message: string): TRPCError {
   return new TRPCError({ code: 'BAD_REQUEST', message, cause: fieldError(field, message) });
@@ -373,7 +392,7 @@ export const pharmacyOnboardingRouter = router({
    * failure can never leave the branch with its history closed and no version in
    * force.
    */
-  saveRegulatoryProfile: adminProcedure
+  saveRegulatoryProfile: regulatoryAdminProcedure
     .input(regulatoryProfileInput)
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements.organizationId;

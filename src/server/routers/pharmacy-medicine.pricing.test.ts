@@ -3,6 +3,7 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   confirm: vi.fn(async () => []),
   list: vi.fn(async () => ({ rows: [] })),
+  setPrice: vi.fn(async () => ({ id: 'price-1' })),
 }));
 vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
@@ -20,7 +21,7 @@ vi.mock('@/lib/pharmacy/pricing', () => ({
   confirmPriceChanges: mocks.confirm,
   priceIntelligence: mocks.list,
   priceOverrides: vi.fn(),
-  setManualPackPrice: vi.fn(),
+  setManualPackPrice: mocks.setPrice,
 }));
 import { pharmacyMedicineRouter } from './pharmacy-medicine';
 import type { TRPCContext } from '../trpc';
@@ -63,5 +64,41 @@ describe('price router authorization', () => {
     await expect(caller().priceOverrides({ branchId: 'sibling' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
+  });
+
+  it('denies a manual price write without the exact safety grant', async () => {
+    await expect(
+      caller().setPackPrice({
+        packLevelId: 'pack-1',
+        mrpMinor: 100,
+        sellingPriceMinor: 90,
+        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.setPrice).not.toHaveBeenCalled();
+  });
+
+  it('allows a manual price write only when the safety decision allows it', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:safety');
+    await caller().setPackPrice({
+      packLevelId: 'pack-1',
+      mrpMinor: 100,
+      sellingPriceMinor: 90,
+      effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    expect(mocks.setPrice).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when central ABAC resolves an exact allow plus wildcard deny to deny', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(
+      caller().setPackPrice({
+        packLevelId: 'pack-1',
+        mrpMinor: 100,
+        sellingPriceMinor: null,
+        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.setPrice).not.toHaveBeenCalled();
   });
 });

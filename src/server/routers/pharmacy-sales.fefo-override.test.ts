@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const auth = vi.hoisted(() => ({ can: vi.fn(async () => true) }));
+vi.mock('@/lib/abac', () => ({
+  can: auth.can,
+  subjectFromSession: (user: unknown) => user,
+}));
+
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -88,9 +94,37 @@ function lastAudit() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  auth.can.mockResolvedValue(true);
 });
 
 describe('pharmacySales.addLine batch override (PH-A4)', () => {
+  it('refuses the override before opening a transaction when safety ABAC denies', async () => {
+    const f = fixture();
+    auth.can.mockResolvedValue(false);
+
+    await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(auth.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'actor-1' }),
+      'pharmacy:safety',
+      undefined,
+      expect.objectContaining({ db: f.context.db, source: 'TRPC' })
+    );
+    expect(f.transaction).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when exact safety allow is overridden by a wildcard deny', async () => {
+    const f = fixture();
+    // `can()` is the central resolver; false is the final DENY-wins decision.
+    auth.can.mockResolvedValue(false);
+    await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(f.transaction).not.toHaveBeenCalled();
+  });
+
   it('passes the override to the domain and labels the audit row with the override id', async () => {
     const f = fixture();
     vi.mocked(addSaleLine).mockResolvedValue({

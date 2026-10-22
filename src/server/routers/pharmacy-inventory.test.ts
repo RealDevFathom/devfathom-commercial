@@ -13,8 +13,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
-  return { hasModule };
+  return { hasModule, can: vi.fn(async () => true) };
 });
+vi.mock('@/lib/abac', () => ({
+  can: mocks.can,
+  subjectFromSession: (user: unknown) => user,
+}));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -109,10 +113,42 @@ function caller(overrides: { enabledModules?: string[]; userId?: string | null }
 
 beforeEach(() => {
   db = makeDb();
+  mocks.can.mockResolvedValue(true);
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 
 describe('pharmacy inventory entitlement and tenant boundaries', () => {
+  it.each(['no exact grant', 'exact allow plus wildcard deny'])(
+    'denies every safety-state mutation without a final safety ALLOW: %s',
+    async () => {
+      mocks.can.mockResolvedValue(false);
+      const api = caller();
+      const attempts = [
+        () => api.setBatchState({
+          manufacturingBatchId: 'batch-1',
+          state: 'QUARANTINED',
+          reason: 'suspected damage',
+        }),
+        () => api.quarantinePart({
+          branchId: 'branch-a',
+          inventoryLotId: 'lot-1',
+          stockLocationId: 'location-1',
+          units: 1,
+          reason: 'suspected damage',
+          idempotencyKeyPrefix: 'quarantine-1',
+        }),
+        () => api.createRecall({ reference: 'recall-1', reason: 'regulator notice' }),
+        () => api.acknowledgeRecall({ branchId: 'branch-a', recallNoticeId: 'recall-1' }),
+        () => api.closeRecall({ recallNoticeId: 'recall-1' }),
+      ];
+      for (const attempt of attempts) {
+        await expect(attempt()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+      expect(db.$transaction).not.toHaveBeenCalled();
+      expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
+    }
+  );
+
   it('maps the public router prefix to the pharmacy-inventory entitlement', () => {
     expect(moduleForProcedure('pharmacyInventory.allocateForSale')).toBe('pharmacy-inventory');
     // Not the mandatory Core module the medicine identity lane maps to.

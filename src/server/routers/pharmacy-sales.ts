@@ -925,6 +925,17 @@ export const pharmacySalesRouter = router({
             approvalPolicy: input.override.approvalPolicy,
           },
         });
+        if (
+          !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:safety', undefined, {
+            db: ctx.db,
+            source: 'TRPC',
+          }))
+        ) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Pharmacy safety permission is required to override FEFO allocation.',
+          });
+        }
       }
       try {
         const outcome = await ctx.db.$transaction(async (tx) => {

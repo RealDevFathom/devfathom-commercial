@@ -8,6 +8,7 @@ import { FileDrapNoticeSource, ingestDrapSource } from '@/lib/pharmacy/drap-moni
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
+import { can, subjectFromSession } from '@/lib/abac';
 import {
   assertSaleable,
   deriveLooseUnitPrice,
@@ -204,7 +205,7 @@ export const pharmacyMedicineRouter = router({
         )
       );
     }),
-  setPackPrice: adminProcedure
+  setPackPrice: capabilityProcedure('pharmacy:safety')
     .input(
       z
         .object({
@@ -551,6 +552,23 @@ export const pharmacyMedicineRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        // Direct creation is allowed for ordinary catalogue drafting, but review
+        // evidence and saleability are regulated state and require the narrow,
+        // exact-grant-only catalogue-review capability.
+        if (
+          (input.saleable || input.provenance.length > 0) &&
+          !(await can(
+            subjectFromSession(ctx.session.user),
+            'pharmacy:catalogue-review',
+            undefined,
+            { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+          ))
+        ) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Catalogue review permission is required for reviewed or saleable records.',
+          });
+        }
         if (input.saleable)
           assertSaleable({
             productFamily: input.productFamily,
@@ -572,6 +590,9 @@ export const pharmacyMedicineRouter = router({
         return await ctx.db.medicine.create({
           data: {
             ...medicine,
+            // The schema defaults this to false; only the reviewed path above
+            // can preserve a caller's true value.
+            saleable: input.saleable,
             presentations: presentation ? { create: presentation } : undefined,
             strengths: { create: strengths },
             provenance: {
@@ -841,121 +862,123 @@ export const pharmacyMedicineRouter = router({
       .map(([duplicateKey, candidates]) => ({ duplicateKey, candidates }));
   }),
 
-  recordReviewDecision: adminProcedure.input(reviewDecisionInput).mutation(({ ctx, input }) =>
-    ctx.db.$transaction(async (tx) => {
-      const medicineIds = [...new Set(input.medicineIds)];
-      const assertionIds = [...new Set(input.payload.assertionIds)];
-      if (
-        medicineIds.length !== input.medicineIds.length ||
-        assertionIds.length !== input.payload.assertionIds.length
-      ) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Review references must be unique.' });
-      }
-      const [medicineCount, assertions] = await Promise.all([
-        tx.medicine.count({ where: { id: { in: medicineIds } } }),
-        tx.medicineProvenance.findMany({ where: { id: { in: assertionIds } } }),
-      ]);
-      if (medicineCount !== medicineIds.length || assertions.length !== assertionIds.length) {
-        throw new TRPCError({
-          code: 'NOT_FOUND',
-          message: 'Review candidate or assertion not found.',
-        });
-      }
-      if (
-        assertions.some(
-          (assertion) =>
-            !medicineIds.includes(assertion.medicineId) || assertion.status !== 'UNREVIEWED'
-        )
-      ) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Review assertions must be unreviewed and belong to the referenced candidates.',
-        });
-      }
-
-      let reviewedAssertionIds = assertionIds;
-      if (input.action === 'ACCEPT' || input.action === 'REJECT') {
-        const transitioned = await tx.medicineProvenance.updateMany({
-          where: { id: { in: assertionIds }, status: 'UNREVIEWED' },
-          data: {
-            status: input.action === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED',
-            reviewer: ctx.session.user.id,
-          },
-        });
-        if (transitioned.count !== assertionIds.length) {
-          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
-        }
-      } else if (input.action === 'CORRECT') {
-        const corrections = new Map(
-          input.payload.corrections.map((item) => [item.assertionId, item.value])
-        );
+  recordReviewDecision: capabilityProcedure('pharmacy:catalogue-review')
+    .input(reviewDecisionInput)
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const medicineIds = [...new Set(input.medicineIds)];
+        const assertionIds = [...new Set(input.payload.assertionIds)];
         if (
-          corrections.size !== input.payload.corrections.length ||
-          [...corrections.keys()].some((id) => !assertionIds.includes(id))
+          medicineIds.length !== input.medicineIds.length ||
+          assertionIds.length !== input.payload.assertionIds.length
+        ) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Review references must be unique.' });
+        }
+        const [medicineCount, assertions] = await Promise.all([
+          tx.medicine.count({ where: { id: { in: medicineIds } } }),
+          tx.medicineProvenance.findMany({ where: { id: { in: assertionIds } } }),
+        ]);
+        if (medicineCount !== medicineIds.length || assertions.length !== assertionIds.length) {
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Review candidate or assertion not found.',
+          });
+        }
+        if (
+          assertions.some(
+            (assertion) =>
+              !medicineIds.includes(assertion.medicineId) || assertion.status !== 'UNREVIEWED'
+          )
         ) {
           throw new TRPCError({
             code: 'BAD_REQUEST',
-            message: 'Corrections must reference selected assertions once.',
+            message: 'Review assertions must be unreviewed and belong to the referenced candidates.',
           });
         }
-        const created = [];
-        for (const assertion of assertions) {
-          const value = corrections.get(assertion.id);
-          if (!value) continue;
-          const envelope = assertedEnvelope.parse(assertion.assertedValue);
-          created.push(
-            await tx.medicineProvenance.create({
-              data: {
-                medicineId: assertion.medicineId,
-                field: assertion.field,
-                source: assertion.source,
-                sourceType: assertion.sourceType,
-                retrievedAt: new Date(),
-                confidence: assertion.confidence,
-                reviewer: ctx.session.user.id,
-                status: 'CORRECTED',
-                supersedesId: assertion.id,
-                assertedValue: { ...envelope, value },
-              },
-            })
+
+        let reviewedAssertionIds = assertionIds;
+        if (input.action === 'ACCEPT' || input.action === 'REJECT') {
+          const transitioned = await tx.medicineProvenance.updateMany({
+            where: { id: { in: assertionIds }, status: 'UNREVIEWED' },
+            data: {
+              status: input.action === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED',
+              reviewer: ctx.session.user.id,
+            },
+          });
+          if (transitioned.count !== assertionIds.length) {
+            throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
+          }
+        } else if (input.action === 'CORRECT') {
+          const corrections = new Map(
+            input.payload.corrections.map((item) => [item.assertionId, item.value])
           );
+          if (
+            corrections.size !== input.payload.corrections.length ||
+            [...corrections.keys()].some((id) => !assertionIds.includes(id))
+          ) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Corrections must reference selected assertions once.',
+            });
+          }
+          const created = [];
+          for (const assertion of assertions) {
+            const value = corrections.get(assertion.id);
+            if (!value) continue;
+            const envelope = assertedEnvelope.parse(assertion.assertedValue);
+            created.push(
+              await tx.medicineProvenance.create({
+                data: {
+                  medicineId: assertion.medicineId,
+                  field: assertion.field,
+                  source: assertion.source,
+                  sourceType: assertion.sourceType,
+                  retrievedAt: new Date(),
+                  confidence: assertion.confidence,
+                  reviewer: ctx.session.user.id,
+                  status: 'CORRECTED',
+                  supersedesId: assertion.id,
+                  assertedValue: { ...envelope, value },
+                },
+              })
+            );
+          }
+          const corrected = await tx.medicineProvenance.updateMany({
+            where: { id: { in: [...corrections.keys()] }, status: 'UNREVIEWED' },
+            data: { status: 'SUPERSEDED', reviewer: ctx.session.user.id },
+          });
+          if (corrected.count !== corrections.size) {
+            throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
+          }
+          reviewedAssertionIds = [
+            ...assertionIds.filter((id) => !corrections.has(id)),
+            ...created.map((assertion) => assertion.id),
+          ];
+          const accepted = await tx.medicineProvenance.updateMany({
+            where: {
+              id: { in: assertionIds.filter((id) => !corrections.has(id)) },
+              status: 'UNREVIEWED',
+            },
+            data: { status: 'ACCEPTED', reviewer: ctx.session.user.id },
+          });
+          if (accepted.count !== assertionIds.length - corrections.size) {
+            throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
+          }
         }
-        const corrected = await tx.medicineProvenance.updateMany({
-          where: { id: { in: [...corrections.keys()] }, status: 'UNREVIEWED' },
-          data: { status: 'SUPERSEDED', reviewer: ctx.session.user.id },
-        });
-        if (corrected.count !== corrections.size) {
-          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
-        }
-        reviewedAssertionIds = [
-          ...assertionIds.filter((id) => !corrections.has(id)),
-          ...created.map((assertion) => assertion.id),
-        ];
-        const accepted = await tx.medicineProvenance.updateMany({
-          where: {
-            id: { in: assertionIds.filter((id) => !corrections.has(id)) },
-            status: 'UNREVIEWED',
+
+        return tx.medicineReviewDecision.create({
+          data: {
+            duplicateKey: input.duplicateKey,
+            action: input.action,
+            medicineIds,
+            payload: { assertionIds: reviewedAssertionIds } as Prisma.InputJsonValue,
+            reviewerId: ctx.session.user.id,
           },
-          data: { status: 'ACCEPTED', reviewer: ctx.session.user.id },
         });
-        if (accepted.count !== assertionIds.length - corrections.size) {
-          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
-        }
-      }
+      })
+    ),
 
-      return tx.medicineReviewDecision.create({
-        data: {
-          duplicateKey: input.duplicateKey,
-          action: input.action,
-          medicineIds,
-          payload: { assertionIds: reviewedAssertionIds } as Prisma.InputJsonValue,
-          reviewerId: ctx.session.user.id,
-        },
-      });
-    })
-  ),
-
-  publishAssertions: adminProcedure
+  publishAssertions: capabilityProcedure('pharmacy:catalogue-review')
     .input(z.object({ assertionIds: z.array(z.string().min(1)).min(1) }).strict())
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {
@@ -1107,7 +1130,7 @@ export const pharmacyMedicineRouter = router({
       })
     ),
 
-  supersedePublication: adminProcedure
+  supersedePublication: capabilityProcedure('pharmacy:catalogue-review')
     .input(z.object({ batchId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {
