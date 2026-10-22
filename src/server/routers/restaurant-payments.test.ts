@@ -162,6 +162,7 @@ describe('refund reads (C12)', () => {
       amount: D('5.00'),
       tipRefundAmount: D('0.00'),
       serviceChargeRefundAmount: D('1.25'),
+      deliveryFeeRefundAmount: D('2.50'),
       taxRefundAmount: D('0.75'),
       businessDate: new Date('2026-08-20T00:00:00.000Z'),
       reason: 'return',
@@ -177,6 +178,7 @@ describe('refund reads (C12)', () => {
     expect(result.refunds).toHaveLength(1);
     expect(result.refunds[0].amount).toBe('5');
     expect(result.refunds[0].serviceChargeRefundAmount).toBe('1.25');
+    expect(result.refunds[0].deliveryFeeRefundAmount).toBe('2.5');
     expect(result.refunds[0].taxRefundAmount).toBe('0.75');
     expect(result.refunds[0].kind).toBe('REFUND');
     expect(result.refunds[0].businessDate).toBe('2026-08-20');
@@ -236,6 +238,7 @@ describe('getPayment (full event trail, C12)', () => {
           amount: D('12.50'),
           tipRefundAmount: D('0.00'),
           serviceChargeRefundAmount: D('1.25'),
+          deliveryFeeRefundAmount: D('2.50'),
           taxRefundAmount: D('0.75'),
           businessDate: new Date('2026-08-19T00:00:00.000Z'),
           createdAt: new Date(),
@@ -254,6 +257,7 @@ describe('getPayment (full event trail, C12)', () => {
     expect(result.refunds[0]).toMatchObject({
       tipRefundAmount: '0',
       serviceChargeRefundAmount: '1.25',
+      deliveryFeeRefundAmount: '2.5',
       taxRefundAmount: '0.75',
     });
     expect(mocks.requireBranchScope).toHaveBeenCalledWith(expect.anything(), 'b1');
@@ -293,6 +297,24 @@ describe('getTenderTypeTotals (per-date summary, C12)', () => {
 });
 
 describe('capability gating + strict inputs', () => {
+  it('allows finance readers to inspect terminal bindings without configure access', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'money:read');
+    mocks.terminalConfigFindMany.mockResolvedValueOnce([
+      {
+        id: 'config_1',
+        branchId: 'b1',
+        source: 'terminal',
+        externalTerminalId: 'front',
+        deviceId: 'device_1',
+        mode: 'WEBHOOK',
+        updatedAt: new Date('2026-10-22T10:00:00Z'),
+      },
+    ]);
+
+    await expect(caller().getTerminalConfig({ branchId: 'b1' })).resolves.toHaveLength(1);
+    expect(mocks.can).toHaveBeenCalledWith(expect.anything(), 'money:read');
+  });
+
   it('guards every list and summary by its exact branch', async () => {
     await caller().listTenders({ branchId: 'b1' });
     await caller().listRefunds({ branchId: 'b2' });

@@ -41,7 +41,9 @@ const readProcedure = capabilityProcedure('money:read');
 const configureProcedure = capabilityProcedure('restaurant:configure');
 
 export const restaurantPaymentsRouter = router({
-  getTerminalConfig: configureProcedure
+  // Provider bindings are reconciliation metadata in the read-only Money workspace.
+  // Updating them remains separately protected by `restaurant:configure` below.
+  getTerminalConfig: readProcedure
     .input(z.object({ branchId: ID }).strict())
     .query(async ({ ctx, input }) => {
       await requireRestaurantBranchScope(ctx, input.branchId);
@@ -280,6 +282,7 @@ async function listRefunds(db: ScopedDb, input: ListRefundsInput) {
       amount: true,
       tipRefundAmount: true,
       serviceChargeRefundAmount: true,
+      deliveryFeeRefundAmount: true,
       taxRefundAmount: true,
       businessDate: true,
       reason: true,
@@ -303,6 +306,7 @@ async function listRefunds(db: ScopedDb, input: ListRefundsInput) {
       amount: money(refund.amount),
       tipRefundAmount: money(refund.tipRefundAmount),
       serviceChargeRefundAmount: money(refund.serviceChargeRefundAmount),
+      deliveryFeeRefundAmount: money(refund.deliveryFeeRefundAmount),
       taxRefundAmount: money(refund.taxRefundAmount),
       businessDate: dateOnly(refund.businessDate),
       reason: refund.reason,
@@ -363,6 +367,7 @@ async function getPayment(db: ScopedDb, paymentId: string) {
           amount: true,
           tipRefundAmount: true,
           serviceChargeRefundAmount: true,
+          deliveryFeeRefundAmount: true,
           taxRefundAmount: true,
           businessDate: true,
           createdAt: true,
@@ -409,6 +414,7 @@ async function getPayment(db: ScopedDb, paymentId: string) {
       amount: money(refund.amount),
       tipRefundAmount: money(refund.tipRefundAmount),
       serviceChargeRefundAmount: money(refund.serviceChargeRefundAmount),
+      deliveryFeeRefundAmount: money(refund.deliveryFeeRefundAmount),
       taxRefundAmount: money(refund.taxRefundAmount),
       businessDate: dateOnly(refund.businessDate),
       createdAt: refund.createdAt,

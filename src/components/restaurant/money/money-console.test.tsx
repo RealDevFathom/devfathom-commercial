@@ -63,6 +63,9 @@ const mocks = vi.hoisted(() => {
           kind: 'PARTIAL',
           amount: '2.00',
           tipRefundAmount: '0',
+          serviceChargeRefundAmount: '0.25',
+          deliveryFeeRefundAmount: '1.50',
+          taxRefundAmount: '0.10',
           businessDate: '2026-08-19',
           reason: 'Item issue',
           coAuthorizationId: 'coauth_1',
@@ -475,25 +478,11 @@ describe('MoneyConsole', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('creates the first provider terminal configuration when the branch has none', () => {
+  it('keeps terminal reconciliation read-only for finance users', () => {
     renderConsole(true, 'terminal');
     fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
-    fireEvent.change(screen.getByLabelText('Provider source'), {
-      target: { value: 'stripe-terminal' },
-    });
-    fireEvent.change(screen.getByLabelText('Terminal ID'), {
-      target: { value: 'tmr_front_counter' },
-    });
-    fireEvent.change(screen.getByLabelText('Device'), { target: { value: 'device_1' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save terminal configuration' }));
-
-    expect(mocks.saveTerminalConfig).toHaveBeenCalledWith({
-      branchId: 'branch_1',
-      source: 'stripe-terminal',
-      externalTerminalId: 'tmr_front_counter',
-      deviceId: 'device_1',
-      mode: 'DISABLED',
-    });
+    expect(screen.getByRole('heading', { name: 'Configured terminals' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save terminal configuration' })).toBeNull();
   });
 
   it('renders one server read model on every tab', () => {
@@ -534,6 +523,24 @@ describe('MoneyConsole', () => {
     });
     expect(screen.getByText('CAPTURE SUCCEEDED')).toBeInTheDocument();
     expect(screen.getByText('{"response":"approved"}')).toBeInTheDocument();
+  });
+
+  it('shows the complete refund breakdown and opens its payment event trail', () => {
+    renderConsole();
+    setBranchAndDate();
+    fireEvent.click(screen.getByRole('tab', { name: 'Payments' }));
+
+    const refunds = screen.getByRole('region', { name: 'Payment refunds table' });
+    expect(refunds).toHaveTextContent('1.50');
+    expect(refunds).toHaveTextContent('0.25');
+    expect(refunds).toHaveTextContent('0.10');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'View payment payment_1' })[1]!);
+    expect(mocks.calls.payment.at(-1)).toEqual({
+      input: { paymentId: 'payment_1' },
+      enabled: true,
+    });
+    expect(screen.getByText('CAPTURE SUCCEEDED')).toBeInTheDocument();
   });
 
   it('paginates bills, tenders, refunds, and drawers independently and resets cursors', () => {

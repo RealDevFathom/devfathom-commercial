@@ -24,7 +24,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
 import { RestaurantBranchSelect } from '../restaurant-branch-select';
-import { RestaurantDeviceSelect, type RestaurantDeviceOption } from '../restaurant-device-select';
+import type { RestaurantDeviceOption } from '../restaurant-device-select';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type BillPage = RouterOutputs['restaurantBills']['listBills'];
@@ -292,14 +292,6 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
   const [refundHistory, setRefundHistory] = useState<CursorHistory>([]);
   const [drawerCursor, setDrawerCursor] = useState<string>();
   const [drawerHistory, setDrawerHistory] = useState<CursorHistory>([]);
-  const [terminalSource, setTerminalSource] = useState('terminal');
-  const [externalTerminalId, setExternalTerminalId] = useState('');
-  const [terminalDeviceId, setTerminalDeviceId] = useState('');
-  const [terminalMode, setTerminalMode] = useState<'DISABLED' | 'SIMULATION' | 'WEBHOOK'>(
-    'DISABLED'
-  );
-  const utils = trpc.useUtils();
-
   const normalizedBranchId = branchId.trim();
   const branchEnabled = posEnabled && normalizedBranchId.length > 0;
   const staffQuery = trpc.restaurantStaff.listDirectory.useQuery(
@@ -379,10 +371,6 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
     { branchId: normalizedBranchId, limit: 20 },
     { enabled: terminalEnabled }
   );
-  const saveTerminalConfig = trpc.restaurantPayments.saveTerminalConfig.useMutation({
-    onSuccess: () => utils.restaurantPayments.getTerminalConfig.invalidate(),
-  });
-
   const resetSelections = () => {
     setSelectedBillId('');
     setSelectedPaymentId('');
@@ -582,78 +570,7 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
           <TabsContent value="terminal">
             {branchEnabled ? (
               <div className="space-y-6">
-                <SectionCard eyebrow="Branch integration" title="Card terminal provider">
-                  <form
-                    className="grid gap-4 md:grid-cols-2"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      saveTerminalConfig.mutate({
-                        branchId: normalizedBranchId,
-                        source: terminalSource.trim(),
-                        externalTerminalId: externalTerminalId.trim(),
-                        deviceId: terminalDeviceId.trim(),
-                        mode: terminalMode,
-                      });
-                    }}
-                  >
-                    <Field label="Provider source">
-                      <Input
-                        value={terminalSource}
-                        onChange={(event) => setTerminalSource(event.target.value)}
-                      />
-                    </Field>
-                    <Field label="Terminal ID">
-                      <Input
-                        value={externalTerminalId}
-                        onChange={(event) => setExternalTerminalId(event.target.value)}
-                      />
-                    </Field>
-                    <Field label="Registered device">
-                      <RestaurantDeviceSelect
-                        devices={devicesQuery.data ?? []}
-                        branchId={normalizedBranchId}
-                        loading={devicesQuery.isLoading}
-                        error={Boolean(devicesQuery.error)}
-                        required
-                        value={terminalDeviceId}
-                        onChange={setTerminalDeviceId}
-                      />
-                    </Field>
-                    <Field label="Mode" description="Simulation is for tests and demos only.">
-                      <select
-                        className="h-11 w-full rounded-sm border border-border-default bg-surface-card px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                        value={terminalMode}
-                        onChange={(event) =>
-                          setTerminalMode(event.target.value as typeof terminalMode)
-                        }
-                      >
-                        <option value="DISABLED">Disabled</option>
-                        <option value="SIMULATION">Simulation — test/demo only</option>
-                        <option value="WEBHOOK">Authenticated webhook</option>
-                      </select>
-                    </Field>
-                    <div className="md:col-span-2 flex items-center gap-3">
-                      <Button
-                        type="submit"
-                        disabled={
-                          saveTerminalConfig.isPending ||
-                          !externalTerminalId.trim() ||
-                          !terminalDeviceId.trim() ||
-                          !terminalSource.trim()
-                        }
-                      >
-                        {saveTerminalConfig.isPending ? 'Saving…' : 'Save terminal configuration'}
-                      </Button>
-                      {saveTerminalConfig.error ? (
-                        <StatusPill status="Save failed" tone="danger" />
-                      ) : null}
-                      {saveTerminalConfig.isSuccess ? (
-                        <StatusPill status="Saved" tone="success" />
-                      ) : null}
-                    </div>
-                  </form>
-                </SectionCard>
-                <SectionCard title="Configured terminals">
+                <SectionCard eyebrow="Branch integration" title="Configured terminals">
                   {terminalConfigQuery.isLoading ? (
                     <LoadingState label="Loading terminal configuration" />
                   ) : null}
@@ -667,7 +584,7 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
                   {terminalConfigQuery.data?.length === 0 ? (
                     <EmptyState
                       title="No terminal configured"
-                      detail="Add a disabled, simulation, or webhook terminal binding above."
+                      detail="No terminal provider binding is configured for this branch."
                     />
                   ) : null}
                   {terminalConfigQuery.data?.map((config) => (
@@ -1216,7 +1133,7 @@ function PaymentsLedger({
               </h3>
               {refunds.length ? (
                 <TableFrame label="Payment refunds table">
-                  <Table className="min-w-[1100px]">
+                  <Table className="min-w-[1420px]">
                     <TableHeader>
                       <TableRow>
                         <TableHead>Refund</TableHead>
@@ -1225,13 +1142,20 @@ function PaymentsLedger({
                         <TableHead>Kind</TableHead>
                         <TableHead numeric>Amount</TableHead>
                         <TableHead numeric>Tip refund</TableHead>
+                        <TableHead numeric>Service charge</TableHead>
+                        <TableHead numeric>Delivery fee</TableHead>
+                        <TableHead numeric>Tax</TableHead>
                         <TableHead>Reason</TableHead>
                         <TableHead>Date</TableHead>
+                        <TableHead className="text-right">Event trail</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {refunds.map((refund) => (
-                        <TableRow key={refund.id}>
+                        <TableRow
+                          key={refund.id}
+                          data-state={selectedId === refund.paymentId ? 'selected' : undefined}
+                        >
                           <TableCell className="font-mono text-xs">{refund.id}</TableCell>
                           <TableCell className="font-mono text-xs">{refund.billId}</TableCell>
                           <TableCell className="font-mono text-xs">
@@ -1240,8 +1164,26 @@ function PaymentsLedger({
                           <TableCell>{label(refund.kind)}</TableCell>
                           <TableCell numeric>{refund.amount}</TableCell>
                           <TableCell numeric>{refund.tipRefundAmount}</TableCell>
+                          <TableCell numeric>{refund.serviceChargeRefundAmount}</TableCell>
+                          <TableCell numeric>{refund.deliveryFeeRefundAmount}</TableCell>
+                          <TableCell numeric>{refund.taxRefundAmount}</TableCell>
                           <TableCell>{refund.reason}</TableCell>
                           <TableCell>{refund.businessDate}</TableCell>
+                          <TableCell className="text-right">
+                            {refund.paymentId ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={selectedId === refund.paymentId ? 'secondary' : 'outline'}
+                                aria-pressed={selectedId === refund.paymentId}
+                                onClick={() => onSelect(refund.paymentId!)}
+                              >
+                                View payment {refund.paymentId}
+                              </Button>
+                            ) : (
+                              <span className="text-xs text-text-muted">No card trail</span>
+                            )}
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
