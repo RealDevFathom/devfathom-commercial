@@ -68,6 +68,7 @@ import { pharmacyFinanceRouter } from './pharmacy-finance';
 import { pharmacyOnboardingRouter } from './pharmacy-onboarding';
 import { pharmacyOrderingRouter } from './pharmacy-ordering';
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
+import { aiDiscountApprovalRouter } from './ai-discount-approval';
 
 export const appRouter = router({
   hotelProperty: hotelPropertyRouter,
@@ -139,6 +140,7 @@ export const appRouter = router({
   pharmacyOnboarding: pharmacyOnboardingRouter,
   pharmacyOrdering: pharmacyOrderingRouter,
   pharmacySupplierLinks: pharmacySupplierLinksRouter,
+  aiDiscountApproval: aiDiscountApprovalRouter,
 });
 
 export type AppRouter = typeof appRouter;
