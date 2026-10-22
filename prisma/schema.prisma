@@ -13722,6 +13722,40 @@ enum HotelPropertyMode {
   VENUE
 }
 
+/// PROP-02. What a type sells: a whole room, one berth in a shared room, or a
+/// self-contained unit. A BED type declares `bedsPerRoom`; the others must not.
+enum HotelInventoryKind {
+  ROOM
+  BED
+  UNIT
+}
+
+/// PROP-03's six room states, exactly as the PRD lists them. `OCCUPIED` is owned
+/// by the stay: it is reached by checking a guest in and left by checking out or
+/// moving, never from the housekeeping board.
+enum HotelRoomStatus {
+  VACANT_CLEAN
+  VACANT_DIRTY
+  OCCUPIED
+  INSPECTED
+  OUT_OF_ORDER
+  OUT_OF_SERVICE
+}
+
+/// MODE-02 dorm policy. `ANY` means "no restriction", not "not yet decided".
+enum HotelGenderPolicy {
+  ANY
+  MALE
+  FEMALE
+}
+
+/// HK-03. Out of order is broken; out of service is deliberately withheld. Both
+/// reduce availability; the distinction tells an incident from a decision.
+enum HotelRoomBlockKind {
+  OUT_OF_ORDER
+  OUT_OF_SERVICE
+}
+
 /// PROP-01 (`05-data-model` §1.1). In hospitality the **branch IS the property**,
 /// so this row is both: `branchId` is the property's own identity and every other
 /// hotel table hangs off it, exactly as `pharmacy_branches` anchors the pharmacy
@@ -13775,8 +13809,202 @@ model HotelProperty {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  roomTypes         HotelRoomType[]
+  rooms             HotelRoom[]
+  beds              HotelBed[]
+  roomStatusEvents  HotelRoomStatusEvent[]
+  roomBlocks        HotelRoomBlock[]
+
   @@unique([organizationId, branchId], map: "hotel_properties_org_branch_key")
   @@unique([organizationId, bookingEngineSlug], map: "hotel_properties_org_slug_key")
   @@index([organizationId, active], map: "hotel_properties_org_active_idx")
   @@map("hotel_properties")
+}
+
+// ============================================
+// HOSPITALITY — PROP-02 / PROP-03 / HK-03 inventory (H1-03)
+// ============================================
+
+/// PROP-02 (`05-data-model` §1.1). A sellable class of inventory: its occupancy
+/// limits, its bed configuration, what an upgrade from it looks like, and — for a
+/// HOSTEL — how many berths a room of this type holds.
+///
+/// `@@unique([id, inventoryKind])` exists only to be a foreign-key target: a room
+/// carries its type's kind as a column and keys into the pair, so the two can
+/// never drift apart and `hotel_beds` can require a BED room structurally.
+model HotelRoomType {
+  id             String             @id @default(cuid())
+  organizationId String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  /// Upper-case token. It travels to rate plans, channel mappings and imports.
+  code           String
+  name           String
+  /// Bilingual per the pack; optional so an untranslated type is still sellable.
+  nameUr         String?
+  description    String?
+  inventoryKind  HotelInventoryKind @default(ROOM)
+  /// Berths per room. Required for BED, forbidden otherwise (DB CHECK).
+  bedsPerRoom    Int?
+  baseAdults     Int                @default(2)
+  maxAdults      Int                @default(2)
+  maxChildren    Int                @default(0)
+  /// Free text, e.g. "1 king" or "2 twin". Rendered, never parsed.
+  bedConfig      String?
+  amenities      String[]           @default([])
+  images         String[]           @default([])
+  /// Upgrade ladder position; higher is better, equal ranks are the same tier.
+  upgradeRank    Int                @default(0)
+  sort           Int                @default(0)
+  active         Boolean            @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  rooms    HotelRoom[]
+
+  @@unique([branchId, code], map: "hotel_room_types_branch_code_key")
+  @@unique([id, inventoryKind], map: "hotel_room_types_id_kind_key")
+  @@unique([organizationId, id], map: "hotel_room_types_org_id_key")
+  @@index([organizationId, branchId, sort], map: "hotel_room_types_branch_sort_idx")
+  @@map("hotel_room_types")
+}
+
+/// PROP-03. One table for rooms, dorm rooms and units: they differ by their
+/// type's `inventoryKind`, not by being different entities.
+///
+/// `status` is the current state only. Its history lives in
+/// `HotelRoomStatusEvent`, which nothing may edit, and the *reason* for a change
+/// is recorded there rather than here.
+model HotelRoom {
+  id             String             @id @default(cuid())
+  organizationId String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  roomTypeId     String
+  /// Denormalized from the type and held there by the composite foreign key.
+  /// Never written on its own.
+  inventoryKind  HotelInventoryKind
+  number         String
+  floor          String?
+  features       String[]           @default([])
+  connectingRoomId String?
+  status         HotelRoomStatus    @default(VACANT_CLEAN)
+  statusChangedAt DateTime          @default(now())
+  /// The user (or `system:` sentinel) behind the current status.
+  statusChangedBy String?
+  /// Only meaningful for BED inventory; the DB refuses anything else.
+  genderPolicy   HotelGenderPolicy  @default(ANY)
+  active         Boolean            @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  property        HotelProperty  @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  roomType        HotelRoomType  @relation(fields: [roomTypeId, inventoryKind], references: [id, inventoryKind], onDelete: Restrict)
+  connectingRoom  HotelRoom?     @relation("HotelConnectingRooms", fields: [organizationId, connectingRoomId], references: [organizationId, id], onDelete: Restrict)
+  connectedFrom   HotelRoom[]    @relation("HotelConnectingRooms")
+  beds            HotelBed[]
+  statusEvents    HotelRoomStatusEvent[]
+  blocks          HotelRoomBlock[]
+
+  @@unique([branchId, number], map: "hotel_rooms_branch_number_key")
+  @@unique([organizationId, id], map: "hotel_rooms_org_id_key")
+  @@unique([id, inventoryKind], map: "hotel_rooms_id_kind_key")
+  @@index([organizationId, branchId, status], map: "hotel_rooms_branch_status_idx")
+  @@index([organizationId, roomTypeId], map: "hotel_rooms_type_idx")
+  @@map("hotel_rooms")
+}
+
+/// MODE-02. A berth in a dorm room. Exists only under a BED room type —
+/// `roomInventoryKind` is pinned to BED by a CHECK and is half of the key into
+/// the room, so the database, not a resolver, is what enforces that.
+///
+/// A room's occupancy is **derived** by counting these (invariant 22). No
+/// occupancy column exists on `HotelRoom` for anyone to write.
+model HotelBed {
+  id                String             @id @default(cuid())
+  organizationId    String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  roomId            String
+  roomInventoryKind HotelInventoryKind @default(BED)
+  label             String
+  status            HotelRoomStatus    @default(VACANT_CLEAN)
+  statusChangedAt   DateTime           @default(now())
+  statusChangedBy   String?
+  active            Boolean            @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  property     HotelProperty          @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  room         HotelRoom              @relation(fields: [roomId, roomInventoryKind], references: [id, inventoryKind], onDelete: Cascade)
+  statusEvents HotelRoomStatusEvent[]
+
+  @@unique([roomId, label], map: "hotel_beds_room_label_key")
+  @@unique([organizationId, id], map: "hotel_beds_org_id_key")
+  @@index([organizationId, roomId], map: "hotel_beds_room_idx")
+  @@map("hotel_beds")
+}
+
+/// PROP-03 / HK-01 — the append-only status ledger. "Status history append-only"
+/// is a database posture, not a convention: the table's policies grant SELECT and
+/// INSERT and there is no UPDATE or DELETE policy, so both are refused even for a
+/// role that holds the privilege.
+model HotelRoomStatusEvent {
+  id             String           @id @default(cuid())
+  organizationId String           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  roomId         String
+  /// Set when one berth changed rather than the whole room.
+  bedId          String?
+  /// Null on the line that records the state a room was created in.
+  fromStatus     HotelRoomStatus?
+  toStatus       HotelRoomStatus
+  /// The acting user, or a `system:` sentinel. Never null — HK-01 is "every
+  /// change attributed".
+  actorId        String
+  reason         String
+  at             DateTime         @default(now())
+
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  room     HotelRoom     @relation(fields: [organizationId, roomId], references: [organizationId, id], onDelete: Restrict)
+  bed      HotelBed?     @relation(fields: [organizationId, bedId], references: [organizationId, id], onDelete: Restrict)
+
+  @@index([organizationId, roomId, at], map: "hotel_room_status_events_room_idx")
+  @@index([organizationId, branchId, at], map: "hotel_room_status_events_branch_idx")
+  @@map("hotel_room_status_events")
+}
+
+/// HK-03. An out-of-order or out-of-service range on one room, inclusive at both
+/// ends. Two *live* blocks may not overlap on a room — a gist exclusion
+/// constraint the migration declares, which Prisma cannot express — so an
+/// availability calculation can subtract them without deduplicating first.
+///
+/// Releasing sets `releasedAt`/`releasedBy` and leaves the row in place: the
+/// history of why a room was withheld survives, and the range frees up.
+model HotelRoomBlock {
+  id             String             @id @default(cuid())
+  organizationId String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  roomId         String
+  kind           HotelRoomBlockKind
+  startsOn       DateTime           @db.Date
+  endsOn         DateTime           @db.Date
+  reason         String
+  /// MNT-03's link to the work order that caused the block. Text, because work
+  /// orders arrive in a later lane.
+  workOrderRef   String?
+  createdBy      String
+  releasedAt     DateTime?
+  releasedBy     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  room     HotelRoom     @relation(fields: [organizationId, roomId], references: [organizationId, id], onDelete: Restrict)
+
+  @@index([organizationId, roomId, startsOn], map: "hotel_room_blocks_room_idx")
+  @@index([organizationId, branchId, endsOn], map: "hotel_room_blocks_branch_idx")
+  @@map("hotel_room_blocks")
 }
