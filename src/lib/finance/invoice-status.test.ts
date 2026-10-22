@@ -1,16 +1,31 @@
 import { describe, expect, it } from 'vitest';
+
 import {
+  canTransitionInvoiceStatus,
+  getInvoiceStatusTransitions,
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
+  INVOICE_STATUS_TRANSITIONS,
+  INVOICE_STATUSES,
   PAID_STATUS_ERROR,
-  type InvoiceStatusValue,
+  type InvoiceStatus,
 } from './invoice-status';
 
-describe('invoice status contract shared by REST, tRPC, and AI', () => {
-  it.each<InvoiceStatusValue>(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED'])(
-    'rejects direct PAID from %s',
-    (prior) => expect(invoiceStatusTransitionError(prior, 'PAID')).toBe(PAID_STATUS_ERROR)
-  );
+describe('invoice status contract shared by REST, tRPC, AI, and UI', () => {
+  it.each([
+    ['DRAFT', ['SENT', 'CANCELLED']],
+    ['SENT', ['OVERDUE', 'CANCELLED', 'DRAFT']],
+    ['OVERDUE', ['CANCELLED', 'SENT']],
+    ['PAID', ['CANCELLED']],
+    ['CANCELLED', ['DRAFT']],
+  ] as const)('returns the server-approved destinations from %s', (status, expected) => {
+    expect(getInvoiceStatusTransitions(status)).toEqual(expected);
+  });
+
+  it.each<InvoiceStatus>(INVOICE_STATUSES)('rejects direct PAID from %s', (prior) => {
+    expect(invoiceStatusTransitionError(prior, 'PAID')).toBe(PAID_STATUS_ERROR);
+    expect(canTransitionInvoiceStatus(prior, 'PAID')).toBe(false);
+  });
 
   it.each([
     ['DRAFT', 'SENT'],
@@ -24,6 +39,18 @@ describe('invoice status contract shared by REST, tRPC, and AI', () => {
     ['CANCELLED', 'DRAFT'],
   ] as const)('allows %s to %s', (prior, next) => {
     expect(invoiceStatusTransitionError(prior, next)).toBeNull();
+    expect(canTransitionInvoiceStatus(prior, next)).toBe(true);
+  });
+
+  it.each(INVOICE_STATUSES)('does not expose a no-op transition from %s', (status) => {
+    expect(canTransitionInvoiceStatus(status, status)).toBe(false);
+  });
+
+  it('defines transitions for every status and never points outside the canonical enum', () => {
+    expect(Object.keys(INVOICE_STATUS_TRANSITIONS).sort()).toEqual([...INVOICE_STATUSES].sort());
+    for (const destinations of Object.values(INVOICE_STATUS_TRANSITIONS)) {
+      expect(destinations.every((status) => INVOICE_STATUSES.includes(status))).toBe(true);
+    }
   });
 
   it.each(['OVERDUE', 'CANCELLED', 'DRAFT'] as const)(

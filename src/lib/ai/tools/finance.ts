@@ -21,7 +21,9 @@ import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
 import {
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
+  INVOICE_STATUSES,
   PAID_STATUS_ERROR,
+  type InvoiceStatus,
 } from '@/lib/finance/invoice-status';
 
 // Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
@@ -572,7 +574,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       'Change an invoice\'s status to SENT, OVERDUE, CANCELLED or back to DRAFT. Identify it by invoice number. Payments must be recorded with the payment tool; this tool cannot mark an invoice PAID. ADMIN ONLY.',
     inputSchema: z.object({
       invoiceNumber: z.string().describe('Invoice number, e.g. "INV-2026-003"'),
-      status: z.enum(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED']),
+      status: z.enum(INVOICE_STATUSES),
     }),
     needsApproval: true,
     execute: async ({ invoiceNumber, status }) => {
@@ -588,7 +590,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         return {
           needsClarification: `Which invoice — ${matches.map((m) => m.invoiceNumber).join(', ')}?`,
         };
-      const priorStatus = matches[0].status;
+      const priorStatus = matches[0].status as InvoiceStatus;
 
       if (status === 'PAID') return { error: PAID_STATUS_ERROR };
 

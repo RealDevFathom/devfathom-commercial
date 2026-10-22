@@ -10,10 +10,10 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { moneyLabel } from '@/lib/finance/currency';
 import { format } from 'date-fns';
-
-type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
-
-const INVOICE_STATUSES: InvoiceStatus[] = ['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED'];
+import {
+  getInvoiceStatusTransitions,
+  type InvoiceStatus,
+} from '@/lib/finance/invoice-status';
 
 const statusConfig: Record<string, { bg: string; label: string }> = {
   DRAFT: { bg: 'bg-muted text-muted-foreground', label: 'Draft' },
@@ -26,7 +26,7 @@ const statusConfig: Record<string, { bg: string; label: string }> = {
 type InvoiceRowData = {
   id: string;
   invoiceNumber: string;
-  status: string;
+  status: InvoiceStatus;
   currency: string;
   total: unknown;
   dueDate: Date | string;
@@ -247,7 +247,7 @@ const InvoiceRow = memo(function InvoiceRow({
                 className="fixed z-[61] w-32 -translate-x-1/2 rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10"
                 style={{ top: menuPos.top, left: menuPos.left }}
               >
-                {INVOICE_STATUSES.map((s) => (
+                {getInvoiceStatusTransitions(inv.status).map((s) => (
                   <button
                     key={s}
                     onClick={() => {
