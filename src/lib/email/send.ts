@@ -27,6 +27,8 @@ export interface SendEmailOptions {
   templateId?: number;
   /** Variables injected into a Brevo template. */
   params?: Record<string, unknown>;
+  /** UUID reused when retrying the same logical delivery. */
+  idempotencyKey?: string;
 }
 
 export interface SendEmailResult {
@@ -114,6 +116,7 @@ export async function sendEmail(options: SendEmailOptions): Promise<SendEmailRes
   if (options.replyTo) payload.replyTo = options.replyTo;
   if (options.templateId) payload.templateId = options.templateId;
   if (options.params) payload.params = options.params;
+  if (options.idempotencyKey) payload.headers = { idempotencyKey: options.idempotencyKey };
 
   const res = await fetch(BREVO_ENDPOINT, {
     method: 'POST',

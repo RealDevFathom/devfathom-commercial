@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useState, useMemo } from 'react';
+import { memo, useRef, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
@@ -274,6 +274,8 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
     emailDelivery: 'SENT' | 'FAILED';
   } | null>(null);
   const [copied, setCopied] = useState(false);
+  // Reused by delivery retries so neither the link nor provider request rotates.
+  const inviteRequestId = useRef(crypto.randomUUID());
 
   const selectedDepartment = departmentOptions.find((item) => item.key === department);
   const departmentReady =
@@ -300,6 +302,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
         phone: phone || undefined,
         bio: bio || undefined,
         skills,
+        requestId: inviteRequestId.current,
       },
       {
         onSuccess: (data) => {
@@ -328,6 +331,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
         phone: phone || undefined,
         bio: bio || undefined,
         skills,
+        requestId: inviteRequestId.current,
       },
       {
         onSuccess: (data) => {

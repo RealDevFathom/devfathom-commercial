@@ -129,12 +129,13 @@ describe('tenant department invitation', () => {
     expect(state.invite.mutate.mock.calls[1][0]).toMatchObject({
       email: 'second@e2e.invalid',
       department: 'COUNTER',
+      requestId: state.invite.mutate.mock.calls[0][0].requestId,
     });
 
     act(() =>
       state.invite.mutate.mock.calls[1][1].onSuccess({
         id: 'user_2',
-        inviteUrl: 'https://app.example/invite/token-2',
+        inviteUrl: 'https://app.example/invite/token-1',
         emailDelivery: { status: 'SENT' },
       })
     );

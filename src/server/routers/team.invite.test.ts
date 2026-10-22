@@ -73,6 +73,7 @@ const invite = {
   role: 'EMPLOYEE' as const,
   department: 'ENGINEERING' as const,
   title: 'Engineer',
+  requestId: '123e4567-e89b-42d3-a456-426614174000',
 };
 
 describe('team.inviteMember duplicate guard', () => {
@@ -138,6 +139,46 @@ describe('team.inviteMember duplicate guard', () => {
     await expect(
       caller().inviteMember({ ...invite, email: 'alex@company.com' })
     ).resolves.toMatchObject({ emailDelivery: { status: 'SENT' } });
+  });
+
+  it('reuses the token and provider idempotency key after response loss', async () => {
+    mocks.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'user_2', status: 'INVITED' });
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+    mocks.sendEmail.mockResolvedValue({ messageId: 'message_1' });
+
+    const first = await caller().inviteMember({ ...invite, email: 'alex@company.com' });
+    const retry = await caller().inviteMember({ ...invite, email: 'alex@company.com' });
+
+    expect(retry.inviteUrl).toBe(first.inviteUrl);
+    expect(mocks.invitationUpsert.mock.calls[1][0].update.tokenHash).toBe(
+      mocks.invitationUpsert.mock.calls[0][0].create.tokenHash
+    );
+    expect(mocks.sendEmail).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ idempotencyKey: invite.requestId })
+    );
+  });
+
+  it('gives concurrent duplicate callbacks one link and one delivery identity', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+    mocks.sendEmail.mockResolvedValue({ messageId: 'message_1' });
+
+    const results = await Promise.all([
+      caller().inviteMember({ ...invite, email: 'alex@company.com' }),
+      caller().inviteMember({ ...invite, email: 'alex@company.com' }),
+    ]);
+
+    expect(results[1].inviteUrl).toBe(results[0].inviteUrl);
+    expect(mocks.sendEmail.mock.calls.map(([options]) => options.idempotencyKey)).toEqual([
+      invite.requestId,
+      invite.requestId,
+    ]);
   });
 
   it('retains the administrator capability check without HR', async () => {

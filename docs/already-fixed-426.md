@@ -1,8 +1,8 @@
-# GitHub issue #426 — already fixed
+# GitHub issue #426 — verification and follow-up
 
-Static verification against the current branch shows that issue #426 was already fixed by
-commit `5a5fe05a5b200280d96bfc8592471e88b185f9cb` (`fix(#426): codex off main`). No additional
-production-code change is required.
+Static verification found that commit `5a5fe05a5b200280d96bfc8592471e88b185f9cb` fixed the
+original false-success UI, but not the Agency preflight or retry-idempotency follow-ups. Those gaps
+are addressed in the current change.
 
 ## Evidence
 
@@ -24,6 +24,11 @@ production-code change is required.
   fallback, resend action, and transition to a successful-delivery state.
 - `src/lib/email/theme.test.ts:7-27` covers rejection of public production HTTP, acceptance of
   production HTTPS, and the local loopback exception.
+- `scripts/agency-e2e-environment.ts` now requires live delivery credentials and an HTTPS app URL
+  before the Agency lane can start.
+- `src/server/routers/team.ts` derives a stable token from the UI's operation UUID and passes that
+  UUID as the provider idempotency key, so a retry cannot rotate a delivered link or duplicate a
+  provider request.
 
-Per the issue request, this conclusion was reached by reading the current code only; no dependency
-installation, database access, or test execution was performed.
+Per the issue request, this conclusion and the follow-up were completed by reading the code only;
+no dependency installation, database access, or test execution was performed.

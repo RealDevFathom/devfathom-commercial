@@ -15,3 +15,9 @@ export function generateInviteToken(): { token: string; tokenHash: string } {
   const token = randomBytes(32).toString('base64url');
   return { token, tokenHash: hashInviteToken(token) };
 }
+
+/** Derive one opaque token for every retry of the same client operation. */
+export function inviteTokenForRequest(requestId: string): { token: string; tokenHash: string } {
+  const token = createHash('sha256').update(`team-invite:${requestId}`).digest('base64url');
+  return { token, tokenHash: hashInviteToken(token) };
+}

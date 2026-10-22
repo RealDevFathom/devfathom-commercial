@@ -145,7 +145,7 @@ describe('capture file', () => {
   });
 });
 
-test('non-capture mode keeps the Brevo provider request unchanged', async () => {
+test('non-capture mode sends a provider idempotency key in the payload', async () => {
   vi.stubEnv('EMAIL_DELIVERY_MODE', 'send');
   vi.stubEnv('EMAIL_CAPTURE_FILE', join(runDirectory, 'must-not-exist.capture'));
   vi.stubEnv('BREVO_API_KEY', 'test-api-key');
@@ -162,6 +162,7 @@ test('non-capture mode keeps the Brevo provider request unchanged', async () => 
       to: { email: 'recipient@example.com' },
       subject: 'Subject',
       text: 'Body',
+      idempotencyKey: '123e4567-e89b-42d3-a456-426614174000',  // gitleaks:allow (fixed test UUID, not a secret)
     })
   ).resolves.toEqual({ messageId: 'provider-message-id' });
   expect(fetchMock).toHaveBeenCalledWith('https://api.brevo.com/v3/smtp/email', {
@@ -176,6 +177,7 @@ test('non-capture mode keeps the Brevo provider request unchanged', async () => 
       to: [{ email: 'recipient@example.com' }],
       subject: 'Subject',
       textContent: 'Body',
+      headers: { idempotencyKey: '123e4567-e89b-42d3-a456-426614174000' },  // gitleaks:allow (fixed test UUID, not a secret)
     }),
   });
   await expect(lstat(join(runDirectory, 'must-not-exist.capture'))).rejects.toThrow();

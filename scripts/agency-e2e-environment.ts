@@ -1,7 +1,28 @@
 const DISPOSABLE_DATABASE = /(?:^|[_-])(test|e2e|tmp|disposable)(?:[_-]|$)/i;
 const FORBIDDEN_HOST = /(?:^|[.-])(prod|production|preview|staging)(?:[.-]|$)/i;
 const COMMON_POSTGRES_PORTS = new Set(['5432', '6432']);
-const REQUIRED = ['AGENCY_E2E_ADMIN_EMAIL', 'AGENCY_E2E_ADMIN_PASSWORD'] as const;
+const REQUIRED = [
+  'AGENCY_E2E_ADMIN_EMAIL',
+  'AGENCY_E2E_ADMIN_PASSWORD',
+  'BREVO_API_KEY',
+  'BREVO_SENDER_EMAIL',
+] as const;
+
+function assertAgencyEmailEnvironment(env: Record<string, string | undefined>): void {
+  if (env.EMAIL_DELIVERY_MODE !== 'send') {
+    throw new Error('EMAIL_DELIVERY_MODE=send is required for the Agency E2E lane.');
+  }
+  if (!env.NEXT_PUBLIC_APP_URL) throw new Error('NEXT_PUBLIC_APP_URL is required.');
+  let appUrl: URL;
+  try {
+    appUrl = new URL(env.NEXT_PUBLIC_APP_URL);
+  } catch {
+    throw new Error('NEXT_PUBLIC_APP_URL must be a valid URL.');
+  }
+  if (appUrl.protocol !== 'https:') {
+    throw new Error('NEXT_PUBLIC_APP_URL must use HTTPS for the Agency E2E lane.');
+  }
+}
 
 export function resolveAgencyE2eDatabaseUrl(
   env: Record<string, string | undefined> = process.env
@@ -51,6 +72,7 @@ export function agencyE2eEnvironment(
   for (const name of REQUIRED) {
     if (!env[name]) throw new Error(`${name} is required.`);
   }
+  assertAgencyEmailEnvironment(env);
   const databaseUrl = resolveAgencyE2eDatabaseUrl(env);
   return { ...env, DATABASE_URL: databaseUrl, TEST_DATABASE_URL: databaseUrl, AGENCY_E2E: '1' };
 }

@@ -19,7 +19,7 @@ import type { NotificationPrefs } from '@/lib/notifications';
 import { emailSchema } from '@/lib/email-address';
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
-import { generateInviteToken } from '@/lib/invite-token';
+import { inviteTokenForRequest } from '@/lib/invite-token';
 
 // IMP-AUTH-04: per-category × per-channel notification opt-outs. Sparse —
 // anything unset means "opted in" (notify() defaults to ON). Keys mirror
@@ -147,6 +147,7 @@ export const teamRouter = router({
         phone: z.string().optional(),
         bio: z.string().optional(),
         skills: z.array(z.string()).default([]),
+        requestId: z.string().uuid(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -171,7 +172,7 @@ export const teamRouter = router({
         });
       }
 
-      const { token, tokenHash } = generateInviteToken();
+      const { token, tokenHash } = inviteTokenForRequest(input.requestId);
       const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
       const profile = {
         name: input.name,
@@ -232,10 +233,12 @@ export const teamRouter = router({
           subject: mail.subject,
           html: mail.html,
           text: mail.text,
+          idempotencyKey: input.requestId,
         });
         emailDelivery = { status: 'SENT' };
-      } catch (err) {
-        console.error('[inviteMember] invite email failed for', email, err);
+      } catch {
+        // Do not log recipient data, provider bodies, credentials, or invite tokens.
+        console.error('[inviteMember] invite email delivery failed', { userId: user.id });
         emailDelivery = { status: 'FAILED', code: 'EMAIL_DELIVERY_FAILED' };
       }
 
