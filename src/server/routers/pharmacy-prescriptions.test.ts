@@ -398,7 +398,7 @@ describe('prescription capture and private delivery', () => {
     const receipt = await upload();
     mocks.actor.mockResolvedValueOnce(null);
     expect((await GET(new Request(`http://localhost${receipt.url}`))).status).toBe(401);
-    mocks.can.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+    mocks.can.mockResolvedValueOnce(false);
     expect((await GET(new Request(`http://localhost${receipt.url}`))).status).toBe(403);
     expect(
       (await GET(new Request('http://localhost/api/pharmacy/prescription-files?id=../secret')))
