@@ -147,6 +147,14 @@ describe('checkout money serialization', () => {
     } as unknown as ScopedDb;
     const receipt = await buildReceiptForBranch(receiptDb, 'bill-1', 'branch-1');
 
+    expect(receiptDb.loyaltyPointsEntry.aggregate).toHaveBeenCalledWith({
+      where: {
+        accountId: 'loyalty-1',
+        occurredAt: { lte: new Date('2026-09-01T01:00:00.000Z') },
+      },
+      _sum: { points: true },
+    });
+
     expect(receipt).toMatchObject({
       loyaltyWallet: { balance: 640, platforms: ['APPLE', 'GOOGLE'] },
       lines: [
