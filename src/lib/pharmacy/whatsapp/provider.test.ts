@@ -195,9 +195,12 @@ describe('MetaWhatsAppProvider', () => {
   });
 });
 
-it('uses the configured Meta provider in the production factory', () => {
+it('keeps configured Meta sending disabled in the production factory', async () => {
+  const { createWhatsAppProvider } = await import('./provider');
   const provider = createWhatsAppProvider(
     readWhatsAppConfig({ ...ENV, PHARMACY_WHATSAPP_PROVIDER: 'meta' })
   );
-  expect(provider).toBeInstanceOf(MetaWhatsAppProvider);
+  await expect(provider.sendText({ to: 'synthetic', body: 'synthetic' })).rejects.toMatchObject({
+    reason: 'NOT_CONFIGURED',
+  });
 });
