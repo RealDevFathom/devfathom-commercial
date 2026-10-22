@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-699-build-sop-v4-9-with-short-socket-and-owner-safe-runtime-grants
+Branch: WHA-699-build-sop-v4-9-with-short-socket-and-owner-safe-runtime-grants
+HEAD: 4cfe75e637bd65d8801b7fae9335c1de405beb4c
+Mode: applied
+Excluded (secrets): 1
