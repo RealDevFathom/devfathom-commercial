@@ -305,8 +305,16 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     });
     expect(result.metrics.salesMinor).toBe(0);
     expect(result.metrics.marginMinor).toBeNull();
-    const where = (coverageArgs[0] as { where: { effectiveFrom: { lte: Date } } }).where;
+    const where = (
+      coverageArgs[0] as {
+        where: {
+          effectiveFrom: { lte: Date };
+          qualifiedPersonValidTo: { gt: Date };
+        };
+      }
+    ).where;
     expect(where.effectiveFrom.lte.toISOString()).toBe('2026-03-10T12:00:00.000Z');
+    expect(where.qualifiedPersonValidTo.gt.toISOString()).toBe('2026-03-10T12:00:00.000Z');
   });
 
   it('issues five raw reads; sales use businessDate while margin uses UTC occurredAt in the same statement', async () => {
