@@ -27,6 +27,8 @@ const mocks = vi.hoisted(() => ({
         createdAt: new Date('2026-08-18T07:00:00Z'),
         updatedAt: new Date('2026-08-18T07:00:00Z'),
         primaryBranch: { id: 'branch_1', name: 'Downtown' },
+        effectiveBranchIds: ['branch_1', 'branch_2'],
+        credentialBranchIds: ['branch_1', 'branch_2'],
       },
     ],
     error: null,
@@ -191,6 +193,12 @@ vi.mock('@/lib/trpc', () => ({
               branch: { id: 'branch_1', name: 'Downtown' },
               status: 'ACTIVE',
             },
+            {
+              id: 'device_2',
+              name: 'Kitchen Register',
+              branch: { id: 'branch_2', name: 'Uptown' },
+              status: 'ACTIVE',
+            },
           ],
           error: null,
           isLoading: false,
@@ -301,6 +309,24 @@ describe('Restaurant staff credential UI', () => {
     expect(type).toHaveValue('BADGE');
     expect(deviceId).toHaveValue('device_1');
     expect(screen.getByRole('alert')).toHaveTextContent('Credential rejected.');
+  });
+
+  it('offers device credentials at a staff member secondary branch', () => {
+    mocks.extraBranches = [{ id: 'branch_2', name: 'Uptown', active: true, isDefault: false }];
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Credentials' }));
+    fireEvent.change(screen.getByLabelText('Device branch'), {
+      target: { value: 'branch_2' },
+    });
+
+    const device = screen.getByLabelText('Device restriction');
+    expect(within(device).getByRole('option', { name: 'Kitchen Register — Uptown' })).toBeEnabled();
+    expect(within(device).queryByRole('option', { name: 'Front Register — Downtown' })).toBeNull();
   });
 
   it('shows loading instead of a false zero staff count', () => {

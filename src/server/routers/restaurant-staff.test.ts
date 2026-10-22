@@ -183,6 +183,80 @@ describe('staff CRUD', () => {
     );
   });
 
+  it('limits a branch manager user directory to unlinked or effectively linked users', async () => {
+    mocks.can.mockImplementation(async (...args) => args[1] === 'staff:manage');
+    mocks.staffFindMany.mockResolvedValue([
+      {
+        id: 'manager',
+        primaryBranchId: 'branch_1',
+        jobRoles: [{ branchId: 'branch_1' }],
+        directCapabilityGrants: [],
+      },
+    ]);
+
+    await caller().listEligibleUsers();
+
+    expect(mocks.userFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_workspace',
+          OR: [
+            { restaurantStaffProfiles: { none: {} } },
+            {
+              restaurantStaffProfiles: {
+                some: expect.objectContaining({
+                  OR: expect.arrayContaining([
+                    { primaryBranchId: { in: ['branch_1'] } },
+                    { jobRoles: { some: { branchId: { in: ['branch_1'] } } } },
+                  ]),
+                }),
+              },
+            },
+          ],
+        },
+        select: expect.objectContaining({
+          restaurantStaffProfiles: expect.objectContaining({
+            where: expect.objectContaining({ OR: expect.any(Array) }),
+          }),
+        }),
+      })
+    );
+  });
+
+  it('lists a staff member at a secondary role branch and returns effective branch links', async () => {
+    mocks.staffFindMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      {
+        id: 'staff_secondary',
+        displayName: 'Secondary Chef',
+        email: null,
+        userId: null,
+        primaryBranchId: 'branch_1',
+        status: 'ACTIVE',
+        createdAt: new Date('2026-10-22T00:00:00Z'),
+        updatedAt: new Date('2026-10-22T00:00:00Z'),
+        primaryBranch: { id: 'branch_1', name: 'Downtown' },
+        jobRoles: [{ branchId: 'branch_2' }],
+        directCapabilityGrants: [],
+      },
+    ]);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1' }, { id: 'branch_2' }]);
+
+    const result = await caller().list({ branchId: 'branch_2' });
+
+    expect(mocks.staffFindMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: expect.arrayContaining([{ jobRoles: { some: { branchId: { in: ['branch_2'] } } } }]),
+        }),
+      })
+    );
+    expect(result[0]).toMatchObject({
+      id: 'staff_secondary',
+      effectiveBranchIds: ['branch_1', 'branch_2'],
+      credentialBranchIds: ['branch_1', 'branch_2'],
+    });
+  });
+
   it('creates a staff profile and audits it', async () => {
     const result = await caller().create({ displayName: 'Dana', email: 'Dana@R.com' });
     expect(result).toMatchObject({ id: 'staff_new', email: 'dana@r.com' });

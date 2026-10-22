@@ -235,11 +235,16 @@ export const restaurantStaffRouter = router({
         ctx.entitlements.organizationId
       );
       if (input?.branchId) assertAuthorizedBranch(authorization, input.branchId);
+      const branchIds = input?.branchId ? [input.branchId] : authorization.branchIds;
       const staff = await ctx.db.restaurantStaffProfile.findMany({
         where: {
           organizationId: workspaceOrganizationId(ctx),
           status: 'ACTIVE',
-          primaryBranchId: input?.branchId ? input.branchId : { in: authorization.branchIds },
+          OR: [
+            { primaryBranchId: { in: branchIds } },
+            { jobRoles: { some: { branchId: { in: branchIds } } } },
+            { directCapabilityGrants: { some: { branchId: { in: branchIds } } } },
+          ],
         },
         select: {
           id: true,
@@ -255,15 +260,47 @@ export const restaurantStaffRouter = router({
       }));
     }),
 
-  listEligibleUsers: staffProcedure.query(({ ctx }) => {
+  listEligibleUsers: staffProcedure.query(async ({ ctx }) => {
+    const authorization = await resolveStaffBranchAuthorization(
+      ctx.db,
+      ctx.session!.user,
+      ctx.entitlements.organizationId
+    );
+    const visibleProfile = authorization.organizationWide
+      ? {}
+      : {
+          OR: [
+            { primaryBranchId: { in: authorization.branchIds } },
+            { jobRoles: { some: { branchId: { in: authorization.branchIds } } } },
+            {
+              directCapabilityGrants: {
+                some: { branchId: { in: authorization.branchIds } },
+              },
+            },
+          ],
+        };
     return ctx.db.user.findMany({
-      where: { organizationId: workspaceOrganizationId(ctx) },
+      where: {
+        organizationId: workspaceOrganizationId(ctx),
+        ...(authorization.organizationWide
+          ? {}
+          : {
+              OR: [
+                { restaurantStaffProfiles: { none: {} } },
+                { restaurantStaffProfiles: { some: visibleProfile } },
+              ],
+            }),
+      },
       select: {
         id: true,
         name: true,
         email: true,
         status: true,
-        restaurantStaffProfiles: { select: { id: true, displayName: true }, take: 1 },
+        restaurantStaffProfiles: {
+          where: visibleProfile,
+          select: { id: true, displayName: true },
+          take: 1,
+        },
       },
       orderBy: [{ name: 'asc' }, { email: 'asc' }],
     });
@@ -286,11 +323,16 @@ export const restaurantStaffRouter = router({
         ctx.entitlements.organizationId
       );
       if (input?.branchId) assertAuthorizedBranch(authorization, input.branchId);
-      return ctx.db.restaurantStaffProfile.findMany({
+      const branchIds = input?.branchId ? [input.branchId] : authorization.branchIds;
+      const staff = await ctx.db.restaurantStaffProfile.findMany({
         where: {
           organizationId: workspaceOrganizationId(ctx),
           ...(input?.status ? { status: input.status } : {}),
-          primaryBranchId: input?.branchId ? input.branchId : { in: authorization.branchIds },
+          OR: [
+            { primaryBranchId: { in: branchIds } },
+            { jobRoles: { some: { branchId: { in: branchIds } } } },
+            { directCapabilityGrants: { some: { branchId: { in: branchIds } } } },
+          ],
         },
         select: {
           id: true,
@@ -302,9 +344,36 @@ export const restaurantStaffRouter = router({
           createdAt: true,
           updatedAt: true,
           primaryBranch: { select: { id: true, name: true } },
+          jobRoles: { select: { branchId: true } },
+          directCapabilityGrants: { select: { branchId: true } },
         },
         orderBy: { createdAt: 'desc' },
       });
+      const visibleBranches = new Set(authorization.branchIds);
+      return staff.map(({ jobRoles, directCapabilityGrants, ...profile }) => ({
+        ...profile,
+        effectiveBranchIds: [
+          ...new Set([
+            ...(profile.primaryBranchId ? [profile.primaryBranchId] : []),
+            ...jobRoles.map((row) => row.branchId),
+            ...directCapabilityGrants.map((row) => row.branchId),
+          ]),
+        ].filter((branchId) => visibleBranches.has(branchId)),
+        credentialBranchIds: authorization.organizationWide
+          ? authorization.branchIds
+          : [
+              ...new Set([
+                ...(profile.primaryBranchId ? [profile.primaryBranchId] : []),
+                ...jobRoles.map((row) => row.branchId),
+                ...directCapabilityGrants.map((row) => row.branchId),
+              ]),
+            ].filter((branchId) => visibleBranches.has(branchId)),
+        // A branch-scoped manager must not learn the name of an out-of-scope primary branch.
+        primaryBranch:
+          profile.primaryBranchId && visibleBranches.has(profile.primaryBranchId)
+            ? profile.primaryBranch
+            : null,
+      }));
     }),
 
   create: staffProcedure

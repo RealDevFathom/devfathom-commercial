@@ -85,6 +85,7 @@ export function RestaurantStaffConsole() {
   const [staffFormOpen, setStaffFormOpen] = useState(false);
   const [editingStaff, setEditingStaff] = useState<StaffProfile | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<StaffProfile | null>(null);
+  const [credentialBranchId, setCredentialBranchId] = useState('');
   // SOP-1: the job-role multi-select target (separate from the credentials dialog).
   const [jobRolesStaff, setJobRolesStaff] = useState<StaffProfile | null>(null);
   const [credentialError, setCredentialError] = useState('');
@@ -177,9 +178,7 @@ export function RestaurantStaffConsole() {
         staff.email?.toLowerCase().includes(needle);
       const matchesStatus = statusFilter === 'ALL' || staff.status === statusFilter;
       const matchesBranch =
-        branchNeedle.length === 0 ||
-        staff.primaryBranchId?.toLowerCase().includes(branchNeedle) ||
-        staff.primaryBranch?.name.toLowerCase().includes(branchNeedle);
+        branchNeedle.length === 0 || staff.effectiveBranchIds.includes(branchFilter);
       return matchesSearch && matchesStatus && matchesBranch;
     });
   }, [branchFilter, search, staffQuery.data, statusFilter]);
@@ -416,6 +415,12 @@ export function RestaurantStaffConsole() {
                           size="sm"
                           onClick={() => {
                             setCredentialError('');
+                            setCredentialBranchId(
+                              staff.primaryBranchId &&
+                                staff.credentialBranchIds.includes(staff.primaryBranchId)
+                                ? staff.primaryBranchId
+                                : (staff.credentialBranchIds[0] ?? '')
+                            );
                             setSelectedStaff(staff);
                           }}
                         >
@@ -588,6 +593,7 @@ export function RestaurantStaffConsole() {
         onOpenChange={(open) => {
           if (!open && !credentialsPending) {
             setSelectedStaff(null);
+            setCredentialBranchId('');
             setRevokeCredential(null);
             setCredentialError('');
           }
@@ -619,10 +625,24 @@ export function RestaurantStaffConsole() {
               </select>
             </label>
             <label className="space-y-1.5">
+              <span className={labelClass}>Device branch (optional)</span>
+              <RestaurantBranchSelect
+                branches={branches.filter((branch) =>
+                  selectedStaff?.credentialBranchIds.includes(branch.id)
+                )}
+                loading={branchesQuery.isLoading}
+                error={Boolean(branchesQuery.error)}
+                value={credentialBranchId}
+                onChange={setCredentialBranchId}
+                allowEmpty
+                emptyLabel="No device restriction"
+              />
+            </label>
+            <label className="space-y-1.5">
               <span className={labelClass}>Device restriction (optional)</span>
               <RestaurantDeviceSelect
-                devices={devicesQuery.data ?? []}
-                branchId={selectedStaff?.primaryBranch?.id}
+                devices={credentialBranchId ? (devicesQuery.data ?? []) : []}
+                branchId={credentialBranchId || undefined}
                 loading={devicesQuery.isLoading}
                 error={Boolean(devicesQuery.error)}
                 allowEmpty
