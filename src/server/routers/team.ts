@@ -846,7 +846,28 @@ export const teamRouter = router({
         }
       }
 
-      const updated = await ctx.db.user.update({ where: { id }, data });
+      // Return only the member profile fields this mutation is allowed to expose.
+      // In particular, relying on Prisma's default full-row return would send the
+      // bcrypt password hash and session-revocation fields to the caller.
+      const updated = await ctx.db.user.update({
+        where: { id },
+        data,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          department: true,
+          title: true,
+          avatar: true,
+          phone: true,
+          bio: true,
+          skills: true,
+          startDate: true,
+          status: true,
+          lastActiveAt: true,
+        },
+      });
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: id,
