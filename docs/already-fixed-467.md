@@ -1,47 +1,58 @@
-# Issue #467 — archived white UI work is already superseded
+# Issue #467 — archive recovery remains on hold
 
 ## Decision
 
-Close the archive-recovery issue as **already fixed / obsolete**. Do not restore the deleted
-branch and do not cherry-pick any of its three commits.
+Do **not** close this recovery as already fixed, do not reopen the deleted branch, and do not
+cherry-pick any of its commits yet. The archive must remain on hold until its Git objects are
+available for inspection.
 
-The archived branch describes a Nuxt/FastAPI migration and a port of the white Studio shell to
-that replacement stack. The current product already has the maintained Studio experience in the
-active Next.js application:
+This checkout cannot support the previous “obsolete” conclusion:
 
-- `package.json:6-18` makes Next.js the development, build, start, typecheck, lint, and test
-  lifecycle; `package.json:100-134` keeps React, the Next.js ESLint integration, TypeScript, and
-  Vitest in the supported application toolchain.
-- `docs/design-system/DEVFATHOM-STUDIO.md:1-23` declares Studio the permanent UI source of truth,
-  points implementation work to the live workspace, semantic CSS, shared UI components, and the
-  tenant/platform shells, and explicitly rejects a second admin theme.
-- `src/app/globals.css:186-279` supplies the live light Studio theme through canonical surface,
-  text, border, action, and state tokens rather than an isolated prototype palette.
-- `src/components/layout/app-shell.tsx:202-285` implements the responsive Studio viewport,
-  mobile navigation dialog, top bar, primary navigation, bounded canvas, transitions, and
-  entitlement-aware content in the production shell.
-- `src/app/(app)/layout.tsx:23-97` composes that shell only after resolving the tenant actor,
-  loading data through the tenant-scoped database wrapper, asserting workspace identity, and
-  establishing the tenant session boundary. Replacing it with an old checkpoint would risk
-  weakening isolation that the current shell deliberately preserves.
+- `git cat-file -t f6f72ee0`, `git cat-file -t 43a72f44`, and
+  `git cat-file -t c85ea42a` each report that the object name is invalid.
+- `git cat-file -t archive/wip/white-ui-dirty-20260828` likewise reports that the tag object is
+  invalid.
+- `git remote -v` is empty, so the documented `git fetch origin tag
+  archive/wip/white-ui-dirty-20260828` cannot be run in this checkout.
+- A direct attempt to query the likely GitHub repository is blocked by the environment's HTTP 403
+  proxy response. No archive content was obtained that way.
 
-Git history also contains `ae7dae672ec8fda7efe0adbda4796102bc55d7e8` (`Restore white Next.js
-dashboard`) as an ancestor of the current `HEAD`. Its object remains available locally and its
-changes cover the dashboard, theme, application shell, sidebar, top bar, and shared card styling.
-The maintained implementation above has continued to evolve since that restoration.
+Commit subjects are not a substitute for comparing commit contents. In particular, the stated
+41-path dirty-worktree snapshot could contain a focused fix, asset, or configuration change that
+is independent of the abandoned migration. Therefore this document does not claim that the
+archive-only work is superseded.
 
-## Archive comparison and skipped work
+## Current-code evidence
 
-The archive tag object is not present in this checkout, and this checkout has no `origin` remote,
-so the requested fetch and a literal tree diff cannot be reproduced here. The recovery inventory
-in issue #467 nevertheless identifies all three archive-only commits and is sufficient to decide
-their disposition against the code-level evidence above:
+The maintained product is a Next.js Studio application, which is relevant to a future archive
+review but does not prove that every archive-only change is obsolete:
 
-| Archive commit | Disposition | Reason |
+- `package.json:6-18` defines the Next.js development, build, start, typecheck, lint, and Vitest
+  lifecycle.
+- `docs/design-system/DEVFATHOM-STUDIO.md:7-23` makes the live Studio implementation the product
+  source of truth and rejects a second admin theme.
+- `src/app/(app)/layout.tsx:23-96` resolves the tenant actor, uses `withTenantDb`, verifies the
+  workspace identity, and establishes the tenant session boundary before rendering the shell.
+- `src/components/layout/app-shell.tsx:202-285` contains the active responsive Studio shell.
+- `ae7dae672ec8fda7efe0adbda4796102bc55d7e8` (`Restore white Next.js dashboard`) is an ancestor of
+  this branch, but that ancestry alone cannot establish semantic equivalence with the unavailable
+  archive.
+
+## Archive inventory and present disposition
+
+No archive change is classified as ported or permanently skipped without a content diff:
+
+| Archive commit | Present disposition | Reason |
 | --- | --- | --- |
-| `c85ea42a` — `chore: checkpoint Nuxt and FastAPI migration` | Skipped | It is a checkpoint for a replacement stack, while the supported application lifecycle is Next.js and the active data layer is the tenant-scoped Prisma application. A checkpoint is not a focused fix to port. |
-| `43a72f44` — `feat(ui): port white Studio shell to Nuxt` | Skipped | The valuable outcome—the white/Studio shell—is already implemented and governed in the current Next.js product. Porting a duplicate Nuxt shell would create the parallel UI architecture that the design contract forbids. |
-| `f6f72ee0` — `wip: snapshot uncommitted white-ui checkout state before backup push (41 paths)` | Skipped | This is explicitly a broad dirty-worktree snapshot rather than a reviewable fix. Importing it wholesale would overwrite newer shell, entitlement, tenant-identity, and tenant-session behavior; no missing, independently valuable fix is identified by the archive inventory. |
+| `c85ea42a` — `chore: checkpoint Nuxt and FastAPI migration` | Deferred, not skipped | The commit tree is unavailable. Its migration work may be obsolete, but independent fixes cannot be excluded from its subject. |
+| `43a72f44` — `feat(ui): port white Studio shell to Nuxt` | Deferred, not skipped | The active shell makes a wholesale Nuxt port unlikely to be valuable, but the commit must be inspected for reusable behavior or assets. |
+| `f6f72ee0` — `wip: snapshot uncommitted white-ui checkout state before backup push (41 paths)` | Deferred, not skipped | A 41-path snapshot cannot be assessed from its subject; every archive-only path must be inventoried. |
+
+When the tag is available, compare it to the current main lineage with rename and copy detection,
+inventory every archive-only path (including non-Nuxt/FastAPI files), and classify each change as
+already present, valuable to port, or intentionally skipped with file-level evidence. Any port
+must preserve tenant isolation, DENY-over-ALLOW, exact-grant-only pharmacy permissions, the
+code-level live WhatsApp send block, and secret-safe logging.
 
 No application code, dependency, database migration, authorization rule, WhatsApp behavior, or
-logging behavior is changed by this resolution.
+logging behavior is changed while the recovery is on hold.
