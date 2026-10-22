@@ -102,6 +102,9 @@ const M7_COLUMNS = {
     'active',
     'createdAt',
     'updatedAt',
+    'assigneeJobRoleId',
+    'assigneeStaffProfileId',
+    'assigneeTargetType',
   ],
   restaurant_sop_occurrences: [
     'id',
@@ -118,6 +121,10 @@ const M7_COLUMNS = {
     'resolvedAt',
     'createdAt',
     'updatedAt',
+    'assignedStaffProfileId',
+    'claimedAt',
+    'claimedByStaffProfileId',
+    'poolJobRoleId',
   ],
   restaurant_sop_occurrence_steps: [
     'id',

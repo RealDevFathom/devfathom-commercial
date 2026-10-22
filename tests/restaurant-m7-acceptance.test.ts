@@ -144,6 +144,8 @@ async function seedOccurrence(
         dueTimeMinutes: 720,
         windowMinutes: 60,
         graceMinutes: options.graceMinutes ?? 0,
+        assigneeTargetType: 'PERSON',
+        assigneeStaffProfileId: ids.operator,
       },
     });
     await tx.restaurantSopOccurrence.create({

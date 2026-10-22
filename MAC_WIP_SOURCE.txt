@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-291-repair-m3-m7-governance-pins-and-m7-sop-fixtures-broken-by-66375bd
+Branch: WHA-291-repair-m3-m7-governance-pins-and-m7-sop-fixtures-broken-by-66375bd
+HEAD: 66375bdd1f7dfb16618206c2a7ff6e160863e9e0
+Mode: applied
+Excluded (secrets): 0
