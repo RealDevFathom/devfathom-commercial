@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import '../prisma/load-env.js';
 import { processPlatformJobs } from '@/lib/platform/jobs';
 
 function requestedJobCount(): number {

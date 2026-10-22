@@ -97,7 +97,10 @@ bun prisma/prepare-extensions.ts
 bunx prisma migrate deploy
 ```
 
-Prisma and the seed load `.env`, then `.env.local`. After migrate, grant the application role
+Prisma, the seed, and the documented database utilities load `.env.local` before `.env`, while
+preserving variables supplied by the shell, CI, or hosting platform. If a required database URL is
+missing, the utility names the variable and both searched files instead of allowing the PostgreSQL
+client to silently try its default host. After migrate, grant the application role
 access to the objects the migration role owns:
 
 ```sql
@@ -126,9 +129,10 @@ extension administrator (`EXTENSION_ADMIN_DATABASE_URL`). Migration
 PostgreSQL `P0001` if it was skipped, so `migrate deploy` will stop on a fresh database until this
 step has run. Bun loads `EXTENSION_ADMIN_DATABASE_URL` from `.env.local`; set it as shown above.
 
-The seed creates the local DevFathom organization, platform operator, modules, users, and demo
-data. Platform login uses `PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD`; tenant login uses
-an email printed by the seed and the `SEED_PASSWORD` value.
+The seed creates the local DevFathom organization, modules, users, and demo data. `SEED_PASSWORD`
+is mandatory. A platform operator is created only when **both** `PLATFORM_ADMIN_EMAIL` and
+`PLATFORM_ADMIN_PASSWORD` are set. Platform login uses those values; tenant login uses an email
+printed by the seed and the `SEED_PASSWORD` value.
 
 Never run `prisma db push`. This project relies on migration-only row-level security and tenant
 constraints.

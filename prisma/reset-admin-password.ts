@@ -4,8 +4,9 @@ import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { hash } from 'bcryptjs';
-import 'dotenv/config';
+import { requiredEnvironmentVariable } from './load-env.js';
 
+const DATABASE_URL = requiredEnvironmentVariable('DATABASE_URL');
 const ADMIN_EMAIL = 'admin@company.com';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 const ORGANIZATION_ID = process.env.ORGANIZATION_ID ?? 'org_devfathom';
@@ -20,7 +21,7 @@ if (ADMIN_PASSWORD.length < 8) {
   process.exit(1);
 }
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new pg.Pool({ connectionString: DATABASE_URL });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 

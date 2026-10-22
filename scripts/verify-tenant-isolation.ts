@@ -3,12 +3,15 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 
 import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js';
+import '../prisma/load-env.js';
 
 const { Client } = pg;
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (!databaseUrl) {
-  throw new Error('TEST_DATABASE_URL is required; tenant isolation tests never use DATABASE_URL.');
+  throw new Error(
+    'TEST_DATABASE_URL is required; checked the existing environment, .env.local, and .env. Tenant isolation tests never use DATABASE_URL.'
+  );
 }
 
 const parsedUrl = new URL(databaseUrl);

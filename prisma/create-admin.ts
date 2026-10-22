@@ -13,9 +13,11 @@ import { PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { hash } from 'bcryptjs';
-import 'dotenv/config';
+import { requiredEnvironmentVariable } from './load-env.js';
 
 import { adminDepartmentKeyForVertical } from '../src/lib/vertical-catalog.js';
+
+const DATABASE_URL = requiredEnvironmentVariable('DATABASE_URL');
 
 // D10: emails are stored lower-cased, so an operator typing `Admin@Company.com`
 // must resolve to the same row rather than creating (or failing to find) another.
@@ -38,7 +40,7 @@ if (PASSWORD.length < 8) {
   process.exit(1);
 }
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new pg.Pool({ connectionString: DATABASE_URL });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
