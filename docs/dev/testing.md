@@ -72,8 +72,8 @@ TODO(confirm): whether the e2e runners in `scripts/` seed automatically.
 
 ## CI
 
-- **`qa.yml`** is the QA gate. It triggers on pushes to `restaurantv2`, pull requests into `integration/**`, and manual dispatch with an optional SHA. It does **not** run automatically on PRs into `main` today. TODO(confirm): when it will be retargeted.
+- **`qa.yml`** is the QA gate. It triggers on pushes to `restaurantv2`, pull requests into `integration/**`, and manual dispatch with an optional SHA. It does **not** run automatically on PRs into `main` today.
 - **`image-build.yml`** runs on every pull request (build only; it does not push or deploy).
-- **Docs-only PRs skip QA** but still need a secrets check. There is no gitleaks workflow on `main`, so run `gitleaks` locally before opening the PR. TODO(confirm): whether a CI secrets scan will be added.
+- **Docs-only PRs skip QA** but still need a secrets check. There is no gitleaks workflow on `main`, so run `gitleaks` locally before opening the PR. There is no CI secrets scan yet.
 
 See [contributing.md](./contributing.md#ci) for how this fits the PR flow.

@@ -13,11 +13,11 @@ This page takes you from a fresh clone to a running app with a migrated, seeded 
 | Tool | Version | Notes |
 |---|---|---|
 | Bun | **1.4.2** | Pinned as `packageManager` in `package.json`. Use Bun, not npm, pnpm or yarn. |
-| PostgreSQL | TODO(confirm): supported major version | Required. Tenant isolation relies on Postgres Row-Level Security (RLS). |
+| PostgreSQL | **16** (CI uses `postgres:16`; staging RDS is 16.12) | Required. Tenant isolation relies on Postgres Row-Level Security (RLS). |
 | Git | any recent version | |
 | Python 3 | TODO(confirm): version | Needed only for the `tests/aws-*_test.py` checks (see [testing.md](./testing.md)). |
 
-There is no Docker Compose setup for local Postgres on `main`. Run Postgres yourself.
+There is no Postgres service in Docker Compose. Run Postgres 16 yourself.
 
 ## 2. Setup at a glance
 
@@ -25,7 +25,7 @@ Follow [LOCAL_SETUP.md](../LOCAL_SETUP.md) for the exact commands. In summary:
 
 1. `bun install --frozen-lockfile`. The `postinstall` step runs `prisma generate`, which writes the client to `src/generated/prisma`. Never edit that directory; regenerate with `bun run db:generate`.
 2. Copy `.env.example` to **`.env.local`** (ignored by Git) and fill in local values. LOCAL_SETUP lists the minimum variables. **Never commit env files or paste real values into docs, PRs, issues or chat.**
-3. Create the database and shadow database, plus a separate **application role** that is `NOSUPERUSER NOBYPASSRLS`. The app connects with `DATABASE_URL` as that role; migrations and seeds use `MIGRATION_DATABASE_URL`. A production server refuses to start if the app role can bypass RLS. (`prisma/prepare-runtime-role.ts` exists for shared environments. TODO(confirm): whether local devs should use it instead of the SQL in LOCAL_SETUP.)
+3. Create the database and shadow database, plus a separate **application role** that is `NOSUPERUSER NOBYPASSRLS`. The app connects with `DATABASE_URL` as that role; migrations and seeds use `MIGRATION_DATABASE_URL`. A production server refuses to start if the app role can bypass RLS. `prisma/prepare-runtime-role.ts` automates this after `migrate deploy`: it creates the app login with no right to create databases or roles, sets its password, and grants connect, schema use and read/write on tables and sequences (including future ones). It fails if the login has extra powers, if `APP_DATABASE_URL` is not that role, or if it points at a different server or database from `DATABASE_URL`.
 4. Run `bun prisma/prepare-extensions.ts` **before** migrating. A later migration fails closed if this was skipped.
 5. Apply migrations with `bunx prisma migrate deploy` (164 migrations as of `16a2a370`), then grant the app role access as LOCAL_SETUP shows.
 6. Seed with `bun run db:seed`.
@@ -50,7 +50,7 @@ Follow [LOCAL_SETUP.md](../LOCAL_SETUP.md) for the exact commands. In summary:
 ### Changing the schema
 
 1. Edit `prisma/schema.prisma`.
-2. Run `bun run db:migrate` to create a migration. **If you add a tenant-scoped model, the migration must also add its RLS policy.** Prisma will not generate it. Copy the pattern from an existing tenant-scoped migration. TODO(confirm): link a canonical example migration.
+2. Run `bun run db:migrate` to create a migration. **If you add a tenant-scoped model, the migration must also add its RLS policy.** Prisma will not generate it. Copy the pattern from `prisma/migrations/20260728092000_row_level_security/migration.sql` (the base RLS setup) or a per-module example such as `prisma/migrations/20260818160000_restaurant_brands_catalog_menus/`.
 3. Add or extend RLS and migration tests (see [testing.md](./testing.md)).
 
 For a brand-new shared database, see the fresh-database pipeline in `prisma/FRESH_DATABASE_ADAPTER.md` and the root `FRESH_DB_HANDOFF.md`. TODO(confirm): which is current, and whether they move into `docs/`.

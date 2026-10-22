@@ -19,20 +19,22 @@
 | Branch | Purpose |
 |---|---|
 | `main` | Integration branch. PR-only. |
-| `feature/<short-name>` | Code changes. TODO(confirm): exact prefix convention (`feature/`, `feat/`, `fix/`). `fix/…` branches already exist, e.g. `fix/abac-deny-precedence`. |
+| `fix/<short-name>` | Most code changes (the most common prefix), e.g. `fix/abac-deny-precedence` |
+| `improve/<short-name>` | Improvements to existing features |
+| `release/<name>` | Release branches |
 | `docs/<short-name>` | Documentation-only changes, e.g. `docs/dev-onboarding-architecture` |
+| `qa/<short-name>` | QA work |
+| `codex/<short-name>` | Branches opened by the Codex agent |
 | `staging`, `develop` | **Planned, not created yet.** The target model is `main` + `staging` + `develop`. TODO(confirm): creation date. Until then, PRs target `main`. |
 | `bots/post-hire-work` | Kept. Do not delete. |
-
-The repo has many stale `backup/*` and `c-*` agent branches from before this model. Do not base new work on them. Cleanup is tracked separately.
 
 ## Pull request flow
 
 ```bash
 git checkout main && git pull
-git checkout -b feature/<short-name>      # or docs/<short-name>
+git checkout -b fix/<short-name>          # or improve/, docs/, qa/ …
 # …work, commit…
-git push -u origin feature/<short-name>
+git push -u origin fix/<short-name>
 # open a PR against main
 ```
 
@@ -45,7 +47,7 @@ Before opening the PR:
 - [ ] No secrets, credentials or logins in code, docs or screenshots
 - [ ] Hotel code is out of scope. Don't extend it.
 
-TODO(confirm): the required reviewers and approval count for code PRs.
+Branch protection is not available on our GitHub plan, so review is required **by policy**: one CTO review on every PR, plus QA for code PRs. Never merge your own PR without it.
 
 ### Docs PRs
 
@@ -59,13 +61,12 @@ TODO(confirm): the required reviewers and approval count for code PRs.
 
 | Workflow | What it does | Status |
 |---|---|---|
-| `qa.yml` | QA gate, including RLS regressions | Triggers on push to `restaurantv2`, PRs into `integration/**`, and manual dispatch with a SHA. Not automatic on PRs into `main`. TODO(confirm): retargeting. |
+| `qa.yml` | QA gate, including RLS regressions | Triggers on push to `restaurantv2`, PRs into `integration/**`, and manual dispatch with a SHA. Not automatic on PRs into `main`. |
 | `image-build.yml` | Builds the container image on every pull request (no push, no deploy) | Active |
 | `promote-production.yml` | Azure production promotion | **DEPRECATED – never deploy to Azure** |
+| `deploy-staging.yml` | Azure-only staging deploy, manual dispatch only | **DEPRECATED – never start it.** |
 
-Any other legacy Azure workflow is also **DEPRECATED**. Never run or dispatch it.
-
-There is **no AWS CI workflow**. `infra/aws/buildspec.yml` exists, but it has not been verified as the live deploy path. TODO(confirm): the CTO will verify the AWS path before PR 5 documents it.
+There is **no AWS CI workflow**. The AWS staging path matches `infra/aws` as of 2026-10-22: CloudFormation stacks (`infra/aws/shared.yaml`, `environment.yaml`, `certificate.yaml`, `dns.yaml`) plus CodeBuild (`infra/aws/buildspec.yml`) building from a source zip in S3 with `IMAGE_TAG` set to the commit SHA, then migrate, `prepare-runtime-role`, and an ECS service roll. No CDK and no GitHub Actions. Full procedure in PR 5.
 
 ## Deployment: Azure is DEPRECATED
 
@@ -80,4 +81,4 @@ There is **no AWS CI workflow**. `infra/aws/buildspec.yml` exists, but it has no
 
 - Read `AGENTS.md` / `CLAUDE.md` at the repo root first.
 - Follow the same rules: branch, PR, review, and no direct pushes.
-- Don't create long-lived or `backup/*` branches.
+- Don't create long-lived branches.

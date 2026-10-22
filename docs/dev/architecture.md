@@ -65,7 +65,7 @@ PostgreSQL ── RLS policies (defined in migrations only)
 | `tests/` | Vitest tests, Python `aws-*_test.py` checks, and `tests/e2e` for Playwright |
 | `qa/` | QA artefacts |
 | `scripts/` | Seeds, E2E runners, jobs, print bridge, tenant-isolation check |
-| `infra/aws/` | AWS staging infrastructure (CloudFormation YAML, `buildspec.yml`). Not yet verified as the live path; see PR 5 docs. |
+| `infra/aws/` | AWS staging infrastructure: CloudFormation (`shared`, `environment`, `certificate`, `dns`) plus CodeBuild `buildspec.yml`. Matches `infra/aws` as of 2026-10-22; see PR 5 docs. |
 | `infra/*.bicep`, `infra/*.bicepparam`, Azure shell scripts in `infra/` | **DEPRECATED – never deploy to Azure** |
 | `.github/workflows/` | CI. See [contributing.md](./contributing.md#ci). |
 | `Dockerfile`, `Dockerfile.aws`, `docker/` | Container builds |
