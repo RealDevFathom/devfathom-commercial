@@ -299,7 +299,7 @@ function capabilityDecision(
 }
 
 /**
- * Dispense, receipt, or counter capability, then an active pharmacy branch
+ * One of the requested counter capabilities, then an active pharmacy branch
  * assignment in the session organization. Restaurant staff profiles are not
  * consulted. An empty assignment denies a non-admin. A session `ADMIN` of this
  * organization may use every active branch, including when they also have an
@@ -317,7 +317,12 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
   }
 }
 
-async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+async function requireCounterBranchAccess(
+  ctx: TRPCContext,
+  branch: string,
+  capabilities: readonly string[],
+  auditAction: 'receipt' | 'sale'
+): Promise<LedgerScope> {
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
   if (!user.organizationId || user.organizationId !== scope.organizationId) {
@@ -349,7 +354,7 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
 
   const overrides = member.permissionOverrides;
   const roleRules = member.organizationRole?.permissions ?? [];
-  const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
+  const capable = capabilities.some((action) => {
     const override = capabilityDecision(overrides, action);
     if (override === 'DENY') return false;
     if (override === 'ALLOW') return true;
@@ -393,13 +398,21 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
         branchId: branch,
         reason:
           assigned.size === 0
-            ? 'org-admin-receipt-access-without-branch-assignment'
-            : 'org-admin-receipt-access',
+            ? `org-admin-${auditAction}-access-without-branch-assignment`
+            : `org-admin-${auditAction}-access`,
       },
     });
     return scope;
   }
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+}
+
+function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  return requireCounterBranchAccess(ctx, branch, RECEIPT_READ_CAPABILITIES, 'receipt');
+}
+
+function requireCounterSaleAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  return requireCounterBranchAccess(ctx, branch, ['pharmacy:counter'], 'sale');
 }
 
 const closeDate = z
@@ -849,7 +862,7 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) =>
-        createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
+        createSale(txDb(tx), await requireCounterSaleAccess(ctx, input.branchId), input.quotation)
       )
     ),
   addLine: protectedProcedure
@@ -929,7 +942,7 @@ export const pharmacySalesRouter = router({
       try {
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
+          const scope = await requireCounterSaleAccess(ctx, input.branchId);
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });

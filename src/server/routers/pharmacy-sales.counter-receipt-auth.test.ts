@@ -32,6 +32,8 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 }));
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
+  createSale: vi.fn(async () => ({ id: 'sale-new' })),
+  addSaleLine: vi.fn(async () => ({ saleId: 'sale-a', lineId: 'line-a' })),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
@@ -64,7 +66,7 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { readReturnHistory } from '@/lib/pharmacy/sales';
+import { addSaleLine, createSale, readReturnHistory } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -124,6 +126,7 @@ function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOY
         },
       ]),
     },
+    medicine: { findFirst: vi.fn(async () => ({ controlled: false })) },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     $transaction: vi.fn(),
   };
@@ -516,5 +519,75 @@ describe('counter receipt authorization', () => {
         }),
       })
     );
+  });
+});
+
+const saleMutations = [
+  {
+    name: 'create',
+    run: (caller: Caller, branchId = 'branch-a') => caller.create({ branchId, quotation: false }),
+    domainWrite: createSale,
+  },
+  {
+    name: 'addLine',
+    run: (caller: Caller, branchId = 'branch-a') =>
+      caller.addLine({
+        branchId,
+        saleId: 'sale-a',
+        medicineId: 'medicine-a',
+        presentationId: 'presentation-a',
+        packLevelId: 'pack-a',
+        saleUnit: 'PACK',
+        quantity: 1,
+        canonicalUnitsPerSaleUnit: 10,
+        idempotencyKey: 'line-key-a',
+      }),
+    domainWrite: addSaleLine,
+  },
+] as const;
+
+describe('counter sale mutation authorization (#471)', () => {
+  it.each(saleMutations)(
+    '$name requires pharmacy:counter, not another receipt grant',
+    async (path) => {
+      const f = fixture(dispense);
+      assign(f, ['branch-a']);
+
+      await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(path.domainWrite).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(saleMutations)(
+    '$name requires an active assignment to the requested branch',
+    async (path) => {
+      const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+      assign(f, ['branch-b']);
+
+      await expect(path.run(f.caller())).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Branch is outside your scope.',
+      });
+      expect(path.domainWrite).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(saleMutations)('$name honors DENY over ALLOW before writing', async (path) => {
+    const f = fixture([
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+      { capability: 'pharmacy:counter', effect: 'DENY' },
+    ]);
+    assign(f, ['branch-a']);
+
+    await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(path.domainWrite).not.toHaveBeenCalled();
+  });
+
+  it.each(saleMutations)('$name allows an assigned counter operator', async (path) => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+
+    await expect(path.run(f.caller())).resolves.toBeDefined();
+    expect(path.domainWrite).toHaveBeenCalledTimes(1);
   });
 });
