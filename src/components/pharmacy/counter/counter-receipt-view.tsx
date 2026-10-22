@@ -82,13 +82,11 @@ async function requestThermalJob(input: {
   branchId: string;
   saleId: string;
   locale: CounterReceiptLocale;
-  reprint: boolean;
 }): Promise<ThermalJob> {
   const params = new URLSearchParams({
     branchId: input.branchId,
     saleId: input.saleId,
     locale: input.locale,
-    reprint: input.reprint ? '1' : '0',
   });
   try {
     const response = await fetch(`/api/pharmacy/print?${params}`, {
@@ -329,7 +327,7 @@ export function CounterReceiptView({
     if (!branchId) return;
     const saleId = receipt.saleId;
     setThermal({ key: thermalKey, job: { state: 'sending' } });
-    const job = await requestThermalJob({ branchId, saleId, locale, reprint: thermalReprint });
+    const job = await requestThermalJob({ branchId, saleId, locale });
     setThermal({ key: thermalKey, job });
     if (job.state === 'ready') setThermalPrinted((prior) => new Set(prior).add(saleId));
   };

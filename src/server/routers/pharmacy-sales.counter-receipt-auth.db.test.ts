@@ -48,7 +48,6 @@ type SalesCaller = {
     branchId: string;
     saleId: string;
     locale: 'en' | 'ur';
-    reprint: boolean;
   }) => Promise<unknown>;
   lookupReceiptByNumber: (input: { branchId: string; receiptNumber: number }) => Promise<unknown>;
   counterReceiptFormat: (input: { branchId: string }) => Promise<unknown>;
@@ -260,7 +259,6 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
           branchId: ids.branchA,
           saleId: ids.saleA,
           locale: 'en',
-          reprint: false,
         })
       ).rejects.toMatchObject({ code: 'NOT_FOUND' });
       await expect(
@@ -268,7 +266,6 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
           branchId: ids.branchA,
           saleId: ids.saleA,
           locale: 'en',
-          reprint: true,
         })
       ).rejects.toMatchObject({ code: 'NOT_FOUND' });
       await expect(
@@ -292,7 +289,6 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
           branchId: ids.branchB,
           saleId: ids.saleB,
           locale: 'en',
-          reprint: true,
         })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       await expect(api.counterReceiptFormat({ branchId: ids.branchB })).rejects.toMatchObject({

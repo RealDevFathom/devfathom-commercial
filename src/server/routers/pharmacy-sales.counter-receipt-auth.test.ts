@@ -42,6 +42,7 @@ vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),
 }));
 vi.mock('@/lib/pharmacy/receipt-print', () => ({
+  allocatePharmacyReceiptPrintCopy: vi.fn(async () => ({ copyNumber: 1, reprint: false })),
   PharmacyReceiptPrintError: class PharmacyReceiptPrintError extends Error {
     constructor(reason: string) {
       super(reason);
@@ -188,14 +189,8 @@ const paths: {
   {
     name: 'counterReceiptPrintJob',
     run: (caller, branchId = 'branch-a') =>
-      caller.counterReceiptPrintJob({ branchId, saleId: 'sale-a', locale: 'en', reprint: false }),
+      caller.counterReceiptPrintJob({ branchId, saleId: 'sale-a', locale: 'en' }),
     allowed: { status: 'READY', reprint: false },
-  },
-  {
-    name: 'counterReceiptPrintJob reprint',
-    run: (caller, branchId = 'branch-a') =>
-      caller.counterReceiptPrintJob({ branchId, saleId: 'sale-a', locale: 'en', reprint: true }),
-    allowed: { status: 'READY', reprint: true },
   },
   {
     name: 'lookupReceiptByNumber',
@@ -460,9 +455,8 @@ describe('counter receipt authorization', () => {
         branchId: 'branch-a',
         saleId: 'sale-a',
         locale: 'en',
-        reprint: true,
       })
-    ).resolves.toMatchObject({ status: 'READY', reprint: true });
+    ).resolves.toMatchObject({ status: 'READY', reprint: false });
     expect(admin.context.audit.detail).toMatchObject({
       metadata: { reason: 'org-admin-receipt-access' },
     });

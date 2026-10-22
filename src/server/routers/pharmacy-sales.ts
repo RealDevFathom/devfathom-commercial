@@ -55,6 +55,7 @@ import {
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
 import {
+  allocatePharmacyReceiptPrintCopy,
   buildPharmacyReceiptEscPosJob,
   PharmacyReceiptPrintError,
   readPharmacyReceiptFormat,
@@ -1610,8 +1611,8 @@ export const pharmacySalesRouter = router({
 
   /**
    * PH-A7: the settled receipt as a validated ESC/POS `RECEIPT` job, using the
-   * branch's saved format. A read: printing and reprinting from history
-   * re-read the same sale, so neither can issue or change a receipt number.
+   * branch's saved format. The server durably assigns the copy ordinal, so
+   * caller input cannot turn a subsequent copy into an apparent original.
    * Text the raw baseline cannot print returns the browser/OS fallback.
    */
   counterReceiptPrintJob: auditedProtectedProcedure
@@ -1621,27 +1622,38 @@ export const pharmacySalesRouter = router({
           branchId,
           saleId: z.string().min(1),
           locale: z.enum(['en', 'ur']),
-          reprint: z.boolean(),
         })
         .strict()
     )
-    .query(async ({ ctx, input }) => {
+    .mutation(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
         const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
         if (receipt.receiptNumber === null || !receipt.completedAt) {
           throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
         }
-        const [format, taxIdentity] = await Promise.all([
+        const [format, taxIdentity, copy] = await Promise.all([
           readPharmacyReceiptFormat(ctx.db, scope),
           readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt)),
+          allocatePharmacyReceiptPrintCopy(
+            ctx.db,
+            scope,
+            input.saleId,
+            ctx.session.user.id,
+            input.locale
+          ),
         ]);
+        annotateAudit(ctx, {
+          targetType: 'PharmacySale',
+          targetId: input.saleId,
+          metadata: { branchId: input.branchId, receiptCopyNumber: copy.copyNumber },
+        });
         return {
           status: 'READY' as const,
           ...buildPharmacyReceiptEscPosJob(receipt, input.locale, {
             layout: format.layout,
             taxIdentity,
-            reprint: input.reprint,
+            reprint: copy.reprint,
           }),
         };
       } catch (error) {

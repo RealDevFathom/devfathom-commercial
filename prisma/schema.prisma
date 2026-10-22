@@ -1107,11 +1107,31 @@ model PharmacySale {
   loyaltyEntries            PharmacyLoyaltyPointsEntry[]
   customerOrder             PharmacyCustomerOrder?
   visibilityAnchor          PharmacyBranch               @relation("PharmacySaleVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_sales_visibility_fkey")
+  receiptPrintAttempts      PharmacyReceiptPrintAttempt[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
   @@index([organizationId, branchId, status, createdAt])
   @@map("pharmacy_sales")
+}
+
+/// Every server-issued thermal receipt copy. The per-sale ordinal is allocated
+/// while locking the settled sale, so only copy 1 can be an unmarked original.
+model PharmacyReceiptPrintAttempt {
+  id             String   @id @default(uuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  saleId         String
+  copyNumber     Int
+  requestedById  String
+  locale         String
+  createdAt      DateTime @default(now())
+
+  sale PharmacySale @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, saleId, copyNumber], map: "pharmacy_receipt_print_attempts_sale_copy_key")
+  @@index([organizationId, branchId, createdAt], map: "pharmacy_receipt_print_attempts_branch_created_idx")
+  @@map("pharmacy_receipt_print_attempts")
 }
 
 /// CRM-L01 retail identity. Clinical identity remains in PharmacyPatient and is

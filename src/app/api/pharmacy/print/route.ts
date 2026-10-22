@@ -10,7 +10,6 @@ const query = z
     branchId: z.string().trim().min(1).max(128),
     saleId: z.string().trim().min(1).max(128),
     locale: z.enum(['en', 'ur']).default('en'),
-    reprint: z.enum(['0', '1']).default('0'),
   })
   .strict();
 
@@ -26,8 +25,8 @@ const headers = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options'
 /**
  * PH-A7 Pharmacy receipt print bridge. Returns a validated ESC/POS `RECEIPT`
  * job (shared `PrintDocumentSchema` + bytes) for a local bridge hand-off; it
- * queues nothing and cannot confirm paper. Reprint from history is the same
- * read with `reprint=1`. Called through the app router so the
+ * cannot confirm paper. The router durably assigns the original/reprint marker.
+ * Called through the app router so the
  * `pharmacySales.*` path keeps session, module and branch-scope enforcement.
  */
 export async function GET(request: Request) {
@@ -41,7 +40,6 @@ export async function GET(request: Request) {
       branchId: parsed.data.branchId,
       saleId: parsed.data.saleId,
       locale: parsed.data.locale,
-      reprint: parsed.data.reprint === '1',
     });
     if (result.status === 'FALLBACK') {
       // Same error contract as the Restaurant print bridge: no payload in errors.

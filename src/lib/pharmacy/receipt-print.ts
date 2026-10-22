@@ -4,15 +4,15 @@
  * One `RECEIPT` document with a shared layout + facts snapshot, rendered by the
  * Restaurant ESC/POS baseline. Pharmacy gets no second print contract and no
  * second queue: `RestaurantPrintJob` references `RestaurantBranch`, so the job
- * is returned to the caller for a local bridge hand-off and never persisted.
+ * is returned for local bridge hand-off. Each issuance attempt is persisted separately.
  *
  * The raw baseline is printable ASCII only. Urdu (or any non-ASCII medicine or
  * branch name) is refused with the contract's `BROWSER_OS` fallback — the
  * browser receipt in `counter-browser-print.ts` is unchanged and remains the
  * Unicode path.
  *
- * Reprint is a read. The receipt number comes from the settled sale; this
- * module only marks the paper as a reprint and can never issue a number.
+ * The receipt number comes from the settled sale; this module only marks later
+ * copies as reprints and can never issue a receipt number.
  */
 
 import { TRPCError } from '@trpc/server';
@@ -54,6 +54,45 @@ export class PharmacyReceiptPrintError extends Error {
     super(reason);
     this.name = 'PharmacyReceiptPrintError';
   }
+}
+
+/** Durably assign a copy ordinal while serializing requests on the settled sale. */
+export async function allocatePharmacyReceiptPrintCopy(
+  db: ScopedDb,
+  scope: BranchScope,
+  saleId: string,
+  requestedById: string,
+  locale: CounterReceiptLocale
+): Promise<{ copyNumber: number; reprint: boolean }> {
+  return db.$transaction(async (tx) => {
+    const sales = await tx.$queryRawUnsafe<{ id: string }[]>(
+      `SELECT "id" FROM "pharmacy_sales"
+       WHERE "organizationId" = $1 AND "branchId" = $2 AND "id" = $3
+         AND "completedAt" IS NOT NULL AND "receiptNumber" IS NOT NULL
+       FOR UPDATE`,
+      scope.organizationId,
+      scope.branchId,
+      saleId
+    );
+    if (!sales[0]) throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
+    const copies = await tx.$queryRawUnsafe<{ copyNumber: number }[]>(
+      `INSERT INTO "pharmacy_receipt_print_attempts"
+         ("id", "organizationId", "branchId", "saleId", "copyNumber", "requestedById", "locale", "createdAt")
+       SELECT gen_random_uuid()::text, $1, $2, $3, COALESCE(MAX("copyNumber"), 0) + 1,
+              $4, $5, CURRENT_TIMESTAMP
+       FROM "pharmacy_receipt_print_attempts"
+       WHERE "organizationId" = $1 AND "saleId" = $3
+       RETURNING "copyNumber"`,
+      scope.organizationId,
+      scope.branchId,
+      saleId,
+      requestedById,
+      locale
+    );
+    const copyNumber = copies[0]?.copyNumber;
+    if (!copyNumber) throw new Error('Receipt print copy allocation returned no row.');
+    return { copyNumber, reprint: copyNumber > 1 };
+  });
 }
 
 const REPRINT_MARKER = 'REPRINT - not a new sale';
