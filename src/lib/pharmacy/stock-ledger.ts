@@ -65,9 +65,14 @@ type CandidateRow = {
  * expiry with one comparison and never sell into an expiry period.
  */
 export function expiryInstant(printed: Date, precision: 'DAY' | 'MONTH'): Date {
-  return precision === 'MONTH'
-    ? new Date(Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth() + 1, 1))
-    : new Date(Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth(), printed.getUTCDate() + 1));
+  const firstExpiredLocalMidnight =
+    precision === 'MONTH'
+      ? Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth() + 1, 1)
+      : Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth(), printed.getUTCDate() + 1);
+
+  // Printed medicine expiries are Pakistan-local calendar dates. Asia/Karachi
+  // is UTC+05:00, so its midnight is 19:00Z on the preceding UTC date.
+  return new Date(firstExpiredLocalMidnight - 5 * 60 * 60_000);
 }
 
 const CANDIDATE_COLUMNS = Prisma.sql`
