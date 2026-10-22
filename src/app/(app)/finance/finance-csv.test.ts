@@ -10,6 +10,13 @@ describe('finance CSV cells', () => {
     }
   );
 
+  it.each(['\t=HYPERLINK("https://example.invalid")', '\r+SUM(A1:A2)', '\n-1+2', '  @SUM(A1)'])(
+    'neutralizes a formula marker after leading whitespace: %j',
+    (value) => {
+      expect(financeCsvCell(value)).toBe(`"'${value.replaceAll('"', '""')}"`);
+    }
+  );
+
   it('preserves ordinary text while escaping CSV quotes', () => {
     expect(financeCsvCell('Project "North"')).toBe('"Project ""North"""');
   });
