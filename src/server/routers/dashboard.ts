@@ -5,11 +5,24 @@ import {
   currenciesPresent,
   type CurrencyAmount,
 } from '@/lib/finance/currency';
+import { workspaceMonthRange } from '@/lib/timezone';
 
 // IMP-DASH-02: stable keys for the dashboard widgets a user may hide. The Next
 // Meeting banner, KPI cards, and admin Revenue chart are intentionally NOT
 // toggleable — they stay always-on to avoid edge cases.
 const TOGGLEABLE_WIDGETS = ['myTasks', 'deadlines', 'activity', 'projects'] as const;
+
+export function monthlyPaymentWhere(
+  organizationId: string,
+  timeZone: string | null | undefined,
+  now: Date
+) {
+  const month = workspaceMonthRange(timeZone, now);
+  return {
+    organizationId,
+    paidAt: { gte: month.start, lt: month.end, lte: now },
+  };
+}
 
 /**
  * Safely coerce a stored `User.preferences` JSON blob into the shape we rely on.
@@ -147,27 +160,38 @@ export const dashboardRouter = router({
 
     if (isAdmin) {
       const now = new Date();
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      const organizationId = ctx.entitlements.organizationId;
+      const organization = await ctx.db.organization.findUnique({
+        where: { id: organizationId },
+        select: { timezone: true, currency: true },
+      });
+      const tenantCurrency = organization?.currency ?? 'USD';
+      const month = workspaceMonthRange(organization?.timezone, now);
 
-      const [incomeResult, expenseResult, outstandingResult] = await Promise.all([
-        ctx.db.transaction.groupBy({
+      const [paymentResult, expenseResult, outstandingResult] = await Promise.all([
+        ctx.db.payment.groupBy({
           by: ['currency'],
           _sum: { amount: true },
-          // FIN-04: bound the upper end so a future-dated row can't inflate
-          // "this month".
-          where: { type: 'INCOME', date: { gte: startOfMonth, lte: now } },
+          // Invoice collections are represented by Payment rows, not Transaction
+          // income rows. Use the payment instant and the tenant's calendar month.
+          where: monthlyPaymentWhere(organizationId, organization?.timezone, now),
         }),
         ctx.db.transaction.groupBy({
           by: ['currency'],
           _sum: { amount: true },
-          where: { type: 'EXPENSE', date: { gte: startOfMonth, lte: now } },
+          where: {
+            organizationId,
+            type: 'EXPENSE',
+            date: { gte: month.start, lt: month.end, lte: now },
+          },
         }),
         ctx.db.invoice.count({
-          where: { status: { in: ['SENT', 'OVERDUE'] } },
+          where: { organizationId, status: { in: ['SENT', 'OVERDUE'] } },
         }),
       ]);
 
-      revenue = fromCurrencyGroups(incomeResult, 'amount');
+      revenue = fromCurrencyGroups(paymentResult, 'amount');
+      if (revenue.length === 0) revenue = [{ currency: tenantCurrency, amount: 0 }];
       expenses = fromCurrencyGroups(expenseResult, 'amount');
       outstandingInvoices = outstandingResult;
     }

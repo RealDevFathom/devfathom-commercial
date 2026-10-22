@@ -39,7 +39,9 @@ export function moneyLabel(amount: number, currency: string): string {
  */
 export function moneyListLabel(rows: CurrencyAmount[]): string {
   const nonZero = rows.filter((r) => r.amount !== 0);
-  const list = nonZero.length ? sortCurrencies(nonZero) : [{ currency: 'USD', amount: 0 }];
+  const list = nonZero.length
+    ? sortCurrencies(nonZero)
+    : [sortCurrencies(rows)[0] ?? { currency: 'USD', amount: 0 }];
   return list.map((r) => moneyLabel(r.amount, r.currency)).join(' · ');
 }
 
