@@ -8,6 +8,7 @@ describe('Restaurant staff branch guard coverage', () => {
   it.each([
     'listBranches',
     'listDirectory',
+    'listEligibleUsers',
     'list',
     'create',
     'update',

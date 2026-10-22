@@ -255,15 +255,38 @@ export const restaurantStaffRouter = router({
       }));
     }),
 
-  listEligibleUsers: staffProcedure.query(({ ctx }) => {
+  listEligibleUsers: staffProcedure.query(async ({ ctx }) => {
+    const authorization = await resolveStaffBranchAuthorization(
+      ctx.db,
+      ctx.session!.user,
+      ctx.entitlements.organizationId
+    );
+    const organizationId = workspaceOrganizationId(ctx);
+    const eligibleProfileWhere = {
+      organizationId,
+      OR: [
+        { primaryBranchId: { in: authorization.branchIds } },
+        { jobRoles: { some: { branchId: { in: authorization.branchIds } } } },
+        { directCapabilityGrants: { some: { branchId: { in: authorization.branchIds } } } },
+      ],
+    };
     return ctx.db.user.findMany({
-      where: { organizationId: workspaceOrganizationId(ctx) },
+      where: {
+        organizationId,
+        ...(authorization.organizationWide
+          ? {}
+          : { restaurantStaffProfiles: { some: eligibleProfileWhere } }),
+      },
       select: {
         id: true,
         name: true,
         email: true,
         status: true,
-        restaurantStaffProfiles: { select: { id: true, displayName: true }, take: 1 },
+        restaurantStaffProfiles: {
+          ...(authorization.organizationWide ? {} : { where: eligibleProfileWhere }),
+          select: { id: true, displayName: true },
+          take: 1,
+        },
       },
       orderBy: [{ name: 'asc' }, { email: 'asc' }],
     });
