@@ -1,0 +1,18 @@
+{
+  "name": "A repeated Abbasi Pharmacie alert is idempotent",
+  "input": {
+    "event": "EIGHTY_PERCENT",
+    "organizationId": "org_abbasi",
+    "monthStart": "2026-09-30T19:00:00.000Z",
+    "monthEnd": "2026-10-31T19:00:00.000Z",
+    "spendUsd": 165.25,
+    "budgetUsd": 200
+  },
+  "expected": {
+    "title": "DevFathom AI budget at 80%",
+    "message": "Anthropic month-to-date spend is $165.25 of the $200.00 budget.",
+    "notificationType": "ai_budget",
+    "recipientOrganizationId": "org_abbasi",
+    "delivered": false
+  }
+}

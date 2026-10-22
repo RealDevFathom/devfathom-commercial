@@ -1,0 +1,18 @@
+{
+  "name": "Abbasi Pharmacie switches after reaching its monthly budget",
+  "input": {
+    "event": "BEDROCK_SWITCH",
+    "organizationId": "org_abbasi",
+    "monthStart": "2026-09-30T19:00:00.000Z",
+    "monthEnd": "2026-10-31T19:00:00.000Z",
+    "spendUsd": 200,
+    "budgetUsd": 200
+  },
+  "expected": {
+    "title": "DevFathom AI switched to Bedrock",
+    "message": "Anthropic month-to-date spend reached $200.00 of the $200.00 budget. DevFathom AI is now routing through Bedrock.",
+    "notificationType": "ai_budget",
+    "recipientOrganizationId": "org_abbasi",
+    "delivered": true
+  }
+}
