@@ -27,7 +27,7 @@ import 'server-only';
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { expiryInstant } from '../stock-ledger';
+import { expiryInstant, organizationTimezone } from '../stock-ledger';
 import type { LedgerScope } from '../stock-ledger';
 
 export class PharmacyOpeningError extends Error {
@@ -321,6 +321,7 @@ export async function postOpeningSession(
 ) {
   const session = await requireSession(db, scope, input.sessionId, ['DRAFT', 'COUNTED']);
 
+  const timeZone = await organizationTimezone(db, scope.organizationId);
   const lines = await db.pharmacyOpeningStockLine.findMany({
     where: { organizationId: scope.organizationId, sessionId: session.id, status: 'READY' },
     orderBy: { id: 'asc' },
@@ -356,7 +357,8 @@ export async function postOpeningSession(
         printedMrpMinor: line.printedMrpMinor as number,
         receivedExpiresAt: expiryInstant(
           line.expiryDate as Date,
-          line.expiryPrecision as 'DAY' | 'MONTH'
+          line.expiryPrecision as 'DAY' | 'MONTH',
+          timeZone
         ),
         receivedExpiryPrecision: line.expiryPrecision as 'DAY' | 'MONTH',
         receivedAt: session.openingAt,

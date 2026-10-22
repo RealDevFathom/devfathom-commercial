@@ -43,7 +43,7 @@ import {
   type OrderedTerms,
 } from './receiving';
 import { nearExpiryWarning, packIsExpired } from './gs1-datamatrix';
-import { expiryInstant, receiveLot, reverseMovements } from './stock-ledger';
+import { expiryInstant, organizationTimezone, receiveLot, reverseMovements } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
 
 export type ReceivingScope = LedgerScope;
@@ -375,7 +375,11 @@ async function resolveManufacturingBatch(
     expiryPrecision: 'DAY' | 'MONTH';
   }
 ) {
-  const expiresAt = expiryInstant(input.printedExpiry, input.expiryPrecision);
+  const expiresAt = expiryInstant(
+    input.printedExpiry,
+    input.expiryPrecision,
+    await organizationTimezone(db, scope.organizationId)
+  );
   const existing = await db.pharmacyManufacturingBatch.findFirst({
     where: {
       organizationId: scope.organizationId,

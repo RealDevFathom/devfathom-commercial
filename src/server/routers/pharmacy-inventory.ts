@@ -41,6 +41,7 @@ import {
   allocateForSale,
   breakPack,
   expiryInstant,
+  organizationTimezone,
   onHand,
   receiveLot,
   transferStock,
@@ -758,7 +759,11 @@ export const pharmacyInventoryRouter = router({
           batchNumber: input.batchNumber,
           // Stored as the instant the batch becomes expired, so INV-03 never has
           // to re-derive a precision rule at the counter.
-          expiresAt: expiryInstant(input.printedExpiry, input.expiryPrecision),
+          expiresAt: expiryInstant(
+            input.printedExpiry,
+            input.expiryPrecision,
+            await organizationTimezone(ctx.db, organizationId)
+          ),
           expiryPrecision: input.expiryPrecision,
         },
       });
@@ -832,6 +837,7 @@ export const pharmacyInventoryRouter = router({
       try {
         // The lot and its opening RECEIPT are one fact: a committed lot with no
         // receipt is unreceived stock the ledger would then refuse to move.
+        const timeZone = await organizationTimezone(ctx.db, scope.organizationId);
         return await ctx.db.$transaction(async (tx) =>
           receiveLot(txDb(tx), scope, {
             manufacturingBatchId: input.manufacturingBatchId,
@@ -842,7 +848,7 @@ export const pharmacyInventoryRouter = router({
             supplierInvoiceRef: input.supplierInvoiceRef,
             unitCostMinor: input.unitCostMinor,
             printedMrpMinor: input.printedMrpMinor,
-            receivedExpiresAt: expiryInstant(input.printedExpiry, input.expiryPrecision),
+            receivedExpiresAt: expiryInstant(input.printedExpiry, input.expiryPrecision, timeZone),
             receivedExpiryPrecision: input.expiryPrecision,
             quantityUnits: input.quantityUnits,
             idempotencyKey: input.idempotencyKey,

@@ -18,6 +18,7 @@
  */
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceTimezone } from '@/lib/timezone';
 
 import {
   arrangementFor,
@@ -63,11 +64,64 @@ type CandidateRow = {
  * expires at the first instant of the next one; a DAY-precision expiry is good
  * through its day. Storing the exclusive instant is what lets INV-03 decide
  * expiry with one comparison and never sell into an expiry period.
+ *
+ * #604: that first instant is 00:00 in the organization's timezone, not in UTC
+ * (06/2027 in Asia/Karachi expires at 2027-06-30T19:00Z). The printed date is a
+ * calendar date held at UTC midnight; an unset or invalid zone falls back to UTC.
+ * The database applies the same rule on write (see the 20261023000604 migration).
  */
-export function expiryInstant(printed: Date, precision: 'DAY' | 'MONTH'): Date {
-  return precision === 'MONTH'
-    ? new Date(Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth() + 1, 1))
-    : new Date(Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth(), printed.getUTCDate() + 1));
+export function expiryInstant(
+  printed: Date,
+  precision: 'DAY' | 'MONTH',
+  timeZone?: string | null
+): Date {
+  const boundary =
+    precision === 'MONTH'
+      ? Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth() + 1, 1)
+      : Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth(), printed.getUTCDate() + 1);
+  return zonedMidnight(boundary, workspaceTimezone(timeZone));
+}
+
+/** 00:00 in `timeZone` of the calendar date held at UTC midnight `utcMidnight`. */
+function zonedMidnight(utcMidnight: number, timeZone: string): Date {
+  const format = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+  const offset = (instant: number) => {
+    const parts = format.formatToParts(new Date(instant));
+    const part = (type: Intl.DateTimeFormatPartTypes) =>
+      Number(parts.find((entry) => entry.type === type)!.value);
+    return (
+      Date.UTC(
+        part('year'),
+        part('month') - 1,
+        part('day'),
+        part('hour'),
+        part('minute'),
+        part('second')
+      ) -
+      Math.floor(instant / 1000) * 1000
+    );
+  };
+  // Second pass corrects a guess that landed across a daylight-saving change.
+  const guess = utcMidnight - offset(utcMidnight);
+  return new Date(utcMidnight - offset(guess));
+}
+
+/** #604: the zone an organization's expiry boundaries are cut in (UTC when unset or invalid). */
+export async function organizationTimezone(db: ScopedDb, organizationId: string): Promise<string> {
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { timezone: true },
+  });
+  return workspaceTimezone(organization?.timezone);
 }
 
 const CANDIDATE_COLUMNS = Prisma.sql`
