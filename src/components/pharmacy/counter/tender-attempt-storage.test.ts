@@ -298,6 +298,7 @@ it('round-trips Khata recovery without storing authentication credentials', () =
     type: 'KHATA',
     familyAccountId: 'family-a',
     ownerOverride: true,
+    overrideReason: 'Urgent medicine',
   };
   delete attempt.input.cashReceivedMinor;
   attempt.draft.cashReceived = '';

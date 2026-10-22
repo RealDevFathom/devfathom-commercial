@@ -133,6 +133,7 @@ describe('CRM-L04 explainable health suggestion', () => {
         familyAccountId: 'family_1',
         suggestion,
         ownerAuthorized: false,
+        overrideReason: 'Customer emergency',
       })
     ).rejects.toEqual(
       expect.objectContaining<Partial<FamilyKhataError>>({
@@ -157,6 +158,7 @@ describe('CRM-L04 explainable health suggestion', () => {
       ownerAuthorized: true,
       ownerAuthorizedByUserId: scope.actorId,
       ownerReauthenticatedAt: now,
+      overrideReason: 'Customer emergency',
       overrideLimitMinor: 15_000,
     });
     expect(update).toHaveBeenCalledWith(
@@ -173,6 +175,7 @@ describe('CRM-L04 explainable health suggestion', () => {
             ownerAuthorizedByUserId: scope.actorId,
             ownerReauthenticatedAt: now.toISOString(),
             ownerAuthorizedAt: now.toISOString(),
+            overrideReason: 'Customer emergency',
           },
         }),
       })
@@ -201,6 +204,7 @@ describe('CRM-L04 explainable health suggestion', () => {
           ownerAuthorized: true,
           ownerAuthorizedByUserId: actor,
           ownerReauthenticatedAt: at,
+          overrideReason: 'Customer emergency',
           overrideLimitMinor: 15_000,
         }
       )
@@ -224,6 +228,7 @@ describe('CRM-L04 explainable health suggestion', () => {
         ownerAuthorized: true,
         ownerAuthorizedByUserId: scope.actorId,
         ownerReauthenticatedAt: new Date(now.getTime() - 5 * 60_000),
+        overrideReason: 'Customer emergency',
       }
     );
     expect(update).toHaveBeenCalledOnce();
@@ -357,7 +362,7 @@ describe('counter Khata ledger gate', () => {
       db as never,
       scope,
       { ...input, amountMinor: 600, ownerOverride: true },
-      { authorized: true, passwordAuthenticatedAt: Date.now() }
+      { authorized: true, passwordAuthenticatedAt: Date.now(), reason: 'Urgent medicine' }
     );
     expect(db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -369,6 +374,7 @@ describe('counter Khata ledger gate', () => {
           reasons: expect.arrayContaining(['1 charge(s) in the stated window']),
           ownerAuthorizedByUserId: scope.actorId,
           ownerAuthorizedAt: expect.any(String),
+          overrideReason: 'Urgent medicine',
         }),
       }),
     });

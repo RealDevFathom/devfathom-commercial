@@ -1189,9 +1189,7 @@ function ScopedPharmacyCounterConsole({
         cashReceivedMinor?: number;
         familyAccountId?: string;
         ownerOverride?: boolean;
-        providerRef?: string;
-        payerName?: string;
-        referenceSkipped?: boolean;
+        overrideReason?: string;
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
@@ -1236,7 +1234,11 @@ function ScopedPharmacyCounterConsole({
             ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
             : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
           ...(input.familyAccountId
-            ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride }
+            ? {
+                familyAccountId: input.familyAccountId,
+                ownerOverride: input.ownerOverride,
+                overrideReason: input.overrideReason,
+              }
             : {}),
           ...(input.providerRef !== undefined ? { providerRef: input.providerRef } : {}),
           ...(input.payerName !== undefined ? { payerName: input.payerName } : {}),

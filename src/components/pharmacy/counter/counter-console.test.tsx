@@ -1101,8 +1101,11 @@ it.each([404, 200])(
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
     await screen.findByText(/Ledger balance/);
-    fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
-    fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
+    fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+    fireEvent.change(screen.getByLabelText('Reason for limit increase'), {
+      target: { value: 'Urgent medicine' },
+    });
+    fireEvent.change(screen.getByLabelText('Approver password (current account)'), {
       target: { value: 'test-only-password' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));

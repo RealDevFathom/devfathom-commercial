@@ -222,13 +222,16 @@ export async function applyKhataLimitDecision(
     ownerAuthorized: boolean;
     ownerAuthorizedByUserId?: string;
     ownerReauthenticatedAt?: Date;
+    overrideReason: string;
     overrideLimitMinor?: number;
   }
 ) {
   const authorizedAt = new Date();
   const reauthenticatedAt = input.ownerReauthenticatedAt?.getTime();
+  const overrideReason = input.overrideReason.trim();
   if (
     !input.ownerAuthorized ||
+    !overrideReason ||
     input.ownerAuthorizedByUserId !== scope.actorId ||
     reauthenticatedAt === undefined ||
     !Number.isFinite(reauthenticatedAt) ||
@@ -266,6 +269,7 @@ export async function applyKhataLimitDecision(
         ownerAuthorizedByUserId: input.ownerAuthorizedByUserId,
         ownerReauthenticatedAt: input.ownerReauthenticatedAt!.toISOString(),
         ownerAuthorizedAt: authorizedAt.toISOString(),
+        overrideReason,
       },
       ownerActorId: scope.actorId,
     },
@@ -355,7 +359,7 @@ export async function authorizeKhataCharge(
   db: ScopedDb,
   scope: FamilyKhataScope,
   input: { saleId: string; familyAccountId: string; amountMinor: number; ownerOverride?: boolean },
-  owner: { authorized: boolean; passwordAuthenticatedAt?: number }
+  owner: { authorized: boolean; passwordAuthenticatedAt?: number; reason?: string }
 ) {
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
@@ -409,6 +413,7 @@ export async function authorizeKhataCharge(
         owner.passwordAuthenticatedAt === undefined
           ? undefined
           : new Date(owner.passwordAuthenticatedAt),
+      overrideReason: owner.reason ?? '',
       overrideLimitMinor: projected,
     });
   }

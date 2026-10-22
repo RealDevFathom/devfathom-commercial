@@ -138,11 +138,18 @@ const tenderInput = z
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
-    providerRef: z.string().regex(/^\d{4,6}$/).optional(),
-    payerName: z.string().trim().min(1).max(100).optional(),
-    referenceSkipped: z.boolean().optional(),
+    overrideReason: z.string().trim().min(1).max(500).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((input, ctx) => {
+    if (input.ownerOverride === true && input.overrideReason === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['overrideReason'],
+        message: 'An override reason is required.',
+      });
+    }
+  });
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
 const demandReason = z.enum([
   'STOCKOUT',
@@ -206,6 +213,21 @@ async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'wr
 async function bindKhataBranch(db: ScopedDb, scope: LedgerScope) {
   await db.$queryRaw(
     Prisma.sql`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`
+  );
+}
+
+async function canApproveKhataLimitOverride(ctx: TRPCContext, organizationId: string) {
+  const user = ctx.session!.user;
+  const approver = await ctx.db.user.findFirst({
+    where: { id: user.id, organizationId, status: { in: [...ACTIVE_STATUSES] } },
+    select: { organizationRole: { select: { key: true } } },
+  });
+  const roleKey = approver?.organizationRole?.key;
+  return (
+    user.role === 'ADMIN' ||
+    roleKey === 'owner' ||
+    roleKey === 'owner-operator' ||
+    roleKey === 'manager'
   );
 }
 
@@ -819,7 +841,11 @@ export const pharmacySalesRouter = router({
     if (isManualTender(input.type)) annotateAudit(ctx, { skipInput: true });
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
-        if (input.familyAccountId !== undefined || input.ownerOverride !== undefined)
+        if (
+          input.familyAccountId !== undefined ||
+          input.ownerOverride !== undefined ||
+          input.overrideReason !== undefined
+        )
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message: 'Khata fields require Khata tender.',
@@ -834,11 +860,7 @@ export const pharmacySalesRouter = router({
       const normalized = ledgerTender(input);
       const ownerAuthorized =
         input.ownerOverride === true &&
-        ctx.session!.user.role === 'ADMIN' &&
-        (await can(subjectFromSession(ctx.session!.user), 'admin:access', undefined, {
-          db: ctx.db,
-          source: 'TRPC',
-        }));
+        (await canApproveKhataLimitOverride(ctx, scope.organizationId));
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
         await bindKhataBranch(db, scope);
@@ -854,6 +876,7 @@ export const pharmacySalesRouter = router({
           {
             authorized: ownerAuthorized,
             passwordAuthenticatedAt: ctx.session!.user.passwordAuthenticatedAt,
+            reason: input.overrideReason,
           }
         );
         const result = await applyPharmacyTender(db, scope, normalized);

@@ -166,7 +166,11 @@ suite('family Khata restricted PostgreSQL', () => {
           db,
           a,
           { ...a, amountMinor: 401, ownerOverride: true },
-          { authorized: true, passwordAuthenticatedAt: Date.now() - 301000 }
+          {
+            authorized: true,
+            passwordAuthenticatedAt: Date.now() - 301000,
+            reason: 'Urgent medicine',
+          }
         )
       )
     ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
@@ -208,7 +212,7 @@ suite('family Khata restricted PostgreSQL', () => {
         db,
         a,
         { ...a, amountMinor: 200, ownerOverride: true },
-        { authorized: true, passwordAuthenticatedAt: Date.now() }
+        { authorized: true, passwordAuthenticatedAt: Date.now(), reason: 'Urgent medicine' }
       )
     );
     const decision = await inScope(a, (db) =>
@@ -217,7 +221,10 @@ suite('family Khata restricted PostgreSQL', () => {
     expect(decision).toMatchObject({
       appliedLimitMinor: 1100,
       ownerActorId: 'owner',
-      reasons: expect.objectContaining({ ownerAuthorizedByUserId: 'owner' }),
+      reasons: expect.objectContaining({
+        ownerAuthorizedByUserId: 'owner',
+        overrideReason: 'Urgent medicine',
+      }),
     });
     await expect(
       inScope(a, (db) =>

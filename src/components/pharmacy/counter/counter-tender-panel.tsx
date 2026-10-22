@@ -66,9 +66,7 @@ export type CounterTenderPanelProps = {
       cashReceivedMinor?: number;
       familyAccountId?: string;
       ownerOverride?: boolean;
-      providerRef?: string;
-      payerName?: string;
-      referenceSkipped?: boolean;
+      overrideReason?: string;
     },
     draft: TenderDraft
   ) => Promise<CounterTenderResult>;
@@ -125,6 +123,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [khataLoading, setKhataLoading] = useState(false);
     const [khataError, setKhataError] = useState('');
     const [ownerOverride, setOwnerOverride] = useState(false);
+    const [overrideReason, setOverrideReason] = useState('');
     const [password, setPassword] = useState('');
     const [totp, setTotp] = useState('');
     const [statementPending, setStatementPending] = useState(false);
@@ -210,7 +209,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       (!isKhata ||
         (Boolean(account) &&
           !khataLoading &&
-          (!overLimit || (ownerOverride && Boolean(password) && Boolean(reauthenticateOwner)))));
+          (!overLimit ||
+            (ownerOverride &&
+              Boolean(overrideReason.trim()) &&
+              Boolean(password) &&
+              Boolean(reauthenticateOwner)))));
 
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
@@ -237,7 +240,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             type,
             amountMinor,
             ...(isKhata
-              ? { familyAccountId: accountId, ownerOverride: overLimit && ownerOverride }
+              ? {
+                  familyAccountId: accountId,
+                  ownerOverride: overLimit && ownerOverride,
+                  ...(overLimit ? { overrideReason: overrideReason.trim() } : {}),
+                }
               : {}),
             ...(type === 'CASH' && cashReceivedMinor !== null ? { cashReceivedMinor } : {}),
             ...(manual && capture?.success ? {
@@ -444,6 +451,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               onChange={(event) => {
                 setAccountId(event.target.value);
                 setOwnerOverride(false);
+                setOverrideReason('');
               }}
             >
               <option value="">Choose family account</option>
@@ -467,8 +475,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             {overLimit ? (
               <>
                 <p role="alert" className="text-sm text-destructive">
-                  This charge exceeds the family credit limit. An owner must re-enter their password
-                  to raise the limit to {formatMinor(account!.balanceMinor + amountMinor!)}.
+                  This charge exceeds the family credit limit. An owner or manager must re-enter
+                  their password and give a reason to raise the limit to{' '}
+                  {formatMinor(account!.balanceMinor + amountMinor!)}.
                 </p>
                 <Label className="flex min-h-11 items-center gap-2">
                   <input
@@ -477,11 +486,19 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     disabled={!editable}
                     onChange={(event) => setOwnerOverride(event.target.checked)}
                   />
-                  Owner: authorize limit increase
+                  Owner or manager: authorize limit increase
                 </Label>
                 {ownerOverride ? (
                   <>
-                    <Label htmlFor="khata-password">Owner password (current account)</Label>
+                    <Label htmlFor="khata-override-reason">Reason for limit increase</Label>
+                    <Input
+                      id="khata-override-reason"
+                      value={overrideReason}
+                      maxLength={500}
+                      disabled={!editable}
+                      onChange={(event) => setOverrideReason(event.target.value)}
+                    />
+                    <Label htmlFor="khata-password">Approver password (current account)</Label>
                     <Input
                       id="khata-password"
                       type="password"
