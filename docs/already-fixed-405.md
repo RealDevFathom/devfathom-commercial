@@ -3,8 +3,8 @@
 Static verification against the current code shows that the reported tax-basis mismatch is
 already fixed:
 
-- `src/lib/restaurant/tenders.ts:895-905` stores a settled bill's `subtotal` after removing
-  inclusive merchandise tax, so day-close gross sales are pre-tax.
+- `src/lib/restaurant/tenders.ts:880-896` totals only inclusive merchandise tax and removes it
+  from the settled bill's stored `subtotal`, so day-close gross sales are pre-tax.
 - `src/lib/restaurant/daily-close.ts:159-170` calculates `refundTotal` as each refund's gross
   `amount` less `taxRefundAmount`, then subtracts that pre-tax refund total from pre-tax gross
   sales when calculating `netSales`.
