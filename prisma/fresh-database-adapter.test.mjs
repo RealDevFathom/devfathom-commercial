@@ -763,6 +763,27 @@ test('offline prep rejects incomplete inventory and unsafe identifiers', () => {
   );
 });
 
+test('offline prep grants only the pg_trgm function required by pharmacy catalogue search', () => {
+  const tables = schemaInventory(new URL('../', import.meta.url).pathname).map((item) => ({
+    ...table(
+      item.name,
+      item.columns.map((name) => col(name, 'text', true))
+    ),
+    primaryKey: [item.columns.includes('id') ? 'id' : item.columns[0]],
+  }));
+  const { runtimeSQL } = renderPreparation(
+    plan(tables),
+    { runtime: 'devfathom_app', migration: 'migration' },
+    'unit'
+  );
+
+  assert.match(
+    runtimeSQL,
+    /GRANT EXECUTE ON FUNCTION public\.similarity_op\(text, text\) TO "devfathom_app";/
+  );
+  assert.doesNotMatch(runtimeSQL, /GRANT EXECUTE ON ALL FUNCTIONS/i);
+});
+
 test('real generated Prisma create SQL needs only the explicitly rendered writer columns', async () => {
   const operations = [
     [
