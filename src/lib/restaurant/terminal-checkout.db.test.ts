@@ -741,13 +741,13 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
           where: { targetType: 'RestaurantBillLine', targetId: line!.id },
           select: {
             terminalSessionId: true,
-            terminalSession: { select: { deviceId: true, status: true } },
+            terminalSession: { select: { deviceId: true, endedAt: true } },
           },
         })
       );
       expect(evidence).toMatchObject({
         terminalSessionId: expect.any(String),
-        terminalSession: { deviceId: ctx.posA.deviceId, status: 'ACTIVE' },
+        terminalSession: { deviceId: ctx.posA.deviceId, endedAt: null },
       });
     });
 

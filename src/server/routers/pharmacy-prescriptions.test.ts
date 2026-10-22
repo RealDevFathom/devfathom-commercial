@@ -193,7 +193,7 @@ describe('prescription capture and private delivery', () => {
   it('allows tenant administrators only when central ABAC finds an explicit dispense grant', async () => {
     mocks.can.mockResolvedValue(true);
     const admin = context();
-    admin.session.user.role = 'ADMIN';
+    admin.session!.user.role = 'ADMIN';
     await expect(
       caller(admin).uploadSource({
         patientId: 'patient-a',
@@ -216,7 +216,7 @@ describe('prescription capture and private delivery', () => {
   it('refuses a tenant administrator when central ABAC finds no exact dispense grant', async () => {
     mocks.can.mockResolvedValue(false);
     const admin = context();
-    admin.session.user.role = 'ADMIN';
+    admin.session!.user.role = 'ADMIN';
 
     await expect(caller(admin).workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.can).toHaveBeenCalledWith(

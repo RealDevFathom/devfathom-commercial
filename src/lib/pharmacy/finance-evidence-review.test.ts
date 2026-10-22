@@ -216,7 +216,7 @@ describe('metric contract (reports.ts PHARMACY_METRIC_CONTRACT)', () => {
 describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () => {
   type Counts = { recalls: number; claims: number; receiving: number; coverage: number };
 
-  function makeDb(rawResults: unknown[][], counts: Counts, khataValue = 4_250n) {
+  function makeDb(rawResults: unknown[][], counts: Counts, khataValue = BigInt(4250)) {
     const calls: CapturedSql[] = [];
     const coverageArgs: unknown[] = [];
     let index = 0;

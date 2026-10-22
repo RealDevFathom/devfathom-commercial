@@ -33,6 +33,7 @@ const receipt: Receipt = {
   ],
   totals: {
     subtotal: '24.00',
+    discountTotal: '0.00',
     taxTotal: '2.00',
     serviceChargeTotal: '1.00',
     deliveryFeeTotal: '3.00',

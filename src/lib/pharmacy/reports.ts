@@ -277,7 +277,7 @@ async function readKhataAgingMinor(db: ScopedDb, branchIds: readonly string[]): 
     Prisma.sql`SELECT NULLIF(current_setting('app.current_branch_id', true), '') AS "branchId"`
   );
   const previousBranchId = context[0]?.branchId ?? '';
-  let total = 0n;
+  let total = BigInt(0);
 
   try {
     // Khata tables enforce organization + exactly one branch through FORCE RLS. Read each
@@ -289,7 +289,7 @@ async function readKhataAgingMinor(db: ScopedDb, branchIds: readonly string[]): 
       const rows = await db.$queryRaw<Array<{ value: bigint }>>(
         Prisma.sql`WITH payments AS (SELECT "organizationId", "branchId", "settlesChargeId", SUM("amountMinor") AS paid FROM "pharmacy_khata_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId"=${branchId} AND "kind"='PAYMENT' GROUP BY "organizationId", "branchId", "settlesChargeId") SELECT COALESCE(SUM(GREATEST(charge."amountMinor"::bigint-COALESCE(payments.paid,0),0)),0)::bigint AS value FROM "pharmacy_khata_events" charge LEFT JOIN payments ON payments."organizationId"=charge."organizationId" AND payments."branchId"=charge."branchId" AND payments."settlesChargeId"=charge."id" WHERE charge."organizationId"=current_setting('app.current_organization_id',true) AND charge."branchId"=${branchId} AND charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`
       );
-      total += rows[0]?.value ?? 0n;
+      total += rows[0]?.value ?? BigInt(0);
     }
   } finally {
     await db.$queryRaw(

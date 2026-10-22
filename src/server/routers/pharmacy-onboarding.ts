@@ -343,7 +343,16 @@ export const pharmacyOnboardingRouter = router({
           if (effective) {
             try {
               assertBranchMayOperate(
-                { ...version, ruleSet: jurisdictionRuleSet, auditDenied: () => undefined },
+                {
+                  ...version,
+                  permittedSchedules: Array.isArray(version.permittedSchedules)
+                    ? version.permittedSchedules.filter(
+                        (schedule): schedule is string => typeof schedule === 'string'
+                      )
+                    : [],
+                  ruleSet: jurisdictionRuleSet,
+                  auditDenied: () => undefined,
+                },
                 { name: 'REGULATORY_PROFILE_VIEW', at: now, requiresQualifiedPerson: true }
               );
             } catch (error) {
