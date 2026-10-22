@@ -2,8 +2,16 @@ import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
-const { applyTenderInTransaction } = vi.hoisted(() => ({ applyTenderInTransaction: vi.fn() }));
-vi.mock('@/lib/restaurant/tenders', () => ({ applyTenderInTransaction }));
+const { applyTenderInTransaction, lockBillForTender, quoteOpenBillSettlement } = vi.hoisted(() => ({
+  applyTenderInTransaction: vi.fn(),
+  lockBillForTender: vi.fn(),
+  quoteOpenBillSettlement: vi.fn(),
+}));
+vi.mock('@/lib/restaurant/tenders', () => ({
+  applyTenderInTransaction,
+  lockBillForTender,
+  quoteOpenBillSettlement,
+}));
 
 import {
   processTerminalEvent,
@@ -59,6 +67,8 @@ describe('provider-neutral terminal payments', () => {
       paymentId: 'payment-1',
       settled: true,
     });
+    lockBillForTender.mockResolvedValue(undefined);
+    quoteOpenBillSettlement.mockResolvedValue({ remainingDue: '12.50' });
   });
 
   afterEach(() => {
@@ -123,11 +133,30 @@ describe('provider-neutral terminal payments', () => {
       db,
       expect.objectContaining({
         billId: 'bill-1',
+        branchId: 'branch-1',
         tender: expect.objectContaining({ type: 'CARD', amount: expect.anything() }),
         actor: expect.objectContaining({ idempotencyKey: 'terminal:event-1' }),
       })
     );
     expect(result.reconciliation).toMatchObject({ outcome: 'APPLIED' });
+  });
+
+  it('validates against the locked, tax-inclusive CARD settlement quote', async () => {
+    const { db } = makeDb();
+    db.restaurantBill.findFirst.mockResolvedValueOnce({
+      id: 'bill-1',
+      grandTotal: '10.00',
+    } as never);
+
+    await processTerminalEvent(db as never, {
+      source: 'provider-neutral',
+      externalEventId: 'event-tax-inclusive',
+      event: baseEvent,
+    });
+
+    expect(lockBillForTender).toHaveBeenCalledWith(db, 'bill-1');
+    expect(quoteOpenBillSettlement).toHaveBeenCalledWith(db, 'bill-1', expect.any(Date), 'CARD');
+    expect(applyTenderInTransaction).toHaveBeenCalledOnce();
   });
 
   it('records an amount mismatch and never tenders', async () => {

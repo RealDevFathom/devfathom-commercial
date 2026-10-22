@@ -264,6 +264,19 @@ export function classifyTenderAmount(
   return 'OK';
 }
 
+/** Lock the order and bill in the same deterministic order used by tendering. */
+export async function lockBillForTender(tx: ScopedDb, billId: string): Promise<void> {
+  const billOwner = await tx.restaurantBill.findUnique({
+    where: { id: billId },
+    select: { orderId: true },
+  });
+  if (!billOwner) {
+    throw new TenderError('The bill does not exist.', 'BILL_NOT_FOUND');
+  }
+  await tx.$queryRaw`SELECT id FROM restaurant_orders WHERE id = ${billOwner.orderId} FOR UPDATE`;
+  await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${billId} FOR UPDATE`;
+}
+
 /**
  * Apply one tender to a bill and, when coverage is reached, settle it + allocate its
  * receipt — atomically and idempotently. See the module doc for the full contract.
@@ -329,15 +342,7 @@ export async function applyTenderInTransaction(
   // Match cancellation's deterministic order → bill lock order. Besides serializing
   // final tenders, the order lock prevents a cancellation waiting on this bill from
   // deadlocking with settlement work that must subsequently touch the order.
-  const billOwner = await tx.restaurantBill.findUnique({
-    where: { id: input.billId },
-    select: { orderId: true },
-  });
-  if (!billOwner) {
-    throw new TenderError('The bill does not exist.', 'BILL_NOT_FOUND');
-  }
-  await tx.$queryRaw`SELECT id FROM restaurant_orders WHERE id = ${billOwner.orderId} FOR UPDATE`;
-  await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} FOR UPDATE`;
+  await lockBillForTender(tx, input.billId);
 
   const bill = await tx.restaurantBill.findUnique({
     where: { id: input.billId },
@@ -471,8 +476,8 @@ export async function applyTenderInTransaction(
 }
 
 /**
- * Compute the live, tax-inclusive settlement quote for an OPEN bill exactly as a
- * CASH tender would — WITHOUT applying anything (QA-143). The stored open-bill
+ * Compute the live, tax-inclusive settlement quote for an OPEN bill exactly as the
+ * proposed tender type would — WITHOUT applying anything (QA-143). The stored open-bill
  * `grandTotal` is pre-tax and its `taxTotal` is 0 until settlement (tax is only
  * frozen once a tender's payment category is known), so the register summary read
  * must recompute here to disclose tax and a `remainingDue` that actually settles
@@ -487,7 +492,8 @@ export async function applyTenderInTransaction(
 export async function quoteOpenBillSettlement(
   tx: ScopedDb,
   billId: string,
-  at: Date
+  at: Date,
+  proposedTenderType: TenderType = 'CASH'
 ): Promise<TaxQuoteResult | null> {
   const bill = await tx.restaurantBill.findUnique({
     where: { id: billId },
@@ -517,7 +523,7 @@ export async function quoteOpenBillSettlement(
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   })) as TenderRow[];
   try {
-    const settlement = await loadSettlementContext(tx, bill, existing, 'CASH', at);
+    const settlement = await loadSettlementContext(tx, bill, existing, proposedTenderType, at);
     return settlement.quote;
   } catch (err) {
     if (err instanceof TenderError) return null;

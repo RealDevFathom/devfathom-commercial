@@ -8,7 +8,11 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { runMoneyTransaction } from './drawer-sessions';
 import { equals, money, sub, sum, ZERO } from './money';
-import { applyTenderInTransaction } from './tenders';
+import {
+  applyTenderInTransaction,
+  lockBillForTender,
+  quoteOpenBillSettlement,
+} from './tenders';
 
 const MONEY = z.string().regex(/^\d{1,10}(?:\.\d{1,2})?$/);
 
@@ -104,6 +108,7 @@ async function processTerminalEventInTransaction(db: ScopedDb, input: ProcessInp
 
   const amount = money(input.event.amount);
   const tipAmount = money(input.event.tipAmount ?? ZERO);
+  const at = new Date();
   const eventStatus = input.event.status.toUpperCase() as
     'INITIATED' | 'APPROVED' | 'DECLINED' | 'VOIDED';
 
@@ -123,10 +128,17 @@ async function processTerminalEventInTransaction(db: ScopedDb, input: ProcessInp
     },
     select: { id: true },
   });
-  const outstanding = bill
-    ? sub(bill.grandTotal, sum(bill.tenders.map((row) => row.amount)))
-    : null;
-  const failureReason = !bill
+  // Hold the same order → bill locks as tender application while producing the
+  // CARD quote. OPEN-bill grandTotal is pre-tax, so it is not a settlement quote.
+  if (bill && operator && eventStatus === 'APPROVED') await lockBillForTender(db, bill.id);
+  const settlement =
+    bill && operator && eventStatus === 'APPROVED'
+      ? await quoteOpenBillSettlement(db, bill.id, at, 'CARD')
+      : null;
+  const outstanding =
+    settlement?.remainingDue ??
+    (bill ? sub(bill.grandTotal, sum(bill.tenders.map((row) => row.amount))) : null);
+  const failureReason = !bill || (operator && eventStatus === 'APPROVED' && !settlement)
     ? 'BILL_NOT_OPEN_OR_BRANCH_MISMATCH'
     : !operator
       ? 'OPERATOR_NOT_ACTIVE_IN_BRANCH'
@@ -169,6 +181,7 @@ async function processTerminalEventInTransaction(db: ScopedDb, input: ProcessInp
 
   const applied = await applyTenderInTransaction(db, {
     billId: bill!.id,
+    branchId: config.branchId,
     tender: {
       type: 'CARD',
       amount,
@@ -187,6 +200,7 @@ async function processTerminalEventInTransaction(db: ScopedDb, input: ProcessInp
       deviceId: config.deviceId,
       idempotencyKey: `terminal:${input.externalEventId}`,
     },
+    now: at,
   });
   const reconciliation = await db.restaurantTerminalReconciliation.findFirstOrThrow({
     where: { source: input.source, externalEventId: input.externalEventId },
