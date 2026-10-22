@@ -111,6 +111,26 @@ beforeEach(() => {
   });
 });
 describe('Khata router trust and recovery boundary', () => {
+  it('lets a cashier with counter permission read and charge Khata without dispense permission', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    vi.mocked(can).mockImplementation(async (_subject, capability) =>
+      capability === 'pharmacy:counter'
+    );
+
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toEqual([
+      expect.objectContaining({ id: 'family-a' }),
+    ]);
+    await expect(f.caller().tender(input)).resolves.toMatchObject({ tenderId: 'tender-a' });
+    expect(can).toHaveBeenCalledWith(f.user, 'pharmacy:counter', undefined, {
+      db: f.db,
+      source: 'TRPC',
+    });
+    expect(can).not.toHaveBeenCalledWith(f.user, 'pharmacy:dispense', undefined, expect.anything());
+  });
+
   it('uses server tenant, CREDIT settlement and an atomic member charge', async () => {
     const f = fixture();
     await f.caller().tender(input);
