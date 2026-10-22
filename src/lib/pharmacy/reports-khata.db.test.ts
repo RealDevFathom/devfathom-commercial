@@ -11,14 +11,19 @@ const orgB = `org_report_khata_b_${suffix}`;
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
 let readCommandCentre: typeof import('./reports').readPharmacyOwnerCommandCentre;
 
-type KhataFixture = { organizationId: string; branchId: string };
+type KhataFixture = {
+  organizationId: string;
+  branchId: string;
+  familyAccountId: string;
+  partialChargeId?: string;
+};
 
 async function createFixture(
   organizationId: string,
   label: string,
   amounts: {
     overdue: number[];
-    partial?: { amount: number; paid: number; dishonoured?: number };
+    partial?: { amount: number; paid?: number; dishonoured?: number };
     future?: number;
   }
 ): Promise<KhataFixture> {
@@ -86,19 +91,23 @@ async function createFixture(
     const overdue = new Date('2020-01-01T00:00:00.000Z');
     const future = new Date('2099-01-01T00:00:00.000Z');
     for (const amount of amounts.overdue) await charge(amount, overdue);
+    let partialChargeId: string | undefined;
     if (amounts.partial) {
       const item = await charge(amounts.partial.amount, overdue);
-      await db.pharmacyKhataEvent.create({
-        data: {
-          organizationId,
-          branchId: branch.id,
-          familyAccountId: family.id,
-          kind: 'PAYMENT',
-          amountMinor: amounts.partial.paid,
-          settlesChargeId: item.id,
-          actorId: 'owner',
-        },
-      });
+      partialChargeId = item.id;
+      if (amounts.partial.paid) {
+        await db.pharmacyKhataEvent.create({
+          data: {
+            organizationId,
+            branchId: branch.id,
+            familyAccountId: family.id,
+            kind: 'PAYMENT',
+            amountMinor: amounts.partial.paid,
+            settlesChargeId: item.id,
+            actorId: 'owner',
+          },
+        });
+      }
       if (amounts.partial.dishonoured) {
         await db.pharmacyKhataEvent.create({
           data: {
@@ -114,7 +123,12 @@ async function createFixture(
       }
     }
     if (amounts.future) await charge(amounts.future, future);
-    return { organizationId, branchId: branch.id };
+    return {
+      organizationId,
+      branchId: branch.id,
+      familyAccountId: family.id,
+      partialChargeId,
+    };
   });
 }
 
@@ -151,5 +165,41 @@ suite('owner command centre Khata aging under forced PostgreSQL RLS', () => {
     // fully paid charge whose cheque bounced. Excludes the future charge and foreign organization's
     // charge. The total is also deliberately above PostgreSQL INTEGER_MAX.
     expect(result.metrics.khataAgingMinor).toBe(2_750_000_500);
+  });
+
+  it('rejects direct and aggregate dishonours beyond payments on the linked charge', async () => {
+    const direct = await createFixture(orgA, `report-direct-${suffix}`, {
+      overdue: [],
+      partial: { amount: 400 },
+    });
+    const excess = await createFixture(orgA, `report-excess-${suffix}`, {
+      overdue: [],
+      partial: { amount: 400, paid: 100 },
+    });
+
+    for (const [fixture, amountMinor] of [
+      [direct, 1],
+      [excess, 101],
+    ] as const) {
+      await expect(
+        withTenantDb(orgA, async (db) => {
+          await db.$queryRawUnsafe(
+            "SELECT set_config('app.current_branch_id', $1, true)",
+            fixture.branchId
+          );
+          return db.pharmacyKhataEvent.create({
+            data: {
+              organizationId: orgA,
+              branchId: fixture.branchId,
+              familyAccountId: fixture.familyAccountId,
+              kind: 'DISHONOURED_CHEQUE',
+              amountMinor,
+              settlesChargeId: fixture.partialChargeId,
+              actorId: 'owner',
+            },
+          });
+        })
+      ).rejects.toThrow(/cannot exceed linked payments/i);
+    }
   });
 });
