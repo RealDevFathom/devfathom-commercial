@@ -234,10 +234,10 @@ export const POLICIES: Record<Action, Policy[]> = {
   'pharmacy:manage': [],
   'pharmacy:procurement': [],
   'pharmacy:inventory': [],
-  // Tenant administrators retain the default dispensing access expected by
-  // legacy role gates, but the grant lives here so custom DENY rules evaluated
-  // by `can()` can revoke it before static policies run.
-  'pharmacy:dispense': [isAdmin],
+  // Exact-grant-only pharmacist authority. The narrow tenant-administrator
+  // exception for prescription capture lives in `canCapturePrescription` and
+  // must not expand into clinical dispensing decisions.
+  'pharmacy:dispense': [],
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],
   'pharmacy:orders': [],

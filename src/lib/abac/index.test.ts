@@ -4,7 +4,7 @@ import type { AuthzDb } from '@/lib/authz';
 import { isAdmin } from '@/lib/authz';
 import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
 
-import { can, subjectFromSession } from '.';
+import { can, canCapturePrescription, subjectFromSession } from '.';
 import { ALL_ACTIONS, POLICIES, type Action } from './policies';
 
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
@@ -110,14 +110,41 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     }
   );
 
-  it('grants admins default dispense access but keeps the other exact-grant actions opt-in', async () => {
+  it('keeps all sensitive pharmacy actions exact-grant-only for tenant admins', async () => {
     const db = authorizationDb({ rolePermissions: permissionsFor('owner') });
-    const exactOnly = ['pharmacy:catalogue-review', 'pharmacy:safety'];
+    const exactOnly = ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:safety'];
     for (const action of grantedActions) {
       await expect(can(proprietor, action, undefined, { db })).resolves.toBe(
         !exactOnly.includes(action)
       );
     }
+  });
+
+  it('limits the tenant-admin fallback to prescription capture and preserves DENY precedence', async () => {
+    await expect(canCapturePrescription(proprietor, { db: authorizationDb({}) })).resolves.toBe(
+      true
+    );
+    await expect(
+      canCapturePrescription(proprietor, {
+        db: authorizationDb({
+          overrides: [{ capability: 'pharmacy:dispense', effect: 'DENY' }],
+        }),
+      })
+    ).resolves.toBe(false);
+    await expect(
+      canCapturePrescription(employee, {
+        db: authorizationDb({
+          rolePermissions: [{ capability: 'pharmacy:orders', effect: 'ALLOW' }],
+        }),
+      })
+    ).resolves.toBe(false);
+    await expect(
+      canCapturePrescription(employee, {
+        db: authorizationDb({
+          rolePermissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+        }),
+      })
+    ).resolves.toBe(true);
   });
 
   it('does not grant unrelated capabilities through wildcard or platform authority', async () => {
@@ -197,8 +224,7 @@ describe('custom ABAC decisions', () => {
       // capability instead of inheriting broad administrator authority.
       'devices:manage',
       // Pharmacy RX-03/04 and RX-05: pharmacist dispense decisions, substitution
-      // evidence, controlled register and incident approval. Dispensing retains
-      // the tenant-admin fallback; the other actions remain org-role-driven.
+      // evidence, controlled register and incident approval remain org-role-driven.
       'pharmacy:dispense',
       'pharmacy:safety',
       'pharmacy:catalogue-review',
@@ -208,7 +234,7 @@ describe('custom ABAC decisions', () => {
     expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
-      expect(POLICIES[action]).toHaveLength(action === 'pharmacy:dispense' ? 1 : 0);
+      expect(POLICIES[action]).toEqual([]);
       await expect(can(employee, action, undefined, { db: authorizationDb({}) })).resolves.toBe(
         false
       );

@@ -58,6 +58,38 @@ async function customDecision(
   return null;
 }
 
+/**
+ * Prescription capture is the one narrow workflow where a tenant administrator
+ * may stand in for a pharmacist. An explicit role/override decision still wins,
+ * so a DENY cannot be bypassed by the administrator fallback.
+ *
+ * Keep this exception separate from the static `pharmacy:dispense` policy: that
+ * action also protects clinical review, signing, controlled-drug, and purchasing
+ * workflows which administrators must not inherit.
+ */
+export async function canCapturePrescription(
+  subject: Subject,
+  opts: CanOptions = {}
+): Promise<boolean> {
+  if (!opts.db) {
+    console.error('[abac] no tenant-scoped database supplied for prescription capture');
+    return false;
+  }
+  try {
+    const decision = await customDecision(
+      opts.db,
+      subject.id,
+      'pharmacy:dispense',
+      opts.now ?? new Date()
+    );
+    return decision ?? subject.role === 'ADMIN';
+  } catch {
+    // Do not put database error details (which may contain sensitive values) in logs.
+    console.error('[abac] prescription capture permission lookup failed');
+    return false;
+  }
+}
+
 /** True iff some policy registered for `action` allows the subject + resource. */
 export async function can(
   subject: Subject,

@@ -4,6 +4,7 @@ import sharp from 'sharp';
 
 const mocks = vi.hoisted(() => ({
   can: vi.fn(),
+  canCapturePrescription: vi.fn(),
   hasModule: vi.fn(),
   patient: vi.fn(),
   prescriber: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }
 vi.mock('@/lib/abac', async () => ({
   ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
   can: mocks.can,
+  canCapturePrescription: mocks.canCapturePrescription,
 }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.hasModule,
@@ -97,6 +99,7 @@ describe('prescription capture and private delivery', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.objects.clear();
+    mocks.canCapturePrescription.mockResolvedValue(true);
     mocks.can.mockResolvedValue(true);
     mocks.hasModule.mockReturnValue(true);
     mocks.patient.mockResolvedValue({ id: 'patient-a' });
@@ -176,22 +179,20 @@ describe('prescription capture and private delivery', () => {
       where: { id: 'prescriber-a', organizationId: 'org-a' },
       select: { id: true },
     });
-    expect(mocks.can).toHaveBeenCalledWith(
+    expect(mocks.canCapturePrescription).toHaveBeenCalledWith(
       expect.anything(),
-      'pharmacy:dispense',
-      undefined,
       expect.objectContaining({ source: 'TRPC' })
     );
   });
 
   it('allows pharmacists with dispensing capability', async () => {
-    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:dispense');
+    mocks.canCapturePrescription.mockResolvedValue(true);
     await expect(upload()).resolves.toHaveProperty('url');
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
   it('allows tenant administrators when the central ABAC decision permits it', async () => {
-    mocks.can.mockResolvedValue(true);
+    mocks.canCapturePrescription.mockResolvedValue(true);
     const admin = context();
     admin.session.user.role = 'ADMIN';
     await expect(
@@ -205,30 +206,26 @@ describe('prescription capture and private delivery', () => {
         ).toString('base64'),
       })
     ).resolves.toHaveProperty('url');
-    expect(mocks.can).toHaveBeenCalledWith(
+    expect(mocks.canCapturePrescription).toHaveBeenCalledWith(
       expect.objectContaining({ role: 'ADMIN' }),
-      'pharmacy:dispense',
-      undefined,
       expect.objectContaining({ source: 'TRPC' })
     );
   });
 
   it('refuses a tenant administrator when central ABAC returns an explicit DENY', async () => {
-    mocks.can.mockResolvedValue(false);
+    mocks.canCapturePrescription.mockResolvedValue(false);
     const admin = context();
     admin.session.user.role = 'ADMIN';
 
     await expect(caller(admin).workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(mocks.can).toHaveBeenCalledWith(
+    expect(mocks.canCapturePrescription).toHaveBeenCalledWith(
       expect.objectContaining({ role: 'ADMIN' }),
-      'pharmacy:dispense',
-      undefined,
       expect.objectContaining({ source: 'TRPC' })
     );
   });
 
   it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
-    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:orders');
+    mocks.canCapturePrescription.mockResolvedValue(false);
     await expect(caller().workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(upload()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.putUpload).not.toHaveBeenCalled();

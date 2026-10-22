@@ -1,7 +1,7 @@
 import { writePatientConsent } from '@/lib/pharmacy/consent-writer';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { can, subjectFromSession } from '@/lib/abac';
+import { canCapturePrescription, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import {
   loadPrescriptionFile,
@@ -48,7 +48,7 @@ const fileProcedure = publicProcedure
     const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
     if (
       !hasModule(ctx.entitlements, 'pharmacy-dispensing') ||
-      !(await can(subject, 'pharmacy:dispense', undefined, options))
+      !(await canCapturePrescription(subject, options))
     ) {
       throw new TRPCError({
         code: 'FORBIDDEN',
