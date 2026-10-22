@@ -10,6 +10,7 @@ function assertPositive(units: number) {
 }
 
 type DispositionTransfer = {
+  kind: 'ADJUSTMENT';
   disposition: 'AVAILABLE' | 'QUARANTINE' | 'DAMAGED';
   quantityUnits: number;
   idempotencyKey: string;
@@ -19,7 +20,12 @@ type DispositionTransfer = {
 async function lockAndFindTransferReplay(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { inventoryLotId: string; stockLocationId: string; idempotencyKeyPrefix: string },
+  input: {
+    inventoryLotId: string;
+    stockLocationId: string;
+    reason: string;
+    idempotencyKeyPrefix: string;
+  },
   expected: readonly [DispositionTransfer, DispositionTransfer]
 ) {
   await db.$queryRaw(
@@ -38,8 +44,11 @@ async function lockAndFindTransferReplay(
         movement.branchId === scope.branchId &&
         movement.inventoryLotId === input.inventoryLotId &&
         movement.stockLocationId === input.stockLocationId &&
+        movement.kind === wanted.kind &&
         movement.disposition === wanted.disposition &&
         movement.quantityUnits === wanted.quantityUnits &&
+        movement.actorId === scope.actorId &&
+        movement.reason === input.reason &&
         movement.idempotencyKey === wanted.idempotencyKey
     )
   );
@@ -267,11 +276,13 @@ export async function releaseQuarantine(
   assertPositive(input.units);
   const expected = [
     {
+      kind: 'ADJUSTMENT' as const,
       disposition: 'QUARANTINE' as const,
       quantityUnits: -input.units,
       idempotencyKey: `${input.idempotencyKeyPrefix}:out`,
     },
     {
+      kind: 'ADJUSTMENT' as const,
       disposition: 'AVAILABLE' as const,
       quantityUnits: input.units,
       idempotencyKey: `${input.idempotencyKeyPrefix}:in`,
@@ -344,11 +355,13 @@ export async function quarantinePart(
   const heldDisposition = input.damaged ? ('DAMAGED' as const) : ('QUARANTINE' as const);
   const expected = [
     {
+      kind: 'ADJUSTMENT' as const,
       disposition: 'AVAILABLE' as const,
       quantityUnits: -input.units,
       idempotencyKey: `${input.idempotencyKeyPrefix}:out`,
     },
     {
+      kind: 'ADJUSTMENT' as const,
       disposition: heldDisposition,
       quantityUnits: input.units,
       idempotencyKey: `${input.idempotencyKeyPrefix}:in`,

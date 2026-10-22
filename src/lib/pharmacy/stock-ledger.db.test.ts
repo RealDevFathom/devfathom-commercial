@@ -457,6 +457,80 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     );
   });
 
+  it('replays quarantine releases sequentially and concurrently without duplicate ledger legs', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'quarantine-replay');
+    const lotId = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 20,
+        label: 'quarantine-replay',
+      });
+      await deps.operations.quarantinePart(db, scopeOf(fixture), {
+        inventoryLotId: lot.id,
+        stockLocationId: fixture.locationId,
+        units: 20,
+        reason: 'Recall investigation',
+        idempotencyKeyPrefix: tag('quarantine-replay'),
+      });
+      return lot.id;
+    });
+    const input = {
+      inventoryLotId: lotId,
+      stockLocationId: fixture.locationId,
+      units: 10,
+      reason: 'Recall cleared',
+      idempotencyKeyPrefix: tag('release-replay'),
+    };
+
+    const first = await inOrg(ORG_A, (db) =>
+      deps.operations.releaseQuarantine(db, scopeOf(fixture), input)
+    );
+    const sequential = await inOrg(ORG_A, (db) =>
+      deps.operations.releaseQuarantine(db, scopeOf(fixture), input)
+    );
+    expect(sequential.removed.id).toBe(first.removed.id);
+    expect(sequential.released.id).toBe(first.released.id);
+
+    const concurrentInput = { ...input, idempotencyKeyPrefix: tag('release-concurrent') };
+    const concurrent = await Promise.all([
+      inOrg(ORG_A, (db) =>
+        deps.operations.releaseQuarantine(db, scopeOf(fixture), concurrentInput)
+      ),
+      inOrg(ORG_A, (db) =>
+        deps.operations.releaseQuarantine(db, scopeOf(fixture), concurrentInput)
+      ),
+    ]);
+    expect(concurrent[1].removed.id).toBe(concurrent[0].removed.id);
+    expect(concurrent[1].released.id).toBe(concurrent[0].released.id);
+
+    const persisted = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockMovement.findMany({
+        where: {
+          organizationId: ORG_A,
+          idempotencyKey: {
+            in: [
+              `${input.idempotencyKeyPrefix}:out`,
+              `${input.idempotencyKeyPrefix}:in`,
+              `${concurrentInput.idempotencyKeyPrefix}:out`,
+              `${concurrentInput.idempotencyKeyPrefix}:in`,
+            ],
+          },
+        },
+      })
+    );
+    expect(persisted).toHaveLength(4);
+
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.operations.releaseQuarantine(
+          db,
+          { ...scopeOf(fixture), branchId: BRANCH_A_TWO },
+          concurrentInput
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+  });
+
   it('dispatches into transit, records a batch receipt discrepancy, and enforces destination branch scope', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-workflow');
     const destinationBranch = 'branch_transfer_destination';
