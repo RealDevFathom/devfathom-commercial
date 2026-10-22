@@ -12,11 +12,14 @@ import { signOut } from 'next-auth/react';
  * The DELETE is best-effort: it 404s on a tenant host (where no intent exists),
  * and a network failure must never leave the user stuck signed in.
  */
-export async function signOutEverything(callbackUrl = '/login') {
+export async function signOutEverything(redirectTo = '/login') {
   try {
     await fetch('/api/login', { method: 'DELETE', credentials: 'include' });
   } catch {
     // Ignore — the intent is single-use and expires in five minutes regardless.
   }
-  await signOut({ callbackUrl });
+  // Auth.js v5 names the post-sign-out destination `redirectTo`. Using the old
+  // v4 `callbackUrl` option can fall back to the current tenant page instead of
+  // the tenant login after the CSRF-protected sign-out POST completes.
+  await signOut({ redirectTo });
 }
