@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
+const finance = vi.hoisted(() => ({ postDailyCloseEntry: vi.fn() }));
+vi.mock('./finance-postings', async () => ({
+  ...(await vi.importActual<typeof import('./finance-postings')>('./finance-postings')),
+  postDailyCloseEntry: finance.postDailyCloseEntry,
+}));
+
 import { cutPharmacyDailyClose } from '@/lib/pharmacy/settlement';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -14,6 +20,8 @@ const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1
 const input = { businessDate: new Date('2026-09-29') };
 
 function fixture(camera: { id: string } | null) {
+  finance.postDailyCloseEntry.mockReset();
+  finance.postDailyCloseEntry.mockResolvedValue(null);
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
     pharmacyDrawerSession: {
@@ -66,6 +74,14 @@ describe('DAILY_CLOSE counter evidence wiring (service-level, integrated tip)', 
     expect(db.pharmacyDailyClose.create.mock.invocationCallOrder[0]).toBeLessThan(
       db.cameraEvidence.createMany.mock.invocationCallOrder[0]!
     );
+    expect(finance.postDailyCloseEntry).toHaveBeenCalledWith(
+      db,
+      scope,
+      expect.objectContaining({ closeId: 'close-1' })
+    );
+    expect(finance.postDailyCloseEntry.mock.invocationCallOrder[0]).toBeLessThan(
+      db.cameraEvidence.createMany.mock.invocationCallOrder[0]!
+    );
   });
 
   it('writes nothing beyond the close when the branch has no usable evidence camera', async () => {
@@ -88,5 +104,16 @@ describe('DAILY_CLOSE counter evidence wiring (service-level, integrated tip)', 
     await expect(run(db)).rejects.toThrow('outbox down');
     // The close row was written in the same transaction; only the thrown error rolls it back.
     expect(db.pharmacyDailyClose.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not request evidence when the finance posting fails', async () => {
+    const db = fixture({ id: 'camera-1' });
+    finance.postDailyCloseEntry.mockRejectedValueOnce(new Error('journal down'));
+
+    await expect(run(db)).rejects.toThrow('journal down');
+
+    expect(db.pharmacyDailyClose.create).toHaveBeenCalledTimes(1);
+    expect(db.camera.findFirst).not.toHaveBeenCalled();
+    expect(db.cameraEvidence.createMany).not.toHaveBeenCalled();
   });
 });
