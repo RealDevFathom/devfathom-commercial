@@ -76,6 +76,30 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 type InvoicePaidEvent = { invoiceId: string; total: number; currency: string; clientId: string };
 
 /**
+ * #574: the INCOME transaction that books a payment as revenue. The same fields
+ * identify it again when the payment is deleted, and they match what the seed
+ * books for each paid invoice ("Payment for INV-…" on the paid date).
+ */
+function paymentIncomeEntry(p: {
+  invoiceNumber: string;
+  clientId: string;
+  projectId: string | null;
+  amount: number;
+  currency: 'USD' | 'PKR';
+  paidAt: Date;
+}) {
+  return {
+    type: 'INCOME' as const,
+    amount: p.amount,
+    currency: p.currency,
+    description: `Payment for ${p.invoiceNumber}`,
+    clientId: p.clientId,
+    projectId: p.projectId,
+    date: p.paidAt,
+  };
+}
+
+/**
  * #398: the one place money is recorded against an invoice, shared by
  * `addPayment` (a stated amount) and `markInvoicePaid` (whatever is still owed).
  * It keeps the invoice's status and its payments in agreement: PAID exactly when
@@ -108,6 +132,7 @@ async function recordInvoicePayment(
       total: true,
       currency: true,
       clientId: true,
+      projectId: true,
     },
   });
   if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
@@ -151,6 +176,7 @@ async function recordInvoicePayment(
     amount = input.amount;
   }
 
+  const paidAt = input.paidAt ?? new Date();
   const payment =
     amount > PAYMENT_EPSILON
       ? await tx.payment.create({
@@ -161,10 +187,25 @@ async function recordInvoicePayment(
             currency: invoice.currency,
             method: input.method?.trim() || null,
             note: input.note?.trim() || null,
-            ...(input.paidAt && { paidAt: input.paidAt }),
+            paidAt,
           },
         })
       : null;
+  // #574: revenue (monthly/yearly income, P&L) is the INCOME transaction ledger,
+  // so money received against an invoice is booked there too, dated when it was
+  // paid. deletePayment removes the same entry (see paymentIncomeEntry).
+  if (payment) {
+    await tx.transaction.create({
+      data: paymentIncomeEntry({
+        invoiceNumber: invoice.invoiceNumber,
+        clientId: invoice.clientId,
+        projectId: invoice.projectId,
+        amount,
+        currency: invoice.currency,
+        paidAt,
+      }),
+    });
+  }
 
   const amountPaid = round2(alreadyPaid + (payment ? amount : 0));
   const settled = amountPaid >= total - PAYMENT_EPSILON;
@@ -778,7 +819,14 @@ export const financeRouter = router({
       return ctx.db.$transaction(async (tx) => {
         const payment = await tx.payment.findUnique({
           where: { id: input.id },
-          select: { id: true, invoiceId: true },
+          select: {
+            id: true,
+            invoiceId: true,
+            amount: true,
+            currency: true,
+            paidAt: true,
+            invoice: { select: { invoiceNumber: true, clientId: true, projectId: true } },
+          },
         });
         if (!payment) throw new TRPCError({ code: 'NOT_FOUND', message: 'Payment not found' });
 
@@ -788,6 +836,28 @@ export const financeRouter = router({
         if (removed.count !== 1) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Payment not found' });
         }
+        // #574: un-book the revenue entry recorded with this payment (one of them,
+        // if identical payments exist, so the totals stay right either way).
+        const entry = paymentIncomeEntry({
+          invoiceNumber: payment.invoice.invoiceNumber,
+          clientId: payment.invoice.clientId,
+          projectId: payment.invoice.projectId,
+          amount: Number(payment.amount),
+          currency: payment.currency,
+          paidAt: payment.paidAt,
+        });
+        const booked = await tx.transaction.findFirst({
+          where: {
+            type: entry.type,
+            amount: entry.amount,
+            currency: entry.currency,
+            description: entry.description,
+            clientId: entry.clientId,
+            date: entry.date,
+          },
+          select: { id: true },
+        });
+        if (booked) await tx.transaction.delete({ where: { id: booked.id } });
 
         const invoice = await tx.invoice.findUnique({
           where: { id: payment.invoiceId },

@@ -60,6 +60,10 @@ type Finance = {
   }) => Promise<{ status: string; amountPaid: number; balance: number }>;
   deletePayment: (input: { id: string }) => Promise<{ status: string | null; balance: number }>;
   updateInvoiceStatus: (input: { id: string; status: string }) => Promise<{ status: string }>;
+  getFinancialSummary: () => Promise<{
+    monthlyIncome: Array<{ currency: string; amount: number }>;
+    yearlyIncome: Array<{ currency: string; amount: number }>;
+  }>;
   updateInvoice: (input: {
     id: string;
     items: Array<{ description: string; quantity: number; rate: number }>;
@@ -75,13 +79,14 @@ async function insertInvoice(opts: {
   total: number;
   dueInDays?: number;
   paidAt?: Date | null;
+  currency?: 'USD' | 'PKR';
 }) {
   const id = newId('inv');
   const due = new Date(Date.now() + (opts.dueInDays ?? 30) * 86_400_000);
   await client.query(
     `INSERT INTO invoices (id, "organizationId", "invoiceNumber", "clientId", items, subtotal, tax,
        total, currency, status, "dueDate", "paidAt", "sentAt", "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, $6, 0, $6, 'USD', $7::"InvoiceStatus", $8, $9, now(), now())`,
+     VALUES ($1, $2, $3, $4, $5, $6, 0, $6, $10::"Currency", $7::"InvoiceStatus", $8, $9, now(), now())`,
     [
       id,
       ORG,
@@ -92,6 +97,7 @@ async function insertInvoice(opts: {
       opts.status,
       due,
       opts.paidAt ?? null,
+      opts.currency ?? 'USD',
     ]
   );
   return id;
@@ -184,6 +190,7 @@ describeIfDatabase('invoice payments and status, against PostgreSQL (#398)', () 
     await new Promise((resolve) => setTimeout(resolve, 200));
     await client.query(`SELECT set_config('app.is_platform_admin', 'true', false)`);
     await client.query(`DELETE FROM activities WHERE "userId" = $1`, [ADMIN]);
+    await client.query(`DELETE FROM transactions WHERE "organizationId" = $1`, [ORG]);
     await client.query(`DELETE FROM invoices WHERE "organizationId" = $1`, [ORG]);
     await client.query(`DELETE FROM clients WHERE "organizationId" = $1`, [ORG]);
     await client.query(`DELETE FROM organizations WHERE id = $1`, [ORG]);
@@ -339,6 +346,23 @@ describeIfDatabase('invoice payments and status, against PostgreSQL (#398)', () 
         items: [{ description: 'Work', quantity: 1, rate: 600 }],
       })
     ).resolves.toMatchObject({ status: 'PAID', balance: 0 });
+  });
+
+  it('books money received as revenue, and takes it back out when the payment is deleted (#574)', async () => {
+    const revenue = async () =>
+      (await finance().getFinancialSummary()).monthlyIncome.find((r) => r.currency === 'PKR')
+        ?.amount ?? 0;
+    expect(await revenue()).toBe(0);
+
+    const invoice = await insertInvoice({ status: 'SENT', total: 100, currency: 'PKR' });
+    await expect(finance().addPayment({ invoiceId: invoice, amount: 100 })).resolves.toMatchObject({
+      status: 'PAID',
+    });
+    expect(await revenue()).toBe(100);
+
+    const [payment] = await payments(invoice);
+    await finance().deletePayment({ id: payment.id });
+    expect(await revenue()).toBe(0);
   });
 
   it('serialises payment writers on the invoice row, so a concurrent payment cannot overpay', async () => {
