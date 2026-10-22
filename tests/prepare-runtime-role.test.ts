@@ -53,9 +53,13 @@ describe('runtime role preparation', () => {
     expect(queries.find(({ sql }) => sql.startsWith("SELECT format('ALTER ROLE"))?.values).toEqual([
       'secret-value',
     ]);
-    expect(queries.filter(({ sql }) => /^(GRANT|ALTER DEFAULT PRIVILEGES)/.test(sql))).toHaveLength(
-      6
-    );
+    const grants = queries
+      .map(({ sql }) => sql)
+      .filter((sql) => /^(GRANT|ALTER DEFAULT PRIVILEGES)/.test(sql));
+    expect(grants).toHaveLength(7);
+    expect(grants.filter((sql) => sql.includes('FUNCTION'))).toEqual([
+      'GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO devfathom_app',
+    ]);
     expect([...output.log.mock.calls, ...output.warn.mock.calls].flat().join('\n')).not.toContain(
       'secret-value'
     );
@@ -79,7 +83,7 @@ describe('runtime role preparation', () => {
     await prepareRuntimeRole(client, secret, output);
 
     expect(queries.filter(({ sql }) => /^(GRANT|ALTER DEFAULT PRIVILEGES)/.test(sql))).toHaveLength(
-      6
+      7
     );
     expect(output.warn).toHaveBeenCalledWith(
       'password: skipped (permission denied; final posture verified)'
