@@ -258,6 +258,7 @@ describe('exclusiveTaxFromSettlementSnapshots', () => {
             status: 'SETTLED',
             splitKind: 'NONE',
             grandTotal: D('1115.50'),
+            serviceChargeTotal: D('0.00'),
             deliveryFeeTotal: D('0.00'),
             compTotal: D('0.00'),
             discountTotal: D('0.00'),
@@ -294,6 +295,122 @@ describe('exclusiveTaxFromSettlementSnapshots', () => {
       }),
     ]);
     expect(totals.get('bill-1')?.toString()).toBe('1.5');
+  });
+});
+
+describe('evaluateOrderSettlement reconciliation', () => {
+  function settlementDb(input: {
+    grandTotal: string;
+    compTotal?: string;
+    serviceChargeTotal: string;
+    taxTotal?: string;
+    exclusiveTax?: string;
+    voidServiceChargeTotal?: string;
+  }): ScopedDb {
+    return {
+      restaurantOrder: {
+        findFirst: async () =>
+          withServiceCharge(
+            order([
+              { id: 'item-1', unitPrice: '40.00' },
+              { id: 'item-2', unitPrice: '60.00' },
+            ])
+          ),
+      },
+      restaurantBill: {
+        findMany: async () => [
+          {
+            id: 'bill-1',
+            status: 'SETTLED',
+            splitKind: 'NONE',
+            grandTotal: D(input.grandTotal),
+            serviceChargeTotal: D(input.serviceChargeTotal),
+            deliveryFeeTotal: D('0'),
+            compTotal: D(input.compTotal ?? '0'),
+            discountTotal: D('0'),
+            taxTotal: D(input.taxTotal ?? '0'),
+            receiptNumber: 1,
+            lines: [{ orderItemId: 'item-1' }, { orderItemId: 'item-2' }],
+            tenders: [{ amount: D(input.grandTotal) }],
+          },
+          ...(input.voidServiceChargeTotal
+            ? [
+                {
+                  id: 'bill-void',
+                  status: 'VOID',
+                  splitKind: 'NONE',
+                  grandTotal: D('0'),
+                  serviceChargeTotal: D(input.voidServiceChargeTotal),
+                  deliveryFeeTotal: D('0'),
+                  compTotal: D('0'),
+                  discountTotal: D('0'),
+                  taxTotal: D('0'),
+                  receiptNumber: null,
+                  lines: [],
+                  tenders: [],
+                },
+              ]
+            : []),
+        ],
+      },
+      restaurantTaxTransactionSnapshot: {
+        findMany: async () =>
+          input.exclusiveTax
+            ? [
+                settlementSnapshot({
+                  id: 'snapshot-1',
+                  tax: input.exclusiveTax,
+                  settledAt: '2026-08-01T12:00:00.000Z',
+                }),
+              ]
+            : [],
+      },
+    } as unknown as ScopedDb;
+  }
+
+  it('accepts a partial comp after service is removed from the comped line', async () => {
+    const settlement = await evaluateOrderSettlement(
+      settlementDb({ grandTotal: '66.00', compTotal: '40.00', serviceChargeTotal: '6.00' }),
+      'order-1'
+    );
+
+    expect(settlement.settled).toBe(true);
+    expect(settlement.blocker).toBeNull();
+    expect(settlement.accountedTotal.toString()).toBe('106');
+    expect(settlement.derivedOrderTotal.toString()).toBe('106');
+  });
+
+  it('accepts exclusive tax added on top of merchandise and service', async () => {
+    const settlement = await evaluateOrderSettlement(
+      settlementDb({
+        grandTotal: '125.00',
+        serviceChargeTotal: '10.00',
+        taxTotal: '15.00',
+        exclusiveTax: '15.00',
+      }),
+      'order-1'
+    );
+
+    expect(settlement.settled).toBe(true);
+    expect(settlement.blocker).toBeNull();
+    expect(settlement.accountedTotal.toString()).toBe('110');
+    expect(settlement.derivedOrderTotal.toString()).toBe('110');
+  });
+
+  it('does not restore service from a voided bill', async () => {
+    const settlement = await evaluateOrderSettlement(
+      settlementDb({
+        grandTotal: '66.00',
+        compTotal: '40.00',
+        serviceChargeTotal: '6.00',
+        voidServiceChargeTotal: '4.00',
+      }),
+      'order-1'
+    );
+
+    expect(settlement.settled).toBe(true);
+    expect(settlement.accountedTotal.toString()).toBe('106');
+    expect(settlement.derivedOrderTotal.toString()).toBe('106');
   });
 });
 
