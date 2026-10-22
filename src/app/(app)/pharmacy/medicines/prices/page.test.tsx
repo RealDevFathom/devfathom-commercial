@@ -114,7 +114,11 @@ describe('corrected reports', () => {
     ]) {
       const region = screen.getByRole('region', { name });
       expect(region).toHaveAttribute('tabindex', '0');
-      expect(within(region).getByRole('table')).toBeVisible();
+      const table = within(region).getByRole('table');
+      expect(table).toBeVisible();
+      for (const header of within(table).getAllByRole('columnheader')) {
+        expect(header).toHaveAttribute('scope', 'col');
+      }
     }
     expect(within(table).queryByText('historic')).not.toBeInTheDocument();
     expect(pricesCsv(history).split('\r\n')).toHaveLength(2);
@@ -153,7 +157,11 @@ describe('corrected reports', () => {
       name: 'Preserved branch override versions, PKR',
     });
     expect(region).toHaveAttribute('tabindex', '0');
-    expect(within(region).getByRole('table')).toBeVisible();
+    const table = within(region).getByRole('table');
+    expect(table).toBeVisible();
+    for (const header of within(table).getAllByRole('columnheader')) {
+      expect(header).toHaveAttribute('scope', 'col');
+    }
     expect(screen.getByText('Needs review')).toBeVisible();
     expect(screen.getByText('Reviewed')).toBeVisible();
     expect(screen.getAllByText(/123.00/)).toHaveLength(2);
