@@ -15,17 +15,42 @@ import {
 
 const scope = { organizationId: 'org_family', branchId: 'branch_main', actorId: 'owner_1' };
 
+/**
+ * #295: a database double that names any delegate or method the code under test
+ * reaches without the test mocking it. A plain object fails as "x is not a function",
+ * which is how a fixture missing `financeJournalEntry.findFirstOrThrow` hid on PR #259.
+ * Wrapped, the same drift fails with the exact `db.<delegate>.<method>` that is missing.
+ */
+function strictDb<T extends object>(mock: T): T {
+  const missing = (path: string) => new Error(`family-khata.test: unmocked db.${path}`);
+  return new Proxy(mock, {
+    get(target, key, receiver) {
+      if (typeof key !== 'string' || key === 'then') return Reflect.get(target, key, receiver);
+      if (!(key in target)) throw missing(key);
+      const value = Reflect.get(target, key, receiver);
+      if (key.startsWith('$') || value === null || typeof value !== 'object') return value;
+      return new Proxy(value, {
+        get(delegate, method, delegateReceiver) {
+          if (typeof method !== 'string' || method === 'then' || method in delegate)
+            return Reflect.get(delegate, method, delegateReceiver);
+          throw missing(`${key}.${method}`);
+        },
+      });
+    },
+  });
+}
+
 describe('CRM-L02 family privacy and khata settlement', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('NEGATIVE: member A cannot read member B dispensing history', async () => {
     const findMany = vi.fn();
-    const db = {
+    const db = strictDb({
       pharmacyFamilyMember: {
         findFirst: vi.fn().mockResolvedValue({ customer: { patientId: 'patient_a' } }),
       },
       prescription: { findMany },
-    };
+    });
 
     await expect(
       readFamilyMemberDispensing(db as never, scope, {
@@ -46,7 +71,7 @@ describe('CRM-L02 family privacy and khata settlement', () => {
       id: `payment_${create.mock.calls.length}`,
       ...data,
     }));
-    const db = {
+    const db = strictDb({
       $queryRaw: vi.fn(),
       pharmacyKhataEvent: {
         findMany: vi.fn().mockResolvedValue([
@@ -65,7 +90,7 @@ describe('CRM-L02 family privacy and khata settlement', () => {
         ]),
         create,
       },
-    };
+    });
 
     const result = await settleFamilyKhata(db as never, scope, {
       familyAccountId: 'family_1',
@@ -123,10 +148,10 @@ describe('CRM-L04 explainable health suggestion', () => {
   it('NEGATIVE: suggestion alone never changes the limit; owner action is required', async () => {
     const update = vi.fn();
     const create = vi.fn();
-    const db = {
+    const db = strictDb({
       pharmacyFamilyAccount: { update },
       pharmacyKhataLimitDecision: { create },
-    };
+    });
 
     await expect(
       applyKhataLimitDecision(db as never, scope, {
@@ -146,10 +171,10 @@ describe('CRM-L04 explainable health suggestion', () => {
   it('applies either the accepted suggestion or an explicit owner override', async () => {
     const update = vi.fn().mockResolvedValue({ creditLimitMinor: 15_000 });
     const create = vi.fn().mockResolvedValue({ kind: 'OVERRIDDEN' });
-    const db = {
+    const db = strictDb({
       pharmacyFamilyAccount: { update },
       pharmacyKhataLimitDecision: { create },
-    };
+    });
 
     await applyKhataLimitDecision(db as never, scope, {
       familyAccountId: 'family_1',
@@ -190,10 +215,10 @@ describe('CRM-L04 explainable health suggestion', () => {
     const create = vi.fn();
     await expect(
       applyKhataLimitDecision(
-        {
+        strictDb({
           pharmacyFamilyAccount: { update },
           pharmacyKhataLimitDecision: { create },
-        } as never,
+        }) as never,
         scope,
         {
           familyAccountId: 'family_1',
@@ -213,10 +238,10 @@ describe('CRM-L04 explainable health suggestion', () => {
     const update = vi.fn().mockResolvedValue({ creditLimitMinor: 20_000 });
     const create = vi.fn().mockResolvedValue({ kind: 'ACCEPTED' });
     await applyKhataLimitDecision(
-      {
+      strictDb({
         pharmacyFamilyAccount: { update },
         pharmacyKhataLimitDecision: { create },
-      } as never,
+      }) as never,
       scope,
       {
         familyAccountId: 'family_1',
@@ -233,7 +258,7 @@ describe('CRM-L04 explainable health suggestion', () => {
 
 describe('counter Khata ledger gate', () => {
   function fixture() {
-    return {
+    return strictDb({
       $queryRaw: vi.fn().mockResolvedValue([]),
       pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
       pharmacyFamilyAccount: {
@@ -255,7 +280,7 @@ describe('counter Khata ledger gate', () => {
         findMany: vi.fn().mockResolvedValue([]),
       },
       pharmacyKhataLimitDecision: { create: vi.fn().mockResolvedValue({}) },
-    };
+    });
   }
   const input = { saleId: 'sale-a', familyAccountId: 'family-a', amountMinor: 500 };
   it('uses all ledger events and accepts the exact limit without owner authorization', async () => {
@@ -333,5 +358,53 @@ describe('counter Khata ledger gate', () => {
         { authorized: true, passwordAuthenticatedAt: Date.now() }
       )
     ).rejects.toMatchObject({ reason: 'CREDIT_LIMIT_EXCEEDED' });
+  });
+});
+
+describe('#295 strict database doubles', () => {
+  it('names a missing delegate method instead of failing as "is not a function"', async () => {
+    const db = strictDb({
+      $queryRaw: vi.fn(),
+      pharmacyKhataEvent: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'charge_a',
+            kind: 'CHARGE',
+            amountMinor: 1_000,
+            occurredAt: new Date('2026-07-01'),
+          },
+        ]),
+      },
+    });
+
+    await expect(
+      settleFamilyKhata(db as never, scope, {
+        familyAccountId: 'family_1',
+        amountMinor: 500,
+        occurredAt: new Date('2026-07-10'),
+      })
+    ).rejects.toThrow('family-khata.test: unmocked db.pharmacyKhataEvent.create');
+  });
+
+  it('names a missing delegate', async () => {
+    const update = vi.fn().mockResolvedValue({ creditLimitMinor: 15_000 });
+    const db = strictDb({ pharmacyFamilyAccount: { update } });
+    const suggestion = calculateKhataHealthSuggestion(
+      [],
+      10_000,
+      new Date('2026-06-01'),
+      new Date('2026-06-30')
+    );
+
+    await expect(
+      applyKhataLimitDecision(db as never, scope, {
+        familyAccountId: 'family_1',
+        suggestion,
+        ownerAuthorized: true,
+        ownerAuthorizedByUserId: scope.actorId,
+        ownerReauthenticatedAt: new Date(),
+        overrideLimitMinor: 15_000,
+      })
+    ).rejects.toThrow('family-khata.test: unmocked db.pharmacyKhataLimitDecision');
   });
 });
