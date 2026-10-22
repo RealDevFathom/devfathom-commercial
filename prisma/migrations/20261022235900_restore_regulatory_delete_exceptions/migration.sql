@@ -16,7 +16,8 @@ BEGIN
        AND current_setting('app.is_platform_admin', true) = 'true' THEN
       RETURN OLD;
     END IF;
-    IF NULLIF(current_setting('app.purging_organization_id', true), '') = OLD."organizationId" THEN
+    IF NULLIF(current_setting('app.purging_organization_id', true), '') = OLD."organizationId"
+       AND current_setting('app.is_platform_admin', true) = 'true' THEN
       RETURN OLD;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM "organizations" WHERE "id" = OLD."organizationId") THEN
