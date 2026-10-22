@@ -300,8 +300,8 @@ async function addSaleLineWithAllocation(
     },
   });
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
-  let unitPriceMinor = 0,
-    ceiling = 0,
+  let allocatedPriceMinor = 0,
+    allocatedCeilingMinor = 0,
     costMinor = 0;
   for (const part of allocation.allocations) {
     const lot = lotById.get(part.inventoryLotId);
@@ -311,10 +311,16 @@ async function addSaleLineWithAllocation(
       canonicalUnitsInPack: lot.unitsPerPack,
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
     });
-    unitPriceMinor = Math.max(unitPriceMinor, price.unitPriceMinor);
-    ceiling = Math.max(ceiling, price.proRataCeilingMinor);
+    allocatedPriceMinor += price.unitPriceMinor * part.units;
+    allocatedCeilingMinor += price.proRataCeilingMinor * part.units;
     costMinor += lot.unitCostMinor * part.units;
   }
+  // A line can span lots with different printed MRPs. Weight each lot by the
+  // canonical units it supplied instead of charging the highest MRP for every
+  // sale unit. Round down so integer-minor-unit storage can never overcharge.
+  const priceDivisor = input.quantity * input.canonicalUnitsPerSaleUnit;
+  const unitPriceMinor = Math.floor(allocatedPriceMinor / priceDivisor);
+  const ceiling = Math.floor(allocatedCeilingMinor / priceDivisor);
   const grossMinor = unitPriceMinor * input.quantity;
   const discountMinor = input.discountMinor ?? 0;
   validateDiscount({
