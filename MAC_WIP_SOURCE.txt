@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Downloads/Projects & Code/DevFathom hub/company-hub
+Branch: codex/white-ui-foundation
+HEAD: 43a72f4485a9301690265f852c23d8e7df8b019b
+Mode: applied
+Excluded (secrets): 54

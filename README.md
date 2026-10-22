@@ -24,48 +24,65 @@ consistent surface:
 - **Clients** — relationships, contacts, and engagement history
 - **Finance** — invoices, transactions, and P&L reporting (admin)
 - **Notes** — a rich Tiptap editor with mentions, tables, and links
-- **Meetings** — scheduling with recurring occurrences
-- **Chat** — real-time messaging over WebSockets
+- **Meetings** — scheduling with recurring occurrences and embedded video (8x8 JaaS)
+- **Chat** — real-time messaging over managed realtime (Ably)
 - **Team, HR & Insights** — people, leave, and analytics
-- **REST API + API docs** — programmatic access for scripts and AI agents
+- **REST API + API docs + AI operator** — programmatic and natural-language access for scripts and agents
+
+## Documentation
+
+The canonical, code-grounded documentation set lives in **[`docs/`](./docs/README.md)** — project status,
+architecture, technical diligence, threat model, engineering/API references, product/business strategy,
+operations, privacy, governance, and ownership. Start with the
+**[current project status](./docs/executive/PROJECT-STATUS.md)** for anything beyond a quick orientation.
 
 ## Tech stack
 
-| Area | Choice |
-| --- | --- |
-| Framework | Next.js 16 (App Router) · React 19 |
-| Styling | Tailwind CSS v4 · shadcn/ui on `@base-ui/react` |
-| Motion | GSAP + `@gsap/react` · Motion (Framer Motion) |
-| Type-safe API | tRPC v11 · TanStack Query |
-| Data | Prisma 7 · PostgreSQL |
-| Auth | NextAuth v5 |
-| Realtime | Socket.IO |
-| Runtime / PM | [Bun](https://bun.sh) |
+| Area          | Choice                                          |
+| ------------- | ----------------------------------------------- |
+| Frontend      | Nuxt 4 · Vue 3 · TypeScript                     |
+| Styling       | DevFathom design tokens · scoped Vue components |
+| API           | FastAPI · Pydantic · automatic OpenAPI          |
+| Data          | SQLAlchemy 2 async · PostgreSQL                  |
+| Auth          | FastAPI JWT sessions · scoped API tokens        |
+| Realtime      | Ably (managed, capability-scoped tokens)        |
+| AI operator   | Google Gemini streaming/function calling        |
+| Runtime / PM  | [Bun](https://bun.sh)                           |
 
 ## Getting started
 
-This project uses **Bun** as its package manager and runtime.
+The web app uses **Bun** and the API uses **Python 3.12+**.
 
 ```bash
-bun install          # install dependencies
-bun run db:generate  # generate the Prisma client
-bun run db:push      # sync the schema to your database
-bun run db:seed      # (optional) seed demo data
-bun dev              # start web + socket server together
+bun install             # install Nuxt/Vue dependencies
+bun run api:install     # install FastAPI/Python dependencies
+cp .env.example .env    # fill local values; never commit .env
+bun dev                 # start Nuxt :3000 and FastAPI :8000
 ```
 
-Open [http://localhost:3000](http://localhost:3000). In production this runs at
-**dev-fathom-hub.vercel.app**.
+Open [http://localhost:3000](http://localhost:3000). FastAPI documentation is at
+[http://localhost:8000/docs](http://localhost:8000/docs). Realtime remains provided by Ably.
+Environment variables (names, consumers, and failure behavior)
+are catalogued in [`docs/reference/ENVIRONMENT-VARIABLES.md`](./docs/reference/ENVIRONMENT-VARIABLES.md).
 
 ### Useful scripts
 
 ```bash
-bun dev            # web (next dev) + socket server, concurrently
-bun run build      # prisma generate && next build
-bun run lint       # eslint
-bun run format     # prettier --write
-bun run db:studio  # Prisma Studio
+bun dev              # Nuxt + FastAPI development servers
+bun run build        # production Nuxt build + Python compile check
+bun run typecheck    # Nuxt/Vue type checking
+bun test             # route-policy unit tests
+bun run api:test     # FastAPI tests
+bun run lint         # Vue typecheck + Ruff
+bun run verify       # formatting, lint, tests, and production build
 ```
+
+### Deployment
+
+`vercel.json` defines two Vercel Services in one deployment: Nuxt serves the web routes,
+and FastAPI receives `/api/*`, `/docs`, `/openapi.json`, and `/health`. Preview deployments
+automatically use their `VERCEL_URL` as the Nuxt API origin; a custom deployment can override
+that with `NUXT_PUBLIC_API_BASE`.
 
 ## Brand
 
@@ -82,18 +99,17 @@ bun run scripts/gen-brand-icons.ts   # rebuilds favicons, app icons & logo SVGs
 ## Project structure
 
 ```
-src/
-  app/                 # App Router routes
-    (app)/             # authenticated workspace (dashboard, projects, …)
-    brand/             # public brand showcase (/brand)
-    login/             # animated sign-in
-    api/               # tRPC + REST (/api/v1)
-  components/
-    brand/             # logo / DevFathom mark
-    layout/            # app shell, sidebar, topbar
-    motion/            # Reveal, Stagger, CountUp, Magnetic, PageTransition
-    ui/                # shadcn primitives
-  lib/                 # auth, db, trpc, motion tokens
-  server/              # tRPC routers
-socket-server/         # Socket.IO server
+app/                   # Nuxt 4 application
+  pages/               # Vue file-based routes
+  components/          # Vue product and layout components
+  composables/         # API and authentication clients
+  assets/css/          # design system and responsive styling
+backend/
+  app/                 # FastAPI service, auth, data, and routers
+  tests/               # API smoke tests
+prisma/                # legacy schema reference during DB migration
+src/                   # read-only legacy Next/React implementation during parity work
 ```
+
+> **Migration note:** `src/` and `prisma/` are inactive historical references. They are
+> excluded from the dependency manifest, Nuxt build, FastAPI runtime, and deployment.

@@ -51,7 +51,7 @@ export function FathomMark({
   className?: string;
   variant?: LogoVariant;
 }) {
-  // Full-colour app-icon lockup: Ink field · Linen mark · Clay node.
+  // Full-colour app-icon lockup: black field · white mark · coral signal.
   if (variant === 'brand') {
     return (
       <svg
@@ -61,16 +61,16 @@ export function FathomMark({
         className={cn('shrink-0', className)}
         aria-hidden="true"
       >
-        <rect width="64" height="64" rx="14" fill="#263128" />
+        <rect width="64" height="64" rx="18" fill="#111110" />
         <svg x="15" y="12" width="34" height="40" viewBox={MARK_VIEWBOX} fill="none">
-          <MarkPaths fill="#F7F1E5" nodeFill="#B14E32" />
+          <MarkPaths fill="#FFFFFF" nodeFill="#FF684F" />
         </svg>
       </svg>
     );
   }
 
   // One-colour silhouettes (currentColor / reversed white / ink).
-  const fill = variant === 'white' ? '#FFFFFF' : variant === 'dark' ? '#263128' : 'currentColor';
+  const fill = variant === 'white' ? '#FFFFFF' : variant === 'dark' ? '#111110' : 'currentColor';
   return (
     <svg
       viewBox={MARK_VIEWBOX}
@@ -103,7 +103,7 @@ export function Logo({
             'font-display font-semibold tracking-tight',
             s.text,
             variant === 'white' && 'text-white',
-            variant === 'dark' && 'text-[#263128]',
+            variant === 'dark' && 'text-[#111110]',
             (variant === 'brand' || variant === 'auto') && 'text-foreground',
             textClassName
           )}
