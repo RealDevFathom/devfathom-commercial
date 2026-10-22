@@ -1123,6 +1123,7 @@ model PharmacyCustomer {
   patientId        String
   displayName      String
   phoneLast4       String?
+  normalizedPhone  String?
   creditLimitMinor Int                  @default(0)
   active           Boolean              @default(true)
   userId           String?
@@ -1142,6 +1143,7 @@ model PharmacyCustomer {
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])
   @@unique([organizationId, userId])
+  @@unique([organizationId, normalizedPhone])
   @@index([organizationId, displayName])
   @@map("pharmacy_customers")
 }

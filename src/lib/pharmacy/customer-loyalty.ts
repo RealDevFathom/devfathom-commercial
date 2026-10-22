@@ -4,6 +4,7 @@ import { completePaidPharmacySale, completionSaleInclude } from './sale-completi
 import { postTenderEntry } from './finance-postings';
 import { requestCounterEvidence } from './counter-evidence';
 import { lockCustomerConsent } from './consent-writer';
+import { lookupLoyaltyCustomerByPhone, normalizePhoneE164 } from './customer-phone-lookup';
 
 import { Prisma } from '@/generated/prisma/client';
 import { pointsForNetPaid, redemptionFor } from '@/lib/commerce/loyalty-arithmetic';
@@ -393,6 +394,10 @@ async function assertLoyaltyHistoryBranch(db: ScopedDb, scope: LedgerScope) {
 export async function listLoyaltyCustomers(db: ScopedDb, scope: LedgerScope, query = '') {
   if (query.trim().length > 100) throw new RangeError('INVALID_CUSTOMER_QUERY');
   await assertLoyaltyHistoryBranch(db, scope);
+  if (normalizePhoneE164(query)) {
+    const customer = await lookupLoyaltyCustomerByPhone(db, query);
+    return { customers: customer ? [customer] : [], hasMore: false };
+  }
   // Retail identities are tenant-wide; balances and entries below are branch-specific.
   const customers = await db.pharmacyCustomer.findMany({
     where: {
