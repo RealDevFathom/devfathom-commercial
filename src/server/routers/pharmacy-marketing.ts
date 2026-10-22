@@ -40,7 +40,12 @@ import {
   type MarketingScope,
 } from '@/lib/pharmacy/marketing-service';
 import { draftMarketingCopy, marketingAssistanceInput } from '@/lib/pharmacy/marketing-assistance';
-import { protectedProcedure, router, type TRPCContext } from '../trpc';
+import { capabilityProcedure, protectedProcedure, router, type TRPCContext } from '../trpc';
+
+// Reviewing customer-facing copy and creating a campaign are privileged writes.
+// Keep these mutations on the central ABAC boundary so tenant role grants and,
+// critically, explicit user/role DENYs are evaluated before any workflow work.
+const manageMarketing = capabilityProcedure('pharmacy:manage');
 
 type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'audit'> & {
   db: Pick<ScopedDb, 'organization' | 'pharmacyBranch'>;
@@ -214,12 +219,12 @@ export const pharmacyMarketingRouter = router({
   history: protectedProcedure
     .input(marketingScopeInput)
     .query(({ ctx, input }) => execute(ctx, input.branchId, marketingHistory)),
-  approveTemplate: protectedProcedure
+  approveTemplate: manageMarketing
     .input(marketingTemplateInput)
     .mutation(({ ctx, input }) =>
       execute(ctx, input.branchId, (db, scope) => approveMarketingTemplate(db, scope, input))
     ),
-  createDraft: protectedProcedure
+  createDraft: manageMarketing
     .input(marketingDraftInput)
     .mutation(({ ctx, input }) =>
       execute(ctx, input.branchId, (db, scope) => createMarketingDraft(db, scope, input))

@@ -17,6 +17,9 @@ const mocks = vi.hoisted(() => ({
   settings: vi.fn(),
   assist: vi.fn(),
   capture: vi.fn(),
+  approveTemplate: vi.fn(),
+  createDraft: vi.fn(),
+  permissionUser: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -42,6 +45,8 @@ vi.mock('@/lib/pharmacy/marketing-service', async () => ({
   )),
   marketingHistory: mocks.history,
   captureMarketingCampaign: mocks.capture,
+  approveMarketingTemplate: mocks.approveTemplate,
+  createMarketingDraft: mocks.createDraft,
 }));
 vi.mock('@/lib/pharmacy/growth-insights', async () => ({
   ...(await vi.importActual<typeof import('@/lib/pharmacy/growth-insights')>(
@@ -61,7 +66,7 @@ vi.mock('@/lib/ai/growth-recommendations', async () => ({
 import { pharmacyMarketingRouter } from './pharmacy-marketing';
 function caller(role = 'ADMIN') {
   const transactionDb = {
-    user: { findFirst: mocks.actor },
+    user: { findFirst: mocks.actor, findUnique: mocks.permissionUser },
     $queryRaw: mocks.branchMatch,
     organization: { findUnique: mocks.organization },
     pharmacyBranch: { findFirst: mocks.branch },
@@ -100,6 +105,12 @@ beforeEach(() => {
   mocks.branch.mockResolvedValue({ id: 'branch-a' });
   mocks.history.mockResolvedValue({ campaigns: [] });
   mocks.capture.mockResolvedValue({ prepared: 1 });
+  mocks.approveTemplate.mockResolvedValue({ id: 'template-a' });
+  mocks.createDraft.mockResolvedValue({ id: 'campaign-a' });
+  mocks.permissionUser.mockResolvedValue({
+    organizationRole: { permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }] },
+    permissionOverrides: [],
+  });
 });
 const input = { branchId: 'branch-a' };
 describe('marketing workflow authorization', () => {
@@ -148,6 +159,49 @@ describe('marketing workflow authorization', () => {
       code: 'FORBIDDEN',
     });
     expect(mocks.capture).not.toHaveBeenCalled();
+    expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+  it('honors an explicit pharmacy management DENY before approving a template', async () => {
+    mocks.permissionUser.mockResolvedValue({
+      organizationRole: { permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }] },
+      permissionOverrides: [{ capability: 'pharmacy:manage', effect: 'DENY' }],
+    });
+
+    await expect(
+      caller().approveTemplate({
+        ...input,
+        name: 'General retail savings',
+        body: 'Save on everyday essentials. Reply STOP to opt out.',
+        reviewed: true,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.organization).not.toHaveBeenCalled();
+    expect(mocks.approveTemplate).not.toHaveBeenCalled();
+    expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+  it('honors an explicit pharmacy management DENY before creating a draft', async () => {
+    mocks.permissionUser.mockResolvedValue({
+      organizationRole: { permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }] },
+      permissionOverrides: [{ capability: 'pharmacy:manage', effect: 'DENY' }],
+    });
+
+    await expect(
+      caller().createDraft({
+        ...input,
+        name: 'Weekend retail campaign',
+        templateId: 'template-a',
+        definition: {
+          version: 1,
+          all: [{ field: 'receiptCount', operator: 'gte', value: 1 }],
+        },
+        scheduledAt: new Date('2026-10-24T12:00:00.000Z'),
+        quietHours: { startHour: 21, endHour: 9 },
+        frequencyCap: { max: 1, windowDays: 7 },
+        promotesRegulatedItem: false,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.organization).not.toHaveBeenCalled();
+    expect(mocks.createDraft).not.toHaveBeenCalled();
     expect(mocks.transaction).not.toHaveBeenCalled();
   });
   it.each([
