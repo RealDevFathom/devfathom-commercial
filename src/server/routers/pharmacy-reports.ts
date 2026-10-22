@@ -92,6 +92,15 @@ const transitions: Record<z.infer<typeof pvState>, readonly z.infer<typeof pvSta
   SUBMITTED: ['CLOSED'],
   CLOSED: [],
 };
+const externalTransitions: Record<
+  z.infer<typeof externalState>,
+  readonly z.infer<typeof externalState>[]
+> = {
+  NOT_SUBMITTED: ['PENDING', 'SUBMITTED', 'FAILED'],
+  PENDING: ['SUBMITTED', 'FAILED'],
+  FAILED: ['PENDING', 'SUBMITTED', 'FAILED'],
+  SUBMITTED: [],
+};
 
 async function requirePvBranch(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements.organizationId;
@@ -237,9 +246,22 @@ export const pharmacyReportsRouter = router({
           code: 'BAD_REQUEST',
           message: 'Invalid report lifecycle transition.',
         });
-      return ctx.db.pharmacyPharmacovigilanceReport.update({
-        where: { id: report.id },
+      const updated = await ctx.db.pharmacyPharmacovigilanceReport.updateMany({
+        where: {
+          id: report.id,
+          branchId: input.branchId,
+          organizationId,
+          state: report.state,
+        },
         data: { state: input.state, reviewedByUserId: ctx.session.user.id },
+      });
+      if (updated.count !== 1)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'Report state changed; reload it before trying again.',
+        });
+      return ctx.db.pharmacyPharmacovigilanceReport.findFirstOrThrow({
+        where: { id: report.id, branchId: input.branchId, organizationId },
       });
     }),
   recordPharmacovigilanceSubmission: auditedProtectedProcedure
@@ -272,16 +294,40 @@ export const pharmacyReportsRouter = router({
       const organizationId = await requirePvBranch(ctx, input.branchId);
       const report = await ctx.db.pharmacyPharmacovigilanceReport.findFirst({
         where: { id: input.id, branchId: input.branchId, organizationId },
-        select: { id: true },
+        select: { id: true, state: true, externalSubmissionState: true },
       });
       if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
-      return ctx.db.pharmacyPharmacovigilanceReport.update({
-        where: { id: report.id },
+      if (report.state !== 'READY' && report.state !== 'SUBMITTED')
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Report must be ready before recording a submission.',
+        });
+      if (!externalTransitions[report.externalSubmissionState].includes(input.state))
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Invalid external submission transition.',
+        });
+      const updated = await ctx.db.pharmacyPharmacovigilanceReport.updateMany({
+        where: {
+          id: report.id,
+          branchId: input.branchId,
+          organizationId,
+          state: report.state,
+          externalSubmissionState: report.externalSubmissionState,
+        },
         data: {
           externalSubmissionState: input.state,
           externalReference: input.state === 'SUBMITTED' ? input.externalReference : null,
           externalFailureReason: input.state === 'FAILED' ? input.failureReason : null,
         },
+      });
+      if (updated.count !== 1)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'Report submission state changed; reload it before trying again.',
+        });
+      return ctx.db.pharmacyPharmacovigilanceReport.findFirstOrThrow({
+        where: { id: report.id, branchId: input.branchId, organizationId },
       });
     }),
   exportPharmacovigilanceDrap: auditedProtectedProcedure
