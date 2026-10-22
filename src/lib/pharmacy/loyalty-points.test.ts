@@ -20,4 +20,28 @@ describe('pharmacy points expiry', () => {
     expect(allocateNetPaid({ medicineMinor: 10_000, nonDrugMinor: 30_000 }, 20_000))
       .toEqual({ medicineMinor: 5_000, nonDrugMinor: 15_000 });
   });
+
+  it('preserves integer paisa and the capped paid total for uneven allocations', () => {
+    for (let netPaidMinor = 1; netPaidMinor < 1_000; netPaidMinor += 17) {
+      const result = allocateNetPaid(
+        { medicineMinor: 101, nonDrugMinor: 203 },
+        netPaidMinor
+      );
+      expect(Number.isSafeInteger(result.medicineMinor)).toBe(true);
+      expect(Number.isSafeInteger(result.nonDrugMinor)).toBe(true);
+      expect(result.medicineMinor + result.nonDrugMinor).toBe(
+        Math.min(netPaidMinor, 304)
+      );
+      expect(result.medicineMinor).toBeGreaterThanOrEqual(0);
+      expect(result.nonDrugMinor).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it.each([
+    [{ medicineMinor: -1, nonDrugMinor: 1 }, 0],
+    [{ medicineMinor: 1.1, nonDrugMinor: 1 }, 1],
+    [{ medicineMinor: 1, nonDrugMinor: 1 }, -1],
+  ])('rejects invalid integer-paisa allocation input', (subtotals, paid) => {
+    expect(() => allocateNetPaid(subtotals, paid)).toThrow('INVALID_MONEY');
+  });
 });

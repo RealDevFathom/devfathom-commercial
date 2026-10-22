@@ -3,6 +3,18 @@ import { describe, expect, it } from 'vitest';
 import { categoryEarnPoints, redemptionFor } from './loyalty-arithmetic';
 
 describe('pharmacy points defaults', () => {
+  it.each([
+    [-1, 0],
+    [1.5, 0],
+    [Number.MAX_SAFE_INTEGER + 1, 0],
+    [0, -1],
+    [0, 1.5],
+  ])('rejects non-paisa category money (%s, %s)', (medicineMinor, nonDrugMinor) => {
+    expect(() => categoryEarnPoints({ medicineMinor, nonDrugMinor })).toThrow(
+      'INVALID_LOYALTY_RULES'
+    );
+  });
+
   it('earns 1/Rs100 on medicine and 3/Rs100 on non-drug, flooring categories separately', () => {
     expect(categoryEarnPoints({ medicineMinor: 10_000, nonDrugMinor: 0 })).toBe(1);
     expect(categoryEarnPoints({ medicineMinor: 0, nonDrugMinor: 10_000 })).toBe(3);
@@ -25,5 +37,30 @@ describe('pharmacy points defaults', () => {
       outstandingMinor: 20_000, minimumRedemptionPoints: 200 })).toEqual({
       points: 200, amountMinor: 20_000,
     });
+  });
+
+  it('never produces fractional paisa or spends more points than are available', () => {
+    for (let outstandingMinor = 100; outstandingMinor <= 20_001; outstandingMinor += 137) {
+      const availablePoints = 500;
+      const result = redemptionFor({
+        requestedPoints: availablePoints,
+        availablePoints,
+        outstandingMinor,
+        pointValueMinor: 100,
+      });
+      expect(Number.isSafeInteger(result.amountMinor)).toBe(true);
+      expect(result.amountMinor).toBe(result.points * 100);
+      expect(result.amountMinor).toBeLessThanOrEqual(outstandingMinor);
+      expect(result.points).toBeLessThanOrEqual(availablePoints);
+    }
+  });
+
+  it.each([
+    { requestedPoints: 1.5, availablePoints: 10, outstandingMinor: 1_000 },
+    { requestedPoints: 1, availablePoints: -1, outstandingMinor: 1_000 },
+    { requestedPoints: 1, availablePoints: 10, outstandingMinor: -1 },
+    { requestedPoints: 1, availablePoints: 10, outstandingMinor: 1.5 },
+  ])('rejects invalid redemption money and balances: $requestedPoints', (input) => {
+    expect(() => redemptionFor(input)).toThrow('INVALID_REDEMPTION');
   });
 });
