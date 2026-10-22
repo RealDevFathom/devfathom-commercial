@@ -1,6 +1,6 @@
 # GitHub issue #255 is already fixed
 
-Verified against the current code at `16a2a37`.
+Verified against the current code at `5a7c353`.
 
 ## Evidence
 
@@ -12,7 +12,7 @@ Verified against the current code at `16a2a37`.
 - `src/app/globals.css:923-932` defines the relevant light-theme colors as page background
   `#f6f6f3`, body text `#333330`, and muted text `#6c6c68`.
 - `src/app/globals.css:272` maps the success color to `--green-600`, which is `#42624a` at
-  `src/app/globals.css:220`.
+  `src/app/globals.css:221`.
 
 Compositing the 10% success tint (`#42624a`) over the page (`#f6f6f3`) produces the reported
 notice background, `#e4e7e2` (allowing for per-channel rounding). The current message foreground
