@@ -33,6 +33,16 @@ function fixture(
 ) {
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+    },
     pharmacyBranch: {
       findMany: vi.fn(
         async ({ where }: { where: { id: { in: string[] }; organizationId: string } }) =>
@@ -40,6 +50,9 @@ function fixture(
       ),
     },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-1' }]),
+    },
     pharmacyDrawerSession: {
       findFirst: vi.fn().mockResolvedValue(options.openDrawer ?? null),
       create: options.createError

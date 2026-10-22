@@ -50,6 +50,7 @@ const RETIRED = `harden_branch_retired_${suffix}`;
 const FOREIGN = `harden_branch_foreign_${suffix}`;
 const UNKNOWN = `harden_branch_unknown_${suffix}`;
 const ACTOR = `harden_actor_${suffix}`;
+const COUNTER_ROLE = `harden_counter_role_${suffix}`;
 const DEVICE = 'counter-device-1';
 const businessDate = new Date('2026-10-20T00:00:00.000Z');
 type Refusal = { code: string; message: string };
@@ -138,6 +139,7 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
     withTenantDb = scoped.withTenantDb;
     withPlatformDb = scoped.withPlatformDb;
     const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
+    const { seedDepartments } = await import('@/lib/test-support/departments');
     await assertRlsEnforcingRole(withPlatformDb);
     await withPlatformDb((db) =>
       db.$executeRawUnsafe(
@@ -153,6 +155,34 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
     await createBranch(ORG, ACTIVE);
     await createBranch(ORG, RETIRED);
     await createBranch(OTHER_ORG, FOREIGN);
+    await withTenantDb(ORG, async (db) => {
+      await seedDepartments(db, [ORG], ['LEADERSHIP']);
+      await db.organizationRole.create({
+        data: {
+          id: COUNTER_ROLE,
+          key: COUNTER_ROLE,
+          name: 'Counter operator',
+          permissions: { create: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }] },
+        },
+      });
+      await db.user.create({
+        data: {
+          id: ACTOR,
+          name: 'Drawer test administrator',
+          email: `${ACTOR}@example.test`,
+          department: 'LEADERSHIP',
+          title: 'Administrator',
+          role: 'ADMIN',
+          organizationRoleId: COUNTER_ROLE,
+        },
+      });
+      await db.pharmacyBranchAssignment.createMany({
+        data: [
+          { userId: ACTOR, branchId: ACTIVE },
+          { userId: ACTOR, branchId: RETIRED },
+        ],
+      });
+    });
     // A drawer opened while the branch traded, then the branch was deactivated.
     const drawer = await asAdmin((c) =>
       c.openDrawer({ branchId: RETIRED, deviceId: DEVICE, businessDate, openingFloatMinor: 500 })

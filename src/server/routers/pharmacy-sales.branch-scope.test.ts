@@ -130,6 +130,8 @@ let db: {
   pharmacyDrawerSession: { findFirst: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
   pharmacyDrawerMovement: { create: ReturnType<typeof vi.fn> };
   pharmacyTender: { findFirst: ReturnType<typeof vi.fn> };
+  user: { findUnique: ReturnType<typeof vi.fn> };
+  pharmacyBranchAssignment: { findMany: ReturnType<typeof vi.fn> };
 };
 
 function caller(role = 'ADMIN'): Caller {
@@ -161,6 +163,19 @@ beforeEach(() => {
     },
     pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue(null) },
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+    },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn().mockResolvedValue([{ branchId: BRANCH }]),
+    },
   };
 });
 

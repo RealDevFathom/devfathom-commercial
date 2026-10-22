@@ -633,8 +633,9 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) =>
-          openPharmacyDrawer(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          openPharmacyDrawer(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);
@@ -654,8 +655,9 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) =>
-          recordPharmacyCashMovement(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          recordPharmacyCashMovement(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);
@@ -674,8 +676,9 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) =>
-          closePharmacyDrawer(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          closePharmacyDrawer(txDb(tx), scope, input)
         );
       } catch (error) {
         fail(error);

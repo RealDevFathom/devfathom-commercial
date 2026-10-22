@@ -37,6 +37,9 @@ vi.mock('@/lib/pharmacy/sales', async (original) => ({
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
+  openPharmacyDrawer: vi.fn(async () => ({ id: 'drawer-1' })),
+  recordPharmacyCashMovement: vi.fn(async () => ({ id: 'movement-1' })),
+  closePharmacyDrawer: vi.fn(async () => ({ id: 'drawer-1', status: 'CLOSED' })),
 }));
 vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),
@@ -65,7 +68,12 @@ import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { readReturnHistory } from '@/lib/pharmacy/sales';
-import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import {
+  applyPharmacyTender,
+  closePharmacyDrawer,
+  openPharmacyDrawer,
+  recordPharmacyCashMovement,
+} from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
@@ -516,5 +524,96 @@ describe('counter receipt authorization', () => {
         }),
       })
     );
+  });
+});
+
+const drawerPaths: { name: string; run: (caller: Caller) => Promise<unknown> }[] = [
+  {
+    name: 'openDrawer',
+    run: (caller) =>
+      caller.openDrawer({
+        branchId: 'branch-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        openingFloatMinor: 500,
+      }),
+  },
+  {
+    name: 'drawerMovement',
+    run: (caller) =>
+      caller.drawerMovement({
+        branchId: 'branch-a',
+        drawerSessionId: 'drawer-1',
+        kind: 'PAID_OUT',
+        amountMinor: 100,
+        reason: 'Petty cash',
+      }),
+  },
+  {
+    name: 'closeDrawer',
+    run: (caller) =>
+      caller.closeDrawer({
+        branchId: 'branch-a',
+        drawerSessionId: 'drawer-1',
+        countedCashMinor: 400,
+      }),
+  },
+];
+
+describe('cash drawer authorization (#343)', () => {
+  it.each(drawerPaths)(
+    '$name denies an organization member without a counter capability',
+    async (path) => {
+      const f = fixture([]);
+      assign(f, ['branch-a']);
+      await expect(path.run(f.caller())).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(drawerPaths)(
+    '$name denies a counter operator without a branch assignment',
+    async (path) => {
+      const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+      await expect(path.run(f.caller())).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Branch is outside your scope.',
+      });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(drawerPaths)('$name allows an assigned counter operator', async (path) => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    await expect(path.run(f.caller())).resolves.toBeDefined();
+    expect(f.db.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(drawerPaths)('$name keeps DENY stronger than ALLOW', async (path) => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    f.db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-a',
+      organizationRole: {
+        permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [{ capability: 'pharmacy:counter', effect: 'DENY' }],
+    });
+    assign(f, ['branch-a']);
+    await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('routes each allowed operation to its settlement command', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    for (const path of drawerPaths) await path.run(f.caller());
+    expect(openPharmacyDrawer).toHaveBeenCalledTimes(1);
+    expect(recordPharmacyCashMovement).toHaveBeenCalledTimes(1);
+    expect(closePharmacyDrawer).toHaveBeenCalledTimes(1);
   });
 });
