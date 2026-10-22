@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
+import { ImportMappingWorkflow } from '@/components/pharmacy/import-mapping-workflow';
 import {
   Table,
   TableBody,
@@ -49,6 +50,7 @@ export default async function ImportedStockPage({
         </SectionCard>
       ) : (
         <>
+          <ImportMappingWorkflow />
           <SectionCard title="Awaiting verification" titleLevel={2}>
             <p className="text-sm text-text-body">
               These quantities are imported references pending batch, expiry, and physical count

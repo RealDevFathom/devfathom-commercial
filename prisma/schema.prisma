@@ -4849,6 +4849,7 @@ enum RestaurantActivationAcknowledgementKind {
 
 model Organization {
   pharmacyMigrationSources PharmacyMigrationSource[]
+  importMappingPresets     ImportMappingPreset[]
   pharmacyMessageLogs      PharmacyMessageLog[]
   id                       String                     @id @default(cuid())
   slug                     String                     @unique
@@ -11564,6 +11565,23 @@ model PharmacyMigrationSource {
   @@unique([organizationId, contentHash])
   @@index([organizationId, kind, capturedAt])
   @@map("pharmacy_migration_sources")
+}
+
+/// Tenant-owned reusable source-header mapping. Sample values are never retained.
+model ImportMappingPreset {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name            String
+  mapping         Json
+  createdByUserId String
+  updatedByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  @@unique([organizationId, id])
+  @@unique([organizationId, name])
+  @@index([organizationId, updatedAt])
+  @@map("import_mapping_presets")
 }
 
 /// One profiling pass over a source. Re-profiling creates a NEW batch; rows are

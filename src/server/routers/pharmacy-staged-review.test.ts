@@ -28,7 +28,18 @@ function makeDb() {
   };
   return {
     user: {
-      findUnique: vi.fn().mockResolvedValue({ organizationRole: null, permissionOverrides: [] }),
+      findUnique: vi.fn().mockResolvedValue({
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:data-import', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+    },
+    importMappingPreset: {
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn().mockResolvedValue({ id: 'preset_a', name: 'Marg', mapping: {} }),
+      update: vi.fn(),
+      deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     pharmacyBranch: {
       findFirst: vi.fn().mockResolvedValue({ id: 'branch_a' }),
@@ -52,6 +63,25 @@ function makeDb() {
     },
     pharmacyMigrationException: { groupBy: vi.fn().mockResolvedValue([]) },
   };
+}
+function importCaller(options: { tenant?: string } = {}) {
+  return pharmacyStagedReviewRouter.createCaller({
+    db,
+    entitlements: { organizationId: 'org_a', enabledModules: ['pharmacy-core'], modules: [] },
+    session: {
+      expires: 'later',
+      user: {
+        id: 'user_a',
+        organizationId: options.tenant ?? 'org_a',
+        role: 'ADMIN',
+        status: 'ACTIVE',
+      },
+    },
+    organization: null,
+    support: null,
+    requestMeta: { ip: null, userAgent: null },
+    audit: { detail: {} },
+  } as unknown as TRPCContext).importCore;
 }
 let db = makeDb();
 function caller(
@@ -196,5 +226,34 @@ describe('staged review authorization and reads', () => {
     const [one, two] = await Promise.all([caller().stagedRows(scope), caller().stagedRows(scope)]);
     expect(one).toEqual(two);
     expect(one.rows[0].sellable).toBe(false);
+  });
+});
+
+describe('import mapping preset RBAC and tenant isolation', () => {
+  it('scopes preset reads and creates to the authenticated organization', async () => {
+    await importCaller().presets();
+    expect(db.importMappingPreset.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org_a' } })
+    );
+    await importCaller().savePreset({ name: 'Marg', mapping: { Item: 'product_name' } });
+    expect(db.importMappingPreset.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ organizationId: 'org_a', createdByUserId: 'user_a' }),
+      })
+    );
+  });
+
+  it('denies a tenant/session mismatch before preset access', async () => {
+    await expect(importCaller({ tenant: 'org_b' }).presets()).rejects.toBeDefined();
+    expect(db.importMappingPreset.findMany).not.toHaveBeenCalled();
+  });
+
+  it('honours an explicit DENY over the role ALLOW', async () => {
+    db.user.findUnique.mockResolvedValueOnce({
+      organizationRole: { permissions: [{ capability: 'pharmacy:data-import', effect: 'ALLOW' }] },
+      permissionOverrides: [{ capability: 'pharmacy:data-import', effect: 'DENY' }],
+    });
+    await expect(importCaller().presets()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.importMappingPreset.findMany).not.toHaveBeenCalled();
   });
 });
