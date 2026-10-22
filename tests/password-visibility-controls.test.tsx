@@ -3,11 +3,20 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { LoginForm } from '@/app/login/login-form';
 import { SharedLoginForm } from '@/app/login/shared-login-form';
 import { PlatformLoginForm } from '@/app/platform/(auth)/login/platform-login-form';
+import { ResetPasswordForm } from '@/app/reset-password/[token]/reset-password-form';
 
 const router = vi.hoisted(() => ({ replace: vi.fn(), refresh: vi.fn() }));
 
 vi.mock('next-auth/react', () => ({ signIn: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
+vi.mock('@/lib/trpc', () => ({
+  trpc: {
+    passwordReset: {
+      validate: { useQuery: () => ({ data: { valid: true }, isLoading: false }) },
+      reset: { useMutation: () => ({ isPending: false, mutateAsync: vi.fn() }) },
+    },
+  },
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -34,6 +43,11 @@ describe.each([
     name: 'platform login',
     renderForm: () => render(<PlatformLoginForm />),
     passwordLabel: 'Password',
+  },
+  {
+    name: 'reset password',
+    renderForm: () => render(<ResetPasswordForm token="valid-reset-token" />),
+    passwordLabel: 'New Password',
   },
 ])('$name password visibility control', ({ renderForm, passwordLabel }) => {
   it('is keyboard-focusable and toggles visibility without changing the password', () => {
