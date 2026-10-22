@@ -3,10 +3,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 const allow = vi.fn(async () => true);
 vi.mock('@/lib/abac', () => ({ can: (...args: unknown[]) => allow(...args) }));
+const issueVoucher = vi.fn(async (_store: unknown, input: { organizationId: string; branchId: string }) => ({
+  id: `voucher-${input.organizationId}-${input.branchId}`,
+}));
+// Loyalty vouchers are a sibling feature. Win-back tests exercise only the contract at this seam.
+vi.mock('./loyalty-vouchers', () => ({ issueVoucher: (...args: unknown[]) => issueVoucher(...args) }));
 
 import {
   calculateWinBackPreview,
+  changeWinBackRules,
   enableWinBack,
+  generateWinBackPreview,
   processWinBackCampaigns,
   selectWinBackCustomers,
   tierForSpend,
@@ -38,7 +45,11 @@ const customer = (overrides: Partial<WinBackCustomer> = {}): WinBackCustomer => 
 });
 
 describe('win-back rules', () => {
-  beforeEach(() => allow.mockResolvedValue(true));
+  beforeEach(() => {
+    allow.mockReset();
+    allow.mockResolvedValue(true);
+    issueVoucher.mockClear();
+  });
 
   it('selects only inactive customers meeting spend, consent, opt-in, and active gates', () => {
     const rows = [customer(), customer({ customerId: 'recent', lastSaleAt: new Date('2026-10-01') }),
@@ -84,6 +95,73 @@ describe('win-back rules', () => {
       .toThrow(expect.objectContaining({ reason: 'INVALID_CANDIDATE' }));
   });
 
+  it.each([
+    ['fractional minimum spend', { minimumSpendMinor: 50_000.5 }],
+    ['negative minimum basket', { minNextBasketMinor: -1 }],
+    ['fractional voucher value', { tiers: [
+      { minimumSpendMinor: 50_000, maximumSpendMinor: null, voucherValueMinor: 20_000.5 },
+    ] }],
+  ])('rejects %s rather than rounding persisted paisa', (_label, override) => {
+    expect(() => validateWinBackRules({ ...rules, ...override }))
+      .toThrow(expect.objectContaining({ reason: 'INVALID_RULES' }));
+  });
+
+  it('never accepts a negative customer spend balance', () => {
+    expect(() => selectWinBackCustomers([customer({ pastSpendMinor: -1 })], rules, NOW))
+      .toThrow(expect.objectContaining({ reason: 'INVALID_CANDIDATE' }));
+    expect(() => tierForSpend(rules.tiers, -1)).toThrow('INVALID_MONEY');
+  });
+
+  it('keeps every preview money field in integer paisa, including a negative net impact', () => {
+    const preview = calculateWinBackPreview([customer({ expectedBasketMinor: 50_001 })], {
+      ...rules, redemptionBasisPoints: 3_333,
+    }, NOW);
+    for (const value of [preview.totalVoucherLiabilityMinor, preview.expectedVoucherCostMinor,
+      preview.expectedMarginMinor, preview.netMarginImpactMinor]) expect(Number.isInteger(value)).toBe(true);
+    expect(preview.netMarginImpactMinor).toBeLessThan(0);
+  });
+
+  it('routes owner changes through central can and writes old/new audit state with tenant and actor', async () => {
+    const oldRules = { ...rules, inactivityDays: 60 };
+    const saveRulesAndAudit = vi.fn().mockResolvedValue(undefined);
+    const store = { authorizationDb: {} as never, readRules: vi.fn().mockResolvedValue(oldRules),
+      saveRulesAndAudit, readCandidates: vi.fn(), savePreview: vi.fn(),
+      enableAndAuditIfPreviewCurrent: vi.fn() };
+    const subject = { id: 'owner-1', role: 'OWNER' as const };
+    await changeWinBackRules(store, { organizationId: 'org-a', subject, rules, now: NOW });
+    expect(allow).toHaveBeenCalledWith(subject, 'pharmacy:loyalty-manage', undefined,
+      { db: store.authorizationDb, now: NOW });
+    expect(saveRulesAndAudit).toHaveBeenCalledWith({ organizationId: 'org-a', actorId: 'owner-1',
+      oldValue: oldRules, newValue: rules });
+  });
+
+  it('honours central can DENY even for an owner and creates no audit entry', async () => {
+    allow.mockResolvedValue(false);
+    const saveRulesAndAudit = vi.fn();
+    const store = { authorizationDb: {} as never, readRules: vi.fn(), saveRulesAndAudit,
+      readCandidates: vi.fn(), savePreview: vi.fn(), enableAndAuditIfPreviewCurrent: vi.fn() };
+    await expect(changeWinBackRules(store, { organizationId: 'org-a',
+      subject: { id: 'owner-1', role: 'OWNER' }, rules, now: NOW }))
+      .rejects.toMatchObject({ reason: 'FORBIDDEN' });
+    expect(store.readRules).not.toHaveBeenCalled();
+    expect(saveRulesAndAudit).not.toHaveBeenCalled();
+  });
+
+  it('records preview and enable audit contracts with the same tenant and actor', async () => {
+    const savePreview = vi.fn().mockResolvedValue(undefined);
+    const enableAndAuditIfPreviewCurrent = vi.fn().mockResolvedValue(true);
+    const store = { authorizationDb: {} as never, readRules: vi.fn().mockResolvedValue(rules),
+      readCandidates: vi.fn().mockResolvedValue([customer()]), saveRulesAndAudit: vi.fn(),
+      savePreview, enableAndAuditIfPreviewCurrent };
+    const subject = { id: 'owner-1', role: 'OWNER' as const };
+    const preview = await generateWinBackPreview(store, { organizationId: 'org-a', subject, now: NOW });
+    expect(savePreview).toHaveBeenCalledWith(expect.objectContaining({ id: preview.id,
+      organizationId: 'org-a', actorId: 'owner-1', generatedAt: NOW }));
+    await enableWinBack(store, { organizationId: 'org-a', subject, previewId: preview.id, now: NOW });
+    expect(enableAndAuditIfPreviewCurrent).toHaveBeenCalledWith({ organizationId: 'org-a',
+      actorId: 'owner-1', previewId: preview.id, expectedSettingsHash: preview.settingsHash });
+  });
+
   it('makes preview enablement depend on the adapter atomic lock-and-recheck result', async () => {
     const enableAndAuditIfPreviewCurrent = vi.fn(async () => false);
     const store = {
@@ -97,6 +175,12 @@ describe('win-back rules', () => {
 });
 
 describe('win-back scheduled job', () => {
+  beforeEach(() => {
+    allow.mockReset();
+    allow.mockResolvedValue(true);
+    issueVoucher.mockClear();
+  });
+
   it('issues once per campaign window through voucher service and respects opt-out', async () => {
     const claims = new Set<string>(); const inserted: string[] = []; const messages: string[] = [];
     const campaign = { organizationId: 'org-1', rules, enabledPreviewId: 'preview-1', enabledPreviewHash: '' };
@@ -108,15 +192,12 @@ describe('win-back scheduled job', () => {
       readCandidates: async () => [customer(), customer({ customerId: 'optout', whatsappOptIn: false })],
       transaction: async (_organizationId: string, operation: (tx: any) => Promise<unknown>) => operation({
         lockCandidate: async () => customer(),
-        vouchers: {
-          countActivity: async () => ({ customer: 0, phone: 0 }),
-          insertVoucher: async (row: { id: string }) => { inserted.push(row.id); },
-        },
+        vouchers: {} as never,
         claimIssuance: async ({ customerId, campaignWindowStart }: any) => {
           const key = `${customerId}:${campaignWindowStart.toISOString()}`;
           if (claims.has(key)) return false; claims.add(key); return true;
         },
-        attachVoucher: async () => undefined,
+        attachVoucher: async ({ voucherId }: { voucherId: string }) => { inserted.push(voucherId); },
         enqueueTransactionalMessage: async ({ dedupeKey }: any) => { messages.push(dedupeKey); },
       }),
     };
@@ -124,6 +205,85 @@ describe('win-back scheduled job', () => {
     await expect(processWinBackCampaigns(store, { subject: { id: 'job', role: 'OWNER' }, now: NOW })).resolves.toMatchObject({ issued: 0, duplicates: 1 });
     expect(inserted).toHaveLength(1);
     expect(messages).toHaveLength(1);
+  });
+
+  it('has exactly one winner when two jobs race for the same tenant campaign window', async () => {
+    const { winBackRulesHash } = await import('./loyalty-win-back');
+    let claimed = false;
+    let arrivals = 0;
+    let release!: () => void;
+    const bothAtClaim = new Promise<void>((resolve) => { release = resolve; });
+    const attachVoucher = vi.fn().mockResolvedValue(undefined);
+    const store = {
+      listEnabledCampaigns: async () => [{ organizationId: 'org-a', rules,
+        enabledPreviewId: 'preview-1', enabledPreviewHash: winBackRulesHash(rules) }],
+      authorizationDb: () => ({} as never), readCandidates: async () => [customer()],
+      transaction: async (organizationId: string, operation: (tx: any) => Promise<unknown>) => operation({
+        lockCandidate: async () => customer(), vouchers: {} as never,
+        claimIssuance: async () => {
+          arrivals += 1;
+          if (arrivals === 2) release();
+          await bothAtClaim;
+          if (claimed) return false;
+          claimed = true;
+          return organizationId === 'org-a';
+        },
+        attachVoucher, enqueueTransactionalMessage: vi.fn().mockResolvedValue(undefined),
+      }),
+    };
+    const outcomes = await Promise.all([
+      processWinBackCampaigns(store, { subject: { id: 'job', role: 'OWNER' }, now: NOW }),
+      processWinBackCampaigns(store, { subject: { id: 'job', role: 'OWNER' }, now: NOW }),
+    ]);
+    expect(outcomes.reduce((sum, outcome) => sum + outcome.issued, 0)).toBe(1);
+    expect(outcomes.reduce((sum, outcome) => sum + outcome.duplicates, 0)).toBe(1);
+    expect(issueVoucher).toHaveBeenCalledTimes(1);
+    expect(attachVoucher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['refund', { pastSpendMinor: 49_999 }],
+    ['void', { pastSpendMinor: 49_999 }],
+  ])('rechecks the locked candidate after a %s reversal before issuing', async (_kind, reversal) => {
+    const { winBackRulesHash } = await import('./loyalty-win-back');
+    const claimIssuance = vi.fn();
+    const store = {
+      listEnabledCampaigns: async () => [{ organizationId: 'org-a', rules,
+        enabledPreviewId: 'preview-1', enabledPreviewHash: winBackRulesHash(rules) }],
+      authorizationDb: () => ({} as never), readCandidates: async () => [customer()],
+      transaction: async (organizationId: string, operation: (tx: any) => Promise<unknown>) => operation({
+        lockCandidate: async () => organizationId === 'org-a' ? customer(reversal) : null,
+        vouchers: {} as never, claimIssuance, attachVoucher: vi.fn(),
+        enqueueTransactionalMessage: vi.fn(),
+      }),
+    };
+    await expect(processWinBackCampaigns(store, {
+      subject: { id: 'job', role: 'OWNER' }, now: NOW,
+    })).resolves.toMatchObject({ issued: 0, duplicates: 1 });
+    expect(claimIssuance).not.toHaveBeenCalled();
+    expect(issueVoucher).not.toHaveBeenCalled();
+  });
+
+  it('keeps campaign reads, transactions, voucher issuance, and outbox writes tenant-scoped', async () => {
+    const { winBackRulesHash } = await import('./loyalty-win-back');
+    const observed: string[] = [];
+    const store = {
+      listEnabledCampaigns: async () => [{ organizationId: 'org-a', rules,
+        enabledPreviewId: 'preview-1', enabledPreviewHash: winBackRulesHash(rules) }],
+      authorizationDb: (organizationId: string) => { observed.push(`auth:${organizationId}`); return {} as never; },
+      readCandidates: async (organizationId: string) => { observed.push(`read:${organizationId}`); return [customer()]; },
+      transaction: async (organizationId: string, operation: (tx: any) => Promise<unknown>) => {
+        observed.push(`tx:${organizationId}`);
+        return operation({ lockCandidate: async () => customer(), vouchers: {} as never,
+          claimIssuance: async () => true,
+          attachVoucher: async () => { observed.push(`attach:${organizationId}`); },
+          enqueueTransactionalMessage: async () => { observed.push(`outbox:${organizationId}`); } });
+      },
+    };
+    await processWinBackCampaigns(store, { subject: { id: 'job', role: 'OWNER' }, now: NOW });
+    expect(observed).toEqual(['auth:org-a', 'read:org-a', 'tx:org-a', 'attach:org-a', 'outbox:org-a']);
+    expect(issueVoucher).toHaveBeenCalledWith(expect.anything(),
+      expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-1' }));
   });
 
   it('denies the scheduled mutation before opening a transaction when central can denies', async () => {
