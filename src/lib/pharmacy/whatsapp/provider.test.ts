@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   createWhatsAppProvider,
@@ -138,57 +138,28 @@ describe('MockWhatsAppProvider', () => {
 });
 
 describe('MetaWhatsAppProvider', () => {
-  it.each([
-    [400, true],
-    [408, false],
-    [500, false],
-    [200, false],
-  ])('classifies HTTP %s without a message id as definitive=%s', async (status, definitive) => {
+  it('blocks text and template sends even when Meta credentials are configured', async () => {
     const provider = new MetaWhatsAppProvider(
-      readWhatsAppConfig(ENV),
-      (async () => new Response('{}', { status })) as typeof fetch
+      readWhatsAppConfig({ ...ENV, PHARMACY_WHATSAPP_PROVIDER: 'meta' })
     );
     await expect(provider.sendText({ to: '923001234567', body: 'x' })).rejects.toMatchObject({
-      reason: 'SEND_FAILED',
-      definitive,
+      reason: 'NOT_CONFIGURED',
+      message: expect.stringContaining('Live sending is disabled'),
     });
-  });
-  it('posts templates to the Graph API with env credentials (fetch injected, no network)', async () => {
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(JSON.stringify({ messages: [{ id: 'wamid.sent' }] }), { status: 200 })
-    );
-    const provider = new MetaWhatsAppProvider(
-      readWhatsAppConfig({ ...ENV, PHARMACY_WHATSAPP_PROVIDER: 'meta' }),
-      fetchImpl as unknown as typeof fetch
-    );
     await expect(
       provider.sendTemplate({
         to: '923001234567',
         template: 'refillReminder',
         parameters: ['Ayesha', 'Panadol', '2026-10-02'],
       })
-    ).resolves.toEqual({ providerMessageId: 'wamid.sent', acceptedByProvider: true });
-    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('https://graph.facebook.com/v21.0/1234567890/messages');
-    expect((init.headers as Record<string, string>).authorization).toBe('Bearer test-token');
-    expect(JSON.parse(String(init.body))).toMatchObject({
-      messaging_product: 'whatsapp',
-      to: '923001234567',
-      type: 'template',
-      template: { name: 'refill_due_v1', language: { code: 'ur' } },
+    ).rejects.toMatchObject({
+      reason: 'NOT_CONFIGURED',
+      message: expect.stringContaining('Live sending is disabled'),
     });
   });
 
-  it('surfaces provider errors and missing credentials', async () => {
-    const failing = new MetaWhatsAppProvider(
-      readWhatsAppConfig(ENV),
-      (async () => new Response('{}', { status: 400 })) as unknown as typeof fetch
-    );
-    await expect(failing.sendText({ to: '923001234567', body: 'x' })).rejects.toThrow(
-      'SEND_FAILED'
-    );
-    const unconfigured = new MetaWhatsAppProvider(readWhatsAppConfig({}), vi.fn());
+  it('also blocks sends without credentials', async () => {
+    const unconfigured = new MetaWhatsAppProvider(readWhatsAppConfig({}));
     await expect(unconfigured.sendText({ to: '923001234567', body: 'x' })).rejects.toThrow(
       'NOT_CONFIGURED'
     );

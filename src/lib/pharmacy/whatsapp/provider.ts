@@ -156,38 +156,15 @@ export function parseMetaInbound(payload: unknown): WhatsAppInboundMessage[] {
 export class MetaWhatsAppProvider implements WhatsAppProvider {
   readonly name = 'meta' as const;
 
-  constructor(
-    private readonly config: WhatsAppConfig,
-    private readonly fetchImpl: typeof fetch = fetch
-  ) {}
+  constructor(private readonly config: WhatsAppConfig) {}
 
-  private async post(body: Record<string, unknown>): Promise<WhatsAppSendResult> {
-    const { accessToken, phoneNumberId, graphVersion } = this.config;
-    if (!accessToken || !phoneNumberId) throw new WhatsAppProviderError('NOT_CONFIGURED');
-    const response = await this.fetchImpl(
-      `https://graph.facebook.com/${encodeURIComponent(graphVersion)}/${encodeURIComponent(phoneNumberId)}/messages`,
-      {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${accessToken}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ messaging_product: 'whatsapp', ...body }),
-        signal: AbortSignal.timeout(10_000),
-      }
+  private async post(_body: Record<string, unknown>): Promise<WhatsAppSendResult> {
+    // Owner sender/template approval remains pending. Keep this block at the
+    // network boundary so direct construction cannot bypass the factory gate.
+    throw new WhatsAppProviderError(
+      'NOT_CONFIGURED',
+      'Live sending is disabled pending owner approval.'
     );
-    const json = (await response.json().catch(() => null)) as {
-      messages?: Array<{ id?: unknown }>;
-    } | null;
-    const id = json?.messages?.[0]?.id;
-    if (!response.ok || typeof id !== 'string') {
-      throw new WhatsAppProviderError(
-        'SEND_FAILED',
-        `HTTP ${response.status}`,
-        !response.ok && response.status >= 400 && response.status < 500 && response.status !== 408
-      );
-    }
-    return { providerMessageId: id, acceptedByProvider: true };
   }
 
   sendTemplate(input: { to: string; template: WhatsAppTemplateKey; parameters: string[] }) {

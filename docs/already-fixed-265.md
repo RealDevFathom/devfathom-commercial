@@ -16,4 +16,6 @@ find prisma/migrations -maxdepth 2 -type f -path '*20261022*' -print
 rg -n "minimize_wa_consent|'yes'|'haan'|'ہاں'|'شروع'" prisma/migrations src/lib/pharmacy/whatsapp
 ```
 
-The first command returns no files. The second finds `شروع` only in the runtime `START` allowlist and finds none of the reported affirmative words in migration logic. Adding another migration would therefore introduce data-changing behavior where the reported contradictory archive operation does not exist. Per the issue's requested already-fixed path, no production code, authorization behavior, dispensing scope, or migration was changed.
+The first command returns no files. The second finds `شروع` only in the runtime `START` allowlist and finds none of the reported affirmative words in migration logic. Adding another migration would therefore introduce data-changing behavior where the reported contradictory archive operation does not exist. No authorization behavior, dispensing scope, or migration was changed.
+
+As a security-review follow-up, [`src/lib/pharmacy/whatsapp/provider.ts` lines 156–168](../src/lib/pharmacy/whatsapp/provider.ts#L156-L168) also enforces the existing live-send block at the Meta provider's network boundary. This is separate from the already-fixed consent classification, and prevents direct provider construction from bypassing the factory-level block.
