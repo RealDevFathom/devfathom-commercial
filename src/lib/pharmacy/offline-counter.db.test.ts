@@ -946,6 +946,65 @@ describeIfDatabase('PH-OFF OFF-03 — per-device lot quotas', () => {
     expect(message).toBe('QUOTA_EXCEEDS_ON_HAND');
   });
 
+  it('reserves quota stock against ordinary online movements until replay consumes it', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'quota-reservation', { units: 10 });
+    await inOrg(ORG_A, (db) =>
+      deps.quotas.grantDeviceLotQuota(db, scopeOf(fixture), {
+        ...bucketOf(fixture),
+        deviceId: fixture.deviceId,
+        units: 10,
+      })
+    );
+
+    const postSale = (db: ScopedDb, idempotencyKey: string) =>
+      db.pharmacyStockMovement.create({
+        data: {
+          organizationId: fixture.organizationId,
+          branchId: fixture.branchId,
+          inventoryLotId: fixture.lotId,
+          stockLocationId: fixture.locationId,
+          kind: 'SALE',
+          disposition: 'AVAILABLE',
+          quantityUnits: -10,
+          sealedPackDelta: -1,
+          looseUnitDelta: 0,
+          actorId: ACTOR,
+          idempotencyKey,
+          occurredAt: NOW,
+        },
+      });
+
+    const onlineSale = await refusal(ORG_A, (db) =>
+      postSale(db, `online-sale-${tag('quota-reservation')}`)
+    );
+    expect(onlineSale).toContain('OFFLINE_QUOTA_RESERVED');
+
+    // Replay consumes its quota in the same transaction before posting stock,
+    // so the owning device can still turn its physical sale into ledger stock.
+    await inOrg(ORG_A, async (db) => {
+      await deps.quotas.consumeDeviceLotQuota(db, scopeOf(fixture), {
+        ...bucketOf(fixture),
+        deviceId: fixture.deviceId,
+        units: 10,
+      });
+      await postSale(db, `offline-replay-${tag('quota-reservation')}`);
+    });
+
+    const balance = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockBalance.findUniqueOrThrow({
+        where: {
+          organizationId_inventoryLotId_stockLocationId_disposition: {
+            organizationId: fixture.organizationId,
+            inventoryLotId: fixture.lotId,
+            stockLocationId: fixture.locationId,
+            disposition: 'AVAILABLE',
+          },
+        },
+      })
+    );
+    expect(balance.onHandUnits).toBe(0);
+  });
+
   it('consumption is monotonic and cannot pass the granted amount', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'quota-monotonic', { units: 20 });
     const quota = await inOrg(ORG_A, (db) =>
