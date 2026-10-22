@@ -3,6 +3,7 @@ import 'server-only';
 import { getModelForTier, AIUnavailableError, type AIModelSelection } from './provider';
 import type { TieredAIProviderName } from './model-defaults';
 import type { AITier } from './tiers';
+import { sendAIBudgetNotice, type AIBudgetNotice } from './budget-alert';
 import {
   readAIRoutingSettings,
   readProviderSpend,
@@ -19,6 +20,7 @@ export type AIRouterDependencies = {
   spend: typeof readProviderSpend;
   model: (provider: TieredAIProviderName, tier: AITier, settings: AIRoutingSettings) => AIModelSelection;
   record: (usage: UsageWrite) => Promise<unknown>;
+  notifyBudget: (notice: AIBudgetNotice) => Promise<unknown>;
 };
 
 let settingsCache: { expiresAt: number; value: AIRoutingSettings | null } | undefined;
@@ -75,6 +77,7 @@ const defaultDependencies: AIRouterDependencies = {
     return { model: getModelForTier(provider, tier, { [tier]: modelId }), provider, modelId };
   },
   record: recordAIUsage,
+  notifyBudget: sendAIBudgetNotice,
 };
 
 export type RouteAIOptions<T> = {
@@ -100,10 +103,29 @@ export async function routeAI<T>(options: RouteAIOptions<T>): Promise<T> {
     throw new AIUnavailableError('DISABLED', 'AI is disabled by the platform routing policy.');
   }
   const bounds = karachiMonthBounds(now);
+  const anthropicSpend = await deps.spend('anthropic', bounds.from, bounds.to);
+  const notice = (event: AIBudgetNotice['event']) =>
+    deps.notifyBudget({
+      event,
+      organizationId: options.organizationId,
+      monthStart: bounds.from,
+      monthEnd: bounds.to,
+      spendUsd: anthropicSpend,
+      budgetUsd: settings.monthlyAnthropicBudgetUsd,
+    });
+  if (
+    settings.monthlyAnthropicBudgetUsd > 0 &&
+    anthropicSpend >= settings.monthlyAnthropicBudgetUsd * 0.8
+  ) {
+    await notice('EIGHTY_PERCENT');
+  }
   let provider: TieredAIProviderName;
   if (settings.mode === 'ForceAnthropic') provider = 'anthropic';
   else if (settings.mode === 'ForceBedrock') provider = 'bedrock';
-  else provider = (await deps.spend('anthropic', bounds.from, bounds.to)) >= settings.monthlyAnthropicBudgetUsd ? 'bedrock' : 'anthropic';
+  else
+    provider =
+      anthropicSpend >= settings.monthlyAnthropicBudgetUsd ? 'bedrock' : 'anthropic';
+  if (settings.mode === 'Auto' && provider === 'bedrock') await notice('BEDROCK_SWITCH');
 
   const attempt = async (selectedProvider: TieredAIProviderName) => {
     const selection = deps.model(selectedProvider, options.tier, settings);

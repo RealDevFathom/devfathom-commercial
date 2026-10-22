@@ -21,6 +21,7 @@ function harness(overrides: Partial<AIRouterDependencies> = {}, settings: AIRout
     settings: async () => settings,
     spend: vi.fn(async () => 0),
     model: (provider) => selection(provider), record,
+    notifyBudget: vi.fn(async () => undefined),
     ...overrides,
   };
   return { deps, record };
@@ -41,6 +42,27 @@ describe('AI router', () => {
       expect((await routed(deps)).value).toBe(expected);
     }
   );
+
+  it.each([
+    [158, 0],
+    [160, 1],
+  ] as const)('alerts at the 80%% boundary (%s)', async (spent, calls) => {
+    const notifyBudget = vi.fn(async () => undefined);
+    const { deps } = harness({ spend: vi.fn(async () => spent), notifyBudget });
+    await routed(deps);
+    expect(
+      notifyBudget.mock.calls.filter(([notice]) => notice.event === 'EIGHTY_PERCENT')
+    ).toHaveLength(calls);
+  });
+
+  it('notifies once when automatic routing switches to Bedrock', async () => {
+    const notifyBudget = vi.fn(async () => undefined);
+    const { deps } = harness({ spend: vi.fn(async () => 200), notifyBudget });
+    expect((await routed(deps)).value).toBe('bedrock');
+    expect(
+      notifyBudget.mock.calls.filter(([notice]) => notice.event === 'BEDROCK_SWITCH')
+    ).toHaveLength(1);
+  });
 
   it.each([
     [{ status: 429 }, '429'], [{ status: 500 }, '500'], [{ statusCode: 503 }, '503'],

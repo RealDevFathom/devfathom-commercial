@@ -29,4 +29,14 @@ describe('AI tiers', () => {
       'database-model'
     );
   });
+
+  it.each(['growth', 'growth-recommendations', 'restaurant-growth', 'whatsapp'])(
+    '%s never resolves to Haiku',
+    (feature) => {
+      const tier = getTierForFeature(feature);
+      expect(tier).toBe('standard');
+      expect(getDefaultModelId('anthropic', tier).toLowerCase()).not.toContain('haiku');
+      expect(getDefaultModelId('bedrock', tier).toLowerCase()).not.toContain('haiku');
+    }
+  );
 });
