@@ -54,8 +54,15 @@ function makeDb() {
     },
     medicine: model(),
     packLevel: model(),
+    camera: model(),
     pharmacyStockLocation: model(),
-    pharmacyManufacturingBatch: model(),
+    pharmacyTemperatureLog: Object.assign(model(), {
+      createMany: vi.fn().mockResolvedValue({ count: 1 }),
+    }),
+    pharmacyManufacturingBatch: Object.assign(model(), {
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+    }),
+    pharmacyRecallNotice: model(),
     pharmacyInventoryLot: model(),
     pharmacyStockMovement: model(),
     pharmacyStockBalance: model(),
@@ -113,6 +120,24 @@ function caller(overrides: { enabledModules?: string[]; userId?: string | null }
     audit: { detail: {} },
   } as unknown as TRPCContext);
 }
+
+type Rule = { capability: string; effect: 'ALLOW' | 'DENY' };
+const allow = (capability: string): Rule => ({ capability, effect: 'ALLOW' });
+const deny = (capability: string): Rule => ({ capability, effect: 'DENY' });
+
+/** What `can()` reads: the member's role rules and their own overrides. */
+function grant(role: Rule[], overrides: Rule[] = []) {
+  db.user.findUnique.mockResolvedValue({
+    organizationRole: { permissions: role },
+    permissionOverrides: overrides,
+  });
+}
+
+/** The capability middleware's refusal, as opposed to a handler's own FORBIDDEN. */
+const CAPABILITY_REFUSAL = {
+  code: 'FORBIDDEN',
+  message: 'You do not have permission for this action.',
+};
 
 beforeEach(() => {
   db = makeDb();
@@ -245,6 +270,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
   });
 
   it('refuses a branch that is not an active branch in the session organization', async () => {
+    grant([allow('pharmacy:inventory')]);
     db.pharmacyBranch.findMany.mockResolvedValueOnce([]);
     await expect(
       caller().createLocation({
@@ -270,6 +296,127 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       })
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(db.pharmacyStockLocation.create).not.toHaveBeenCalled();
+  });
+});
+
+const LOCATION_ROW = {
+  id: 'location_1',
+  coldChain: false,
+  minimumTemperatureC: null,
+  maximumTemperatureC: null,
+};
+
+/** #355: every storage-zone, cold-chain and recall write goes through `can()`. */
+const GATED_MUTATIONS = [
+  {
+    procedure: 'createLocation',
+    capability: 'pharmacy:inventory',
+    input: { branchId: 'branch_a', code: 'FRIDGE-1', name: 'Vaccine fridge', kind: 'FRIDGE' },
+    writes: () => [db.pharmacyStockLocation.create],
+  },
+  {
+    procedure: 'recordTemperature',
+    capability: 'pharmacy:inventory',
+    input: {
+      branchId: 'branch_a',
+      stockLocationId: 'location_1',
+      temperatureC: 5,
+      recordedAt: new Date('2026-10-22T08:00:00.000Z'),
+    },
+    writes: () => [db.pharmacyTemperatureLog.createMany],
+  },
+  {
+    procedure: 'importTemperatureCsv',
+    capability: 'pharmacy:inventory',
+    input: {
+      branchId: 'branch_a',
+      stockLocationId: 'location_1',
+      csv: 'recordedAt,temperatureC\n2026-10-22T08:00:00.000Z,5\n',
+    },
+    writes: () => [db.pharmacyTemperatureLog.createMany],
+  },
+  {
+    procedure: 'configureTemperatureMonitoring',
+    capability: 'pharmacy:inventory',
+    input: {
+      branchId: 'branch_a',
+      stockLocationId: 'location_1',
+      expectedTemperatureReadingIntervalMinutes: 30,
+      temperatureExcursionDurationMinutes: 60,
+    },
+    writes: () => [db.pharmacyStockLocation.update],
+  },
+  {
+    procedure: 'createRecall',
+    capability: 'pharmacy:safety',
+    input: { batchId: 'batch_1', reference: 'DRAP-R-1', reason: 'Contaminated lot' },
+    writes: () => [db.pharmacyManufacturingBatch.updateMany, db.pharmacyRecallNotice.create],
+  },
+] as const;
+
+describe.each(GATED_MUTATIONS)(
+  '#355 — $procedure requires $capability',
+  ({ procedure, capability, input, writes }) => {
+    const run = () => caller()[procedure](input as never);
+
+    beforeEach(() => {
+      // The zone exists in the branch, so only the capability check can refuse.
+      db.pharmacyStockLocation.findFirst.mockResolvedValue(LOCATION_ROW);
+    });
+
+    it('refuses a member without the capability before any read or write', async () => {
+      grant([allow('pharmacy:counter'), allow('pharmacy:orders')]);
+      await expect(run()).rejects.toMatchObject(CAPABILITY_REFUSAL);
+      expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+      expect(db.pharmacyStockLocation.findFirst).not.toHaveBeenCalled();
+      for (const write of writes()) expect(write).not.toHaveBeenCalled();
+    });
+
+    it('runs for the exact grant', async () => {
+      grant([allow(capability)]);
+      await run();
+      for (const write of writes()) expect(write).toHaveBeenCalledTimes(1);
+    });
+
+    it('lets a user DENY override beat a role ALLOW', async () => {
+      grant([allow(capability)], [deny(capability)]);
+      await expect(run()).rejects.toMatchObject(CAPABILITY_REFUSAL);
+      for (const write of writes()) expect(write).not.toHaveBeenCalled();
+    });
+
+    // Needs fix/abac-deny-precedence (6b120a50): can() on this base reads user
+    // overrides before role rules, so a user ALLOW still beats a role DENY. This
+    // case passes on a local merge with 6b120a50; make it a plain `it` once merged.
+    it.fails('lets a role DENY beat a user ALLOW override', async () => {
+      grant([deny(capability)], [allow(capability)]);
+      await expect(run()).rejects.toMatchObject(CAPABILITY_REFUSAL);
+      for (const write of writes()) expect(write).not.toHaveBeenCalled();
+    });
+  }
+);
+
+describe('#355 — wildcard grants', () => {
+  it.each(GATED_MUTATIONS.filter((gated) => gated.capability === 'pharmacy:inventory'))(
+    'lets the Owner template (pharmacy:*) run $procedure',
+    async ({ procedure, input, writes }) => {
+      db.pharmacyStockLocation.findFirst.mockResolvedValue(LOCATION_ROW);
+      grant([allow('pharmacy:*')]);
+      await caller()[procedure](input as never);
+      for (const write of writes()) expect(write).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('does not let pharmacy:* raise a recall: pharmacy:safety is an exact grant', async () => {
+    grant([allow('pharmacy:*'), allow('pharmacy:inventory')]);
+    await expect(
+      caller().createRecall({
+        batchId: 'batch_1',
+        reference: 'DRAP-R-1',
+        reason: 'Contaminated lot',
+      })
+    ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    expect(db.pharmacyManufacturingBatch.updateMany).not.toHaveBeenCalled();
+    expect(db.pharmacyRecallNotice.create).not.toHaveBeenCalled();
   });
 });
 

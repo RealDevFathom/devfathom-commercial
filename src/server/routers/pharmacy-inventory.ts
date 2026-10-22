@@ -80,6 +80,9 @@ import type { TRPCContext } from '../trpc';
 const branchId = z.string().trim().min(1).max(128);
 const expiryPrecision = z.enum(['DAY', 'MONTH']);
 const regulatory = capabilityProcedure('pharmacy:safety');
+// Storage zones and their cold-chain readings belong to whoever runs the stock
+// (the Inventory role, or `pharmacy:*`). Checked through `can()` before any read.
+const inventoryControl = capabilityProcedure('pharmacy:inventory');
 const drapNotice = z.discriminatedUnion('kind', [
   z
     .object({
@@ -601,7 +604,7 @@ export const pharmacyInventoryRouter = router({
       )
     ),
 
-  createLocation: protectedProcedure
+  createLocation: inventoryControl
     .input(
       z
         .object({
@@ -644,7 +647,7 @@ export const pharmacyInventoryRouter = router({
       });
     }),
 
-  recordTemperature: protectedProcedure
+  recordTemperature: inventoryControl
     .input(
       z
         .object({
@@ -669,7 +672,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  importTemperatureCsv: protectedProcedure
+  importTemperatureCsv: inventoryControl
     .input(
       z
         .object({
@@ -700,7 +703,7 @@ export const pharmacyInventoryRouter = router({
       return loadTemperatureZoneStatuses(ctx.db, scope, new Date());
     }),
 
-  configureTemperatureMonitoring: auditedProtectedProcedure
+  configureTemperatureMonitoring: inventoryControl
     .input(
       z
         .object({
@@ -1150,7 +1153,9 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  createRecall: protectedProcedure
+  // Raising a recall moves every matching batch to RECALLED, the same regulated
+  // state change as setBatchState, so it needs the same exact pharmacy:safety grant.
+  createRecall: regulatory
     .input(
       z
         .object({
