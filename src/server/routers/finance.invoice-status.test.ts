@@ -5,6 +5,15 @@ const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
   findUniqueOrThrow: vi.fn(),
   updateMany: vi.fn(),
+  transactionGroupBy: vi.fn(),
+  paymentGroupBy: vi.fn(),
+  invoiceGroupBy: vi.fn(),
+  recurringFindMany: vi.fn(),
+  paymentAggregate: vi.fn(),
+  paymentCreate: vi.fn(),
+  invoiceUpdate: vi.fn(),
+  transaction: vi.fn(),
+  emitEvent: vi.fn(),
   logActivity: vi.fn(),
 }));
 
@@ -15,6 +24,7 @@ vi.mock('@/lib/abac', async () => ({
 }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: vi.fn(() => true) }));
 vi.mock('../activity', () => ({ logActivity: mocks.logActivity }));
+vi.mock('@/lib/webhooks', () => ({ emitEvent: mocks.emitEvent }));
 vi.mock('../audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
@@ -31,7 +41,12 @@ function caller() {
         findUnique: mocks.findUnique,
         findUniqueOrThrow: mocks.findUniqueOrThrow,
         updateMany: mocks.updateMany,
+        groupBy: mocks.invoiceGroupBy,
       },
+      transaction: { groupBy: mocks.transactionGroupBy },
+      payment: { groupBy: mocks.paymentGroupBy },
+      recurringExpense: { findMany: mocks.recurringFindMany },
+      $transaction: mocks.transaction,
     },
     entitlements: { organizationId: 'org-1', enabledModules: [], modules: [] },
     session: {
@@ -89,5 +104,70 @@ describe('finance.updateInvoiceStatus', () => {
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(mocks.findUniqueOrThrow).not.toHaveBeenCalled();
     expect(mocks.logActivity).not.toHaveBeenCalled();
+  });
+});
+
+describe('finance.getFinancialSummary', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.transactionGroupBy.mockResolvedValue([]);
+    mocks.paymentGroupBy.mockResolvedValue([{ currency: 'USD', _sum: { amount: 100 } }]);
+    mocks.invoiceGroupBy.mockResolvedValue([]);
+    mocks.recurringFindMany.mockResolvedValue([]);
+  });
+
+  it('includes a recorded invoice payment in monthly revenue', async () => {
+    const summary = await caller().getFinancialSummary();
+
+    expect(summary.monthlyIncome).toEqual([{ currency: 'USD', amount: 100 }]);
+    expect(summary.monthlyProfit).toEqual([{ currency: 'USD', amount: 100 }]);
+    expect(mocks.paymentGroupBy).toHaveBeenCalledWith({
+      by: ['currency'],
+      _sum: { amount: true },
+      where: { paidAt: { gte: expect.any(Date), lte: expect.any(Date) } },
+    });
+  });
+});
+
+describe('finance.addPayment', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.findUnique.mockResolvedValue({
+      id: 'invoice-584',
+      status: 'SENT',
+      total: 100,
+      currency: 'USD',
+      clientId: 'client-1',
+    });
+    mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: null } });
+    mocks.paymentCreate.mockResolvedValue({ id: 'payment-584', amount: 100 });
+    mocks.invoiceUpdate.mockResolvedValue({ id: 'invoice-584', status: 'PAID' });
+    mocks.transaction.mockImplementation((run: (tx: Record<string, unknown>) => unknown) =>
+      run({
+        invoice: { findUnique: mocks.findUnique, update: mocks.invoiceUpdate },
+        payment: { aggregate: mocks.paymentAggregate, create: mocks.paymentCreate },
+      })
+    );
+  });
+
+  it('persists a full payment and transitions a sent invoice to paid', async () => {
+    const result = await caller().addPayment({ invoiceId: 'invoice-584', amount: 100 });
+
+    expect(mocks.paymentCreate).toHaveBeenCalledWith({
+      data: {
+        invoiceId: 'invoice-584',
+        amount: 100,
+        currency: 'USD',
+        method: null,
+        note: null,
+      },
+    });
+    expect(mocks.invoiceUpdate).toHaveBeenCalledWith({
+      where: { id: 'invoice-584' },
+      data: { status: 'PAID', paidAt: expect.any(Date) },
+    });
+    expect(result).toMatchObject({ amountPaid: 100, balance: 0, status: 'PAID' });
   });
 });

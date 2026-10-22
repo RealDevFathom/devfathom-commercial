@@ -10,6 +10,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { moneyLabel } from '@/lib/finance/currency';
 import { format } from 'date-fns';
+import { toast } from 'sonner';
 
 type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
 
@@ -29,10 +30,29 @@ type InvoiceRowData = {
   status: string;
   currency: string;
   total: unknown;
+  balance: number;
   dueDate: Date | string;
   client: { name: string };
   project: { name: string } | null;
 };
+
+type InvoiceStatusActions = {
+  updateStatus: (input: { id: string; status: InvoiceStatus }) => void;
+  addPayment: (input: { invoiceId: string; amount: number }) => void;
+};
+
+export function applyInvoiceStatusSelection(
+  invoice: Pick<InvoiceRowData, 'id' | 'status' | 'balance'>,
+  status: InvoiceStatus,
+  actions: InvoiceStatusActions
+) {
+  if (invoice.status === status) return;
+  if (status === 'PAID') {
+    actions.addPayment({ invoiceId: invoice.id, amount: invoice.balance });
+    return;
+  }
+  actions.updateStatus({ id: invoice.id, status });
+}
 
 export function InvoicesTab() {
   const utils = trpc.useUtils();
@@ -49,19 +69,32 @@ export function InvoicesTab() {
       );
       return { previous };
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       if (ctx?.previous) {
         utils.finance.getInvoices.setData(undefined, ctx.previous);
       }
+      toast.error(err.message || 'Could not update the invoice status.');
     },
     onSettled: () => {
       utils.finance.getFinancialSummary.invalidate();
     },
   });
 
+  const { mutate: addPayment } = trpc.finance.addPayment.useMutation({
+    onSuccess: () => {
+      utils.finance.getInvoices.invalidate();
+      utils.finance.getFinancialSummary.invalidate();
+    },
+    onError: (err) => toast.error(err.message || 'Could not record the payment.'),
+  });
+
   const handleUpdateStatus = useCallback(
-    (id: string, status: InvoiceStatus) => mutateStatus({ id, status }),
-    [mutateStatus]
+    (invoice: InvoiceRowData, status: InvoiceStatus) =>
+      applyInvoiceStatusSelection(invoice, status, {
+        updateStatus: mutateStatus,
+        addPayment,
+      }),
+    [addPayment, mutateStatus]
   );
 
   // Virtualize against the app's scrollable <main> ancestor so the list can grow
@@ -174,7 +207,7 @@ const InvoiceRow = memo(function InvoiceRow({
   onUpdateStatus,
 }: {
   inv: InvoiceRowData;
-  onUpdateStatus: (id: string, status: InvoiceStatus) => void;
+  onUpdateStatus: (invoice: InvoiceRowData, status: InvoiceStatus) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -251,7 +284,7 @@ const InvoiceRow = memo(function InvoiceRow({
                   <button
                     key={s}
                     onClick={() => {
-                      onUpdateStatus(inv.id, s);
+                      onUpdateStatus(inv, s);
                       setMenuOpen(false);
                     }}
                     className={cn(
@@ -271,7 +304,7 @@ const InvoiceRow = memo(function InvoiceRow({
                               : 'bg-muted-foreground'
                       )}
                     />
-                    {statusConfig[s].label}
+                    {s === 'PAID' ? 'Record as paid' : statusConfig[s].label}
                   </button>
                 ))}
               </div>
