@@ -65,8 +65,12 @@ describe('CRM-L01 pharmacy loyalty', () => {
 
   it('updates WhatsApp consent on the matching tenant pharmacy customer', async () => {
     const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const findFirst = vi.fn().mockResolvedValue({ patientId: 'patient-a' });
+    const queryRaw = vi.fn().mockResolvedValueOnce([{ id: 'patient-a' }]).mockResolvedValueOnce([
+      { patientId: 'patient-a' },
+    ]);
     const result = await setCustomerWhatsAppOptIn(
-      { pharmacyCustomer: { updateMany } } as never,
+      { pharmacyCustomer: { findFirst, updateMany }, $queryRaw: queryRaw } as never,
       scope,
       'customer-a',
       true
@@ -77,14 +81,22 @@ describe('CRM-L01 pharmacy loyalty', () => {
       data: { whatsappOptIn: true, whatsappOptInChangedAt: expect.any(Date) },
     });
     expect(result).toMatchObject({ whatsappOptIn: true });
+    expect(queryRaw).toHaveBeenCalledTimes(2);
+    expect(queryRaw.mock.invocationCallOrder[1]).toBeLessThan(
+      updateMany.mock.invocationCallOrder[0]
+    );
   });
 
   it('fails closed when no tenant pharmacy customer matches WhatsApp consent', async () => {
     const updateMany = vi.fn().mockResolvedValue({ count: 0 });
+    const findFirst = vi.fn().mockResolvedValue({ patientId: 'patient-a' });
+    const queryRaw = vi.fn().mockResolvedValueOnce([{ id: 'patient-a' }]).mockResolvedValueOnce([
+      { patientId: 'patient-a' },
+    ]);
 
     await expect(
       setCustomerWhatsAppOptIn(
-        { pharmacyCustomer: { updateMany } } as never,
+        { pharmacyCustomer: { findFirst, updateMany }, $queryRaw: queryRaw } as never,
         scope,
         'customer-from-another-tenant',
         false

@@ -388,6 +388,7 @@ export async function setCustomerWhatsAppOptIn(
   customerId: string,
   optedIn: boolean
 ) {
+  await lockCustomerConsent(db, scope.organizationId, customerId);
   const changedAt = new Date();
   const result = await db.pharmacyCustomer.updateMany({
     where: { id: customerId, organizationId: scope.organizationId, active: true },

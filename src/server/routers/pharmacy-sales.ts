@@ -318,6 +318,36 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
   }
 }
 
+async function customerConsentScope(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await branchScopeOrForbidden(ctx, branch);
+  const user = ctx.session!.user;
+  if (
+    ctx.organization?.vertical !== 'PHARMACY' ||
+    ctx.organization.id !== scope.organizationId ||
+    user.organizationId !== scope.organizationId ||
+    !hasModule(ctx.entitlements, 'pharmacy-counter') ||
+    !(await can(subjectFromSession(user), 'pharmacy:counter', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }))
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
+  }
+  const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: branch,
+      userId: user.id,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { id: true },
+  });
+  if (!assignment)
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  return scope;
+}
+
 async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
@@ -574,11 +604,9 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await setCustomerWhatsAppOptIn(
-          ctx.db,
-          await scopeFor(ctx, input.branchId),
-          input.customerId,
-          input.optedIn
+        const scope = await customerConsentScope(ctx, input.branchId);
+        return await ctx.db.$transaction((tx) =>
+          setCustomerWhatsAppOptIn(txDb(tx), scope, input.customerId, input.optedIn)
         );
       } catch (error) {
         fail(error);
