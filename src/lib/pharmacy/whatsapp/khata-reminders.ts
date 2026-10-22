@@ -17,8 +17,7 @@ import {
   type WhatsAppProvider,
 } from './provider';
 
-const DAY_MS = 86_400_000;
-const WEEK_MS = 7 * DAY_MS;
+const KHATA_REMINDER_TIME_ZONE = 'Asia/Karachi';
 
 /** Do not nag over a few paisa: a reminder needs a real outstanding balance. */
 const DEFAULT_MIN_BALANCE_MINOR = 10_000;
@@ -32,9 +31,9 @@ export type KhataReminderCandidate = {
 /**
  * CRM-L06 pure reminder plan for one family khata account. A reminder is due
  * only when the account carries an overdue, unsettled balance at or above the
- * floor. The dedupe key buckets by account x week, so the scheduled job nudges
- * an overdue payer at most once per week until the balance clears — never a
- * promotion, only the utility fact that money is owed.
+ * floor. The dedupe key buckets by account x Karachi ISO week, so the
+ * scheduled job nudges an overdue payer at most once per week until the balance
+ * clears — never a promotion, only the utility fact that money is owed.
  */
 export function planKhataReminder(
   candidate: KhataReminderCandidate,
@@ -47,7 +46,7 @@ export function planKhataReminder(
     candidate.oldestOverdueAt.getTime() <= now.getTime() &&
     Number.isSafeInteger(candidate.balanceMinor) &&
     candidate.balanceMinor >= floor;
-  const week = Math.floor(now.getTime() / WEEK_MS);
+  const week = karachiIsoWeek(now);
   return {
     due,
     dueDate: candidate.oldestOverdueAt
@@ -55,6 +54,25 @@ export function planKhataReminder(
       : null,
     dedupeKey: `khata:${candidate.familyAccountId}:w${week}`,
   };
+}
+
+/** ISO week for the Karachi calendar date, independent of the worker's host timezone. */
+function karachiIsoWeek(now: Date): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: KHATA_REMINDER_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value);
+  const date = new Date(Date.UTC(value('year'), value('month') - 1, value('day')));
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - day);
+  const isoYear = date.getUTCFullYear();
+  const yearStart = new Date(Date.UTC(isoYear, 0, 1));
+  const isoWeek = Math.ceil((Number(date) - Number(yearStart) + 86_400_000) / 604_800_000);
+  return `${isoYear}-${String(isoWeek).padStart(2, '0')}`;
 }
 
 type DueAccount = {
@@ -76,6 +94,7 @@ export type KhataReminderRunResult = {
   failed: number;
   duplicate: number;
   skippedNoConsent: number;
+  skippedQuietHours: number;
   notDue: number;
 };
 
@@ -108,6 +127,7 @@ export async function processDueWhatsAppKhataReminders(
     failed: 0,
     duplicate: 0,
     skippedNoConsent: 0,
+    skippedQuietHours: 0,
     notDue: 0,
   };
   const organizationId = config.organizationId;
@@ -168,7 +188,7 @@ export async function processDueWhatsAppKhataReminders(
           hourCycle: 'h23',
         }).format(now)
       );
-      if (hour >= 22 || hour < 8) return null;
+      if (hour >= 22 || hour < 8) return { outcome: 'QUIET_HOURS' as const };
       const customer = await db.pharmacyCustomer.findFirst({
         where: { organizationId: account.organizationId, id: account.payerCustomerId },
         select: {
@@ -220,10 +240,20 @@ export async function processDueWhatsAppKhataReminders(
         templateName: config.templates.khataReminder,
         dueDate: plan.dueDate,
       });
-      return { customerId: customer.id, patientId: customer.patientId, to, logId };
+      return {
+        outcome: 'RECIPIENT' as const,
+        customerId: customer.id,
+        patientId: customer.patientId,
+        to,
+        logId,
+      };
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
+      continue;
+    }
+    if (recipient.outcome === 'QUIET_HOURS') {
+      result.skippedQuietHours += 1;
       continue;
     }
     if (!recipient.logId) {

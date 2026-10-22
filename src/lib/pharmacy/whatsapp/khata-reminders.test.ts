@@ -121,7 +121,7 @@ describe('planKhataReminder', () => {
       NOW
     );
     expect(plan).toMatchObject({ due: true, dueDate: '2026-10-21' });
-    expect(plan.dedupeKey).toMatch(/^khata:family-1:w\d+$/);
+    expect(plan.dedupeKey).toBe('khata:family-1:w2026-43');
   });
 
   it('is not due without an overdue charge, below the floor, or in the future', () => {
@@ -160,6 +160,19 @@ describe('planKhataReminder', () => {
     );
     expect(sameInstant.dedupeKey).toBe(base.dedupeKey);
     expect(nextWeek.dedupeKey).not.toBe(base.dedupeKey);
+  });
+
+  it('changes weeks at Monday midnight in Asia/Karachi, not at the UTC epoch boundary', () => {
+    const candidate = {
+      familyAccountId: 'family-1',
+      balanceMinor: 50_000,
+      oldestOverdueAt: NOW,
+    };
+    const sunday = planKhataReminder(candidate, new Date('2026-10-25T18:59:59.999Z'));
+    const monday = planKhataReminder(candidate, new Date('2026-10-25T19:00:00.000Z'));
+
+    expect(sunday.dedupeKey).toBe('khata:family-1:w2026-43');
+    expect(monday.dedupeKey).toBe('khata:family-1:w2026-44');
   });
 });
 
@@ -215,6 +228,28 @@ describe('processDueWhatsAppKhataReminders', () => {
     const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
 
     expect(result).toMatchObject({ scanned: 1, sent: 0, skippedNoConsent: 1 });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
+  it('counts a consented quiet-hours candidate separately from missing consent', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: new Date('2026-10-21T20:00:00.000Z'),
+      config,
+      provider,
+    });
+
+    expect(result).toMatchObject({
+      scanned: 1,
+      sent: 0,
+      skippedNoConsent: 0,
+      skippedQuietHours: 1,
+    });
     expect(provider.calls).toEqual([]);
     expect(store.logs).toEqual([]);
   });
