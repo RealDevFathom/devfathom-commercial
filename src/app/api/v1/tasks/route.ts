@@ -4,6 +4,7 @@ import { withApiAuth } from '@/lib/api-auth';
 import { canAccessProject } from '@/lib/authz';
 import { logActivity } from '@/server/activity';
 import { readJson } from '@/lib/api-json';
+import { labelsBelongToBoard } from '@/lib/task-labels';
 
 // GET /api/v1/tasks?columnId=&assigneeId=&priority=
 export const GET = withApiAuth('tasks:read', async (ctx, request) => {
@@ -78,7 +79,7 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
   const column = await ctx.db.column.findUnique({
     where: { id: input.columnId },
     include: {
-      board: { select: { project: { select: { id: true, name: true } } } },
+      board: { select: { id: true, project: { select: { id: true, name: true } } } },
       defaultAssignees: { select: { userId: true } },
     },
   });
@@ -89,8 +90,9 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     return NextResponse.json({ error: 'You do not have access to that project.' }, { status: 403 });
   }
 
-  // REST-07: validate referenced FKs exist BEFORE the create, so a bad assignee/
-  // label id is a clean 400 instead of a raw Prisma FK violation (500).
+  // REST-07: validate referenced FKs before create, so bad ids produce a clean
+  // 400 instead of a raw Prisma FK violation (500). Labels are additionally
+  // constrained to the selected column's exact board.
   if (input.assigneeIds.length > 0) {
     const found = await ctx.db.user.count({ where: { id: { in: input.assigneeIds } } });
     if (found !== new Set(input.assigneeIds).size) {
@@ -98,9 +100,11 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     }
   }
   if (input.labelIds.length > 0) {
-    const found = await ctx.db.label.count({ where: { id: { in: input.labelIds } } });
-    if (found !== new Set(input.labelIds).size) {
-      return NextResponse.json({ error: 'One or more labelIds do not exist.' }, { status: 400 });
+    if (!(await labelsBelongToBoard(ctx.db.label, column.board.id, input.labelIds))) {
+      return NextResponse.json(
+        { error: 'One or more labelIds are not available on the selected board.' },
+        { status: 400 }
+      );
     }
   }
 

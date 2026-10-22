@@ -12,6 +12,7 @@ import {
   assertTaskAccess,
 } from '../authz';
 import { assertInOrganization, workspaceId } from '../org-refs';
+import { labelsBelongToBoard } from '@/lib/task-labels';
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM".
 function formatDue(date: Date): string {
@@ -1604,6 +1605,19 @@ export const projectsRouter = router({
     .input(z.object({ taskId: z.string(), labelId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       await assertTaskAccess(ctx, input.taskId);
+      const task = await ctx.db.task.findUnique({
+        where: { id: input.taskId },
+        select: { column: { select: { boardId: true } } },
+      });
+      if (
+        !task ||
+        !(await labelsBelongToBoard(ctx.db.label, task.column.boardId, [input.labelId]))
+      ) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Label is not available on the task board',
+        });
+      }
       return ctx.db.taskLabel.create({
         data: { taskId: input.taskId, labelId: input.labelId },
       });
