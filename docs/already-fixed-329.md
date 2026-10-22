@@ -1,9 +1,10 @@
 # GitHub issue #329: already fixed in the current code
 
 Issue #329 reports that the **Comp a bill line** dialog renders identical bill-line options
-with identical visible labels. That report was made against PR #320 at `ddc5a4e6`; neither the
-dialog nor a bill-line picker exists in the current branch, so the reported state cannot be
-reproduced here and porting a label-only patch would create an unused parallel UI.
+with identical visible labels. That report was made against PR #320 at `ddc5a4e6`. The current
+checkout UI has no comp dialog or bill-line picker, so the reported ambiguous choice is already
+absent. Adding a standalone label formatter would not fix a live surface; it would create unused
+parallel UI code.
 
 ## Current-code evidence
 
@@ -21,7 +22,8 @@ reproduced here and porting a label-only patch would create an unused parallel U
   device branch, and requires manager co-authorization. The command does not infer a target from a
   display label.
 
-The current UI therefore has no ambiguous picker to change. If line comping is reintroduced into
-the checkout UI later, it should be designed as a new, server-backed surface and its visible line
-identity should be covered by a focused component test rather than reviving code from the PR #320
-snapshot.
+The current UI therefore has no ambiguous picker to change. The server-side comp operation remains
+available to an exact line identifier, but it is not exposed by this checkout panel. If line
+comping is introduced into the checkout UI later, it should be designed as a server-backed surface
+and its visible line identity should be covered by a focused component test rather than reviving
+code from the PR #320 snapshot.
