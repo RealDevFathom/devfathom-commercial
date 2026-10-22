@@ -17,10 +17,23 @@ export type CounterCartPanelProps = {
 export const NEAR_EXPIRY_DAYS = 90;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const KARACHI_CALENDAR = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Karachi',
+  year: 'numeric',
+  month: 'numeric',
+  day: 'numeric',
+});
 
-/** Whole days until `expiresAt` when under {@link NEAR_EXPIRY_DAYS}; otherwise null. */
+function karachiDay(date: Date): number {
+  const parts = Object.fromEntries(
+    KARACHI_CALENDAR.formatToParts(date).map(({ type, value }) => [type, value])
+  );
+  return Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
+}
+
+/** Karachi calendar days until `expiresAt` when under {@link NEAR_EXPIRY_DAYS}; otherwise null. */
 export function nearExpiryDays(expiresAt: string, now: Date): number | null {
-  const days = Math.floor((new Date(expiresAt).getTime() - now.getTime()) / DAY_MS);
+  const days = (karachiDay(new Date(expiresAt)) - karachiDay(now)) / DAY_MS;
   return days >= 0 && days < NEAR_EXPIRY_DAYS ? days : null;
 }
 

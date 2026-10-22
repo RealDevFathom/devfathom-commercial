@@ -65,6 +65,13 @@ describe('nearExpiryDays', () => {
   ])('%i days out → %s', (days, expected) => {
     expect(nearExpiryDays(inDays(days), NOW)).toBe(expected);
   });
+
+  it('counts Karachi calendar days rather than elapsed 24-hour periods', () => {
+    const afterKarachiMidnight = new Date('2026-09-29T20:00:00.000Z');
+
+    expect(nearExpiryDays('2026-09-30T19:00:00.000Z', afterKarachiMidnight)).toBe(1);
+    expect(nearExpiryDays('2026-12-28T19:00:00.000Z', afterKarachiMidnight)).toBeNull();
+  });
 });
 
 describe('CounterCartPanel FEFO chips', () => {
