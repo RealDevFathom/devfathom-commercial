@@ -1,0 +1,89 @@
+{
+  "happyPath": {
+    "organizationId": "abbasi-pharmacie",
+    "year": 2026,
+    "items": [
+      {
+        "category": "Personal care",
+        "sellingPriceMinor": 1000,
+        "costMinor": 800,
+        "mrpMinor": 1100,
+        "isPrescription": false,
+        "isControlled": false
+      },
+      {
+        "category": "Vitamins",
+        "sellingPriceMinor": 2000,
+        "costMinor": 1500,
+        "mrpMinor": 2200,
+        "isPrescription": false,
+        "isControlled": false
+      }
+    ],
+    "proposals": [
+      { "eventId": "2026:fitr", "category": "Personal care", "percent": 75 },
+      { "eventId": "2026:payday:1:window", "category": "Vitamins", "percent": 10 }
+    ],
+    "expectedDrafts": [
+      {
+        "status": "PENDING",
+        "sourceLabel": "DevFathom AI",
+        "category": "Personal care",
+        "percent": 20,
+        "from": "2026-03-20",
+        "to": "2026-03-20",
+        "event": "EID_UL_FITR",
+        "model": "smart-model",
+        "tier": "standard"
+      },
+      {
+        "status": "PENDING",
+        "sourceLabel": "DevFathom AI",
+        "category": "Vitamins",
+        "percent": 10,
+        "from": "2025-12-25",
+        "to": "2026-01-01",
+        "event": "PAYDAY",
+        "model": "smart-model",
+        "tier": "standard"
+      }
+    ]
+  },
+  "regulatedAndInvalidInputs": {
+    "items": [
+      {
+        "category": "Prescription medicine",
+        "sellingPriceMinor": 1000,
+        "costMinor": 100,
+        "mrpMinor": 1000,
+        "isPrescription": true,
+        "isControlled": false
+      },
+      {
+        "category": "Controlled medicine",
+        "sellingPriceMinor": 1000,
+        "costMinor": 100,
+        "mrpMinor": 1000,
+        "isPrescription": false,
+        "isControlled": true
+      },
+      {
+        "category": "Above MRP",
+        "sellingPriceMinor": 1200,
+        "costMinor": 500,
+        "mrpMinor": 1100,
+        "isPrescription": false,
+        "isControlled": false
+      },
+      {
+        "category": "Fractional minor units",
+        "sellingPriceMinor": 1000.5,
+        "costMinor": 500,
+        "mrpMinor": 1100,
+        "isPrescription": false,
+        "isControlled": false
+      }
+    ],
+    "expectedDrafts": []
+  }
+}

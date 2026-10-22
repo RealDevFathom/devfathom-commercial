@@ -86,6 +86,10 @@ type AuditValue = { old: unknown; new: unknown; model: string; tier: typeof AI_D
 export type DiscountSchedulerDependencies = {
   loadConfig: (organizationId: string) => Promise<SchedulerConfig>;
   loadItems: (organizationId: string) => Promise<readonly DiscountableItem[]>;
+  findPendingDraft: (
+    organizationId: string,
+    draft: PendingDiscountDraft
+  ) => Promise<{ id: string } | null>;
   savePendingDraft: (
     organizationId: string,
     draft: PendingDiscountDraft
@@ -292,6 +296,7 @@ export async function scheduleDiscountDrafts(
   });
 
   const drafts: PendingDiscountDraft[] = [];
+  const handledDrafts = new Set<string>();
   for (const proposal of proposals.proposals) {
     const event = events.find((candidate) => candidate.id === proposal.eventId);
     const cap = categoryCaps.get(proposal.category);
@@ -308,6 +313,20 @@ export async function scheduleDiscountDrafts(
       model: usedModel,
       tier: AI_DISCOUNT_TIER,
     };
+    const draftKey = JSON.stringify(draft);
+    if (handledDrafts.has(draftKey)) continue;
+    handledDrafts.add(draftKey);
+    const existing = await dependencies.findPendingDraft(input.organizationId, draft);
+    if (existing) {
+      await audit(input.organizationId, input.actor, 'draftReused', {
+        old: { id: existing.id, ...draft },
+        new: { id: existing.id, ...draft },
+        model: usedModel,
+        tier: AI_DISCOUNT_TIER,
+      });
+      drafts.push(draft);
+      continue;
+    }
     const saved = await dependencies.savePendingDraft(input.organizationId, draft);
     await audit(input.organizationId, input.actor, 'draftCreated', {
       old: null,
