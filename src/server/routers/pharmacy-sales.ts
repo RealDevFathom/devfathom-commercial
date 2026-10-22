@@ -2,7 +2,7 @@ import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restorati
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
   PharmacyRxReferenceError,
-  recordPrescriptionReference,
+  attachPrescriptionReference,
   resolvePrescriptionReference,
 } from '@/lib/pharmacy/rx-prescription-reference';
 import { hasModule } from '@/lib/entitlements';
@@ -980,10 +980,9 @@ export const pharmacySalesRouter = router({
               units,
             });
             const result = await addSaleLine(db, scope, lineInput);
-            await recordPrescriptionReference(db, scope, {
+            await attachPrescriptionReference(db, scope, {
               ...reference,
               saleLineId: result.line.id,
-              units,
             });
             annotateAudit(ctx, {
               metadata: {

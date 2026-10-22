@@ -51,7 +51,7 @@ export async function resolvePrescriptionReference(
     units: number;
   },
   now: Date = new Date()
-): Promise<{ prescriptionLineId: string; fillSequence: number }> {
+): Promise<{ prescriptionLineId: string }> {
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${input.prescriptionLineId} FOR UPDATE`
   );
@@ -91,29 +91,96 @@ export async function resolvePrescriptionReference(
     line.fills.length > line.prescription.authorizedRepeats
   )
     throw new PharmacyRxReferenceError('PRESCRIPTION_EXHAUSTED');
-  return { prescriptionLineId: line.id, fillSequence: line.fills.length + 1 };
+  return { prescriptionLineId: line.id };
 }
 
 /**
- * Records a resolved reference as the controlled path records its fill: an immutable
- * prescription fill by the dispensing pharmacist (the actor, who holds pharmacy:dispense to get
- * here), keyed to the sale line. The database trigger re-checks the remaining quantity and
- * repeats. No RX-03 review decision is written: the model forbids the requester signing it, so
- * a SIGN stays a second pharmacist's act in the review queue.
+ * Persists the validated reference on the open sale line without consuming prescription
+ * quantity. The immutable fill is created only if the sale completes.
  */
-export async function recordPrescriptionReference(
+export async function attachPrescriptionReference(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { prescriptionLineId: string; fillSequence: number; saleLineId: string; units: number }
+  input: { prescriptionLineId: string; saleLineId: string }
 ): Promise<void> {
+  await db.pharmacySaleLine.update({
+    where: { organizationId_id: { organizationId: scope.organizationId, id: input.saleLineId } },
+    data: { prescriptionLineId: input.prescriptionLineId },
+  });
+}
+
+/** Creates the fill for a referenced line while completion holds the surrounding sale lock. */
+export async function recordCompletedPrescriptionReference(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: {
+    id: string;
+    organizationId: string;
+    branchId: string;
+    medicineId: string;
+    presentationId: string;
+    canonicalUnits: number;
+    prescriptionLineId: string;
+  },
+  now: Date = new Date()
+): Promise<void> {
+  if (input.organizationId !== scope.organizationId || input.branchId !== scope.branchId)
+    throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_FOUND');
+  const idempotencyKey = `rx-reference:${input.id}`;
+  if (
+    await db.prescriptionFill.findUnique({
+      where: {
+        organizationId_idempotencyKey: { organizationId: scope.organizationId, idempotencyKey },
+      },
+      select: { id: true },
+    })
+  )
+    return;
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${input.prescriptionLineId} FOR UPDATE`
+  );
+  // Recheck after waiting for the line lock: a concurrent completion may have inserted this fill.
+  if (
+    await db.prescriptionFill.findUnique({
+      where: {
+        organizationId_idempotencyKey: { organizationId: scope.organizationId, idempotencyKey },
+      },
+      select: { id: true },
+    })
+  )
+    return;
+  const line = await db.prescriptionLine.findFirst({
+    where: {
+      id: input.prescriptionLineId,
+      organizationId: scope.organizationId,
+      medicineId: input.medicineId,
+      presentationId: input.presentationId,
+    },
+    select: {
+      authorizedCanonicalUnits: true,
+      prescription: { select: { validFrom: true, validUntil: true, authorizedRepeats: true } },
+      fills: { select: { quantityCanonicalUnits: true } },
+    },
+  });
+  if (!line) throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_FOUND');
+  if (line.prescription.validFrom > now || line.prescription.validUntil <= now)
+    throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_IN_DATE');
+  const filled = line.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0);
+  if (
+    !Number.isSafeInteger(input.canonicalUnits) ||
+    input.canonicalUnits <= 0 ||
+    filled + input.canonicalUnits > line.authorizedCanonicalUnits ||
+    line.fills.length > line.prescription.authorizedRepeats
+  )
+    throw new PharmacyRxReferenceError('PRESCRIPTION_EXHAUSTED');
   await db.prescriptionFill.create({
     data: {
       organizationId: scope.organizationId,
       prescriptionLineId: input.prescriptionLineId,
-      fillSequence: input.fillSequence,
-      quantityCanonicalUnits: input.units,
+      fillSequence: line.fills.length + 1,
+      quantityCanonicalUnits: input.canonicalUnits,
       dispensedByUserId: scope.actorId,
-      idempotencyKey: `rx-reference:${input.saleLineId}`,
+      idempotencyKey,
     },
   });
 }

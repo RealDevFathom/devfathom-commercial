@@ -36,7 +36,6 @@ const NOT_FOUND = refused(
 );
 const PATIENT_MISMATCH = refused('That prescription belongs to a different patient.');
 const NOT_IN_DATE = refused('That prescription is outside its validity period.');
-const EXHAUSTED = refused('That prescription has no remaining quantity or repeats for this line.');
 const NEEDS_PHARMACIST = refused(
   'Only a pharmacist with the dispensing permission can record a prescription against a line.',
   'FORBIDDEN'
@@ -53,6 +52,12 @@ type SalesCaller = {
   addLine: (input: Record<string, unknown>) => Promise<{ line: { id: string } }>;
   linkCustomer: (input: Record<string, unknown>) => Promise<unknown>;
   counterCart: (input: { branchId: string; saleId: string }) => Promise<{ lines: unknown[] }>;
+  transition: (input: {
+    branchId: string;
+    saleId: string;
+    action: 'void';
+    reason: string;
+  }) => Promise<unknown>;
 };
 
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
@@ -70,6 +75,10 @@ const lines = {
   bilal: '',
   otcForAyesha: '',
   otherOrg: '',
+  voided: '',
+  completed: '',
+  retried: '',
+  concurrent: '',
 };
 
 function act<T>(userId: string, run: (api: SalesCaller, db: ScopedDb) => Promise<T>) {
@@ -369,6 +378,15 @@ beforeAll(async () => {
       medicine: otc,
       authorizedCanonicalUnits: 100,
     });
+    for (const name of ['voided', 'completed', 'retried', 'concurrent'] as const) {
+      lines[name] = await prescriptionLine(tx, ids.org, {
+        ...forAyesha,
+        ...current,
+        medicine: rx,
+        authorizedCanonicalUnits: 10,
+        authorizedRepeats: 3,
+      });
+    }
   });
   // The same medicine and patient shape in another organization, invisible to this one.
   await withTenantDb(ids.otherOrg, async (tx) => {
@@ -463,37 +481,95 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     await expectRefused(ids.cashier, otc, withReference(lines.otcForAyesha), NEEDS_PHARMACIST);
   });
 
-  it('accepts a valid reference for a dispense holder, records the fill, then refuses the used-up remainder', async () => {
+  async function addReferencedSale(prescriptionLineId: string) {
     const saleId = await newSale(ids.pharmacist);
     const added = await act(ids.pharmacist, (api) =>
-      api.addLine(line(saleId, rx, withReference(lines.valid)))
+      api.addLine(line(saleId, rx, withReference(prescriptionLineId)))
     );
-    const recorded = await withTenantDb(ids.org, async (tx) => ({
-      fills: await tx.prescriptionFill.findMany({
-        where: { prescriptionLineId: lines.valid },
-        select: {
-          fillSequence: true,
-          quantityCanonicalUnits: true,
-          dispensedByUserId: true,
-          idempotencyKey: true,
-        },
-      }),
-      // RX-03 forbids the requester signing, so no review decision is fabricated here.
-      reviews: await tx.pharmacyPharmacistReviewItem.count({
-        where: { prescriptionLineId: lines.valid },
-      }),
-    }));
-    expect(recorded).toEqual({
-      fills: [
-        {
-          fillSequence: 1,
-          quantityCanonicalUnits: 10,
-          dispensedByUserId: ids.pharmacist,
-          idempotencyKey: `rx-reference:${added.line.id}`,
-        },
-      ],
-      reviews: 0,
+    return { saleId, saleLineId: added.line.id };
+  }
+
+  async function recordCompletion(saleLineId: string) {
+    const { recordCompletedPrescriptionReference } = await import(
+      '@/lib/pharmacy/rx-prescription-reference'
+    );
+    return withTenantDb(
+      ids.org,
+      async (tx) => {
+        const saleLine = await tx.pharmacySaleLine.findFirstOrThrow({
+          where: { id: saleLineId, organizationId: ids.org, branchId: ids.branch },
+        });
+        if (!saleLine.prescriptionLineId) throw new Error('missing prescription reference');
+        await recordCompletedPrescriptionReference(
+          tx,
+          { organizationId: ids.org, branchId: ids.branch, actorId: ids.pharmacist },
+          { ...saleLine, prescriptionLineId: saleLine.prescriptionLineId }
+        );
+      },
+      { userId: ids.pharmacist }
+    );
+  }
+
+  it('leaves prescription quantity unconsumed when an added line is voided', async () => {
+    const added = await addReferencedSale(lines.voided);
+    await act(ids.pharmacist, (api) =>
+      api.transition({
+        branchId: ids.branch,
+        saleId: added.saleId,
+        action: 'void',
+        reason: 'Patient cancelled before payment',
+      })
+    );
+    await expect(
+      withTenantDb(ids.org, (tx) =>
+        tx.prescriptionFill.count({ where: { prescriptionLineId: lines.voided } })
+      )
+    ).resolves.toBe(0);
+  });
+
+  it('consumes prescription quantity at completion, not at addLine', async () => {
+    const added = await addReferencedSale(lines.completed);
+    await expect(
+      withTenantDb(ids.org, (tx) =>
+        tx.prescriptionFill.count({ where: { prescriptionLineId: lines.completed } })
+      )
+    ).resolves.toBe(0);
+    await recordCompletion(added.saleLineId);
+    await expect(
+      withTenantDb(ids.org, (tx) =>
+        tx.prescriptionFill.findFirst({ where: { prescriptionLineId: lines.completed } })
+      )
+    ).resolves.toMatchObject({
+      quantityCanonicalUnits: 10,
+      dispensedByUserId: ids.pharmacist,
+      idempotencyKey: `rx-reference:${added.saleLineId}`,
     });
-    await expectRefused(ids.pharmacist, rx, withReference(lines.valid), EXHAUSTED);
+  });
+
+  it('makes completion retries idempotent', async () => {
+    const added = await addReferencedSale(lines.retried);
+    await recordCompletion(added.saleLineId);
+    await recordCompletion(added.saleLineId);
+    await expect(
+      withTenantDb(ids.org, (tx) =>
+        tx.prescriptionFill.count({ where: { prescriptionLineId: lines.retried } })
+      )
+    ).resolves.toBe(1);
+  });
+
+  it('does not let two concurrent completions over-fill a prescription', async () => {
+    const first = await addReferencedSale(lines.concurrent);
+    const second = await addReferencedSale(lines.concurrent);
+    const outcomes = await Promise.allSettled([
+      recordCompletion(first.saleLineId),
+      recordCompletion(second.saleLineId),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
+    await expect(
+      withTenantDb(ids.org, (tx) =>
+        tx.prescriptionFill.count({ where: { prescriptionLineId: lines.concurrent } })
+      )
+    ).resolves.toBe(1);
   });
 });

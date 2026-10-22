@@ -1464,12 +1464,14 @@ model PharmacySaleLine {
   discountMinor             Int                          @default(0)
   approvalPolicy            String?
   approvedByUserId          String?
+  prescriptionLineId        String?
   idempotencyKey            String
   createdAt                 DateTime                     @default(now())
   sale                      PharmacySale                 @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
   medicine                  Medicine                     @relation(fields: [medicineId], references: [id], onDelete: Restrict)
   presentation              Presentation                 @relation(fields: [presentationId], references: [id], onDelete: Restrict)
   packLevel                 PackLevel                    @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
+  prescriptionLine          PrescriptionLine?            @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict)
   allocations               PharmacySaleLineAllocation[]
   returnLines               PharmacySaleReturnLine[]
   unidentifiedReturnHolds   PharmacyUnidentifiedReturnHold[]
@@ -12275,6 +12277,7 @@ model PrescriptionLine {
   medicine                  Medicine                          @relation(fields: [medicineId], references: [id], onDelete: Restrict)
   presentation              Presentation                      @relation(fields: [presentationId], references: [id], onDelete: Restrict)
   fills                     PrescriptionFill[]
+  saleLines                 PharmacySaleLine[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, prescriptionId, lineNumber])

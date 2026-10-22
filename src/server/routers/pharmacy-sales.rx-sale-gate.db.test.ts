@@ -417,11 +417,7 @@ describeIfDatabase('Rx/restricted sale gate with persisted roles (#518 launch fi
       await expectRefusedEverywhere(ids.userDenied, FORBIDDEN);
     });
 
-    // Role DENY over a user ALLOW override is decided in src/lib/abac/index.ts, which still lets a
-    // matching user ALLOW return before role rules are read. The central fix is 6b120a50 on
-    // fix/abac-deny-precedence (not on main yet); with it merged this case passes, so turn
-    // `it.fails` back into `it` when 6b120a50 lands.
-    it.fails('refuses a role DENY over a user pharmacy:dispense ALLOW everywhere', async () => {
+    it('refuses a role DENY over a user pharmacy:dispense ALLOW everywhere', async () => {
       await expectRefusedEverywhere(ids.roleDenied, FORBIDDEN);
     });
   });

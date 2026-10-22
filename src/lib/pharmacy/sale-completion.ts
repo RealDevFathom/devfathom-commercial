@@ -6,6 +6,7 @@ import type { LedgerScope } from './stock-ledger';
 import { postSaleLineEntry } from './finance-postings';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
 import { assertRxSaleAllowed } from './rx-sale-gate';
+import { recordCompletedPrescriptionReference } from './rx-prescription-reference';
 
 export const completionSaleInclude = {
   lines: {
@@ -55,6 +56,24 @@ export async function completePaidPharmacySale(
       businessDate: input.businessDate,
     },
   });
+  for (const line of sale.lines) {
+    if (line.prescriptionLineId) {
+      await recordCompletedPrescriptionReference(
+        db,
+        scope,
+        {
+          id: line.id,
+          organizationId: line.organizationId,
+          branchId: line.branchId,
+          medicineId: line.medicineId,
+          presentationId: line.presentationId,
+          canonicalUnits: line.canonicalUnits,
+          prescriptionLineId: line.prescriptionLineId,
+        },
+        issuedAt
+      );
+    }
+  }
   for (const line of sale.lines) {
     if (
       line.organizationId !== scope.organizationId ||
