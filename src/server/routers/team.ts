@@ -112,7 +112,13 @@ export const teamRouter = router({
 
   // Lightweight roster — just enough to render avatars and names.
   getRoster: protectedProcedure.query(async ({ ctx }) => {
+    const me = ctx.session.user.id;
+    const directory = await can(subjectFromSession(ctx.session.user), 'team:view', undefined, {
+      source: 'TRPC',
+      db: ctx.db,
+    });
     return ctx.db.user.findMany({
+      ...(directory ? {} : { where: { id: me } }),
       select: {
         id: true,
         name: true,
