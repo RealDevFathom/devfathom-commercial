@@ -7,9 +7,13 @@ const mocks = vi.hoisted(() => ({
   loadHotelLanding: vi.fn(),
   createHotelCaller: vi.fn(),
   withTenantDb: vi.fn(),
+  redirect: vi.fn((path: string) => {
+    throw new Error(`NEXT_REDIRECT;${path}`);
+  }),
   db: {},
 }));
 vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
+vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
 vi.mock('@/lib/onboarding/setup-evaluator', () => ({
   loadSetupChecklist: mocks.loadSetupChecklist,
 }));
@@ -64,6 +68,64 @@ describe('DashboardPage vertical dispatch', () => {
 
     expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
     expect(agencyHelpers.meetings.getUpcoming.prefetch).not.toHaveBeenCalled();
+  });
+
+  it('sends a restaurant operator to POS only when effective orders:take is allowed', async () => {
+    const user = { id: 'cashier', role: 'EMPLOYEE', status: 'ACTIVE' };
+    mocks.createSSRHelpers.mockResolvedValue({
+      helpers: helpers(),
+      session: { user },
+      organization: { id: 'tenant' },
+      entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
+    });
+    mocks.can.mockImplementation(async (_subject, action) => action === 'orders:take');
+
+    await expect(DashboardPage()).rejects.toThrow('NEXT_REDIRECT;/pos');
+
+    expect(mocks.can).toHaveBeenNthCalledWith(1, user, 'admin:access', undefined, {
+      db: mocks.db,
+    });
+    expect(mocks.can).toHaveBeenNthCalledWith(2, user, 'orders:take', undefined, {
+      db: mocks.db,
+    });
+    expect(mocks.redirect).toHaveBeenCalledWith('/pos');
+  });
+
+  it.each(['kitchen', 'inventory', 'finance'])(
+    'keeps a %s restaurant persona without orders:take on the dashboard',
+    async (id) => {
+      const user = { id, role: 'EMPLOYEE', status: 'ACTIVE' };
+      mocks.createSSRHelpers.mockResolvedValue({
+        helpers: helpers(),
+        session: { user },
+        organization: { id: 'tenant' },
+        entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
+      });
+      mocks.can.mockResolvedValue(false);
+
+      await DashboardPage();
+
+      expect(mocks.can).toHaveBeenCalledWith(user, 'orders:take', undefined, { db: mocks.db });
+      expect(mocks.redirect).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps an effective administrator on the restaurant management dashboard', async () => {
+    const user = { id: 'owner', role: 'EMPLOYEE', status: 'ACTIVE' };
+    mocks.createSSRHelpers.mockResolvedValue({
+      helpers: helpers(),
+      session: { user },
+      organization: { id: 'tenant' },
+      entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
+    });
+    mocks.can.mockResolvedValue(true);
+    mocks.loadSetupChecklist.mockResolvedValue({ complete: true, items: [] });
+
+    await DashboardPage();
+
+    expect(mocks.can).toHaveBeenCalledOnce();
+    expect(mocks.can).toHaveBeenCalledWith(user, 'admin:access', undefined, { db: mocks.db });
+    expect(mocks.redirect).not.toHaveBeenCalled();
   });
 
   it('lands a Hospitality organization on the property setup page, without Agency prefetches', async () => {

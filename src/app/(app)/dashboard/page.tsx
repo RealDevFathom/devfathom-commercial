@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { redirect } from 'next/navigation';
 import { HydrationBoundary } from '@tanstack/react-query';
 import { createSSRHelpers } from '@/lib/trpc-server';
 import { DashboardContent } from './dashboard-content';
@@ -28,14 +29,34 @@ export default async function DashboardPage() {
       : null;
   const organizationId = ssr?.organization?.id;
   const user = ssr?.session?.user;
-  const checklist =
+  const access =
     organizationId && firstRunVertical && user
-      ? await withTenantDb(organizationId, async (db) =>
-          (await can(subjectFromSession(user), 'admin:access', undefined, { db }))
-            ? loadSetupChecklist(db, organizationId, firstRunVertical)
-            : null
-        )
-      : null;
+      ? await withTenantDb(organizationId, async (db) => {
+          const subject = subjectFromSession(user);
+          const hasAdminAccess = await can(subject, 'admin:access', undefined, { db });
+          const takeOrders =
+            restaurant && !hasAdminAccess
+              ? await can(subject, 'orders:take', undefined, { db })
+              : false;
+
+          return {
+            checklist: hasAdminAccess
+              ? await loadSetupChecklist(db, organizationId, firstRunVertical)
+              : null,
+            takeOrders,
+          };
+        })
+      : { checklist: null, takeOrders: false };
+
+  // Restaurant operators who can actually take orders land at the POS. Every
+  // decision goes through the central ABAC evaluator, so role/override DENYs
+  // win and a kitchen, inventory, or finance persona stays on the useful
+  // restaurant dashboard instead of being classified by its coarse User.role.
+  // Administrators retain the management dashboard even when their role also
+  // carries the broad order-taking grant.
+  if (access.takeOrders) redirect('/pos');
+
+  const checklist = access.checklist;
 
   // Prefetch above-the-fold data on the server so it arrives hydrated. The
   // client QueryClient has staleTime 60s, so hydrated data is "fresh" and the
