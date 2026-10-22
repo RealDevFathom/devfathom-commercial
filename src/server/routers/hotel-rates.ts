@@ -46,6 +46,7 @@ import {
 } from '@/server/hotel-property-context';
 import { hotelPropertySelectionInput } from '@/server/hotel-property-scope';
 import { capabilityProcedure, router } from '../trpc';
+import { hotelRatePlansRouter } from './hotel-rate-plans';
 
 const rates = capabilityProcedure('hotel:rates');
 const RATES = 'hotel:rates' as const;
@@ -167,6 +168,7 @@ function mapMealPlanError(error: unknown, code: string): never {
 }
 
 export const hotelRatesRouter = router({
+  ratePlans: hotelRatePlansRouter,
   mealPlans: router({
     /** Every plan the property has, inactive ones included — this is the editor. */
     list: rates.input(hotelPropertySelectionInput).query(async ({ ctx, input }) => {
