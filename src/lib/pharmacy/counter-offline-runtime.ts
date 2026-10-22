@@ -129,6 +129,7 @@ type ReplayResult = {
 export class PharmacyCounterRuntime {
   private state: CounterRuntimeState;
   private activeReplay: Promise<ReplayResult> | null = null;
+  private enqueueTransition: Promise<void> = Promise.resolve();
 
   constructor(
     readonly scope: TerminalScope,
@@ -324,6 +325,21 @@ export class PharmacyCounterRuntime {
    * cannot talk the matrix into accepting a snapshot the runtime never verified.
    */
   async enqueue(
+    input: CounterCommandInput,
+    matrix: Omit<CounterMatrixInputs, 'snapshots'>
+  ): Promise<CounterEnqueueResult> {
+    const result = this.enqueueTransition.then(() => this.runEnqueue(input, matrix));
+    // Keep the tail fulfilled so a failed persistence attempt does not prevent
+    // later sales from reaching the transition. Each transition reads state
+    // only after the preceding whole-document write has published it.
+    this.enqueueTransition = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  private async runEnqueue(
     input: CounterCommandInput,
     matrix: Omit<CounterMatrixInputs, 'snapshots'>
   ): Promise<CounterEnqueueResult> {

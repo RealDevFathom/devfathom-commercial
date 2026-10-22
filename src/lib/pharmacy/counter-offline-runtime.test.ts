@@ -277,6 +277,45 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
     expect(counter.snapshot().queue?.quotas[0]).toMatchObject({ consumedUnits: 2 });
   });
 
+  it('serializes concurrent sales before deriving receipts and sequences', async () => {
+    const storage = createMemoryDriver();
+    let saleWrites = 0;
+    let releaseFirstSale!: () => void;
+    const firstSaleBlocked = new Promise<void>((resolve) => {
+      releaseFirstSale = resolve;
+    });
+    const driver: TerminalStorageDriver = {
+      ...storage,
+      write: async (scopeKey, record) => {
+        const commandCount = (record as { queue?: { commands?: unknown[] } }).queue?.commands
+          ?.length;
+        if (commandCount) {
+          saleWrites += 1;
+          if (saleWrites === 1) await firstSaleBlocked;
+        }
+        await storage.write(scopeKey, record);
+      },
+    };
+    const counter = await readyCounter(driver);
+
+    const first = counter.enqueue(cashSale(1), MATRIX);
+    const second = counter.enqueue(cashSale(1), MATRIX);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(saleWrites).toBe(1);
+
+    releaseFirstSale();
+    const results = await Promise.all([first, second]);
+    expect(results.map((result) => (result.ok ? result.command.receiptNumber : null))).toEqual([
+      900, 901,
+    ]);
+    expect(results.map((result) => (result.ok ? result.command.sequence : null))).toEqual([1, 2]);
+
+    const reloaded = runtime(storage);
+    expect(await reloaded.hydrate()).toBe('ready');
+    expect(reloaded.snapshot().queue?.commands).toHaveLength(2);
+  });
+
   it('refuses a denied action and queues nothing', async () => {
     const counter = await readyCounter(createMemoryDriver());
     const result = await counter.enqueue(
