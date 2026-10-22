@@ -58,6 +58,7 @@ type Deps = {
 let deps: Deps;
 let organizationId: string;
 let inviteToken: string;
+let deactivatedInviteToken: string;
 let resetToken: string;
 
 /** The public procedures use only `db` and `requestMeta` from the context. */
@@ -103,6 +104,7 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
     organizationId = organization.id;
 
     inviteToken = randomBytes(32).toString('base64url');
+    deactivatedInviteToken = randomBytes(32).toString('base64url');
     resetToken = randomBytes(32).toString('base64url');
 
     await deps.withTenantDb(organizationId, async (db) => {
@@ -117,6 +119,18 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
         );
       }
 
+      await db.user.create({
+        data: {
+          id: id('user_deactivated_invitee'),
+          organizationId,
+          email: `deactivated.invitee.${suffix}@example.test`,
+          name: 'Deactivated Invitee',
+          title: 'Engineer',
+          department: department.key,
+          role: 'EMPLOYEE',
+          status: 'INACTIVE',
+        },
+      });
       await db.user.create({
         data: {
           id: id('user_invitee'),
@@ -152,6 +166,16 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
           expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         },
       });
+      await db.invitation.create({
+        data: {
+          id: id('inv_deactivated'),
+          organizationId,
+          userId: id('user_deactivated_invitee'),
+          email: `deactivated.invitee.${suffix}@example.test`,
+          tokenHash: hashToken(deactivatedInviteToken),
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        },
+      });
       await db.passwordResetToken.create({
         data: {
           id: id('prt'),
@@ -167,10 +191,16 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
   afterAll(async () => {
     if (!organizationId) return;
     await deps.withTenantDb(organizationId, async (db) => {
-      await db.invitation.deleteMany({ where: { id: id('inv') } });
+      await db.invitation.deleteMany({
+        where: { id: { in: [id('inv'), id('inv_deactivated')] } },
+      });
       await db.passwordResetToken.deleteMany({ where: { id: id('prt') } });
       await db.user.deleteMany({
-        where: { id: { in: [id('user_invitee'), id('user_resetter')] } },
+        where: {
+          id: {
+            in: [id('user_invitee'), id('user_deactivated_invitee'), id('user_resetter')],
+          },
+        },
       });
     });
   }, 60_000);
@@ -208,6 +238,25 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
     );
 
     expect(result).toEqual({ valid: false });
+  });
+
+  it('does not let a deactivated invitee accept a still-live invitation', async () => {
+    await expect(
+      deps.withTenantDb(organizationId, (db) =>
+        caller(deps.invitationsRouter, db).accept({
+          token: deactivatedInviteToken,
+          password: 'Str0ng!Passw0rd',
+          phone: '+15550123',
+        })
+      )
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: deps.INVITATION_GENERIC_MESSAGE });
+
+    const [invitation, user] = await deps.withTenantDb(organizationId, async (db) => [
+      await db.invitation.findUnique({ where: { id: id('inv_deactivated') } }),
+      await db.user.findUnique({ where: { id: id('user_deactivated_invitee') } }),
+    ]);
+    expect(invitation?.acceptedAt).toBeNull();
+    expect(user).toMatchObject({ status: 'INACTIVE', password: null, phone: null });
   });
 
   it('accepts an invitation exactly once under real concurrency', async () => {

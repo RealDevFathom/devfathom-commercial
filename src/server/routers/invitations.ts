@@ -38,13 +38,19 @@ async function loadPendingInvitation(db: PrismaClient, token: string) {
           title: true,
           department: true,
           role: true,
+          status: true,
           organization: { select: { isDemo: true } },
         },
       },
     },
   });
 
-  if (!invitation || invitation.acceptedAt || invitation.user.organization.isDemo) {
+  if (
+    !invitation ||
+    invitation.acceptedAt ||
+    invitation.user.status !== 'INVITED' ||
+    invitation.user.organization.isDemo
+  ) {
     throw invalidInvitation();
   }
   if (invitation.expiresAt.getTime() < Date.now()) throw invalidInvitation();
@@ -112,8 +118,11 @@ export const invitationsRouter = router({
         });
         if (claimed.count !== 1) throw invalidInvitation();
 
-        await tx.user.update({
-          where: { id: invitation.userId },
+        // The member can be deactivated after the public token lookup. Only an
+        // INVITED user may cross this state transition; a conditional write
+        // keeps an admin's intervening deactivation authoritative.
+        const activated = await tx.user.updateMany({
+          where: { id: invitation.userId, status: 'INVITED' },
           data: {
             password: hashed,
             status: 'ACTIVE',
@@ -122,6 +131,7 @@ export const invitationsRouter = router({
             ...(input.skills ? { skills: input.skills } : {}),
           },
         });
+        if (activated.count !== 1) throw invalidInvitation();
 
         return { email: invitation.user.email };
       });
