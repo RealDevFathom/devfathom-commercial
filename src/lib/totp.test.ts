@@ -22,9 +22,15 @@ describe('platform TOTP and recovery codes', () => {
     const uri = totpAuthUri('admin@example.test', secret, 'DevFathom Control');
 
     expect(secret).toMatch(/^[A-Z2-7]{32}$/);
-    expect(uri).toContain('otpauth://totp/');
-    expect(uri).toContain(`secret=${secret}`);
-    expect(uri).toContain('issuer=DevFathom%20Control');
+    const parsed = new URL(uri);
+    expect(parsed.protocol).toBe('otpauth:');
+    expect(parsed.hostname).toBe('totp');
+    expect(decodeURIComponent(parsed.pathname)).toBe('/DevFathom Control:admin@example.test');
+    expect(parsed.searchParams.get('secret')).toBe(secret);
+    expect(parsed.searchParams.get('issuer')).toBe('DevFathom Control');
+    expect(parsed.searchParams.get('algorithm')).toBe('SHA1');
+    expect(parsed.searchParams.get('digits')).toBe('6');
+    expect(parsed.searchParams.get('period')).toBe('30');
   });
 
   it('creates unique one-time recovery codes and hashes normalized input', () => {

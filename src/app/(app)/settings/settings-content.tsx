@@ -46,6 +46,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
 import { PrintRoutingSection } from '@/components/restaurant/print-routing-section';
+import { AuthenticatorQrCode } from '@/components/authenticator-qr-code';
 export { PrintRoutingSection };
 import { useEntitlements } from '@/components/entitlements-provider';
 import type { EntitlementView } from '@/lib/module-catalog';
@@ -1116,16 +1117,21 @@ function TwoFactorSection() {
         ) : enrolling ? (
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              Add this account to your authenticator app — scan the URI or enter the key manually —
-              then enter the 6-digit code to confirm.
+              Add this account to your authenticator app — scan the QR code or enter the key
+              manually — then enter the 6-digit code to confirm.
             </p>
-            <div>
-              <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
-                Setup key
-              </p>
-              <code className="block break-all rounded-lg bg-background border border-border px-3 py-2 text-xs font-mono text-foreground">
-                {enrolling.secret}
-              </code>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+              <div className="shrink-0 rounded-xl border border-border bg-white p-2">
+                <AuthenticatorQrCode uri={enrolling.otpauthUri} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-1">
+                  Setup key
+                </p>
+                <code className="block break-all rounded-lg bg-background border border-border px-3 py-2 text-xs font-mono text-foreground">
+                  {enrolling.secret}
+                </code>
+              </div>
             </div>
             <details className="text-xs text-muted-foreground">
               <summary className="cursor-pointer">otpauth:// URI</summary>
