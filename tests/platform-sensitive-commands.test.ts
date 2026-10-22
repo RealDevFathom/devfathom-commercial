@@ -31,6 +31,7 @@ const db = {
       return state.organization;
     }),
   },
+  organizationLifecycleEvent: { create: vi.fn(async ({ data }: any) => data) },
   jurisdictionRuleSet: {
     upsert: vi.fn(async ({ create }: any) => create),
   },
@@ -181,6 +182,17 @@ describe('pharmacy placeholder commands', () => {
       where: { id: 'org_1' },
       data: { status: 'ONBOARDING', activatedAt: null },
     });
+    expect(db.organizationLifecycleEvent.create).toHaveBeenCalledOnce();
+    expect(db.organizationLifecycleEvent.create).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'org_1',
+        action: 'CREATED',
+        fromStatus: 'ACTIVE',
+        toStatus: 'ONBOARDING',
+        reason,
+        actorId: 'actor_1',
+      },
+    });
     expect(state.audits.at(-1)).toMatchObject({ metadata: { placeholder: true } });
   });
 
@@ -220,6 +232,27 @@ describe('pharmacy placeholder commands', () => {
     });
     expect(db.branchRegulatoryProfile.create.mock.calls[0]![0].data.version).toBe(8);
   });
+
+  it.each(['AGENCY', 'RESTAURANT'])(
+    'rejects a %s organization without changing it',
+    async (vertical) => {
+      state.organization = { id: 'org_1', vertical, status: 'ACTIVE' };
+      state.placeholderActive = true;
+
+      await expect(
+        execute('organization.pharmacy.placeholder.lock', {
+          organizationId: 'org_1',
+          reason,
+          authenticationCode: '123456',
+        })
+      ).rejects.toThrow('A Pharmacy organization is required.');
+
+      expect(state.organization.status).toBe('ACTIVE');
+      expect(db.branchRegulatoryProfile.deleteMany).not.toHaveBeenCalled();
+      expect(db.organization.update).not.toHaveBeenCalled();
+      expect(db.organizationLifecycleEvent.create).not.toHaveBeenCalled();
+    }
+  );
 
   it('flags failed platform commands while the placeholder is active', async () => {
     state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ACTIVE' };

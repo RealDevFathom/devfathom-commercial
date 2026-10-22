@@ -1660,17 +1660,29 @@ async function runCommand(
         .object({ organizationId: id, reason: sensitiveReason, authenticationCode: z.string() })
         .parse(payload);
       await assertFreshPlaceholderMfa(db, actor, input.authenticationCode);
-      const removed = await db.branchRegulatoryProfile.deleteMany({
-        where: { organizationId: input.organizationId, isPlaceholder: true },
-      });
       const organization = await db.organization.findUnique({
         where: { id: input.organizationId },
       });
       if (!organization) throw new PlatformSecurityError('Organization not found.', 400);
+      if (organization.vertical !== 'PHARMACY')
+        throw new PlatformSecurityError('A Pharmacy organization is required.', 400);
+      const removed = await db.branchRegulatoryProfile.deleteMany({
+        where: { organizationId: input.organizationId, isPlaceholder: true },
+      });
       if (organization.status === 'ACTIVE') {
         await db.organization.update({
           where: { id: input.organizationId },
           data: { status: 'ONBOARDING', activatedAt: null },
+        });
+        await db.organizationLifecycleEvent.create({
+          data: {
+            organizationId: input.organizationId,
+            action: lifecycleAction(organization.status, 'ONBOARDING'),
+            fromStatus: organization.status,
+            toStatus: 'ONBOARDING',
+            reason: input.reason,
+            actorId: actor.id,
+          },
         });
       }
       return {
