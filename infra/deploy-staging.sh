@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+printf '%s\n' 'Azure staging deploys are retired; no Azure resources were changed.' >&2
+printf '%s\n' 'Use the AWS CloudFormation/ECS staging runbook: docs/deploy/aws.md' >&2
+exit 1
+
 location=uaenorth
 shared_group=rg-devfathom-shared-uaenorth
 staging_group=rg-devfathom-staging-uaenorth

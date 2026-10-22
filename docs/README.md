@@ -21,7 +21,7 @@ Use one status on every capability claim:
 | --- | --- | --- |
 | Everyone | [Technical overview](technical-overview.md) | Product boundaries, architecture, tenancy, and operating model |
 | Developers | [Local setup](LOCAL_SETUP.md) | Local environment and verification |
-| Operators | [Azure deployment](azure-deployment.md) | Staging, production gate, backups, and rollback |
+| Operators | [AWS deployment](deploy/aws.md) | CloudFormation/ECS staging, backups, and rollback |
 | Platform team | [Admin platform handbook](admin-platform/README.md) | Control-plane architecture and runbooks |
 | Product and sales | [Product and commercial pack](product-pack.md) | ICP, positioning, feature status, packaging, and customer lifecycle |
 | Product and engineering | [POS & terminal module PRD](product/modules/pos-terminal.md) | Evidence-linked register, terminal, checkout, and branch-boundary scope |
