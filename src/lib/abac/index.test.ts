@@ -110,14 +110,26 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     }
   );
 
-  it('grants admins default dispense access but keeps the other exact-grant actions opt-in', async () => {
-    const db = authorizationDb({ rolePermissions: permissionsFor('owner') });
-    const exactOnly = ['pharmacy:catalogue-review', 'pharmacy:safety'];
-    for (const action of grantedActions) {
-      await expect(can(proprietor, action, undefined, { db })).resolves.toBe(
-        !exactOnly.includes(action)
-      );
-    }
+  it('requires an exact dispense grant for admins and lets a wildcard DENY win', async () => {
+    await expect(
+      can(proprietor, 'pharmacy:dispense', undefined, { db: authorizationDb({}) })
+    ).resolves.toBe(false);
+
+    const exactAllow = [{ capability: 'pharmacy:dispense', effect: 'ALLOW' as const }];
+    await expect(
+      can(proprietor, 'pharmacy:dispense', undefined, {
+        db: authorizationDb({ rolePermissions: exactAllow }),
+      })
+    ).resolves.toBe(true);
+
+    await expect(
+      can(proprietor, 'pharmacy:dispense', undefined, {
+        db: authorizationDb({
+          rolePermissions: exactAllow,
+          overrides: [{ capability: 'pharmacy:*', effect: 'DENY' }],
+        }),
+      })
+    ).resolves.toBe(false);
   });
 
   it('does not grant unrelated capabilities through wildcard or platform authority', async () => {
@@ -224,8 +236,8 @@ describe('custom ABAC decisions', () => {
       // capability instead of inheriting broad administrator authority.
       'devices:manage',
       // Pharmacy RX-03/04 and RX-05: pharmacist dispense decisions, substitution
-      // evidence, controlled register and incident approval. Dispensing retains
-      // the tenant-admin fallback; the other actions remain org-role-driven.
+      // evidence, controlled register and incident approval. All three remain
+      // exact-grant-only and are never inherited from an agency role.
       'pharmacy:dispense',
       'pharmacy:safety',
       'pharmacy:catalogue-review',
@@ -235,7 +247,7 @@ describe('custom ABAC decisions', () => {
     expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
-      expect(POLICIES[action]).toHaveLength(action === 'pharmacy:dispense' ? 1 : 0);
+      expect(POLICIES[action]).toHaveLength(0);
       await expect(can(employee, action, undefined, { db: authorizationDb({}) })).resolves.toBe(
         false
       );

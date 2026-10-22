@@ -190,7 +190,7 @@ describe('prescription capture and private delivery', () => {
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
-  it('allows tenant administrators when the central ABAC decision permits it', async () => {
+  it('allows tenant administrators only when central ABAC finds an explicit dispense grant', async () => {
     mocks.can.mockResolvedValue(true);
     const admin = context();
     admin.session.user.role = 'ADMIN';
@@ -213,7 +213,7 @@ describe('prescription capture and private delivery', () => {
     );
   });
 
-  it('refuses a tenant administrator when central ABAC returns an explicit DENY', async () => {
+  it('refuses a tenant administrator when central ABAC finds no exact dispense grant', async () => {
     mocks.can.mockResolvedValue(false);
     const admin = context();
     admin.session.user.role = 'ADMIN';

@@ -237,10 +237,10 @@ export const POLICIES: Record<Action, Policy[]> = {
   // still resolved first by `can()` and therefore takes precedence.
   'pharmacy:procurement': [isAdmin],
   'pharmacy:inventory': [],
-  // Tenant administrators retain the default dispensing access expected by
-  // legacy role gates, but the grant lives here so custom DENY rules evaluated
-  // by `can()` can revoke it before static policies run.
-  'pharmacy:dispense': [isAdmin],
+  // Dispensing is an exact-grant-only action: tenant administration alone is
+  // insufficient, and wildcard ALLOW rules cannot opt a user in. Wildcard DENY
+  // rules are still resolved by `can()` before this default-deny policy.
+  'pharmacy:dispense': [],
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],
   'pharmacy:orders': [],
