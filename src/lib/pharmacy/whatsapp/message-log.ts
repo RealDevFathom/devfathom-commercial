@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { markRefillReminderSent } from '@/lib/pharmacy/refill-reminder-sender';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { WhatsAppProviderError, type WhatsAppSendResult } from './provider';
@@ -12,6 +13,7 @@ export type MessageLogKind =
   | 'ORDER_FALLBACK'
   | 'OPT_OUT'
   | 'OPT_IN'
+  | 'REFILL_OPT_OUT'
   | 'CONSENT_ACK';
 
 export type MessageLogEntry = {
@@ -81,6 +83,34 @@ export async function sendAndLog(
   return sendClaimedMessage(entry, logId, send);
 }
 
+/**
+ * The provider accepted the message. A refill reminder's capture moves
+ * QUEUED -> SENT in the same transaction, validated against this accepted log
+ * row, so neither can be recorded without the other.
+ */
+async function recordProviderAcceptance(
+  entry: MessageLogEntry,
+  logId: string,
+  providerMessageId: string
+) {
+  await withTenantDb(entry.organizationId, async (db) => {
+    await db.pharmacyMessageLog.update({
+      where: { id: logId },
+      data: { status: 'SENT', providerMessageId },
+    });
+    if (entry.kind === 'REFILL_REMINDER' && entry.refillCaptureId && entry.branchId) {
+      await markRefillReminderSent(db, {
+        organizationId: entry.organizationId,
+        branchId: entry.branchId,
+        captureId: entry.refillCaptureId,
+        messageLogId: logId,
+        providerMessageId,
+        sentAt: new Date(),
+      });
+    }
+  });
+}
+
 /** Reservation has already committed with its eligibility checks. */
 export async function sendClaimedMessage(
   entry: MessageLogEntry,
@@ -107,14 +137,14 @@ export async function sendClaimedMessage(
         : 'UNKNOWN';
   // Keep the provider call outside persistence error handling. A failed log
   // update after provider acceptance must not overwrite the claim as FAILED.
+  if (outcome === 'SENT') {
+    await recordProviderAcceptance(entry, logId, result.providerMessageId);
+    return outcome;
+  }
   await updateMessageLog(entry.organizationId, logId, {
-    status: outcome === 'SENT' ? 'SENT' : outcome === 'PREPARED' ? 'IGNORED' : 'PENDING',
+    status: outcome === 'PREPARED' ? 'IGNORED' : 'PENDING',
     providerMessageId: result.providerMessageId,
-    ...(outcome === 'PREPARED'
-      ? { error: 'MOCK_PREPARED' }
-      : outcome === 'UNKNOWN'
-        ? { error: 'UNKNOWN_PROVIDER_OUTCOME' }
-        : {}),
+    error: outcome === 'PREPARED' ? 'MOCK_PREPARED' : 'UNKNOWN_PROVIDER_OUTCOME',
   });
   return outcome;
 }

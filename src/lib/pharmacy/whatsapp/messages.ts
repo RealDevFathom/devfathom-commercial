@@ -51,7 +51,6 @@ function normalizeText(text: string): string {
 const STOP_KEYWORDS = new Set([
   'stop',
   'stop all',
-  'stop refill',
   'stopall',
   'unsubscribe',
   'opt out',
@@ -72,8 +71,17 @@ const START_KEYWORDS = new Set([
   'شروع کریں',
 ]);
 
-export function consentKeyword(text: string): 'STOP' | 'START' | null {
+/**
+ * The opt-out printed in the refill reminder template. It stops refill
+ * reminders only; the customer-wide WhatsApp consent (STOP/START) is untouched.
+ */
+const STOP_REFILL_KEYWORDS = new Set(['stop refill', 'stop refills']);
+
+export type ConsentKeyword = 'STOP' | 'START' | 'STOP_REFILL';
+
+export function consentKeyword(text: string): ConsentKeyword | null {
   const normalized = normalizeText(text);
+  if (STOP_REFILL_KEYWORDS.has(normalized)) return 'STOP_REFILL';
   if (STOP_KEYWORDS.has(normalized)) return 'STOP';
   if (START_KEYWORDS.has(normalized)) return 'START';
   return null;
@@ -253,6 +261,9 @@ export const WHATSAPP_REPLIES = {
   optedIn:
     'You are now subscribed to WhatsApp messages from this pharmacy. Reply STOP at any time to opt out.\n' +
     'آپ نے واٹس ایپ پیغامات کی اجازت دے دی ہے۔ بند کرنے کے لیے STOP لکھیں۔',
+  refillOptedOut:
+    'You will no longer receive refill reminders from this pharmacy. Your other WhatsApp messages are not affected.\n' +
+    'آپ کو اب اس فارمیسی سے ری فل یاد دہانیاں نہیں ملیں گی۔ دیگر واٹس ایپ پیغامات پر اس کا کوئی اثر نہیں پڑے گا۔',
   confirmation(input: { reference: string; quantity: number; medicine: string; branch: string }) {
     return (
       `Order ${input.reference} received: ${input.quantity} x ${input.medicine} for collection at ${input.branch}. ` +

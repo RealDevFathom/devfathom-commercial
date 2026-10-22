@@ -1,5 +1,7 @@
 import { readdirSync } from 'node:fs';
 
+import { describe, expect, it } from 'vitest';
+
 describe('Prisma migration directory names', () => {
   it('uses unique, valid timestamps', () => {
     const names = readdirSync('prisma/migrations', { withFileTypes: true })
@@ -35,7 +37,17 @@ describe('Prisma migration directory names', () => {
       '20261021130000:2',
       '20261021160000:2',
     ]);
-    for (const timestamp of timestamps as string[]) {
+    // Applied on main before this check existed, so these cannot be renamed either (minute
+    // 60 and above). Pinned like the duplicates: no new invalid timestamp may join them.
+    const appliedInvalid = new Set([
+      '20260728106000',
+      '20260904196000',
+      '20260904197000',
+      '20260904198000',
+    ]);
+    for (const timestamp of (timestamps as string[]).filter(
+      (value) => !appliedInvalid.has(value)
+    )) {
       const [year, month, day, hour, minute, second] = [
         timestamp.slice(0, 4),
         timestamp.slice(4, 6),

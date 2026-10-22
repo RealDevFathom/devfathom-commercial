@@ -18,15 +18,28 @@ after that sibling lands**; the migration and service are intentionally additive
 - `pharmacy_refill_reminder_preferences` is a per-patient, per-organization
   preference dedicated to refill reminders. It deliberately does not reuse the
   customer-wide WhatsApp flag or any points/voucher preference. `STOP REFILL`
-  records a keyword opt-out; the service also exposes `LINK` as a source for the
+  is its own inbound intent (log kind `REFILL_OPT_OUT`): it writes only this
+  preference and never reads or writes `whatsappOptIn` or its timestamp. It is
+  ordered against the preference's own last change (an older or replayed reply
+  never undoes a newer staff or link decision; an opt-out wins a tie). A global
+  `STOP` still clears the WhatsApp opt-in and records the refill opt-out, as
+  before. The service also exposes `LINK` as a source for the
   authenticated/signed link handler.
 - An eligible capture and its `pharmacy_message_logs` `PENDING` row are written
   in one tenant transaction. The deterministic `refill-capture:<captureId>` key
   makes the claim idempotent. State proceeds `CAPTURED -> QUEUED -> SENT`; an
   ineligible capture proceeds `CAPTURED -> SKIPPED` with `statusReason`.
 - The scheduler never calls a WhatsApp provider. The existing live-send block
-  remains untouched; only the current outbox worker may deliver and then call
-  `markRefillReminderSent` after provider acknowledgement.
+  remains untouched. `QUEUED -> SENT` happens only in the transaction that
+  records the provider's acceptance of the capture's own outbox log
+  (`sendClaimedMessage`, or a status callback through `applyProviderAck`):
+  `markRefillReminderSent` matches the tenant, branch, capture, log id,
+  `refill-capture:<id>` key, provider message id and an accepted log state.
+- Signed webhook status callbacks advance the outbound log
+  `SENT -> DELIVERED -> READ` (`FAILED` only from `SENT`), with `statusAt`,
+  `deliveredAt` and `readAt`. The log row is locked first; a duplicate or older
+  status changes nothing, and a status for a log the provider never accepted is
+  ignored.
 
 ## Template and data minimization
 
@@ -45,7 +58,11 @@ wins. Keyword requests are patient-originated webhook events rather than staff
 mutations. The new table carries `organizationId` with the standard
 `current_setting` default and enabled plus forced RLS. Scheduler work is
 tenant-scoped, and branch identity participates in both the eligibility lock
-and transition update.
+and transition update. `pharmacy_message_logs` carries the standard tenant +
+branch policy: a branch-bound session sees only its own branch's rows plus the
+organization-level (branchless) inbound intake rows; the organization-wide
+service path (tenant set, no branch) is used by the scheduler, the khata job,
+the signed webhook and the organization-level marketing report.
 
 ## Follow-ups
 
@@ -54,9 +71,7 @@ and transition update.
    identifier in the URL.
 2. Register the bilingual template with the selected WhatsApp provider before
    enabling its existing dispatcher. Live sending remains blocked in this lane.
-3. Have the outbox acknowledgement path invoke `markRefillReminderSent`; failed
-   transport attempts remain owned by the existing outbox retry lifecycle.
-4. Rebase onto the sibling loyalty branch and regenerate Prisma artifacts in
+3. Rebase onto the sibling loyalty branch and regenerate Prisma artifacts in
    the integration environment.
 
 ## Verification approach

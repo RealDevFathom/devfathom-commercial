@@ -32,6 +32,7 @@ export type InboundOutcome =
   | 'NO_CONSENT'
   | 'OPTED_OUT'
   | 'OPTED_IN'
+  | 'REFILL_OPTED_OUT'
   | 'STALE_CONSENT'
   | 'EXPIRED_MESSAGE'
   | 'ORDER_PLACED'
@@ -154,7 +155,13 @@ export async function handleInboundWhatsAppMessage(
 ): Promise<InboundOutcome> {
   const keyword = consentKeyword(message.text);
   const kind: MessageLogKind =
-    keyword === 'STOP' ? 'OPT_OUT' : keyword === 'START' ? 'OPT_IN' : 'ORDER_REQUEST';
+    keyword === 'STOP'
+      ? 'OPT_OUT'
+      : keyword === 'START'
+        ? 'OPT_IN'
+        : keyword === 'STOP_REFILL'
+          ? 'REFILL_OPT_OUT'
+          : 'ORDER_REQUEST';
   const last4 = phoneLast4(message.from);
   // Commit the consent effect with its replay claim. A failed transaction must
   // leave the webhook retryable; no provider call occurs inside this transaction.
@@ -171,7 +178,27 @@ export async function handleInboundWhatsAppMessage(
       providerMessageId: message.providerMessageId,
     });
     let staleConsent = false;
-    if (inboundId && customer && keyword) {
+    if (inboundId && customer && keyword === 'STOP_REFILL') {
+      if (!Number.isFinite(message.receivedAt.getTime()) || message.receivedAt > now)
+        throw new Error('Invalid consent timestamp.');
+      // Refill reminders only. The customer-wide WhatsApp consent flag and its
+      // timestamp are not read or written: only the refill preference changes,
+      // ordered against that preference's own last change.
+      const applied = await setRefillReminderPreference(db, {
+        organizationId,
+        patientId: customer.patientId,
+        optedOut: true,
+        source: 'KEYWORD',
+        now: message.receivedAt,
+        ordered: true,
+      });
+      staleConsent = !applied;
+      if (staleConsent)
+        await db.pharmacyMessageLog.update({
+          where: { id: inboundId },
+          data: { status: 'IGNORED', error: 'STALE_CONSENT' },
+        });
+    } else if (inboundId && customer && keyword) {
       if (!Number.isFinite(message.receivedAt.getTime()) || message.receivedAt > now)
         throw new Error('Invalid consent timestamp.');
       await lockCustomerConsent(db, organizationId, customer.id);
@@ -232,6 +259,11 @@ export async function handleInboundWhatsAppMessage(
       },
       () => provider.sendText({ to: message.from, body })
     );
+
+  if (keyword === 'STOP_REFILL') {
+    if (inReplyWindow) await reply('CONSENT_ACK', WHATSAPP_REPLIES.refillOptedOut);
+    return 'REFILL_OPTED_OUT';
+  }
 
   if (keyword) {
     const optIn = keyword === 'START';

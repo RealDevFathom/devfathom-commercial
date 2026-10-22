@@ -14527,12 +14527,12 @@ model PharmacyCampaignDispatchAttempt {
 }
 
 model PharmacyMessageLog {
-  id                String   @id @default(cuid())
-  organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id                String    @id @default(cuid())
+  organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId          String?
   customerId        String?
   patientId         String?
-  channel           String   @default("WHATSAPP")
+  channel           String    @default("WHATSAPP")
   direction         String
   kind              String
   status            String
@@ -14547,8 +14547,13 @@ model PharmacyMessageLog {
   error             String?
   templateLocale    String?
   templatePayload   Json?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  // Provider time of the last acknowledgement applied (loyalty-5 hold fix); an
+  // older acknowledgement never moves the status backwards.
+  statusAt          DateTime?
+  deliveredAt       DateTime?
+  readAt            DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   branch       PharmacyBranch?   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
@@ -14558,6 +14563,7 @@ model PharmacyMessageLog {
   @@unique([organizationId, customerDayKey], map: "pharmacy_message_logs_customer_day_key")
   @@index([organizationId, customerId, createdAt(sort: Desc)], map: "pharmacy_message_logs_customer_idx")
   @@index([organizationId, kind, status], map: "pharmacy_message_logs_kind_status_idx")
+  @@index([organizationId, providerMessageId], map: "pharmacy_message_logs_provider_message_idx")
   @@map("pharmacy_message_logs")
 }
 

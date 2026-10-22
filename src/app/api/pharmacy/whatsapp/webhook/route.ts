@@ -6,6 +6,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
 import { handleInboundWhatsAppMessage } from '@/lib/pharmacy/whatsapp/inbound';
+import { applyProviderAck, providerAckState } from '@/lib/pharmacy/whatsapp/message-acks';
 import { createWhatsAppProvider, readWhatsAppConfig } from '@/lib/pharmacy/whatsapp/provider';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import {
@@ -139,15 +140,27 @@ export async function POST(request: Request) {
                   ? 'PROVIDER_ACCEPTED'
                   : null;
           const occurredAt = new Date(Number(status.timestamp) * 1000);
-          if (!state || !Number.isFinite(occurredAt.getTime())) continue;
-          await withTenantDb(organization.id, (db) =>
-            recordMarketingCallback(db, organization.id, config.phoneNumberId!, {
-              senderId: value.metadata!.phone_number_id,
-              messageId: status.id,
-              state,
-              occurredAt,
-            })
-          );
+          if (!Number.isFinite(occurredAt.getTime())) continue;
+          if (state)
+            await withTenantDb(organization.id, (db) =>
+              recordMarketingCallback(db, organization.id, config.phoneNumberId!, {
+                senderId: value.metadata!.phone_number_id,
+                messageId: status.id,
+                state,
+                occurredAt,
+              })
+            );
+          // The same signed status advances the outbound message log (and a
+          // refill reminder's capture) for this tenant, idempotently.
+          const ackState = providerAckState(status.status);
+          if (ackState)
+            await withTenantDb(organization.id, (db) =>
+              applyProviderAck(db, organization.id, {
+                providerMessageId: status.id,
+                state: ackState,
+                occurredAt,
+              })
+            );
         }
       }
   const messages = provider

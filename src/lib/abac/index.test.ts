@@ -242,9 +242,12 @@ describe('custom ABAC decisions', () => {
       'pharmacy:safety',
       'pharmacy:catalogue-review',
       'pharmacy:orders',
+      // Loyalty 1/3: owner loyalty policy (voucher scope, earn rates, point value,
+      // redemption minimum, expiry, tiers). Granted through `pharmacy:*` or exactly.
+      'pharmacy:loyalty-manage',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);

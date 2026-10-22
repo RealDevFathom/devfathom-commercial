@@ -6,6 +6,13 @@ const mocks = vi.hoisted(() => ({
   organization: vi.fn(),
   inbound: vi.fn(),
   callback: vi.fn(),
+  ack: vi.fn(),
+}));
+vi.mock('@/lib/pharmacy/whatsapp/message-acks', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/pharmacy/whatsapp/message-acks')>(
+    '@/lib/pharmacy/whatsapp/message-acks'
+  )),
+  applyProviderAck: mocks.ack,
 }));
 vi.mock('@/lib/pharmacy/whatsapp/provider', () => ({
   readWhatsAppConfig: mocks.config,
@@ -104,4 +111,56 @@ it('routes authenticated status evidence only for the owned sender', async () =>
   mocks.callback.mockClear();
   expect((await POST(payload('sender-a'))).status).toBe(401);
   expect(mocks.callback).not.toHaveBeenCalled();
+});
+
+it('drives the message-log acknowledgement lifecycle from the owned sender only', async () => {
+  const payload = (sender: string, statuses: Array<{ status: string; timestamp?: string }>) =>
+    new Request('http://pharmacy.localhost/api/pharmacy/whatsapp/webhook', {
+      method: 'POST',
+      body: JSON.stringify({
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  metadata: { phone_number_id: sender },
+                  statuses: statuses.map((status) => ({
+                    id: 'wamid.out-a',
+                    timestamp: '1790000000',
+                    ...status,
+                  })),
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+  await POST(payload('foreign', [{ status: 'delivered' }]));
+  expect(mocks.ack).not.toHaveBeenCalled();
+
+  await POST(
+    payload('sender-a', [
+      { status: 'sent' },
+      { status: 'delivered' },
+      { status: 'read' },
+      { status: 'failed' },
+      { status: 'deleted' },
+    ])
+  );
+  const occurredAt = new Date(1790000000 * 1000);
+  expect(mocks.ack.mock.calls).toEqual(
+    (['SENT', 'DELIVERED', 'READ', 'FAILED'] as const).map((state) => [
+      {},
+      'org-a',
+      { providerMessageId: 'wamid.out-a', state, occurredAt },
+    ])
+  );
+  // The marketing ledger keeps its own mapping (read counts as delivered there).
+  expect(mocks.callback.mock.calls.map((call) => call[3].state)).toEqual([
+    'PROVIDER_ACCEPTED',
+    'DELIVERED',
+    'DELIVERED',
+    'FAILED',
+  ]);
 });

@@ -7,21 +7,49 @@ const store = vi.hoisted(() => ({
   logs: [] as Row[],
   catalog: [] as Row[],
   placed: [] as unknown[],
-  refillPreferences: [] as Array<{ organizationId: unknown; patientId: unknown; optedOut: unknown }>,
+  refillPreferences: [] as Array<{
+    organizationId: unknown;
+    patientId: unknown;
+    optedOut: unknown;
+    source: unknown;
+    changedAt: Date;
+  }>,
   failConsent: false,
   failCommit: false,
 }));
 
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
-    $queryRaw: async () => [{ id: 'patient-a', patientId: 'patient-a' }],
-    $executeRaw: async (query: { values: unknown[] }) => {
-      store.refillPreferences.push({
-        organizationId: query.values[1],
-        patientId: query.values[2],
-        optedOut: query.values[3],
-      });
-      return 1;
+    // The patient lock, or the refill-preference upsert (with or without the
+    // ordered guard), emulated against the store.
+    $queryRaw: async (query: { sql: string; values: unknown[] }) => {
+      if (!query.sql.includes('"pharmacy_refill_reminder_preferences"'))
+        return [{ id: 'patient-a', patientId: 'patient-a' }];
+      const [, organizationId, patientId, optedOut, source, , changedAt] = query.values as [
+        unknown,
+        unknown,
+        unknown,
+        boolean,
+        unknown,
+        unknown,
+        Date,
+      ];
+      const ordered = query.sql.includes('WHERE pref."changedAt" <');
+      const stored = store.refillPreferences.find(
+        (row) => row.organizationId === organizationId && row.patientId === patientId
+      );
+      if (
+        stored &&
+        ordered &&
+        !(
+          stored.changedAt < changedAt ||
+          (stored.changedAt.getTime() === changedAt.getTime() && optedOut)
+        )
+      )
+        return [];
+      if (stored) Object.assign(stored, { optedOut, source, changedAt });
+      else store.refillPreferences.push({ organizationId, patientId, optedOut, source, changedAt });
+      return [{ id: 'preference-a' }];
     },
     pharmacyCustomer: {
       findFirst: async () => ({ patientId: 'patient-a' }),
@@ -118,15 +146,16 @@ function message(text: string, from = FROM) {
   };
 }
 
-function knownCustomer(whatsappOptIn: boolean | null) {
+function knownCustomer(whatsappOptIn: boolean | null, whatsappOptInChangedAt: Date | null = null) {
   store.customers = [
     {
       id: 'customer-1',
       organizationId: 'org_a',
+      patientId: 'patient-a',
       userId: 'user-1',
       active: true,
       whatsappOptIn,
-      whatsappOptInChangedAt: null,
+      whatsappOptInChangedAt,
       phone: '0300-1234567',
     },
   ];
@@ -248,14 +277,85 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     expect(provider.calls).toHaveLength(1);
   });
 
-  it('STOP REFILL records an organization-wide refill opt-out', async () => {
-    knownCustomer(true);
-    await expect(
-      handleInboundWhatsAppMessage('org_a', provider, message('STOP REFILL'))
-    ).resolves.toBe('OPTED_OUT');
+  it('STOP REFILL stops refill reminders only, never the WhatsApp opt-in', async () => {
+    const consentAt = new Date(Date.UTC(2026, 9, 6, 11, 0, 0));
+    knownCustomer(true, consentAt);
+    const stopRefill = message('STOP REFILL');
+    await expect(handleInboundWhatsAppMessage('org_a', provider, stopRefill)).resolves.toBe(
+      'REFILL_OPTED_OUT'
+    );
+    expect(store.customers[0]).toMatchObject({
+      whatsappOptIn: true,
+      whatsappOptInChangedAt: consentAt,
+    });
     expect(store.refillPreferences).toEqual([
-      { organizationId: 'org_a', patientId: 'patient-a', optedOut: true },
+      {
+        organizationId: 'org_a',
+        patientId: 'patient-a',
+        optedOut: true,
+        source: 'KEYWORD',
+        changedAt: stopRefill.receivedAt,
+      },
     ]);
+    expect(store.logs[0]).toMatchObject({ kind: 'REFILL_OPT_OUT', status: 'RECEIVED' });
+    expect(provider.calls).toEqual([
+      expect.objectContaining({ body: expect.stringContaining('no longer receive refill') }),
+    ]);
+    // The customer-wide consent still answers orders.
+    await expect(
+      handleInboundWhatsAppMessage('org_a', provider, message('Panadol 2 packs'))
+    ).resolves.toBe('ORDER_PLACED');
+  });
+
+  it.each([
+    ['the same second as', 0],
+    ['older than', -3_600_000],
+  ])(
+    'STOP REFILL at %s the last consent change leaves the opt-in alone',
+    async (_label, offset) => {
+      const consentAt = new Date(Date.UTC(2026, 9, 6, 12, 0, 30));
+      knownCustomer(true, consentAt);
+      const stopRefill = {
+        ...message('STOP REFILL'),
+        receivedAt: new Date(consentAt.getTime() + offset),
+      };
+      await expect(handleInboundWhatsAppMessage('org_a', provider, stopRefill)).resolves.toBe(
+        'REFILL_OPTED_OUT'
+      );
+      expect(store.customers[0]).toMatchObject({
+        whatsappOptIn: true,
+        whatsappOptInChangedAt: consentAt,
+      });
+      expect(store.refillPreferences).toMatchObject([{ optedOut: true }]);
+    }
+  );
+
+  it('ignores a replayed STOP REFILL, and one older than the stored refill choice', async () => {
+    knownCustomer(true);
+    const stopRefill = message('STOP REFILL');
+    await handleInboundWhatsAppMessage('org_a', provider, stopRefill);
+    // Staff re-enable reminders after the reply was sent.
+    store.refillPreferences[0]!.optedOut = false;
+    store.refillPreferences[0]!.changedAt = new Date(stopRefill.receivedAt.getTime() + 60_000);
+    await expect(handleInboundWhatsAppMessage('org_a', provider, stopRefill)).resolves.toBe(
+      'DUPLICATE'
+    );
+    const delayed = { ...message('STOP REFILL'), receivedAt: stopRefill.receivedAt };
+    await expect(handleInboundWhatsAppMessage('org_a', provider, delayed)).resolves.toBe(
+      'STALE_CONSENT'
+    );
+    expect(store.refillPreferences).toMatchObject([{ optedOut: false }]);
+    expect(store.logs.at(-1)).toMatchObject({ status: 'IGNORED', error: 'STALE_CONSENT' });
+    expect(store.customers[0]).toMatchObject({ whatsappOptIn: true, whatsappOptInChangedAt: null });
+  });
+
+  it('a global STOP still stops refill reminders as well', async () => {
+    knownCustomer(true);
+    await expect(handleInboundWhatsAppMessage('org_a', provider, message('STOP'))).resolves.toBe(
+      'OPTED_OUT'
+    );
+    expect(store.customers[0]).toMatchObject({ whatsappOptIn: false });
+    expect(store.refillPreferences).toMatchObject([{ optedOut: true, source: 'KEYWORD' }]);
   });
 
   it('Urdu STOP and START toggle the flag', async () => {
