@@ -380,6 +380,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                   data.branches.find((branch) => branch.id === branchId)?.addressLine ?? ''
                 }
                 id="premisesAddressLine"
+                key={branchId}
                 name="premisesAddressLine"
                 required
               />
@@ -391,6 +392,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 className="mt-1 min-h-11"
                 defaultValue={data.branches.find((branch) => branch.id === branchId)?.city ?? ''}
                 id="premisesCity"
+                key={branchId}
                 name="premisesCity"
                 required
               />
