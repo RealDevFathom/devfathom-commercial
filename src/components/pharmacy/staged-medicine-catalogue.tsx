@@ -6,6 +6,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { StagedMedicineExport } from '@/components/pharmacy/staged-medicine-export';
+import { ScrollableTableRegion } from '@/components/pharmacy/scrollable-table-region';
 import { SOURCE_REFERENCE_COLUMNS } from '@/lib/pharmacy/migration/staged-review';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyStagedReviewRouter } from '@/server/routers/pharmacy-staged-review';
@@ -233,7 +234,7 @@ export async function StagedMedicineCatalogue({
               </li>
             ))}
           </ul>
-          <div className="overflow-x-auto">
+          <ScrollableTableRegion label="Staged medicine catalogue review">
             <table className="w-full text-sm">
               <caption className="sr-only">
                 Unverified source quantities. No saleable stock is created.
@@ -276,7 +277,7 @@ export async function StagedMedicineCatalogue({
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollableTableRegion>
           {!result.rows.length && (
             <p className="py-4">No candidates match. Clear the search or choose another batch.</p>
           )}

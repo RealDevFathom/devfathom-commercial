@@ -74,8 +74,8 @@ export function TransferCard({
         />
       </div>
 
-      <div className="mt-4 overflow-x-auto">
-        <Table>
+      <div className="mt-4">
+        <Table scrollAreaLabel={`Transfer ${reference} lines`}>
           <TableHeader>
             <TableRow>
               <TableHead>Medicine / batch</TableHead>

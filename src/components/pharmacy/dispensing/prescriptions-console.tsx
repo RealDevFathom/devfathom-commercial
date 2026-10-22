@@ -10,6 +10,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Field, WorkspaceState, fieldClass } from './field';
 import { MedicationCard } from './medication-card';
+import { ScrollableTableRegion } from '../scrollable-table-region';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -508,7 +509,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                   every line.
                 </WorkspaceState>
               ) : (
-                <div className="overflow-x-auto">
+                <ScrollableTableRegion label="Prescription worklist">
                   <table className="w-full min-w-[46rem] text-left text-sm">
                     <thead className="font-mono text-[0.65rem] tracking-wide text-text-muted uppercase">
                       <tr>
@@ -577,7 +578,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                       )}
                     </tbody>
                   </table>
-                </div>
+                </ScrollableTableRegion>
               )}
             </SectionCard>
           </div>

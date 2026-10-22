@@ -19,6 +19,7 @@ import {
   type NormalizedMedicineReferenceRow,
 } from '@/lib/pharmacy/reference-connectors';
 import { trpc } from '@/lib/trpc';
+import { ScrollableTableRegion } from './scrollable-table-region';
 
 type ConnectorHealth = {
   id: string;
@@ -355,7 +356,10 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
         )}
 
         {preview.length ? (
-          <div className="mt-5 overflow-x-auto rounded-md border border-border-subtle">
+          <ScrollableTableRegion
+            label="Medicine reference import preview"
+            className="mt-5 rounded-md border border-border-subtle"
+          >
             <table className="w-full min-w-[780px] text-left text-sm">
               <thead className="bg-surface-sunken font-mono text-[10px] uppercase tracking-wide text-text-muted">
                 <tr>
@@ -385,7 +389,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
                 ))}
               </tbody>
             </table>
-          </div>
+          </ScrollableTableRegion>
         ) : null}
       </SectionCard>
 
