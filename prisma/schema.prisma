@@ -1092,12 +1092,14 @@ model PharmacyWinBackIssuance {
   id               String   @id @default(cuid())
   organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   customerId       String
-  voucherId        String
+  branchId         String
+  voucherId        String?
   campaignWindowStart DateTime
   issuedAt         DateTime @default(now())
 
   @@unique([organizationId, id])
   @@unique([organizationId, customerId, campaignWindowStart])
+  @@index([organizationId, branchId, campaignWindowStart])
   @@unique([organizationId, voucherId])
   @@map("pharmacy_win_back_issuances")
 }
