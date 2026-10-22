@@ -1,5 +1,4 @@
 import { pharmacyCamerasRouter } from './pharmacy-cameras';
-import { pharmacyAccessRouter } from './pharmacy-access';
 import { pharmacyMarketingRouter } from './pharmacy-marketing';
 import { router } from '../trpc';
 import { hotelPropertyRouter } from './hotel-property';
@@ -71,7 +70,6 @@ import { pharmacyOrderingRouter } from './pharmacy-ordering';
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
 
 export const appRouter = router({
-  pharmacyAccess: pharmacyAccessRouter,
   hotelProperty: hotelPropertyRouter,
   hotelRates: hotelRatesRouter,
   restaurantPromotions: restaurantPromotionsRouter,

@@ -69,7 +69,6 @@ type NavGroup = 'Workspace' | 'Restaurant' | 'Pharmacy' | 'Hospitality' | 'Firm'
 
 /** A hospitality property capability, as the property scope check names it. */
 export type HotelCapability = Extract<Action, `hotel:${string}`>;
-export type PharmacyCapability = Extract<Action, `pharmacy:${string}` | `reports:${string}`>;
 
 interface NavItem {
   label: string;
@@ -89,9 +88,7 @@ interface NavItem {
    */
   hotelCapabilities?: readonly HotelCapability[];
   /** Shown only when the signed-in user holds one of these capabilities. */
-  pharmacyCapabilities?: readonly PharmacyCapability[];
-  /** Shown only when the signed-in user holds every one of these capabilities. */
-  pharmacyAllCapabilities?: readonly PharmacyCapability[];
+  pharmacyCapabilities?: readonly string[];
 }
 
 // Grouped to match the Studio WORKSPACE / RESTAURANT / FIRM rail. Order defines the
@@ -319,7 +316,6 @@ export const navigation: NavItem[] = [
     icon: Monitor,
     group: 'Pharmacy',
     module: 'pharmacy-counter',
-    adminOnly: true,
   },
   {
     label: 'Counter',
@@ -327,21 +323,18 @@ export const navigation: NavItem[] = [
     icon: Monitor,
     group: 'Pharmacy',
     module: 'pharmacy-counter',
-    pharmacyCapabilities: ['pharmacy:counter', 'pharmacy:dispense'],
   },
   {
     label: 'Inventory',
     href: '/pharmacy/inventory',
     icon: PackageSearch,
     group: 'Pharmacy',
-    pharmacyCapabilities: ['pharmacy:inventory'],
   },
   {
     label: 'Purchasing',
     href: '/pharmacy/purchasing',
     icon: ShoppingCart,
     group: 'Pharmacy',
-    pharmacyCapabilities: ['pharmacy:procurement'],
   },
   {
     label: 'Finance',
@@ -349,14 +342,12 @@ export const navigation: NavItem[] = [
     icon: DollarSign,
     adminOnly: true,
     group: 'Pharmacy',
-    pharmacyAllCapabilities: ['reports:operational', 'reports:financial'],
   },
   {
     label: 'Reports & Insights',
     href: '/pharmacy/reports',
     icon: BarChart3,
     group: 'Pharmacy',
-    pharmacyCapabilities: ['reports:operational'],
   },
   {
     label: 'Cameras',
@@ -388,7 +379,6 @@ export const navigation: NavItem[] = [
     icon: FileText,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
-    pharmacyCapabilities: ['pharmacy:orders', 'pharmacy:dispense'],
   },
   {
     label: 'Pharmacist queue',
@@ -396,7 +386,6 @@ export const navigation: NavItem[] = [
     icon: ClipboardCheck,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
-    pharmacyCapabilities: ['pharmacy:dispense'],
   },
   {
     label: 'Substitution',
@@ -404,7 +393,6 @@ export const navigation: NavItem[] = [
     icon: Replace,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
-    pharmacyCapabilities: ['pharmacy:dispense'],
   },
   {
     label: 'Controlled register',
@@ -548,7 +536,7 @@ export function visibleNavigation(
   entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>,
   role?: string,
   hotelCapabilities: readonly HotelCapability[] = NO_HOTEL_CAPABILITIES,
-  pharmacyCapabilities: readonly PharmacyCapability[] = []
+  pharmacyCapabilities: readonly string[] = []
 ) {
   const isAdmin = role === 'ADMIN';
   const isHr = role === 'HR';
@@ -569,13 +557,6 @@ export function visibleNavigation(
       if (
         item.pharmacyCapabilities?.length &&
         !item.pharmacyCapabilities.some((capability) => pharmacyCapabilities.includes(capability))
-      )
-        return false;
-      if (
-        item.pharmacyAllCapabilities?.length &&
-        !item.pharmacyAllCapabilities.every((capability) =>
-          pharmacyCapabilities.includes(capability)
-        )
       )
         return false;
       if (item.hrAccess) return isAdmin || isHr;
@@ -625,13 +606,15 @@ function useVisibleNavigation() {
     current && properties.data
       ? [...new Set(properties.data.properties.flatMap((property) => property.capabilities))]
       : NO_HOTEL_CAPABILITIES;
-  const pharmacyWorkspace = entitlements.vertical === 'PHARMACY';
-  const pharmacyAccess = trpc.pharmacyAccess.navigation.useQuery(undefined, {
-    enabled: pharmacyWorkspace,
+  const safetyModule =
+    entitlements.vertical === 'PHARMACY' &&
+    isModuleGranted('pharmacy-safety', entitlements.enabledModules);
+  const safetyAccess = trpc.pharmacySafety.access.useQuery(undefined, {
+    enabled: safetyModule,
     retry: false,
     staleTime: 30_000,
   });
-  const pharmacyCapabilities = (pharmacyAccess.data ?? []) as PharmacyCapability[];
+  const pharmacyCapabilities = safetyAccess.data?.allowed ? ['pharmacy:safety'] : [];
   const filteredNav = visibleNavigation(
     entitlements,
     session?.user?.role,
