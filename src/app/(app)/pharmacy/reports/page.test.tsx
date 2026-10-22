@@ -15,6 +15,33 @@ const commandCentre = vi.fn(async () => ({
     expiryValueMinor90: 0,
   },
 }));
+const expiryAdvice = vi.fn(async () => [
+  {
+    lotId: 'lot-1',
+    branchId: 'b1',
+    medicineName: 'High-value medicine',
+    batchNumber: 'B-1',
+    supplierId: 'supplier-1',
+    supplierName: 'Supplier',
+    stockLocationId: 'location-1',
+    onHandUnits: 90,
+    unitCostMinor: 500,
+    expiresAt: new Date('2026-10-05T00:00:00Z'),
+    soldUnits: 10,
+    historyDays: 30,
+    returnWindowDays: 45,
+    coldChain: false,
+    classification: 'RETURNABLE',
+    observedUnitsPerDay: 0.33,
+    projectedClearAt: new Date('2027-06-01T00:00:00Z'),
+    returnWindowStartsAt: new Date('2026-08-21T00:00:00Z'),
+    valueAtRiskMinor: 40_000,
+    projectedUnsoldUnits: 80,
+    proposalAllowed: true,
+    explanation: 'Observed 10 units over 30 days; projected clear after expiry.',
+  },
+]);
+const packAuthenticationFlags = vi.fn(async () => []);
 vi.mock('@/server/trpc', () => ({ createTRPCContext: vi.fn(async () => ({})) }));
 vi.mock('@/server/routers/pharmacy-reports', () => ({
   pharmacyReportsRouter: {
@@ -42,33 +69,10 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
           estimateConfidence: null,
         },
       ],
-      expiryAdvice: async () => [
-        {
-          lotId: 'lot-1',
-          branchId: 'b1',
-          medicineName: 'High-value medicine',
-          batchNumber: 'B-1',
-          supplierId: 'supplier-1',
-          supplierName: 'Supplier',
-          stockLocationId: 'location-1',
-          onHandUnits: 90,
-          unitCostMinor: 500,
-          expiresAt: new Date('2026-10-05T00:00:00Z'),
-          soldUnits: 10,
-          historyDays: 30,
-          returnWindowDays: 45,
-          coldChain: false,
-          classification: 'RETURNABLE',
-          observedUnitsPerDay: 0.33,
-          projectedClearAt: new Date('2027-06-01T00:00:00Z'),
-          returnWindowStartsAt: new Date('2026-08-21T00:00:00Z'),
-          valueAtRiskMinor: 40_000,
-          projectedUnsoldUnits: 80,
-          proposalAllowed: true,
-          explanation: 'Observed 10 units over 30 days; projected clear after expiry.',
-        },
-      ],
+      expiryAdvice,
       proposeExpiryReturn: async () => ({}),
+      packAuthenticationFlags,
+      acknowledgePackAuthenticationFlag: async () => ({}),
       refreshAnomalies: async () => ({ evaluated: 1, signals: [] }),
       acknowledgeAnomaly: async () => ({}),
       snoozeAnomaly: async () => ({}),
@@ -127,6 +131,12 @@ describe('pharmacy report catalog filters', () => {
     expect(commandCentre).toHaveBeenCalledWith(
       expect.objectContaining({ supplierId: 'sup1', ingredientId: 'ing1', batchId: 'lot1' })
     );
+    expect(expiryAdvice).toHaveBeenCalledWith(
+      expect.objectContaining({ supplierId: 'sup1', ingredientId: 'ing1', batchId: 'lot1' })
+    );
+    expect(packAuthenticationFlags).toHaveBeenCalledWith(
+      expect.objectContaining({ supplierId: 'sup1', ingredientId: 'ing1', batchId: 'lot1' })
+    );
     expect(screen.getByText('Source:').parentElement).toHaveTextContent('pharmacy_sales');
     expect(screen.getByRole('heading', { name: 'Daily owner digest' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Anomaly review signals' })).toBeVisible();
@@ -135,6 +145,8 @@ describe('pharmacy report catalog filters', () => {
     ).toBeVisible();
     expect(screen.getByText('High-value medicine')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Create draft proposal' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Pack authentication flags' })).toBeVisible();
+    expect(screen.getByText('No pack authentication flags match these branches.')).toBeVisible();
     expect(screen.getByText(/never rank staff, imply misconduct/)).toBeVisible();
     expect(screen.getByText(/no posting is created by this signal/)).toBeVisible();
     expect(screen.getByLabelText('Acknowledgement reason')).toBeRequired();
