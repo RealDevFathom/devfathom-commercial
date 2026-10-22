@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1350-env-ph-purge-provision-bounded-verification-prerequisites-for-regulatory-profile-repair
+Branch: WHA-1350-env-ph-purge-provision-bounded-verification-prerequisites-for-regulatory-profile-repair
+HEAD: fe1e3e383c8b966cdb68669ba5366db00fe2320a
+Mode: applied
+Excluded (secrets): 25

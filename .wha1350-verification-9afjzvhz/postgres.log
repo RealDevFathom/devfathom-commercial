@@ -1,0 +1,107 @@
+2026-09-05 21:54:58.098 PKT [78624] LOG:  starting PostgreSQL 16.15 (Homebrew) on aarch64-apple-darwin25.6.0, compiled by Apple clang version 21.0.0 (clang-2100.1.1.101), 64-bit
+2026-09-05 21:54:58.098 PKT [78624] LOG:  listening on IPv4 address "127.0.0.1", port 52027
+2026-09-05 21:54:58.101 PKT [78627] LOG:  database system was shut down at 2026-09-05 21:54:58 PKT
+2026-09-05 21:54:58.104 PKT [78624] LOG:  database system is ready to accept connections
+2026-09-05 21:54:58.418 PKT [78624] LOG:  received SIGHUP, reloading configuration files
+2026-09-05 21:55:16.367 PKT [82481] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-05 21:55:16.440 PKT [82481] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-05 21:59:58.429 PKT [78625] LOG:  checkpoint starting: time
+2026-09-05 22:03:29.119 PKT [39176] ERROR:  pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+2026-09-05 22:03:29.119 PKT [39176] CONTEXT:  PL/pgSQL function pharmacy_reject_regulatory_rewrite() line 20 at RAISE
+2026-09-05 22:03:29.119 PKT [39176] STATEMENT:  DELETE FROM pharmacy_branch_regulatory_profiles WHERE id = $1
+2026-09-05 22:03:29.123 PKT [39176] ERROR:  pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+2026-09-05 22:03:29.123 PKT [39176] CONTEXT:  PL/pgSQL function pharmacy_reject_regulatory_rewrite() line 20 at RAISE
+2026-09-05 22:03:29.123 PKT [39176] STATEMENT:  UPDATE pharmacy_branch_regulatory_profiles SET "licenceNumber" = 'rewritten' WHERE id = $1
+2026-09-05 22:03:29.125 PKT [39176] ERROR:  pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+2026-09-05 22:03:29.125 PKT [39176] CONTEXT:  PL/pgSQL function pharmacy_reject_regulatory_rewrite() line 20 at RAISE
+2026-09-05 22:03:29.125 PKT [39176] STATEMENT:  DELETE FROM pharmacy_branch_regulatory_profiles WHERE id = $1
+2026-09-05 22:03:29.130 PKT [39176] ERROR:  pharmacy onboarding events are append-only; delete or purge the organization to remove its onboarding history
+2026-09-05 22:03:29.130 PKT [39176] CONTEXT:  PL/pgSQL function pharmacy_assert_onboarding_event_append_only() line 12 at RAISE
+2026-09-05 22:03:29.130 PKT [39176] STATEMENT:  DELETE FROM pharmacy_onboarding_events WHERE "organizationId" = $1
+2026-09-05 22:03:29.131 PKT [39176] ERROR:  pharmacy onboarding events are append-only
+2026-09-05 22:03:29.131 PKT [39176] CONTEXT:  PL/pgSQL function pharmacy_assert_onboarding_event_append_only() line 16 at RAISE
+2026-09-05 22:03:29.131 PKT [39176] STATEMENT:  UPDATE pharmacy_onboarding_events SET note = 'rewritten' WHERE "organizationId" = $1
+2026-09-05 22:03:50.256 PKT [45670] ERROR:  pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+2026-09-05 22:03:50.256 PKT [45670] CONTEXT:  PL/pgSQL function pharmacy_reject_regulatory_rewrite() line 20 at RAISE
+2026-09-05 22:03:50.256 PKT [45670] STATEMENT:  DELETE FROM pharmacy_branch_regulatory_profiles WHERE id = $1
+2026-09-05 22:03:50.261 PKT [45670] ERROR:  pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+2026-09-05 22:03:50.261 PKT [45670] CONTEXT:  PL/pgSQL function pharmacy_reject_regulatory_rewrite() line 20 at RAISE
+2026-09-05 22:03:50.261 PKT [45670] STATEMENT:  UPDATE pharmacy_branch_regulatory_profiles SET "licenceNumber" = 'rewritten' WHERE id = $1
+2026-09-05 22:03:50.263 PKT [45670] ERROR:  pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+2026-09-05 22:03:50.263 PKT [45670] CONTEXT:  PL/pgSQL function pharmacy_reject_regulatory_rewrite() line 20 at RAISE
+2026-09-05 22:03:50.263 PKT [45670] STATEMENT:  DELETE FROM pharmacy_branch_regulatory_profiles WHERE id = $1
+2026-09-05 22:03:50.266 PKT [45670] ERROR:  pharmacy onboarding events are append-only; delete or purge the organization to remove its onboarding history
+2026-09-05 22:03:50.266 PKT [45670] CONTEXT:  PL/pgSQL function pharmacy_assert_onboarding_event_append_only() line 12 at RAISE
+2026-09-05 22:03:50.266 PKT [45670] STATEMENT:  DELETE FROM pharmacy_onboarding_events WHERE "organizationId" = $1
+2026-09-05 22:03:50.267 PKT [45670] ERROR:  pharmacy onboarding events are append-only
+2026-09-05 22:03:50.267 PKT [45670] CONTEXT:  PL/pgSQL function pharmacy_assert_onboarding_event_append_only() line 16 at RAISE
+2026-09-05 22:03:50.267 PKT [45670] STATEMENT:  UPDATE pharmacy_onboarding_events SET note = 'rewritten' WHERE "organizationId" = $1
+2026-09-05 22:04:28.171 PKT [78625] LOG:  checkpoint complete: wrote 3060 buffers (18.7%); 0 WAL file(s) added, 0 removed, 2 recycled; write=269.650 s, sync=0.083 s, total=269.743 s; sync files=3579, longest=0.001 s, average=0.001 s; distance=29151 kB, estimate=29151 kB; lsn=0/31B1A28, redo lsn=0/31957C0
+2026-09-05 22:04:28.282 PKT [47054] ERROR:  pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+2026-09-05 22:04:28.282 PKT [47054] CONTEXT:  PL/pgSQL function pharmacy_reject_regulatory_rewrite() line 20 at RAISE
+2026-09-05 22:04:28.282 PKT [47054] STATEMENT:  DELETE FROM pharmacy_branch_regulatory_profiles WHERE id = $1
+2026-09-05 22:04:28.286 PKT [47054] ERROR:  pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+2026-09-05 22:04:28.286 PKT [47054] CONTEXT:  PL/pgSQL function pharmacy_reject_regulatory_rewrite() line 20 at RAISE
+2026-09-05 22:04:28.286 PKT [47054] STATEMENT:  UPDATE pharmacy_branch_regulatory_profiles SET "licenceNumber" = 'rewritten' WHERE id = $1
+2026-09-05 22:04:28.287 PKT [47054] ERROR:  pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+2026-09-05 22:04:28.287 PKT [47054] CONTEXT:  PL/pgSQL function pharmacy_reject_regulatory_rewrite() line 20 at RAISE
+2026-09-05 22:04:28.287 PKT [47054] STATEMENT:  DELETE FROM pharmacy_branch_regulatory_profiles WHERE id = $1
+2026-09-05 22:04:28.291 PKT [47054] ERROR:  pharmacy onboarding events are append-only; delete or purge the organization to remove its onboarding history
+2026-09-05 22:04:28.291 PKT [47054] CONTEXT:  PL/pgSQL function pharmacy_assert_onboarding_event_append_only() line 12 at RAISE
+2026-09-05 22:04:28.291 PKT [47054] STATEMENT:  DELETE FROM pharmacy_onboarding_events WHERE "organizationId" = $1
+2026-09-05 22:04:28.292 PKT [47054] ERROR:  pharmacy onboarding events are append-only
+2026-09-05 22:04:28.292 PKT [47054] CONTEXT:  PL/pgSQL function pharmacy_assert_onboarding_event_append_only() line 16 at RAISE
+2026-09-05 22:04:28.292 PKT [47054] STATEMENT:  UPDATE pharmacy_onboarding_events SET note = 'rewritten' WHERE "organizationId" = $1
+2026-09-05 22:04:58.175 PKT [78625] LOG:  checkpoint starting: time
+2026-09-05 22:05:08.906 PKT [78625] LOG:  checkpoint complete: wrote 107 buffers (0.7%); 0 WAL file(s) added, 0 removed, 0 recycled; write=10.728 s, sync=0.002 s, total=10.732 s; sync files=66, longest=0.001 s, average=0.001 s; distance=117 kB, estimate=26247 kB; lsn=0/31B2C18, redo lsn=0/31B2BE0
+2026-09-05 22:20:00.120 PKT [53957] ERROR:  pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+2026-09-05 22:20:00.120 PKT [53957] CONTEXT:  PL/pgSQL function pharmacy_reject_regulatory_rewrite() line 20 at RAISE
+2026-09-05 22:20:00.120 PKT [53957] STATEMENT:  DELETE FROM pharmacy_branch_regulatory_profiles WHERE id = $1
+2026-09-05 22:20:00.124 PKT [53957] ERROR:  pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+2026-09-05 22:20:00.124 PKT [53957] CONTEXT:  PL/pgSQL function pharmacy_reject_regulatory_rewrite() line 20 at RAISE
+2026-09-05 22:20:00.124 PKT [53957] STATEMENT:  UPDATE pharmacy_branch_regulatory_profiles SET "licenceNumber" = 'rewritten' WHERE id = $1
+2026-09-05 22:20:00.125 PKT [53957] ERROR:  pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+2026-09-05 22:20:00.125 PKT [53957] CONTEXT:  PL/pgSQL function pharmacy_reject_regulatory_rewrite() line 20 at RAISE
+2026-09-05 22:20:00.125 PKT [53957] STATEMENT:  DELETE FROM pharmacy_branch_regulatory_profiles WHERE id = $1
+2026-09-05 22:20:00.129 PKT [53957] ERROR:  pharmacy onboarding events are append-only; delete or purge the organization to remove its onboarding history
+2026-09-05 22:20:00.129 PKT [53957] CONTEXT:  PL/pgSQL function pharmacy_assert_onboarding_event_append_only() line 12 at RAISE
+2026-09-05 22:20:00.129 PKT [53957] STATEMENT:  DELETE FROM pharmacy_onboarding_events WHERE "organizationId" = $1
+2026-09-05 22:20:00.130 PKT [53957] ERROR:  pharmacy onboarding events are append-only
+2026-09-05 22:20:00.130 PKT [53957] CONTEXT:  PL/pgSQL function pharmacy_assert_onboarding_event_append_only() line 16 at RAISE
+2026-09-05 22:20:00.130 PKT [53957] STATEMENT:  UPDATE pharmacy_onboarding_events SET note = 'rewritten' WHERE "organizationId" = $1
+2026-09-05 22:24:58.916 PKT [78625] LOG:  checkpoint starting: time
+2026-09-05 22:25:05.229 PKT [78625] LOG:  checkpoint complete: wrote 63 buffers (0.4%); 0 WAL file(s) added, 0 removed, 0 recycled; write=6.309 s, sync=0.001 s, total=6.314 s; sync files=63, longest=0.001 s, average=0.001 s; distance=87 kB, estimate=23631 kB; lsn=0/31C8828, redo lsn=0/31C87F0
+2026-09-05 22:49:58.241 PKT [78625] LOG:  checkpoint starting: time
+2026-09-05 22:50:02.434 PKT [78625] LOG:  checkpoint complete: wrote 42 buffers (0.3%); 0 WAL file(s) added, 0 removed, 0 recycled; write=4.187 s, sync=0.002 s, total=4.194 s; sync files=28, longest=0.001 s, average=0.001 s; distance=77 kB, estimate=21276 kB; lsn=0/31E2E20, redo lsn=0/31DBD88
+2026-09-05 22:58:08.135 PKT [49696] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-05 22:58:08.205 PKT [49696] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-05 22:59:58.440 PKT [78625] LOG:  checkpoint starting: time
+2026-09-05 23:04:28.154 PKT [78625] LOG:  checkpoint complete: wrote 2733 buffers (16.7%); 0 WAL file(s) added, 0 removed, 1 recycled; write=269.587 s, sync=0.125 s, total=269.714 s; sync files=3577, longest=0.002 s, average=0.001 s; distance=28719 kB, estimate=28719 kB; lsn=0/4DE7C48, redo lsn=0/4DE7C10
+2026-09-05 23:09:58.158 PKT [78625] LOG:  checkpoint starting: time
+2026-09-05 23:10:00.513 PKT [78625] LOG:  checkpoint complete: wrote 24 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=2.349 s, sync=0.003 s, total=2.356 s; sync files=21, longest=0.001 s, average=0.001 s; distance=30 kB, estimate=25850 kB; lsn=0/4DEF508, redo lsn=0/4DEF4D0
+2026-09-05 23:13:33.834 PKT [73024] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-05 23:13:33.903 PKT [73024] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-05 23:14:58.516 PKT [78625] LOG:  checkpoint starting: time
+2026-09-05 23:19:28.157 PKT [78625] LOG:  checkpoint complete: wrote 2690 buffers (16.4%); 0 WAL file(s) added, 0 removed, 2 recycled; write=269.505 s, sync=0.133 s, total=269.641 s; sync files=3562, longest=0.006 s, average=0.001 s; distance=28284 kB, estimate=28284 kB; lsn=0/6AF76C8, redo lsn=0/698E778
+2026-09-05 23:22:11.524 PKT [78625] LOG:  checkpoint starting: immediate force wait
+2026-09-05 23:22:11.527 PKT [78625] LOG:  checkpoint complete: wrote 25 buffers (0.2%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.003 s, sync=0.001 s, total=0.004 s; sync files=10, longest=0.001 s, average=0.001 s; distance=1568 kB, estimate=25613 kB; lsn=0/6B16A50, redo lsn=0/6B16A18
+2026-09-05 23:27:11.530 PKT [78625] LOG:  checkpoint starting: time
+2026-09-05 23:27:17.110 PKT [78625] LOG:  checkpoint complete: wrote 56 buffers (0.3%); 0 WAL file(s) added, 0 removed, 0 recycled; write=5.576 s, sync=0.002 s, total=5.580 s; sync files=36, longest=0.001 s, average=0.001 s; distance=149 kB, estimate=23066 kB; lsn=0/6B3C0E0, redo lsn=0/6B3C0A8
+2026-09-05 23:32:11.112 PKT [78625] LOG:  checkpoint starting: time
+2026-09-05 23:32:14.480 PKT [78625] LOG:  checkpoint complete: wrote 34 buffers (0.2%); 0 WAL file(s) added, 0 removed, 0 recycled; write=3.366 s, sync=0.002 s, total=3.369 s; sync files=30, longest=0.001 s, average=0.001 s; distance=125 kB, estimate=20772 kB; lsn=0/6B5B6D0, redo lsn=0/6B5B698
+2026-09-05 23:44:13.813 PKT [20993] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-05 23:44:13.877 PKT [20993] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-05 23:47:11.490 PKT [78625] LOG:  checkpoint starting: time
+2026-09-05 23:48:46.813 PKT [78625] LOG:  checkpoint complete: wrote 1047 buffers (6.4%); 0 WAL file(s) added, 0 removed, 2 recycled; write=95.320 s, sync=0.001 s, total=95.323 s; sync files=14, longest=0.001 s, average=0.001 s; distance=28763 kB, estimate=28763 kB; lsn=0/879B870, redo lsn=0/8772348
+2026-09-05 23:48:46.813 PKT [78625] LOG:  checkpoint starting: immediate force wait
+2026-09-05 23:48:46.814 PKT [78625] LOG:  checkpoint complete: wrote 11 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.001 s; sync files=1, longest=0.001 s, average=0.001 s; distance=165 kB, estimate=25903 kB; lsn=0/879B920, redo lsn=0/879B8E8
+2026-09-05 23:53:46.818 PKT [78625] LOG:  checkpoint starting: time
+2026-09-05 23:53:50.155 PKT [78625] LOG:  checkpoint complete: wrote 34 buffers (0.2%); 0 WAL file(s) added, 0 removed, 0 recycled; write=3.335 s, sync=0.001 s, total=3.337 s; sync files=11, longest=0.001 s, average=0.001 s; distance=164 kB, estimate=23329 kB; lsn=0/87C4C38, redo lsn=0/87C4C00
+2026-09-05 23:58:46.157 PKT [78625] LOG:  checkpoint starting: time
+2026-09-05 23:58:50.456 PKT [78625] LOG:  checkpoint complete: wrote 43 buffers (0.3%); 0 WAL file(s) added, 0 removed, 0 recycled; write=4.295 s, sync=0.002 s, total=4.300 s; sync files=31, longest=0.001 s, average=0.001 s; distance=177 kB, estimate=21014 kB; lsn=0/87F12A0, redo lsn=0/87F1268
+2026-09-05 23:59:28.610 PKT [35709] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-05 23:59:28.676 PKT [35709] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-06 00:02:15.972 PKT [78625] LOG:  checkpoint starting: immediate force wait
+2026-09-06 00:02:15.977 PKT [78625] LOG:  checkpoint complete: wrote 41 buffers (0.3%); 0 WAL file(s) added, 0 removed, 2 recycled; write=0.004 s, sync=0.001 s, total=0.006 s; sync files=16, longest=0.001 s, average=0.001 s; distance=28887 kB, estimate=28887 kB; lsn=0/A427228, redo lsn=0/A4271F0
+2026-09-06 00:07:16.085 PKT [78625] LOG:  checkpoint starting: time
+2026-09-06 00:07:18.730 PKT [78625] LOG:  checkpoint complete: wrote 27 buffers (0.2%); 0 WAL file(s) added, 0 removed, 0 recycled; write=2.639 s, sync=0.002 s, total=2.645 s; sync files=12, longest=0.001 s, average=0.001 s; distance=114 kB, estimate=26010 kB; lsn=0/A443DF0, redo lsn=0/A443DB8
