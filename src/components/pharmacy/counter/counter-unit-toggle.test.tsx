@@ -155,7 +155,9 @@ describe('CounterUnitToggle (POS-03)', () => {
     for (const radio of screen.getAllByRole('radio')) {
       expect((radio as HTMLButtonElement).disabled).toBe(true);
     }
+    expect(screen.getByRole('button', { name: 'Decrease quantity' })).toBeDisabled();
     expect((screen.getByLabelText('Quantity') as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Increase quantity' })).toBeDisabled();
   });
 
   it('explains itself when the lot has no priceable sale unit', () => {
