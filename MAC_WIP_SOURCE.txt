@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-8-m1-vertical-foundation-restaurant-vertical-restaurant-v1
+Branch: WHA-8-m1-vertical-foundation-restaurant-vertical-restaurant-v1
+HEAD: 3972704c17a042fb7820112f70d4abc859319bde
+Mode: applied
+Excluded (secrets): 5
