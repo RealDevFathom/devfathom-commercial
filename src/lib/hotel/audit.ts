@@ -65,6 +65,12 @@ export const HOTEL_AUDIT_ENTITY_TYPES = [
   'HotelFunctionSpace',
   'HotelSpaceBooking',
   'HotelJourneyTemplate',
+  'HotelGuest',
+  'HotelReservation',
+  'HotelReservationStayUnit',
+  'HotelRoomAssignment',
+  'HotelReservationEvent',
+  'HotelFolio',
 ] as const;
 
 export type HotelAuditEntityType = (typeof HOTEL_AUDIT_ENTITY_TYPES)[number];

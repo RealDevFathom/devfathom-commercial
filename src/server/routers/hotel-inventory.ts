@@ -63,6 +63,7 @@ import {
   type InventoryDb,
 } from '@/lib/hotel/inventory';
 import { readHotelModeOverrides } from '@/lib/hotel/mode-overrides';
+import { hasModule } from '@/lib/entitlements';
 import { applyHotelModeDefaults } from '@/lib/hotel/modes';
 import type { EntitlementSnapshot } from '@/lib/module-catalog';
 import {
@@ -74,6 +75,7 @@ import {
 } from '@/server/hotel-property-context';
 import { hotelPropertySelectionInput } from '@/server/hotel-property-scope';
 import { capabilityProcedure, protectedProcedure, router, type TRPCContext } from '../trpc';
+import { hotelAvailability } from './hotel-reservations';
 
 const propertyAdmin = capabilityProcedure('hotel:property-admin');
 
@@ -286,6 +288,56 @@ const genderPolicyOptions = HOTEL_GENDER_POLICIES.map((value) => ({
 }));
 
 export const hotelInventoryRouter = router({
+  /** Operational projection; front desk gets occupant identity, housekeeping does not. */
+  statusBoard: protectedProcedure.input(hotelPropertySelectionInput).query(async ({ ctx, input }) => {
+    if (!hasModule(ctx.entitlements, 'hotel-front-desk'))
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Front desk operations are not enabled.' });
+    let audience: 'front-desk' | 'housekeeping' = 'front-desk';
+    let property: HotelProperty;
+    try {
+      property = await currentProperty(ctx, input.branchId, 'hotel:front-desk');
+    } catch (error) {
+      if (!(error instanceof TRPCError) || error.code !== 'FORBIDDEN') throw error;
+      audience = 'housekeeping';
+      property = await currentProperty(ctx, input.branchId, 'hotel:housekeeping');
+    }
+    const today = property.businessDate;
+    const rooms = await ctx.db.hotelRoom.findMany({
+      where: { organizationId: ctx.entitlements.organizationId, branchId: property.branchId, active: true },
+      orderBy: [{ number: 'asc' }],
+      include: {
+        roomType: { select: { id: true, code: true, name: true } },
+        beds: { where: { active: true }, orderBy: { label: 'asc' } },
+        blocks: { where: { releasedAt: null, startDate: { lte: today }, endDate: { gt: today } }, take: 1 },
+        assignments: { where: { status: { in: ['HELD', 'ACTIVE'] }, startDate: { lte: today }, endDate: { gt: today } }, include: { stayUnit: { include: { reservation: { include: { primaryGuest: { select: { firstName: true, lastName: true } } } } } } } },
+      },
+    });
+    return { audience, businessDate: today, rooms: rooms.map((room) => ({
+      id: room.id, number: room.number, status: room.status, roomType: room.roomType, beds: room.beds,
+      activeBlock: room.blocks[0] ?? null,
+      allowedTransitions: audience === 'housekeeping'
+        ? (room.status === 'VACANT_DIRTY' ? ['CLEANING'] : room.status === 'CLEANING' ? ['INSPECTED', 'VACANT_DIRTY'] : room.status === 'INSPECTED' ? ['VACANT_CLEAN', 'VACANT_DIRTY'] : [])
+        : [],
+      ...(audience === 'front-desk' ? { occupant: room.assignments.find((assignment) => assignment.status === 'ACTIVE')?.stayUnit.reservation.primaryGuest ?? null,
+        nextArrival: room.assignments.filter((assignment) => assignment.status === 'HELD').sort((a, b) => a.startDate.getTime() - b.startDate.getTime())[0]?.startDate ?? null } : {}),
+    })) };
+  }),
+
+  availabilityCalendar: capabilityProcedure('hotel:reservations').input(hotelPropertySelectionInput.extend({
+    startDate: z.coerce.date(), days: z.number().int().min(1).max(31).default(14),
+  })).query(async ({ ctx, input }) => {
+    if (!hasModule(ctx.entitlements, 'hotel-reservations')) throw new TRPCError({ code: 'FORBIDDEN', message: 'Reservations are not enabled.' });
+    const property = await currentProperty(ctx, input.branchId, 'hotel:reservations');
+    const dates = Array.from({ length: input.days }, (_, offset) => {
+      const date = new Date(input.startDate); date.setUTCDate(date.getUTCDate() + offset); return date;
+    });
+    const calendar = await Promise.all(dates.map(async (date) => {
+      const departure = new Date(date); departure.setUTCDate(departure.getUTCDate() + 1);
+      return { date, roomTypes: await hotelAvailability(ctx.db as Prisma.TransactionClient, ctx.entitlements.organizationId, property.branchId, date, departure) };
+    }));
+    return { startDate: input.startDate, days: calendar };
+  }),
+
   roomTypes: router({
     /** The property's types, which kinds it may add, and how much of the room ceiling is used. */
     list: propertyAdmin.input(hotelPropertySelectionInput).query(async ({ ctx, input }) => {
