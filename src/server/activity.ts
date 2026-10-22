@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@/generated/prisma/client';
+import { trackSideEffect } from '@/lib/side-effects/scope';
 
 /**
  * Activity types — keep this list in sync with the dashboard's getActivityColor mapping.
@@ -51,7 +52,7 @@ export interface LogActivityArgs {
  * succeeded; failing to log shouldn't surface an error to the client).
  */
 export function logActivity(db: PrismaClient, userId: string, args: LogActivityArgs): void {
-  db.activity
+  const write = db.activity
     .create({
       data: {
         type: args.type,
@@ -63,6 +64,17 @@ export function logActivity(db: PrismaClient, userId: string, args: LogActivityA
       },
     })
     .catch((err) => {
-      console.error('[activity] failed to log', args.type, err);
+      // Prisma errors can contain query values. Log only stable, non-sensitive
+      // diagnostics rather than the full error object.
+      const code =
+        typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string'
+          ? err.code
+          : 'unknown';
+      console.error('[activity] failed to log', args.type, code);
     });
+
+  // Tenant requests run inside an interactive transaction. Register this
+  // otherwise fire-and-forget write so withTenantDb waits for it before commit;
+  // without this, Prisma can close the transaction first and reject with P2028.
+  trackSideEffect(write);
 }
