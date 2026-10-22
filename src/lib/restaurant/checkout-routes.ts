@@ -34,7 +34,6 @@ import { RefundError, type RefundTenderResult } from './refunds';
 import { quoteOpenBillSettlement, TenderError, type ApplyTenderResult } from './tenders';
 import { TaxConfigurationError, TaxProfileResolutionError } from './tax-calculator';
 import { OrderCommandError } from './orders';
-import { loyaltyBalance } from './loyalty';
 import {
   authenticateApprover,
   buildActor,
@@ -788,7 +787,15 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
   const loyaltyWallet =
     account?.active && account.walletPasses.length > 0
       ? {
-          balance: await loyaltyBalance(db, account.id),
+          // A receipt is a settlement record, so later earns, redemptions, refunds,
+          // and adjustments must not rewrite the balance shown on a historical copy.
+          balance:
+            (
+              await db.loyaltyPointsEntry.aggregate({
+                where: { accountId: account.id, occurredAt: { lte: bill.settledAt! } },
+                _sum: { points: true },
+              })
+            )._sum.points ?? 0,
           platforms: [...new Set(account.walletPasses.map(({ platform }) => platform))],
         }
       : null;
