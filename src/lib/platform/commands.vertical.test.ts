@@ -213,7 +213,7 @@ function createPayload(overrides: Record<string, unknown> = {}) {
     primaryContactEmail: 'ops@acme.com',
     adminName: 'Acme Admin',
     adminEmail: 'admin@acme.com',
-    adminPassword: 'a-strong-password',
+    adminPassword: 'A-strong-password1',
     ...overrides,
   };
 }

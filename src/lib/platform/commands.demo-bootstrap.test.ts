@@ -449,7 +449,7 @@ describe('ordinary organization onboarding', () => {
         primaryContactEmail: 'owner@ordinary.test',
         adminName: 'Owner',
         adminEmail: 'owner@ordinary.test',
-        adminPassword: 'ordinary-password',
+        adminPassword: 'Ordinary-password1',
       },
       request
     );

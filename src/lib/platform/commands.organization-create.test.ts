@@ -68,7 +68,7 @@ function payload(adminEmail: string) {
     primaryContactEmail: 'ops@acme.com',
     adminName: 'Acme Admin',
     adminEmail,
-    adminPassword: 'a-strong-password',
+    adminPassword: 'A-strong-password1',
   };
 }
 
@@ -113,6 +113,20 @@ describe('organization.create admin email', () => {
         data: expect.objectContaining({ email: 'admin@acme.com', mustChangePassword: true }),
       })
     );
+  });
+
+  it('rejects an administrator password that fails the shared password policy', async () => {
+    await expect(
+      executePlatformCommand(
+        actor,
+        'organization.create',
+        { ...payload('admin@acme.com'), adminPassword: 'aaaaaaaaaaaa' },
+        request
+      )
+    ).rejects.toMatchObject({ issues: expect.any(Array) });
+
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+    expect(mocks.userCreate).not.toHaveBeenCalled();
   });
 });
 
