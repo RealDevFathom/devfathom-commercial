@@ -1,4 +1,4 @@
-import { capabilityMatches } from '@/lib/abac/capabilities';
+import { can, subjectFromSession } from '@/lib/abac';
 /**
  * PUR-07 — the database half of the stock action centre: reading exact ledger
  * facts, persisting the deduplicated signals `stock-signals.evaluateStockSignals`
@@ -657,7 +657,7 @@ function normalizeDraftInput(input: DraftActionInput): DraftActionInput {
   };
 }
 
-async function authorizeDraftIntent(
+export async function authorizeDraftIntent(
   db: ScopedDb,
   scope: LedgerScope,
   input: DraftActionInput,
@@ -678,13 +678,11 @@ async function authorizeDraftIntent(
   const user = await db.user.findFirst({
     where: { id: scope.actorId, organizationId: scope.organizationId },
     select: {
+      id: true,
+      role: true,
+      department: true,
       status: true,
       organization: { select: { status: true, vertical: true } },
-      organizationRole: { select: { permissions: { select: { capability: true, effect: true } } } },
-      permissionOverrides: {
-        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: at } }] },
-        select: { capability: true, effect: true },
-      },
     },
   });
   if (
@@ -696,18 +694,11 @@ async function authorizeDraftIntent(
     throw new PharmacyDraftIntentError('FORBIDDEN', 'Draft actor is not authorized.');
 
   // These are the native PHARMACY_ROLE_TEMPLATES grants, not Restaurant actions.
-  // Preserve the established override-before-role, deny-before-allow precedence.
+  // User and role rules form one set: any explicit deny wins.
   const capability =
     input.kind === 'DRAFT_TRANSFER' ? 'pharmacy:inventory' : 'pharmacy:procurement';
-  const matches = (rule: { capability: string; effect: string }) =>
-    capabilityMatches(rule.capability, capability, rule.effect === 'DENY' ? 'DENY' : 'ALLOW');
-  const overrides = user.permissionOverrides.filter(matches);
-  const rules = overrides.length
-    ? overrides
-    : (user.organizationRole?.permissions ?? []).filter(matches);
   if (
-    rules.some((rule) => rule.effect === 'DENY') ||
-    !rules.some((rule) => rule.effect === 'ALLOW')
+    !(await can(subjectFromSession(user), capability, undefined, { db, now: at }))
   ) {
     throw new PharmacyDraftIntentError('FORBIDDEN', 'Draft capability is not authorized.');
   }
