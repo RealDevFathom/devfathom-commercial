@@ -18,7 +18,6 @@ import {
   type SeriesRow,
 } from '@/lib/meetings/occurrences';
 import { guestSecretExpiryFor, mintGuestSecret } from '@/lib/meetings/guest-access';
-import { createMeetingInput } from '@/lib/meetings/validation';
 import { assertInOrganization, workspaceId } from '../org-refs';
 
 /** Page size `getAll` falls back to when the caller sends no `limit` (#38). */
@@ -323,7 +322,17 @@ export const meetingsRouter = router({
     }),
 
   create: protectedProcedure
-    .input(createMeetingInput)
+    .input(
+      z.object({
+        title: z.string().min(1),
+        description: z.string().optional(),
+        startTime: z.date(),
+        endTime: z.date(),
+        location: z.string().optional(),
+        recurrence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).nullable().default(null),
+        attendeeIds: z.array(z.string()),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       // Guard against stale sessions: if the session JWT references a user that
       // no longer exists (e.g. after a DB reset), fail fast with a useful message
