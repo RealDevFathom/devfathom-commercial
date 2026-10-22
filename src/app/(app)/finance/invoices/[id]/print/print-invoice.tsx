@@ -6,6 +6,7 @@ import { format } from 'date-fns';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { moneyLabel } from '@/lib/finance/currency';
+import { InvoiceTotals } from './invoice-totals';
 
 // Line items are stored as Json on the invoice; this is their persisted shape.
 type LineItem = { description: string; quantity: number; rate: number; amount: number };
@@ -54,6 +55,8 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
   const subtotal = Number(invoice.subtotal);
   const tax = Number(invoice.tax);
   const total = Number(invoice.total);
+  const amountPaid = Number(invoice.amountPaid);
+  const balance = Number(invoice.balance);
   const primaryContact = invoice.client.contacts?.[0];
 
   return (
@@ -192,20 +195,14 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
 
           {/* Totals */}
           <div className="mt-6 flex justify-end">
-            <div className="w-full max-w-xs space-y-1.5 text-sm">
-              <div className="flex justify-between text-slate-600">
-                <span>Subtotal</span>
-                <span className="tabular-nums">{moneyLabel(subtotal, currency)}</span>
-              </div>
-              <div className="flex justify-between text-slate-600">
-                <span>Tax</span>
-                <span className="tabular-nums">{moneyLabel(tax, currency)}</span>
-              </div>
-              <div className="flex justify-between border-t border-slate-200 pt-2 text-base font-bold text-slate-900">
-                <span>Total</span>
-                <span className="tabular-nums">{moneyLabel(total, currency)}</span>
-              </div>
-            </div>
+            <InvoiceTotals
+              subtotal={subtotal}
+              tax={tax}
+              total={total}
+              amountPaid={amountPaid}
+              balance={balance}
+              currency={currency}
+            />
           </div>
 
           {/* Notes */}
