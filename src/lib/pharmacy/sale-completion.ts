@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
 import { postSaleLineEntry } from './finance-postings';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
+import { assertRxSaleAllowed } from './rx-sale-gate';
 
 export const completionSaleInclude = {
   lines: {
@@ -26,6 +27,12 @@ export async function completePaidPharmacySale(
   /** F2: a leased offline receipt number the caller already consumed in this transaction. */
   leasedReceiptNumber: number | null = null
 ) {
+  // #518: every completion path re-checks who may sell Rx/restricted non-controlled lines.
+  await assertRxSaleAllowed(
+    db,
+    scope,
+    sale.lines.map((line) => line.medicine)
+  );
   let receiptNumber = leasedReceiptNumber;
   if (receiptNumber === null) {
     // Reserved (leased) numbers never return to this online sequence.
