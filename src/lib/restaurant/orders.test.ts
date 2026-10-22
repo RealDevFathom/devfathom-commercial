@@ -832,6 +832,60 @@ describeIfDatabase('orders command layer (real DB)', () => {
     expect(count).toBe(1); // the replay created nothing
   });
 
+  it('rejects reuse of an idempotency key with a different command payload', async () => {
+    const { orderId, db } = await openWithItem();
+    const addKey = key();
+    const first = await deps.orders.addItem(db, {
+      orderId,
+      menuItemId: ids.menuItem,
+      quantity: 1,
+      actor: actor(addKey),
+    });
+
+    await expect(
+      deps.orders.addItem(db, {
+        orderId,
+        menuItemId: ids.menuItem,
+        quantity: 2,
+        actor: actor(addKey),
+      })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_KEY_CONFLICT' });
+
+    expect(
+      await read((tx) =>
+        tx.restaurantOrderItem.count({ where: { orderId, id: { not: first.itemId } } })
+      )
+    ).toBe(1);
+    const stored = await read((tx) =>
+      tx.restaurantOrderIdempotencyKey.findUnique({
+        where: { deviceId_key: { deviceId, key: addKey } },
+        select: { commandType: true, payloadHash: true, resultRef: true },
+      })
+    );
+    expect(stored).toMatchObject({ commandType: 'item.add', resultRef: first.itemId });
+    expect(stored?.payloadHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('rejects reuse of an idempotency key across command types', async () => {
+    const { orderId, db } = await openWithItem();
+    const reusedKey = key();
+    await deps.orders.addItem(db, {
+      orderId,
+      menuItemId: ids.menuItem,
+      actor: actor(reusedKey),
+    });
+
+    await expect(
+      deps.orders.sendOrder(db, { orderId, actor: actor(reusedKey) })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_KEY_CONFLICT' });
+
+    expect(
+      await read((tx) =>
+        tx.restaurantOrderItem.count({ where: { orderId, status: 'QUEUED' } })
+      )
+    ).toBe(0);
+  });
+
   it('keeps the ledger + outbox in lock-step, one monotonic sequence per order (C2)', async () => {
     const { orderId, itemId, db } = await openWithItem();
     await deps.orders.sendOrder(db, { orderId, actor: actor() });

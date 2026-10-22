@@ -6960,14 +6960,16 @@ model RestaurantEventOutbox {
 
 /// M4/C7/§12.1: a device-scoped idempotency key. A terminal-submitted mutating
 /// command carries a `key`; the first occurrence records the `commandType` and
-/// the `resultRef` of what it created, and any replay of the same (deviceId, key)
-/// returns that original result and creates nothing. Unique (deviceId, key).
+/// a hash binding the exact command payload, and the `resultRef` of what it created.
+/// Only an exact replay of the same (deviceId, key, command type, payload) returns
+/// that original result and creates nothing. Unique (deviceId, key).
 model RestaurantOrderIdempotencyKey {
   id             String   @id @default(cuid())
   organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   deviceId       String
   key            String
   commandType    String
+  payloadHash    String
   resultRef      String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
