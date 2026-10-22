@@ -230,6 +230,25 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(db.pharmacyStockLocation.create).not.toHaveBeenCalled();
   });
+
+  it('validates the dispatch branch on the same transaction used for dispatch', async () => {
+    const transactionBranch = {
+      findMany: vi.fn().mockResolvedValue([{ id: 'branch_a' }]),
+    };
+    const transactionDb = { ...db, pharmacyBranch: transactionBranch };
+    db.$transaction.mockImplementationOnce(async (fn) => fn(transactionDb));
+
+    await expect(
+      caller().dispatchTransfer({
+        branchId: 'branch_a',
+        transferId: 'missing_transfer',
+        idempotencyKeyPrefix: 'dispatch-1',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'INVALID_STATE' });
+
+    expect(transactionBranch.findMany).toHaveBeenCalledOnce();
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+  });
 });
 
 describe('PUR-07 — the stock action centre transport', () => {

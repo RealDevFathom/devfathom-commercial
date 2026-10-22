@@ -588,6 +588,56 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     expect(balances.find((row) => row.disposition === 'AVAILABLE')?.onHandUnits).toBe(10);
   });
 
+  it('serializes duplicate dispatches of one approved transfer', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'duplicate-transfer-race');
+    const transferId = await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, 'branch_duplicate_transfer_destination');
+      const destination = await db.pharmacyStockLocation.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: 'branch_duplicate_transfer_destination',
+          code: `DUP-${tag('destination')}`,
+          name: 'Duplicate race destination',
+          kind: 'STORE',
+        },
+      });
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'duplicate-transfer-race',
+      });
+      const transfer = await deps.operations.allocateTransfer(db, scopeOf(fixture), {
+        toBranchId: destination.branchId,
+        lines: [
+          {
+            sourceLotId: lot.id,
+            sourceStockLocationId: fixture.locationId,
+            destinationStockLocationId: destination.id,
+            quantityUnits: 10,
+          },
+        ],
+      });
+      await deps.operations.approveTransfer(
+        db,
+        { ...scopeOf(fixture), actorId: 'duplicate_transfer_approver' },
+        transfer.id
+      );
+      return transfer.id;
+    });
+
+    const results = await Promise.allSettled([
+      inOrg(ORG_A, (db) =>
+        deps.operations.dispatchTransfer(db, scopeOf(fixture), transferId, tag('duplicate-a'))
+      ),
+      inOrg(ORG_A, (db) =>
+        deps.operations.dispatchTransfer(db, scopeOf(fixture), transferId, tag('duplicate-b'))
+      ),
+    ]);
+
+    expect(results.filter((one) => one.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((one) => one.status === 'rejected')).toHaveLength(1);
+  });
+
   it('globally recalls a batch, traces branch holdings, acknowledges, and reconciles closure', async () => {
     const a = await scenario(ORG_A, BRANCH_A, 'recall-a');
     const otherBranch = 'branch_recall_b';

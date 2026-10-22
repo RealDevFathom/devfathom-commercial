@@ -146,9 +146,13 @@ function actorFor(ctx: TRPCContext): { organizationId: string; actorId: string }
   return { organizationId, actorId };
 }
 
-async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+async function scopeFor(
+  ctx: TRPCContext,
+  branch: string,
+  scopedDb: ScopedDb = ctx.db
+): Promise<LedgerScope> {
   const actor = actorFor(ctx);
-  await assertInOrganization(ctx.db.pharmacyBranch, actor.organizationId, [branch], {
+  await assertInOrganization(scopedDb.pharmacyBranch, actor.organizationId, [branch], {
     active: true,
   });
   return { ...actor, branchId: branch };
@@ -1115,14 +1119,15 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          dispatchTransfer(
-            txDb(tx),
-            await scopeFor(ctx, input.branchId),
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          return dispatchTransfer(
+            db,
+            await scopeFor(ctx, input.branchId, db),
             input.transferId,
             input.idempotencyKeyPrefix
-          )
-        );
+          );
+        });
       } catch (error) {
         domainError(error);
       }

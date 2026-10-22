@@ -193,6 +193,17 @@ describe('transfer removal planning (INV-04)', () => {
       shippedLooseUnits: 10,
     });
   });
+
+  it('ships sealed packs and loose units without changing the source composition unnecessarily', () => {
+    expect(
+      planTransferRemoval({ sealedPacks: 3, looseUnits: 4, unitsPerPack: 10, units: 24 })
+    ).toEqual({
+      sourceSealedPackDelta: -2,
+      sourceLooseUnitDelta: -4,
+      shippedSealedPacks: 2,
+      shippedLooseUnits: 4,
+    });
+  });
 });
 
 // ── INV-03 / §8A invariant 4 — hard blocks ──────────────────────────────────

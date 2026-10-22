@@ -348,6 +348,12 @@ export async function dispatchTransfer(
   transferId: string,
   key: string
 ) {
+  // Serialize the state check as well as the balance updates. Locking only the
+  // balances permits two concurrent dispatches of the same approved transfer
+  // to both pass their initial status read and create duplicate movements.
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM "pharmacy_interbranch_transfers" WHERE id=${transferId} AND "organizationId"=${scope.organizationId} AND "fromBranchId"=${scope.branchId} FOR UPDATE`
+  );
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: { id: transferId, organizationId: scope.organizationId, fromBranchId: scope.branchId },
     include: { lines: true },
