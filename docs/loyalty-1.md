@@ -25,12 +25,14 @@ limiter. Unknown, expired, redeemed, void, and cross-tenant codes return the sam
 
 ## Checkout and concurrency
 
-Voucher redemption runs within the pharmacy checkout transaction. It locks the
-organization-scoped voucher row, checks `ISSUED`, abuse limits, expiry, minimum
+Voucher redemption runs within the pharmacy checkout transaction. A durable,
+tenant-scoped idempotency record is checked before voucher state and stores the
+prior tender result. It locks the organization-scoped voucher row, persisted
+settings, abuse identities, and idempotency key; then checks `ISSUED`, abuse limits, expiry, minimum
 basket, and scope eligibility, then conditionally changes `ISSUED` to `REDEEMED`
 before writing one `LOYALTY` tender. A unique `(organizationId, redeemedSaleId)`
 constraint makes one voucher per sale/visit non-stackable. The sale idempotency
-key is carried into the tender adapter, so replay returns the prior sale result.
+key is also carried into the tender adapter, so replay returns the prior sale result.
 The conditional status transition means two sales racing for one code have one
 winner even if a storage adapter's row lock is ineffective.
 
@@ -56,8 +58,7 @@ used to bypass `PatientConsent` or the existing customer opt-out.
 
 ## Follow-ups
 
-- Wire the storage adapter into the sales router checkout transaction and its
-  existing money-idempotency record.
+- Wire the transaction-enforcing storage adapter into the sales router checkout transaction.
 - Complete proportional refund/reissue and finance journal evidence.
 - Add owner settings and cashier lookup surfaces without enabling live sends.
 - Add PostgreSQL concurrency/RLS coverage in the database integration suite.

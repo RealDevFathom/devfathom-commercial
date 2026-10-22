@@ -1079,6 +1079,7 @@ model PharmacyVoucher {
 
   @@unique([organizationId, code])
   @@unique([organizationId, id])
+  @@unique([organizationId, branchId, id])
   @@unique([organizationId, redeemedSaleId])
   @@index([organizationId, branchId, status, expiresAt])
   @@index([organizationId, customerId, issuedAt])
@@ -1100,6 +1101,23 @@ model PharmacyVoucherOverrideAudit {
   @@unique([organizationId, id])
   @@index([organizationId, branchId, voucherId, occurredAt])
   @@map("pharmacy_voucher_override_audits")
+}
+
+model PharmacyVoucherRedemption {
+  id             String               @id @default(cuid())
+  organizationId String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  saleId         String
+  voucherId      String
+  idempotencyKey String
+  tenderId       String
+  amountMinor    Int
+  scope          PharmacyVoucherScope
+  createdAt      DateTime             @default(now())
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, idempotencyKey])
+  @@map("pharmacy_voucher_redemptions")
 }
 
 enum PharmacyDrawerSessionStatus {
