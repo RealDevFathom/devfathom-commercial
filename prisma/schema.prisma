@@ -871,6 +871,7 @@ enum PharmacySaleStatus {
 enum PharmacySaleEventKind {
   CREATED
   LINE_ADDED
+  RX_AUTHORIZED
   HELD
   RESUMED
   QUOTATION_CREATED

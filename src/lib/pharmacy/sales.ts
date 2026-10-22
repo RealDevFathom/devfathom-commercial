@@ -147,6 +147,7 @@ export class PharmacySaleError extends Error {
       | 'CONSENT_REQUIRED'
       | 'UNSAFE_STOCK'
       | 'CROSS_BRANCH_REFERENCE'
+      | 'RX_AUTHORIZATION_REQUIRED'
   ) {
     super(reason);
   }
@@ -227,6 +228,12 @@ type AddSaleLineInput = {
   approvalPolicy?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
   idempotencyKey: string;
+  /** Server-resolved evidence. Public callers must never manufacture this value. */
+  rxAuthorization?:
+    | { path: 'ACTOR_GRANT' }
+    | { path: 'PRESCRIPTION_REFERENCE'; prescriptionReference: string }
+    | { path: 'PRESCRIPTION_PHOTO'; prescriptionFileRef: string }
+    | { path: 'PHARMACIST_OVERRIDE'; approverUserId: string; reason: string };
 };
 
 export async function addSaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
@@ -282,6 +289,9 @@ async function addSaleLineWithAllocation(
     where: { id: input.medicineId, organizationId: scope.organizationId, saleable: true },
   });
   if (!medicine) throw new PharmacySaleError('NOT_FOUND');
+  const needsRxAuthorization = (medicine.rx || medicine.restricted) && !medicine.controlled;
+  if (needsRxAuthorization && !input.rxAuthorization)
+    throw new PharmacySaleError('RX_AUTHORIZATION_REQUIRED');
   const allocationInput = {
     medicineId: input.medicineId,
     requiredUnits: canonicalUnits,
@@ -363,6 +373,23 @@ async function addSaleLineWithAllocation(
     )
   );
   await event(db, scope, sale.id, 'LINE_ADDED', undefined, { saleLineId: line.id });
+  if (needsRxAuthorization) {
+    const authorization = input.rxAuthorization!;
+    await event(db, scope, sale.id, 'RX_AUTHORIZED', 'Non-controlled Rx sale authorized', {
+      saleLineId: line.id,
+      path: authorization.path,
+      ...(authorization.path === 'PRESCRIPTION_REFERENCE'
+        ? { prescriptionReference: authorization.prescriptionReference }
+        : authorization.path === 'PRESCRIPTION_PHOTO'
+          ? { prescriptionFileRef: authorization.prescriptionFileRef }
+          : authorization.path === 'PHARMACIST_OVERRIDE'
+            ? {
+                overrideApproverUserId: authorization.approverUserId,
+                overrideReason: authorization.reason,
+              }
+            : {}),
+    });
+  }
   return { line, allocation };
 }
 
@@ -385,6 +412,33 @@ export async function changeSaleStatus(
   } as const;
   const [from, to, kind] = transitions[action];
   if (sale.status !== from) throw new PharmacySaleError('INVALID_STATE');
+  if (action === 'complete') {
+    const regulatedLineIds = sale.lines
+      .filter((line) => (line.medicine.rx || line.medicine.restricted) && !line.medicine.controlled)
+      .map((line) => line.id);
+    if (regulatedLineIds.length) {
+      const authorizations = await db.pharmacySaleEvent.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          saleId,
+          kind: 'RX_AUTHORIZED',
+        },
+        select: { payload: true },
+      });
+      const authorized = new Set(
+        authorizations.flatMap((row) => {
+          const payload = row.payload;
+          return payload && typeof payload === 'object' && !Array.isArray(payload) &&
+            typeof payload.saleLineId === 'string'
+            ? [payload.saleLineId]
+            : [];
+        })
+      );
+      if (regulatedLineIds.some((id) => !authorized.has(id)))
+        throw new PharmacySaleError('RX_AUTHORIZATION_REQUIRED');
+    }
+  }
   const witness =
     action === 'void' && sale.lines.some((line) => line.medicine.controlled)
       ? await authorizeControlledRestoration(db, scope, controlledWitness)

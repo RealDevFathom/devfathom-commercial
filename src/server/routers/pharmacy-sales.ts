@@ -25,6 +25,10 @@ import {
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
 import { workspaceTimezone } from '@/lib/timezone';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
+import {
+  loadPrescriptionFile,
+  prescriptionFileRefSchema,
+} from '@/lib/pharmacy/prescription-files';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
@@ -180,6 +184,12 @@ function fail(error: unknown): never {
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyPaymentSandboxError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+  if (error instanceof PharmacySaleError && error.reason === 'RX_AUTHORIZATION_REQUIRED')
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'RX_AUTHORIZATION_REQUIRED',
+      cause: { machineCode: 'RX_AUTHORIZATION_REQUIRED' },
+    });
   if (error instanceof FamilyKhataError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
   if (error instanceof PharmacyInventoryError && error.reason === 'BLOCKED_STOCK') {
@@ -879,6 +889,20 @@ export const pharmacySalesRouter = router({
               path: ['prescriberName'],
             })
             .optional(),
+          rxAuthorization: z
+            .object({
+              prescriptionReference: z.string().trim().min(1).max(160).optional(),
+              prescriptionFileRef: prescriptionFileRefSchema.optional(),
+              override: z
+                .object({
+                  approverUserId: z.string().trim().min(1).max(128),
+                  reason: z.string().trim().min(1).max(500),
+                })
+                .strict()
+                .optional(),
+            })
+            .strict()
+            .optional(),
           branchId,
           saleId: z.string().min(1),
           medicineId: z.string().min(1),
@@ -933,7 +957,71 @@ export const pharmacySalesRouter = router({
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
-          if (!medicine?.controlled) return addSaleLine(db, scope, input);
+          if (!medicine) throw new PharmacySaleError('NOT_FOUND');
+          if (!medicine.controlled) {
+            const regulated = medicine.rx || medicine.restricted;
+            if (!regulated) return addSaleLine(db, scope, input);
+
+            let rxAuthorization: Parameters<typeof addSaleLine>[2]['rxAuthorization'];
+            if (
+              await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+                db,
+              })
+            ) {
+              rxAuthorization = { path: 'ACTOR_GRANT' };
+            } else if (input.rxAuthorization?.prescriptionFileRef) {
+              // Loading verifies the opaque reference against this tenant's private
+              // namespace. The event written below binds that evidence to this branch.
+              await loadPrescriptionFile(
+                scope.organizationId,
+                input.rxAuthorization.prescriptionFileRef
+              );
+              rxAuthorization = {
+                path: 'PRESCRIPTION_PHOTO',
+                prescriptionFileRef: input.rxAuthorization.prescriptionFileRef,
+              };
+            } else if (input.rxAuthorization?.prescriptionReference?.trim()) {
+              rxAuthorization = {
+                path: 'PRESCRIPTION_REFERENCE',
+                prescriptionReference: input.rxAuthorization.prescriptionReference.trim(),
+              };
+            } else if (input.rxAuthorization?.override) {
+              const override = input.rxAuthorization.override;
+              if (override.approverUserId === scope.actorId)
+                throw new PharmacySaleError('RX_AUTHORIZATION_REQUIRED');
+              const approver = await db.user.findFirst({
+                where: {
+                  id: override.approverUserId,
+                  organizationId: scope.organizationId,
+                  status: { in: [...ACTIVE_STATUSES] },
+                },
+              });
+              const assigned = approver
+                ? await db.pharmacyBranchAssignment.findFirst({
+                    where: {
+                      organizationId: scope.organizationId,
+                      branchId: scope.branchId,
+                      userId: approver.id,
+                      active: true,
+                    },
+                    select: { id: true },
+                  })
+                : null;
+              if (
+                !approver ||
+                !assigned ||
+                !(await can(subjectFromSession(approver), 'pharmacy:dispense', undefined, { db }))
+              )
+                throw new PharmacySaleError('RX_AUTHORIZATION_REQUIRED');
+              rxAuthorization = {
+                path: 'PHARMACIST_OVERRIDE',
+                approverUserId: approver.id,
+                reason: override.reason.trim(),
+              };
+            }
+            if (!rxAuthorization) throw new PharmacySaleError('RX_AUTHORIZATION_REQUIRED');
+            return addSaleLine(db, scope, { ...input, rxAuthorization });
+          }
           if (
             !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
               db,

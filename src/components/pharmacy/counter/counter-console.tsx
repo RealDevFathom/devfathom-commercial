@@ -92,6 +92,29 @@ type ReceiptIntent = {
   printReservation?: CounterBrowserPrintReservation;
 };
 
+type RxAuthorizationDraft = {
+  prescriptionReference?: string;
+  prescriptionFileRef?: string;
+  override?: { approverUserId: string; reason: string };
+};
+
+function isRxAuthorizationRequired(error: unknown) {
+  return (
+    error instanceof Error &&
+    (error.message.includes('RX_AUTHORIZATION_REQUIRED') ||
+      ('data' in error && JSON.stringify(error.data).includes('RX_AUTHORIZATION_REQUIRED')))
+  );
+}
+
+async function fileBase64(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('The prescription photo could not be read.'));
+    reader.onload = () => resolve(String(reader.result).split(',', 2)[1] ?? '');
+    reader.readAsDataURL(file);
+  });
+}
+
 /**
  * A stable per-browser identifier for the drawer session and receipt sequence.
  *
@@ -282,6 +305,11 @@ function ScopedPharmacyCounterConsole({
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantity, setQuantity] = useState(1);
   const [lotOverride, setLotOverride] = useState<CounterLotOverrideValue | null>(null);
+  const [rxPrompt, setRxPrompt] = useState(false);
+  const [rxReference, setRxReference] = useState('');
+  const [rxPhoto, setRxPhoto] = useState<File | null>(null);
+  const [rxApprover, setRxApprover] = useState('');
+  const [rxOverrideReason, setRxOverrideReason] = useState('');
   const [saleId, setSaleId] = useState<string | null>(initialSaleId);
   const [heldSaleId, setHeldSaleId] = useState<string | null>(null);
   const [patientQuery, setPatientQuery] = useState('');
@@ -299,6 +327,7 @@ function ScopedPharmacyCounterConsole({
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: safetyLicensed,
   });
+  const uploadPrescription = trpc.pharmacyPrescriptions.uploadSource.useMutation();
   const [patientId, setPatientId] = useState<string | null>(null);
   const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
@@ -853,7 +882,7 @@ function ScopedPharmacyCounterConsole({
     return created.id;
   }, [branchId, createSale, saleId, setActiveSale]);
 
-  const addToCart = useCallback(async () => {
+  const addToCart = useCallback(async (suppliedRxAuthorization?: RxAuthorizationDraft) => {
     if (!activeRow || !selectedOption || !preview || busy) return;
     if (!preview.sufficient) {
       setNotice({
@@ -896,6 +925,7 @@ function ScopedPharmacyCounterConsole({
       }
       const refSerial = Number(controlledAuth.refSerial);
       const added = await addLine.mutateAsync({
+        rxAuthorization: suppliedRxAuthorization,
         controlledAuthorization:
           controlled && patient
             ? {
@@ -941,6 +971,11 @@ function ScopedPharmacyCounterConsole({
       await utils.pharmacySafety.controlledRegister.invalidate();
       await utils.pharmacySales.counterSearch.invalidate();
       setLotOverride(null);
+      setRxPrompt(false);
+      setRxReference('');
+      setRxPhoto(null);
+      setRxApprover('');
+      setRxOverrideReason('');
       setNotice({
         tone: 'success',
         message: `${quantity} × ${activeRow.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
@@ -948,6 +983,14 @@ function ScopedPharmacyCounterConsole({
       setQuery('');
       focusSearch();
     } catch (error) {
+      if (isRxAuthorizationRequired(error)) {
+        setRxPrompt(true);
+        setNotice({
+          tone: 'warning',
+          message: 'A prescription or pharmacist authorization is required for this medicine.',
+        });
+        return;
+      }
       const message = messageFrom(error);
       setNotice({
         tone: 'danger',
@@ -976,6 +1019,49 @@ function ScopedPharmacyCounterConsole({
     refreshCart,
     selectedOption,
     utils,
+  ]);
+
+  const retryRxAdd = useCallback(async () => {
+    if (!activeRow || pending || (!rxReference.trim() && !rxPhoto && !rxOverrideReason.trim()))
+      return;
+    try {
+      let authorization: RxAuthorizationDraft;
+      if (rxPhoto) {
+        if (!patient) {
+          setNotice({ tone: 'warning', message: 'Select the prescription patient first.' });
+          return;
+        }
+        if (!['image/png', 'image/jpeg', 'image/webp'].includes(rxPhoto.type)) {
+          setNotice({ tone: 'warning', message: 'Attach a PNG, JPEG or WebP prescription image.' });
+          return;
+        }
+        const uploaded = await uploadPrescription.mutateAsync({
+          patientId: patient.patientId,
+          contentType: rxPhoto.type as 'image/png' | 'image/jpeg' | 'image/webp',
+          dataBase64: await fileBase64(rxPhoto),
+        });
+        authorization = { prescriptionFileRef: uploaded.sourceFileRef };
+      } else if (rxReference.trim()) {
+        authorization = { prescriptionReference: rxReference.trim() };
+      } else {
+        authorization = {
+          override: { approverUserId: rxApprover.trim(), reason: rxOverrideReason.trim() },
+        };
+      }
+      await addToCart(authorization);
+    } catch (error) {
+      setNotice({ tone: 'danger', message: messageFrom(error) });
+    }
+  }, [
+    activeRow,
+    addToCart,
+    patient,
+    pending,
+    rxApprover,
+    rxOverrideReason,
+    rxPhoto,
+    rxReference,
+    uploadPrescription,
   ]);
 
   useEffect(() => {
@@ -1968,6 +2054,66 @@ function ScopedPharmacyCounterConsole({
               </Button>
             }
           >
+            {rxPrompt ? (
+              <div
+                role="group"
+                aria-label="Prescription authorization"
+                className="mb-4 space-y-3 rounded-sm border border-border-default bg-surface-sunken p-4"
+              >
+                <div>
+                  <p className="font-medium text-text-strong">
+                    Prescription authorization required
+                  </p>
+                  <p className="text-sm text-text-body">
+                    Enter a prescription reference, attach its photo, or request a pharmacist
+                    override.
+                  </p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="counter-rx-reference">Prescription reference</Label>
+                    <Input
+                      id="counter-rx-reference"
+                      value={rxReference}
+                      onChange={(event) => setRxReference(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="counter-rx-photo">Attach prescription photo</Label>
+                    <Input
+                      id="counter-rx-photo"
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={(event) => setRxPhoto(event.target.files?.[0] ?? null)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="counter-rx-approver">Pharmacist approver ID</Label>
+                    <Input
+                      id="counter-rx-approver"
+                      value={rxApprover}
+                      onChange={(event) => setRxApprover(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="counter-rx-reason">Override reason</Label>
+                    <Input
+                      id="counter-rx-reason"
+                      value={rxOverrideReason}
+                      onChange={(event) => setRxOverrideReason(event.target.value)}
+                    />
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => void retryRxAdd()}
+                >
+                  Authorize and retry add
+                </Button>
+              </div>
+            ) : null}
             {activeRow ? (
               <div className="space-y-2">
                 <CounterUnitToggle

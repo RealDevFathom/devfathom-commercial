@@ -111,7 +111,7 @@ vi.mock('@/lib/trpc', () => {
         'authenticatePack',
         'substituteProposals',
       ]),
-      pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
+      pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel', 'uploadSource']),
       pharmacySafety: router(['controlledPharmacists']),
     },
   };
@@ -259,6 +259,7 @@ beforeEach(() => {
     'linkCustomer',
     'redeemPoints',
     'authenticatePack',
+    'uploadSource',
   ])
     mocks.mutations[name] = vi.fn();
   mocks.mutations.tender!.mockResolvedValue(accepted());
@@ -278,6 +279,51 @@ beforeEach(() => {
   ]);
   mocks.signIn.mockResolvedValue({ ok: true });
   window.localStorage.clear();
+});
+
+it('opens the inline Rx authorization prompt and retries with its prescription reference', async () => {
+  const row = {
+    medicineId: 'rx-medicine',
+    displayName: 'Prescription medicine',
+    brandName: null,
+    manufacturer: null,
+    strength: '10 mg',
+    presentationId: 'presentation-rx',
+    presentation: 'Tablet',
+    dosageForm: 'Tablet',
+    route: 'Oral',
+    matchedOn: 'BARCODE',
+    recommendedLotId: 'lot-rx',
+    packLevelId: 'pack-rx',
+    unitsPerPack: 1,
+    printedMrpMinor: 100,
+    roundingIncrementMinor: 1,
+    batchNumber: 'RX-1',
+    nearestSafeExpiry: '2028-01-01T00:00:00.000Z',
+    onHandUnits: 5,
+    saleableUnits: [],
+    saleUnits: [{ kind: 'UNIT', packLevelId: 'pack-rx', levelLabel: 'Unit', canonicalUnitsPerSaleUnit: 1 }],
+    restriction: { rx: true, otc: false, restricted: false, controlled: false, highAlert: false, lasa: false },
+    storage: { coldChain: false, locationKind: 'STORE', locationCode: 'A', locationName: 'Store' },
+    blocked: [],
+  };
+  mocks.queries.counterSearch = query({ rows: [row] });
+  mocks.mutations.addLine!
+    .mockRejectedValueOnce(Object.assign(new Error('RX_AUTHORIZATION_REQUIRED'), { data: { code: 'FORBIDDEN' } }))
+    .mockResolvedValueOnce({});
+  render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+  const search = screen.getByLabelText('Scan or search');
+  fireEvent.change(search, { target: { value: '123456' } });
+  fireEvent.keyDown(search, { key: 'Enter' });
+  expect(await screen.findByRole('group', { name: 'Prescription authorization' })).toBeVisible();
+
+  fireEvent.change(screen.getByLabelText('Prescription reference'), { target: { value: ' RX-42 ' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Authorize and retry add' }));
+  await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(2));
+  expect(mocks.mutations.addLine).toHaveBeenLastCalledWith(
+    expect.objectContaining({ rxAuthorization: { prescriptionReference: 'RX-42' } })
+  );
 });
 
 afterEach(() => vi.restoreAllMocks());
