@@ -7,9 +7,12 @@ re-applied: every valuable behavior named by its four-commit inventory is alread
 in the current tree, together with later tenant-boundary and authorization hardening.
 
 The archive ref itself is not available in this checkout: there is no configured `origin`,
-and neither `archive/rescue/WHA-52` nor object `9585089c` exists locally. Consequently, the
-verification compared the issue's supplied commit inventory with the current code rather
-than manufacturing a branch or claiming a byte-for-byte Git diff.
+and neither `archive/rescue/WHA-52` nor object `9585089c` exists locally. A direct fetch from
+the repository named in `RESUME.md` was attempted, but the environment's HTTPS tunnel
+rejected it with HTTP 403. Consequently, the verification compared the issue's supplied
+commit inventory with the current code rather than manufacturing a branch or claiming a
+byte-for-byte Git diff. The skipped list below is therefore a current-code reconciliation,
+not a claim that the unavailable archive received a byte-for-byte review.
 
 ## Current-code evidence
 
@@ -33,10 +36,12 @@ than manufacturing a branch or claiming a byte-for-byte Git diff.
   tenders and refunds (`src/server/routers/restaurant-payments.ts:133-169`,
   `src/server/routers/restaurant-payments.ts:194-214`,
   `src/server/routers/restaurant-payments.ts:250-274`).
-- Focused tests already cover the recovered behavior: cash pagination and serialized monetary
-  values (`src/server/routers/restaurant-cash.test.ts:86-105`), tender pagination
-  (`src/server/routers/restaurant-payments.test.ts:89-113`), and refund pagination
-  (`src/server/routers/restaurant-payments.test.ts:156-184`).
+- Focused tests cover the recovered behavior: cash, tender, and refund tests request the next
+  page with the returned cursor, verify its result, and assert that Prisma receives the cursor,
+  boundary-row skip, `limit + 1`, and stable compound ordering
+  (`src/server/routers/restaurant-cash.test.ts:86-132`,
+  `src/server/routers/restaurant-payments.test.ts:89-134`,
+  `src/server/routers/restaurant-payments.test.ts:175-224`).
 
 ## Archive commit disposition
 

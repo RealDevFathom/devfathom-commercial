@@ -99,7 +99,9 @@ describe('drawer session reads (C12)', () => {
       variance: D('-0.50'),
       _count: { movements: 4 },
     });
-    mocks.drawerFindMany.mockResolvedValue([row('s1'), row('s2'), row('s3')]);
+    mocks.drawerFindMany
+      .mockResolvedValueOnce([row('s1'), row('s2'), row('s3')])
+      .mockResolvedValueOnce([row('s3')]);
     const result = await caller().listDrawerSessions({ branchId: 'b1', limit: 2 });
     expect(result.sessions).toHaveLength(2);
     expect(result.sessions[0].openingFloat).toBe('100.00');
@@ -108,6 +110,23 @@ describe('drawer session reads (C12)', () => {
     expect(result.sessions[0].businessDate).toBe('2026-08-19');
     expect(result.sessions[0].movementCount).toBe(4);
     expect(result.nextCursor).toBe('s2');
+
+    const nextPage = await caller().listDrawerSessions({
+      branchId: 'b1',
+      limit: 2,
+      cursor: result.nextCursor!,
+    });
+    expect(nextPage.sessions.map(({ id }) => id)).toEqual(['s3']);
+    expect(nextPage.nextCursor).toBeNull();
+    expect(mocks.drawerFindMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        cursor: { id: 's2' },
+        skip: 1,
+        take: 3,
+        orderBy: [{ openedAt: 'desc' }, { id: 'desc' }],
+      })
+    );
   });
 
   it('leaves an open session expected/counted null in the list', async () => {

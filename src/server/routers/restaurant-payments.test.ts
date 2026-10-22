@@ -102,13 +102,32 @@ describe('tender reads (C12)', () => {
       deviceId: 'dev_1',
       createdAt: new Date(),
     });
-    mocks.tenderFindMany.mockResolvedValue([row('t1'), row('t2'), row('t3')]);
+    mocks.tenderFindMany
+      .mockResolvedValueOnce([row('t1'), row('t2'), row('t3')])
+      .mockResolvedValueOnce([row('t3')]);
     const result = await caller().listTenders({ branchId: 'b1', limit: 2 });
     expect(result.tenders).toHaveLength(2);
     expect(result.tenders[0].amount).toBe('12.5');
     expect(result.tenders[0].changeGiven).toBe('7.5');
     expect(result.tenders[0].businessDate).toBe('2026-08-19');
     expect(result.nextCursor).toBe('t2');
+
+    const nextPage = await caller().listTenders({
+      branchId: 'b1',
+      limit: 2,
+      cursor: result.nextCursor!,
+    });
+    expect(nextPage.tenders.map(({ id }) => id)).toEqual(['t3']);
+    expect(nextPage.nextCursor).toBeNull();
+    expect(mocks.tenderFindMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        cursor: { id: 't2' },
+        skip: 1,
+        take: 3,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      })
+    );
   });
 
   it('leaves card tenders cashReceived/changeGiven null', async () => {
@@ -172,7 +191,9 @@ describe('refund reads (C12)', () => {
       deviceId: 'dev_1',
       createdAt: new Date(),
     });
-    mocks.refundFindMany.mockResolvedValue([row('r1'), row('r2')]);
+    mocks.refundFindMany
+      .mockResolvedValueOnce([row('r1'), row('r2')])
+      .mockResolvedValueOnce([row('r2')]);
     const result = await caller().listRefunds({ branchId: 'b1', limit: 1 });
     expect(result.refunds).toHaveLength(1);
     expect(result.refunds[0].amount).toBe('5');
@@ -181,6 +202,23 @@ describe('refund reads (C12)', () => {
     expect(result.refunds[0].kind).toBe('REFUND');
     expect(result.refunds[0].businessDate).toBe('2026-08-20');
     expect(result.nextCursor).toBe('r1');
+
+    const nextPage = await caller().listRefunds({
+      branchId: 'b1',
+      limit: 1,
+      cursor: result.nextCursor!,
+    });
+    expect(nextPage.refunds.map(({ id }) => id)).toEqual(['r2']);
+    expect(nextPage.nextCursor).toBeNull();
+    expect(mocks.refundFindMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        cursor: { id: 'r1' },
+        skip: 1,
+        take: 2,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      })
+    );
   });
 });
 
