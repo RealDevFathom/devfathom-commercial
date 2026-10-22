@@ -23,4 +23,12 @@ export function requiredEnvironmentVariable(
   return value;
 }
 
+/** Select the elevated migration connection without requiring its runtime fallback. */
+export function migrationDatabaseUrl(environment: NodeJS.ProcessEnv = process.env): string {
+  return (
+    environment.MIGRATION_DATABASE_URL?.trim() ||
+    requiredEnvironmentVariable('DATABASE_URL', environment)
+  );
+}
+
 loadLocalEnvironment();

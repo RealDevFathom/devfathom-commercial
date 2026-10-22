@@ -2,7 +2,7 @@ import { Prisma, PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { hash } from 'bcryptjs';
-import { requiredEnvironmentVariable } from './load-env.js';
+import { migrationDatabaseUrl } from './load-env.js';
 
 import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js';
 import { AGENCY_SUITE_MODULES, syncPlatformCatalog } from './catalog-sync.js';
@@ -11,9 +11,8 @@ import { upsertStagingAdmin } from './staging-admin.js';
 
 // Seed writes through row-level security as a platform admin. Use the migration
 // role when it is set so the application role can stay NOSUPERUSER NOBYPASSRLS.
-const databaseUrl = requiredEnvironmentVariable('DATABASE_URL');
 const pool = new pg.Pool({
-  connectionString: process.env.MIGRATION_DATABASE_URL?.trim() || databaseUrl,
+  connectionString: migrationDatabaseUrl(),
 });
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
