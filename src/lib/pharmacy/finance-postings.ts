@@ -32,7 +32,7 @@
  * unbalanced in between, so each must run inside the caller's transaction —
  * the same one that wrote the operational row.
  */
-import type { FinanceSourceKind } from '@/generated/prisma/client';
+import { Prisma, type FinanceSourceKind } from '@/generated/prisma/client';
 import {
   postJournalEntry,
   reverseJournalEntry,
@@ -363,7 +363,7 @@ export async function postUnidentifiedSaleReturnEntry(
   scope: PostingScope,
   input: { holdingId: string; at: Date }
 ) {
-  const holding = await db.pharmacyUnidentifiedReturnHold.findFirst({
+  let holding = await db.pharmacyUnidentifiedReturnHold.findFirst({
     where: { id: input.holdingId, organizationId: scope.organizationId },
     include: {
       saleLine: { include: { returnLines: true, unidentifiedReturnHolds: true } },
@@ -372,6 +372,20 @@ export async function postUnidentifiedSaleReturnEntry(
   if (!holding) throw new PharmacyFinanceError('NOT_FOUND');
   if (holding.branchId !== scope.branchId)
     throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
+
+  // Posting adapters run in the operation's transaction. Take the same sold-line
+  // lock as returnSaleLine before re-reading the cumulative state, so a direct
+  // recovery invocation cannot race an identified or unidentified return.
+  await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_sale_lines
+    WHERE id=${holding.saleLine.id} AND "organizationId"=${scope.organizationId}
+      AND "branchId"=${scope.branchId} FOR UPDATE`);
+  holding = await db.pharmacyUnidentifiedReturnHold.findFirst({
+    where: { id: input.holdingId, organizationId: scope.organizationId },
+    include: {
+      saleLine: { include: { returnLines: true, unidentifiedReturnHolds: true } },
+    },
+  });
+  if (!holding) throw new PharmacyFinanceError('NOT_FOUND');
 
   const sourceKind: FinanceSourceKind = 'PHARMACY_UNIDENTIFIED_RETURN_HOLD';
   const existing = await db.financeJournalEntry.findFirst({
@@ -384,9 +398,18 @@ export async function postUnidentifiedSaleReturnEntry(
   if (existing) return existing;
 
   const saleLine = holding.saleLine;
+  const isThroughCurrent = (row: { id: string; createdAt: Date }) =>
+    row.createdAt < holding.createdAt ||
+    (row.createdAt.getTime() === holding.createdAt.getTime() && row.id <= holding.id);
+  // Only use the deterministic prefix ending at this hold. Summing every hold
+  // makes recovery of an earlier hold reuse the final hold's monetary slice.
   const through =
-    saleLine.returnLines.reduce((sum, row) => sum + row.canonicalUnits, 0) +
-    saleLine.unidentifiedReturnHolds.reduce((sum, row) => sum + row.canonicalUnits, 0);
+    saleLine.returnLines
+      .filter(isThroughCurrent)
+      .reduce((sum, row) => sum + row.canonicalUnits, 0) +
+    saleLine.unidentifiedReturnHolds
+      .filter(isThroughCurrent)
+      .reduce((sum, row) => sum + row.canonicalUnits, 0);
   const before = through - holding.canonicalUnits;
   if (before < 0 || through > saleLine.canonicalUnits)
     throw new PharmacyFinanceError('INVALID_STATE');
