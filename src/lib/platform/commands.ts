@@ -1560,6 +1560,10 @@ async function runCommand(
         .object({ organizationId: id, reason: sensitiveReason, authenticationCode: z.string() })
         .parse(payload);
       await assertFreshPlaceholderMfa(db, actor, input.authenticationCode);
+      await db.$queryRawUnsafe(
+        'SELECT id FROM organizations WHERE id = $1 FOR UPDATE',
+        input.organizationId
+      );
       const organization = await db.organization.findUnique({
         where: { id: input.organizationId },
         select: { id: true, vertical: true, status: true },
@@ -1594,6 +1598,7 @@ async function runCommand(
       const branches = await db.pharmacyBranch.findMany({
         where: { organizationId: input.organizationId, active: true },
       });
+      let created = 0;
       for (const branch of branches) {
         const existing = await db.branchRegulatoryProfile.findFirst({
           where: {
@@ -1604,6 +1609,7 @@ async function runCommand(
           },
         });
         if (existing) continue;
+        created += 1;
         const latest = await db.branchRegulatoryProfile.findFirst({
           where: { organizationId: input.organizationId, branchId: branch.id },
           orderBy: { version: 'desc' },
@@ -1645,17 +1651,19 @@ async function runCommand(
           },
         });
       }
-      await db.organizationLifecycleEvent.create({
-        data: {
-          organizationId: input.organizationId,
-          action: 'CREATED',
-          fromStatus: organization.status,
-          toStatus: organization.status,
-          reason: input.reason,
-          actorId: actor.id,
-          metadata: { placeholder: true, operation: 'APPLIED', ruleSetId: ruleSet.id },
-        },
-      });
+      if (created > 0) {
+        await db.organizationLifecycleEvent.create({
+          data: {
+            organizationId: input.organizationId,
+            action: 'CREATED',
+            fromStatus: organization.status,
+            toStatus: organization.status,
+            reason: input.reason,
+            actorId: actor.id,
+            metadata: { placeholder: true, operation: 'APPLIED', ruleSetId: ruleSet.id },
+          },
+        });
+      }
       return {
         targetType: 'Organization',
         targetId: input.organizationId,
@@ -1671,6 +1679,10 @@ async function runCommand(
         .object({ organizationId: id, reason: sensitiveReason, authenticationCode: z.string() })
         .parse(payload);
       await assertFreshPlaceholderMfa(db, actor, input.authenticationCode);
+      await db.$queryRawUnsafe(
+        'SELECT id FROM organizations WHERE id = $1 FOR UPDATE',
+        input.organizationId
+      );
       const organization = await db.organization.findUnique({
         where: { id: input.organizationId },
       });

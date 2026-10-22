@@ -32,7 +32,6 @@ const db = {
       return state.organization;
     }),
   },
-  organizationLifecycleEvent: { create: vi.fn(async ({ data }: any) => data) },
   jurisdictionRuleSet: {
     upsert: vi.fn(async ({ create }: any) => create),
   },
@@ -303,6 +302,19 @@ describe('pharmacy placeholder commands', () => {
       }),
     });
   });
+
+  it.each(['organization.pharmacy.placeholder.apply', 'organization.pharmacy.placeholder.lock'])(
+    '%s locks the organization row before reading state',
+    async (action) => {
+      state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ONBOARDING' };
+      state.placeholderActive = true;
+      await execute(action, { organizationId: 'org_1', reason, authenticationCode: '123456' });
+      expect(db.$queryRawUnsafe).toHaveBeenCalledWith(
+        'SELECT id FROM organizations WHERE id = $1 FOR UPDATE',
+        'org_1'
+      );
+    }
+  );
 
   it('flags failed platform commands while the placeholder is active', async () => {
     state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ACTIVE' };

@@ -33,6 +33,17 @@ describe('#631 placeholder migration contract', () => {
     );
   });
 
+  it('never commits an intermediate weakened trigger (every migration in sequence)', () => {
+    for (const m of [placeholderMigration, restoredTriggerMigration]) {
+      expect(m).not.toContain('OLD."isPlaceholder" = true');
+      if (m.includes('pharmacy_reject_regulatory_rewrite')) {
+        expect(m).toContain("current_setting('app.purging_organization_id'");
+        expect(m).toContain("AND current_setting('app.is_platform_admin', true) = 'true'");
+        expect(m).toContain('NOT EXISTS (SELECT 1 FROM "organizations" WHERE "id" = OLD."organizationId")');
+      }
+    }
+  });
+
   it('allows deletes only for organization purge and orphan cleanup', () => {
     expect(restoredTriggerMigration).toContain("current_setting('app.purging_organization_id'");
     expect(restoredTriggerMigration).toContain(
