@@ -17,4 +17,14 @@ the server rejects. The current code already resolves that mismatch:
   destinations, representative rejected transitions (including `DRAFT` to
   `PAID`), no-op exclusion, and completeness of the transition table.
 
-No additional product-code change is needed for this issue.
+The verification followed the status value through all three layers rather than
+comparing two duplicated lists: the row's typed status is passed to the shared
+lookup, the selected value is validated by the shared enum, and the mutation
+checks the same transition map before its compare-and-set write. Consequently,
+every option displayed by the dropdown is accepted from that same prior status;
+a concurrent change is reported as a conflict instead of silently overwriting
+the newer state (`src/server/routers/finance.ts:514-525`).
+
+This is not a recover-from-archive issue, so there is no archive branch diff or
+skipped archive work to report. No additional product-code change is needed for
+this issue.
