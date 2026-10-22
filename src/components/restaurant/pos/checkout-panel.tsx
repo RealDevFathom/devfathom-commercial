@@ -926,7 +926,9 @@ export function CheckoutPanel({
                 title={
                   bill.receiptNumber !== null
                     ? `Receipt ${bill.receiptNumber}`
-                    : bill.splitKind.replaceAll('_', ' ')
+                    : bill.splitKind === 'NONE'
+                      ? 'Whole order'
+                      : bill.splitKind.replaceAll('_', ' ')
                 }
                 actions={<StatusPill status={bill.status} tone={billTone(bill.status)} />}
               >

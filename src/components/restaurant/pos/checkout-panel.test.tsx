@@ -118,6 +118,14 @@ describe('CheckoutPanel', () => {
     expect(screen.getAllByText('24.00')).toHaveLength(3);
   });
 
+  it('labels a non-split bill without exposing the raw split kind', async () => {
+    const request: TerminalRequest = async <T,>() => billed as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText('Whole order')).toBeVisible();
+    expect(screen.queryByText('NONE')).not.toBeInTheDocument();
+  });
+
   it('loads summary and cuts one bill through the L5 endpoint', async () => {
     const calls: { path: string; options?: TerminalRequestOptions }[] = [];
     let reads = 0;
