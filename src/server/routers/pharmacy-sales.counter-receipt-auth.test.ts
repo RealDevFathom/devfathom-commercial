@@ -69,6 +69,7 @@ import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
+  readPharmacyReceiptTaxIdentity,
   savePharmacyReceiptFormat,
 } from '@/lib/pharmacy/receipt-print';
 import { router, type TRPCContext } from '../trpc';
@@ -158,7 +159,12 @@ function assign(f: ReturnType<typeof fixture>, branchIds: string[]) {
   );
 }
 
-const reads = () => [readCounterReceipt, readPharmacyReceiptFormat, readDispensingLabelSources];
+const reads = () => [
+  readCounterReceipt,
+  readPharmacyReceiptFormat,
+  readPharmacyReceiptTaxIdentity,
+  readDispensingLabelSources,
+];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -183,7 +189,11 @@ const paths: {
   {
     name: 'counterReceipt',
     run: (caller, branchId = 'branch-a') => caller.counterReceipt({ branchId, saleId: 'sale-a' }),
-    allowed: { receiptNumber: 7, dispensingLabelSources: [] },
+    allowed: {
+      receiptNumber: 7,
+      taxIdentity: { ntn: null, strn: null },
+      dispensingLabelSources: [],
+    },
   },
   {
     name: 'counterReceiptPrintJob',
@@ -211,6 +221,26 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it('resolves the browser receipt identity at completion time inside the authorized scope', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({
+      ntn: 'NTN-HISTORICAL',
+      strn: 'STRN-HISTORICAL',
+    });
+
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({
+      taxIdentity: { ntn: 'NTN-HISTORICAL', strn: 'STRN-HISTORICAL' },
+    });
+    expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a' },
+      new Date('2026-10-01T00:00:00.000Z')
+    );
+  });
+
   it.each(paths)('$name allows an assigned dispenser on their own branch', async (path) => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);

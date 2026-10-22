@@ -1598,9 +1598,13 @@ export const pharmacySalesRouter = router({
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
         const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
+        const taxIdentity = receipt.completedAt
+          ? await readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt))
+          : { ntn: null, strn: null };
         // F8: sourced Rx label payloads come only from this authorized receipt read.
         return {
           ...receipt,
+          taxIdentity,
           dispensingLabelSources: await readDispensingLabelSources(ctx.db, scope, receipt),
         };
       } catch (error) {

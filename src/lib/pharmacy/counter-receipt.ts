@@ -58,6 +58,8 @@ export type CounterReceiptTender = {
 
 export type CounterReceipt = {
   dispensingLabelSources?: DispensingLabelSource[];
+  /** Regulatory identity in force when this sale completed; absent on legacy/local fixtures. */
+  taxIdentity?: { ntn: string | null; strn: string | null };
   saleId: string;
   /** Null until a tender settles the bill; never minted by a render. */
   receiptNumber: number | null;

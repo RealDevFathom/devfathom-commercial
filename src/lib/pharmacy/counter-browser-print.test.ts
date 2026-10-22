@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
+
 import { buildCounterBrowserReceipt, printCounterBrowserReceipt } from './counter-browser-print';
 import type { CounterReceipt, CounterReceiptLocale } from './counter-receipt';
+import { buildPharmacyReceiptPrintDocument } from './receipt-print';
 
 const receipt: CounterReceipt = {
   saleId: 'sale-1',
@@ -78,6 +81,30 @@ describe('isolated Pharmacy browser receipt', () => {
     const html = buildCounterBrowserReceipt(receipt, 'ur', 'THERMAL_58');
     expect(html).toContain('lang="ur" dir="rtl"');
     expect(html).toContain('قابلِ ادائیگی');
+  });
+
+  it('keeps the completion-time NTN/STRN identical across raw, browser, A4 and Urdu output', () => {
+    const settled = {
+      ...receipt,
+      taxIdentity: { ntn: 'NTN-HISTORICAL-1', strn: 'STRN-HISTORICAL-2' },
+    };
+    const thermal = buildPharmacyReceiptPrintDocument(settled, 'en', {
+      layout: DEFAULT_RECEIPT_LAYOUT,
+      taxIdentity: settled.taxIdentity,
+      reprint: false,
+    });
+    const outputs = [
+      thermal.receiptSnapshot?.facts.taxLines.join('\n'),
+      buildCounterBrowserReceipt(settled, 'en', 'THERMAL'),
+      buildCounterBrowserReceipt(settled, 'en', 'A4'),
+      buildCounterBrowserReceipt(settled, 'ur', 'THERMAL_58'),
+      buildCounterBrowserReceipt(settled, 'ur', 'A4'),
+    ];
+
+    for (const output of outputs) {
+      expect(output).toContain('NTN: NTN-HISTORICAL-1');
+      expect(output).toContain('STRN: STRN-HISTORICAL-2');
+    }
   });
 
   it.each(['THERMAL_58', 'THERMAL', 'A4'] as const)(
