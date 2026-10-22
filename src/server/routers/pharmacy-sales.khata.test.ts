@@ -55,7 +55,15 @@ function fixture(
     permissionOverrides: [...overrides] as { capability: string; effect: string }[],
   };
   const db = {
-    $queryRaw: vi.fn().mockResolvedValue([]),
+    $queryRaw: vi.fn().mockResolvedValue([
+      {
+        id: 'owner-a',
+        status: 'ACTIVE',
+        organizationId: 'org-a',
+        roleKey: 'owner',
+        isSystem: true,
+      },
+    ]),
     $transaction: vi.fn(),
     user: { findUnique: vi.fn(async () => member) },
     pharmacyBranchAssignment: {
@@ -68,7 +76,11 @@ function fixture(
       ),
     },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue({ type: 'CREDIT' }) },
-    pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
+    pharmacySale: {
+      findFirst: vi
+        .fn()
+        .mockResolvedValue({ customerId: 'customer-a', createdByUserId: 'cashier-a' }),
+    },
     pharmacyFamilyAccount: {
       findMany: vi.fn().mockResolvedValue([
         {
@@ -661,7 +673,12 @@ describe('Khata router trust and recovery boundary', () => {
     const f = fixture();
     await f
       .caller()
-      .tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Emergency' });
+      .tender({
+        ...input,
+        amountMinor: 101,
+        ownerOverride: true,
+        overrideReason: 'Approved exception',
+      });
     expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         reasons: expect.objectContaining({
@@ -682,40 +699,46 @@ describe('Khata router trust and recovery boundary', () => {
       expect(applyPharmacyTender).not.toHaveBeenCalled();
     }
   );
-  it.each(['owner', 'manager'])('allows the %s organization role to approve', async (roleKey) => {
-    const approver = fixture();
-    approver.user.role = 'EMPLOYEE';
-    approver.db.user.findFirst.mockResolvedValue({ organizationRole: { key: roleKey } });
+  it('rejects stale evidence and an ADMIN whose current organization role is cashier', async () => {
+    const f = fixture();
     await expect(
-      approver
+      f
         .caller()
-        .tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Emergency' })
-    ).resolves.toMatchObject({ tenderId: 'tender-a' });
-  });
-  it('rejects stale evidence and non-approver roles', async () => {
-    const stale = fixture();
-    stale.user.passwordAuthenticatedAt -= 301000;
-    await expect(
-      stale
-        .caller()
-        .tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Emergency' })
+        .tender({
+          ...input,
+          amountMinor: 101,
+          ownerOverride: true,
+          overrideReason: 'Approved exception',
+        })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
-    const employee = fixture();
-    employee.user.role = 'EMPLOYEE';
-    employee.db.user.findFirst.mockResolvedValue({ organizationRole: { key: 'cashier' } });
+    f.user.passwordAuthenticatedAt = Date.now();
+    f.db.$queryRaw.mockResolvedValue([
+      {
+        id: 'owner-a',
+        status: 'ACTIVE',
+        organizationId: 'org-a',
+        roleKey: 'cashier',
+        isSystem: true,
+      },
+    ]);
     await expect(
-      employee
+      f
         .caller()
-        .tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Emergency' })
+        .tender({
+          ...input,
+          amountMinor: 101,
+          ownerOverride: true,
+          overrideReason: 'Approved exception',
+        })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
-    expect(employee.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
-  it('requires a reason for every requested limit override', async () => {
+  it('requires an override reason before changing the limit', async () => {
     const f = fixture();
     await expect(
       f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+    expect(f.db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
   });
   it('replays exact accepted evidence without reauthorizing or duplicating a charge', async () => {
     const f = fixture();
@@ -729,7 +752,7 @@ describe('Khata router trust and recovery boundary', () => {
     expect(
       await f
         .caller()
-        .tender({ ...input, ownerOverride: true, overrideReason: 'Emergency' })
+        .tender({ ...input, ownerOverride: true, overrideReason: 'Approved exception' })
     ).toEqual({
       ...result,
       replayed: true,

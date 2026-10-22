@@ -858,9 +858,6 @@ export const pharmacySalesRouter = router({
       const scope = await khataScope(ctx, input.branchId, 'write');
       if (!input.familyAccountId) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
       const normalized = ledgerTender(input);
-      const ownerAuthorized =
-        input.ownerOverride === true &&
-        (await canApproveKhataLimitOverride(ctx, scope.organizationId));
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
         await bindKhataBranch(db, scope);
@@ -874,9 +871,9 @@ export const pharmacySalesRouter = router({
           scope,
           { ...input, familyAccountId: input.familyAccountId! },
           {
-            authorized: ownerAuthorized,
-            passwordAuthenticatedAt: ctx.session!.user.passwordAuthenticatedAt,
+            approverId: ctx.session!.user.id,
             reason: input.overrideReason,
+            reauthenticatedAt: ctx.session!.user.passwordAuthenticatedAt,
           }
         );
         const result = await applyPharmacyTender(db, scope, normalized);

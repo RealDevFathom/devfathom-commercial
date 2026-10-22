@@ -222,7 +222,7 @@ export async function applyKhataLimitDecision(
     ownerAuthorized: boolean;
     ownerAuthorizedByUserId?: string;
     ownerReauthenticatedAt?: Date;
-    overrideReason: string;
+    overrideReason?: string;
     overrideLimitMinor?: number;
   }
 ) {
@@ -231,8 +231,8 @@ export async function applyKhataLimitDecision(
   const overrideReason = input.overrideReason.trim();
   if (
     !input.ownerAuthorized ||
-    !overrideReason ||
-    input.ownerAuthorizedByUserId !== scope.actorId ||
+    !input.ownerAuthorizedByUserId ||
+    !input.overrideReason?.trim() ||
     reauthenticatedAt === undefined ||
     !Number.isFinite(reauthenticatedAt) ||
     reauthenticatedAt > authorizedAt.getTime() ||
@@ -269,9 +269,9 @@ export async function applyKhataLimitDecision(
         ownerAuthorizedByUserId: input.ownerAuthorizedByUserId,
         ownerReauthenticatedAt: input.ownerReauthenticatedAt!.toISOString(),
         ownerAuthorizedAt: authorizedAt.toISOString(),
-        overrideReason,
+        overrideReason: input.overrideReason.trim(),
       },
-      ownerActorId: scope.actorId,
+      ownerActorId: input.ownerAuthorizedByUserId,
     },
   });
   return { account, decision };
@@ -359,7 +359,11 @@ export async function authorizeKhataCharge(
   db: ScopedDb,
   scope: FamilyKhataScope,
   input: { saleId: string; familyAccountId: string; amountMinor: number; ownerOverride?: boolean },
-  owner: { authorized: boolean; passwordAuthenticatedAt?: number; reason?: string }
+  approval: {
+    approverId?: string;
+    reason?: string;
+    reauthenticatedAt?: number;
+  }
 ) {
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
@@ -378,6 +382,40 @@ export async function authorizeKhataCharge(
     throw new FamilyKhataError('INVALID_AMOUNT');
   if (projected > account.creditLimitMinor) {
     if (!input.ownerOverride) throw new FamilyKhataError('CREDIT_LIMIT_EXCEEDED');
+    const reason = approval.reason?.trim();
+    const sale = await db.pharmacySale.findFirst({
+      where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
+      select: { createdByUserId: true },
+    });
+    if (!sale || !approval.approverId || approval.approverId === sale.createdByUserId || !reason)
+      throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+    // This lock and the account lock above are deliberately acquired through the caller's
+    // transaction. Revocation, deactivation, or reassignment before this point is observed here.
+    const approvers = await db.$queryRaw<
+      Array<{
+        id: string;
+        status: string;
+        organizationId: string;
+        roleKey: string;
+        isSystem: boolean;
+      }>
+    >(Prisma.sql`
+      SELECT u.id, u.status, u."organizationId", r.key AS "roleKey", r."isSystem"
+      FROM users u
+      JOIN organization_roles r
+        ON r.id = u."organizationRoleId" AND r."organizationId" = u."organizationId"
+      WHERE u.id = ${approval.approverId} AND u."organizationId" = ${scope.organizationId}
+      FOR SHARE OF u, r
+    `);
+    const approver = approvers[0];
+    if (
+      !approver ||
+      approver.organizationId !== scope.organizationId ||
+      approver.status !== 'ACTIVE' ||
+      !approver.isSystem ||
+      (approver.roleKey !== 'owner' && approver.roleKey !== 'manager')
+    )
+      throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
     const now = new Date();
     const windowStart = new Date(now.getTime() - 180 * DAY_MS);
     // The durable override evidence must describe this account's real ledger. Keep the
@@ -407,13 +445,13 @@ export async function authorizeKhataCharge(
         windowStart,
         now
       ),
-      ownerAuthorized: owner.authorized,
-      ownerAuthorizedByUserId: scope.actorId,
+      ownerAuthorized: true,
+      ownerAuthorizedByUserId: approval.approverId,
+      overrideReason: reason,
       ownerReauthenticatedAt:
-        owner.passwordAuthenticatedAt === undefined
+        approval.reauthenticatedAt === undefined
           ? undefined
-          : new Date(owner.passwordAuthenticatedAt),
-      overrideReason: owner.reason ?? '',
+          : new Date(approval.reauthenticatedAt),
       overrideLimitMinor: projected,
     });
   }

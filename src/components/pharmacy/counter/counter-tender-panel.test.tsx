@@ -273,11 +273,11 @@ describe('family Khata tender', () => {
     await screen.findByText(/Ledger balance/);
     expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
     fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
-    fireEvent.change(screen.getByLabelText('Reason for limit increase'), {
-      target: { value: 'Urgent medicine' },
-    });
     fireEvent.change(screen.getByLabelText('Approver password (current account)'), {
       target: { value: 'test-only-password' },
+    });
+    fireEvent.change(screen.getByLabelText('Reason for limit increase'), {
+      target: { value: 'Long-standing customer' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await screen.findByText('Payment recorded.');
@@ -288,7 +288,7 @@ describe('family Khata tender', () => {
         amountMinor: 25000,
         familyAccountId: 'family-a',
         ownerOverride: true,
-        overrideReason: 'Urgent medicine',
+        overrideReason: 'Long-standing customer',
       },
       { amount: '', cashReceived: '' }
     );
@@ -301,14 +301,14 @@ describe('family Khata tender', () => {
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
     await screen.findByText(/Ledger balance/);
     fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
-    fireEvent.change(screen.getByLabelText('Reason for limit increase'), {
-      target: { value: 'Urgent medicine' },
-    });
     fireEvent.change(screen.getByLabelText('Approver password (current account)'), {
       target: { value: 'wrong' },
     });
+    fireEvent.change(screen.getByLabelText('Reason for limit increase'), {
+      target: { value: 'Requested exception' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
-    await screen.findByText(/Owner re-authentication failed/);
+    await screen.findByText(/Approver re-authentication failed/);
     expect(props.onTender).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Approver password (current account)')).toHaveValue('');
   });

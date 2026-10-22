@@ -156,9 +156,9 @@ describe('CRM-L04 explainable health suggestion', () => {
       familyAccountId: 'family_1',
       suggestion,
       ownerAuthorized: true,
-      ownerAuthorizedByUserId: scope.actorId,
+      ownerAuthorizedByUserId: 'manager_1',
       ownerReauthenticatedAt: now,
-      overrideReason: 'Customer emergency',
+      overrideReason: 'Customer has approved terms',
       overrideLimitMinor: 15_000,
     });
     expect(update).toHaveBeenCalledWith(
@@ -169,13 +169,13 @@ describe('CRM-L04 explainable health suggestion', () => {
         data: expect.objectContaining({
           kind: 'OVERRIDDEN',
           appliedLimitMinor: 15_000,
-          ownerActorId: scope.actorId,
+          ownerActorId: 'manager_1',
           reasons: {
             reasons: suggestion.reasons,
-            ownerAuthorizedByUserId: scope.actorId,
+            ownerAuthorizedByUserId: 'manager_1',
             ownerReauthenticatedAt: now.toISOString(),
             ownerAuthorizedAt: now.toISOString(),
-            overrideReason: 'Customer emergency',
+            overrideReason: 'Customer has approved terms',
           },
         }),
       })
@@ -183,11 +183,10 @@ describe('CRM-L04 explainable health suggestion', () => {
   });
 
   it.each([
-    ['missing', undefined, scope.actorId],
-    ['expired', new Date('2026-09-29T15:54:59.999Z'), scope.actorId],
-    ['future', new Date('2026-09-29T16:00:00.001Z'), scope.actorId],
-    ['invalid', new Date('invalid'), scope.actorId],
-    ['different owner', new Date('2026-09-29T16:00:00.000Z'), 'other-owner'],
+    ['missing', undefined, 'manager_1'],
+    ['expired', new Date('2026-09-29T15:54:59.999Z'), 'manager_1'],
+    ['future', new Date('2026-09-29T16:00:00.001Z'), 'manager_1'],
+    ['invalid', new Date('invalid'), 'manager_1'],
   ])('rejects %s reauthentication before any write', async (_name, at, actor) => {
     const update = vi.fn();
     const create = vi.fn();
@@ -204,7 +203,7 @@ describe('CRM-L04 explainable health suggestion', () => {
           ownerAuthorized: true,
           ownerAuthorizedByUserId: actor,
           ownerReauthenticatedAt: at,
-          overrideReason: 'Customer emergency',
+          overrideReason: 'Approved exception',
           overrideLimitMinor: 15_000,
         }
       )
@@ -226,9 +225,9 @@ describe('CRM-L04 explainable health suggestion', () => {
         familyAccountId: 'family_1',
         suggestion,
         ownerAuthorized: true,
-        ownerAuthorizedByUserId: scope.actorId,
+        ownerAuthorizedByUserId: 'manager_1',
         ownerReauthenticatedAt: new Date(now.getTime() - 5 * 60_000),
-        overrideReason: 'Customer emergency',
+        overrideReason: 'Approved exception',
       }
     );
     expect(update).toHaveBeenCalledOnce();
@@ -239,8 +238,10 @@ describe('CRM-L04 explainable health suggestion', () => {
 describe('counter Khata ledger gate', () => {
   function fixture() {
     return {
-      $queryRaw: vi.fn().mockResolvedValue([]),
-      pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
+      $queryRaw: vi.fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([{ id: 'manager_1', status: 'ACTIVE', organizationId: scope.organizationId, roleKey: 'manager', isSystem: true }]),
+      pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a', createdByUserId: 'cashier_1' }) },
       pharmacyFamilyAccount: {
         findMany: vi.fn().mockResolvedValue([
           {
@@ -318,7 +319,7 @@ describe('counter Khata ledger gate', () => {
   it('uses all ledger events and accepts the exact limit without owner authorization', async () => {
     const db = fixture();
     expect(await readKhataBalance(db as never, scope, 'family-a')).toBe(500);
-    await authorizeKhataCharge(db as never, scope, input, { authorized: false });
+    await authorizeKhataCharge(db as never, scope, input, {});
     expect(db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
     expect(db.pharmacyKhataEvent.groupBy).toHaveBeenCalledWith({
       by: ['kind'],
@@ -331,9 +332,9 @@ describe('counter Khata ledger gate', () => {
     });
   });
   it.each([
-    { authorized: false, passwordAuthenticatedAt: Date.now() },
-    { authorized: true, passwordAuthenticatedAt: Date.now() - 301000 },
-    { authorized: true },
+    { approverId: 'manager_1', reason: 'Approved', reauthenticatedAt: Date.now() - 301000 },
+    { approverId: 'manager_1', reason: 'Approved' },
+    { approverId: 'manager_1', reauthenticatedAt: Date.now() },
   ])('rejects over-limit override with insufficient server evidence: %j', async (owner) => {
     const db = fixture();
     await expect(
@@ -346,35 +347,31 @@ describe('counter Khata ledger gate', () => {
     ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
     expect(db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
   });
-  it('records the freshly reauthenticated owner and raised limit', async () => {
+  it.each(['owner', 'manager'])('allows an active system %s to approve', async (roleKey) => {
     const db = fixture();
-    db.pharmacyKhataEvent.findMany.mockResolvedValue([
+    db.$queryRaw.mockReset().mockResolvedValueOnce([]).mockResolvedValue([
       {
-        id: 'charge-1',
-        kind: 'CHARGE',
-        amountMinor: 800,
-        occurredAt: new Date(),
-        dueAt: null,
-        settlesChargeId: null,
+        id: 'manager_1',
+        status: 'ACTIVE',
+        organizationId: scope.organizationId,
+        roleKey,
+        isSystem: true,
       },
     ]);
     await authorizeKhataCharge(
       db as never,
       scope,
       { ...input, amountMinor: 600, ownerOverride: true },
-      { authorized: true, passwordAuthenticatedAt: Date.now(), reason: 'Urgent medicine' }
+      { approverId: 'manager_1', reason: 'Approved exception', reauthenticatedAt: Date.now() }
     );
     expect(db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         appliedLimitMinor: 1100,
-        score: 100,
-        suggestedLimitMinor: 1000,
-        ownerActorId: scope.actorId,
+        ownerActorId: 'manager_1',
         reasons: expect.objectContaining({
-          reasons: expect.arrayContaining(['1 charge(s) in the stated window']),
-          ownerAuthorizedByUserId: scope.actorId,
+          ownerAuthorizedByUserId: 'manager_1',
           ownerAuthorizedAt: expect.any(String),
-          overrideReason: 'Urgent medicine',
+          overrideReason: 'Approved exception',
         }),
       }),
     });
@@ -395,6 +392,40 @@ describe('counter Khata ledger gate', () => {
       },
     });
   });
+  it.each([
+    ['cashier role', { status: 'ACTIVE', roleKey: 'cashier', isSystem: true }],
+    ['custom role', { status: 'ACTIVE', roleKey: 'manager', isSystem: false }],
+    ['no role', { status: 'ACTIVE', roleKey: null, isSystem: null }],
+    ['deactivated', { status: 'INACTIVE', roleKey: 'owner', isSystem: true }],
+    ['revoked mid-flow', { status: 'ACTIVE', roleKey: 'cashier', isSystem: true }],
+  ])('refuses an approver with %s on the in-transaction read', async (_label, row) => {
+    const db = fixture();
+    db.$queryRaw.mockReset().mockResolvedValueOnce([]).mockResolvedValue([
+      { id: 'manager_1', organizationId: scope.organizationId, ...row },
+    ]);
+    await expect(
+      authorizeKhataCharge(
+        db as never,
+        scope,
+        { ...input, amountMinor: 600, ownerOverride: true },
+        { approverId: 'manager_1', reason: 'Approved exception', reauthenticatedAt: Date.now() }
+      )
+    ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
+    expect(db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+  });
+  it('refuses self-approval before reading or writing the approver', async () => {
+    const db = fixture();
+    await expect(
+      authorizeKhataCharge(
+        db as never,
+        scope,
+        { ...input, amountMinor: 600, ownerOverride: true },
+        { approverId: 'cashier_1', reason: 'Approved', reauthenticatedAt: Date.now() }
+      )
+    ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    expect(db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+  });
   it('denies an account outside the sale customer membership and does not expose its statement', async () => {
     const db = fixture();
     await expect(
@@ -402,7 +433,7 @@ describe('counter Khata ledger gate', () => {
         db as never,
         scope,
         { ...input, familyAccountId: 'foreign' },
-        { authorized: true }
+        { approverId: 'manager_1', reason: 'Approved exception' }
       )
     ).rejects.toMatchObject({ reason: 'ACCOUNT_NOT_FOUND' });
     await expect(
@@ -417,7 +448,7 @@ describe('counter Khata ledger gate', () => {
         db as never,
         scope,
         { ...input, amountMinor: 501 },
-        { authorized: true, passwordAuthenticatedAt: Date.now() }
+        { approverId: 'manager_1', reason: 'Approved exception', reauthenticatedAt: Date.now() }
       )
     ).rejects.toMatchObject({ reason: 'CREDIT_LIMIT_EXCEEDED' });
   });

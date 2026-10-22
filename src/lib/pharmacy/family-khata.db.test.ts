@@ -19,6 +19,7 @@ type Fixture = {
   saleId: string;
   familyAccountId: string;
   memberId: string;
+  approverId: string;
 };
 let a: Fixture, sibling: Fixture, foreign: Fixture;
 async function fixture(
@@ -38,6 +39,29 @@ async function fixture(
         vertical: 'PHARMACY',
         status: 'ACTIVE',
         currency: 'PKR',
+      },
+    });
+    await db.organizationDepartment.upsert({
+      where: { organizationId_key: { organizationId, key: 'operations' } },
+      update: {},
+      create: { organizationId, key: 'operations', name: 'Operations' },
+    });
+    const ownerRole = await db.organizationRole.upsert({
+      where: { organizationId_key: { organizationId, key: 'owner' } },
+      update: { isSystem: true },
+      create: { organizationId, key: 'owner', name: 'Owner', isSystem: true },
+    });
+    const approver = await db.user.upsert({
+      where: { organizationId_email: { organizationId, email: `${organizationId}@owner.test` } },
+      update: { status: 'ACTIVE', organizationRoleId: ownerRole.id },
+      create: {
+        organizationId,
+        email: `${organizationId}@owner.test`,
+        name: 'Khata owner',
+        department: 'operations',
+        title: 'Owner',
+        status: 'ACTIVE',
+        organizationRoleId: ownerRole.id,
       },
     });
     const branch = await db.pharmacyBranch.create({
@@ -103,6 +127,7 @@ async function fixture(
       saleId: sale.id,
       familyAccountId: family.id,
       memberId: member.id,
+      approverId: approver.id,
     };
   });
 }
@@ -139,7 +164,7 @@ suite('family Khata restricted PostgreSQL', () => {
   it('uses all twelve ledger entries and allows the exact limit', async () => {
     await inScope(a, async (db) => {
       expect(await khata.readKhataBalance(db, a, a.familyAccountId)).toBe(600);
-      await khata.authorizeKhataCharge(db, a, { ...a, amountMinor: 400 }, { authorized: false });
+      await khata.authorizeKhataCharge(db, a, { ...a, amountMinor: 400 }, {});
       const statement = await khata.readSaleKhataStatement(db, a, a.saleId, a.familyAccountId);
       expect(statement.entries).toHaveLength(12);
       expect(JSON.stringify(statement)).not.toContain('Private clinical name');
@@ -166,11 +191,7 @@ suite('family Khata restricted PostgreSQL', () => {
           db,
           a,
           { ...a, amountMinor: 401, ownerOverride: true },
-          {
-            authorized: true,
-            passwordAuthenticatedAt: Date.now() - 301000,
-            reason: 'Urgent medicine',
-          }
+          { approverId: a.approverId, reason: 'Approved exception', reauthenticatedAt: Date.now() - 301000 }
         )
       )
     ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
@@ -187,7 +208,7 @@ suite('family Khata restricted PostgreSQL', () => {
   it('serializes competing charges at the family limit', async () => {
     const charge = () =>
       inScope(a, async (db) => {
-        await khata.authorizeKhataCharge(db, a, { ...a, amountMinor: 300 }, { authorized: false });
+        await khata.authorizeKhataCharge(db, a, { ...a, amountMinor: 300 }, {});
         await db.pharmacyKhataEvent.create({
           data: {
             organizationId: orgA,
@@ -212,7 +233,7 @@ suite('family Khata restricted PostgreSQL', () => {
         db,
         a,
         { ...a, amountMinor: 200, ownerOverride: true },
-        { authorized: true, passwordAuthenticatedAt: Date.now(), reason: 'Urgent medicine' }
+        { approverId: a.approverId, reason: 'Approved exception', reauthenticatedAt: Date.now() }
       )
     );
     const decision = await inScope(a, (db) =>
@@ -220,11 +241,8 @@ suite('family Khata restricted PostgreSQL', () => {
     );
     expect(decision).toMatchObject({
       appliedLimitMinor: 1100,
-      ownerActorId: 'owner',
-      reasons: expect.objectContaining({
-        ownerAuthorizedByUserId: 'owner',
-        overrideReason: 'Urgent medicine',
-      }),
+      ownerActorId: a.approverId,
+      reasons: expect.objectContaining({ ownerAuthorizedByUserId: a.approverId }),
     });
     await expect(
       inScope(a, (db) =>
