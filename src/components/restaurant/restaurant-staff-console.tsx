@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState, type FormEvent } from 'react';
+import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
 import { toast } from 'sonner';
 
@@ -537,6 +538,11 @@ export function RestaurantStaffConsole() {
                     ? 'No active or invited, unlinked organization users are available.'
                     : 'Unavailable users remain visible for context but cannot be selected.'}
                 </span>
+                {!editingStaff ? (
+                  <Button asChild type="button" variant="outline" size="sm">
+                    <Link href="/team">Invite a new organization user</Link>
+                  </Button>
+                ) : null}
               </div>
               <div className="space-y-1.5">
                 <label htmlFor="staff-primary-branch" className={labelClass}>

@@ -272,6 +272,9 @@ describe('Restaurant staff credential UI', () => {
       })
     ).toBeEnabled();
     expect(within(dialog).queryByText(/linked user id/i)).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByRole('link', { name: 'Invite a new organization user' })
+    ).toHaveAttribute('href', '/team');
   });
   beforeEach(() => {
     vi.clearAllMocks();
