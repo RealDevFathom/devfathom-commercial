@@ -128,6 +128,23 @@ beforeEach(() => {
 });
 
 describe('R1 receipt identity carries every batch fact', () => {
+  it.each(['RECALLED', 'QUARANTINED', 'EXPIRED'] as const)(
+    'refuses completion when the locked batch re-check reports %s, before money or stock posting',
+    async (blocker) => {
+      db.$queryRaw.mockResolvedValueOnce([{ blocker }] as never);
+
+      await expect(complete(sale())).rejects.toMatchObject({
+        name: 'PharmacyBatchSafetyError',
+        reason: 'BLOCKED_STOCK',
+        blocker,
+      });
+
+      expect(db.pharmacySale.update).not.toHaveBeenCalled();
+      expect(db.pharmacySaleEvent.create).not.toHaveBeenCalled();
+      expect(mocks.post).not.toHaveBeenCalled();
+    }
+  );
+
   it('hands the validator all three allocations with batch, expiry and units, and stores its result', async () => {
     await expect(complete(sale())).resolves.toBe(41);
     expect(mocks.validate).toHaveBeenCalledTimes(1);

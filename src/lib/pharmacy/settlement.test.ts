@@ -108,7 +108,9 @@ describe('pharmacy settlement invariants', () => {
         .fn()
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ receipt_number: 41 }]),
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ receipt_number: 41 }])
+        .mockResolvedValueOnce([]),
       pharmacyMoneyIdempotencyKey: {
         findUnique: vi.fn().mockImplementation(async () => idempotency),
         update: vi.fn().mockImplementation(async ({ data }) => {
@@ -236,7 +238,7 @@ describe('pharmacy settlement invariants', () => {
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       select: { id: true },
     });
-    expect(db.$queryRaw).toHaveBeenCalledTimes(3);
+    expect(db.$queryRaw).toHaveBeenCalledTimes(5);
   });
 });
 
