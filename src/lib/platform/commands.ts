@@ -226,6 +226,12 @@ export function auditProjection(result: Pick<CommandResult, 'audit' | 'auditBefo
   };
 }
 
+function auditReason(audit: unknown): string | undefined {
+  if (!audit || typeof audit !== 'object' || Array.isArray(audit)) return undefined;
+  const reason = (audit as Record<string, unknown>).reason;
+  return typeof reason === 'string' ? reason : undefined;
+}
+
 function sensitiveCommand(action: string): boolean {
   return (
     [
@@ -294,7 +300,9 @@ async function persistCommandFailure(
   action: string,
   payload: unknown,
   request: Request,
-  error: unknown
+  error: unknown,
+  attemptedCapability?: string,
+  operatorReason?: string
 ) {
   const category = failureCategory(error);
   const correlation = requestId.safeParse(request.headers.get('x-devfathom-request-id'));
@@ -326,9 +334,14 @@ async function persistCommandFailure(
             ...target,
             actorPlatformUserId: actor.id,
             action,
-            metadata: { outcomeCategory: category },
+            metadata: {
+              outcomeCategory: category,
+              ...(category === 'capability_denied' && attemptedCapability
+                ? { missingCapability: attemptedCapability }
+                : {}),
+            },
             requestId: correlationId,
-            reason: FAILURE_REASON[category],
+            reason: operatorReason ?? FAILURE_REASON[category],
             success: false,
             error: FAILURE_REASON[category],
           },
@@ -3859,6 +3872,8 @@ export async function executePlatformCommand(
   request: Request
 ) {
   let action = 'platform.command.invalid';
+  let attemptedCapability: string | undefined;
+  let operatorReason: string | undefined;
   try {
     action = z
       .string()
@@ -3867,14 +3882,17 @@ export async function executePlatformCommand(
       .max(100)
       .regex(/^[a-z]+(?:\.[a-z]+)+$/)
       .parse(actionInput);
-    assertPlatformCapability(actor, capabilityFor(action));
+    attemptedCapability = capabilityFor(action);
+    assertPlatformCapability(actor, attemptedCapability);
 
     return await withPlatformDb(async (db) => {
-      const reason = sensitiveCommand(action)
+      operatorReason = sensitiveCommand(action)
         ? z.object({ reason: sensitiveReason }).parse(payload).reason
         : undefined;
       const result = await runCommand(db, actor, action, payload);
-      if (reason) result.audit = { ...(result.audit as Record<string, unknown>), reason };
+      if (operatorReason) {
+        result.audit = { ...(result.audit as Record<string, unknown>), reason: operatorReason };
+      }
       // The audit row is built from the command's declared projection only.
       // `result.data` is the reveal channel and never reaches this table.
       const { before, after } = auditProjection(result);
@@ -3887,6 +3905,9 @@ export async function executePlatformCommand(
           targetId: result.targetId,
           before,
           after,
+          reason: operatorReason ?? auditReason(result.audit),
+          success: true,
+          error: null,
           requestId: request.headers.get('x-devfathom-request-id'),
           ip:
             request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
@@ -3897,7 +3918,15 @@ export async function executePlatformCommand(
       return result.data;
     });
   } catch (error) {
-    await persistCommandFailure(actor, action, payload, request, error);
+    await persistCommandFailure(
+      actor,
+      action,
+      payload,
+      request,
+      error,
+      attemptedCapability,
+      operatorReason
+    );
     throw error;
   }
 }

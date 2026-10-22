@@ -340,6 +340,11 @@ describe('restaurant administrator staff profile at the platform entry points', 
         },
       ],
     });
+    expect(auditRecords.at(-1)).toMatchObject({
+      reason: activatePayload.reason,
+      success: true,
+      error: null,
+    });
   });
 
   it('is idempotent across both entry points and across repeated activations', async () => {

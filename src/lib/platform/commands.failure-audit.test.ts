@@ -87,7 +87,10 @@ describe('platform command failure auditing', () => {
       action: 'setting.upsert',
       success: false,
       reason: 'Platform command capability denied.',
-      metadata: { outcomeCategory: 'capability_denied' },
+      metadata: {
+        outcomeCategory: 'capability_denied',
+        missingCapability: 'settings:write',
+      },
       requestId: expect.stringMatching(/^pcorr_[a-f0-9]{32}$/),
     });
   });
@@ -205,8 +208,11 @@ describe('platform command failure auditing', () => {
 
     expect(state.transactionCalls).toBe(1);
     expect(state.audits).toHaveLength(1);
-    expect(state.audits[0]).toMatchObject({ action: 'setting.upsert' });
-    expect(state.audits[0].success).toBeUndefined();
+    expect(state.audits[0]).toMatchObject({
+      action: 'setting.upsert',
+      success: true,
+      error: null,
+    });
   });
 
   it('deduplicates a replay by actor, action, category, and correlation id', async () => {

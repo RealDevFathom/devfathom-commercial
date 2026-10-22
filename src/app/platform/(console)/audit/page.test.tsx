@@ -134,6 +134,21 @@ describe('PlatformAuditPage', () => {
     expect(csv).not.toContain('audit-001');
   });
 
+  it('filters the ledger to failed command attempts', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    mocks.withPlatformDb.mockImplementation((run) => run({ platformAuditLog: { findMany } }));
+
+    render(
+      await PlatformAuditPage({
+        searchParams: Promise.resolve({ outcome: 'failure' }),
+      })
+    );
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ success: false }) })
+    );
+  });
+
   it.each([
     { from: '2026-02-30' },
     { cursor: 'broken' },
