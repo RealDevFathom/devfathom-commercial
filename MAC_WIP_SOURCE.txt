@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/wha1617-corpus
+Branch: REST-FIX-corpus
+HEAD: 52639b039860d6544a2e57ecb569e02859995f61
+Mode: applied
+Excluded (secrets): 0

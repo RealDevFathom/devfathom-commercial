@@ -55,3 +55,30 @@ describe('FirstRunChecklist', () => {
     );
   });
 });
+
+it('keeps incomplete setup visible even when the restaurant has a settled sale', () => {
+  render(
+    <FirstRunChecklist
+      checklist={evaluateSetupChecklist(restaurant.vertical, {
+        ...evidence,
+        hasFirstSale: true,
+      })}
+    />
+  );
+  expect(screen.getByTestId('first-run-checklist')).toBeVisible();
+  expect(screen.getByRole('link', { name: /set up a menu/i })).toBeVisible();
+});
+
+it('hides the restaurant checklist once every required step is complete', () => {
+  const { container } = render(
+    <FirstRunChecklist
+      checklist={evaluateSetupChecklist(restaurant.vertical, {
+        ...evidence,
+        hasCatalog: true,
+        hasTax: true,
+        hasFirstSale: true,
+      })}
+    />
+  );
+  expect(container).toBeEmptyDOMElement();
+});
