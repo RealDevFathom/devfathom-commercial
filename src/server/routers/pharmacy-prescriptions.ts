@@ -392,7 +392,9 @@ export const pharmacyPrescriptionsRouter = router({
       return patient;
     }),
 
-  fill: protectedProcedure
+  // Recording a fill is a dispensing act: require the exact-grant-only
+  // pharmacy:dispense capability through central ABAC (DENY wins).
+  fill: capabilityProcedure('pharmacy:dispense')
     .input(
       z
         .object({
