@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-84-m7-l4-sop-execution-evidence-verify-reject-waive-late-missed-escalation-chains-restaurant-m7
+Branch: WHA-84-m7-l4-sop-execution-evidence-verify-reject-waive-late-missed-escalation-chains-restaurant-m7
+HEAD: b640fc66c2f67b37c1271c545ee0d91f67abffb7
+Mode: applied
+Excluded (secrets): 0
