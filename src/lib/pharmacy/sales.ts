@@ -377,6 +377,7 @@ async function addSaleLineWithAllocation(
     const authorization = input.rxAuthorization!;
     await event(db, scope, sale.id, 'RX_AUTHORIZED', 'Non-controlled Rx sale authorized', {
       saleLineId: line.id,
+      idempotencyKey: input.idempotencyKey,
       path: authorization.path,
       ...(authorization.path === 'PRESCRIPTION_REFERENCE'
         ? { prescriptionReference: authorization.prescriptionReference }

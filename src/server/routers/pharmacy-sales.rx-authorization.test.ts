@@ -25,14 +25,49 @@ const base = {
   quantity: 1, canonicalUnitsPerSaleUnit: 1, idempotencyKey: 'rx-line-1',
 };
 
-function caller(actorRules: Array<{ capability: string; effect: 'ALLOW' | 'DENY' }>, approverRules = actorRules) {
+function caller(
+  actorRules: Array<{ capability: string; effect: 'ALLOW' | 'DENY' }>,
+  approverRules = actorRules,
+  options: {
+    actorAssigned?: boolean;
+    approverAssigned?: boolean;
+    counterGrant?: boolean;
+    replayExisting?: boolean;
+    serializeTransactions?: boolean;
+  } = {}
+) {
+  const effectiveActorRules = [
+    ...(options.counterGrant === false
+      ? []
+      : [{ capability: 'pharmacy:counter', effect: 'ALLOW' as const }]),
+    ...actorRules,
+  ];
+  let transactionTail = Promise.resolve();
   const db = {
-    $transaction: async (fn: (tx: unknown) => unknown) => fn(db),
+    $transaction: async (fn: (tx: unknown) => unknown) => {
+      if (!options.serializeTransactions) return fn(db);
+      const prior = transactionTail;
+      let release!: () => void;
+      transactionTail = new Promise<void>((resolve) => (release = resolve));
+      await prior;
+      try {
+        return await fn(db);
+      } finally {
+        release();
+      }
+    },
+    $queryRaw: async () => [],
     pharmacyBranch: { findMany: async () => [{ id: 'branch-1' }] },
+    pharmacySaleLine: {
+      findFirst: async () =>
+        options.replayExisting && vi.mocked(addSaleLine).mock.calls.length > 0
+          ? { id: 'line-1', branchId: 'branch-1', saleId: 'sale-1' }
+          : null,
+    },
     medicine: { findFirst: async () => ({ id: 'medicine-1', rx: true, restricted: false, controlled: false }) },
     user: {
       findUnique: async ({ where }: { where: { id: string } }) => ({
-        organizationRole: { permissions: where.id === 'pharmacist-1' ? approverRules : actorRules },
+        organizationRole: { permissions: where.id === 'pharmacist-1' ? approverRules : effectiveActorRules },
         permissionOverrides: [],
       }),
       findFirst: async ({ where }: { where: { id: string } }) =>
@@ -40,7 +75,15 @@ function caller(actorRules: Array<{ capability: string; effect: 'ALLOW' | 'DENY'
           ? { id: 'pharmacist-1', organizationId: 'org-1', role: 'EMPLOYEE', status: 'ACTIVE' }
           : null,
     },
-    pharmacyBranchAssignment: { findFirst: async () => ({ id: 'assignment-1' }) },
+    pharmacyBranchAssignment: {
+      findMany: async ({ where }: { where: { userId: string } }) => {
+        const assigned =
+          where.userId === 'pharmacist-1'
+            ? options.approverAssigned !== false
+            : options.actorAssigned !== false;
+        return assigned ? [{ branchId: 'branch-1' }] : [];
+      },
+    },
   };
   const context = {
     db,
@@ -55,6 +98,26 @@ function caller(actorRules: Array<{ capability: string; effect: 'ALLOW' | 'DENY'
 beforeEach(() => vi.mocked(addSaleLine).mockClear());
 
 describe('pharmacySales.addLine non-controlled Rx authorization', () => {
+  it('rejects an actor without the counter sale capability', async () => {
+    await expect(
+      caller([], [], { counterGrant: false }).addLine({
+        ...base,
+        rxAuthorization: { prescriptionReference: 'RX-42' },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('rejects an actor not assigned to the sale branch', async () => {
+    await expect(
+      caller([], [], { actorAssigned: false }).addLine({
+        ...base,
+        rxAuthorization: { prescriptionReference: 'RX-42' },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
   it('accepts path (a) only for the actor exact dispense grant', async () => {
     await caller([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]).addLine(base);
     expect(addSaleLine).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ rxAuthorization: { path: 'ACTOR_GRANT' } }));
@@ -85,6 +148,53 @@ describe('pharmacySales.addLine non-controlled Rx authorization', () => {
     expect(addSaleLine).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({
       rxAuthorization: { path: 'PHARMACIST_OVERRIDE', approverUserId: 'pharmacist-1', reason: 'Prescription confirmed by phone' },
     }));
+  });
+
+  it('rejects an override approver who is not assigned to the sale branch', async () => {
+    await expect(
+      caller([], [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }], {
+        approverAssigned: false,
+      }).addLine({
+        ...base,
+        rxAuthorization: {
+          override: { approverUserId: 'pharmacist-1', reason: 'Asked pharmacist' },
+        },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('rejects an override approver with only a wildcard grant', async () => {
+    await expect(
+      caller([], [{ capability: 'pharmacy:*', effect: 'ALLOW' }]).addLine({
+        ...base,
+        rxAuthorization: {
+          override: { approverUserId: 'pharmacist-1', reason: 'Asked pharmacist' },
+        },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'RX_AUTHORIZATION_REQUIRED' });
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('returns one line for a retry with the same idempotency key', async () => {
+    const api = caller([], [], { replayExisting: true });
+    const input = { ...base, rxAuthorization: { prescriptionReference: 'RX-42' } };
+    const first = await api.addLine(input);
+    const retry = await api.addLine(input);
+    expect('line' in first && first.line.id).toBe('line-1');
+    expect('line' in retry && retry.line.id).toBe('line-1');
+    // addSaleLine owns both the line insert and RX_AUTHORIZED audit insert, so
+    // bypassing it on replay means neither row can be duplicated.
+    expect(addSaleLine).toHaveBeenCalledTimes(1);
+  });
+
+  it('serializes concurrent duplicate submits to one line insertion', async () => {
+    const api = caller([], [], { replayExisting: true, serializeTransactions: true });
+    const input = { ...base, rxAuthorization: { prescriptionReference: 'RX-42' } };
+    const [first, duplicate] = await Promise.all([api.addLine(input), api.addLine(input)]);
+    expect('line' in first && first.line.id).toBe('line-1');
+    expect('line' in duplicate && duplicate.line.id).toBe('line-1');
+    expect(addSaleLine).toHaveBeenCalledTimes(1);
   });
 
   it.each([

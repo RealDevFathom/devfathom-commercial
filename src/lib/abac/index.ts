@@ -24,13 +24,16 @@ export type CanOptions = {
   source?: Environment['source'];
   ip?: string | null;
   db?: AuthzDb;
+  /** Require an explicit rule for this action; wildcard grants and policy fallbacks do not qualify. */
+  exactCapability?: boolean;
 };
 
 async function customDecision(
   db: AuthzDb,
   userId: string,
   action: string,
-  now: Date
+  now: Date,
+  exactCapability = false
 ): Promise<boolean | null> {
   const user = await db.user.findUnique({
     where: { id: userId },
@@ -45,14 +48,14 @@ async function customDecision(
     },
   });
   if (!user) return false;
-  const overrides = user.permissionOverrides.filter((rule) =>
-    capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
-  );
+  const matches = (rule: { capability: string; effect: string }) =>
+    exactCapability
+      ? rule.capability === action
+      : capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW');
+  const overrides = user.permissionOverrides.filter(matches);
   if (overrides.some((rule) => rule.effect === 'DENY')) return false;
   if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
-  const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
-    capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
-  );
+  const roleRules = (user.organizationRole?.permissions ?? []).filter(matches);
   if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
   if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
   return null;
@@ -76,12 +79,13 @@ export async function can(
     return false;
   }
   try {
-    const decision = await customDecision(db, subject.id, action, env.now);
+    const decision = await customDecision(db, subject.id, action, env.now, opts.exactCapability);
     if (decision !== null) return decision;
   } catch (err) {
     console.error(`[abac] custom permission lookup for "${action}" threw:`, err);
     return false;
   }
+  if (opts.exactCapability) return false;
   for (const policy of POLICIES[action] ?? []) {
     try {
       if (await policy({ subject, resource, env, db })) return true;

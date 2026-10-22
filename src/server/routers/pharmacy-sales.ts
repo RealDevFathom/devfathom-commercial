@@ -10,6 +10,7 @@ import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/coun
 import { can, subjectFromSession } from '@/lib/abac';
 import {
   appendControlledSaleEntries,
+  assignedRegisterBranchIds,
   earlierRegisterEntry,
   EMERGENCY_NO_RX_WINDOW_MS,
   emergencyNoRxDecision,
@@ -104,7 +105,13 @@ import {
 } from '@/lib/pharmacy/settlement';
 
 import { assertInOrganization } from '../org-refs';
-import { adminProcedure, auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import {
+  adminProcedure,
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  protectedProcedure,
+  router,
+} from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
@@ -138,6 +145,14 @@ const demandReason = z.enum([
   'SERVICE_FAILURE',
 ]);
 const txDb = (tx: unknown) => tx as ScopedDb;
+const counterSaleProcedure = capabilityProcedure('pharmacy:counter');
+
+async function requireAssignedSaleBranch(db: ScopedDb, scope: LedgerScope, userId: string) {
+  const assigned = await assignedRegisterBranchIds(db, scope.organizationId, userId);
+  if (!assigned.includes(scope.branchId)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your pharmacy scope.' });
+  }
+}
 
 async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const organizationId = ctx.entitlements?.organizationId;
@@ -862,7 +877,7 @@ export const pharmacySalesRouter = router({
         createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
       )
     ),
-  addLine: protectedProcedure
+  addLine: counterSaleProcedure
     .input(
       z
         .object({
@@ -954,6 +969,37 @@ export const pharmacySalesRouter = router({
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           const scope = await scopeFor(ctx, input.branchId);
+          const actor = subjectFromSession(ctx.session!.user);
+          // The outer procedure is the central edge gate. Repeat both authorization
+          // and branch scope after entering the transaction so neither can go stale
+          // before stock and audit evidence are committed.
+          if (!(await can(actor, 'pharmacy:counter', undefined, { db, source: 'TRPC' }))) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Pharmacy counter permission required.',
+            });
+          }
+          await requireAssignedSaleBranch(db, scope, scope.actorId);
+          await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':sale-line:' + input.idempotencyKey},0))`;
+          const priorLine = await db.pharmacySaleLine.findFirst({
+            where: { organizationId: scope.organizationId, idempotencyKey: input.idempotencyKey },
+          });
+          if (priorLine) {
+            if (priorLine.branchId !== scope.branchId || priorLine.saleId !== input.saleId) {
+              throw new TRPCError({ code: 'CONFLICT', message: 'Idempotency key is already in use.' });
+            }
+            return {
+              line: priorLine,
+              allocation: {
+                allocations: [],
+                recommendedLotId: null,
+                blocked: [],
+                overrideId: null,
+                discrepancyId: null,
+                movementIds: [],
+              },
+            };
+          }
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
@@ -964,8 +1010,9 @@ export const pharmacySalesRouter = router({
 
             let rxAuthorization: Parameters<typeof addSaleLine>[2]['rxAuthorization'];
             if (
-              await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+              await can(actor, 'pharmacy:dispense', undefined, {
                 db,
+                exactCapability: true,
               })
             ) {
               rxAuthorization = { path: 'ACTOR_GRANT' };
@@ -996,21 +1043,13 @@ export const pharmacySalesRouter = router({
                   status: { in: [...ACTIVE_STATUSES] },
                 },
               });
-              const assigned = approver
-                ? await db.pharmacyBranchAssignment.findFirst({
-                    where: {
-                      organizationId: scope.organizationId,
-                      branchId: scope.branchId,
-                      userId: approver.id,
-                      active: true,
-                    },
-                    select: { id: true },
-                  })
-                : null;
+              if (approver) await requireAssignedSaleBranch(db, scope, approver.id);
               if (
                 !approver ||
-                !assigned ||
-                !(await can(subjectFromSession(approver), 'pharmacy:dispense', undefined, { db }))
+                !(await can(subjectFromSession(approver), 'pharmacy:dispense', undefined, {
+                  db,
+                  exactCapability: true,
+                }))
               )
                 throw new PharmacySaleError('RX_AUTHORIZATION_REQUIRED');
               rxAuthorization = {
