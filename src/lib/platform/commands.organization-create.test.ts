@@ -7,12 +7,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 
-const mocks = vi.hoisted(() => ({ userFindFirst: vi.fn(), userCreate: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  userFindFirst: vi.fn(),
+  userCreate: vi.fn(),
+  assertCapability: vi.fn(),
+}));
 
 vi.mock('server-only', () => ({}));
 vi.mock('bcryptjs', () => ({ hash: vi.fn(async () => 'hashed'), compare: vi.fn() }));
 vi.mock('@/lib/secret-crypto', () => ({ encryptSecret: vi.fn() }));
-vi.mock('@/lib/platform/auth', () => ({ assertPlatformCapability: vi.fn() }));
+vi.mock('@/lib/platform/auth', () => ({ assertPlatformCapability: mocks.assertCapability }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withPlatformDb: vi.fn(async (run: (db: unknown) => Promise<unknown>) => run(platformDb)),
 }));
@@ -26,6 +30,7 @@ function record(model: string) {
 }
 
 const platformDb = {
+  $queryRaw: vi.fn(async () => []),
   platformPackage: {
     findUnique: vi.fn(async () => ({
       id: 'pkg_1',
@@ -45,6 +50,12 @@ const platformDb = {
   platformJob: { create: record('job') },
   organizationLifecycleEvent: { create: record('lifecycle') },
   platformAuditLog: { create: record('audit') },
+  platformOpportunity: {
+    findUnique: vi.fn(),
+    update: record('opportunity'),
+  },
+  platformOpportunityStageEvent: { create: record('opportunityStageEvent') },
+  platformAccount: { findUnique: vi.fn(), update: record('account') },
 };
 
 import { executePlatformCommand } from './commands';
@@ -113,6 +124,58 @@ describe('organization.create admin email', () => {
         data: expect.objectContaining({ email: 'admin@acme.com', mustChangePassword: true }),
       })
     );
+  });
+});
+
+describe('organization.create CRM conversion boundary', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.assertCapability.mockReset();
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.userCreate.mockResolvedValue({ id: 'user_new' });
+  });
+
+  it('requires crm:write before provisioning when an opportunity is supplied', async () => {
+    mocks.assertCapability.mockImplementation((_actor, capability) => {
+      if (capability === 'crm:write') throw new PlatformSecurityError('Denied.', 403);
+    });
+
+    await expect(
+      executePlatformCommand(
+        { ...actor, role: 'OPERATIONS' } as never,
+        'organization.create',
+        { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+        request
+      )
+    ).rejects.toMatchObject({ status: 403 });
+
+    expect(mocks.assertCapability).toHaveBeenCalledWith(expect.anything(), 'crm:write');
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['converted opportunity', { convertedOrganizationId: 'org_existing', stage: 'WON' }, null],
+    ['bound account', { convertedOrganizationId: null, stage: 'NEGOTIATION' }, 'org_existing'],
+    ['terminal opportunity', { convertedOrganizationId: null, stage: 'LOST' }, null],
+  ])('rejects a %s before provisioning', async (_label, opportunityState, accountOrganizationId) => {
+    platformDb.platformOpportunity.findUnique
+      .mockResolvedValueOnce({ accountId: 'account_1' })
+      .mockResolvedValueOnce({ accountId: 'account_1', ...opportunityState });
+    platformDb.platformAccount.findUnique.mockResolvedValue({
+      organizationId: accountOrganizationId,
+    });
+
+    await expect(
+      executePlatformCommand(
+        actor,
+        'organization.create',
+        { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+        request
+      )
+    ).rejects.toMatchObject({ status: 409 });
+
+    expect(platformDb.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
   });
 });
 

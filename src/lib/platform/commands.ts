@@ -839,12 +839,56 @@ async function createOrganizationRecord(
   }
 }
 
+async function assertOpportunityCanBeConverted(db: PrismaClient, opportunityId: string) {
+  const candidate = await db.platformOpportunity.findUnique({
+    where: { id: opportunityId },
+    select: { accountId: true },
+  });
+  if (!candidate) throw new PlatformSecurityError('Opportunity not found.', 400);
+
+  // Both CRM rows stay locked until the surrounding withPlatformDb transaction
+  // commits. The second reads are therefore the authoritative conversion
+  // precondition, and competing conversions cannot both provision a tenant.
+  await db.$queryRaw(Prisma.sql`
+    SELECT id FROM platform_opportunities WHERE id = ${opportunityId} FOR UPDATE
+  `);
+  await db.$queryRaw(Prisma.sql`
+    SELECT id FROM platform_accounts WHERE id = ${candidate.accountId} FOR UPDATE
+  `);
+  const opportunity = await db.platformOpportunity.findUnique({
+    where: { id: opportunityId },
+    select: { accountId: true, convertedOrganizationId: true, stage: true },
+  });
+  const account = opportunity
+    ? await db.platformAccount.findUnique({
+        where: { id: opportunity.accountId },
+        select: { organizationId: true },
+      })
+    : null;
+  if (
+    !opportunity ||
+    !account ||
+    opportunity.convertedOrganizationId ||
+    account.organizationId ||
+    opportunity.stage === 'WON' ||
+    opportunity.stage === 'LOST'
+  ) {
+    throw new PlatformSecurityError(
+      'This opportunity or account has already been claimed and cannot be converted.',
+      409
+    );
+  }
+}
+
 async function bootstrapOrganization(
   db: PrismaClient,
   actor: PlatformIdentity | null,
   input: z.infer<typeof organizationInput>,
   demo?: DemoOrganizationBootstrap
 ) {
+  if (input.opportunityId) {
+    await assertOpportunityCanBeConverted(db, input.opportunityId);
+  }
   if (input.deploymentMode === 'DEDICATED' && !isDedicatedProvisioningConfigured()) {
     throw new PlatformSecurityError(
       'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
@@ -1506,6 +1550,7 @@ async function runCommand(
   switch (action) {
     case 'organization.create': {
       const input = organizationInput.parse(payload);
+      if (input.opportunityId) assertPlatformCapability(actor, 'crm:write');
       const organization = await bootstrapOrganization(db, actor, input);
       return {
         targetType: 'Organization',
