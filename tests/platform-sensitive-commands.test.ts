@@ -1,10 +1,18 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Partial Prisma delegates model only the operations exercised by these boundary tests. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const state = vi.hoisted(() => ({ audits: [] as any[], operator: {} as any, remaining: 0 }));
+const state = vi.hoisted(() => ({
+  audits: [] as any[],
+  operator: {} as any,
+  remaining: 0,
+  organization: { id: 'org_1', vertical: 'AGENCY', status: 'ONBOARDING' } as any,
+  placeholderActive: false,
+}));
 vi.mock('server-only', () => ({}));
 vi.mock('bcryptjs', () => ({ hash: async () => 'hashed' }));
 const db = {
-  $queryRawUnsafe: vi.fn(async () => []),
+  $queryRawUnsafe: vi.fn(async (sql: string) =>
+    sql.startsWith('SELECT id FROM organizations') ? [{ id: state.organization.id }] : []
+  ),
   platformUser: {
     findUnique: vi.fn(async () => state.operator),
     count: vi.fn(async () => state.remaining),
@@ -13,7 +21,33 @@ const db = {
   },
   platformSession: { updateMany: vi.fn() },
   user: { update: vi.fn(async () => ({ id: 'user_1', organizationId: 'org_1' })) },
-  organization: { findUnique: vi.fn(async () => ({ id: 'org_1', vertical: 'AGENCY' })) },
+  organization: {
+    findUnique: vi.fn(async () => state.organization),
+    update: vi.fn(async ({ data }: any) => {
+      state.organization = { ...state.organization, ...data };
+      return state.organization;
+    }),
+  },
+  jurisdictionRuleSet: {
+    upsert: vi.fn(async ({ create }: any) => create),
+  },
+  pharmacyBranch: {
+    findMany: vi.fn(async () => [{ id: 'branch_1', provinceCode: 'PB', active: true }]),
+  },
+  branchRegulatoryProfile: {
+    findFirst: vi.fn(async ({ where }: any) =>
+      where?.isPlaceholder && state.placeholderActive ? { id: 'placeholder_profile' } : null
+    ),
+    create: vi.fn(async ({ data }: any) => {
+      state.placeholderActive = true;
+      return { id: 'placeholder_profile', ...data };
+    }),
+    deleteMany: vi.fn(async () => {
+      const count = state.placeholderActive ? 1 : 0;
+      state.placeholderActive = false;
+      return { count };
+    }),
+  },
   platformAuditLog: {
     create: vi.fn(async ({ data }: any) => {
       state.audits.push(data);
@@ -40,6 +74,99 @@ beforeEach(() => {
   state.audits = [];
   state.operator = { id: 'target_1', role: 'SUPER_ADMIN', active: true };
   state.remaining = 0;
+  state.organization = { id: 'org_1', vertical: 'AGENCY', status: 'ONBOARDING' };
+  state.placeholderActive = false;
+});
+
+describe('pharmacy placeholder commands', () => {
+  const reason = 'Owner-approved temporary activation';
+
+  it.each(['OPERATIONS', 'SUPPORT', 'SALES', 'FINANCE', 'AUDITOR'])(
+    'does not allow a %s platform user to apply or lock the placeholder',
+    async (role) => {
+      for (const action of [
+        'organization.pharmacy.placeholder.apply',
+        'organization.pharmacy.placeholder.lock',
+      ]) {
+        await expect(
+          execute(action, { organizationId: 'org_1', reason }, role)
+        ).rejects.toMatchObject({ status: 403 });
+      }
+      expect(db.jurisdictionRuleSet.upsert).not.toHaveBeenCalled();
+      expect(db.branchRegulatoryProfile.deleteMany).not.toHaveBeenCalled();
+    }
+  );
+
+  it('creates only flagged, non-provisional wildcard rules and labelled branch fields', async () => {
+    state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ONBOARDING' };
+
+    await execute('organization.pharmacy.placeholder.apply', { organizationId: 'org_1', reason });
+
+    const rule = db.jurisdictionRuleSet.upsert.mock.calls[0]![0].create;
+    expect(rule).toMatchObject({
+      id: 'pk_pb_placeholder_v1',
+      isPlaceholder: true,
+      licenceCategories: { values: ['*'], provisional: false },
+      permittedSchedules: { values: ['*'], provisional: false },
+      controlledRegisterFlags: { values: { recordEverySale: true }, provisional: false },
+      pharmacistCoverageRule: { values: { dispenseGrantRequired: true }, provisional: false },
+    });
+    for (const field of [
+      rule.licenceCategories,
+      rule.permittedSchedules,
+      rule.prescriptionOnlyClasses,
+      rule.prescriptionRetentionDays,
+      rule.controlledRegisterFlags,
+      rule.pharmacistCoverageRule,
+      rule.recordRetentionByClass,
+    ]) {
+      expect(field.label).toBe('PLACEHOLDER – not a real licence');
+      expect(field.provisional).toBe(false);
+    }
+
+    const profile = db.branchRegulatoryProfile.create.mock.calls[0]![0].data;
+    expect(profile).toMatchObject({
+      isPlaceholder: true,
+      licenceNumber: 'PLACEHOLDER – not a real licence',
+      licenceIssuingAuthority: 'PLACEHOLDER – not a real licence',
+      licenceExpiryLabel: 'PLACEHOLDER – not a real licence',
+      qualifiedPersonRegistration: 'PLACEHOLDER – not a real licence',
+      permittedSchedules: ['OTC', 'RX', 'CONTROLLED'],
+    });
+    expect(state.audits.at(-1)).toMatchObject({ metadata: { placeholder: true } });
+  });
+
+  it('locks idempotently, clears placeholder profiles, and returns an active org to onboarding', async () => {
+    state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ACTIVE' };
+    state.placeholderActive = true;
+
+    await execute('organization.pharmacy.placeholder.lock', { organizationId: 'org_1', reason });
+    await execute('organization.pharmacy.placeholder.lock', { organizationId: 'org_1', reason });
+
+    expect(db.branchRegulatoryProfile.deleteMany).toHaveBeenCalledTimes(2);
+    expect(db.organization.update).toHaveBeenCalledWith({
+      where: { id: 'org_1' },
+      data: { status: 'ONBOARDING', activatedAt: null },
+    });
+    expect(state.audits.at(-1)).toMatchObject({ metadata: { placeholder: true } });
+  });
+
+  it('flags failed platform commands while the placeholder is active', async () => {
+    state.organization = { id: 'org_1', vertical: 'PHARMACY', status: 'ACTIVE' };
+    state.placeholderActive = true;
+
+    await expect(
+      execute('organization.pharmacy.placeholder.apply', {
+        organizationId: 'org_1',
+        reason: 'short',
+      })
+    ).rejects.toThrow();
+
+    expect(state.audits.at(-1)).toMatchObject({
+      success: false,
+      metadata: { outcomeCategory: 'validation_failed', placeholder: true },
+    });
+  });
 });
 describe('sensitive commands', () => {
   it.each(['OPERATIONS', 'SUPPORT', 'SALES', 'FINANCE', 'AUDITOR'])(

@@ -321,6 +321,18 @@ async function persistCommandFailure(
         if (organization.length === 0) target.organizationId = undefined;
       }
 
+      const placeholder =
+        target.organizationId && db.branchRegulatoryProfile
+          ? await db.branchRegulatoryProfile.findFirst({
+              where: {
+                organizationId: target.organizationId,
+                isPlaceholder: true,
+                effectiveTo: null,
+              },
+              select: { id: true },
+            })
+          : null;
+
       try {
         await db.platformAuditLog.create({
           data: {
@@ -328,7 +340,10 @@ async function persistCommandFailure(
             ...target,
             actorPlatformUserId: actor.id,
             action,
-            metadata: { outcomeCategory: category },
+            metadata: {
+              outcomeCategory: category,
+              ...(placeholder ? { placeholder: true } : {}),
+            },
             requestId: correlationId,
             reason: FAILURE_REASON[category],
             success: false,
@@ -1533,7 +1548,11 @@ async function runCommand(
           prescriptionOnlyClasses: { values: ['*'], provisional: false, label },
           prescriptionRetentionDays: { values: {}, provisional: false, label },
           controlledRegisterFlags: { values: { recordEverySale: true }, provisional: false, label },
-          pharmacistCoverageRule: { values: { dispenseGrantRequired: true }, provisional: false, label },
+          pharmacistCoverageRule: {
+            values: { dispenseGrantRequired: true },
+            provisional: false,
+            label,
+          },
           recordRetentionByClass: { values: {}, provisional: false, label },
         },
       });
@@ -1550,7 +1569,10 @@ async function runCommand(
           orderBy: { version: 'desc' },
         });
         if (latest?.effectiveTo === null)
-          throw new PlatformSecurityError('Lock the current regulatory profile before applying the placeholder.', 409);
+          throw new PlatformSecurityError(
+            'Lock the current regulatory profile before applying the placeholder.',
+            409
+          );
         await db.branchRegulatoryProfile.create({
           data: {
             organizationId: input.organizationId,
@@ -1560,7 +1582,9 @@ async function runCommand(
             provinceCode: branch.provinceCode,
             jurisdictionRuleSetId: ruleSet.id,
             premises: { label },
-            licenceCategory: '*', licenceNumber: label, licenceIssuingAuthority: label,
+            licenceCategory: '*',
+            licenceNumber: label,
+            licenceIssuingAuthority: label,
             licenceValidFrom: new Date('1970-01-01T00:00:00.000Z'),
             licenceValidTo: new Date('9999-12-31T00:00:00.000Z'),
             licenceExpiryLabel: label,
@@ -1576,9 +1600,13 @@ async function runCommand(
           },
         });
       }
-      return { targetType: 'Organization', targetId: input.organizationId,
-        organizationId: input.organizationId, data: { applied: true },
-        audit: { placeholder: true, ruleSetId: ruleSet.id, reason: input.reason } };
+      return {
+        targetType: 'Organization',
+        targetId: input.organizationId,
+        organizationId: input.organizationId,
+        data: { applied: true },
+        audit: { placeholder: true, ruleSetId: ruleSet.id, reason: input.reason },
+      };
     }
     case 'organization.pharmacy.placeholder.lock': {
       if (actor.role !== 'SUPER_ADMIN')
@@ -1587,7 +1615,9 @@ async function runCommand(
       const removed = await db.branchRegulatoryProfile.deleteMany({
         where: { organizationId: input.organizationId, isPlaceholder: true },
       });
-      const organization = await db.organization.findUnique({ where: { id: input.organizationId } });
+      const organization = await db.organization.findUnique({
+        where: { id: input.organizationId },
+      });
       if (!organization) throw new PlatformSecurityError('Organization not found.', 400);
       if (organization.status === 'ACTIVE') {
         await db.organization.update({
@@ -1595,9 +1625,13 @@ async function runCommand(
           data: { status: 'ONBOARDING', activatedAt: null },
         });
       }
-      return { targetType: 'Organization', targetId: input.organizationId,
-        organizationId: input.organizationId, data: { locked: true, removed: removed.count },
-        audit: { placeholder: true, locked: true, removed: removed.count, reason: input.reason } };
+      return {
+        targetType: 'Organization',
+        targetId: input.organizationId,
+        organizationId: input.organizationId,
+        data: { locked: true, removed: removed.count },
+        audit: { placeholder: true, locked: true, removed: removed.count, reason: input.reason },
+      };
     }
     case 'organization.create': {
       const input = organizationInput.parse(payload);
@@ -3978,12 +4012,17 @@ export async function executePlatformCommand(
         typeof result.audit === 'object' &&
         'placeholder' in result.audit &&
         result.audit.placeholder === true;
-      const placeholder = result.organizationId && db.branchRegulatoryProfile
-        ? await db.branchRegulatoryProfile.findFirst({
-            where: { organizationId: result.organizationId, isPlaceholder: true, effectiveTo: null },
-            select: { id: true },
-          })
-        : null;
+      const placeholder =
+        result.organizationId && db.branchRegulatoryProfile
+          ? await db.branchRegulatoryProfile.findFirst({
+              where: {
+                organizationId: result.organizationId,
+                isPlaceholder: true,
+                effectiveTo: null,
+              },
+              select: { id: true },
+            })
+          : null;
       await db.platformAuditLog.create({
         data: {
           organizationId: result.organizationId,
@@ -4015,7 +4054,9 @@ export function applyPlaceholderRuleSet(
   organizationId: string,
   actor: PlatformIdentity,
   reason: string,
-  request = new Request('http://platform.internal/commands/pharmacy-placeholder', { method: 'POST' })
+  request = new Request('http://platform.internal/commands/pharmacy-placeholder', {
+    method: 'POST',
+  })
 ) {
   return executePlatformCommand(
     actor,
@@ -4029,7 +4070,9 @@ export function lockPlaceholderRuleSet(
   organizationId: string,
   actor: PlatformIdentity,
   reason: string,
-  request = new Request('http://platform.internal/commands/pharmacy-placeholder', { method: 'POST' })
+  request = new Request('http://platform.internal/commands/pharmacy-placeholder', {
+    method: 'POST',
+  })
 ) {
   return executePlatformCommand(
     actor,

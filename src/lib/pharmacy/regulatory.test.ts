@@ -57,6 +57,26 @@ describe('assertBranchMayOperate', () => {
     expect(state.auditDenied).not.toHaveBeenCalled();
   });
 
+  it.each(['OTC', 'RX', 'CONTROLLED'])(
+    'permits %s through the placeholder wildcards',
+    (schedule) => {
+      const state = validState();
+      state.licenceCategory = '*';
+      state.permittedSchedules = ['OTC', 'RX', 'CONTROLLED'];
+      state.ruleSet.licenceCategories = { provisional: false, values: ['*'] };
+      state.ruleSet.permittedSchedules = { provisional: false, values: ['*'] };
+
+      expect(() =>
+        assertBranchMayOperate(state, {
+          name: 'DISPENSE',
+          at,
+          schedule,
+          requiresQualifiedPerson: true,
+        })
+      ).not.toThrow();
+    }
+  );
+
   it('fails closed and audits an expired licence', () => {
     const state = validState();
     state.licenceValidTo = at;
