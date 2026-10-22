@@ -22,6 +22,8 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
 import { Textarea } from '@/components/ui/textarea';
 import type { UpsellSuggestion } from '@/lib/ai/shared/upsell-engine.types';
+import { AI_UPSELL_CHECKOUT_STRINGS } from '@/lib/pharmacy/ai-upsell-checkout-i18n';
+import type { CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
 
 import { ReceiptView } from './receipt-view';
 import { SplitBillDialog, type BillSplit } from './split-bill-dialog';
@@ -72,6 +74,8 @@ type CheckoutPanelProps = {
   connected?: boolean;
   operators?: RestaurantStaffOption[];
   actingOperatorId?: string;
+  /** Language selected for pharmacy checkout operator copy. */
+  locale?: CounterReceiptLocale;
   /** `settled` reports whether the order was fully settled when the panel closed. */
   onClose: (result: { settled: boolean }) => void;
 };
@@ -672,6 +676,7 @@ export function CheckoutPanel({
   operators = [],
   actingOperatorId = '',
   onClose,
+  locale = 'en',
 }: CheckoutPanelProps) {
   const [summary, setSummary] = useState<CheckoutSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -680,6 +685,7 @@ export function CheckoutPanel({
   const [busy, setBusy] = useState(false);
   const [tenderPending, setTenderPending] = useState(false);
   const [dismissedUpsell, setDismissedUpsell] = useState<string | null>(null);
+  const aiUpsellStrings = AI_UPSELL_CHECKOUT_STRINGS[locale];
 
   const fetchSummary = useCallback(
     () =>
@@ -919,17 +925,19 @@ export function CheckoutPanel({
 
             {summary.aiUpsell && dismissedUpsell !== `${orderId}:${summary.aiUpsell.menuItemId}` ? (
               <SectionCard
-                eyebrow="DevFathom AI"
+                lang={locale === 'ur' ? 'ur-PK' : 'en'}
+                dir={locale === 'ur' ? 'rtl' : 'ltr'}
+                eyebrow={aiUpsellStrings.label}
                 title={summary.aiUpsell.name}
                 actions={
                   <Button
                     type="button"
                     variant="ghost"
-                    aria-label="Dismiss DevFathom AI suggestion"
+                    aria-label={aiUpsellStrings.dismissAriaLabel}
                     onClick={() => setDismissedUpsell(`${orderId}:${summary.aiUpsell!.menuItemId}`)}
                     disabled={busy}
                   >
-                    Dismiss
+                    {aiUpsellStrings.dismiss}
                   </Button>
                 }
               >
@@ -941,7 +949,17 @@ export function CheckoutPanel({
                   disabled={busy}
                   onClick={() => void addUpsell(summary.aiUpsell!)}
                 >
-                  {busy ? 'Adding…' : `Add ${summary.aiUpsell.name}`}
+                  {busy ? (
+                    aiUpsellStrings.adding
+                  ) : locale === 'ur' ? (
+                    <>
+                      <bdi>{summary.aiUpsell.name}</bdi> {aiUpsellStrings.add}
+                    </>
+                  ) : (
+                    <>
+                      {aiUpsellStrings.add} <bdi>{summary.aiUpsell.name}</bdi>
+                    </>
+                  )}
                 </Button>
               </SectionCard>
             ) : null}
