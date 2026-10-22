@@ -176,6 +176,7 @@ export async function processDueWhatsAppKhataReminders(
           patientId: true,
           active: true,
           whatsappOptIn: true,
+          preferredLanguage: true,
           patient: { select: { phone: true } },
         },
       });
@@ -206,6 +207,13 @@ export async function processDueWhatsAppKhataReminders(
         month: '2-digit',
         day: '2-digit',
       }).format(now);
+      const template =
+        customer.preferredLanguage === 'ur' && config.templates.khataReminderUrdu
+          ? ('khataReminderUrdu' as const)
+          : ('khataReminder' as const);
+      const templateName = config.templates[template];
+      // English remains the safe fallback until an approved Urdu template is configured.
+      if (!templateName) return null;
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: account.organizationId,
         direction: 'OUTBOUND',
@@ -217,10 +225,10 @@ export async function processDueWhatsAppKhataReminders(
         customerId: customer.id,
         patientId: customer.patientId,
         phoneLast4: phoneLast4(to),
-        templateName: config.templates.khataReminder,
+        templateName,
         dueDate: plan.dueDate,
       });
-      return { customerId: customer.id, patientId: customer.patientId, to, logId };
+      return { customerId: customer.id, patientId: customer.patientId, to, logId, template };
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
@@ -240,14 +248,15 @@ export async function processDueWhatsAppKhataReminders(
         customerId: recipient.customerId,
         patientId: recipient.patientId,
         phoneLast4: phoneLast4(recipient.to),
-        templateName: config.templates.khataReminder,
+        templateName: config.templates[recipient.template],
         dueDate: plan.dueDate,
       },
       recipient.logId,
       () =>
         provider.sendTemplate({
           to: recipient.to,
-          template: 'khataReminder',
+          template: recipient.template,
+          ...(recipient.template === 'khataReminderUrdu' ? { languageCode: 'ur' } : {}),
           // Utility parameters only: who owes, and how much is outstanding.
           parameters: [sanitizeReminderDisplayName(account.displayName), formatMinor(balanceMinor)],
         })

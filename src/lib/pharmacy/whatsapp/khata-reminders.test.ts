@@ -80,6 +80,7 @@ import {
 const NOW = new Date('2026-10-21T08:00:00.000Z');
 const config = readWhatsAppConfig({
   PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER: 'khata_due_v1',
+  PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR: 'khata_due_ur_v1',
   PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
   PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sandbox-owner',
 });
@@ -96,12 +97,13 @@ function account(id = 'family-1') {
   };
 }
 
-function customer(whatsappOptIn: boolean | null) {
+function customer(whatsappOptIn: boolean | null, preferredLanguage = 'en') {
   return {
     id: 'customer-1',
     patientId: 'patient-1',
     active: true,
     whatsappOptIn,
+    preferredLanguage,
     patient: { phone: '0300-1234567' },
   };
 }
@@ -197,6 +199,46 @@ describe('processDueWhatsAppKhataReminders', () => {
       status: 'IGNORED',
       phoneLast4: '4567',
       dueDate: '2026-10-10',
+    });
+  });
+
+  it('uses the approved Urdu variant for an Urdu-preferring customer', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true, 'ur')];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(provider.calls).toEqual([
+      {
+        kind: 'template',
+        to: '923001234567',
+        template: 'khataReminderUrdu',
+        templateName: 'khata_due_ur_v1',
+        languageCode: 'ur',
+        parameters: ['Khan household', '500.00'],
+      },
+    ]);
+    expect(store.logs[0]).toMatchObject({ templateName: 'khata_due_ur_v1' });
+  });
+
+  it('falls back to English when the Urdu template is not configured', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true, 'ur')];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const englishOnly = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER: 'khata_due_v1',
+      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sandbox-owner',
+    });
+    const provider = new MockWhatsAppProvider(englishOnly);
+
+    await processDueWhatsAppKhataReminders({ now: NOW, config: englishOnly, provider });
+
+    expect(provider.calls[0]).toMatchObject({
+      template: 'khataReminder',
+      templateName: 'khata_due_v1',
     });
   });
 

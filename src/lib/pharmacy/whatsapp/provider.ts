@@ -7,7 +7,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
  * environment; see docs/pharmacy/whatsapp.md.
  */
 
-export type WhatsAppTemplateKey = 'refillReminder' | 'khataReminder';
+export type WhatsAppTemplateKey = 'refillReminder' | 'khataReminder' | 'khataReminderUrdu';
 
 export type WhatsAppConfig = {
   provider: 'meta' | 'mock';
@@ -44,6 +44,7 @@ export interface WhatsAppProvider {
     to: string;
     template: WhatsAppTemplateKey;
     parameters: string[];
+    languageCode?: string;
   }): Promise<WhatsAppSendResult>;
   sendText(input: { to: string; body: string }): Promise<WhatsAppSendResult>;
   /** Verifies Meta's `X-Hub-Signature-256` HMAC over the raw request body. Fails closed. */
@@ -83,6 +84,7 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
     templates: {
       refillReminder: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_REFILL_REMINDER'),
       khataReminder: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER'),
+      khataReminderUrdu: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR'),
     },
     reminderLeadDays:
       Number.isSafeInteger(leadDays) && leadDays >= 0 && leadDays <= 30 ? leadDays : 3,
@@ -190,7 +192,12 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
     return { providerMessageId: id, acceptedByProvider: true };
   }
 
-  sendTemplate(input: { to: string; template: WhatsAppTemplateKey; parameters: string[] }) {
+  sendTemplate(input: {
+    to: string;
+    template: WhatsAppTemplateKey;
+    parameters: string[];
+    languageCode?: string;
+  }) {
     const name = this.config.templates[input.template];
     if (!name) return Promise.reject(new WhatsAppProviderError('TEMPLATE_NOT_CONFIGURED'));
     return this.post({
@@ -198,7 +205,7 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
       type: 'template',
       template: {
         name,
-        language: { code: this.config.templateLanguage },
+        language: { code: input.languageCode ?? this.config.templateLanguage },
         components: [
           {
             type: 'body',
@@ -233,6 +240,7 @@ export type MockWhatsAppCall =
       template: WhatsAppTemplateKey;
       templateName: string;
       parameters: string[];
+      languageCode?: string;
     }
   | { kind: 'text'; to: string; body: string };
 
@@ -249,7 +257,12 @@ export class MockWhatsAppProvider implements WhatsAppProvider {
     return { providerMessageId: `mock-wamid-${this.sequence}`, acceptedByProvider: false };
   }
 
-  async sendTemplate(input: { to: string; template: WhatsAppTemplateKey; parameters: string[] }) {
+  async sendTemplate(input: {
+    to: string;
+    template: WhatsAppTemplateKey;
+    parameters: string[];
+    languageCode?: string;
+  }) {
     const templateName = this.config.templates[input.template];
     if (!templateName) throw new WhatsAppProviderError('TEMPLATE_NOT_CONFIGURED');
     this.calls.push({

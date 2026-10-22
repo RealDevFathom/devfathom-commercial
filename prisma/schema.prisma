@@ -1138,6 +1138,8 @@ model PharmacyCustomer {
   orders                 PharmacyCustomerOrder[]
   whatsappOptIn          Boolean?
   whatsappOptInChangedAt DateTime?                    @db.Timestamp(3)
+  /// Customer-facing WhatsApp language. Database constraint limits this to en/ur.
+  preferredLanguage      String                       @default("en")
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])
