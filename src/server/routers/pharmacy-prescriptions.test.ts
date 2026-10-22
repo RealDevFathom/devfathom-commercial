@@ -227,6 +227,29 @@ describe('prescription capture and private delivery', () => {
     );
   });
 
+  it('refuses to record a prescription fill without an exact dispense grant', async () => {
+    mocks.can.mockResolvedValue(false);
+    const ctx = context();
+    const create = vi.fn();
+    (ctx.db as Record<string, unknown>).prescriptionFill = { create };
+    await expect(
+      caller(ctx).fill({
+        id: 'fill-a',
+        prescriptionLineId: 'line-a',
+        fillSequence: 1,
+        quantityCanonicalUnits: 1,
+        idempotencyKey: 'fill-key-a',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(create).not.toHaveBeenCalled();
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:dispense',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+  });
+
   it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:orders');
     await expect(caller().workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
