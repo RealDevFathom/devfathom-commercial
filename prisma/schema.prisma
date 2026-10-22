@@ -997,6 +997,9 @@ enum PharmacyLoyaltyEntryKind {
   EARN
   REDEEM
   REFUND
+  EXPIRE
+  REVERSAL
+  ADJUST
 }
 
 enum PharmacyVoucherStatus {
@@ -1024,6 +1027,15 @@ model PharmacyLoyaltySettings {
   maxRedeemedPerPhonePerPeriod  Int                  @default(5)
   abusePeriodDays               Int                  @default(30)
   expiryOverrideGraceDays       Int                  @default(0)
+  medicineEarnPoints            Int                  @default(1)
+  nonDrugEarnPoints             Int                  @default(3)
+  earnBlockMinor                Int                  @default(10000)
+  pointValueMinor               Int                  @default(100)
+  minimumRedemptionPoints       Int                  @default(200)
+  pointsExpiryMonths            Int                  @default(6)
+  goldTierEnabled               Boolean              @default(false)
+  goldTierThresholdMinor        Int                  @default(5000000)
+  goldTierMultiplier            Int                  @default(2)
   createdAt                     DateTime              @default(now())
   updatedAt                     DateTime              @updatedAt
 
@@ -1353,6 +1365,8 @@ model PharmacyLoyaltyPointsEntry {
   actorId         String
   idempotencyKey  String
   occurredAt      DateTime                 @default(now())
+  expiresAt       DateTime?
+  sourceEntryId   String?
 
   customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
   sale     PharmacySale     @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
@@ -1364,6 +1378,7 @@ model PharmacyLoyaltyPointsEntry {
   @@index([organizationId, branchId, customerId, occurredAt])
   @@index([organizationId, saleId])
   @@index([organizationId, refundId])
+  @@index([organizationId, branchId, customerId, expiresAt])
   @@map("pharmacy_loyalty_points_entries")
 }
 

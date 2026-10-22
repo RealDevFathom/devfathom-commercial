@@ -2,7 +2,6 @@ import 'server-only';
 
 import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
-import { pointsForNetPaid } from '@/lib/commerce/loyalty-arithmetic';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { lockCustomerConsent } from './consent-writer';
 import type { LedgerScope } from './stock-ledger';
@@ -56,7 +55,7 @@ export async function reverseRefundedEarnedPoints(
   });
   if (!earn) return null;
   // Stops the operator's refund and names who must look, so a deliberate TRPCError.
-  if (earn.netPaidMinor === null || earn.points !== pointsForNetPaid(earn.netPaidMinor))
+  if (earn.netPaidMinor === null || earn.netPaidMinor <= 0 || earn.points <= 0)
     throw new TRPCError({
       code: 'PRECONDITION_FAILED',
       message: 'Earn basis requires accounting review.',
@@ -76,8 +75,14 @@ export async function reverseRefundedEarnedPoints(
       _sum: { points: true },
     }),
   ]);
-  const netPaidMinor = Math.max(0, earn.netPaidMinor - (refunded._sum.amountMinor ?? 0));
-  const target = earn.points - pointsForNetPaid(netPaidMinor);
+  const refundedMinor = Math.min(earn.netPaidMinor, refunded._sum.amountMinor ?? 0);
+  const netPaidMinor = earn.netPaidMinor - refundedMinor;
+  // Reverse the earned award proportionally. This remains valid when category rates or tier
+  // multipliers have changed since the immutable EARN row was posted.
+  const target = Number(
+    (BigInt(earn.points) * BigInt(refundedMinor) + BigInt(earn.netPaidMinor - 1)) /
+      BigInt(earn.netPaidMinor)
+  );
   const points = -target - (reversed._sum.points ?? 0);
   if (points >= 0) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({

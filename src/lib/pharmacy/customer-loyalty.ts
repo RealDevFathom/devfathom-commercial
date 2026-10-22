@@ -10,6 +10,13 @@ import { pointsForNetPaid, redemptionFor } from '@/lib/commerce/loyalty-arithmet
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import type { LedgerScope } from './stock-ledger';
+import {
+  allocateNetPaid,
+  categoryEarnPoints,
+  expireCustomerPoints,
+  expiryDate,
+  readPointsPolicy,
+} from './loyalty-points';
 
 export class PharmacyLoyaltyError extends Error {
   constructor(
@@ -85,13 +92,31 @@ export async function accrueSalePoints(db: ScopedDb, scope: LedgerScope, saleId:
   if (prior) return { ...prior, replayed: true };
   const sale = await db.pharmacySale.findFirst({
     where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
-    include: { tenders: true },
+    include: { tenders: true, lines: { include: { medicine: { select: { productFamily: true } } } } },
   });
   if (!sale?.customerId) return null;
   const netPaidMinor = sale.tenders
     .filter((tender) => tender.type !== 'LOYALTY')
     .reduce((sum, tender) => sum + tender.amountMinor, 0);
-  const points = pointsForNetPaid(netPaidMinor);
+  const policy = await readPointsPolicy(db, scope.organizationId);
+  const rawSubtotals = sale.lines.reduce((value, line) => {
+    const subtotalMinor = line.quantity * line.unitPriceMinor - line.discountMinor;
+    const key = line.medicine.productFamily === 'PHARMACEUTICAL' ||
+      line.medicine.productFamily === 'BIOLOGICAL' ? 'medicineMinor' : 'nonDrugMinor';
+    value[key] += subtotalMinor;
+    return value;
+  }, { medicineMinor: 0, nonDrugMinor: 0 });
+  const yearAgo = new Date();
+  yearAgo.setUTCFullYear(yearAgo.getUTCFullYear() - 1);
+  const spend = policy.goldTierEnabled ? await db.pharmacyLoyaltyPointsEntry.aggregate({
+    where: { organizationId: scope.organizationId, customerId: sale.customerId, kind: 'EARN',
+      occurredAt: { gte: yearAgo } }, _sum: { netPaidMinor: true },
+  }) : null;
+  const goldTierMultiplier = policy.goldTierEnabled &&
+    (spend?._sum.netPaidMinor ?? 0) >= policy.goldTierThresholdMinor ? policy.goldTierMultiplier : 1;
+  const points = categoryEarnPoints(allocateNetPaid(rawSubtotals, netPaidMinor), {
+    ...policy, goldTierMultiplier,
+  });
   if (points === 0) return null;
   const entry = await db.pharmacyLoyaltyPointsEntry.create({
     data: {
@@ -102,9 +127,10 @@ export async function accrueSalePoints(db: ScopedDb, scope: LedgerScope, saleId:
       kind: 'EARN',
       points,
       netPaidMinor,
+      expiresAt: expiryDate(new Date(), policy.pointsExpiryMonths),
       actorId: scope.actorId,
       idempotencyKey: `loyalty:earn:${sale.id}`,
-    },
+    } as never,
   });
   return { ...entry, replayed: false };
 }
@@ -167,6 +193,9 @@ export async function redeemSalePoints(
   });
   if (!consent?.granted || consent.revokedAt)
     throw new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED');
+  // The consent/customer locks serialize two sales redeeming the same balance. Lazy expiry is
+  // appended in the same checkout transaction before the available balance is evaluated.
+  await expireCustomerPoints(db, scope, sale.customerId);
   const balance = await db.pharmacyLoyaltyPointsEntry.aggregate({
     where: {
       organizationId: scope.organizationId,
@@ -175,6 +204,7 @@ export async function redeemSalePoints(
     },
     _sum: { points: true },
   });
+  const policy = await readPointsPolicy(db, scope.organizationId);
   const totalMinor = sale.lines.reduce(
     (sum, line) => sum + line.quantity * line.unitPriceMinor - line.discountMinor,
     0
@@ -187,6 +217,8 @@ export async function redeemSalePoints(
       requestedPoints: input.points,
       availablePoints: balance._sum.points ?? 0,
       outstandingMinor,
+      pointValueMinor: policy.pointValueMinor,
+      minimumRedemptionPoints: policy.minimumRedemptionPoints,
     });
   } catch (error) {
     throw new PharmacyLoyaltyError(

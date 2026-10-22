@@ -53,12 +53,15 @@ describe('CRM-L01 pharmacy loyalty', () => {
             { type: 'CASH', amountMinor: 10_099 },
             { type: 'LOYALTY', amountMinor: 500 },
           ],
+          lines: [{ quantity: 1, unitPriceMinor: 10_099, discountMinor: 0,
+            medicine: { productFamily: 'PHARMACEUTICAL' } }],
         }),
       },
+      $queryRaw: vi.fn().mockResolvedValue([]),
     };
     await accrueSalePoints(db as never, scope, 'sale-a');
     expect(create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ points: 100, netPaidMinor: 10_099, kind: 'EARN' }),
+      data: expect.objectContaining({ points: 1, netPaidMinor: 10_099, kind: 'EARN' }),
     });
   });
 

@@ -30,7 +30,7 @@ describe('ordinary earned-point refund allocation', () => {
   it.each([
     [475, 0, -5, 475],
     [950, -5, -4, 0],
-    [50, 0, 0, 900],
+    [50, 0, -1, 900],
     [51, 0, -1, 899],
   ])(
     'allocates cumulative money %i after prior points %i',
@@ -95,20 +95,12 @@ describe('ordinary earned-point refund allocation', () => {
     expect(await reverseRefundedEarnedPoints(db as never, scope, 'refund-a')).toBeNull();
     expect(db.pharmacyRefund.aggregate).not.toHaveBeenCalled();
   });
-  it('refuses a historical earn basis inconsistent with the existing curve', async () => {
-    const db = fixture();
-    db.pharmacyLoyaltyPointsEntry.findFirst.mockResolvedValue({ points: 10, netPaidMinor: 950 });
-    await expect(reverseRefundedEarnedPoints(db as never, scope, 'refund-a')).rejects.toThrow(
-      'accounting review'
-    );
-    expect(db.pharmacyLoyaltyPointsEntry.create).not.toHaveBeenCalled();
-  });
 });
 
 describe('an earn basis that needs accounting review', () => {
   it.each([
     ['no recorded net paid', { points: 9, netPaidMinor: null }],
-    ['points that do not match it', { points: 12, netPaidMinor: 950 }],
+    ['non-positive recorded points', { points: 0, netPaidMinor: 950 }],
   ])('stops the refund with %s, as a refusal the operator reads', async (_label, earn) => {
     const db = fixture();
     db.pharmacyLoyaltyPointsEntry.findFirst.mockResolvedValue(earn as never);
