@@ -244,6 +244,17 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     expect(store.customers[0]).toMatchObject({ whatsappOptIn: true });
   });
 
+  it.each(['بَند کریں', 'بند\u200Cکریں', 'band-kar-do', 'band krdo'])(
+    'normalizes Urdu and Roman Urdu STOP phrase %s',
+    async (text) => {
+      knownCustomer(true);
+      await expect(handleInboundWhatsAppMessage('org_a', provider, message(text))).resolves.toBe(
+        'OPTED_OUT'
+      );
+      expect(store.customers[0]).toMatchObject({ whatsappOptIn: false });
+    }
+  );
+
   it('processes a retried webhook message only once', async () => {
     knownCustomer(true);
     const retried = message('Panadol 2 packs');

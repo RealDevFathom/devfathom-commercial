@@ -3,6 +3,27 @@ import { describe, expect, it } from 'vitest';
 import { buildCapturePlan, buildAttributionReport, validateSegmentDefinition } from './marketing';
 
 describe('pharmacy marketing invariants', () => {
+  it.each(['m e d i c i n e offer', 'Ｍｅｄｉｃｉｎｅ offer', 'MS Contin savings', 'd\u200Brug deal'])(
+    'rejects disguised or named medicine copy: %s',
+    (body) => {
+      expect(() =>
+        buildCapturePlan({
+          campaignId: 'campaign-1',
+          channel: 'WHATSAPP',
+          purpose: 'MARKETING',
+          template: { approved: true, body },
+          ownerApproval: { approved: true },
+          regulatoryApproval: { d10Approved: false },
+          promotesRegulatedItem: false,
+          candidates: [],
+          now: new Date('2026-09-05T12:00:00Z'),
+          quietHours: { startHour: 22, endHour: 8 },
+          frequencyCap: { max: 2, windowDays: 7 },
+        })
+      ).toThrow('Clinical and medicine data cannot appear in marketing messages.');
+    }
+  );
+
   it.each(['prescription', 'condition', 'allergy', 'medicine'])(
     'rejects protected clinical field %s at segment definition time',
     (field) => {

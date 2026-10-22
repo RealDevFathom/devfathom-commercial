@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
+import { containsClinicalMarketingContent } from './marketing-copy';
 
 const id = z.string().trim().min(1).max(128);
 export const marketingScopeInput = z.object({ branchId: id }).strict();
@@ -52,7 +53,7 @@ export class MarketingWorkflowError extends Error {}
 const DAY = 86_400_000;
 
 export function validateMarketingBody(body: string) {
-  if (/prescription|condition|allerg|medicine|diagnos|patient|drug|\brx\b/i.test(body))
+  if (containsClinicalMarketingContent(body))
     throw new MarketingWorkflowError(
       'Use generic retail copy without clinical or medicine content.'
     );

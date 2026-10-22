@@ -1,3 +1,5 @@
+import { containsClinicalMarketingContent } from './marketing-copy';
+
 export const MARKETING_SEGMENT_FIELDS = [
   'daysSinceLastReceipt',
   'receiptCount',
@@ -60,7 +62,7 @@ type CapturePlanInput = {
 export type CaptureExclusionReason = 'OPTED_OUT' | 'NO_CONSENT' | 'FREQUENCY_CAP';
 
 export function buildCapturePlan(input: CapturePlanInput) {
-  if (forbiddenClinicalKey.test(input.template.body))
+  if (containsClinicalMarketingContent(input.template.body))
     throw new Error('Clinical and medicine data cannot appear in marketing messages.');
   if (!input.template.approved) throw new Error('Select an approved template before scheduling.');
   if (!input.ownerApproval.approved) throw new Error('Owner approval is required before capture.');

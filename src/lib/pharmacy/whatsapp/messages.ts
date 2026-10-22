@@ -40,10 +40,11 @@ export function canMessageCustomer(customer: WhatsAppConsentSubject | null | und
 }
 
 function normalizeText(text: string): string {
-  return asciiDigits(text.normalize('NFKC'))
+  return asciiDigits(text.normalize('NFKD'))
     .toLowerCase()
+    .replace(/\p{M}|\p{Cf}/gu, '')
     .replace(/[×]/g, 'x')
-    .replace(/[.,!?؟،۔;:'"()]/g, ' ')
+    .replace(/[\p{P}\p{S}]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -56,6 +57,8 @@ const STOP_KEYWORDS = new Set([
   'opt out',
   'optout',
   'band karo',
+  'band kar do',
+  'band krdo',
   'band karein',
   'بند',
   'بند کریں',
