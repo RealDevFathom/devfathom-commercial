@@ -17,6 +17,7 @@ import {
 } from '@/lib/pharmacy/counter-prescriptions';
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
 import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
+import { assertPrescriptionSaleLineReady, PharmacyDispensingError } from '@/lib/pharmacy/dispensing';
 import {
   configuredRxOcrAdapterName,
   proposeRxPrefill,
@@ -430,6 +431,7 @@ export const pharmacyPrescriptionsRouter = router({
       z
         .object({
           id: z.string().min(1),
+          saleLineId: z.string().min(1),
           prescriptionLineId: z.string().min(1),
           fillSequence: z.number().int().positive(),
           quantityCanonicalUnits: z.number().int().positive(),
@@ -438,26 +440,30 @@ export const pharmacyPrescriptionsRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const line = await ctx.db.prescriptionLine.findFirst({
-        where: {
-          id: input.prescriptionLineId,
-          organizationId: ctx.entitlements.organizationId,
-        },
-        select: { medicine: { select: { controlled: true } } },
+      const saleLine = await ctx.db.pharmacySaleLine.findFirst({
+        where: { id: input.saleLineId, organizationId: ctx.entitlements.organizationId },
+        include: { medicine: true },
       });
-      if (!line) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription line not found.' });
-      }
-      // Controlled dispensing must use the counter flow, which atomically allocates stock and
-      // records both the witnessed fill and controlled-drug register entry.
-      if (line.medicine.controlled) {
+      if (!saleLine || !saleLine.medicine.rx || saleLine.medicine.controlled) {
         throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Controlled medicines must be dispensed through the witnessed counter flow.',
+          code: 'FORBIDDEN',
+          message: 'A non-controlled Rx sale line is required.',
         });
       }
+      try {
+        await assertPrescriptionSaleLineReady(ctx.db, {
+          ...saleLine,
+          prescriptionLineId: input.prescriptionLineId,
+        });
+      } catch (error) {
+        if (error instanceof PharmacyDispensingError) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+        }
+        throw error;
+      }
+      const { saleLineId: _saleLineId, ...fill } = input;
       return ctx.db.prescriptionFill.create({
-        data: { ...input, dispensedByUserId: ctx.session.user.id },
+        data: { ...fill, dispensedByUserId: ctx.session.user.id },
       });
     }),
 

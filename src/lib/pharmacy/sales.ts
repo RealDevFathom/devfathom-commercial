@@ -22,7 +22,8 @@ import {
 import { appendControlledRestorations } from './controlled-register';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
-import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+import { postSaleReturnEntry } from './finance-postings';
+import { assertPrescriptionSaleLineReady } from './dispensing';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -419,6 +420,13 @@ export async function changeSaleStatus(
   } as const;
   const [from, to, kind] = transitions[action];
   if (sale.status !== from) throw new PharmacySaleError('INVALID_STATE');
+  if (action === 'complete') {
+    for (const line of sale.lines) {
+      if (line.medicine.rx && !line.medicine.controlled) {
+        await assertPrescriptionSaleLineReady(db, line);
+      }
+    }
+  }
   const witness =
     action === 'void' && sale.lines.some((line) => line.medicine.controlled)
       ? await authorizeControlledRestoration(db, scope, controlledWitness)
