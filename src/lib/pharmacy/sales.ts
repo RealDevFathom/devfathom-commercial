@@ -2,7 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { priceFromLot } from './medicine';
+import { priceFromLot, roundingIncrementForLot } from './medicine';
 import { hashDeviceSecret } from '@/lib/retail-terminal/device-secret';
 import { canonicalJson } from './offline-snapshot-envelope';
 import { checkEnvelope } from './offline-snapshot-envelope';
@@ -298,7 +298,20 @@ async function addSaleLineWithAllocation(
       organizationId: scope.organizationId,
       branchId: scope.branchId,
     },
+    include: { batch: { select: { batchNumber: true } } },
   });
+  const mrps = lots.length
+    ? await db.medicinePackMrp.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          OR: lots.map((lot) => ({
+            packLevelId: lot.packLevelId,
+            batchReference: lot.batch.batchNumber,
+          })),
+        },
+        select: { packLevelId: true, batchReference: true, roundingIncrementMinor: true },
+      })
+    : [];
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
   let unitPriceMinor = 0,
     ceiling = 0,
@@ -310,6 +323,10 @@ async function addSaleLineWithAllocation(
       printedMrpMinor: lot.printedMrpMinor,
       canonicalUnitsInPack: lot.unitsPerPack,
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
+      roundingIncrementMinor: roundingIncrementForLot(mrps, {
+        packLevelId: lot.packLevelId,
+        batchNumber: lot.batch.batchNumber,
+      }),
     });
     unitPriceMinor = Math.max(unitPriceMinor, price.unitPriceMinor);
     ceiling = Math.max(ceiling, price.proRataCeilingMinor);

@@ -108,6 +108,23 @@ export function priceFromLot(input: {
   };
 }
 
+/** Resolve the rounding rule for the exact pack/batch printed on a received lot. */
+export function roundingIncrementForLot(
+  mrps: readonly {
+    packLevelId: string;
+    batchReference: string;
+    roundingIncrementMinor: number;
+  }[],
+  lot: { packLevelId: string; batchNumber: string }
+): number {
+  return (
+    mrps.find(
+      (mrp) =>
+        mrp.packLevelId === lot.packLevelId && mrp.batchReference === lot.batchNumber
+    )?.roundingIncrementMinor ?? 1
+  );
+}
+
 export function assertSaleable(input: {
   productFamily: 'PHARMACEUTICAL' | 'BIOLOGICAL' | 'DEVICE' | 'ALTERNATIVE' | 'FRONT_SHOP';
   hasPresentation: boolean;

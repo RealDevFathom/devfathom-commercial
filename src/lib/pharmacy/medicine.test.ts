@@ -6,9 +6,31 @@ import {
   medicineDuplicateKey,
   normalizeMedicineText,
   parseSimpleMedicineStrength,
+  roundingIncrementForLot,
 } from './medicine';
 
 describe('pharmacy medicine invariants', () => {
+  it('selects the rounding increment by both pack level and batch regardless of row order', () => {
+    const mrps = [
+      { packLevelId: 'pack-a', batchReference: 'batch-b', roundingIncrementMinor: 10 },
+      { packLevelId: 'pack-a', batchReference: 'batch-a', roundingIncrementMinor: 5 },
+      { packLevelId: 'pack-b', batchReference: 'batch-a', roundingIncrementMinor: 25 },
+    ];
+
+    expect(
+      roundingIncrementForLot(mrps, { packLevelId: 'pack-a', batchNumber: 'batch-a' })
+    ).toBe(5);
+    expect(
+      roundingIncrementForLot([...mrps].reverse(), {
+        packLevelId: 'pack-a',
+        batchNumber: 'batch-a',
+      })
+    ).toBe(5);
+    expect(
+      roundingIncrementForLot(mrps, { packLevelId: 'pack-a', batchNumber: 'unknown' })
+    ).toBe(1);
+  });
+
   it('structures only lossless scalar strengths', () => {
     expect(parseSimpleMedicineStrength('500 mg')).toEqual({ value: 500, unit: 'mg' });
     expect(parseSimpleMedicineStrength('2.5%')).toEqual({ value: 2.5, unit: '%' });

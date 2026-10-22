@@ -56,18 +56,66 @@ function fixture() {
       findMany: vi.fn().mockResolvedValue(
         ['reserved', 'split'].map((id) => ({
           id,
+          packLevelId: 'pack',
           printedMrpMinor: 100,
           unitsPerPack: 1,
           unitCostMinor: 50,
+          batch: { batchNumber: 'batch-a' },
         }))
       ),
     },
+    medicinePackMrp: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacySaleLine: { create: vi.fn(async ({ data }) => ({ id: 'sale-line', ...data })) },
     pharmacySaleLineAllocation: { create: vi.fn() },
     pharmacySaleEvent: { create: vi.fn() },
   };
 }
 describe('internal reserved checkout allocation', () => {
+  it('posts the exact batch rounding increment used by the counter quote', async () => {
+    const db = fixture();
+    db.pharmacyInventoryLot.findMany.mockResolvedValue(
+      ['reserved', 'split'].map((id) => ({
+        id,
+        packLevelId: 'pack',
+        printedMrpMinor: 1_000,
+        unitsPerPack: 3,
+        unitCostMinor: 50,
+        batch: { batchNumber: 'batch-a' },
+      }))
+    );
+    db.medicinePackMrp.findMany.mockResolvedValue([
+      { packLevelId: 'pack', batchReference: 'batch-b', roundingIncrementMinor: 10 },
+      { packLevelId: 'pack', batchReference: 'batch-a', roundingIncrementMinor: 5 },
+    ]);
+
+    const result = await addReservedSaleLine(
+      db as never,
+      scope,
+      {
+        saleId: 'sale',
+        medicineId: 'medicine',
+        presentationId: 'presentation',
+        packLevelId: 'pack',
+        saleUnit: 'UNIT',
+        quantity: 3,
+        canonicalUnitsPerSaleUnit: 1,
+        idempotencyKey: 'order-line',
+      },
+      reservation
+    );
+
+    expect(db.medicinePackMrp.findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org',
+        OR: expect.arrayContaining([
+          { packLevelId: 'pack', batchReference: 'batch-a' },
+        ]),
+      },
+      select: { packLevelId: true, batchReference: true, roundingIncrementMinor: true },
+    });
+    expect(result.line.unitPriceMinor).toBe(330);
+  });
+
   it('keeps receipt allocations and movement identities despite a newer earlier-expiry lot', async () => {
     const db = fixture();
     const result = await addReservedSaleLine(
