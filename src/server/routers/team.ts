@@ -195,6 +195,23 @@ export const teamRouter = router({
       };
 
       const user = await ctx.db.$transaction(async (tx) => {
+        if (!existing) {
+          const organizationId = ctx.session.user.organizationId;
+          await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
+          const activeSeats = await tx.user.count({
+            where: {
+              organizationId,
+              status: { in: ['ACTIVE', 'ON_LEAVE', 'INVITED'] },
+            },
+          });
+          if (activeSeats >= ctx.entitlements.seatLimit) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: `Seat limit reached (${activeSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
+            });
+          }
+        }
+
         // Upsert the user (re-invite refreshes the seeded details), then replace
         // any prior invitation with a fresh single-use token.
         const u = existing
