@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Downloads/Projects & Code/DevFathom hub/company-hub/.paperclip/worktrees/WHA-242-m9-feature-integration-union-tip-landed-lanes
+Branch: WHA-242-m9-feature-integration-union-tip-landed-lanes
+HEAD: 2a9ccfc2bedc9ac7f5907635164a23bb7c4ee2e0
+Mode: applied
+Excluded (secrets): 1
