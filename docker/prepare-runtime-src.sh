@@ -8,5 +8,5 @@ test -d "$source_dir"
 test ! -e "$runtime_dir"
 
 cp -a -- "$source_dir" "$runtime_dir"
-find "$runtime_dir" -type f -name '*.test.ts*' -delete
+find "$runtime_dir" -type f -name '*.test.*' -delete
 rm -rf -- "$runtime_dir/lib/testing"
