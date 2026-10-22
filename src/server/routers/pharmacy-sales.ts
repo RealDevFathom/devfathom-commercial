@@ -272,34 +272,8 @@ async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: 
   });
 }
 
-// Canonical names (#163) beside the legacy dotted ones, which still cover un-migrated grants.
-const RECEIPT_READ_CAPABILITIES = [
-  'pharmacy:dispense',
-  'pharmacy.dispense',
-  'pharmacy:receipt',
-  'pharmacy.receipt',
-  'pharmacy:counter',
-  'pharmacy.counter',
-] as const;
-
-function capabilityCovers(rule: string, action: string): boolean {
-  if (rule === '*' || rule === action) return true;
-  if (rule.endsWith(':*') || rule.endsWith('.*')) return action.startsWith(rule.slice(0, -1));
-  return false;
-}
-
-function capabilityDecision(
-  rules: { capability: string; effect: string }[],
-  action: string
-): 'ALLOW' | 'DENY' | null {
-  const matched = rules.filter((rule) => capabilityCovers(rule.capability, action));
-  if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
-  if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
-  return null;
-}
-
 /**
- * Dispense, receipt, or counter capability, then an active pharmacy branch
+ * Counter capability, then an active pharmacy branch
  * assignment in the session organization. Restaurant staff profiles are not
  * consulted. An empty assignment denies a non-admin. A session `ADMIN` of this
  * organization may use every active branch, including when they also have an
@@ -329,13 +303,6 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     select: {
       status: true,
       organizationId: true,
-      organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
-      },
-      permissionOverrides: {
-        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
-        select: { capability: true, effect: true },
-      },
     },
   });
   if (
@@ -347,13 +314,8 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const overrides = member.permissionOverrides;
-  const roleRules = member.organizationRole?.permissions ?? [];
-  const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
-    const override = capabilityDecision(overrides, action);
-    if (override === 'DENY') return false;
-    if (override === 'ALLOW') return true;
-    return capabilityDecision(roleRules, action) === 'ALLOW';
+  const capable = await can(subjectFromSession(user), 'pharmacy:counter', undefined, {
+    db: ctx.db,
   });
   if (!capable) {
     throw new TRPCError({

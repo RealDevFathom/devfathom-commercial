@@ -78,7 +78,7 @@ const app = router({ pharmacySales: pharmacySalesRouter });
 
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 
-const dispense: Permission[] = [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }];
+const counterGrant: Permission[] = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }];
 
 function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE') {
   const db = {
@@ -211,8 +211,8 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
-  it.each(paths)('$name allows an assigned dispenser on their own branch', async (path) => {
-    const f = fixture(dispense);
+  it.each(paths)('$name allows an assigned cashier on their own branch', async (path) => {
+    const f = fixture(counterGrant);
     assign(f, ['branch-a']);
     await expect(path.run(f.caller())).resolves.toMatchObject(path.allowed);
     expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith(
@@ -227,7 +227,7 @@ describe('counter receipt authorization', () => {
   });
 
   it.each(paths)('$name denies another branch before the receipt is read', async (path) => {
-    const f = fixture(dispense);
+    const f = fixture(counterGrant);
     assign(f, ['branch-a']);
     await expect(path.run(f.caller(), 'branch-b')).rejects.toMatchObject({ code: 'FORBIDDEN' });
     for (const read of reads()) expect(read).not.toHaveBeenCalled();
@@ -235,8 +235,8 @@ describe('counter receipt authorization', () => {
     expect(buildPharmacyReceiptEscPosJob).not.toHaveBeenCalled();
   });
 
-  it.each(paths)('$name denies a dispenser with no assignment', async (path) => {
-    const f = fixture(dispense);
+  it.each(paths)('$name denies a cashier with no assignment', async (path) => {
+    const f = fixture(counterGrant);
     await expect(path.run(f.caller())).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'Branch is outside your scope.',
@@ -246,7 +246,7 @@ describe('counter receipt authorization', () => {
   });
 
   it.each(paths)('$name denies a session from another organization', async (path) => {
-    const f = fixture(dispense, 'ADMIN');
+    const f = fixture(counterGrant, 'ADMIN');
     assign(f, ['branch-a']);
     f.user.organizationId = 'org-b';
     await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -257,7 +257,7 @@ describe('counter receipt authorization', () => {
 
   it.each(paths)('$name denies when the pharmacy module is off', async (path) => {
     vi.mocked(hasModule).mockReturnValue(false);
-    const f = fixture(dispense);
+    const f = fixture(counterGrant);
     assign(f, ['branch-a']);
     await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(f.db.user.findUnique).not.toHaveBeenCalled();
@@ -265,14 +265,14 @@ describe('counter receipt authorization', () => {
   });
 
   it.each(paths)('$name denies an inactive session before the receipt is read', async (path) => {
-    const f = fixture(dispense);
+    const f = fixture(counterGrant);
     f.user.status = 'INACTIVE';
     await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
     for (const read of reads()) expect(read).not.toHaveBeenCalled();
   });
 
-  it('lets an assigned cashier use the receipt, the cart, return history, and cash tender', async () => {
+  it('does not authorize a legacy dotted counter grant at runtime', async () => {
     const f = fixture([
       { capability: 'pharmacy.counter', effect: 'ALLOW' },
       { capability: 'pharmacy:orders', effect: 'ALLOW' },
@@ -288,18 +288,11 @@ describe('counter receipt authorization', () => {
       idempotencyKey: 'cash-1',
     };
     await expect(
-      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
-    ).resolves.toMatchObject({ receiptNumber: 7 });
-    await expect(
       f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
-    ).resolves.toMatchObject({ saleId: 'sale-a' });
-    await expect(
-      f.caller().returnHistory({ branchId: 'branch-a', saleId: 'sale-a' })
-    ).resolves.toEqual([{ id: 'return-1' }]);
-    await expect(f.caller().tender(tender)).resolves.toEqual({ tenderId: 'tender-1' });
-    expect(readCounterCart).toHaveBeenCalled();
-    expect(readReturnHistory).toHaveBeenCalled();
-    expect(applyPharmacyTender).toHaveBeenCalled();
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller().tender(tender)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(readCounterCart).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 
   it('lets an assigned cashier holding the canonical pharmacy:counter do the same (#163)', async () => {
@@ -362,7 +355,7 @@ describe('counter receipt authorization', () => {
   });
 
   it('keeps Khata tender off the branch-assignment guard', async () => {
-    const f = fixture(dispense);
+    const f = fixture(counterGrant);
     f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
     await expect(
       f.caller().tender({
@@ -393,7 +386,7 @@ describe('counter receipt authorization', () => {
     expect(readCounterCart).not.toHaveBeenCalled();
   });
 
-  it('allows pharmacy.dispense and pharmacy:receipt when the branch is assigned', async () => {
+  it('does not substitute dispense or receipt grants for counter authorization', async () => {
     for (const capability of [
       'pharmacy.dispense',
       'pharmacy:receipt',
@@ -403,16 +396,29 @@ describe('counter receipt authorization', () => {
       assign(f, ['branch-a']);
       await expect(
         f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
-      ).resolves.toMatchObject({ receiptNumber: 7 });
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     }
   });
 
+  it('does not let an allow bypass a matching deny for counter access', async () => {
+    const f = fixture([
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+      { capability: 'pharmacy:*', effect: 'DENY' },
+    ]);
+    assign(f, ['branch-a']);
+
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(readCounterReceipt).not.toHaveBeenCalled();
+  });
+
   it('denies an inactive database user and an inactive assignment', async () => {
-    const inactive = fixture(dispense);
+    const inactive = fixture(counterGrant);
     inactive.db.user.findUnique.mockResolvedValue({
       status: 'INACTIVE',
       organizationId: 'org-a',
-      organizationRole: { permissions: dispense },
+      organizationRole: { permissions: counterGrant },
       permissionOverrides: [],
     });
     await expect(
@@ -420,7 +426,7 @@ describe('counter receipt authorization', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(inactive.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
 
-    const paused = fixture(dispense);
+    const paused = fixture(counterGrant);
     await expect(
       paused.caller().lookupReceiptByNumber({ branchId: 'branch-a', receiptNumber: 7 })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -428,7 +434,7 @@ describe('counter receipt authorization', () => {
   });
 
   it('lets a session admin of this organization read without an assignment and records why', async () => {
-    const f = fixture(dispense, 'ADMIN');
+    const f = fixture(counterGrant, 'ADMIN');
     await expect(
       f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
     ).resolves.toMatchObject({
@@ -453,7 +459,7 @@ describe('counter receipt authorization', () => {
   });
 
   it('lets a session admin read a branch they are not assigned to even when another branch is', async () => {
-    const admin = fixture(dispense, 'ADMIN');
+    const admin = fixture(counterGrant, 'ADMIN');
     assign(admin, ['branch-b']);
     await expect(
       admin.caller().counterReceiptPrintJob({
@@ -479,7 +485,7 @@ describe('counter receipt authorization', () => {
       showChannel: true,
     };
     vi.mocked(savePharmacyReceiptFormat).mockResolvedValue({ layout, revision: 1 });
-    const admin = fixture(dispense, 'ADMIN');
+    const admin = fixture(counterGrant, 'ADMIN');
     await expect(
       admin.caller().counterSaveReceiptFormat({ branchId: 'branch-a', revision: 0, layout })
     ).resolves.toMatchObject({ revision: 1 });
@@ -502,7 +508,7 @@ describe('counter receipt authorization', () => {
   });
 
   it('denies a branch that is not in the session organization before the sale is read', async () => {
-    const f = fixture(dispense, 'ADMIN');
+    const f = fixture(counterGrant, 'ADMIN');
     await expect(
       f.caller().counterReceipt({ branchId: 'foreign-branch', saleId: 'sibling-sale' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
