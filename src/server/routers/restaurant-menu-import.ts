@@ -14,6 +14,7 @@ import {
   getMenuImport,
   listMenuImports,
   reviewMenuImportLine,
+  retryMenuImportExtraction,
   summarizeMenuImport,
 } from '@/lib/restaurant/menu-import';
 import {
@@ -183,6 +184,12 @@ export const restaurantMenuImportRouter = router({
           description: z.string().max(2_000).nullable().optional(),
           priceAmount: z.string().max(20).nullable().optional(),
           currency: z.string().length(3).nullable().optional(),
+          variants: z
+            .array(
+              z.object({ name: z.string().min(1).max(200), amount: z.string().max(20).nullable() })
+            )
+            .max(100)
+            .optional(),
           note: z.string().max(1_000).nullable().optional(),
           mergeProductId: z.string().min(1).nullable().optional(),
           mergeVariantId: z.string().min(1).nullable().optional(),
@@ -208,6 +215,26 @@ export const restaurantMenuImportRouter = router({
           mergeVariantId: line.mergeVariantId,
           reviewedAt: line.reviewedAt,
         };
+      } catch (err) {
+        mapMenuImportError(err);
+      }
+    }),
+
+  retryExtraction: importProcedure
+    .input(z.object({ importId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const result = await retryMenuImportExtraction(
+          ctx.db,
+          input.importId,
+          ctx.session.user.id
+        );
+        annotateAudit(ctx, {
+          targetType: 'RestaurantMenuImport',
+          targetId: input.importId,
+          description: 'Retried a failed menu extraction',
+        });
+        return result;
       } catch (err) {
         mapMenuImportError(err);
       }

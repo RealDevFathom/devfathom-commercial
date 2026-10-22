@@ -566,6 +566,7 @@ export type ReviewLineInput = {
   description?: string | null;
   priceAmount?: string | null;
   currency?: string | null;
+  variants?: Array<{ name: string; amount: string | null }>;
   note?: string | null;
   /** Required for MERGED, forbidden otherwise. */
   mergeProductId?: string | null;
@@ -618,6 +619,19 @@ export async function reviewMenuImportLine(
   const categoryName = trimmedOrNull(input.categoryName, 200);
   const description = trimmedOrNull(input.description, 2_000);
   const note = trimmedOrNull(input.note, 1_000);
+  const variants = input.variants?.map((variant) => {
+    const amount = variant.amount?.trim() || null;
+    if (amount !== null && !/^\d{1,10}(\.\d{1,2})?$/.test(amount)) {
+      throw new MenuImportError('Each variant price must be a positive decimal amount.', 'INVALID');
+    }
+    return {
+      name: variant.name.trim().slice(0, 200),
+      amount: amount === null ? null : new Prisma.Decimal(amount).toString(),
+    };
+  });
+  if (variants?.some((variant) => !variant.name)) {
+    throw new MenuImportError('Every retained variant needs a name.', 'INVALID');
+  }
   const currency = trimmedOrNull(input.currency, 3)?.toUpperCase();
 
   let priceAmount: Prisma.Decimal | null | undefined;
@@ -680,6 +694,9 @@ export async function reviewMenuImportLine(
         ...(description !== undefined ? { reviewedDescription: description } : {}),
         ...(priceAmount !== undefined ? { reviewedPriceAmount: priceAmount } : {}),
         ...(currency !== undefined ? { reviewedCurrency: currency } : {}),
+        ...(variants !== undefined
+          ? { reviewedVariants: variants as unknown as Prisma.InputJsonValue }
+          : {}),
         ...(note !== undefined ? { reviewNote: note } : {}),
       },
     });
@@ -723,6 +740,9 @@ export async function reviewMenuImportLine(
       ...(description !== undefined ? { reviewedDescription: description } : {}),
       ...(priceAmount !== undefined ? { reviewedPriceAmount: priceAmount } : {}),
       ...(currency !== undefined ? { reviewedCurrency: currency } : {}),
+      ...(variants !== undefined
+        ? { reviewedVariants: variants as unknown as Prisma.InputJsonValue }
+        : {}),
       ...(note !== undefined ? { reviewNote: note } : {}),
     },
   });
@@ -827,11 +847,77 @@ type ResolvedLine = {
   sortOrder: number;
 };
 
+/** Requeue a terminal failure without bypassing the normal extraction worker. */
+export async function retryMenuImportExtraction(
+  db: ScopedDb,
+  importId: string,
+  requestedById: string,
+  now: Date = new Date()
+) {
+  if (!requestedById.trim()) {
+    throw new MenuImportError('Retrying extraction needs a requesting user.', 'INVALID');
+  }
+  const record = await db.restaurantMenuImport.findUnique({
+    where: { id: importId },
+    select: { id: true, status: true, storageObjectName: true, extractionJobId: true },
+  });
+  if (!record) throw new MenuImportError('The menu import does not exist.', 'NOT_FOUND');
+  if (record.status !== 'EXTRACTION_FAILED') {
+    throw new MenuImportError('Only a failed extraction can be retried.', 'INVALID_STATE');
+  }
+  if (!record.storageObjectName) {
+    throw new MenuImportError('The uploaded source is no longer available.', 'INVALID_STATE');
+  }
+
+  // Compare-and-set closes the double-click/concurrent-reviewer race. ScopedDb
+  // supplies organization context to both this update and the queued job.
+  const claimed = await db.restaurantMenuImport.updateMany({
+    where: { id: importId, status: 'EXTRACTION_FAILED' },
+    data: { status: 'PENDING_EXTRACTION', failureReason: null },
+  });
+  if (claimed.count !== 1) {
+    throw new MenuImportError('This extraction has already been retried.', 'INVALID_STATE');
+  }
+  try {
+    const { job } = await enqueue(
+      db,
+      {
+        type: MENU_IMPORT_EXTRACT_JOB,
+        payload: { importId },
+        idempotencyKey: `${MENU_IMPORT_EXTRACT_JOB}:${importId}:retry:${now.toISOString()}`,
+      },
+      now
+    );
+    await db.restaurantMenuImport.update({
+      where: { id: importId },
+      data: {
+        status: 'PENDING_EXTRACTION',
+        failureReason: null,
+        extractionJobId: job.id,
+        extractionStartedAt: null,
+        extractionCompletedAt: null,
+      },
+    });
+    return { importId, jobId: job.id };
+  } catch (error) {
+    await db.restaurantMenuImport.updateMany({
+      where: {
+        id: importId,
+        status: 'PENDING_EXTRACTION',
+        extractionJobId: record.extractionJobId,
+      },
+      data: { status: 'EXTRACTION_FAILED', failureReason: 'The retry could not be queued.' },
+    });
+    throw error;
+  }
+}
+
 const VARIANT_SHAPE = z.array(
   z.object({
     name: z.string(),
-    price: z.object({ amount: z.string().nullable() }).partial().passthrough(),
-  })
+    amount: z.string().nullable().optional(),
+    price: z.object({ amount: z.string().nullable() }).partial().passthrough().optional(),
+  }).passthrough()
 );
 
 function resolveVariants(raw: Prisma.JsonValue): Array<{ name: string; amount: string | null }> {
@@ -839,7 +925,7 @@ function resolveVariants(raw: Prisma.JsonValue): Array<{ name: string; amount: s
   if (!parsed.success) return [];
   return parsed.data.map((variant) => ({
     name: variant.name,
-    amount: variant.price?.amount ?? null,
+    amount: variant.amount ?? variant.price?.amount ?? null,
   }));
 }
 
@@ -960,6 +1046,7 @@ export async function commitMenuImport(
         extractedDescription: true,
         extractedPriceAmount: true,
         extractedVariants: true,
+        reviewedVariants: true,
         reviewedCategoryName: true,
         reviewedProductName: true,
         reviewedDescription: true,
@@ -1000,7 +1087,7 @@ export async function commitMenuImport(
         price,
         mergeProductId: line.mergeProductId,
         mergeVariantId: line.mergeVariantId,
-        variants: resolveVariants(line.extractedVariants),
+        variants: resolveVariants(line.reviewedVariants ?? line.extractedVariants),
         sortOrder: line.sortOrder,
       });
     }

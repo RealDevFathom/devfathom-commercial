@@ -90,10 +90,33 @@ type LineEditor = {
   description: string;
   priceAmount: string;
   currency: string;
+  variants: Array<{ name: string; amount: string }>;
   note: string;
   mergeProductId: string;
   mergeVariantId: string;
 };
+
+type ExtractedVariant = { name: string; price?: { amount?: string | null }; amount?: string | null };
+
+function extractedVariants(line: ImportLine): Array<{ name: string; amount: string }> {
+  const source = line.reviewedVariants ?? line.extractedVariants;
+  if (!Array.isArray(source)) return [];
+  return source.flatMap((value) => {
+    if (!value || typeof value !== 'object' || !('name' in value)) return [];
+    const variant = value as ExtractedVariant;
+    if (typeof variant.name !== 'string') return [];
+    return [{ name: variant.name, amount: variant.amount ?? variant.price?.amount ?? '' }];
+  });
+}
+
+function confidenceEntries(line: ImportLine): Array<[string, number]> {
+  if (!line.confidence || typeof line.confidence !== 'object' || Array.isArray(line.confidence)) {
+    return [];
+  }
+  return Object.entries(line.confidence).flatMap(([field, value]) =>
+    typeof value === 'number' ? [[field, value] as [string, number]] : []
+  );
+}
 
 const labelClass =
   'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
@@ -228,6 +251,7 @@ function editorFor(line: ImportLine): LineEditor {
     description: line.reviewedDescription ?? '',
     priceAmount: line.reviewedPriceAmount ?? '',
     currency: line.reviewedCurrency ?? '',
+    variants: extractedVariants(line),
     note: line.reviewNote ?? '',
     mergeProductId: line.mergeProductId ?? '',
     mergeVariantId: line.mergeVariantId ?? '',
@@ -274,7 +298,13 @@ export function RestaurantMenuImportConsole({
   });
   const detailQuery = trpc.restaurantMenuImport.get.useQuery(
     { importId: selectedImportId },
-    { enabled: active && selectedImportId !== '' }
+    {
+      enabled: active && selectedImportId !== '',
+      refetchInterval: (query) => {
+        const status = query.state.data?.status;
+        return !status || status === 'PENDING_EXTRACTION' || status === 'EXTRACTING' ? 2_000 : false;
+      },
+    }
   );
   const summaryQuery = trpc.restaurantMenuImport.summary.useQuery(
     { importId: selectedImportId },
@@ -335,12 +365,23 @@ export function RestaurantMenuImportConsole({
     onError: (error) => setMutationError(errorMessage(error, 'The import could not be discarded.')),
   });
 
+  const retryMutation = trpc.restaurantMenuImport.retryExtraction.useMutation({
+    onSuccess: () => {
+      setMutationError('');
+      setStatusMessage('Extraction queued again. This page will update when it finishes.');
+      refreshImport();
+      router.refresh();
+    },
+    onError: (error) => setMutationError(errorMessage(error, 'Extraction could not be retried.')),
+  });
+
   const busy =
     isEncoding ||
     uploadMutation.isPending ||
     reviewMutation.isPending ||
     commitMutation.isPending ||
-    discardMutation.isPending;
+    discardMutation.isPending ||
+    retryMutation.isPending;
 
   const detail = detailQuery.data;
   const summary: ImportSummary | undefined = summaryQuery.data;
@@ -409,6 +450,10 @@ export function RestaurantMenuImportConsole({
       description: override(draft.description),
       priceAmount: override(draft.priceAmount),
       currency: override(draft.currency),
+      variants: draft.variants.map((variant) => ({
+        name: variant.name.trim(),
+        amount: override(variant.amount),
+      })),
       note: override(draft.note),
       mergeProductId: decision === 'MERGED' ? draft.mergeProductId : null,
       mergeVariantId: decision === 'MERGED' ? override(draft.mergeVariantId) : null,
@@ -695,10 +740,23 @@ export function RestaurantMenuImportConsole({
             {!openForReview ? (
               <div
                 role="status"
-                className="mb-4 rounded-md border border-border-default bg-surface-sunken px-4 py-3 text-sm text-text-muted"
+                className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-default bg-surface-sunken px-4 py-3 text-sm text-text-muted"
               >
-                This import is {humanStatus(detail.status)}. The queue is read-only — decisions can
-                only be recorded while an import is awaiting review.
+                <span>
+                  This import is {humanStatus(detail.status)}. The queue is read-only — decisions
+                  can only be recorded while an import is awaiting review.
+                </span>
+                {detail.status === 'EXTRACTION_FAILED' ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => retryMutation.mutate({ importId: detail.id })}
+                  >
+                    {retryMutation.isPending ? 'Retrying…' : 'Retry extraction'}
+                  </Button>
+                ) : null}
               </div>
             ) : null}
 
@@ -797,6 +855,35 @@ export function RestaurantMenuImportConsole({
                                         fallback="(no price)"
                                       />
                                     </span>
+                                    {line.extractedIngredients.length > 0 ? (
+                                      <span className="mt-2 block text-xs text-text-muted">
+                                        Ingredients: {line.extractedIngredients.join(', ')}
+                                      </span>
+                                    ) : null}
+                                    {extractedVariants(line).length > 0 ? (
+                                      <span className="mt-1 block text-xs text-text-muted">
+                                        Variants:{' '}
+                                        {extractedVariants(line)
+                                          .map((variant) =>
+                                            `${variant.name}${variant.amount ? ` (${variant.amount})` : ''}`
+                                          )
+                                          .join(', ')}
+                                      </span>
+                                    ) : null}
+                                    {Array.isArray(line.extractedModifiers) &&
+                                    line.extractedModifiers.length > 0 ? (
+                                      <span className="mt-1 block text-xs text-text-muted">
+                                        {line.extractedModifiers.length} modifier group(s) extracted (not imported)
+                                      </span>
+                                    ) : null}
+                                    {confidenceEntries(line).length > 0 ? (
+                                      <span className="mt-2 block font-mono text-[0.625rem] text-text-faint">
+                                        Confidence:{' '}
+                                        {confidenceEntries(line)
+                                          .map(([field, value]) => `${field} ${Math.round(value * 100)}%`)
+                                          .join(' · ')}
+                                      </span>
+                                    ) : null}
                                   </TableCell>
                                   <TableCell className="max-w-[18rem] align-top">
                                     {corrected ? (
@@ -1066,6 +1153,53 @@ function LineEditorPanel({
             />
           </Field>
         </div>
+        <fieldset className="space-y-3 md:col-span-2">
+          <legend className={labelClass}>Variants to import</legend>
+          <p className="text-xs text-text-muted">
+            Review every extracted size or option. Edit its name or price, or remove it so it is not
+            added to the draft catalog.
+          </p>
+          {editor.variants.length === 0 ? (
+            <p className="text-sm text-text-faint">No variants will be imported.</p>
+          ) : (
+            editor.variants.map((variant, index) => (
+              <div key={index} className="grid gap-2 sm:grid-cols-[1fr_10rem_auto]">
+                <Input
+                  aria-label={`Variant ${index + 1} name`}
+                  value={variant.name}
+                  maxLength={200}
+                  disabled={busy}
+                  onChange={(event) => {
+                    const variants = [...editor.variants];
+                    variants[index] = { ...variant, name: event.target.value };
+                    set('variants', variants);
+                  }}
+                />
+                <Input
+                  aria-label={`Variant ${index + 1} price`}
+                  value={variant.amount}
+                  inputMode="decimal"
+                  placeholder="No price"
+                  disabled={busy}
+                  onChange={(event) => {
+                    const variants = [...editor.variants];
+                    variants[index] = { ...variant, amount: event.target.value };
+                    set('variants', variants);
+                  }}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => set('variants', editor.variants.filter((_, item) => item !== index))}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))
+          )}
+        </fieldset>
         <div className="md:col-span-2">
           <Field label="Review note" hint="Recorded with the decision. Not imported.">
             <Input
