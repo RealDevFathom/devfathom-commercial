@@ -295,6 +295,7 @@ export async function appendMovement(
   tx: ScopedDb,
   input: AppendMovementInput
 ): Promise<{ movementId: string }> {
+  await tx.$queryRaw`SELECT id FROM restaurant_drawer_sessions WHERE id = ${input.drawerSessionId} FOR UPDATE`;
   const session = await tx.restaurantDrawerSession.findUnique({
     where: { id: input.drawerSessionId },
     select: { id: true, status: true },
@@ -595,6 +596,8 @@ export async function closeDrawerSession(
       };
     }
 
+    // Read the ledger only after all earlier movement writers have committed.
+    await tx.$queryRaw`SELECT id FROM restaurant_drawer_sessions WHERE id = ${input.drawerSessionId} FOR UPDATE`;
     const session = await tx.restaurantDrawerSession.findFirst({
       where: { id: input.drawerSessionId, deviceId: input.actor.deviceId },
       select: {

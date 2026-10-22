@@ -5,6 +5,7 @@ import type { TRPCContext } from '@/server/trpc';
 
 const mocks = vi.hoisted(() => ({
   createJobRole: vi.fn(),
+  seedPersonas: vi.fn(),
   grantJobRole: vi.fn(),
   setJobRoleCapabilities: vi.fn(),
   updateJobRole: vi.fn(),
@@ -35,11 +36,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/restaurant/job-roles', () => ({
+  ensureDefaultJobRoles: vi.fn(),
   createJobRole: mocks.createJobRole,
   grantJobRole: mocks.grantJobRole,
   setJobRoleCapabilities: mocks.setJobRoleCapabilities,
   updateJobRole: mocks.updateJobRole,
 }));
+vi.mock('./seed-personas', () => ({ seedDemoPersonas: mocks.seedPersonas }));
 vi.mock('@/lib/restaurant/checkout-routes', () => ({
   operatorHasCapability: mocks.operatorHasCapability,
 }));
@@ -114,7 +117,7 @@ const catalog = {
 
 const database = {
   restaurantStaffProfile: { findFirst: vi.fn() },
-  restaurantJobRole: { findUnique: vi.fn() },
+  restaurantJobRole: { findUnique: vi.fn(), findMany: vi.fn() },
 } as unknown as ScopedDb;
 const context = {
   db: database,
@@ -129,6 +132,17 @@ const context = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.seedPersonas.mockResolvedValue({
+    cashier: 'cashier_staff',
+    waiter: 'waiter_staff',
+    kitchen: 'kitchen_staff',
+  });
+  vi.mocked(database.restaurantJobRole.findMany).mockResolvedValue(
+    ['manager', 'shift-supervisor', 'cashier', 'server', 'kitchen'].map((key) => ({
+      id: `role_${key}`,
+      key,
+    })) as never
+  );
   const findStaff = database.restaurantStaffProfile.findFirst as ReturnType<typeof vi.fn>;
   findStaff
     .mockResolvedValueOnce({ id: 'manager_staff', userId: seed.identity.managerUserId })
@@ -205,7 +219,17 @@ describe('seedDemoRestaurantOperations', () => {
     expect(ids.staff[managerDescriptor.id]).toBe('manager_staff');
     expect(ids.staff[approverDescriptor.id]).toBe('approver_staff');
     expect(Object.keys(ids.staff)).toHaveLength(seed.workforce.staff.length);
-    expect(mocks.createStaffProfile).toHaveBeenCalledTimes(seed.workforce.staff.length - 2);
+    expect(mocks.createStaffProfile).toHaveBeenCalledTimes(seed.workforce.staff.length - 5);
+    expect(
+      mocks.grantJobRole.mock.calls
+        .filter(([, input]) => input.jobRoleId === 'role_demo')
+        .every(([, input]) => input.staffProfileId === 'manager_staff')
+    ).toBe(true);
+    expect(
+      mocks.grantJobRole.mock.calls.find(
+        ([, input]) => input.staffProfileId === 'waiter_staff'
+      )?.[1].jobRoleId
+    ).toBe('role_server');
     expect(mocks.operatorHasCapability).toHaveBeenCalledWith(
       database,
       'approver_staff',

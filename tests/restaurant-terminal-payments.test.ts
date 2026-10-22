@@ -9,8 +9,8 @@ import {
   processTerminalEvent,
   simulateTerminalEvent,
   terminalEventSchema,
+  verifyTerminalSignature,
 } from '@/lib/restaurant/terminal-payments';
-import { verifyTerminalSignature } from '@/app/api/restaurant/webhooks/[source]/route';
 
 const baseEvent = {
   status: 'approved' as const,

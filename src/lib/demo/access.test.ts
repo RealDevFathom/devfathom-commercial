@@ -18,6 +18,13 @@ import {
   readDemoAccessGrant,
   resolveDemoSeat,
 } from './access';
+import {
+  DEMO_PERSONA_KEYS,
+  DEMO_PERSONAS,
+  demoPersonaEmail,
+  demoPersonaUserId,
+  demoPersonaUserRole,
+} from './personas';
 
 const NOW = new Date('2026-09-04T12:00:00.000Z');
 const HOST = 'www.devfathom.com';
@@ -30,6 +37,7 @@ function organization(overrides: Record<string, unknown> = {}) {
     status: 'ACTIVE',
     vertical: 'RESTAURANT',
     deploymentMode: 'SHARED',
+    isDemo: true,
     users: [
       {
         id: 'user_demo_restaurant_seat_1_manager',
@@ -37,6 +45,9 @@ function organization(overrides: Record<string, unknown> = {}) {
         password: null,
         status: 'ACTIVE',
         role: 'ADMIN',
+        organizationId: 'org_demo_restaurant_seat_1',
+        organizationRole: { key: 'owner' },
+        restaurantStaffProfiles: [{ id: 'manager_staff' }],
       },
     ],
     ...overrides,
@@ -112,7 +123,9 @@ describe('demo access grant', () => {
       }),
     ]);
 
-    await expect(getDemoSeatOptions()).resolves.toEqual([
+    expect(
+      (await getDemoSeatOptions()).map(({ seat, name, ready }) => ({ seat, name, ready }))
+    ).toEqual([
       { seat: 1, name: 'Demo Restaurant — Seat 1', ready: true },
       { seat: 2, name: 'Demo Restaurant — Seat 2', ready: false },
       { seat: 3, name: 'Demo Restaurant — Seat 3', ready: false },
@@ -122,15 +135,7 @@ describe('demo access grant', () => {
   });
 
   it('resolves only the exact seeded manager inside the flagged organization', async () => {
-    mocks.findFirst.mockResolvedValue({
-      id: 'org_demo_restaurant_seat_1',
-      users: [
-        {
-          id: 'user_demo_restaurant_seat_1_manager',
-          email: 'manager.seat1@demo.devfathom.invalid',
-        },
-      ],
-    });
+    mocks.findFirst.mockResolvedValue(organization());
 
     await expect(resolveDemoSeat(1)).resolves.toMatchObject({
       organizationId: 'org_demo_restaurant_seat_1',
@@ -147,5 +152,57 @@ describe('demo access grant', () => {
         }),
       })
     );
+  });
+
+  it.each(DEMO_PERSONA_KEYS)(
+    'resolves the canonical %s without accepting a supplied user identity',
+    async (persona) => {
+      const user = {
+        ...organization().users[0]!,
+        id: demoPersonaUserId(1, persona),
+        email: demoPersonaEmail(1, persona),
+        role: demoPersonaUserRole(persona),
+        organizationRole: { key: DEMO_PERSONAS[persona].roleKey },
+      };
+      mocks.findFirst.mockResolvedValue(organization({ users: [user] }));
+      await expect(resolveDemoSeat(1, persona)).resolves.toMatchObject({
+        persona,
+        userId: user.id,
+        email: user.email,
+      });
+      for (const invalid of [
+        { password: 'hash' },
+        { status: 'SUSPENDED' },
+        { id: demoPersonaUserId(2, persona) },
+        { organizationRole: { key: 'general-manager' } },
+        { restaurantStaffProfiles: [] },
+        { restaurantStaffProfiles: [{ id: 'a' }, { id: 'b' }] },
+      ]) {
+        mocks.findFirst.mockResolvedValue(organization({ users: [{ ...user, ...invalid }] }));
+        await expect(resolveDemoSeat(1, persona)).resolves.toBeNull();
+      }
+    }
+  );
+
+  it.each([
+    { isDemo: false },
+    { deploymentMode: 'DEDICATED' },
+    { vertical: 'AGENCY' },
+    { status: 'SUSPENDED' },
+    { id: 'org_production' },
+    { slug: 'production' },
+  ])('rejects changed seat state %j', async (state) => {
+    mocks.findFirst.mockResolvedValue(organization(state));
+    await expect(resolveDemoSeat(1)).resolves.toBeNull();
+  });
+
+  it('rejects unsupported personas, seats and production grants before DB access', async () => {
+    for (const seat of [0, -1, 1.5, 26, NaN])
+      await expect(resolveDemoSeat(seat)).resolves.toBeNull();
+    await expect(resolveDemoSeat(1, 'admin' as never)).resolves.toBeNull();
+    expect(mocks.findFirst).not.toHaveBeenCalled();
+    expect(() =>
+      createDemoAccessGrant({ organizationId: 'org_production', seat: 1, host: HOST, now: NOW })
+    ).toThrow('canonical demo seat');
   });
 });

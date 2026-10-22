@@ -261,6 +261,7 @@ export async function createDemoRestaurantSeedContext(
   };
   return createTRPCContext({
     db,
+    auditDb: db,
     organization,
     session,
   });

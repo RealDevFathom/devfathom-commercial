@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
 
+import { demoSeatFromOrganizationId, isDemoEnabled } from '@/lib/demo/config';
+import { demoPersonaForUser } from '@/lib/demo/personas';
 import {
-  demoManagerEmail,
-  demoManagerId,
-  demoSeatFromOrganizationId,
-  isDemoEnabled,
-} from '@/lib/demo/config';
-import { demoTerminalCookieOptions, prepareDemoDeviceSession } from '@/lib/demo/device-session';
+  DEMO_TERMINAL_SESSION_COOKIE,
+  demoTerminalCookieOptions,
+  prepareDemoDeviceSession,
+} from '@/lib/demo/device-session';
 import { isDemoMutationOrigin } from '@/lib/demo/isolation';
 import { DEMO_RESET_TRANSACTION_TIMEOUT_MS } from '@/lib/demo/jobs';
 import { resetDemoSeatInTransaction } from '@/lib/demo/reset';
@@ -43,11 +43,11 @@ export async function POST(request: Request) {
     return json({ error: 'Not found.' }, 404);
   }
   const seat = demoSeatFromOrganizationId(actor.organization.id);
+  const persona = seat ? demoPersonaForUser(seat, actor.session.user) : null;
   if (
     !seat ||
     actor.session.user.organizationId !== actor.organization.id ||
-    actor.session.user.id !== demoManagerId(seat) ||
-    actor.session.user.email !== demoManagerEmail(seat)
+    (persona !== 'manager' && persona !== 'owner')
   ) {
     return json({ error: 'Not found.' }, 404);
   }
@@ -112,5 +112,9 @@ export async function POST(request: Request) {
     summary: result.summary,
   });
   response.cookies.set(TERMINAL_DEVICE_COOKIE, deviceSecret, cookieOptions);
+  response.cookies.set(DEMO_TERMINAL_SESSION_COOKIE, result.runtime.sessionToken, {
+    ...cookieOptions,
+    path: '/demo/restaurants/device-session',
+  });
   return response;
 }

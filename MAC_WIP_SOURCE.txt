@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/demo-restaurants
+Branch: demo/restaurants
+HEAD: 1075cc4a5313f5330eaa0632a6135deab83e04fb
+Mode: applied
+Excluded (secrets): 11

@@ -329,7 +329,7 @@ function Status({ status }: { status: SopStatus }) {
   return <StatusPill status={status} label={STATUS_LABEL[status]} tone={STATUS_TONE[status]} />;
 }
 
-export function SopBoardView(props: SopBoardViewProps) {
+function SopBoardView(props: SopBoardViewProps) {
   const header = (
     <PageHeader
       eyebrow="Restaurant operations"

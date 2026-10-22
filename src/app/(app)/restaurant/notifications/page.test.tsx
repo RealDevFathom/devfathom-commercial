@@ -21,7 +21,8 @@ vi.mock('@/server/routers/restaurant-notifications', () => ({
   restaurantNotificationsRouter: { createCaller: mocks.createCaller },
 }));
 
-import RestaurantNotificationsPage, { retryWebhookNotice } from './page';
+import RestaurantNotificationsPage from './page';
+import { retryWebhookNotice } from './retry-webhook-notice';
 
 const actor = {
   session: { expires: '2099-01-01', user: { id: 'user-1', organizationId: 'org-1' } },

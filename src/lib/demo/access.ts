@@ -10,8 +10,19 @@ import {
   demoOrganizationId,
   demoSeatName,
   demoSeatSlug,
+  demoSeatFromOrganizationId,
   getDemoSeatCount,
 } from './config';
+import {
+  DEMO_PERSONA_KEYS,
+  DEMO_PERSONAS,
+  demoPersonaEmail,
+  demoPersonaUserId,
+  demoPersonaUserRole,
+  isCanonicalDemoOrganization,
+  isDemoPersona,
+  type DemoPersona,
+} from './personas';
 
 type DemoGrant = {
   v: 1;
@@ -21,13 +32,67 @@ type DemoGrant = {
   expiresAt: number;
 };
 
-export type DemoSeat = { seat: number; name: string; ready: boolean };
+export type DemoSeat = {
+  seat: number;
+  name: string;
+  ready: boolean;
+  personas: {
+    key: DemoPersona;
+    label: string;
+    ready: boolean;
+    callbackUrl: string;
+    deviceKind: 'POS' | 'KDS' | null;
+  }[];
+};
 
-export type ResolvedDemoSeat = DemoSeat & {
+export type ResolvedDemoSeat = Omit<DemoSeat, 'personas'> & {
   organizationId: string;
   managerUserId: string;
   managerEmail: string;
+  persona: DemoPersona;
+  userId: string;
+  email: string;
 };
+
+const demoUserSelect = {
+  id: true,
+  email: true,
+  password: true,
+  status: true,
+  role: true,
+  organizationId: true,
+  organizationRole: { select: { key: true } },
+  restaurantStaffProfiles: {
+    where: { status: 'ACTIVE' as const, primaryBranch: { active: true } },
+    select: { id: true },
+  },
+} as const;
+
+function isReadyPersona(
+  user: {
+    id: string;
+    email: string;
+    password: string | null;
+    status: string;
+    role: string;
+    organizationId: string;
+    organizationRole: { key: string } | null;
+    restaurantStaffProfiles: { id: string }[];
+  },
+  seat: number,
+  persona: DemoPersona
+): boolean {
+  return (
+    user.id === demoPersonaUserId(seat, persona) &&
+    user.email === demoPersonaEmail(seat, persona) &&
+    user.organizationId === demoOrganizationId(seat) &&
+    user.password === null &&
+    user.status === 'ACTIVE' &&
+    user.role === demoPersonaUserRole(persona) &&
+    user.organizationRole?.key === DEMO_PERSONAS[persona].roleKey &&
+    user.restaurantStaffProfiles.length === 1
+  );
+}
 
 function digest(value: string): Buffer {
   return createHash('sha256').update(value).digest();
@@ -55,6 +120,12 @@ export function createDemoAccessGrant(input: {
 }): { value: string; expiresAt: Date } {
   const secret = signingSecret();
   if (!secret) throw new Error('AUTH_SECRET is required for demo access.');
+  if (
+    demoSeatFromOrganizationId(input.organizationId) !== input.seat ||
+    input.organizationId !== demoOrganizationId(input.seat)
+  ) {
+    throw new Error('A canonical demo seat is required.');
+  }
   const now = input.now ?? new Date();
   const expiresAt = new Date(now.getTime() + DEMO_SESSION_MAX_AGE * 1000);
   const grant: DemoGrant = {
@@ -103,6 +174,7 @@ export function readDemoAccessGrant(
       !Number.isInteger(grant.seat) ||
       grant.seat! < 1 ||
       grant.seat! > getDemoSeatCount() ||
+      grant.organizationId !== demoOrganizationId(grant.seat!) ||
       grant.host !== host ||
       typeof grant.expiresAt !== 'number' ||
       grant.expiresAt <= now.getTime()
@@ -137,8 +209,9 @@ export async function getDemoSeatOptions(): Promise<DemoSeat[]> {
         status: true,
         vertical: true,
         deploymentMode: true,
+        isDemo: true,
         users: {
-          select: { id: true, email: true, password: true, status: true, role: true },
+          select: demoUserSelect,
         },
       },
     })
@@ -146,29 +219,31 @@ export async function getDemoSeatOptions(): Promise<DemoSeat[]> {
   const byId = new Map(organizations.map((organization) => [organization.id, organization]));
   return seats.map((seat) => {
     const organization = byId.get(demoOrganizationId(seat));
-    const manager = organization?.users.find(
-      (user) =>
-        user.id === demoManagerId(seat) &&
-        user.email === demoManagerEmail(seat) &&
-        user.password === null &&
-        user.status === 'ACTIVE' &&
-        user.role === 'ADMIN'
-    );
-    const ready = Boolean(
-      organization &&
-      organization.slug === demoSeatSlug(seat) &&
-      organization.displayName === demoSeatName(seat) &&
-      organization.status === 'ACTIVE' &&
-      organization.vertical === 'RESTAURANT' &&
-      organization.deploymentMode === 'SHARED' &&
-      manager
-    );
-    return { seat, name: demoSeatName(seat), ready };
+    const validOrganization = Boolean(organization && isCanonicalDemoOrganization(organization));
+    const personas = DEMO_PERSONA_KEYS.map((key) => ({
+      key,
+      label: DEMO_PERSONAS[key].label,
+      callbackUrl: DEMO_PERSONAS[key].callbackUrl,
+      deviceKind: DEMO_PERSONAS[key].deviceKind,
+      ready:
+        validOrganization &&
+        Boolean(organization?.users.some((user) => isReadyPersona(user, seat, key))),
+    }));
+    return {
+      seat,
+      name: demoSeatName(seat),
+      ready: personas.some(({ key, ready }) => key === 'manager' && ready),
+      personas,
+    };
   });
 }
 
-export async function resolveDemoSeat(seat: number): Promise<ResolvedDemoSeat | null> {
-  if (!Number.isInteger(seat) || seat < 1 || seat > getDemoSeatCount()) return null;
+export async function resolveDemoSeat(
+  seat: number,
+  persona: DemoPersona = 'manager'
+): Promise<ResolvedDemoSeat | null> {
+  if (!Number.isInteger(seat) || seat < 1 || seat > getDemoSeatCount() || !isDemoPersona(persona))
+    return null;
   const managerEmail = demoManagerEmail(seat);
   const managerUserId = demoManagerId(seat);
   const organization = await withPlatformDb((db) =>
@@ -183,29 +258,43 @@ export async function resolveDemoSeat(seat: number): Promise<ResolvedDemoSeat | 
       },
       select: {
         id: true,
+        slug: true,
+        isDemo: true,
+        status: true,
+        vertical: true,
+        deploymentMode: true,
         users: {
           where: {
-            id: managerUserId,
-            email: managerEmail,
+            id: demoPersonaUserId(seat, persona),
+            email: demoPersonaEmail(seat, persona),
             password: null,
             status: 'ACTIVE',
-            role: 'ADMIN',
+            role: demoPersonaUserRole(persona),
           },
-          select: { id: true, email: true },
+          select: demoUserSelect,
           take: 1,
         },
       },
     })
   );
-  const manager = organization?.users[0];
-  if (!organization || !manager) return null;
+  const user = organization?.users[0];
+  if (
+    !organization ||
+    !isCanonicalDemoOrganization(organization) ||
+    !user ||
+    !isReadyPersona(user, seat, persona)
+  )
+    return null;
   return {
     seat,
     name: demoSeatName(seat),
     ready: true,
     organizationId: organization.id,
-    managerUserId: manager.id,
-    managerEmail: manager.email,
+    managerUserId,
+    managerEmail,
+    persona,
+    userId: user.id,
+    email: user.email,
   };
 }
 

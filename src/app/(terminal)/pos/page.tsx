@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { SessionProvider } from 'next-auth/react';
 
 import { OrderPad } from '@/components/restaurant/pos/order-pad';
 import { DemoToolbar } from '@/lib/demo/toolbar';
@@ -15,7 +16,11 @@ export default async function PosPage() {
   const demo = actor?.organization.isDemo === true;
   return (
     <>
-      {demo ? <DemoToolbar seatName={actor.organization.displayName} /> : null}
+      {demo ? (
+        <SessionProvider session={actor.session} refetchOnWindowFocus>
+          <DemoToolbar seatName={actor.organization.displayName} />
+        </SessionProvider>
+      ) : null}
       <OrderPad demo={demo} />
     </>
   );

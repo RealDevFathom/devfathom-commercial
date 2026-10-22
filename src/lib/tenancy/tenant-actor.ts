@@ -16,6 +16,8 @@ import {
 } from '@/lib/tenancy/host';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { getSupportSession, type SupportIdentity } from '@/lib/tenancy/support-session';
+import { demoSeatFromOrganizationId, isDemoEnabled } from '@/lib/demo/config';
+import { demoPersonaForUser, isCanonicalDemoOrganization } from '@/lib/demo/personas';
 import {
   evaluateSessionUser,
   isSessionUsable,
@@ -179,8 +181,16 @@ async function resolveTenantActorUncached(
     if (!isSessionUsable(session.user)) return null;
     const organization = await organizationForActor(session.user.organizationId, options.request);
     if (!organization) return null;
-    if (organization.isDemo && !liveDemoAccessExpiry(session.user.demoAccessExpiresAt)) {
-      return null;
+    if (organization.isDemo || session.user.demoAccessExpiresAt !== undefined) {
+      const seat = demoSeatFromOrganizationId(organization.id);
+      if (
+        !isDemoEnabled() ||
+        !isCanonicalDemoOrganization(organization) ||
+        !seat ||
+        !demoPersonaForUser(seat, session.user) ||
+        !liveDemoAccessExpiry(session.user.demoAccessExpiresAt)
+      )
+        return null;
     }
     return { session, organization, support: null };
   }

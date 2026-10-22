@@ -3,6 +3,7 @@ import 'server-only';
 import { appendCustomerConsent, createCustomer } from '@/lib/restaurant/customers';
 import {
   createJobRole,
+  ensureDefaultJobRoles,
   grantJobRole,
   setJobRoleCapabilities,
   updateJobRole,
@@ -43,6 +44,7 @@ import { demoApproverEmail } from './approval';
 import { DEMO_RESTAURANT_JOB_ROLE_KEY } from './seed-bootstrap';
 import type { DemoRestaurantCatalogIds } from './seed-catalog';
 import type { DemoRestaurantSeed } from './seed-data';
+import { seedDemoPersonas } from './seed-personas';
 
 export type DemoRestaurantOperationsIds = {
   staff: Record<string, string>;
@@ -139,6 +141,18 @@ async function seedWorkforce(
     [managerDescriptor.id]: manager.id,
     [approverDescriptor.id]: approver.id,
   };
+  const personas = await seedDemoPersonas(db, seed, catalog, manager.id);
+  for (const [persona, descriptorRole] of [
+    ['cashier', 'CASHIER'],
+    ['waiter', 'SERVER'],
+    ['kitchen', 'COOK'],
+  ] as const) {
+    const descriptor = seed.workforce.staff.find(
+      (item) => item.branchId === firstBranch.id && item.role === descriptorRole
+    );
+    if (!descriptor || !personas[persona]) throw new Error(`Missing demo ${persona} staff.`);
+    staff[descriptor.id] = personas[persona]!;
+  }
   for (const descriptor of seed.workforce.staff) {
     if (staff[descriptor.id]) continue;
     const created = await createStaffProfile(db, {
@@ -150,24 +164,40 @@ async function seedWorkforce(
     staff[descriptor.id] = created.id;
   }
 
-  const grants = new Map<string, { staffProfileId: string; branchId: string }>();
+  await ensureDefaultJobRoles(db);
+  const roles = await db.restaurantJobRole.findMany({ select: { id: true, key: true } });
+  const roleByKey = new Map(roles.map((item) => [item.key, item.id]));
+  const descriptorRoles = {
+    BRANCH_MANAGER: 'manager',
+    SHIFT_SUPERVISOR: 'shift-supervisor',
+    CASHIER: 'cashier',
+    SERVER: 'server',
+    COOK: 'kitchen',
+  } as const;
+  const grants = new Map<string, { staffProfileId: string; branchId: string; jobRoleId: string }>();
   for (const descriptor of seed.workforce.staff) {
     const grant = {
       staffProfileId: requiredId(staff, descriptor.id, 'staff profile'),
       branchId: requiredId(catalog.branch, descriptor.branchId, 'branch'),
+      jobRoleId: requiredId(
+        Object.fromEntries(roleByKey),
+        descriptorRoles[descriptor.role],
+        'job role'
+      ),
     };
     grants.set(`${grant.staffProfileId}:${grant.branchId}`, grant);
   }
   for (const branch of seed.branches) {
     const branchId = requiredId(catalog.branch, branch.id, 'branch');
     for (const staffProfileId of [manager.id, approver.id]) {
-      grants.set(`${staffProfileId}:${branchId}`, { staffProfileId, branchId });
+      const jobRoleId =
+        staffProfileId === manager.id ? role.id : roleByKey.get('shift-supervisor')!;
+      grants.set(`${staffProfileId}:${branchId}`, { staffProfileId, branchId, jobRoleId });
     }
   }
   for (const grant of grants.values()) {
     await grantJobRole(db, {
       ...grant,
-      jobRoleId: role.id,
       actorStaffProfileId: manager.id,
     });
   }

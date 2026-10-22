@@ -250,6 +250,7 @@ describe('createDemoRestaurantSeedContext', () => {
     expect(context).toMatchObject({ db, organization: { id: identity.organizationId } });
     expect(mocks.createContext).toHaveBeenCalledWith({
       db,
+      auditDb: db,
       organization: expect.objectContaining({
         id: identity.organizationId,
         isDemo: true,
