@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs
+Branch: (detached)
+HEAD: 89f39834e7688c7f93dc467b945c980ada708463
+Mode: applied
+Excluded (secrets): 1
