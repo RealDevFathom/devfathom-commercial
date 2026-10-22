@@ -725,6 +725,18 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
+  it('refuses a purchase order from another branch', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue(null);
+
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
+      where: { id: 'po_a', supplierId: 'supplier_a', branchId: 'branch_a' },
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
   it('refuses rejected units with no quarantine destination or reason (PUR-04)', async () => {
     await expect(
       caller().createGoodsReceipt({
