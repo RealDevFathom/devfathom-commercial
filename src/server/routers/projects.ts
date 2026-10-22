@@ -5,6 +5,7 @@ import { logActivity } from '../activity';
 import { emitEvent } from '@/lib/webhooks';
 import { appUrl, templates } from '@/lib/email';
 import { notify } from '@/lib/notifications';
+import { isValidProjectDateRange } from '@/lib/project-dates';
 import {
   assertProjectAccess,
   assertBoardAccess,
@@ -12,6 +13,8 @@ import {
   assertTaskAccess,
 } from '../authz';
 import { assertInOrganization, workspaceId } from '../org-refs';
+
+const projectDateRangeMessage = 'End date must be on or after the start date.';
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM".
 function formatDue(date: Date): string {
@@ -67,18 +70,23 @@ export const projectsRouter = router({
 
   create: protectedProcedure
     .input(
-      z.object({
-        name: z.string().min(1, 'Project name is required'),
-        description: z.string().optional(),
-        type: z.enum(['CLIENT', 'INTERNAL']),
-        status: z.enum(['ACTIVE', 'IN_DEVELOPMENT', 'ON_HOLD']).default('ACTIVE'),
-        clientId: z.string().optional(),
-        startDate: z.date().optional(),
-        endDate: z.date().optional(),
-        techStack: z.array(z.string()).default([]),
-        memberIds: z.array(z.string()).default([]),
-        createDefaultBoard: z.boolean().default(true),
-      })
+      z
+        .object({
+          name: z.string().min(1, 'Project name is required'),
+          description: z.string().optional(),
+          type: z.enum(['CLIENT', 'INTERNAL']),
+          status: z.enum(['ACTIVE', 'IN_DEVELOPMENT', 'ON_HOLD']).default('ACTIVE'),
+          clientId: z.string().optional(),
+          startDate: z.date().optional(),
+          endDate: z.date().optional(),
+          techStack: z.array(z.string()).default([]),
+          memberIds: z.array(z.string()).default([]),
+          createDefaultBoard: z.boolean().default(true),
+        })
+        .refine(({ startDate, endDate }) => isValidProjectDateRange(startDate, endDate), {
+          message: projectDateRangeMessage,
+          path: ['endDate'],
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const { memberIds, createDefaultBoard, ...projectData } = input;
@@ -154,6 +162,17 @@ export const projectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
       await assertProjectAccess(ctx, id);
+      if (data.startDate !== undefined || data.endDate !== undefined) {
+        const storedDates = await ctx.db.project.findUnique({
+          where: { id },
+          select: { startDate: true, endDate: true },
+        });
+        const startDate = data.startDate === undefined ? storedDates?.startDate : data.startDate;
+        const endDate = data.endDate === undefined ? storedDates?.endDate : data.endDate;
+        if (!isValidProjectDateRange(startDate, endDate)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: projectDateRangeMessage });
+        }
+      }
       const project = await ctx.db.project.update({ where: { id }, data });
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'project_updated',
