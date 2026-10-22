@@ -46,18 +46,25 @@ describe('pure rollup calculations', () => {
         },
       ],
       tenders: [{ tipAmount: D('6.00') }],
-      refunds: [{ amount: D('2.50'), deliveryFeeRefundAmount: D('1.25') }],
+      refunds: [
+        {
+          amount: D('12.50'),
+          taxRefundAmount: D('2.00'),
+          serviceChargeRefundAmount: D('1.00'),
+          deliveryFeeRefundAmount: D('1.25'),
+        },
+      ],
       drawers: [],
     });
     expect(total.grossSales.toString()).toBe('100');
     expect(total.deliveryFeeSales.toString()).toBe('12');
     expect(total.deliveryFeeRefunds.toString()).toBe('1.25');
     expect(total.discountTotal.toString()).toBe('5');
-    expect(total.netSales.toString()).toBe('82.5');
-    expect(total.taxTotal.toString()).toBe('7');
-    expect(total.serviceChargeTotal.toString()).toBe('3');
+    expect(total.netSales.toString()).toBe('76.75');
+    expect(total.taxTotal.toString()).toBe('5');
+    expect(total.serviceChargeTotal.toString()).toBe('2');
     expect(total.tipTotal.toString()).toBe('6');
-    expect(total.refundTotal.toString()).toBe('2.5');
+    expect(total.refundTotal.toString()).toBe('11.25');
     expect(total.voidTotal.toString()).toBe('9.99');
   });
 
@@ -153,7 +160,14 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
     },
     restaurantTender: { findMany: vi.fn(async () => []) },
     restaurantRefund: {
-      findMany: vi.fn(async () => [{ amount: D('3'), deliveryFeeRefundAmount: D('1') }]),
+      findMany: vi.fn(async () => [
+        {
+          amount: D('4'),
+          taxRefundAmount: D('0'),
+          serviceChargeRefundAmount: D('0'),
+          deliveryFeeRefundAmount: D('1'),
+        },
+      ]),
     },
     restaurantDrawerSession: { findMany: vi.fn(async () => []) },
     insightDailyRollup: {
@@ -163,7 +177,7 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
           sourceDailyCloseId: string;
           projectionVersion: number;
         } | null>
-      >(async () => ({ id: 'rollup_1', sourceDailyCloseId: 'close_1', projectionVersion: 4 })),
+      >(async () => ({ id: 'rollup_1', sourceDailyCloseId: 'close_1', projectionVersion: 5 })),
       upsert: vi.fn(async () => ({ id: 'rollup_1' })),
     },
     insightLoyaltyLiability: {
@@ -184,7 +198,7 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
         positivePoints: BigInt(0),
         signedPoints: BigInt(0),
         liability: D('0'),
-        projectionVersion: 4,
+        projectionVersion: 5,
       })),
       upsert: vi.fn<(args?: { update: { liability: Prisma.Decimal } }) => Promise<{ id: string }>>(
         async () => ({ id: 'liability_1' })
@@ -274,7 +288,7 @@ describe('rollupDay handler idempotency and correction', () => {
 
       db.insightDailyRollup.findFirst
         .mockResolvedValueOnce(null)
-        .mockResolvedValue({ id: 'rollup_1', sourceDailyCloseId: 'close_1', projectionVersion: 4 });
+        .mockResolvedValue({ id: 'rollup_1', sourceDailyCloseId: 'close_1', projectionVersion: 5 });
       db.insightLoyaltyLiability.findFirst.mockResolvedValueOnce(null).mockResolvedValue({
         cutoffAt: new Date('2026-08-20T19:00:00.000Z'),
         programVersionId: 'program_1',
@@ -282,7 +296,7 @@ describe('rollupDay handler idempotency and correction', () => {
         positivePoints: BigInt(100),
         signedPoints: BigInt(100),
         liability: D('1.5'),
-        projectionVersion: 4,
+        projectionVersion: 5,
       });
       db.loyaltyProgramVersion.findFirst.mockResolvedValue({
         id: 'program_1',

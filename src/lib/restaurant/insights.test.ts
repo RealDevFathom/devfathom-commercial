@@ -36,10 +36,7 @@ const dailyRow = {
   updatedAt: computedAt,
   branch: { name: 'Main', timezone: 'Asia/Karachi' },
   sourceDailyClose: {
-    grossSales: D('125.50'),
-    compTotal: D('5.25'),
-    discountTotal: D('0'),
-    refundTotal: D('10'),
+    netSales: D('113.25'),
     supersededBy: [],
   },
 };
@@ -67,6 +64,7 @@ describe('insight report serialization', () => {
     });
     expect(row).toMatchObject({
       grossSales: '125.5',
+      netSales: '113.25',
       deliveryFeeSales: '12',
       deliveryFeeRefunds: '3',
       drawerVariance: '-0.5',
@@ -146,37 +144,34 @@ describe('append-only labour import', () => {
 });
 
 it.each(['7', '4'])(
-  'normalizes existing cached net %s from source close without writes',
+  'uses source-close net sales instead of cached net %s without writes',
   async (stored) => {
     const row = {
       ...dailyRow,
       netSales: D(stored),
       sourceDailyClose: {
-        grossSales: D('10'),
-        compTotal: D('2'),
-        discountTotal: D('1'),
-        refundTotal: D('3'),
+        netSales: D('5'),
         supersededBy: [],
       },
     };
     db.insightDailyRollup.findMany.mockResolvedValue([row]);
     const [report] = await listInsightReports(db as unknown as ScopedDb, 'financial', {});
-    expect(report.netSales).toBe('4');
+    expect(report.netSales).toBe('5');
     db.insightDailyRollup.findFirst.mockResolvedValue(row);
     const detail = await readInsightReport(db as unknown as ScopedDb, 'financial', {
       branchId: row.branchId,
       businessDate: '2026-08-20',
     });
-    expect(detail.netSales).toBe('4');
+    expect(detail.netSales).toBe('5');
     const csv = await exportInsightReports(db as unknown as ScopedDb, 'financial', {});
     const [header, line] = csv.content.split('\n');
-    expect(line!.split(',')[header!.split(',').indexOf('netSales')]).toBe('4');
+    expect(line!.split(',')[header!.split(',').indexOf('netSales')]).toBe('5');
     expect(row.netSales.toString()).toBe(stored);
     expect(db.insightDailyRollup.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         select: expect.objectContaining({
           sourceDailyClose: expect.objectContaining({
-            select: expect.objectContaining({ discountTotal: true, refundTotal: true }),
+            select: expect.objectContaining({ netSales: true }),
           }),
         }),
       })
