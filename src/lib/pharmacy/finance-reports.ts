@@ -29,6 +29,9 @@ export type ReportScope = {
 type JournalReportScope = Omit<ReportScope, 'organizationId'> & {
   organizationId: string | Prisma.Sql;
   branchIds?: string[];
+  supplierId?: string;
+  ingredientId?: string;
+  batchId?: string;
 };
 
 function branchFilter(scope: JournalReportScope) {
@@ -36,6 +39,14 @@ function branchFilter(scope: JournalReportScope) {
   return scope.branchId
     ? Prisma.sql`AND line."branchId" = ${scope.branchId}`
     : Prisma.sql`AND TRUE`;
+}
+
+function pharmacyDimensionFilter(scope: JournalReportScope) {
+  return Prisma.sql`
+    ${scope.batchId ? Prisma.sql`AND lot."manufacturingBatchId" = ${scope.batchId}` : Prisma.empty}
+    ${scope.ingredientId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_medicine_strength_components" strength WHERE strength."organizationId" = line."organizationId" AND strength."medicineId" = line."productId" AND strength."ingredientId" = ${scope.ingredientId})` : Prisma.empty}
+    ${scope.supplierId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_goods_receipt_lines" receipt_line JOIN "pharmacy_goods_receipts" receipt ON receipt."organizationId" = receipt_line."organizationId" AND receipt."branchId" = receipt_line."branchId" AND receipt."id" = receipt_line."goodsReceiptId" WHERE receipt_line."organizationId" = line."organizationId" AND receipt_line."branchId" = line."branchId" AND receipt_line."inventoryLotId" = line."lotId" AND receipt."supplierId" = ${scope.supplierId})` : Prisma.empty}
+  `;
 }
 
 export type ValuationRow = {
@@ -140,12 +151,15 @@ export function grossMarginQuery(
         JOIN "finance_journal_entries" entry
           ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
         LEFT JOIN "pharmacy_inventory_lots" lot
-          ON lot."organizationId" = line."organizationId" AND lot."id" = line."lotId"
+          ON lot."organizationId" = line."organizationId"
+         AND lot."branchId" = line."branchId"
+         AND lot."id" = line."lotId"
        WHERE line."organizationId" = ${scope.organizationId}
          AND line."accountCode" IN ('SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD')
          AND entry."occurredAt" >= ${input.from}
          AND entry."occurredAt" < ${input.to}
          ${branchFilter(scope)}
+         ${pharmacyDimensionFilter(scope)}
     )
     SELECT "key",
            -- Revenue is a credit account: a credit increases it, so its signed

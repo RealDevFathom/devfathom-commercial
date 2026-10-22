@@ -45,6 +45,26 @@ describe('PH-RPT metric contract', () => {
     expect(sql).not.toContain('SUM(t."amountMinor" - COALESCE(t."changeGivenMinor",0))');
   });
 
+  it('applies supplier, ingredient, and batch filters to dimensional aggregates', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const count = vi.fn().mockResolvedValue(0);
+    const pharmacySupplierClaim = { count: vi.fn().mockResolvedValue(0) };
+    const pharmacyReceivingException = { count: vi.fn().mockResolvedValue(0) };
+    await readPharmacyOwnerCommandCentre({ $queryRaw: queryRaw, pharmacyRecallNotice: { count }, pharmacySupplierClaim, pharmacyReceivingException, branchRegulatoryProfile: { count } } as never,
+      { branchIds: ['branch_1'], from: '2026-09-04', to: '2026-09-04', supplierId: 'supplier_1', ingredientId: 'ingredient_1', batchId: 'batch_1' });
+    const sql = queryRaw.mock.calls.map(([query]) => (query as { strings: readonly string[] }).strings.join('?')).join('\n');
+    expect(sql).toContain('strength."ingredientId"=?');
+    expect(sql).toContain('lot."manufacturingBatchId"=?');
+    expect(sql).toContain('receipt."supplierId"=?');
+    expect(sql).not.toContain('Prisma.raw');
+    expect(sql).toContain('allocation."branchId"=l."branchId"');
+    expect(sql).toContain('receipt_line."branchId"=lot."branchId"');
+    expect(sql).toContain('receipt_line."branchId" = line."branchId"');
+    expect(queryRaw.mock.calls.map(([query]) => (query as { strings: readonly string[] }).strings.join('?')).filter((sql) => /pharmacy_(?:sale_lines|tenders|refunds|daily_closes|stock_signals|stock_balances|fiscal_documents)/.test(sql)).every((sql) => sql.includes("current_setting('app.current_organization_id',true)"))).toBe(true);
+    expect(pharmacySupplierClaim.count).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ lot: expect.objectContaining({ manufacturingBatchId: 'batch_1' }) }) }));
+    expect(pharmacyReceivingException.count).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ goodsReceipt: { supplierId: 'supplier_1' } }) }));
+  });
+
   it('reports overdue Khata principal net of payments for the selected branches', async () => {
     const queryRaw = vi.fn().mockImplementation(async (query: { strings: readonly string[] }) =>
       query.strings.join('?').includes('FROM "pharmacy_khata_events" charge')
