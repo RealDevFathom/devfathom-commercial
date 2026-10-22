@@ -309,8 +309,7 @@ export async function postSaleReturnEntry(
     where: { organizationId: scope.organizationId, saleLineId: saleLine.id },
     _sum: { canonicalUnits: true },
   });
-  const through =
-    (cumulative._sum.canonicalUnits ?? 0) + (unidentified._sum.canonicalUnits ?? 0);
+  const through = (cumulative._sum.canonicalUnits ?? 0) + (unidentified._sum.canonicalUnits ?? 0);
   const before = through - returned;
   if (before < 0 || through > sold) throw new PharmacyFinanceError('INVALID_STATE');
   const delta = (amount: number) =>
@@ -370,8 +369,7 @@ export async function postUnidentifiedSaleReturnEntry(
     },
   });
   if (!holding) throw new PharmacyFinanceError('NOT_FOUND');
-  if (holding.branchId !== scope.branchId)
-    throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
+  if (holding.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
 
   const sourceKind: FinanceSourceKind = 'PHARMACY_UNIDENTIFIED_RETURN_HOLD';
   const existing = await db.financeJournalEntry.findFirst({

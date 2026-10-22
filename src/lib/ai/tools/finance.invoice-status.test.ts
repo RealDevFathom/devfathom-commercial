@@ -20,7 +20,11 @@ const invoice = {
 function setup(prior: string, changed = 1) {
   const db = {
     invoice: {
-      findMany: vi.fn().mockResolvedValue([{ id: invoice.id, invoiceNumber: invoice.invoiceNumber, status: prior }]),
+      findMany: vi
+        .fn()
+        .mockResolvedValue([
+          { id: invoice.id, invoiceNumber: invoice.invoiceNumber, status: prior },
+        ]),
       updateMany: vi.fn().mockResolvedValue({ count: changed }),
       findUniqueOrThrow: vi.fn().mockResolvedValue({ ...invoice, status: prior }),
     },
@@ -43,17 +47,20 @@ function setup(prior: string, changed = 1) {
 describe('assistant updateInvoiceStatus', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it.each(['SENT', 'OVERDUE', 'PAID'])('rejects direct PAID from %s without side effects', async (prior) => {
-    const { db, helpers, tool } = setup(prior);
+  it.each(['SENT', 'OVERDUE', 'PAID'])(
+    'rejects direct PAID from %s without side effects',
+    async (prior) => {
+      const { db, helpers, tool } = setup(prior);
 
-    const result = await tool.execute({ invoiceNumber: invoice.invoiceNumber, status: 'PAID' });
+      const result = await tool.execute({ invoiceNumber: invoice.invoiceNumber, status: 'PAID' });
 
-    expect(result.error).toBe(PAID_STATUS_ERROR);
-    expect(db.invoice.updateMany).not.toHaveBeenCalled();
-    expect(helpers.activity).not.toHaveBeenCalled();
-    expect(helpers.audit).not.toHaveBeenCalled();
-    expect(helpers.notifyUsers).not.toHaveBeenCalled();
-  });
+      expect(result.error).toBe(PAID_STATUS_ERROR);
+      expect(db.invoice.updateMany).not.toHaveBeenCalled();
+      expect(helpers.activity).not.toHaveBeenCalled();
+      expect(helpers.audit).not.toHaveBeenCalled();
+      expect(helpers.notifyUsers).not.toHaveBeenCalled();
+    }
+  );
 
   it('clears sentAt with a compare-and-set when SENT becomes OVERDUE', async () => {
     const { db, tool } = setup('SENT');

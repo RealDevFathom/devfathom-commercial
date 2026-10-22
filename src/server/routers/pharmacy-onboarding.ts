@@ -366,8 +366,7 @@ export const pharmacyOnboardingRouter = router({
             effective,
             inForce,
             licenceExpired: effective && now >= version.licenceValidTo,
-            qualifiedPersonCoverageExpired:
-              effective && now >= version.qualifiedPersonValidTo,
+            qualifiedPersonCoverageExpired: effective && now >= version.qualifiedPersonValidTo,
           };
         }),
       };

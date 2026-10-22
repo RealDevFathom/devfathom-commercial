@@ -246,16 +246,14 @@ function fixture() {
       ]),
     },
     restaurantBillLine: {
-      findMany: vi.fn(
-        async ({ where }: { where: { billId: string | { in: string[] } } }) => {
-          if (typeof where.billId === 'string') {
-            return linesByBill.get(where.billId) ?? [defaultLine];
-          }
-          return where.billId.in.flatMap((billId) =>
-            (linesByBill.get(billId) ?? []).map((line) => ({ ...line, billId }))
-          );
+      findMany: vi.fn(async ({ where }: { where: { billId: string | { in: string[] } } }) => {
+        if (typeof where.billId === 'string') {
+          return linesByBill.get(where.billId) ?? [defaultLine];
         }
-      ),
+        return where.billId.in.flatMap((billId) =>
+          (linesByBill.get(billId) ?? []).map((line) => ({ ...line, billId }))
+        );
+      }),
     },
     restaurantPromotionBillApplicationSnapshot: { findMany: vi.fn(async () => []) },
     restaurantRefund: {
@@ -369,7 +367,12 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     // Two live OPEN bills: one partially paid (0.01 of 3860), one fully comped (nets 0).
     // Each is re-quoted by id, so register its own bill row, lines and tenders (QA-143).
     f.billsById.set('partial', { ...f.bill, id: 'partial' });
-    f.billsById.set('comped', { ...f.bill, id: 'comped', compTotal: D('4000'), grandTotal: D('0') });
+    f.billsById.set('comped', {
+      ...f.bill,
+      id: 'comped',
+      compTotal: D('4000'),
+      grandTotal: D('0'),
+    });
     f.linesByBill.set('partial', [f.defaultLine]);
     f.linesByBill.set('comped', [{ ...f.defaultLine, compAmount: D('4000') }]);
     f.tenders.push(partialTender);

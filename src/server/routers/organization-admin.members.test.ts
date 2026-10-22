@@ -126,12 +126,19 @@ describe('organization member creation', () => {
     });
   });
 
-  it.each(['aaaaaaaaaaaa', 'AAAAAAAAAAAA', 'PasswordOnly'])('rejects weak staff passwords: %s', async (password) => {
-    await expect(caller().createMember({ ...input, password })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    await expect(caller().resetMemberPassword({ id: 'member', password })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(mocks.userCreate).not.toHaveBeenCalled();
-    expect(mocks.userFindFirst).not.toHaveBeenCalled();
-  });
+  it.each(['aaaaaaaaaaaa', 'AAAAAAAAAAAA', 'PasswordOnly'])(
+    'rejects weak staff passwords: %s',
+    async (password) => {
+      await expect(caller().createMember({ ...input, password })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      await expect(caller().resetMemberPassword({ id: 'member', password })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      expect(mocks.userCreate).not.toHaveBeenCalled();
+      expect(mocks.userFindFirst).not.toHaveBeenCalled();
+    }
+  );
 
   it('creates an ACTIVE member scoped to the caller tenant with a hashed password', async () => {
     await caller('org_a').createMember(input);
@@ -317,24 +324,26 @@ describe('organization member last-admin guard', () => {
       },
     };
     const concurrentCaller = (memberId: string) =>
-      organizationAdminRouter.createCaller({
-        db: concurrentDb,
-        entitlements: { enabledModules: [], activeSeats: 2, seatLimit: 10 },
-        session: {
-          expires: 'later',
-          user: {
-            id: 'admin_a',
-            organizationId: 'org_a',
-            role: 'ADMIN',
-            department: 'COUNTER',
-            status: 'ACTIVE',
+      organizationAdminRouter
+        .createCaller({
+          db: concurrentDb,
+          entitlements: { enabledModules: [], activeSeats: 2, seatLimit: 10 },
+          session: {
+            expires: 'later',
+            user: {
+              id: 'admin_a',
+              organizationId: 'org_a',
+              role: 'ADMIN',
+              department: 'COUNTER',
+              status: 'ACTIVE',
+            },
           },
-        },
-        organization: null,
-        support: null,
-        requestMeta: { ip: null, userAgent: null },
-        audit: { detail: {} },
-      } as unknown as TRPCContext).updateMember({ ...updateInput, id: memberId });
+          organization: null,
+          support: null,
+          requestMeta: { ip: null, userAgent: null },
+          audit: { detail: {} },
+        } as unknown as TRPCContext)
+        .updateMember({ ...updateInput, id: memberId });
 
     const results = await Promise.allSettled([
       concurrentCaller('admin_b'),

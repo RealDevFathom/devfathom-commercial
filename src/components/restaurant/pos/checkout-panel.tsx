@@ -173,8 +173,8 @@ function CompControl({
           <DialogHeader>
             <DialogTitle>Comp bill item</DialogTitle>
             <DialogDescription>
-              Select an item and record distinct manager approval. The original price remains in
-              the audit record.
+              Select an item and record distinct manager approval. The original price remains in the
+              audit record.
             </DialogDescription>
           </DialogHeader>
           <div className="my-4 space-y-3">

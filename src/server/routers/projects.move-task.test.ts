@@ -73,9 +73,7 @@ const caller = () =>
 
 beforeEach(() => {
   vi.clearAllMocks();
-  tx.task.findMany
-    .mockResolvedValueOnce([{ id: 'task-1' }])
-    .mockResolvedValueOnce([]);
+  tx.task.findMany.mockResolvedValueOnce([{ id: 'task-1' }]).mockResolvedValueOnce([]);
 });
 
 describe('projects.moveTask', () => {

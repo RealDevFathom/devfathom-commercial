@@ -327,12 +327,7 @@ async function unlock(secret: string, token: string, staffProfileId: string, pin
   );
 }
 
-async function switchOperator(
-  secret: string,
-  token: string,
-  staffProfileId: string,
-  pin: string
-) {
+async function switchOperator(secret: string, token: string, staffProfileId: string, pin: string) {
   return call(
     switchRoute,
     terminalRequest(secret, token, { staffProfileId, type: 'PIN', secret: pin }, 'switch')
@@ -541,9 +536,9 @@ describe('KDS unlock authorization', () => {
     addOperator(INCOMING, device.id, ['kitchen:operate']);
 
     expect((await unlock(secret, token, ACTING, PINS[ACTING])).response.status).toBe(200);
-    expect(
-      (await switchOperator(secret, token, INCOMING, PINS[INCOMING])).response.status
-    ).toBe(200);
+    expect((await switchOperator(secret, token, INCOMING, PINS[INCOMING])).response.status).toBe(
+      200
+    );
     expect(find(h.store.sessions, { id: sessionId })).toMatchObject({
       activeStaffProfileId: INCOMING,
     });

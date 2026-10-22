@@ -14,10 +14,7 @@ import {
   moneyLabel,
   type CurrencyAmount,
 } from '@/lib/finance/currency';
-import {
-  invoiceStatusTransitionError,
-  invoiceStatusUpdate,
-} from '@/lib/finance/invoice-status';
+import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -247,61 +244,59 @@ export const financeRouter = router({
       return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
     }),
 
-  createInvoice: adminProcedure
-    .input(createInvoiceInputSchema)
-    .mutation(async ({ ctx, input }) => {
-      const orgId = workspaceId(ctx);
-      await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
-      await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
-      // FIN-01: never trust client-sent money. Derive every line `amount`, the
-      // `subtotal` and the `total` from quantity × rate (+ tax) on the server, so
-      // a request claiming subtotal/total = 0 (or a negative) cannot corrupt the
-      // stored figure or the paid/outstanding aggregates. Mirrors the AI tool.
-      const lineItems = input.items.map((it) => ({
-        description: it.description,
-        quantity: it.quantity,
-        rate: it.rate,
-        amount: round2(it.quantity * it.rate),
-      }));
-      const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
-      const tax = round2(input.tax ?? 0);
-      const total = round2(subtotal + tax);
+  createInvoice: adminProcedure.input(createInvoiceInputSchema).mutation(async ({ ctx, input }) => {
+    const orgId = workspaceId(ctx);
+    await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
+    await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
+    // FIN-01: never trust client-sent money. Derive every line `amount`, the
+    // `subtotal` and the `total` from quantity × rate (+ tax) on the server, so
+    // a request claiming subtotal/total = 0 (or a negative) cannot corrupt the
+    // stored figure or the paid/outstanding aggregates. Mirrors the AI tool.
+    const lineItems = input.items.map((it) => ({
+      description: it.description,
+      quantity: it.quantity,
+      rate: it.rate,
+      amount: round2(it.quantity * it.rate),
+    }));
+    const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
+    const tax = round2(input.tax ?? 0);
+    const total = round2(subtotal + tax);
 
-      // Generate invoice number. FIN-09: scope the count to THIS year's invoices
-      // so the sequence resets to -001 each January (was a global count that never
-      // reset across years).
-      const year = new Date().getFullYear();
-      const count = await ctx.db.invoice.count({
-        where: { invoiceNumber: { startsWith: `INV-${year}-` } },
-      });
-      const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
+    // Generate invoice number. FIN-09: scope the count to THIS year's invoices
+    // so the sequence resets to -001 each January (was a global count that never
+    // reset across years).
+    const year = new Date().getFullYear();
+    const count = await ctx.db.invoice.count({
+      where: { invoiceNumber: { startsWith: `INV-${year}-` } },
+    });
+    const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
 
-      const invoice = await ctx.db.invoice.create({
-        data: {
-          invoiceNumber,
-          clientId: input.clientId,
-          projectId: input.projectId || null,
-          items: lineItems,
-          subtotal,
-          tax,
-          total,
-          currency: input.currency,
-          status: 'DRAFT',
-          dueDate: input.dueDate,
-          notes: input.notes,
-        },
-        include: { client: { select: { name: true } } },
-      });
+    const invoice = await ctx.db.invoice.create({
+      data: {
+        invoiceNumber,
+        clientId: input.clientId,
+        projectId: input.projectId || null,
+        items: lineItems,
+        subtotal,
+        tax,
+        total,
+        currency: input.currency,
+        status: 'DRAFT',
+        dueDate: input.dueDate,
+        notes: input.notes,
+      },
+      include: { client: { select: { name: true } } },
+    });
 
-      logActivity(ctx.db, ctx.session.user.id, {
-        type: 'invoice_created',
-        message: `created invoice ${invoice.invoiceNumber} for ${invoice.client.name} ($${Number(invoice.total).toLocaleString()})`,
-        entityType: 'Invoice',
-        entityId: invoice.id,
-      });
+    logActivity(ctx.db, ctx.session.user.id, {
+      type: 'invoice_created',
+      message: `created invoice ${invoice.invoiceNumber} for ${invoice.client.name} ($${Number(invoice.total).toLocaleString()})`,
+      entityType: 'Invoice',
+      entityId: invoice.id,
+    });
 
-      return invoice;
-    }),
+    return invoice;
+  }),
 
   // IMP-FIN-01: full line-item edit of an unsettled invoice. Like createInvoice,
   // every line `amount`, the `subtotal` and the `total` are recomputed SERVER-SIDE

@@ -573,8 +573,8 @@ export function OrganizationAdminContent() {
           </div>
           <p className="text-[11px] text-muted-foreground sm:col-span-2 lg:col-span-3">
             12–256 characters, with a lowercase letter, an uppercase letter and a digit. The new
-            member occupies one licensed seat (
-            {entitlements.activeSeats}/{entitlements.seatLimit} used).
+            member occupies one licensed seat ({entitlements.activeSeats}/{entitlements.seatLimit}{' '}
+            used).
           </p>
         </form>
         <div className="divide-y divide-border/60">

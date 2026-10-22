@@ -1,10 +1,4 @@
-export const INVOICE_STATUS_VALUES = [
-  'DRAFT',
-  'SENT',
-  'PAID',
-  'OVERDUE',
-  'CANCELLED',
-] as const;
+export const INVOICE_STATUS_VALUES = ['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED'] as const;
 
 export type InvoiceStatusValue = (typeof INVOICE_STATUS_VALUES)[number];
 

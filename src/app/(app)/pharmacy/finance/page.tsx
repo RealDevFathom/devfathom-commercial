@@ -254,9 +254,7 @@ export default async function PharmacyFinancePage({
       // Preserve Next.js control-flow errors without trusting a user/provider-controlled
       // `digest` property as proof that an arbitrary thrown value is a framework error.
       unstable_rethrow(error);
-      redirect(
-        destination(branchId || branch.id, pharmacyActionErrorMessage('finance'), 'error')
-      );
+      redirect(destination(branchId || branch.id, pharmacyActionErrorMessage('finance'), 'error'));
     }
   }
 

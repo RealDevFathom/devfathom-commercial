@@ -612,8 +612,7 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     totals: {
       subtotal: money(deriveSubtotal(activeItems)),
       tax: quoted.tax,
-      serviceCharge:
-        order.bills.length > 0 ? money(billedServiceCharge) : quoted.serviceCharge,
+      serviceCharge: order.bills.length > 0 ? money(billedServiceCharge) : quoted.serviceCharge,
       deliveryFee: money(order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)),
     },
   };

@@ -315,7 +315,8 @@ async function seedStagingDemoSensitiveGrants() {
       where: { id: PHARMACY_E2E.roleId, organizationId: PHARMACY_E2E.organizationId },
       select: { id: true },
     });
-    if (!role) throw new Error('Demo pharmacy administrator role not found; run the full seed first.');
+    if (!role)
+      throw new Error('Demo pharmacy administrator role not found; run the full seed first.');
     for (const capability of STAGING_DEMO_ADMIN_SENSITIVE_CAPABILITIES) {
       await tx.organizationRolePermission.upsert({
         where: { organizationRoleId_capability: { organizationRoleId: role.id, capability } },
@@ -393,10 +394,13 @@ async function seedStagingDemoPharmacist(
     await tx.user.upsert({
       where: { id: STAGING_DEMO_PHARMACIST.userId },
       // Grants-only top-ups never rotate an existing login's password.
-      update: opts.keepExistingPassword
-        ? (({ password: _password, ...rest }) => rest)(user)
-        : user,
-      create: { id: STAGING_DEMO_PHARMACIST.userId, ...user, createdAt: FIXED_AT, updatedAt: FIXED_AT },
+      update: opts.keepExistingPassword ? (({ password: _password, ...rest }) => rest)(user) : user,
+      create: {
+        id: STAGING_DEMO_PHARMACIST.userId,
+        ...user,
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
     });
     await tx.pharmacyBranchAssignment.upsert({
       where: {

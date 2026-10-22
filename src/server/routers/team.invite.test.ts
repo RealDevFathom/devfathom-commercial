@@ -149,15 +149,20 @@ describe('team.inviteMember duplicate guard', () => {
 
   it('retains the administrator capability check without HR', async () => {
     mocks.can.mockResolvedValue(false);
-    await expect(caller().inviteMember({ ...invite, email: 'cashier@example.com' }))
-      .rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().inviteMember({ ...invite, email: 'cashier@example.com' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
   it('retains seat limits without HR', async () => {
     mocks.findFirst.mockResolvedValue(null);
-    await expect(caller(50).inviteMember({ ...invite, email: 'cashier@example.com' }))
-      .rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining('Seat limit reached') });
+    await expect(
+      caller(50).inviteMember({ ...invite, email: 'cashier@example.com' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: expect.stringContaining('Seat limit reached'),
+    });
     expect(mocks.create).not.toHaveBeenCalled();
   });
 

@@ -569,7 +569,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
   tools.updateInvoiceStatus = tool({
     description:
-      'Change an invoice\'s status to SENT, OVERDUE, CANCELLED or back to DRAFT. Identify it by invoice number. Payments must be recorded with the payment tool; this tool cannot mark an invoice PAID. ADMIN ONLY.',
+      "Change an invoice's status to SENT, OVERDUE, CANCELLED or back to DRAFT. Identify it by invoice number. Payments must be recorded with the payment tool; this tool cannot mark an invoice PAID. ADMIN ONLY.",
     inputSchema: z.object({
       invoiceNumber: z.string().describe('Invoice number, e.g. "INV-2026-003"'),
       status: z.enum(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED']),

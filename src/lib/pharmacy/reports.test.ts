@@ -46,11 +46,13 @@ describe('PH-RPT metric contract', () => {
   });
 
   it('reports overdue Khata principal net of payments for the selected branches', async () => {
-    const queryRaw = vi.fn().mockImplementation(async (query: { strings: readonly string[] }) =>
-      query.strings.join('?').includes('FROM "pharmacy_khata_events" charge')
-        ? [{ value: BigInt(4250) }]
-        : []
-    );
+    const queryRaw = vi
+      .fn()
+      .mockImplementation(async (query: { strings: readonly string[] }) =>
+        query.strings.join('?').includes('FROM "pharmacy_khata_events" charge')
+          ? [{ value: BigInt(4250) }]
+          : []
+      );
     const count = vi.fn().mockResolvedValue(0);
     const result = await readPharmacyOwnerCommandCentre(
       {
@@ -81,7 +83,8 @@ describe('PH-RPT metric contract', () => {
       const sql = query.strings.join('?');
       if (sql.includes("current_setting('app.current_branch_id'"))
         return [{ branchId: 'original' }];
-      if (sql.includes('FROM "pharmacy_khata_events" charge')) return [{ value: BigInt(1500000000) }];
+      if (sql.includes('FROM "pharmacy_khata_events" charge'))
+        return [{ value: BigInt(1500000000) }];
       return [];
     });
     const count = vi.fn().mockResolvedValue(0);

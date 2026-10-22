@@ -166,9 +166,7 @@ export function computeCloseAggregate(inputs: AggregateInputs): CloseAggregate {
 
   const tipTotal = sum(inputs.tenders.map((t) => t.tipAmount));
   const refundedTaxTotal = sum(inputs.refunds.map((r) => r.taxRefundAmount));
-  const refundedServiceChargeTotal = sum(
-    inputs.refunds.map((r) => r.serviceChargeRefundAmount)
-  );
+  const refundedServiceChargeTotal = sum(inputs.refunds.map((r) => r.serviceChargeRefundAmount));
   const deliveryFeeRefunds = sum(inputs.refunds.map((r) => r.deliveryFeeRefundAmount));
   const refundTotal = sub(sum(inputs.refunds.map((r) => r.amount)), deliveryFeeRefunds);
   const refundedSales = sum(

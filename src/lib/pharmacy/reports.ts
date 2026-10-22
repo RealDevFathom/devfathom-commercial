@@ -283,9 +283,7 @@ async function readKhataAgingMinor(db: ScopedDb, branchIds: readonly string[]): 
     // Khata tables enforce organization + exactly one branch through FORCE RLS. Read each
     // authorized report branch under its own branch context rather than bypassing that boundary.
     for (const branchId of branchIds) {
-      await db.$queryRaw(
-        Prisma.sql`SELECT set_config('app.current_branch_id', ${branchId}, true)`
-      );
+      await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_branch_id', ${branchId}, true)`);
       const rows = await db.$queryRaw<Array<{ value: bigint }>>(
         Prisma.sql`WITH payments AS (SELECT "organizationId", "branchId", "settlesChargeId", SUM("amountMinor") AS paid FROM "pharmacy_khata_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId"=${branchId} AND "kind"='PAYMENT' GROUP BY "organizationId", "branchId", "settlesChargeId") SELECT COALESCE(SUM(GREATEST(charge."amountMinor"::bigint-COALESCE(payments.paid,0),0)),0)::bigint AS value FROM "pharmacy_khata_events" charge LEFT JOIN payments ON payments."organizationId"=charge."organizationId" AND payments."branchId"=charge."branchId" AND payments."settlesChargeId"=charge."id" WHERE charge."organizationId"=current_setting('app.current_organization_id',true) AND charge."branchId"=${branchId} AND charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`
       );
