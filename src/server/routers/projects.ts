@@ -833,8 +833,31 @@ export const projectsRouter = router({
       }
 
       await ctx.db.$transaction(async (tx) => {
-        // Serialise concurrent bulk moves/reorders on the destination column.
-        await tx.$queryRaw`SELECT id FROM columns WHERE id = ${input.targetColumnId} FOR UPDATE`;
+        // Serialise against every other move: lock the destination and every
+        // current source column in sorted-id order (same protocol as moveTask), then
+        // re-check that no selected task changed column before the locks were held.
+        const before = await tx.task.findMany({
+          where: { id: { in: input.taskIds } },
+          select: { id: true, columnId: true },
+        });
+        if (before.length !== new Set(input.taskIds).size) {
+          throw new TRPCError({ code: 'NOT_FOUND' });
+        }
+        const lockIds = [
+          ...new Set([input.targetColumnId, ...before.map((row) => row.columnId)]),
+        ].sort();
+        await tx.$queryRaw`SELECT id FROM columns WHERE id = ANY(${lockIds}) ORDER BY id FOR UPDATE`;
+        const after = await tx.task.findMany({
+          where: { id: { in: input.taskIds } },
+          select: { id: true, columnId: true },
+        });
+        const beforeColumn = new Map(before.map((row) => [row.id, row.columnId]));
+        if (
+          after.length !== before.length ||
+          after.some((row) => beforeColumn.get(row.id) !== row.columnId)
+        ) {
+          throw new TRPCError({ code: 'CONFLICT', message: 'Tasks moved concurrently; retry' });
+        }
         const targetColumn = await tx.column.findUnique({
           where: { id: input.targetColumnId },
           select: { board: { select: { projectId: true } } },

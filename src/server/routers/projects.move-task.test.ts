@@ -111,6 +111,14 @@ describe('projects.moveTask', () => {
     tx.task.findMany
       .mockReset()
       .mockResolvedValueOnce([
+        { id: 'task-1', columnId: 'source-column' },
+        { id: 'task-2', columnId: 'other-column' },
+      ])
+      .mockResolvedValueOnce([
+        { id: 'task-1', columnId: 'source-column' },
+        { id: 'task-2', columnId: 'other-column' },
+      ])
+      .mockResolvedValueOnce([
         { id: 'task-1', column: { board: { projectId: 'source-project' } } },
         { id: 'task-2', column: { board: { projectId: 'destination-project' } } },
       ])
@@ -147,5 +155,23 @@ describe('projects.moveTask concurrency', () => {
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(tx.$queryRaw).toHaveBeenCalled();
     expect(taskUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('projects.bulkMoveTasks concurrency', () => {
+  it('locks destination and source columns in sorted order and refuses concurrent moves', async () => {
+    tx.task.findMany
+      .mockReset()
+      .mockResolvedValueOnce([{ id: 'task-1', columnId: 'z-source' }])
+      .mockResolvedValueOnce([{ id: 'task-1', columnId: 'moved-away' }]);
+
+    await expect(
+      caller().bulkMoveTasks({ taskIds: ['task-1'], targetColumnId: 'a-target' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+
+    const lockCall = tx.$queryRaw.mock.calls[0] as unknown[];
+    expect(lockCall[1]).toEqual(['a-target', 'z-source']);
+    expect(taskUpdate).not.toHaveBeenCalled();
+    expect(assigneeDeleteMany).not.toHaveBeenCalled();
   });
 });
