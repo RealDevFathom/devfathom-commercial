@@ -1,11 +1,45 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
+  assertActivePharmacyBranchAssignment,
   assertPharmacistApproved,
   assertPrescriptionSaleLineReady,
   assertSubstitutionRecorded,
   PharmacyDispensingError,
 } from './dispensing';
+
+describe('Rx dispensing branch boundary', () => {
+  const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'user-1' };
+
+  it('requires an active assignment to the requested active tenant branch', async () => {
+    const findFirst = vi.fn().mockResolvedValue({ id: 'assignment-1' });
+    await expect(
+      assertActivePharmacyBranchAssignment(
+        { pharmacyBranchAssignment: { findFirst } } as never,
+        scope
+      )
+    ).resolves.toBeUndefined();
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        userId: 'user-1',
+        active: true,
+        branch: { organizationId: 'org-1', active: true },
+      },
+      select: { id: true },
+    });
+  });
+
+  it('fails closed when the actor is not assigned to that branch', async () => {
+    const db = {
+      pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+    await expect(assertActivePharmacyBranchAssignment(db as never, scope)).rejects.toMatchObject({
+      code: 'BRANCH_ACCESS_REQUIRED',
+    });
+  });
+});
 
 function dbWith(options: { signed?: boolean; substitution?: boolean; prescription?: boolean } = {}) {
   return {

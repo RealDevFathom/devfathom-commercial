@@ -18,7 +18,11 @@ import {
 } from '@/lib/pharmacy/counter-prescriptions';
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
 import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
-import { assertPrescriptionSaleLineReady, PharmacyDispensingError } from '@/lib/pharmacy/dispensing';
+import {
+  assertActivePharmacyBranchAssignment,
+  assertPrescriptionSaleLineReady,
+  PharmacyDispensingError,
+} from '@/lib/pharmacy/dispensing';
 import {
   configuredRxOcrAdapterName,
   proposeRxPrefill,
@@ -403,6 +407,7 @@ export const pharmacyPrescriptionsRouter = router({
       z
         .object({
           id: z.string().min(1),
+          branchId: z.string().min(1),
           saleLineId: z.string().min(1),
           prescriptionLineId: z.string().min(1),
           fillSequence: z.number().int().positive(),
@@ -413,6 +418,26 @@ export const pharmacyPrescriptionsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements.organizationId;
+      const actorId = ctx.session.user.id;
+      const scope = { organizationId, branchId: input.branchId, actorId };
+      if (
+        !(await can(
+          subjectFromSession(ctx.session.user),
+          'pharmacy:dispense',
+          { type: 'PharmacyBranch', organizationId, branchId: input.branchId },
+          { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+        ))
+      ) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Dispensing is not permitted.' });
+      }
+      try {
+        await assertActivePharmacyBranchAssignment(ctx.db, scope);
+      } catch (error) {
+        if (error instanceof PharmacyDispensingError) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+        }
+        throw error;
+      }
       return ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
         const locked = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
@@ -437,7 +462,7 @@ export const pharmacyPrescriptionsRouter = router({
           return existing;
         }
         const saleLine = await db.pharmacySaleLine.findFirst({
-          where: { id: input.saleLineId, organizationId },
+          where: { id: input.saleLineId, organizationId, branchId: input.branchId },
           include: { medicine: true },
         });
         if (
@@ -462,9 +487,9 @@ export const pharmacyPrescriptionsRouter = router({
           }
           throw error;
         }
-        const { saleLineId: _saleLineId, ...fill } = input;
+        const { saleLineId: _saleLineId, branchId: _branchId, ...fill } = input;
         return db.prescriptionFill.create({
-          data: { ...fill, dispensedByUserId: ctx.session.user.id },
+          data: { ...fill, dispensedByUserId: actorId },
         });
       });
     }),

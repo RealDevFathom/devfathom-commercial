@@ -5,17 +5,38 @@ export class PharmacyDispensingError extends Error {
     readonly code:
       | 'PRESCRIPTION_REQUIRED'
       | 'PHARMACIST_APPROVAL_REQUIRED'
+      | 'BRANCH_ACCESS_REQUIRED'
       | 'SUBSTITUTION_RECORD_REQUIRED'
   ) {
     super(
       code === 'PRESCRIPTION_REQUIRED'
         ? 'A linked, valid prescription line is required.'
-        : code === 'PHARMACIST_APPROVAL_REQUIRED'
-          ? 'A signed pharmacist decision is required.'
-          : 'A substitution record is required.'
+        : code === 'BRANCH_ACCESS_REQUIRED'
+          ? 'An active assignment to this pharmacy branch is required.'
+          : code === 'PHARMACIST_APPROVAL_REQUIRED'
+            ? 'A signed pharmacist decision is required.'
+            : 'A substitution record is required.'
     );
     this.name = 'PharmacyDispensingError';
   }
+}
+
+/** Branch boundary shared by mutations that release prescription stock. */
+export async function assertActivePharmacyBranchAssignment(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string; actorId: string }
+): Promise<void> {
+  const assignment = await db.pharmacyBranchAssignment.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      userId: scope.actorId,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { id: true },
+  });
+  if (!assignment) throw new PharmacyDispensingError('BRANCH_ACCESS_REQUIRED');
 }
 
 /** Server-side release gate for an Rx-only, non-controlled counter line. */
