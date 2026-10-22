@@ -672,7 +672,7 @@ export const projectsRouter = router({
   deleteTask: protectedProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      await assertTaskAccess(ctx, input.id);
+      await assertTaskAccess(ctx, input.id, { manage: true });
       return ctx.db.task.delete({ where: { id: input.id } });
     }),
 
