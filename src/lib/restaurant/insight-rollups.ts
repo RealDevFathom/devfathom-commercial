@@ -5,6 +5,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate } from './business-date';
+import { computeCloseAggregate } from './daily-close';
 import { foldExpectedCash, type FoldableMovement } from './drawer-sessions';
 import { add, multiply, roundMoney, sub, sum, ZERO } from './money';
 import { enqueue, SchedulerError } from './scheduler';
@@ -12,7 +13,7 @@ import type { RestaurantJobHandler } from './job-handlers-core';
 
 export const INSIGHTS_ROLLUP_DAY_JOB = 'insights.rollupDay';
 export const MAX_BACKFILL_CHUNK_DAYS = 90;
-export const INSIGHT_PROJECTION_VERSION = 4;
+export const INSIGHT_PROJECTION_VERSION = 5;
 
 export type RollupErrorReason = 'CLOSE_NOT_FOUND' | 'RECONCILIATION_FAILED' | 'INVALID';
 
@@ -62,34 +63,25 @@ export type ReconciledFinancials = {
 export function computeReconciledFinancials(input: {
   bills: readonly RawBill[];
   tenders: readonly { tipAmount: Prisma.Decimal }[];
-  refunds: readonly { amount: Prisma.Decimal; deliveryFeeRefundAmount: Prisma.Decimal }[];
+  refunds: readonly {
+    amount: Prisma.Decimal;
+    taxRefundAmount: Prisma.Decimal;
+    serviceChargeRefundAmount: Prisma.Decimal;
+    deliveryFeeRefundAmount: Prisma.Decimal;
+  }[];
   drawers: readonly RawDrawer[];
 }): ReconciledFinancials {
-  const settled = input.bills.filter((bill) => bill.status === 'SETTLED');
-  const grossSales = sum(settled.map((bill) => bill.subtotal));
-  const compTotal = sum(settled.map((bill) => bill.compTotal));
-  const discountTotal = sum(settled.map((bill) => bill.discountTotal));
-  const cashExpected = sum(input.drawers.map((drawer) => foldExpectedCash(drawer.movements)));
-  const cashCounted = sum(input.drawers.map((drawer) => drawer.countedCash ?? ZERO));
-  const refundTotal = sum(input.refunds.map((refund) => refund.amount));
-  return {
-    grossSales,
-    netSales: sub(sub(sub(grossSales, compTotal), discountTotal), refundTotal),
-    deliveryFeeSales: sum(settled.map((bill) => bill.deliveryFeeTotal)),
-    deliveryFeeRefunds: sum(input.refunds.map((refund) => refund.deliveryFeeRefundAmount)),
-    taxTotal: sum(settled.map((bill) => bill.taxTotal)),
-    serviceChargeTotal: sum(settled.map((bill) => bill.serviceChargeTotal)),
-    tipTotal: sum(input.tenders.map((tender) => tender.tipAmount)),
-    compTotal,
-    discountTotal,
-    refundTotal,
-    voidTotal: sum(
-      input.bills.filter((bill) => bill.status === 'VOID').map((bill) => bill.grandTotal)
-    ),
-    cashExpected,
-    cashCounted,
-    cashVariance: sub(cashCounted, cashExpected),
-  };
+  const { tenderTotals: _tenderTotals, ...financials } = computeCloseAggregate({
+    bills: input.bills,
+    tenders: input.tenders.map((tender) => ({ type: 'OTHER', amount: ZERO, ...tender })),
+    refunds: input.refunds,
+    drawers: input.drawers.map((drawer) => ({
+      status: 'CLOSED',
+      expectedCash: foldExpectedCash(drawer.movements),
+      countedCash: drawer.countedCash,
+    })),
+  });
+  return financials;
 }
 
 export type ItemMixInput = {
@@ -310,7 +302,12 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
     });
     const refunds = await tx.restaurantRefund.findMany({
       where: { businessDate, bill: { branchId: input.branchId } },
-      select: { amount: true, deliveryFeeRefundAmount: true },
+      select: {
+        amount: true,
+        taxRefundAmount: true,
+        serviceChargeRefundAmount: true,
+        deliveryFeeRefundAmount: true,
+      },
     });
     const drawers = await tx.restaurantDrawerSession.findMany({
       where: { branchId: input.branchId, businessDate },
