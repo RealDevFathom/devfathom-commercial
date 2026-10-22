@@ -9,7 +9,7 @@ import { passwordRules, passwordMeetsPolicy } from '@/lib/password-policy';
 import { cn } from '@/lib/utils';
 
 const inputClass =
-  'flex h-11 w-full rounded-lg border border-input bg-background px-4 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-brass focus:outline-none focus:ring-2 focus:ring-brass/30';
+  'flex h-11 w-full rounded-sm border border-border-default bg-surface-sunken px-4 text-sm text-text-strong placeholder:text-text-faint transition-colors focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30';
 
 function titleCase(value: string): string {
   return value.charAt(0) + value.slice(1).toLowerCase();
@@ -33,7 +33,10 @@ export function AcceptInviteForm({ token }: { token: string }) {
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
-        <Loader2 className="h-6 w-6 animate-spin text-brass" />
+        <Loader2 className="h-6 w-6 animate-spin text-accent-brand" />
+        <h1 className="font-display text-2xl font-semibold tracking-tight text-text-strong">
+          Accept your invitation
+        </h1>
         <p className="text-sm text-muted-foreground">Verifying your invitation...</p>
       </div>
     );
@@ -43,7 +46,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
   if (queryError || !data) {
     return (
       <div className="space-y-5 text-center">
-        <h1 className="font-display text-xl font-semibold tracking-tight text-foreground">
+        <h1 className="font-display text-2xl font-semibold tracking-tight text-text-strong">
           Invitation unavailable
         </h1>
         <p className="text-sm text-muted-foreground">
@@ -51,7 +54,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
         </p>
         <a
           href="/login"
-          className="inline-flex h-11 w-full items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+          className="inline-flex h-11 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
         >
           Go to sign in
         </a>
@@ -121,7 +124,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
   return (
     <div>
       <div className="mb-7">
-        <h1 className="font-display text-xl font-semibold tracking-tight text-foreground">
+        <h1 className="font-display text-2xl font-semibold tracking-tight text-text-strong">
           Welcome, {data.name.split(' ')[0]}
         </h1>
         <p className="mt-1.5 text-sm text-muted-foreground">
@@ -130,7 +133,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
       </div>
 
       {/* Read-only summary */}
-      <dl className="mb-6 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4 rounded-xl border border-border bg-background p-4">
+      <dl className="mb-6 grid grid-cols-1 gap-x-4 gap-y-4 rounded-md border border-border-subtle bg-surface-sunken p-4 sm:grid-cols-2">
         <div>
           <dt className="font-mono text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             Full Name
@@ -166,7 +169,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
       </dl>
 
       {error && (
-        <div className="mb-5 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div className="mb-5 rounded-sm border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           {error}
         </div>
       )}
@@ -175,7 +178,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
         {/* Password */}
         <div className="space-y-2">
           <label htmlFor="password" className="block text-sm font-medium text-foreground">
-            New Password <span className="text-brass">*</span>
+            New Password <span className="text-accent-brand">*</span>
           </label>
           <div className="relative">
             <input
@@ -191,7 +194,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
               type="button"
               onClick={() => setShowPassword(!showPassword)}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-              tabIndex={-1}
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
               {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </button>
@@ -227,7 +230,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
         {/* Confirm Password */}
         <div className="space-y-2">
           <label htmlFor="confirm" className="block text-sm font-medium text-foreground">
-            Confirm Password <span className="text-brass">*</span>
+            Confirm Password <span className="text-accent-brand">*</span>
           </label>
           <input
             id="confirm"
@@ -246,7 +249,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
         {/* Phone */}
         <div className="space-y-2">
           <label htmlFor="phone" className="block text-sm font-medium text-foreground">
-            Phone <span className="text-brass">*</span>
+            Phone <span className="text-accent-brand">*</span>
           </label>
           <input
             id="phone"
@@ -300,13 +303,14 @@ export function AcceptInviteForm({ token }: { token: string }) {
               {skills.map((s) => (
                 <span
                   key={s}
-                  className="inline-flex items-center gap-1 rounded-md border border-border bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground"
+                  className="inline-flex items-center gap-1 rounded-xs border border-border-subtle bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground"
                 >
                   {s}
                   <button
                     type="button"
                     onClick={() => setSkills(skills.filter((sk) => sk !== s))}
                     className="text-muted-foreground transition-colors hover:text-foreground"
+                    aria-label={`Remove ${s}`}
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -319,7 +323,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
         <button
           type="submit"
           disabled={!canSubmit}
-          className="group flex h-11 w-full items-center justify-center rounded-lg bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
+          className="group flex h-11 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
         >
           {accept.isPending ? (
             <>
