@@ -4,6 +4,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { CameraPrivacyPanel, cameraSignage } from './camera-privacy-panel';
 
 const view = {
+  retentionManaged: true,
   gateways: [
     { id: 'gw-1', name: 'Front gateway', retentionDays: 7 },
     { id: 'gw-2', name: 'Store gateway', retentionDays: 30 },

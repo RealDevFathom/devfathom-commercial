@@ -18,22 +18,30 @@ const PURPOSE: Record<CameraPrivacyVertical, { en: string; ur: string }> = {
 };
 
 /** The notice to print and display at the entrance, in English and Urdu. */
-export function cameraSignage(vertical: CameraPrivacyVertical, retentionDays: number | null) {
+export function cameraSignage(
+  vertical: CameraPrivacyVertical,
+  retentionDays: number | null,
+  retentionVerified = true
+) {
   const purpose = PURPOSE[vertical];
   return {
     en: [
       'CCTV cameras in operation.',
       purpose.en,
-      retentionDays === null
-        ? 'No camera recording is configured.'
-        : `Camera stills are kept for ${retentionDays} days unless held for a legal or regulatory reason.`,
+      !retentionVerified
+        ? 'The recording retention period is managed by the gateway owner and must be verified.'
+        : retentionDays === null
+          ? 'No camera recording is configured.'
+          : `Camera stills are kept for ${retentionDays} days unless held for a legal or regulatory reason.`,
     ],
     ur: [
       'سی سی ٹی وی کیمرے زیرِ استعمال ہیں۔',
       purpose.ur,
-      retentionDays === null
-        ? 'کوئی کیمرہ ریکارڈنگ ترتیب نہیں دی گئی۔'
-        : `کیمرے کی تصاویر ${retentionDays} دن تک محفوظ رکھی جاتی ہیں، سوائے اس کے کہ کسی قانونی یا ضابطہ جاتی وجہ سے روکی جائیں۔`,
+      !retentionVerified
+        ? 'ریکارڈنگ برقرار رکھنے کی مدت گیٹ وے کا مالک منظم کرتا ہے اور اس کی تصدیق ضروری ہے۔'
+        : retentionDays === null
+          ? 'کوئی کیمرہ ریکارڈنگ ترتیب نہیں دی گئی۔'
+          : `کیمرے کی تصاویر ${retentionDays} دن تک محفوظ رکھی جاتی ہیں، سوائے اس کے کہ کسی قانونی یا ضابطہ جاتی وجہ سے روکی جائیں۔`,
     ],
   };
 }
@@ -59,10 +67,11 @@ export function CameraPrivacyPanel({
   revokeGrantAction: (data: FormData) => void | Promise<void>;
 }) {
   // The notice promises the longest period any gateway keeps a still.
-  const retentionDays = view.gateways.length
-    ? Math.max(...view.gateways.map((gateway) => gateway.retentionDays))
-    : null;
-  const signage = cameraSignage(vertical, retentionDays);
+  const retentionDays =
+    view.retentionManaged && view.gateways.length
+      ? Math.max(...view.gateways.map((gateway) => gateway.retentionDays))
+      : null;
+  const signage = cameraSignage(vertical, retentionDays, view.retentionManaged);
   return (
     <div className="space-y-6">
       <SectionCard eyebrow="Signage" title="Camera notice" titleLevel={2}>
@@ -85,7 +94,18 @@ export function CameraPrivacyPanel({
       </SectionCard>
 
       <SectionCard eyebrow="Retention" title="Retention days" titleLevel={2}>
-        {view.gateways.length === 0 ? (
+        {!view.retentionManaged ? (
+          <div className="space-y-2 text-sm text-text-muted">
+            <p>
+              Retention is controlled on the owner-provisioned gateway. The registry value is not a
+              verified statement of how long footage is kept, so it cannot be edited here.
+            </p>
+            <p>
+              Verify the policy with the gateway owner before publishing a numeric retention notice.
+              Until then, the signage does not make a retention promise.
+            </p>
+          </div>
+        ) : view.gateways.length === 0 ? (
           <p className="text-sm text-text-muted">No active camera gateway is enrolled.</p>
         ) : (
           <div className="grid gap-4 md:grid-cols-2">

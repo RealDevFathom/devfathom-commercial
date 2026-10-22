@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 import { CameraTile } from '@/components/camera/camera-tile';
 import { useEntitlements } from '@/components/entitlements-provider';
@@ -10,6 +10,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { trpc } from '@/lib/trpc';
 import { RestaurantCameraWizard, type CameraWizardValues } from './restaurant-camera-wizard';
 import { RestaurantCameraPlayer } from './restaurant-camera-player';
+import { RestaurantCameraGateways } from './restaurant-camera-gateways';
 
 const diagnostics = {
   'not-configured':
@@ -67,7 +68,7 @@ export function RestaurantCamerasConsole() {
   const gateways = trpc.restaurantCameras.listGateways.useQuery(undefined, {
     enabled: enabled && gatewayAvailable,
   });
-  const staff = trpc.restaurantStaff.list.useQuery(undefined, {
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
     enabled: enabled && gatewayAvailable,
   });
   const recordings = trpc.restaurantCameras.listRecordings.useQuery(
@@ -77,12 +78,7 @@ export function RestaurantCamerasConsole() {
       retry: false,
     }
   );
-  const branches = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const item of staff.data ?? [])
-      if (item.primaryBranch) map.set(item.primaryBranch.id, item.primaryBranch.name);
-    return [...map].map(([id, name]) => ({ id, name }));
-  }, [staff.data]);
+  const branches = (branchesQuery.data ?? []).filter((branch) => branch.active);
   const test = trpc.restaurantCameras.testConnection.useMutation();
   const register = trpc.restaurantCameras.register.useMutation({
     onSuccess: () => {
@@ -154,10 +150,18 @@ export function RestaurantCamerasConsole() {
         gateways={gateways.data ?? []}
         gatewaysLoading={gateways.isLoading}
         gatewaysError={gateways.isError}
+        branchesLoading={branchesQuery.isLoading}
+        branchesError={branchesQuery.isError}
         onTest={onTest}
         onSubmit={onSubmit}
         busy={test.isPending || register.isPending}
         ownerProvisioned={ownerProvisioned}
+      />
+      <RestaurantCameraGateways
+        branches={branches}
+        branchesLoading={branchesQuery.isLoading}
+        branchesError={branchesQuery.isError}
+        gateways={gateways.data ?? []}
       />
       <SectionCard eyebrow="Live view" title="Camera feeds">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

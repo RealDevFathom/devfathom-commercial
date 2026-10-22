@@ -7,6 +7,7 @@ import { hasModule } from '@/lib/entitlements';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '@/server/audit';
 import { adminProcedure, router } from '@/server/trpc';
+import { cameraGatewayRuntime } from '@/lib/restaurant/camera-gateway-runtime';
 
 /**
  * CAM-3 camera privacy settings, one contract for both verticals. Pharmacy
@@ -41,6 +42,8 @@ export type CameraPrivacyGrant = {
 export type CameraPrivacyView = {
   gateways: CameraPrivacyGateway[];
   grants: CameraPrivacyGrant[];
+  /** False when retention is owned by the external gateway, not this registry. */
+  retentionManaged: boolean;
 };
 
 const GRANT_HISTORY = 50;
@@ -92,6 +95,7 @@ export async function loadCameraPrivacy(
     return {
       gateways: gateways.map(({ id, name, retentionDays }) => ({ id, name, retentionDays })),
       grants: await grantViews(db, grants, new Map(cameras.map((c) => [c.id, c.name])), now),
+      retentionManaged: true,
     };
   }
   const [gateways, cameras, grants] = await Promise.all([
@@ -102,6 +106,7 @@ export async function loadCameraPrivacy(
   return {
     gateways: gateways.map(({ id, name, retentionDays }) => ({ id, name, retentionDays })),
     grants: await grantViews(db, grants, new Map(cameras.map((c) => [c.id, c.name])), now),
+    retentionManaged: cameraGatewayRuntime.mode !== 'mediamtx',
   };
 }
 
@@ -183,6 +188,12 @@ export const cameraPrivacyRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const organizationId = organizationFor(ctx, input);
+      if (input.vertical === 'restaurant' && cameraGatewayRuntime.mode === 'mediamtx') {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Retention is controlled by the owner-provisioned camera gateway.',
+        });
+      }
       if (!(await setCameraRetention(ctx.db, input.vertical, organizationId, input))) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Camera gateway not found.' });
       }

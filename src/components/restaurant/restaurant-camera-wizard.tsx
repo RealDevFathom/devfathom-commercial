@@ -36,6 +36,8 @@ export function RestaurantCameraWizard({
   gateways,
   gatewaysLoading = false,
   gatewaysError = false,
+  branchesLoading = false,
+  branchesError = false,
   onTest,
   onSubmit,
   busy = false,
@@ -46,6 +48,8 @@ export function RestaurantCameraWizard({
   gateways: CameraWizardGateway[];
   gatewaysLoading?: boolean;
   gatewaysError?: boolean;
+  branchesLoading?: boolean;
+  branchesError?: boolean;
   onTest: (
     values: CameraWizardValues
   ) => Promise<{ outcome: 'ok' | 'auth-failed' | 'unreachable'; discoveredProfile?: string }>;
@@ -125,6 +129,21 @@ export function RestaurantCameraWizard({
           camera; it does not configure the DVR. Stored credentials do not rotate gateway or DVR
           credentials. After registration, ask the owner to bind the registered camera, then run its
           connection check.
+        </p>
+      )}
+      {branchesLoading && (
+        <p className="mb-4 text-sm text-text-muted" role="status">
+          Loading authorized branches…
+        </p>
+      )}
+      {branchesError && (
+        <p className="mb-4 text-sm text-destructive" role="alert">
+          Authorized branches could not be loaded. Camera registration is unavailable.
+        </p>
+      )}
+      {!branchesLoading && !branchesError && branches.length === 0 && (
+        <p className="mb-4 text-sm text-text-muted">
+          No active branches are available in your management scope.
         </p>
       )}
       {branches.length > 1 && (
@@ -277,7 +296,17 @@ export function RestaurantCameraWizard({
             </label>
           )}
           <div className="md:col-span-2 flex flex-wrap gap-3">
-            <Button type="submit" disabled={busy || pending || !effectiveBranchId || !gatewayId}>
+            <Button
+              type="submit"
+              disabled={
+                busy ||
+                pending ||
+                branchesLoading ||
+                branchesError ||
+                !effectiveBranchId ||
+                !gatewayId
+              }
+            >
               {ownerProvisioned || tested ? 'Register camera' : 'Test connection'}
             </Button>
             {!ownerProvisioned && !tested && outcome && (

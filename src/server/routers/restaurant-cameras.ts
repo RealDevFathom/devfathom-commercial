@@ -32,6 +32,12 @@ function entitled(ctx: { entitlements: Parameters<typeof hasModule>[0] }) {
   }
 }
 
+function organizationId(ctx: TRPCContext) {
+  const id = ctx.entitlements.organizationId ?? ctx.session?.user.organizationId;
+  if (!id) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  return id;
+}
+
 function requireCameraGateway() {
   if (!cameraGatewayRuntime.available) {
     throw new TRPCError({
@@ -64,13 +70,17 @@ export const restaurantCamerasRouter = router({
   listGateways: adminProcedure.query(async ({ ctx }) => {
     entitled(ctx);
     const now = new Date();
-    const rows = await ctx.db.restaurantCameraGateway.findMany({ orderBy: { createdAt: 'desc' } });
+    const rows = await ctx.db.restaurantCameraGateway.findMany({
+      where: { organizationId: organizationId(ctx) },
+      orderBy: { createdAt: 'desc' },
+    });
     return rows.map((row) => ({
       id: row.id,
       organizationId: row.organizationId,
       branchId: row.branchId,
       name: row.name,
       status: row.status,
+      baseUrl: row.baseUrl,
       revokedAt: row.revokedAt,
       lastSeenAt: row.lastSeenAt,
       retentionDays: row.retentionDays,
@@ -119,12 +129,46 @@ export const restaurantCamerasRouter = router({
     .mutation(async ({ ctx, input }) => {
       entitled(ctx);
       const found = await ctx.db.restaurantCameraGateway.findUnique({
-        where: { id: input.gatewayId },
-        select: { id: true },
+        where: { id: input.gatewayId, organizationId: organizationId(ctx) },
+        select: { id: true, branchId: true },
       });
       if (!found) throw new TRPCError({ code: 'NOT_FOUND', message: 'Gateway not found.' });
+      await requireBranch(ctx, found.branchId);
       const result = await rotateCameraGatewaySecret(ctx.db, found.id);
       return { gateway: { id: result.gateway.id }, enrollmentSecret: result.secret };
+    }),
+  gatewayRevocationActors: adminProcedure
+    .input(strict({ gatewayId: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      entitled(ctx);
+      const tenantId = organizationId(ctx);
+      const gateway = await ctx.db.restaurantCameraGateway.findUnique({
+        where: { id: input.gatewayId, organizationId: tenantId },
+        select: { branchId: true },
+      });
+      if (!gateway) throw new TRPCError({ code: 'NOT_FOUND', message: 'Gateway not found.' });
+      await requireBranch(ctx, gateway.branchId);
+      const actingStaff = await ctx.db.restaurantStaffProfile.findFirst({
+        where: { organizationId: tenantId, userId: ctx.session.user.id, status: 'ACTIVE' },
+        select: { id: true, displayName: true },
+      });
+      if (!actingStaff)
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Active staff profile required.' });
+      const approvers = await ctx.db.restaurantStaffProfile.findMany({
+        where: {
+          organizationId: tenantId,
+          id: { not: actingStaff.id },
+          status: 'ACTIVE',
+          OR: [
+            { primaryBranchId: gateway.branchId },
+            { jobRoles: { some: { branchId: gateway.branchId } } },
+            { directCapabilityGrants: { some: { branchId: gateway.branchId } } },
+          ],
+        },
+        select: { id: true, displayName: true },
+        orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+      });
+      return { actingStaff, approvers };
     }),
   revokeGateway: adminProcedure
     .input(
@@ -141,9 +185,10 @@ export const restaurantCamerasRouter = router({
       entitled(ctx);
       annotateAudit(ctx, { skipInput: true });
       const gateway = await ctx.db.restaurantCameraGateway.findUnique({
-        where: { id: input.gatewayId },
+        where: { id: input.gatewayId, organizationId: organizationId(ctx) },
       });
       if (!gateway) throw new TRPCError({ code: 'NOT_FOUND', message: 'Gateway not found.' });
+      await requireBranch(ctx, gateway.branchId);
       let record;
       try {
         record = buildCoAuthorizationRecord({

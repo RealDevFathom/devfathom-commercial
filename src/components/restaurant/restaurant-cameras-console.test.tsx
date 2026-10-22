@@ -31,8 +31,18 @@ vi.mock('@/lib/trpc', () => ({
       register: { useMutation: vi.fn(() => ({ isPending: false })) },
       issueStreamGrant: { useMutation: vi.fn(() => ({ isPending: false })) },
       setRetention: { useMutation: vi.fn(() => ({ isPending: false })) },
+      enrollGateway: { useMutation: vi.fn(() => ({ isPending: false })) },
+      rotateGatewaySecret: { useMutation: vi.fn(() => ({ isPending: false })) },
+      revokeGateway: { useMutation: vi.fn(() => ({ isPending: false })) },
+      gatewayRevocationActors: {
+        useQuery: vi.fn(() => ({ data: undefined, isLoading: false, isError: false })),
+      },
     },
-    restaurantStaff: { list: { useQuery: vi.fn(() => ({ data: [] })) } },
+    restaurantStaff: {
+      listBranches: {
+        useQuery: vi.fn(() => ({ data: [], isLoading: false, isError: false })),
+      },
+    },
   },
 }));
 
