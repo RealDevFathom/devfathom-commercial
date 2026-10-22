@@ -27,6 +27,7 @@ beforeEach(() => {
   });
   m.tenant.mockImplementation(async (_org, callback) =>
     callback({
+      branchRegulatoryProfile: { findFirst: vi.fn() },
       restaurantSopEvidence: { findFirst: m.sop },
       restaurantBranchAssignment: { findUnique: m.branch },
       messageAttachment: { findFirst: m.attachment },

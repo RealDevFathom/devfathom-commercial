@@ -11,6 +11,7 @@ vi.mock('@/lib/storage', async (importOriginal) => {
 import { StorageUnavailableError } from '@/lib/storage';
 import { GET } from './route';
 const db = {
+  branchRegulatoryProfile: { findFirst: vi.fn() },
   restaurantSopEvidence: { findFirst: vi.fn() },
   restaurantBranchAssignment: { findUnique: vi.fn() },
   messageAttachment: { findFirst: vi.fn() },
@@ -28,6 +29,7 @@ beforeEach(() => {
   mocks.actor.mockResolvedValue(actor());
   mocks.tenantDb.mockImplementation(async (_org, fn) => fn(db));
   mocks.getUpload.mockResolvedValue(Buffer.from([1, 2, 3]));
+  db.branchRegulatoryProfile.findFirst.mockResolvedValue(null);
   db.restaurantSopEvidence.findFirst.mockResolvedValue(null);
   db.messageAttachment.findFirst.mockResolvedValue(null);
 });
@@ -99,6 +101,21 @@ describe('private attachment delivery', () => {
     mocks.actor.mockResolvedValue(actor('ADMIN'));
     db.restaurantBranchAssignment.findUnique.mockResolvedValue(null);
     expect((await read('sop.png')).status).toBe(200);
+  });
+
+  it('hides regulatory licence evidence from non-admin members', async () => {
+    db.branchRegulatoryProfile.findFirst.mockResolvedValue({ id: 'profile_1' });
+    expect((await read('licence.pdf')).status).toBe(404);
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+    expect(db.branchRegulatoryProfile.findFirst).toHaveBeenCalledWith({
+      where: { licenceEvidenceFileRef: '/api/files/licence.pdf' },
+      select: { id: true },
+    });
+
+    mocks.actor.mockResolvedValue(actor('ADMIN'));
+    expect((await read('licence.pdf')).status).toBe(200);
+    expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'licence.pdf');
+    expect(mocks.tenantDb.mock.calls.every(([org]) => org === 'org_a')).toBe(true);
   });
 
   it('keeps chat membership required even for admins', async () => {

@@ -55,6 +55,18 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   }
   const organization = actor.organization;
 
+  // Licence evidence is part of the admin-only regulatory profile. Keep the
+  // existence of both the profile and its evidence hidden from other members.
+  const licenceEvidence = await withTenantDb(organization.id, (db) =>
+    db.branchRegulatoryProfile.findFirst({
+      where: { licenceEvidenceFileRef: '/api/files/' + name },
+      select: { id: true },
+    })
+  );
+  if (licenceEvidence && session.user.role !== 'ADMIN') {
+    return new Response('Not found', { status: 404 });
+  }
+
   const sopEvidence = await withTenantDb(organization.id, (db) =>
     db.restaurantSopEvidence.findFirst({
       where: { storageRef: '/api/files/' + name },
