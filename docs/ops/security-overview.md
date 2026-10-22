@@ -29,7 +29,7 @@ Tenant data is separated at three layers.
 
 **Tests:** RLS tests exist per milestone; `bun run test:rls` runs the tenant-isolation check on a disposable database; `qa.yml` runs RLS regressions against Postgres 16.
 
-TODO(confirm): the list of tables deliberately outside RLS (for example `rate_limit_buckets` and other platform tables). A quick scan of migrations could not determine this reliably, because RLS is enabled in more than one way.
+**Tables outside RLS:** the only one is `rate_limit_buckets` (migration `20261021120000_rate_limit_buckets`). It is used without tenant context by `src/lib/rate-limit.ts`. This comes from reading the migrations. TODO(confirm): verify it with a `pg_class` check (`relrowsecurity`) on a migrated database.
 
 ## 2. Roles
 
@@ -58,8 +58,8 @@ TODO(confirm): the list of tables deliberately outside RLS (for example `rate_li
 - Last **5–60 minutes** (default 30), then expire.
 - Act as an active tenant **ADMIN** of that organization; refused if the organization has none.
 - Start through a one-use launch token.
-- Are written to `PlatformAuditLog`, and **every active tenant admin gets an in-app notification** with the staff member's name, the reason and the end time.
-- Tenant consent is **not** required before a session starts. TODO(confirm): whether that is the intended policy.
+- Are written to `PlatformAuditLog`, and **every active tenant admin gets an in-app notification** with the staff member's name, the reason and the end time. The notification is created in the same transaction, so if it fails the session is not created.
+- **No tenant consent** is needed before a session starts. TODO(confirm), policy question for Inky: should consent be required?
 
 ### Restaurant staff
 `RestaurantJobRole` and capabilities, audited `StaffCapabilityGrant`, operator credentials, registered devices and co-authorization for sensitive actions.
@@ -114,7 +114,7 @@ Three capabilities are **exact-grant-only** (`EXACT_GRANT_ONLY_ACTIONS`, `src/li
 ## 7. Open items
 
 - `fix/abac-deny-precedence` is unmerged. Update sections 2 and 3 when it lands.
-- Tables outside RLS (section 1).
-- Whether support sessions should need tenant consent (section 2).
+- Confirm `rate_limit_buckets` is the only table outside RLS with a `pg_class` check on a migrated database (section 1).
+- Policy question for Inky: should support sessions require tenant consent? Today they don't; admins are notified in the same transaction (section 2).
 - IAM review and access to secrets (sections 4 and 5).
 - `vercel.json` and the Vercel variables can probably be removed.
