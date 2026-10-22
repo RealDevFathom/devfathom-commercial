@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-160-verify-wha-159-frozen-install-repair-independently
+Branch: WHA-160-verify-wha-159-frozen-install-repair-independently
+HEAD: 5421e03eae7003270eac65068d3d11443a9eea32
+Mode: applied
+Excluded (secrets): 0
