@@ -16,7 +16,7 @@ import {
 import { appendControlledRestorations } from './controlled-register';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
-import { postSaleReturnEntry } from './finance-postings';
+import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -734,6 +734,10 @@ export async function returnSaleLine(
         holdingId: holding.id,
         requestedByUserId: scope.actorId,
       },
+    });
+    await postUnidentifiedSaleReturnEntry(db, scope, {
+      holdingId: holding.id,
+      at: saleReturn.createdAt,
     });
     await event(db, scope, line.saleId, 'RETURNED', input.reason, {
       returnId: saleReturn.id,
