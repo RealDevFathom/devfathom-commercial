@@ -743,12 +743,6 @@ export function CheckoutPanel({
                       </dd>
                     </div>
                   ) : null}
-                  <div>
-                    <dt className="text-xs text-text-muted">Comp total</dt>
-                    <dd className="font-mono text-lg font-semibold tabular-nums text-text-strong">
-                      {bill.compTotal}
-                    </dd>
-                  </div>
                 </dl>
                 {bill.status === 'OPEN' ? (
                   <>

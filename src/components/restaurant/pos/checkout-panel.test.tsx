@@ -445,6 +445,14 @@ describe('CheckoutPanel guest and loyalty', () => {
     expect(screen.getByRole('button', { name: 'Redeem' })).toBeDisabled();
   });
 
+  it('does not offer comp totals in the MVP checkout', async () => {
+    const { request } = router();
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText('Bill total')).toBeVisible();
+    expect(screen.queryByText('Comp total')).not.toBeInTheDocument();
+  });
+
   it('reports an unenrolled guest instead of offering a redemption keypad', async () => {
     const { request } = router({
       loyalty: () => ({ ...enrolled, accountId: null, accountActive: false, balance: 0 }),
