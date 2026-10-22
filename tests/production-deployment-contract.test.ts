@@ -94,11 +94,16 @@ describe('production deployment contract', () => {
     const template = read('infra', 'environment.bicep');
     const production = read('infra', 'production.bicepparam');
     const bootstrap = read('infra', 'production.bootstrap.bicepparam');
+    const runtimeRolePreparation = read('prisma', 'prepare-runtime-role.ts');
 
     expect(template).toContain('param bootstrapDatabase bool = false');
     expect(template).toContain(
       "var migrateDatabaseCommand = 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/prepare-runtime-role.ts && bun prisma/sync-catalog.ts'"
     );
+    expect(runtimeRolePreparation).toContain(
+      'GRANT EXECUTE ON FUNCTION public.similarity_op(text, text) TO ${ROLE_NAME}'
+    );
+    expect(runtimeRolePreparation).not.toMatch(/GRANT EXECUTE ON ALL FUNCTIONS/i);
     // Production still never seeds: the migration-only command carries no
     // `prisma/seed.ts` (the seed suffix is reachable only from the staging-only
     // `seedDatabase` branch), and production disables seed and bootstrap alike.

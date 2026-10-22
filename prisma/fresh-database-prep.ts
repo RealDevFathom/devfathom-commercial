@@ -142,8 +142,6 @@ export function renderPreparation(
         throw new Error('Writer column inventory rejected.');
       return `GRANT INSERT (${columns.map(quoteIdentifier).join(', ')}) ON TABLE public.${quoteIdentifier(name)} TO ${runtime};`;
     }),
-    '-- Pharmacy catalogue fuzzy search uses only this pg_trgm operator function.',
-    `GRANT EXECUTE ON FUNCTION public.similarity_op(text, text) TO ${runtime};`,
     '-- Built-in catalog reads, set_config and pg_advisory_xact_lock require their standard EXECUTE privileges.',
     '-- No sequence grants: the canonical writer uses client-generated IDs. Any future SQL needing UPDATE requires separate exact review.',
   ];

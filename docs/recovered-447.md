@@ -9,9 +9,10 @@ minimal current-code change instead.
 
 - `f09ced61` (`fix(pharmacy): grant app role pg_trgm search execution (#233)`): current extension
   preparation revokes `PUBLIC EXECUTE`, while the pharmacy RLS fixture demonstrates that catalogue
-  search needs the exact `public.similarity_op(text,text)` function. The fresh-database runtime grant
-  plan now grants only that function to the fixed runtime role. It does not grant all extension
-  functions or broaden table privileges.
+  search needs the exact `public.similarity_op(text,text)` function. The executable runtime-role
+  preparation step now grants only that function to the fixed runtime role after creating it. This
+  repairs both fresh and existing installations whenever the supported deployment command runs; it
+  does not grant all extension functions or broaden table privileges.
 
 ## Skipped
 
@@ -26,6 +27,7 @@ minimal current-code change instead.
   the fixes assessed above; the needed pg_trgm behavior was applied directly to today's deployment
   preparation path.
 
-No migration is added. The current deployment contract emits reviewed runtime-role grants from
-`renderPreparation`; keeping the exact function grant there avoids embedding a role-dependent grant
-in the schema migration ledger.
+No migration is added. Production runs `prepare-runtime-role.ts` after extension preparation and
+`prisma migrate deploy`; keeping the exact grant in that executable, repeatable step avoids a fresh
+database failure from referring to `devfathom_app` before the role is created and remediates existing
+databases whose extension preparation previously revoked `PUBLIC EXECUTE`.

@@ -89,6 +89,10 @@ export async function prepareRuntimeRole(
     ['database connect', `GRANT CONNECT ON DATABASE devfathom TO ${ROLE_NAME}`],
     ['schema usage', `GRANT USAGE ON SCHEMA public TO ${ROLE_NAME}`],
     [
+      'pharmacy catalogue similarity function',
+      `GRANT EXECUTE ON FUNCTION public.similarity_op(text, text) TO ${ROLE_NAME}`,
+    ],
+    [
       'existing tables',
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${ROLE_NAME}`,
     ],
