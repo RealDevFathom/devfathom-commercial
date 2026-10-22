@@ -1,0 +1,13 @@
+{
+  "name": "small pharmacy cohort remains suppressed",
+  "input": {
+    "vertical": "PHARMACY",
+    "current": { "from": "2026-09-01T00:00:00.000Z", "cutoff": "2026-10-01T00:00:00.000Z" },
+    "comparison": { "from": "2026-08-01T00:00:00.000Z", "cutoff": "2026-09-01T00:00:00.000Z" },
+    "currency": "PKR",
+    "facts": [{ "ref": "e1", "metric": "consent_eligible_retail_count", "value": "9", "period": "CURRENT", "cohortSize": 9, "coverage": "COMPLETE", "freshAt": "2026-10-01T00:00:00.000Z" }],
+    "actions": [{ "ref": "a1", "kind": "RETAIL_REVIEW" }]
+  },
+  "providerOutput": null,
+  "expected": { "status": "INSUFFICIENT_DATA", "failureCode": "SPARSE", "recommendationCount": 0 }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "provider cannot invent customer evidence",
+  "input": {
+    "vertical": "PHARMACY",
+    "current": { "from": "2026-09-01T00:00:00.000Z", "cutoff": "2026-10-01T00:00:00.000Z" },
+    "comparison": { "from": "2026-08-01T00:00:00.000Z", "cutoff": "2026-09-01T00:00:00.000Z" },
+    "currency": "PKR",
+    "facts": [{ "ref": "e1", "metric": "receipt_count", "value": "31", "period": "CURRENT", "cohortSize": 17, "coverage": "COMPLETE", "freshAt": "2026-10-01T00:00:00.000Z" }],
+    "actions": [{ "ref": "a1", "kind": "RETAIL_REVIEW" }]
+  },
+  "providerOutput": {
+    "recommendations": [{ "evidenceRefs": ["e99"], "actionRef": "a1", "hypothesis": "REVIEW_RETAIL", "limitations": ["OBSERVATIONAL"] }]
+  },
+  "expected": { "status": "INVALID", "failureCode": "OUTPUT", "recommendationCount": 0 }
+}

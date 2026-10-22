@@ -1,0 +1,18 @@
+{
+  "name": "pharmacy retention review from complete aggregate evidence",
+  "input": {
+    "vertical": "PHARMACY",
+    "current": { "from": "2026-09-01T00:00:00.000Z", "cutoff": "2026-10-01T00:00:00.000Z" },
+    "comparison": { "from": "2026-08-01T00:00:00.000Z", "cutoff": "2026-09-01T00:00:00.000Z" },
+    "currency": "PKR",
+    "facts": [
+      { "ref": "e1", "metric": "receipt_count", "value": "84", "period": "CURRENT", "cohortSize": 42, "coverage": "COMPLETE", "freshAt": "2026-10-01T00:00:00.000Z" },
+      { "ref": "e2", "metric": "consent_eligible_retail_count", "value": "28", "period": "CURRENT", "cohortSize": 28, "coverage": "COMPLETE", "freshAt": "2026-10-01T00:00:00.000Z" }
+    ],
+    "actions": [{ "ref": "a1", "kind": "RETAIL_REVIEW" }]
+  },
+  "providerOutput": {
+    "recommendations": [{ "evidenceRefs": ["e1", "e2"], "actionRef": "a1", "hypothesis": "REVIEW_RETAIL", "limitations": ["OBSERVATIONAL", "COST_UNKNOWN"] }]
+  },
+  "expected": { "status": "READY", "failureCode": null, "recommendationCount": 1 }
+}

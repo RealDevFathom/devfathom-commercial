@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   settings: vi.fn(),
   assist: vi.fn(),
   capture: vi.fn(),
+  audit: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -26,8 +27,8 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(),
-  isAuditExcludedPath: () => true,
-  recordTrpcAudit: vi.fn(),
+  isAuditExcludedPath: () => false,
+  recordTrpcAudit: mocks.audit,
 }));
 vi.mock('@/lib/ai/ask-fathom-settings', () => ({ readAskFathomSettings: mocks.settings }));
 vi.mock('@/lib/pharmacy/marketing-assistance', async () => ({
@@ -178,8 +179,39 @@ describe('marketing workflow authorization', () => {
   });
   it('strips branch context from the allowed AI input', async () => {
     mocks.settings.mockResolvedValue({ askFathomEnabled: true });
+    mocks.assist.mockResolvedValue({
+      available: true,
+      body: 'Welcome back. Reply STOP to opt out.',
+      approved: false,
+    });
     await caller().assist({ ...input, occasion: 'WELCOME', tone: 'FRIENDLY' });
     expect(mocks.assist).toHaveBeenCalledWith({ occasion: 'WELCOME', tone: 'FRIENDLY' });
+  });
+  it('audit-logs successful and denied AI actions without recording generated copy', async () => {
+    mocks.settings.mockResolvedValue({ askFathomEnabled: true });
+    mocks.assist.mockResolvedValue({
+      available: true,
+      body: 'Welcome back. Reply STOP to opt out.',
+      approved: false,
+    });
+    await caller().assist({ ...input, occasion: 'WELCOME', tone: 'FRIENDLY' });
+    expect(mocks.audit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        path: 'assist',
+        type: 'mutation',
+        outcome: 'SUCCESS',
+        input: { ...input, occasion: 'WELCOME', tone: 'FRIENDLY' },
+      })
+    );
+    expect(JSON.stringify(mocks.audit.mock.calls.at(-1))).not.toContain('Welcome back');
+
+    mocks.branch.mockResolvedValue(null);
+    await expect(
+      caller().assist({ ...input, occasion: 'WELCOME', tone: 'FRIENDLY' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.audit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ path: 'assist', type: 'mutation', outcome: 'FAILURE' })
+    );
   });
 });
 
