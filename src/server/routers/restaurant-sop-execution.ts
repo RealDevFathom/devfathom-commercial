@@ -27,6 +27,8 @@ import {
 import { summarizeSopReport } from '@/lib/restaurant/sop-reporting';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { can, subjectFromSession } from '@/lib/abac';
+import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
+import { claimSopOccurrence } from '@/lib/restaurant/sop-assignment';
 
 /**
  * M7-L4 — the SOP execution router (branch-board reads + operator/verifier commands).
@@ -145,6 +147,50 @@ async function requireReportBranch(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements.organizationId ?? user.organizationId;
   if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.restaurantBranch, organizationId, [branchId], { active: true });
+}
+
+async function executionScope(ctx: TRPCContext, branchId: string) {
+  await requireRestaurantBranchScope(ctx, branchId);
+  const user = ctx.session!.user;
+  const subject = subjectFromSession(user);
+  const [canConfigure, canVerify] = await Promise.all([
+    can(subject, 'restaurant:configure', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }),
+    can(subject, 'sop:verify', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }),
+  ]);
+  const staff = await ctx.db.restaurantStaffProfile.findFirst({
+    where: { userId: user.id, status: 'ACTIVE' },
+    select: {
+      id: true,
+      jobRoles: { where: { branchId }, select: { jobRoleId: true } },
+    },
+  });
+  return {
+    organizationWide: canConfigure || canVerify,
+    staffProfileId: staff?.id ?? null,
+    jobRoleIds: staff?.jobRoles.map((row) => row.jobRoleId) ?? [],
+  };
+}
+
+function visibleOccurrenceFilter(scope: Awaited<ReturnType<typeof executionScope>>) {
+  if (scope.organizationWide) return {};
+  if (!scope.staffProfileId) return { id: { in: [] } };
+  return {
+    OR: [
+      { assignedStaffProfileId: scope.staffProfileId },
+      { claimedByStaffProfileId: scope.staffProfileId },
+      ...(scope.jobRoleIds.length
+        ? [{ poolJobRoleId: { in: scope.jobRoleIds }, claimedByStaffProfileId: null }]
+        : []),
+    ],
+  };
 }
 
 // ── Read: branch board ────────────────────────────────────────────────────────
@@ -270,7 +316,11 @@ export const restaurantSopExecutionRouter = router({
 
   listOccurrences: completeProcedure.input(BoardFilterSchema).query(async ({ ctx, input }) => {
     assertSopDepth(ctx.entitlements, 'sop.execution');
-    const where: Record<string, unknown> = { branchId: input.branchId };
+    const scope = await executionScope(ctx, input.branchId);
+    const where: Record<string, unknown> = {
+      branchId: input.branchId,
+      ...visibleOccurrenceFilter(scope),
+    };
 
     if (input.businessDate) {
       // Filter by business date (stored as UTC @db.Date midnight)
@@ -304,6 +354,9 @@ export const restaurantSopExecutionRouter = router({
         startedAt: true,
         submittedAt: true,
         resolvedAt: true,
+        assignedStaffProfileId: true,
+        poolJobRoleId: true,
+        claimedByStaffProfileId: true,
         assignment: {
           select: {
             id: true,
@@ -341,6 +394,9 @@ export const restaurantSopExecutionRouter = router({
           startedAt: true,
           submittedAt: true,
           resolvedAt: true,
+          assignedStaffProfileId: true,
+          poolJobRoleId: true,
+          claimedByStaffProfileId: true,
           branchId: true,
           assignment: {
             select: {
@@ -415,7 +471,60 @@ export const restaurantSopExecutionRouter = router({
         },
       });
       if (!occ) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+      const scope = await executionScope(ctx, occ.branchId);
+      if (!scope.organizationWide) {
+        const visible =
+          Boolean(scope.staffProfileId) &&
+          (occ.assignedStaffProfileId === scope.staffProfileId ||
+            occ.claimedByStaffProfileId === scope.staffProfileId ||
+            (occ.claimedByStaffProfileId === null &&
+              occ.poolJobRoleId !== null &&
+              scope.jobRoleIds.includes(occ.poolJobRoleId)));
+        if (!visible) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+      }
       return occ;
+    }),
+
+  claim: completeProcedure
+    .input(z.object({ occurrenceId: OCCURRENCE_ID }).strict())
+    .mutation(async ({ ctx, input }) => {
+      assertSopDepth(ctx.entitlements, 'sop.execution');
+      const occurrence = await ctx.db.restaurantSopOccurrence.findUnique({
+        where: { id: input.occurrenceId },
+        select: { branchId: true, status: true },
+      });
+      if (!occurrence) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+      if (!['SCHEDULED', 'REJECTED'].includes(occurrence.status)) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'Only scheduled or rejected role-pool work can be claimed.',
+        });
+      }
+      const scope = await executionScope(ctx, occurrence.branchId);
+      if (!scope.staffProfileId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'An active staff profile linked to your account is required to claim SOP work.',
+        });
+      }
+      const outcome = await claimSopOccurrence(ctx.db, input.occurrenceId, scope.staffProfileId);
+      if (outcome.status === 'NOT_CLAIMABLE') {
+        throw new TRPCError({
+          code: outcome.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'FORBIDDEN',
+          message:
+            outcome.reason === 'NOT_ELIGIBLE'
+              ? 'You are not eligible for this role-pool occurrence.'
+              : 'This occurrence is not available to claim.',
+        });
+      }
+      if (outcome.status === 'CLAIMED') {
+        annotateAudit(ctx, {
+          targetType: 'RestaurantSopOccurrence',
+          targetId: input.occurrenceId,
+          description: 'Claimed SOP occurrence from role pool',
+        });
+      }
+      return outcome;
     }),
 
   // ── Commands: execution lifecycle ─────────────────────────────────────────
