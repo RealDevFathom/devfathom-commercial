@@ -14,7 +14,7 @@ import type { LedgerScope } from './stock-ledger';
 export class PharmacyLoyaltyError extends Error {
   constructor(
     readonly reason:
-      | 'CONSENT_REQUIRED'
+      | 'LOYALTY_CONSENT_REQUIRED'
       | 'CUSTOMER_NOT_FOUND'
       | 'SALE_NOT_OPEN'
       | 'SALE_NOT_LINKED'
@@ -36,7 +36,8 @@ export async function linkCustomerToSale(
     orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
     select: { granted: true, revokedAt: true },
   });
-  if (!consent?.granted || consent.revokedAt) throw new PharmacyLoyaltyError('CONSENT_REQUIRED');
+  if (!consent?.granted || consent.revokedAt)
+    throw new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED');
   const sale = await db.pharmacySale.findFirst({
     where: {
       id: input.saleId,
@@ -164,7 +165,8 @@ export async function redeemSalePoints(
     orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
     select: { granted: true, revokedAt: true },
   });
-  if (!consent?.granted || consent.revokedAt) throw new PharmacyLoyaltyError('CONSENT_REQUIRED');
+  if (!consent?.granted || consent.revokedAt)
+    throw new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED');
   const balance = await db.pharmacyLoyaltyPointsEntry.aggregate({
     where: {
       organizationId: scope.organizationId,
