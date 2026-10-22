@@ -227,15 +227,15 @@ export function PlatformLoginForm() {
             required
             minLength={8}
             maxLength={256}
-            className={`${inputClass} pr-10`}
+            className={`${inputClass} pr-12`}
             placeholder="Enter your password"
           />
           <button
             type="button"
             onClick={() => setShowPassword((visible) => !visible)}
             aria-label={showPassword ? 'Hide password' : 'Show password'}
-            className="absolute top-1/2 right-3 -translate-y-1/2 text-text-muted transition-colors hover:text-foreground"
-            tabIndex={-1}
+            aria-pressed={showPassword}
+            className="absolute top-1/2 right-0 flex size-11 -translate-y-1/2 items-center justify-center rounded-[3px] text-text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
           </button>
