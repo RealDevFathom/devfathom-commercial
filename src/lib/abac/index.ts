@@ -48,13 +48,15 @@ async function customDecision(
   const overrides = user.permissionOverrides.filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
-  if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
-  if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
-  if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
+  const matchingRules = [...overrides, ...roleRules];
+  // A user override and an organization-role rule are both explicit tenant
+  // policy. Evaluate them as one set so a narrower ALLOW can never bypass a
+  // DENY from the other source.
+  if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
+  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
   return null;
 }
 
