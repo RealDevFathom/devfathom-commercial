@@ -107,6 +107,19 @@ export type ScheduleDiscountsInput = {
   year: number;
 };
 
+function isDiscountableItem(item: DiscountableItem): boolean {
+  const prices = [item.sellingPriceMinor, item.costMinor, item.mrpMinor];
+  return (
+    !item.isPrescription &&
+    !item.isControlled &&
+    prices.every(Number.isSafeInteger) &&
+    item.costMinor >= 0 &&
+    item.sellingPriceMinor > 0 &&
+    item.sellingPriceMinor <= item.mrpMinor &&
+    item.costMinor <= item.sellingPriceMinor
+  );
+}
+
 const proposalSchema = z
   .object({
     proposals: z
@@ -221,15 +234,9 @@ export async function scheduleDiscountDrafts(
     config.holidays ?? PAKISTAN_HOLIDAY_DATES
   );
   const items = await dependencies.loadItems(input.organizationId);
-  const safeItems = items.filter(
-    (item) =>
-      !item.isPrescription &&
-      !item.isControlled &&
-      item.costMinor >= 0 &&
-      item.sellingPriceMinor > 0 &&
-      item.sellingPriceMinor <= item.mrpMinor &&
-      item.costMinor <= item.sellingPriceMinor
-  );
+  // Minor-unit prices must be integers so the percentage cap cannot be weakened by
+  // floating-point or malformed monetary values before a draft reaches review.
+  const safeItems = items.filter(isDiscountableItem);
   const categoryCaps = new Map<string, number>();
   for (const item of safeItems) {
     const cap = Math.floor(

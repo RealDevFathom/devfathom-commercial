@@ -51,6 +51,22 @@ function dependencies(
         isPrescription: false,
         isControlled: true,
       },
+      {
+        category: 'Above MRP',
+        sellingPriceMinor: 1200,
+        costMinor: 500,
+        mrpMinor: 1100,
+        isPrescription: false,
+        isControlled: false,
+      },
+      {
+        category: 'Malformed money',
+        sellingPriceMinor: 1000.5,
+        costMinor: 500,
+        mrpMinor: 1100,
+        isPrescription: false,
+        isControlled: false,
+      },
     ]),
     savePendingDraft: vi.fn(async () => ({ id: 'draft-1' })),
     audit: vi.fn(),
@@ -113,6 +129,10 @@ describe('AI discount scheduler', () => {
     ]);
     expect(mocks.generate.mock.calls[0][0].prompt).not.toContain('Rx');
     expect(mocks.generate.mock.calls[0][0].prompt).not.toContain('Controlled');
+    expect(mocks.generate.mock.calls[0][0].prompt).not.toContain('Above MRP');
+    expect(mocks.generate.mock.calls[0][0].prompt).not.toContain('Malformed money');
+    expect(deps.loadConfig).toHaveBeenCalledWith('org-1');
+    expect(deps.loadItems).toHaveBeenCalledWith('org-1');
     expect(deps.savePendingDraft).toHaveBeenCalledWith(
       'org-1',
       expect.objectContaining({ status: 'PENDING' })
