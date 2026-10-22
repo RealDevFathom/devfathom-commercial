@@ -240,6 +240,45 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     });
   });
 
+  it("refuses a profile whose province does not match the branch's province", async () => {
+    await owner.query(`UPDATE pharmacy_branches SET "provinceCode" = 'SD' WHERE id = $1`, [
+      branchId,
+    ]);
+    try {
+      await withTenantDb(organizationId, async (db) => {
+        await expect(caller(db).saveRegulatoryProfile(profile)).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: 'The regulatory profile province must match the branch province.',
+        });
+      });
+    } finally {
+      await owner.query(`UPDATE pharmacy_branches SET "provinceCode" = 'PB' WHERE id = $1`, [
+        branchId,
+      ]);
+    }
+  });
+
+  it('refuses licence and qualified-person windows that do not cover the effective date', async () => {
+    await withTenantDb(organizationId, async (db) => {
+      await expect(
+        caller(db).saveRegulatoryProfile({ ...profile, licenceValidTo: profile.effectiveFrom })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'The licence must be valid on the date this profile takes effect.',
+      });
+      await expect(
+        caller(db).saveRegulatoryProfile({
+          ...profile,
+          qualifiedPersonValidFrom: '2026-09-03',
+        })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message:
+          "The qualified person's registration must be valid on the date this profile takes effect.",
+      });
+    });
+  });
+
   it('saves version 1 and leaves the licences step outstanding while the rules are provisional', async () => {
     await withTenantDb(organizationId, async (db) => {
       const saved = await caller(db).saveRegulatoryProfile(profile);

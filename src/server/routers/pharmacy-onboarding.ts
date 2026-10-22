@@ -62,6 +62,10 @@ function midnightUtc(isoDate: string): Date {
   return new Date(`${isoDate}T00:00:00.000Z`);
 }
 
+function canonicalProvinceCode(code: string): string {
+  return code.startsWith('PK-') ? code : `PK-${code}`;
+}
+
 /**
  * `evaluatePharmacyReadiness` answers the commercial-package gate by reading the
  * assigned package's own vertical. `platform_packages` is FORCE row-level
@@ -343,10 +347,26 @@ export const pharmacyOnboardingRouter = router({
 
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { organizationId, id: input.branchId, active: true },
-        select: { id: true },
+        select: { id: true, provinceCode: true },
       });
       if (!branch) {
         throw badRequest('branchId', 'Choose one of this workspace’s active branches.');
+      }
+      const licenceValidFrom = midnightUtc(input.licenceValidFrom);
+      const licenceValidTo = midnightUtc(input.licenceValidTo);
+      const qualifiedPersonValidFrom = midnightUtc(input.qualifiedPersonValidFrom);
+      const qualifiedPersonValidTo = midnightUtc(input.qualifiedPersonValidTo);
+      if (licenceValidFrom > effectiveFrom || licenceValidTo <= effectiveFrom) {
+        throw badRequest(
+          'licenceValidTo',
+          'The licence must be valid on the date this profile takes effect.'
+        );
+      }
+      if (qualifiedPersonValidFrom > effectiveFrom || qualifiedPersonValidTo <= effectiveFrom) {
+        throw badRequest(
+          'qualifiedPersonValidTo',
+          "The qualified person's registration must be valid on the date this profile takes effect."
+        );
       }
 
       const jurisdictions = await jurisdictionsInForce(ctx, effectiveFrom);
@@ -357,6 +377,12 @@ export const pharmacyOnboardingRouter = router({
         throw badRequest(
           'provinceCode',
           'No jurisdiction rules are published for that province on the date you chose. Pick a province that appears in the list.'
+        );
+      }
+      if (canonicalProvinceCode(branch.provinceCode) !== input.provinceCode) {
+        throw badRequest(
+          'provinceCode',
+          'The regulatory profile province must match the branch province.'
         );
       }
       if (
@@ -421,13 +447,13 @@ export const pharmacyOnboardingRouter = router({
             },
             licenceCategory: input.licenceCategory,
             licenceNumber: input.licenceNumber,
-            licenceValidFrom: midnightUtc(input.licenceValidFrom),
-            licenceValidTo: midnightUtc(input.licenceValidTo),
+            licenceValidFrom,
+            licenceValidTo,
             licenceEvidenceFileRef: input.licenceEvidenceFileRef,
             permittedSchedules: input.permittedSchedules,
             qualifiedPersonRegistration: input.qualifiedPersonRegistration,
-            qualifiedPersonValidFrom: midnightUtc(input.qualifiedPersonValidFrom),
-            qualifiedPersonValidTo: midnightUtc(input.qualifiedPersonValidTo),
+            qualifiedPersonValidFrom,
+            qualifiedPersonValidTo,
             qualifiedPersonCoverageRosterRef: input.qualifiedPersonCoverageRosterRef,
             ntn: input.ntn?.trim() ? input.ntn.trim() : null,
             strn: input.strn?.trim() ? input.strn.trim() : null,
