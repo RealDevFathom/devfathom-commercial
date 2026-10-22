@@ -12,7 +12,7 @@
  */
 import { capabilityMatches } from './capabilities';
 import type { AuthzDb } from '@/lib/authz';
-import { POLICIES, type Action } from './policies';
+import { MANDATORY_POLICIES, POLICIES, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
 
 export type { Action } from './policies';
@@ -77,7 +77,18 @@ export async function can(
   }
   try {
     const decision = await customDecision(db, subject.id, action, env.now);
-    if (decision !== null) return decision;
+    if (decision === false) return false;
+    if (decision === true) {
+      for (const constraint of MANDATORY_POLICIES[action] ?? []) {
+        try {
+          if (!(await constraint({ subject, resource, env, db }))) return false;
+        } catch (err) {
+          console.error(`[abac] mandatory constraint for "${action}" threw:`, err);
+          return false;
+        }
+      }
+      return true;
+    }
   } catch (err) {
     console.error(`[abac] custom permission lookup for "${action}" threw:`, err);
     return false;

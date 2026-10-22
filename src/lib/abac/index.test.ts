@@ -156,6 +156,61 @@ describe('custom ABAC decisions', () => {
     ).resolves.toBe(false);
   });
 
+  it.each([
+    { status: 'PENDING', userId: employee.id, targetRole: 'ADMIN' },
+    { status: 'APPROVED', userId: 'user_2', targetRole: 'EMPLOYEE' },
+  ])('does not let persisted wildcard grants bypass resignation constraints', async (resource) => {
+    const db = authorizationDb({ rolePermissions: [{ capability: '*', effect: 'ALLOW' }] });
+
+    await expect(
+      can(
+        { ...employee, role: 'ADMIN' },
+        'resignation:review',
+        { type: 'Resignation', ...resource },
+        { db }
+      )
+    ).resolves.toBe(false);
+  });
+
+  it('applies resignation constraints to an ALLOW override while preserving valid review', async () => {
+    const db = authorizationDb({
+      overrides: [{ capability: 'resignation:review', effect: 'ALLOW' }],
+    });
+    const reviewer = { ...employee, role: 'ADMIN' };
+
+    await expect(
+      can(
+        reviewer,
+        'resignation:review',
+        { type: 'Resignation', status: 'PENDING', userId: reviewer.id, targetRole: 'ADMIN' },
+        { db }
+      )
+    ).resolves.toBe(false);
+    await expect(
+      can(
+        reviewer,
+        'resignation:review',
+        { type: 'Resignation', status: 'PENDING', userId: 'user_2', targetRole: 'EMPLOYEE' },
+        { db }
+      )
+    ).resolves.toBe(true);
+  });
+
+  it('does not let a persisted grant allow HR to review an administrator resignation', async () => {
+    const db = authorizationDb({
+      rolePermissions: [{ capability: 'resignation:review', effect: 'ALLOW' }],
+    });
+
+    await expect(
+      can(
+        { ...employee, role: 'HR' },
+        'resignation:review',
+        { type: 'Resignation', status: 'PENDING', userId: 'user_2', targetRole: 'ADMIN' },
+        { db }
+      )
+    ).resolves.toBe(false);
+  });
+
   it('falls back to built-in policy only when no custom rule matches', async () => {
     const db = authorizationDb({});
 

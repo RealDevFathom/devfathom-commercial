@@ -111,6 +111,20 @@ const isHrOrAdmin: Policy = ({ subject }) => subject.role === 'ADMIN' || subject
 const isActiveMember: Policy = ({ subject }) =>
   Boolean(subject.status) && ACTIVE_STATUSES.has(subject.status!);
 
+const canReviewResignationResource: Policy = ({ subject, resource }) =>
+  resource?.status === 'PENDING' &&
+  resource?.userId !== subject.id &&
+  !(subject.role === 'HR' && resource?.targetRole === 'ADMIN');
+
+/**
+ * Constraints which remain mandatory after a persisted capability establishes
+ * action eligibility. Unlike POLICIES (an allow-list), every constraint here
+ * must pass.
+ */
+export const MANDATORY_POLICIES: Partial<Record<Action, Policy[]>> = {
+  'resignation:review': [canReviewResignationResource],
+};
+
 export const POLICIES: Record<Action, Policy[]> = {
   // ── Coarse role gates (back the tRPC procedures) ──────────────────────────
   'admin:access': [isAdmin],
@@ -135,11 +149,7 @@ export const POLICIES: Record<Action, Policy[]> = {
   // isn't your own, and — for HR reviewers — that the resignee isn't an admin
   // (an admin's departure is reviewed by another admin).
   'resignation:review': [
-    ({ subject, resource }) =>
-      (subject.role === 'ADMIN' || subject.role === 'HR') &&
-      resource?.status === 'PENDING' &&
-      resource?.userId !== subject.id &&
-      !(subject.role === 'HR' && resource?.targetRole === 'ADMIN'),
+    (ctx) => isHrOrAdmin(ctx) && canReviewResignationResource(ctx),
   ],
 
   // Restaurant M2 (§8): staff & operator-credential management is granted through
