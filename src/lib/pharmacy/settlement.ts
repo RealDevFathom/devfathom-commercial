@@ -15,6 +15,7 @@ import { firstCloseIsFinal } from './migration/first-close';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
 import type { LedgerScope } from './stock-ledger';
 import { paymentSandboxAdmitted } from './payment-sandbox-admission';
+import { assertStoredBranchMayOperate } from './regulatory';
 import { authenticatePharmacyCommand, validateLeasedReceiptReplay } from './sales';
 import type { PharmacyCommandAuthentication, PharmacyLeasedReceipt } from './sales';
 
@@ -304,6 +305,17 @@ export async function applyPharmacyTender(
   const settled = tenderedMinor + input.amountMinor === totalMinor;
   if (input.leasedReceipt && !settled)
     throw new PharmacySettlementError('LEASE_REQUIRES_SETTLEMENT');
+
+  // Re-evaluate the branch's live regulatory record at the point the sale
+  // would become final. Activation and onboarding checks are not durable
+  // permission: the pharmacy's own licence or qualified-person cover may have
+  // expired while the branch remained active. Keeping this inside the owning
+  // transaction covers counter, delivery, sandbox and offline-replay callers.
+  if (settled) {
+    await assertStoredBranchMayOperate(db, scope.organizationId, scope.branchId, {
+      name: 'pharmacy.sale.complete',
+    });
+  }
 
   // Same owning transaction as the sale/tender/event. UPDATE locks and rechecks
   // the cursor, so a second command cannot consume the same number. Reserved

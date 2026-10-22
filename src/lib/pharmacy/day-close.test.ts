@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
+vi.mock('./regulatory', () => ({ assertStoredBranchMayOperate: vi.fn() }));
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { applyPharmacyTender, openPharmacyDrawer, requirePharmacyDayOpen } from './settlement';
 import { closePharmacyDay, readPharmacyClose } from './day-close';

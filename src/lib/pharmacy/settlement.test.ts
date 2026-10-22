@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 const postings = vi.hoisted(() => ({ postTenderEntry: vi.fn(), postSaleLineEntry: vi.fn() }));
+const regulatory = vi.hoisted(() => ({ assertStoredBranchMayOperate: vi.fn() }));
+vi.mock('./regulatory', () => ({
+  assertStoredBranchMayOperate: regulatory.assertStoredBranchMayOperate,
+}));
 // Keep settlement, receipt identity, idempotency and evidence logic real.
 vi.mock('./finance-postings', async () => ({
   ...(await vi.importActual<typeof import('./finance-postings')>('./finance-postings')),
@@ -25,6 +29,8 @@ import {
 } from './settlement';
 
 describe('pharmacy settlement invariants', () => {
+  beforeEach(() => regulatory.assertStoredBranchMayOperate.mockResolvedValue(undefined));
+
   it('uses exact integer minor units for split coverage', () => {
     expect(
       saleTotalMinor([
@@ -209,6 +215,12 @@ describe('pharmacy settlement invariants', () => {
 
     expect(first).toMatchObject({ tenderId: 'tender-1', receiptNumber: 41, replayed: false });
     expect(replay).toMatchObject({ tenderId: 'tender-1', receiptNumber: 41, replayed: true });
+    expect(regulatory.assertStoredBranchMayOperate).toHaveBeenCalledExactlyOnceWith(
+      db,
+      'org-1',
+      'branch-1',
+      { name: 'pharmacy.sale.complete' }
+    );
     expect(tenderCreate).toHaveBeenCalledTimes(1);
     expect(saleUpdate).toHaveBeenCalledTimes(1);
     expect(db.pharmacySaleEvent.create).toHaveBeenCalledTimes(1);

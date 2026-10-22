@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('./regulatory', () => ({ assertStoredBranchMayOperate: vi.fn() }));
+
 // Integrated tip: settlement also posts finance entries and requests counter evidence.
 // This suite is about receipt leases, so those collaborators are stubbed here.
 vi.mock('./finance-postings', async (importOriginal) => ({

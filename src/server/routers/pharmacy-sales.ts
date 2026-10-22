@@ -88,6 +88,10 @@ import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import {
+  assertStoredBranchMayOperate,
+  BranchOperationDeniedError,
+} from '@/lib/pharmacy/regulatory';
+import {
   applyPharmacyTender,
   closePharmacyDrawer,
   cutPharmacyDailyClose,
@@ -176,6 +180,11 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof BranchOperationDeniedError)
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'This branch is not currently licensed to complete pharmacy sales.',
+    });
   if (error instanceof ControlledRestorationDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyPaymentSandboxError)
@@ -1211,9 +1220,18 @@ export const pharmacySalesRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           try {
+            const scope = await scopeFor(ctx, input.branchId);
+            if (input.action === 'complete') {
+              await assertStoredBranchMayOperate(
+                txDb(tx),
+                scope.organizationId,
+                scope.branchId,
+                { name: 'pharmacy.sale.complete' }
+              );
+            }
             return await changeSaleStatus(
               txDb(tx),
-              await scopeFor(ctx, input.branchId),
+              scope,
               input.saleId,
               input.action,
               input.reason,
