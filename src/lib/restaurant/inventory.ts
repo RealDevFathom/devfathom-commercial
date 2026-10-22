@@ -514,12 +514,13 @@ export type LowStockFlag = {
 /** Derive on-hand for each rule's (stockItem, location) and flag when < threshold. */
 export async function evaluateLowStockRules(
   db: ScopedDb,
-  filter: { locationId?: string; stockItemId?: string } = {}
+  filter: { locationId?: string; stockItemId?: string; authorizedBranchIds: string[] }
 ): Promise<LowStockFlag[]> {
   const rules = await db.restaurantLowStockRule.findMany({
     where: {
       ...(filter.locationId ? { locationId: filter.locationId } : {}),
       ...(filter.stockItemId ? { stockItemId: filter.stockItemId } : {}),
+      location: { branchId: { in: filter.authorizedBranchIds } },
     },
     select: { id: true, stockItemId: true, locationId: true, threshold: true },
   });
@@ -660,22 +661,29 @@ export type StockOnHandRow = {
 /** Derived on-hand per (stockItem × location) with negative flag. */
 export async function listStockOnHand(
   db: ScopedDb,
-  filter: { locationId?: string; stockItemId?: string; branchId?: string }
-): Promise<StockOnHandRow[]> {
-  // Determine location IDs for this branch when branchId is supplied.
-  let locationIds: string[] | undefined;
-  if (filter.branchId) {
-    const locations = await db.restaurantStockLocation.findMany({
-      where: { branchId: filter.branchId, isActive: true },
-      select: { id: true },
-    });
-    locationIds = locations.map((l) => l.id);
-    if (locationIds.length === 0) return [];
+  filter: {
+    locationId?: string;
+    stockItemId?: string;
+    branchId?: string;
+    authorizedBranchIds: string[];
   }
+): Promise<StockOnHandRow[]> {
+  const locations = await db.restaurantStockLocation.findMany({
+    where: {
+      branchId: filter.branchId
+        ? { equals: filter.branchId, in: filter.authorizedBranchIds }
+        : { in: filter.authorizedBranchIds },
+      isActive: true,
+      ...(filter.locationId ? { id: filter.locationId } : {}),
+    },
+    select: { id: true },
+  });
+  const locationIds = locations.map((location) => location.id);
+  if (locationIds.length === 0) return [];
 
   const balances = await deriveBalances(db, {
     stockItemIds: filter.stockItemId ? [filter.stockItemId] : undefined,
-    locationIds: filter.locationId ? [filter.locationId] : locationIds,
+    locationIds,
   });
   if (balances.length === 0) return [];
 
@@ -735,6 +743,7 @@ export async function listStockOnHand(
 }
 
 export type ListMovementsInput = {
+  authorizedBranchIds: string[];
   stockItemId?: string;
   locationId?: string;
   reason?: StockMovementReason;
@@ -750,6 +759,7 @@ export async function listStockMovements(db: ScopedDb, input: ListMovementsInput
     where: {
       ...(input.stockItemId ? { stockItemId: input.stockItemId } : {}),
       ...(input.locationId ? { locationId: input.locationId } : {}),
+      location: { branchId: { in: input.authorizedBranchIds } },
       ...(input.reason ? { reason: input.reason } : {}),
       ...(input.from || input.to
         ? {
@@ -784,6 +794,7 @@ export async function listStockMovements(db: ScopedDb, input: ListMovementsInput
 }
 
 export type ListCountsInput = {
+  authorizedBranchIds: string[];
   locationId?: string;
   status?: 'DRAFT' | 'SUBMITTED' | 'POSTED';
   cursor?: string;
@@ -795,6 +806,7 @@ export async function listStockCounts(db: ScopedDb, input: ListCountsInput) {
   const rows = await db.restaurantStockCount.findMany({
     where: {
       ...(input.locationId ? { locationId: input.locationId } : {}),
+      location: { branchId: { in: input.authorizedBranchIds } },
       ...(input.status ? { status: input.status } : {}),
       ...(input.cursor ? { id: { lt: input.cursor } } : {}),
     },
@@ -817,6 +829,7 @@ export async function listStockCounts(db: ScopedDb, input: ListCountsInput) {
 }
 
 export type ListTransfersInput = {
+  authorizedBranchIds: string[];
   sourceLocationId?: string;
   destinationLocationId?: string;
   status?: 'DRAFT' | 'DISPATCHED' | 'RECEIVED' | 'CANCELLED';
@@ -832,6 +845,8 @@ export async function listStockTransfers(db: ScopedDb, input: ListTransfersInput
       ...(input.destinationLocationId
         ? { destinationLocationId: input.destinationLocationId }
         : {}),
+      sourceLocation: { branchId: { in: input.authorizedBranchIds } },
+      destinationLocation: { branchId: { in: input.authorizedBranchIds } },
       ...(input.status ? { status: input.status } : {}),
       ...(input.cursor ? { id: { lt: input.cursor } } : {}),
     },
@@ -855,12 +870,18 @@ export async function listStockTransfers(db: ScopedDb, input: ListTransfersInput
 
 export async function listStockBatches(
   db: ScopedDb,
-  filter: { stockItemId?: string; cursor?: string; limit?: number }
+  filter: {
+    stockItemId?: string;
+    cursor?: string;
+    limit?: number;
+    authorizedBranchIds: string[];
+  }
 ) {
   const limit = Math.min(filter.limit ?? 50, 200);
   const rows = await db.restaurantStockBatch.findMany({
     where: {
       ...(filter.stockItemId ? { stockItemId: filter.stockItemId } : {}),
+      receipt: { branchId: { in: filter.authorizedBranchIds } },
       ...(filter.cursor ? { id: { lt: filter.cursor } } : {}),
     },
     orderBy: { createdAt: 'desc' },

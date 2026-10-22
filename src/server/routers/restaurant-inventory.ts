@@ -4,7 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import { router, capabilityProcedure } from '../trpc';
 import type { TRPCContext } from '../trpc';
-import { resolveRestaurantActor } from '../restaurant-actor';
+import { resolveRestaurantActor, resolveRestaurantActorBranchIds } from '../restaurant-actor';
 import {
   InventoryError,
   createStockItem,
@@ -70,6 +70,10 @@ const readProc = capabilityProcedure('inventory:read');
 const countProc = capabilityProcedure('inventory:count');
 const adjustProc = capabilityProcedure('inventory:adjust');
 const wasteProc = capabilityProcedure('inventory:waste');
+
+async function inventoryReadBranchIds(ctx: TRPCContext): Promise<string[]> {
+  return resolveRestaurantActorBranchIds(ctx);
+}
 
 function stockLocationLimit(limits: Record<string, number>): number {
   const resolution = resolveEntitlementLimit(limits, INVENTORY_STOCK_LOCATIONS_LIMIT);
@@ -250,7 +254,10 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const rows = await listStockOnHand(ctx.db, input).catch(mapInventoryError);
+      const rows = await listStockOnHand(ctx.db, {
+        ...input,
+        authorizedBranchIds: await inventoryReadBranchIds(ctx),
+      }).catch(mapInventoryError);
       return rows.map((r) => ({
         stockItemId: r.stockItemId,
         ingredientName: r.ingredientName,
@@ -279,7 +286,10 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const result = await listStockMovements(ctx.db, input).catch(mapInventoryError);
+      const result = await listStockMovements(ctx.db, {
+        ...input,
+        authorizedBranchIds: await inventoryReadBranchIds(ctx),
+      }).catch(mapInventoryError);
       return {
         items: result.items.map((m) => ({
           ...m,
@@ -358,7 +368,10 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const result = await listStockCounts(ctx.db, input).catch(mapInventoryError);
+      const result = await listStockCounts(ctx.db, {
+        ...input,
+        authorizedBranchIds: await inventoryReadBranchIds(ctx),
+      }).catch(mapInventoryError);
       return { items: result.items, nextCursor: result.nextCursor };
     }),
 
@@ -423,7 +436,10 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const result = await listStockTransfers(ctx.db, input).catch(mapInventoryError);
+      const result = await listStockTransfers(ctx.db, {
+        ...input,
+        authorizedBranchIds: await inventoryReadBranchIds(ctx),
+      }).catch(mapInventoryError);
       return { items: result.items, nextCursor: result.nextCursor };
     }),
 
@@ -523,7 +539,10 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const flags = await evaluateLowStockRules(ctx.db, input).catch(mapInventoryError);
+      const flags = await evaluateLowStockRules(ctx.db, {
+        ...input,
+        authorizedBranchIds: await inventoryReadBranchIds(ctx),
+      }).catch(mapInventoryError);
       return flags.map((f) => ({
         ruleId: f.ruleId,
         stockItemId: f.stockItemId,
@@ -547,7 +566,10 @@ export const restaurantInventoryRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const result = await listStockBatches(ctx.db, input).catch(mapInventoryError);
+      const result = await listStockBatches(ctx.db, {
+        ...input,
+        authorizedBranchIds: await inventoryReadBranchIds(ctx),
+      }).catch(mapInventoryError);
       return { items: result.items, nextCursor: result.nextCursor };
     }),
 });

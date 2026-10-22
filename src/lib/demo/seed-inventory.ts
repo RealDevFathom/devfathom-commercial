@@ -259,7 +259,9 @@ export async function reconcileDemoRestaurantInventory(
     ids.counts.lowStockRules += 1;
   }
 
-  const actualFlags = await evaluateLowStockRules(db);
+  const actualFlags = await evaluateLowStockRules(db, {
+    authorizedBranchIds: Object.values(catalog.branch),
+  });
   const flagById = new Map(actualFlags.map((flag) => [flag.ruleId, flag] as const));
   for (const expected of seed.inventory.lowStockRules) {
     const flag = flagById.get(requiredId(ids.lowStockRule, expected.id, 'low-stock rule'));

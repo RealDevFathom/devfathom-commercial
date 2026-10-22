@@ -99,7 +99,6 @@ vi.mock('@/lib/restaurant/inventory-ledger', () => ({
     }
   },
 }));
-
 import { restaurantInventoryRouter } from './restaurant-inventory';
 import type { TRPCContext } from '../trpc';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -134,6 +133,7 @@ function caller(
   return restaurantInventoryRouter.createCaller({
     db,
     entitlements: {
+      organizationId: 'org_test',
       enabledModules: ['restaurant-pos'],
       activeSeats: 1,
       seatLimit: 50,
@@ -362,6 +362,41 @@ describe('restaurantInventoryRouter', () => {
     expect(flags[0]!.isTriggered).toBe(true);
     expect(flags[0]!.threshold).toBe('5');
     expect(flags[0]!.onHand).toBe('3');
+  });
+
+  it('constrains every inventory reader to the actor inventory branch scope', async () => {
+    mocks.listStockOnHand.mockResolvedValue([]);
+    mocks.listStockMovements.mockResolvedValue({ items: [], nextCursor: null });
+    mocks.listStockCounts.mockResolvedValue({ items: [], nextCursor: null });
+    mocks.listStockTransfers.mockResolvedValue({ items: [], nextCursor: null });
+    mocks.evaluateLowStockRules.mockResolvedValue([]);
+    mocks.listStockBatches.mockResolvedValue({ items: [], nextCursor: null });
+    mocks.can.mockImplementation((_subject, action) =>
+      Promise.resolve(action === 'inventory:read')
+    );
+    mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff_test', primaryBranchId: null }]);
+    mocks.findBranchAssignments.mockResolvedValue([{ branchId: 'branch_1' }]);
+
+    await caller().listStockOnHand({ branchId: 'branch_2' });
+    await caller().listStockMovements({});
+    await caller().listStockCounts({});
+    await caller().listStockTransfers({});
+    await caller().evaluateLowStockRules({});
+    await caller().listStockBatches({});
+
+    for (const reader of [
+      mocks.listStockOnHand,
+      mocks.listStockMovements,
+      mocks.listStockCounts,
+      mocks.listStockTransfers,
+      mocks.evaluateLowStockRules,
+      mocks.listStockBatches,
+    ]) {
+      expect(reader).toHaveBeenCalledWith(
+        db,
+        expect.objectContaining({ authorizedBranchIds: ['branch_1'] })
+      );
+    }
   });
 
   // ── Count lifecycle ───────────────────────────────────────────────────────────

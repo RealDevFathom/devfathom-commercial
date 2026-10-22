@@ -51,3 +51,50 @@ export async function resolveRestaurantActor(ctx: TRPCContext, branchIds: string
   });
   return { staffProfileId: actor.id };
 }
+
+/** Resolve the active restaurant actor's complete readable branch boundary. */
+export async function resolveRestaurantActorBranchIds(ctx: TRPCContext): Promise<string[]> {
+  const user = ctx.session?.user;
+  if (!user) throw new TRPCError({ code: 'UNAUTHORIZED' });
+
+  const actors = await ctx.db.restaurantStaffProfile.findMany({
+    where: { userId: user.id, status: 'ACTIVE' },
+    select: { id: true, primaryBranchId: true },
+    orderBy: { id: 'asc' },
+    take: 2,
+  });
+  if (actors.length !== 1) throw ACTOR_DENIED;
+
+  const configuresAllBranches = await can(
+    subjectFromSession(user),
+    'restaurant:configure',
+    undefined,
+    { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+  );
+  const assignedBranchIds = configuresAllBranches
+    ? undefined
+    : [
+        ...new Set([
+          ...(actors[0]!.primaryBranchId ? [actors[0]!.primaryBranchId] : []),
+          ...(
+            await ctx.db.restaurantBranchAssignment.findMany({
+              where: { userId: user.id },
+              select: { branchId: true },
+            })
+          ).map(({ branchId }) => branchId),
+        ]),
+      ];
+
+  const organizationId = ctx.entitlements?.organizationId ?? user.organizationId;
+  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  const branches = await ctx.db.restaurantBranch.findMany({
+    where: {
+      organizationId,
+      active: true,
+      ...(assignedBranchIds ? { id: { in: assignedBranchIds } } : {}),
+    },
+    select: { id: true },
+  });
+  if (branches.length === 0) throw ACTOR_DENIED;
+  return branches.map(({ id }) => id);
+}

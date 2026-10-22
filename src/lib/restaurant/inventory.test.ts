@@ -487,6 +487,7 @@ describeIfDatabase('M6-L2 inventory operations (real PostgreSQL)', () => {
         const flags = await deps.evaluateLowStockRules(tx, {
           stockItemId: ids.stockItem,
           locationId: ids.locationB,
+          authorizedBranchIds: [ids.branch],
         });
         const flag = flags.find((f) => f.ruleId === rule.id);
         expect(flag).toBeTruthy();
@@ -517,6 +518,7 @@ describeIfDatabase('M6-L2 inventory operations (real PostgreSQL)', () => {
         const flags = await deps.evaluateLowStockRules(tx, {
           stockItemId: ids.stockItem2,
           locationId: ids.locationB,
+          authorizedBranchIds: [ids.branch],
         });
         const flag = flags.find((f) => f.ruleId === rule.id);
         expect(flag!.isTriggered).toBe(false); // 10 is not < 10 → not triggered
@@ -541,7 +543,10 @@ describeIfDatabase('M6-L2 inventory operations (real PostgreSQL)', () => {
           ],
         });
 
-        const rows = await deps.listStockOnHand(tx, { locationId: ids.locationA });
+        const rows = await deps.listStockOnHand(tx, {
+          locationId: ids.locationA,
+          authorizedBranchIds: [ids.branch],
+        });
         const row = rows.find((r) => r.stockItemId === ids.stockItem);
         expect(row).toBeTruthy();
         expect(row!.isNegative).toBe(true);
