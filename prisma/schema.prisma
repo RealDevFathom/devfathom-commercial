@@ -14526,9 +14526,131 @@ model PharmacyWhatsAppConsentArchive {
   archivedAt                  DateTime @default(now()) @db.Timestamp(3)
   expiresAt                   DateTime @db.Timestamp(3)
 
-  @@unique([organizationFingerprint, customerFingerprint, consentChangedAt], map: "pharmacy_wa_consent_archive_event_key")
-  @@index([expiresAt], map: "pharmacy_wa_consent_archive_expiry_idx")
-  @@map("pharmacy_whatsapp_consent_archives")
+/// Per-customer recency/frequency snapshot the metrics job (WP-G2) rebuilds.
+/// One row per retail customer; the 1:1 is pinned by @@unique on the tenant key.
+model CustomerMetrics {
+  customerId      String    @id
+  organizationId  String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  lastPurchaseAt  DateTime?
+  orders90d       Int       @default(0)
+  spend90dMinor   BigInt    @default(0)
+  medianGapDays   Int?
+  churnScore      Int       @default(0)
+  churnBand       String    @default("low")
+  nextRefillDueAt DateTime?
+  computedAt      DateTime
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, customerId])
+  @@index([organizationId, churnBand])
+  @@index([organizationId, nextRefillDueAt])
+  @@map("customer_metrics")
+}
+
+/// One settings row per organization (id == organizationId). Holds budget caps,
+/// quiet hours, send limits and the encrypted WhatsApp credentials.
+model GrowthSettings {
+  organizationId        String   @id @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  monthlyBudgetMinor    Int      @default(0)
+  autoApproveUnderMinor Int      @default(0)
+  quietHoursStart       Int      @default(21)
+  quietHoursEnd         Int      @default(9)
+  maxMsgsPerDay         Int      @default(200)
+  minSecondsBetweenMsgs Int      @default(4)
+  waInstanceName        String?
+  waApiUrl              String?
+  waApiKeyEnc           String?
+  lastMetricsRunAt      DateTime?
+  churnThreshold        Int      @default(60)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("growth_settings")
+}
+
+/// A campaign proposed (by AI or a human), approved, scheduled and sent. The AI
+/// only ever writes `proposed` rows; the server enforces caps regardless.
+model Campaign {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  kind           String
+  status         String    @default("proposed")
+  name           String
+  rationale      String?
+  segment        Json
+  sendAt         DateTime
+  discountType   String?
+  discountValue  Int?
+  codeExpiresAt  DateTime?
+  budgetCapMinor Int
+  spentMinor     Int       @default(0)
+  templateId     String
+  estimatedReach Int       @default(0)
+  createdBy      String
+  approvedBy     String?
+  approvedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  template     MessageTemplate     @relation(fields: [organizationId, templateId], references: [organizationId, id], onDelete: Restrict)
+  recipients   CampaignRecipient[]
+  messages     PharmacyMessageLog[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, status, sendAt])
+  @@map("campaigns")
+}
+
+/// One recipient of a campaign, with its per-customer discount code and the sale
+/// that redeemed it. Redemption always scopes a code to the authenticated tenant.
+model CampaignRecipient {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  campaignId     String
+  customerId     String
+  code           String?
+  status         String    @default("queued")
+  sentAt         DateTime?
+  redeemedAt     DateTime?
+  saleId         String?
+  error          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  campaign Campaign             @relation(fields: [organizationId, campaignId], references: [organizationId, id], onDelete: Restrict)
+  customer PharmacyCustomer     @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  sale     PharmacySale?        @relation(fields: [organizationId, saleId], references: [organizationId, id], onDelete: Restrict)
+  messages PharmacyMessageLog[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, code])
+  @@unique([organizationId, campaignId, customerId])
+  @@index([organizationId, status, campaignId])
+  @@map("campaign_recipients")
+}
+
+/// Org-owned message body with {{var}} placeholders, rendered server-side.
+model MessageTemplate {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  key            String
+  language       String   @default("ur-en")
+  body           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaigns    Campaign[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, key, language])
+  @@map("message_templates")
 }
 
 model PharmacyOrderDeliveryEvidence {

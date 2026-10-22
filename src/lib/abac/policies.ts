@@ -19,6 +19,7 @@ import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 
 export const ALL_ACTIONS = [
   'admin:access', // the legacy "is this person an admin" gate
+  'growth.manage', // growth administration; explicit grant required
   'hr:access', // HR console: people-ops surfaces
   'team:view', // read the team directory
   'team:layoff', // terminate / deactivate a member (resource: { targetRole })
@@ -116,6 +117,10 @@ const isActiveMember: Policy = ({ subject }) =>
 export const POLICIES: Record<Action, Policy[]> = {
   // ── Coarse role gates (back the tRPC procedures) ──────────────────────────
   'admin:access': [isAdmin],
+  // Growth can spend campaign money and contact customers. A coarse tenant ADMIN
+  // role is not sufficient: authorization must come from an explicit capability
+  // (or a non-pharmacy wildcard) through customDecision.
+  'growth.manage': [],
   'hr:access': [isHrOrAdmin],
   'finance:read': [isAdmin], // HR does NOT get finance
   'team:view': [isActiveMember],

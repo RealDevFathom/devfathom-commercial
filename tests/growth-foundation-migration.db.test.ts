@@ -1,0 +1,153 @@
+// @vitest-environment node
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import pg from 'pg';
+import { describe, expect, it } from 'vitest';
+
+const sql = readFileSync(
+  resolve('prisma/migrations/20261021110000_growth_foundation/migration.sql'),
+  'utf8'
+);
+// A disposable database with CREATE SCHEMA permission, using a restricted role.
+const url = process.env.TEST_DATABASE_URL;
+
+describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
+  it('backfills both tenants before enforcing NOT NULL without granting consent', async () => {
+    const client = new pg.Client({ connectionString: url });
+    await client.connect();
+    const schema = `growth_migration_${randomUUID().replaceAll('-', '')}`;
+    try {
+      const role = await client.query(
+        'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
+      );
+      expect(role.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+      await client.query(`CREATE SCHEMA "${schema}"`);
+      await client.query(`SET search_path TO "${schema}"`);
+      await client.query(`
+        SELECT set_config('app.is_platform_admin', 'false', false);
+        SELECT set_config('app.current_organization_id', '', false);
+        CREATE TABLE organizations (id TEXT PRIMARY KEY);
+        CREATE TABLE pharmacy_patients (
+          id TEXT PRIMARY KEY, "organizationId" TEXT NOT NULL, phone TEXT
+        );
+        CREATE TABLE pharmacy_customers (
+          id TEXT PRIMARY KEY, "organizationId" TEXT NOT NULL,
+          "patientId" TEXT, "whatsappOptIn" BOOLEAN,
+          UNIQUE ("organizationId", id)
+        );
+        CREATE TABLE pharmacy_sales (
+          id TEXT PRIMARY KEY, "organizationId" TEXT NOT NULL,
+          UNIQUE ("organizationId", id)
+        );
+        CREATE TABLE pharmacy_message_logs (
+          id TEXT PRIMARY KEY, "organizationId" TEXT NOT NULL, direction TEXT
+        );
+        INSERT INTO organizations VALUES ('a'), ('b');
+        INSERT INTO pharmacy_patients VALUES
+          ('pa', 'a', '0300-1234567'), ('pb', 'b', '0311 7654321');
+        INSERT INTO pharmacy_customers VALUES
+          ('ca', 'a', 'pa', NULL), ('cb', 'b', 'pb', NULL),
+          ('consented', 'a', NULL, true), ('unlinked', 'b', NULL, false);
+      `);
+      for (const table of ['pharmacy_customers', 'pharmacy_patients']) {
+        await client.query(`
+          ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY;
+          ALTER TABLE "${table}" FORCE ROW LEVEL SECURITY;
+          CREATE POLICY tenant_isolation ON "${table}"
+          USING (
+            current_setting('app.is_platform_admin', true) = 'true'
+            OR "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')
+          );
+        `);
+      }
+      // Confirm the owner cannot see the fixture before the migration elevates.
+      expect((await client.query('SELECT * FROM pharmacy_customers')).rows).toEqual([]);
+      // This migration has no procedural blocks or semicolons in SQL literals.
+      // Send each statement separately, with no test-owned outer transaction:
+      // only the migration's explicit BEGIN/COMMIT may retain local settings.
+      const statements = sql
+        .replace(/--[^\n]*/g, '')
+        .split(';')
+        .filter((s) => s.trim());
+      const backfilledCounts: number[] = [];
+      for (const statement of statements) {
+        const result = await client.query(statement);
+        if (result.command === 'UPDATE') {
+          expect(result.rowCount).toBeGreaterThan(0);
+          backfilledCounts.push(result.rowCount!);
+        }
+      }
+      expect(backfilledCounts).toEqual([2, 2]);
+      const context = await client.query(
+        "SELECT current_setting('app.is_platform_admin', true) AS admin"
+      );
+      expect(context.rows[0].admin).not.toBe('true');
+      expect((await client.query('SELECT * FROM pharmacy_customers')).rows).toEqual([]);
+      // Elevate separately for inspection after confirming migration scope ended.
+      await client.query('BEGIN');
+      await client.query("SELECT set_config('app.is_platform_admin', 'true', true)");
+      const customers = await client.query(`
+        SELECT id, "whatsappOptIn", "whatsappE164"
+        FROM pharmacy_customers ORDER BY id
+      `);
+      expect(customers.rows).toEqual([
+        { id: 'ca', whatsappOptIn: false, whatsappE164: '+923001234567' },
+        { id: 'cb', whatsappOptIn: false, whatsappE164: '+923117654321' },
+        { id: 'consented', whatsappOptIn: true, whatsappE164: null },
+        { id: 'unlinked', whatsappOptIn: false, whatsappE164: null },
+      ]);
+      const column = await client.query(
+        `
+        SELECT is_nullable FROM information_schema.columns
+        WHERE table_schema = $1 AND table_name = 'pharmacy_customers'
+          AND column_name = 'whatsappOptIn'
+      `,
+        [schema]
+      );
+      expect(column.rows[0].is_nullable).toBe('NO');
+      const metrics = await client.query(
+        `SELECT column_name, data_type FROM information_schema.columns
+         WHERE table_schema = $1 AND
+         ((table_name = 'customer_metrics' AND column_name = 'spend90dMinor')
+         OR (table_name = 'growth_settings' AND column_name = 'lastMetricsRunAt'))
+         ORDER BY column_name`,
+        [schema]
+      );
+      expect(metrics.rows).toEqual([
+        { column_name: 'lastMetricsRunAt', data_type: 'timestamp without time zone' },
+        { column_name: 'spend90dMinor', data_type: 'bigint' },
+      ]);
+      const constraints = await client.query(
+        `SELECT conname FROM pg_constraint
+         WHERE connamespace = $1::regnamespace
+           AND conname IN (
+             'customer_metrics_nonnegative_check', 'customer_metrics_churn_check',
+             'growth_settings_money_check', 'growth_settings_limits_check',
+             'campaigns_money_check', 'campaigns_reach_check', 'campaigns_discount_check'
+           ) ORDER BY conname`,
+        [schema]
+      );
+      expect(constraints.rows.map((row) => row.conname)).toEqual([
+        'campaigns_discount_check',
+        'campaigns_money_check',
+        'campaigns_reach_check',
+        'customer_metrics_churn_check',
+        'customer_metrics_nonnegative_check',
+        'growth_settings_limits_check',
+        'growth_settings_money_check',
+      ]);
+      const codeIndex = await client.query(
+        `SELECT indexdef FROM pg_indexes
+         WHERE schemaname = $1 AND indexname = 'campaign_recipients_organizationId_code_key'`,
+        [schema]
+      );
+      expect(codeIndex.rows[0].indexdef).toContain('("organizationId", code)');
+    } finally {
+      await client.query('ROLLBACK');
+      await client.query('RESET search_path');
+      await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      await client.end();
+    }
+  });
+});
