@@ -1,0 +1,2 @@
+import base from './vitest.config.ts';
+export default {...base,cacheDir:"/Users/Saad/Developer/devfathom-consolidation-20261013/validation/vite",test:{...base.test,include:["src/components/restaurant/print-bridge-enrollment.test.tsx", "src/components/restaurant/restaurant-devices-console.test.tsx", "tests/print-bridge-enrollment.test.ts", "tests/print-bridge-token.test.ts", "tests/print-bridge.test.ts"],testNamePattern:/^(?!.*sends exact receipt bytes to an isolated fake TCP printer)/,maxWorkers:1,cache:false,experimental:{fsModuleCache:false}}};

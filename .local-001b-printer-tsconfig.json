@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "types": ["vitest/globals", "@testing-library/jest-dom/vitest", "./src/types/next-auth"]
+  },
+  "files": [
+    "src/components/restaurant/printer-inventory-panel.tsx",
+    "src/components/restaurant/printer-inventory-panel.test.tsx"
+  ],
+  "include": [],
+  "exclude": [
+    "node_modules",
+    "prisma",
+    "scripts",
+    "tests"
+  ]
+}

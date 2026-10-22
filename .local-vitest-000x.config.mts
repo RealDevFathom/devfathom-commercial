@@ -1,0 +1,2 @@
+import base from './vitest.config.ts';
+export default {...base,cacheDir:"/Users/Saad/Developer/devfathom-consolidation-20261013/validation/vite",test:{...base.test,include:["src/lib/browser-uuid.contract.test.ts", "src/components/restaurant/pos/order-pad.test.tsx"],testNamePattern:"synthetic browser UUID contract|composes item taps locally|reuses an uncertain retry key|reuses a mutation retry key",maxWorkers:1,cache:false,experimental:{fsModuleCache:false}}};

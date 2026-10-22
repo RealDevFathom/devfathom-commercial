@@ -1,0 +1,2 @@
+import base from './vitest.config.ts';
+export default {...base, cacheDir:"/Users/Saad/Developer/devfathom-consolidation-20261013/validation/vite", test:{...base.test, include:["src/lib/tenant-brand.test.ts", "src/components/layout/app-shell.tenant-identity.test.tsx", "src/lib/restaurant/loyalty.test.ts", "src/components/platform/platform-shell.test.tsx", "src/components/restaurant/pos/drawer-panel.test.tsx"], maxWorkers:1, cache:false, experimental:{fsModuleCache:false}}};

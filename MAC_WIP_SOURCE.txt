@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/devfathom-consolidation-20261013/candidate
+Branch: integration/consolidation-20261019
+HEAD: fa3658b715bf2e672f7e38f983b558d8d86b5a75
+Mode: applied
+Excluded (secrets): 61

@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "incremental": false,
+    "noEmit": true
+  },
+  "files": [
+    "src/app/api/restaurant/print-bridge/route.test.ts",
+    "src/lib/restaurant/printing/printing.test.ts",
+    "src/lib/restaurant/printing/registered-locking.test.ts",
+    "src/lib/restaurant/printing/registered-routing-producers.test.ts",
+    "src/lib/restaurant/printing/registered-routing-service.test.ts",
+    "src/lib/restaurant/printing/registered-routing.test.ts",
+    "src/lib/restaurant/printing/registered-routing.ts",
+    "src/lib/restaurant/printing/service.ts",
+    "src/lib/restaurant/printing/width-snapshot.test.ts"
+  ],
+  "include": [],
+  "exclude": []
+}
