@@ -23,7 +23,9 @@ describe('issue #260 default-department repair migration', () => {
   });
 
   it('crosses FORCE RLS only for the migration transaction', () => {
-    expect(migration).toContain("SET LOCAL app.is_platform_admin = 'true'");
+    expect(migration).toMatch(
+      /BEGIN;\s+SET LOCAL app\.is_platform_admin = 'true';[\s\S]+ON CONFLICT \("organizationId", "key"\) DO NOTHING;\s+COMMIT;/
+    );
     expect(migration).not.toContain('SET app.is_platform_admin');
   });
 });

@@ -2,6 +2,8 @@
 --
 -- The department catalog is FORCE RLS, so this transaction-local setting is
 -- required for a migration that deliberately repairs every organization.
+BEGIN;
+
 SET LOCAL app.is_platform_admin = 'true';
 
 INSERT INTO "organization_departments"
@@ -44,3 +46,5 @@ CROSS JOIN LATERAL (
 -- A different key using the same name must remain a visible unique-constraint
 -- error instead of silently leaving the required key absent.
 ON CONFLICT ("organizationId", "key") DO NOTHING;
+
+COMMIT;
