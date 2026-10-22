@@ -4,9 +4,10 @@ import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platf
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
 import { PlatformMfaCard } from '@/components/platform/platform-mfa-card';
+import { AiSettingsConsole } from '@/components/platform/ai-settings-console';
 
 export default async function PlatformSettingsPage() {
-  await requirePlatformRead('/platform/settings');
+  const actor = await requirePlatformRead('/platform/settings');
   const settings = await withPlatformDb((db) =>
     db.platformSetting.findMany({ orderBy: [{ category: 'asc' }, { key: 'asc' }] })
   );
@@ -28,6 +29,7 @@ export default async function PlatformSettingsPage() {
         title="Platform settings"
         description="Versioned operational defaults live in PostgreSQL. Secrets remain in the deployment environment and are never rendered here."
       />
+      {actor.role === 'SUPER_ADMIN' ? <AiSettingsConsole /> : null}
       <div className="mt-7 grid gap-7 xl:grid-cols-[1fr_400px]">
         <div className="space-y-7">
           <PlatformMfaCard />

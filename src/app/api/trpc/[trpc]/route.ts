@@ -135,6 +135,23 @@ function procedurePaths(req: Request): string[] {
   return decodeURIComponent(pathname.slice(start + prefix.length)).split(',');
 }
 
+function isPlatformAiSettingsRequest(req: Request): boolean {
+  const paths = procedurePaths(req);
+  return paths.length > 0 && paths.every((path) => path.startsWith('aiSettings.'));
+}
+
+function servePlatformAiSettings(req: Request) {
+  return fetchRequestHandler({
+    endpoint: TRPC_ENDPOINT,
+    req,
+    router: appRouter,
+    // AI settings procedures establish their own platform transaction after
+    // authenticating the platform cookie; tenant context must never be used.
+    createContext: () =>
+      ({ requestMeta: { ip: clientIp(req), userAgent: req.headers.get('user-agent') } }) as never,
+  });
+}
+
 /** What a failed entry of an aborted response says about itself. */
 type Failure = { path?: string; code?: string; message: string };
 
@@ -399,6 +416,7 @@ async function handleAnonymous(req: Request): Promise<Response> {
 
 async function handler(req: Request) {
   try {
+    if (isPlatformAiSettingsRequest(req)) return servePlatformAiSettings(req);
     const actor = await resolveTenantActor({ request: req });
     if (!actor) return handleAnonymous(req);
 
