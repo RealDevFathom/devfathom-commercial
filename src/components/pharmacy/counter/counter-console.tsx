@@ -279,6 +279,15 @@ function ScopedPharmacyCounterConsole({
   const submittedQuery = submittedSearch.query;
   const scannerRevision = useRef(0);
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
+  const [acceptedSubstitute, setAcceptedSubstitute] = useState<{
+    requestedMedicineId: string;
+    requestedText: string;
+    suppliedMedicineId: string;
+    suppliedPresentationId: string;
+    saleUnit: SaleUnitKind;
+    quantity: number;
+    equivalenceBasis: string;
+  } | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantity, setQuantity] = useState(1);
   const [lotOverride, setLotOverride] = useState<CounterLotOverrideValue | null>(null);
@@ -511,6 +520,7 @@ function ScopedPharmacyCounterConsole({
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
+  const recordAcceptedSubstitute = trpc.pharmacySales.recordAcceptedSubstitute.useMutation();
   const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
   const redeemLoyalty = trpc.pharmacySales.redeemPoints.useMutation();
   const authenticatePack = trpc.pharmacySales.authenticatePack.useMutation();
@@ -590,7 +600,6 @@ function ScopedPharmacyCounterConsole({
           medicineId: activeRow.medicineId,
           presentationId: activeRow.presentationId,
           quantityCanonicalUnits: requestedCanonicalUnits,
-          ...(preview ? { referencePriceMinor: preview.unitPriceMinor } : {}),
         }
       : null;
   const substitutesQuery = trpc.pharmacySales.substituteProposals.useQuery(
@@ -936,6 +945,28 @@ function ScopedPharmacyCounterConsole({
         setNotice({ tone: 'warning', message: added.blocked });
         return;
       }
+      if (
+        acceptedSubstitute &&
+        acceptedSubstitute.suppliedMedicineId === activeRow.medicineId &&
+        acceptedSubstitute.suppliedPresentationId === activeRow.presentationId
+      ) {
+        await recordAcceptedSubstitute.mutateAsync({
+          branchId,
+          saleId: activeSaleId,
+          saleLineId: added.line.id,
+          requestedMedicineId: acceptedSubstitute.requestedMedicineId,
+          requestedText: acceptedSubstitute.requestedText,
+          suppliedMedicineId: acceptedSubstitute.suppliedMedicineId,
+          suppliedPresentationId: acceptedSubstitute.suppliedPresentationId,
+          saleUnit: acceptedSubstitute.saleUnit,
+          quantity: acceptedSubstitute.quantity,
+          inventoryRuleSnapshot: {
+            source: 'counter-substitute-proposal',
+            equivalenceBasis: acceptedSubstitute.equivalenceBasis,
+          },
+        });
+        setAcceptedSubstitute(null);
+      }
       await refreshCart();
       await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
       await utils.pharmacySafety.controlledRegister.invalidate();
@@ -962,7 +993,9 @@ function ScopedPharmacyCounterConsole({
     }
   }, [
     activeRow,
+    acceptedSubstitute,
     addLine,
+    recordAcceptedSubstitute,
     controlledAuth,
     patient,
     patientAddress,
@@ -1937,6 +1970,16 @@ function ScopedPharmacyCounterConsole({
                 error={substitutesQuery.error ? messageFrom(substitutesQuery.error) : null}
                 disabled={busy}
                 onChoose={(proposal) => {
+                  if (!activeRow || !saleUnit) return;
+                  setAcceptedSubstitute({
+                    requestedMedicineId: activeRow.medicineId,
+                    requestedText: activeRow.displayName,
+                    suppliedMedicineId: proposal.medicineId,
+                    suppliedPresentationId: proposal.presentationId,
+                    saleUnit,
+                    quantity,
+                    equivalenceBasis: proposal.equivalenceBasis,
+                  });
                   setQuery(proposal.displayName);
                   setSubmittedSearch({
                     text: proposal.displayName,

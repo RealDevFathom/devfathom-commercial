@@ -61,7 +61,6 @@ export async function findSubstituteProposals(
     medicineId: string;
     presentationId: string;
     quantityCanonicalUnits: number;
-    referencePriceMinor?: number;
     at?: Date;
   }
 ): Promise<SubstituteProposal[]> {
@@ -75,27 +74,26 @@ export async function findSubstituteProposals(
   );
   if (!requested || !requestedPresentation) throw new PharmacySubstituteError('NOT_FOUND');
 
-  const historicalReference =
-    input.referencePriceMinor === undefined
-      ? await db.pharmacyInventoryLot.findFirst({
-          where: {
-            organizationId: scope.organizationId,
-            branchId: scope.branchId,
-            receivedAt: { not: null },
-            batch: { medicineId: input.medicineId },
-          },
-          select: { printedMrpMinor: true, unitsPerPack: true },
-          orderBy: { receivedAt: 'desc' },
-        })
-      : null;
+  // Price comparisons are server facts. Never let a caller choose the price
+  // that decides whether an alternative is cheaper.
+  const historicalReference = await db.pharmacyInventoryLot.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      receivedAt: { not: null },
+      batch: { medicineId: input.medicineId },
+      packLevel: { presentationId: input.presentationId },
+    },
+    select: { printedMrpMinor: true, unitsPerPack: true },
+    orderBy: { receivedAt: 'desc' },
+  });
   const referencePriceMinor =
-    input.referencePriceMinor ??
-    (historicalReference
+    historicalReference
       ? Math.floor(
           (historicalReference.printedMrpMinor * input.quantityCanonicalUnits) /
             historicalReference.unitsPerPack
         )
-      : null);
+      : null;
   if (referencePriceMinor === null) return [];
 
   const lots: CandidateLot[] = await db.pharmacyInventoryLot.findMany({

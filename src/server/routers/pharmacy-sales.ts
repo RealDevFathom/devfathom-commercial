@@ -79,6 +79,7 @@ import {
   optOutRestockInterest,
   PharmacySaleError,
   recoverDemandWithAlternate,
+  recordAcceptedSubstitute,
   recoverRestockInterest,
   restockRecoveryReport,
   returnSaleLine,
@@ -1330,7 +1331,6 @@ export const pharmacySalesRouter = router({
           medicineId: z.string().min(1),
           presentationId: z.string().min(1),
           quantityCanonicalUnits: z.number().int().positive(),
-          referencePriceMinor: z.number().int().positive().optional(),
         })
         .strict()
     )
@@ -1376,6 +1376,33 @@ export const pharmacySalesRouter = router({
           throw new TRPCError({ code: 'NOT_FOUND', message: error.code });
         }
         throw error;
+      }
+    }),
+  recordAcceptedSubstitute: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          saleLineId: z.string().min(1),
+          requestedMedicineId: z.string().min(1),
+          requestedText: z.string().trim().min(1),
+          suppliedMedicineId: z.string().min(1),
+          suppliedPresentationId: z.string().min(1),
+          saleUnit,
+          quantity: z.number().int().positive(),
+          inventoryRuleSnapshot: z.record(z.string(), z.unknown()),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction((tx) =>
+          recordAcceptedSubstitute(txDb(tx), scope, input)
+        );
+      } catch (error) {
+        fail(error);
       }
     }),
   recoverDemand: protectedProcedure

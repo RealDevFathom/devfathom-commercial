@@ -7,6 +7,7 @@ import {
   changeSaleStatus,
   PharmacySaleError,
   priceFromLot,
+  recordAcceptedSubstitute,
   recoverDemandWithAlternate,
   recoverRestockInterest,
   returnSaleLine,
@@ -461,5 +462,64 @@ describe('POS-10 recovered alternate', () => {
     };
     await recoverDemandWithAlternate(db as never, scope, 'demand-a', 'line-a');
     expect(update).toMatchObject({ data: { status: 'RECOVERED', recoveredSaleLineId: 'line-a' } });
+  });
+
+  it('records requested-to-supplied evidence only for the scoped proposed sale line', async () => {
+    let created: unknown;
+    let updated: unknown;
+    const db = {
+      pharmacySaleLine: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValueOnce({ id: 'line-a' })
+          .mockResolvedValueOnce({ id: 'line-a', saleId: 'sale-a' }),
+      },
+      unfulfilledDemandEvent: {
+        create: async (args: unknown) => {
+          created = args;
+          return { id: 'demand-a' };
+        },
+        findFirst: async () => ({ id: 'demand-a', saleId: 'sale-a' }),
+        update: async (args: unknown) => {
+          updated = args;
+          return args;
+        },
+      },
+    };
+
+    await recordAcceptedSubstitute(db as never, scope, {
+      saleId: 'sale-a',
+      saleLineId: 'line-a',
+      requestedMedicineId: 'requested',
+      requestedText: 'Requested medicine',
+      suppliedMedicineId: 'alternate',
+      suppliedPresentationId: 'alternate-presentation',
+      saleUnit: 'UNIT',
+      quantity: 10,
+      inventoryRuleSnapshot: { source: 'counter-substitute-proposal' },
+    });
+
+    expect(db.pharmacySaleLine.findFirst).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org-a',
+          branchId: 'branch-a',
+          medicineId: 'alternate',
+          presentationId: 'alternate-presentation',
+        }),
+      })
+    );
+    expect(created).toMatchObject({
+      data: {
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        requestedMedicineId: 'requested',
+        saleId: 'sale-a',
+      },
+    });
+    expect(updated).toMatchObject({
+      data: { status: 'RECOVERED', recoveredSaleLineId: 'line-a' },
+    });
   });
 });

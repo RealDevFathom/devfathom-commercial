@@ -17,6 +17,7 @@ import { appendControlledRestorations } from './controlled-register';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry } from './finance-postings';
+import type { SaleUnitKind } from './counter-pricing';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -954,6 +955,47 @@ export async function recoverDemandWithAlternate(
     where: { organizationId_id: { organizationId: scope.organizationId, id: demandId } },
     data: { status: 'RECOVERED', recoveredSaleLineId: saleLineId, recoveredAt: new Date() },
   });
+}
+
+/** POS-10: atomically preserve the requested item behind an accepted counter alternative. */
+export async function recordAcceptedSubstitute(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: {
+    saleId: string;
+    saleLineId: string;
+    requestedMedicineId: string;
+    requestedText: string;
+    suppliedMedicineId: string;
+    suppliedPresentationId: string;
+    saleUnit: SaleUnitKind;
+    quantity: number;
+    inventoryRuleSnapshot: Record<string, unknown>;
+  }
+) {
+  const supplied = await db.pharmacySaleLine.findFirst({
+    where: {
+      id: input.saleLineId,
+      saleId: input.saleId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      medicineId: input.suppliedMedicineId,
+      presentationId: input.suppliedPresentationId,
+    },
+    select: { id: true },
+  });
+  if (!supplied) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+
+  const demand = await captureDemand(db, scope, {
+    saleId: input.saleId,
+    requestedMedicineId: input.requestedMedicineId,
+    requestedText: input.requestedText,
+    saleUnit: input.saleUnit,
+    quantity: input.quantity,
+    reason: 'STOCKOUT',
+    inventoryRuleSnapshot: input.inventoryRuleSnapshot,
+  });
+  return recoverDemandWithAlternate(db, scope, demand.id, supplied.id);
 }
 
 export async function demandAggregate(
