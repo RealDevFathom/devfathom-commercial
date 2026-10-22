@@ -100,4 +100,40 @@ describe('invitations.accept during resend', () => {
     });
     expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
+
+  it('still claims the invitation when its token has not been replaced', async () => {
+    mocks.findUnique.mockResolvedValue(invitation);
+    mocks.hash.mockResolvedValue('hashed-password');
+    mocks.updateMany.mockResolvedValue({ count: 1 });
+    mocks.userUpdate.mockResolvedValue({});
+
+    const db = {
+      invitation: { findUnique: mocks.findUnique },
+      $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
+        run({
+          invitation: { updateMany: mocks.updateMany },
+          user: { update: mocks.userUpdate },
+        }),
+    };
+    const caller = invitationsRouter.createCaller({ db } as never);
+
+    await expect(
+      caller.accept({
+        token: oldToken,
+        password: 'Str0ng!Passw0rd',
+        phone: '+15550000000',
+      })
+    ).resolves.toEqual({ email: invitation.user.email });
+
+    expect(mocks.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: invitation.id,
+        tokenHash: invitation.tokenHash,
+        acceptedAt: null,
+        expiresAt: { gt: expect.any(Date) },
+      },
+      data: { acceptedAt: expect.any(Date) },
+    });
+    expect(mocks.userUpdate).toHaveBeenCalledOnce();
+  });
 });
