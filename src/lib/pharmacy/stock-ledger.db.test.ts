@@ -476,15 +476,21 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     const second = inOrg(ORG_A, (db) =>
       deps.operations.approveCount(db, scopeOf(fixture), count.id, tag('count-approval-second'))
     );
+    const startedSecond = Date.now();
     await new Promise((resolve) => setTimeout(resolve, 250));
     releaseFirst();
 
     const [firstOutcome, secondOutcome] = await Promise.allSettled([first, second]);
+    const waitedMs = Date.now() - startedSecond;
     expect(firstOutcome.status).toBe('fulfilled');
     expect(secondOutcome.status).toBe('rejected');
-    expect((secondOutcome as PromiseRejectedResult).reason).toMatchObject({
-      reason: 'INVALID_STATE',
-    });
+    // Prove that the second approval stayed inside the first transaction's
+    // overlap window rather than merely losing after the transactions happened
+    // to execute back to back.
+    expect(waitedMs).toBeGreaterThanOrEqual(200);
+    const rejection = (secondOutcome as PromiseRejectedResult).reason;
+    expect(rejection).toBeInstanceOf(PharmacyInventoryError);
+    expect(rejection.reason).toBe('INVALID_STATE');
 
     const after = await inOrg(ORG_A, async (db) => ({
       balance: await db.pharmacyStockBalance.findFirst({
