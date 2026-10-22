@@ -738,6 +738,7 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:procurement',
   'pharmacy:inventory',
   'pharmacy:orders',
+  'pharmacy:loyalty-manage',
   'reports:operational',
   'reports:financial',
   'pharmacy:safety',
@@ -753,6 +754,7 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:safety',
   'pharmacy:catalogue-review',
   'pharmacy:orders',
+  'pharmacy:loyalty-manage',
   'reports:operational',
   'reports:financial',
 ] as const;
@@ -762,7 +764,7 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+    capabilities: ['pharmacy:*', 'pharmacy:loyalty-manage', 'reports:operational', 'reports:financial'],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN

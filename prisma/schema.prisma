@@ -999,6 +999,97 @@ enum PharmacyLoyaltyEntryKind {
   REFUND
 }
 
+enum PharmacyVoucherStatus {
+  ISSUED
+  REDEEMED
+  EXPIRED
+  VOID
+}
+
+enum PharmacyVoucherScope {
+  WHOLE_BASKET
+  NON_DRUG_ONLY
+}
+
+/// One mutable tenant policy row. Every update is copied to the append-only
+/// audit table by the service before this row changes.
+model PharmacyLoyaltySettings {
+  id                           String               @id @default(cuid())
+  organizationId               String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  voucherScope                  PharmacyVoucherScope @default(WHOLE_BASKET)
+  voucherValidityDays           Int                  @default(30)
+  maxIssuedPerCustomerPerPeriod Int                  @default(5)
+  maxIssuedPerPhonePerPeriod    Int                  @default(5)
+  maxRedeemedPerCustomerPerPeriod Int                @default(5)
+  maxRedeemedPerPhonePerPeriod  Int                  @default(5)
+  abusePeriodDays               Int                  @default(30)
+  expiryOverrideGraceDays       Int                  @default(0)
+  createdAt                     DateTime              @default(now())
+  updatedAt                     DateTime              @updatedAt
+
+  @@unique([organizationId])
+  @@unique([organizationId, id])
+  @@map("pharmacy_loyalty_settings")
+}
+
+model PharmacyLoyaltySettingsAudit {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  actorId        String
+  oldValue       Json
+  newValue       Json
+  occurredAt     DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@index([organizationId, occurredAt])
+  @@map("pharmacy_loyalty_settings_audits")
+}
+
+model PharmacyVoucher {
+  id                 String                @id @default(cuid())
+  organizationId     String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  code               String
+  valueMinor         Int
+  status             PharmacyVoucherStatus @default(ISSUED)
+  scope              PharmacyVoucherScope  @default(WHOLE_BASKET)
+  customerId         String?
+  phone              String?
+  issuedAt           DateTime              @default(now())
+  expiresAt          DateTime
+  minNextBasketMinor Int                   @default(0)
+  redeemedAt         DateTime?
+  redeemedSaleId     String?
+  issuedByActorId    String
+  redeemedByActorId  String?
+  createdAt          DateTime              @default(now())
+  updatedAt          DateTime              @updatedAt
+
+  @@unique([organizationId, code])
+  @@unique([organizationId, id])
+  @@unique([organizationId, redeemedSaleId])
+  @@index([organizationId, branchId, status, expiresAt])
+  @@index([organizationId, customerId, issuedAt])
+  @@index([organizationId, phone, issuedAt])
+  @@map("pharmacy_vouchers")
+}
+
+model PharmacyVoucherOverrideAudit {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  voucherId      String
+  saleId         String
+  actorId        String
+  reason         String
+  violations     Json
+  occurredAt     DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@index([organizationId, branchId, voucherId, occurredAt])
+  @@map("pharmacy_voucher_override_audits")
+}
+
 enum PharmacyDrawerSessionStatus {
   OPEN
   CLOSED

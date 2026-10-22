@@ -1,4 +1,5 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
+import { randomUUID } from 'node:crypto';
 import { hasModule } from '@/lib/entitlements';
 import {
   executeSandboxPayment,
@@ -87,6 +88,11 @@ import {
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
+import {
+  admitVoucherLookup,
+  PharmacyVoucherError,
+  publicVoucherResult,
+} from '@/lib/pharmacy/loyalty-vouchers';
 import {
   applyPharmacyTender,
   closePharmacyDrawer,
@@ -421,6 +427,84 @@ function requireCloseAccess(ctx: TRPCContext) {
 }
 
 export const pharmacySalesRouter = router({
+  updateLoyaltySettings: protectedProcedure
+    .input(z.object({
+      voucherScope: z.enum(['WHOLE_BASKET', 'NON_DRUG_ONLY']),
+      voucherValidityDays: z.number().int().min(1).max(3650),
+      maxIssuedPerCustomerPerPeriod: z.number().int().nonnegative(),
+      maxIssuedPerPhonePerPeriod: z.number().int().nonnegative(),
+      maxRedeemedPerCustomerPerPeriod: z.number().int().nonnegative(),
+      maxRedeemedPerPhonePerPeriod: z.number().int().nonnegative(),
+      abusePeriodDays: z.number().int().min(1).max(3650),
+      expiryOverrideGraceDays: z.number().int().min(0).max(365),
+    }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements?.organizationId;
+      const actorId = ctx.session?.user?.id;
+      if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      if (!(await can(subjectFromSession(ctx.session!.user), 'pharmacy:loyalty-manage', undefined, {
+        db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip,
+      }))) throw new TRPCError({ code: 'FORBIDDEN' });
+      return ctx.db.$transaction(async (tx) => {
+        const rows = await tx.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
+          SELECT * FROM pharmacy_loyalty_settings WHERE "organizationId"=${organizationId} FOR UPDATE`);
+        const oldValue = rows[0] ?? {
+          voucherScope: 'WHOLE_BASKET', voucherValidityDays: 30,
+          maxIssuedPerCustomerPerPeriod: 5, maxIssuedPerPhonePerPeriod: 5,
+          maxRedeemedPerCustomerPerPeriod: 5, maxRedeemedPerPhonePerPeriod: 5,
+          abusePeriodDays: 30, expiryOverrideGraceDays: 0,
+        };
+        await tx.$executeRaw(Prisma.sql`INSERT INTO pharmacy_loyalty_settings
+          (id,"organizationId","voucherScope","voucherValidityDays","maxIssuedPerCustomerPerPeriod",
+           "maxIssuedPerPhonePerPeriod","maxRedeemedPerCustomerPerPeriod","maxRedeemedPerPhonePerPeriod",
+           "abusePeriodDays","expiryOverrideGraceDays","createdAt","updatedAt")
+          VALUES (${randomUUID()},${organizationId},${input.voucherScope}::"PharmacyVoucherScope",
+            ${input.voucherValidityDays},${input.maxIssuedPerCustomerPerPeriod},${input.maxIssuedPerPhonePerPeriod},
+            ${input.maxRedeemedPerCustomerPerPeriod},${input.maxRedeemedPerPhonePerPeriod},
+            ${input.abusePeriodDays},${input.expiryOverrideGraceDays},now(),now())
+          ON CONFLICT ("organizationId") DO UPDATE SET "voucherScope"=EXCLUDED."voucherScope",
+            "voucherValidityDays"=EXCLUDED."voucherValidityDays",
+            "maxIssuedPerCustomerPerPeriod"=EXCLUDED."maxIssuedPerCustomerPerPeriod",
+            "maxIssuedPerPhonePerPeriod"=EXCLUDED."maxIssuedPerPhonePerPeriod",
+            "maxRedeemedPerCustomerPerPeriod"=EXCLUDED."maxRedeemedPerCustomerPerPeriod",
+            "maxRedeemedPerPhonePerPeriod"=EXCLUDED."maxRedeemedPerPhonePerPeriod",
+            "abusePeriodDays"=EXCLUDED."abusePeriodDays",
+            "expiryOverrideGraceDays"=EXCLUDED."expiryOverrideGraceDays","updatedAt"=now()`);
+        await tx.$executeRaw(Prisma.sql`INSERT INTO pharmacy_loyalty_settings_audits
+          (id,"organizationId","actorId","oldValue","newValue","occurredAt") VALUES
+          (${randomUUID()},${organizationId},${actorId},${JSON.stringify(oldValue)}::jsonb,
+           ${JSON.stringify(input)}::jsonb,now())`);
+        annotateAudit(ctx, { action: 'pharmacy.loyalty.settings.update', targetId: organizationId });
+        return input;
+      });
+    }),
+  voucherLookup: protectedProcedure
+    .input(z.object({ branchId, code: z.string().trim().min(10).max(64) }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      if (!(await can(subjectFromSession(ctx.session!.user), 'pharmacy:counter', undefined, {
+        db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip,
+      }))) throw new TRPCError({ code: 'FORBIDDEN' });
+      try {
+        await admitVoucherLookup({ organizationId: scope.organizationId, branchId: scope.branchId,
+          userId: scope.actorId, ip: ctx.requestMeta.ip });
+        const rows = await ctx.db.$queryRaw<Array<{
+          id: string; status: 'ISSUED' | 'REDEEMED' | 'EXPIRED' | 'VOID'; valueMinor: number;
+          scope: 'WHOLE_BASKET' | 'NON_DRUG_ONLY'; expiresAt: Date; minNextBasketMinor: number;
+        }>>(Prisma.sql`SELECT id,status,"valueMinor",scope,"expiresAt","minNextBasketMinor"
+          FROM pharmacy_vouchers WHERE "organizationId"=${scope.organizationId}
+          AND "branchId"=${scope.branchId} AND code=${input.code} LIMIT 1`);
+        const voucher = publicVoucherResult(rows[0] ?? null);
+        return { valueMinor: voucher.valueMinor, scope: voucher.scope,
+          expiresAt: voucher.expiresAt, minNextBasketMinor: voucher.minNextBasketMinor };
+      } catch (error) {
+        if (error instanceof PharmacyVoucherError) throw new TRPCError({
+          code: error.reason === 'RATE_LIMITED' ? 'TOO_MANY_REQUESTS' : 'NOT_FOUND',
+          message: error.reason === 'RATE_LIMITED' ? 'RATE_LIMITED' : 'VOUCHER_NOT_FOUND',
+        });
+        throw error;
+      }
+    }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
     try {
