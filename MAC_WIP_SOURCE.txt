@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/.paperclip/instances/default/workspaces/732dc77a-5583-49eb-8354-2a9dff0064c5
+Branch: codex/wha-1564-csv-acceptance-20260924
+HEAD: d9957a9a309b386602e7a4496d17479b28026fc7
+Mode: applied
+Excluded (secrets): 1
