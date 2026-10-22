@@ -4167,6 +4167,7 @@ model Meeting {
   title               String
   description         String?
   startTime           DateTime
+  /// Strictly later than `startTime`; enforced by meetings_time_order_check.
   endTime             DateTime
   location            String? // "Google Meet", "Office", URL, etc.
   /// DEPRECATED (MEET-01): superseded by `recurrenceRule`. Still written and
