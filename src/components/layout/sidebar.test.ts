@@ -216,6 +216,23 @@ describe('pharmacy navigation', () => {
     ).toBe(true);
   });
 
+  it('hides Prescriptions until the user may capture prescriptions (#238)', () => {
+    const entitled = {
+      vertical: 'PHARMACY' as const,
+      enabledModules: ['pharmacy-core', 'pharmacy-counter', 'pharmacy-dispensing'],
+    };
+    const shows = (role: string, capabilities: string[]) =>
+      visibleNavigation(entitled, role, [], capabilities).some(
+        (item) => item.href === '/pharmacy/prescriptions'
+      );
+    // A cashier, and a tenant ADMIN without the exact dispense grant, are refused by the server.
+    expect(shows('EMPLOYEE', [])).toBe(false);
+    expect(shows('ADMIN', [])).toBe(false);
+    expect(shows('EMPLOYEE', ['pharmacy:safety'])).toBe(false);
+    expect(shows('EMPLOYEE', ['pharmacy:dispense'])).toBe(true);
+    expect(shows('ADMIN', ['pharmacy:dispense'])).toBe(true);
+  });
+
   it('shows pharmacy routes to a Pharmacy admin with core and counter modules', () => {
     const visible = visibleNavigation(
       {

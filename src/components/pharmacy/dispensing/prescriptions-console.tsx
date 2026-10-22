@@ -87,9 +87,21 @@ function patientFromFragment() {
 export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleProps = {}) {
   const utils = trpc.useUtils();
   const [selectedBranchId, setSelectedBranchId] = useState('');
+  // #238: the same server decision as the upload, capture and image routes. The protected
+  // workspace is only requested, and the capture form only shown, when it allows this user.
+  const access = trpc.pharmacyPrescriptions.captureAccess.useQuery(undefined, {
+    retry: false,
+    staleTime: 30_000,
+  });
+  const allowed = access.data?.allowed === true;
   const workspace = trpc.pharmacyPrescriptions.workspace.useQuery(
-    selectedBranchId ? { branchId: selectedBranchId } : undefined
+    selectedBranchId ? { branchId: selectedBranchId } : undefined,
+    { enabled: allowed }
   );
+  const permissionDenied =
+    (access.isSuccess && !allowed) ||
+    access.error?.data?.code === 'FORBIDDEN' ||
+    workspace.error?.data?.code === 'FORBIDDEN';
   const capture = trpc.pharmacyPrescriptions.capture.useMutation();
   const uploadSource = trpc.pharmacyPrescriptions.uploadSource.useMutation();
   const captureReminder = trpc.pharmacyPrescriptions.captureRefillReminder.useMutation({
@@ -254,17 +266,32 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
         heading="Prescriptions"
         description="Capture the original evidence, authority and every authorized unit before dispensing."
       />
-      {workspace.isLoading ? (
+      {access.isLoading ? (
+        <WorkspaceState title="Checking prescription access">
+          Confirming that you may capture and read prescriptions.
+        </WorkspaceState>
+      ) : permissionDenied ? (
+        <WorkspaceState title="Prescription capture needs a pharmacist">
+          Capturing prescriptions and opening their images needs the pharmacist dispensing
+          permission. Ask a pharmacist, or an owner or administrator who has been given that
+          permission, to capture this prescription. Counter sales are not affected.
+        </WorkspaceState>
+      ) : access.error ? (
+        <WorkspaceState title="Prescription access could not be checked" tone="danger">
+          Try again when the connection is restored.
+        </WorkspaceState>
+      ) : null}
+      {allowed && !permissionDenied && workspace.isLoading ? (
         <WorkspaceState title="Loading prescriptions">
           Retrieving protected patient and prescription records.
         </WorkspaceState>
       ) : null}
-      {workspace.error ? (
+      {allowed && !permissionDenied && workspace.error ? (
         <WorkspaceState title="Prescriptions could not be loaded" tone="danger">
           {workspace.error.message} Try again when the connection is restored.
         </WorkspaceState>
       ) : null}
-      {workspace.data ? (
+      {allowed && !permissionDenied && workspace.data ? (
         <>
           <div className="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
             <SectionCard title="Capture prescription" titleLevel={2}>

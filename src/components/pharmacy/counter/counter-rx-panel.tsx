@@ -524,6 +524,12 @@ export type CounterRxPanelProps = {
   state: 'idle' | 'loading' | 'ready' | 'error' | 'denied';
   error?: string | null;
   disabled?: boolean;
+  /**
+   * #238: true only when `pharmacyPrescriptions.captureAccess` allowed this user, the same
+   * decision the upload and image routes enforce. Capture controls and prescription photos are
+   * not offered otherwise (unknown access counts as not allowed).
+   */
+  canCapturePrescriptions?: boolean;
   onQueryChange: (query: string) => void;
   onSearch: () => void;
   onSelectPatient: (patientId: string) => void;
@@ -558,6 +564,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
       state,
       error,
       disabled = false,
+      canCapturePrescriptions = false,
       onQueryChange,
       onSearch,
       onSelectPatient,
@@ -822,46 +829,56 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 </div>
               </div>
 
-              <div className="space-y-2">
-                {onCapturePrescription ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="h-11"
+              {canCapturePrescriptions ? (
+                <div className="space-y-2">
+                  {onCapturePrescription ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-11"
+                      disabled={disabled || state === 'loading' || state === 'error'}
+                      onClick={() => onCapturePrescription({ patientId: patient.patientId })}
+                    >
+                      Capture prescription
+                    </Button>
+                  ) : disabled || state === 'loading' || state === 'error' ? (
+                    <Button type="button" variant="outline" className="h-11" disabled>
+                      Capture prescription
+                    </Button>
+                  ) : (
+                    <Link
+                      className={buttonVariants({ variant: 'outline', className: 'h-11' })}
+                      href={`/pharmacy/prescriptions#patientId=${encodeURIComponent(patient.patientId)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      prefetch={false}
+                    >
+                      Capture prescription
+                      <span className="sr-only">
+                        {' '}
+                        for {patient.displayName} (opens in a new tab)
+                      </span>
+                    </Link>
+                  )}
+                  <p className="text-xs text-text-muted">
+                    {onCapturePrescription
+                      ? `Capture evidence for ${patient.displayName}.`
+                      : `Opens capture for ${patient.displayName} in a new tab. This bill stays open.`}{' '}
+                    Capture does not replace pharmacist review or dispensing consent.
+                  </p>
+                  <CounterRxPhotoCapture
+                    key={patient.patientId}
+                    patientId={patient.patientId}
+                    patientName={patient.displayName}
                     disabled={disabled || state === 'loading' || state === 'error'}
-                    onClick={() => onCapturePrescription({ patientId: patient.patientId })}
-                  >
-                    Capture prescription
-                  </Button>
-                ) : disabled || state === 'loading' || state === 'error' ? (
-                  <Button type="button" variant="outline" className="h-11" disabled>
-                    Capture prescription
-                  </Button>
-                ) : (
-                  <Link
-                    className={buttonVariants({ variant: 'outline', className: 'h-11' })}
-                    href={`/pharmacy/prescriptions#patientId=${encodeURIComponent(patient.patientId)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    prefetch={false}
-                  >
-                    Capture prescription
-                    <span className="sr-only"> for {patient.displayName} (opens in a new tab)</span>
-                  </Link>
-                )}
+                  />
+                </div>
+              ) : (
                 <p className="text-xs text-text-muted">
-                  {onCapturePrescription
-                    ? `Capture evidence for ${patient.displayName}.`
-                    : `Opens capture for ${patient.displayName} in a new tab. This bill stays open.`}{' '}
-                  Capture does not replace pharmacist review or dispensing consent.
+                  Prescription capture needs the pharmacist dispensing permission. Ask a pharmacist
+                  to capture {patient.displayName}&apos;s prescription; this bill stays open.
                 </p>
-                <CounterRxPhotoCapture
-                  key={patient.patientId}
-                  patientId={patient.patientId}
-                  patientName={patient.displayName}
-                  disabled={disabled || state === 'loading' || state === 'error'}
-                />
-              </div>
+              )}
 
               {patient.prescriptions.length === 0 ? (
                 <p className="text-sm text-text-muted">
@@ -876,7 +893,8 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-3">
-                          {photoUrlFor(prescription.prescriptionId) ? (
+                          {/* The image route refuses anyone who may not capture: no broken thumbnail. */}
+                          {canCapturePrescriptions && photoUrlFor(prescription.prescriptionId) ? (
                             <PrescriptionThumbnail
                               url={photoUrlFor(prescription.prescriptionId)!}
                               label={`Prescription photo from ${prescription.prescriberName}`}
@@ -934,7 +952,9 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
           ) : (
             <div className="space-y-2">
               <p className="text-sm text-text-muted">
-                Select a patient to capture their prescription.
+                {canCapturePrescriptions
+                  ? 'Select a patient to capture their prescription.'
+                  : 'Select a patient to check their prescriptions.'}
               </p>
               <div className="space-y-1.5">
                 <Label htmlFor="counter-patient-search">Find patient</Label>

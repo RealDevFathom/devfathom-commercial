@@ -250,6 +250,50 @@ describe('prescription capture and private delivery', () => {
     );
   });
 
+  it('tells the counter exactly what the upload guard decides (#238)', async () => {
+    for (const canDispense of [true, false]) {
+      mocks.can.mockResolvedValue(canDispense);
+      mocks.putUpload.mockClear();
+      await expect(caller().captureAccess()).resolves.toEqual({ allowed: canDispense });
+      if (canDispense) await expect(upload()).resolves.toHaveProperty('url');
+      else await expect(upload()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.putUpload).toHaveBeenCalledTimes(canDispense ? 1 : 0);
+    }
+    // Without the dispensing module neither is available, whatever the grant. (Through the
+    // app router the module middleware refuses first; called directly, the decision says no.)
+    mocks.can.mockResolvedValue(true);
+    mocks.hasModule.mockReturnValue(false);
+    mocks.putUpload.mockClear();
+    await expect(caller().captureAccess()).resolves.toEqual({ allowed: false });
+    await expect(upload()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.putUpload).not.toHaveBeenCalled();
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-a' }),
+      'pharmacy:dispense',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+  });
+
+  it('refuses a cashier upload with a clean 403 before input validation or storage', async () => {
+    // Cashier grants are counter/orders; neither is pharmacy:dispense.
+    mocks.can.mockImplementation(
+      async (_subject, action) => action === 'pharmacy:counter' || action === 'pharmacy:orders'
+    );
+    await expect(caller().captureAccess()).resolves.toEqual({ allowed: false });
+    for (const dataBase64 of ['not-an-image', 'A'.repeat(10)]) {
+      await expect(
+        caller().uploadSource({ patientId: 'patient-a', contentType: 'image/png', dataBase64 })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Prescription file access is not permitted.',
+      });
+    }
+    await expect(upload()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.patient).not.toHaveBeenCalled();
+    expect(mocks.putUpload).not.toHaveBeenCalled();
+  });
+
   it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:orders');
     await expect(caller().workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });

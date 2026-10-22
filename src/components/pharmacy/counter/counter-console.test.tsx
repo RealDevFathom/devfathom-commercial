@@ -111,7 +111,7 @@ vi.mock('@/lib/trpc', () => {
         'authenticatePack',
         'substituteProposals',
       ]),
-      pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
+      pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel', 'captureAccess']),
       pharmacySafety: router(['controlledPharmacists']),
     },
   };
@@ -124,9 +124,14 @@ vi.mock('./counter-receipt-view', () => ({
   },
 }));
 vi.mock('./counter-rx-panel', () => ({
-  // Render a marker only when the console offers controlled authorization (QA-138).
-  CounterRxPanel: (props: { controlled?: unknown }) =>
-    props.controlled ? <div data-testid="controlled-authorization" /> : null,
+  // Render a marker only when the console offers controlled authorization (QA-138), and another
+  // only when it offers prescription capture (#238).
+  CounterRxPanel: (props: { controlled?: unknown; canCapturePrescriptions?: boolean }) => (
+    <>
+      {props.controlled ? <div data-testid="controlled-authorization" /> : null}
+      {props.canCapturePrescriptions ? <div data-testid="prescription-capture" /> : null}
+    </>
+  ),
 }));
 vi.mock('./counter-keymap-legend', () => ({ CounterKeymapLegend: () => null }));
 vi.mock('./counter-search-results', () => ({ CounterSearchResults: () => null }));
@@ -239,6 +244,7 @@ beforeEach(() => {
     'counterPatients',
     'counterPatientPanel',
     'controlledPharmacists',
+    'captureAccess',
   ])
     mocks.queries[name] = query();
   mocks.queries.drawerStatus = query({ openDrawer: null });
@@ -1258,5 +1264,46 @@ describe('PharmacyCounterConsole module boundaries', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(mocks.queryOptions).toHaveBeenCalledWith('controlledPharmacists', { enabled: true });
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
+  });
+});
+
+describe('PharmacyCounterConsole prescription capture access (#238)', () => {
+  const dispensing = ['pharmacy-counter', 'pharmacy-safety', 'pharmacy-dispensing'];
+  const renderConsole = () =>
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+
+  it('offers capture only when the server allows it', () => {
+    mocks.entitlements.enabledModules = dispensing;
+    mocks.queries.captureAccess = query({ allowed: true });
+    renderConsole();
+    expect(screen.getByTestId('prescription-capture')).toBeTruthy();
+    expect(mocks.queryOptions).toHaveBeenCalledWith(
+      'captureAccess',
+      expect.objectContaining({ enabled: true, retry: false })
+    );
+  });
+
+  it.each([
+    ['refused', () => query({ allowed: false })],
+    ['loading', () => ({ ...query(), isSuccess: false, isLoading: true })],
+    [
+      'failed',
+      () => ({ ...query(), isSuccess: false, isError: true, error: refused('FORBIDDEN') }),
+    ],
+  ])('offers no capture while access is %s', (_label, state) => {
+    mocks.entitlements.enabledModules = dispensing;
+    mocks.queries.captureAccess = state();
+    renderConsole();
+    expect(screen.queryByTestId('prescription-capture')).toBeNull();
+  });
+
+  it('neither asks nor offers capture without Pharmacy Dispensing', () => {
+    mocks.queries.captureAccess = query({ allowed: true });
+    renderConsole();
+    expect(mocks.queryOptions).toHaveBeenCalledWith(
+      'captureAccess',
+      expect.objectContaining({ enabled: false })
+    );
+    expect(screen.queryByTestId('prescription-capture')).toBeNull();
   });
 });

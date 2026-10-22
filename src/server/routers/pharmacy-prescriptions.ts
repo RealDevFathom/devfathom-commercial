@@ -35,6 +35,29 @@ import {
 const purpose = z.enum(['DISPENSING', 'REMINDERS', 'LOYALTY', 'MARKETING']);
 const channel = z.enum(['IN_PERSON', 'PHONE', 'SMS', 'WHATSAPP', 'EMAIL']);
 
+/**
+ * #238/#349: the one decision for prescription capture, upload and image access. It needs the
+ * dispensing module and the exact pharmacy:dispense grant, resolved by central ABAC from the
+ * persisted organization role and user overrides (a DENY wins; wildcards and a cashier's
+ * counter/orders grants never qualify). A pharmacist holds it; a tenant Admin/Owner holds it
+ * through an explicit grant such as the Owner/Operator role. `captureAccess` hands the same
+ * answer to the counter and the prescriptions page, so they only offer capture to someone
+ * this guard lets through.
+ */
+async function prescriptionCaptureAllowed(ctx: {
+  db: ScopedDb;
+  entitlements: Parameters<typeof hasModule>[0];
+  session: { user: Parameters<typeof subjectFromSession>[0] };
+  requestMeta: { ip: string | null };
+}): Promise<boolean> {
+  if (!hasModule(ctx.entitlements, 'pharmacy-dispensing')) return false;
+  return can(subjectFromSession(ctx.session.user), 'pharmacy:dispense', undefined, {
+    db: ctx.db,
+    source: 'TRPC',
+    ip: ctx.requestMeta.ip,
+  });
+}
+
 // Suppress sensitive payload auditing before authentication/input validation,
 // including denied uploads. Keep the existing audited guards and ABAC engine.
 const fileProcedure = publicProcedure
@@ -44,12 +67,7 @@ const fileProcedure = publicProcedure
   })
   .concat(auditedProtectedProcedure)
   .use(async ({ ctx, next }) => {
-    const subject = subjectFromSession(ctx.session.user);
-    const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
-    if (
-      !hasModule(ctx.entitlements, 'pharmacy-dispensing') ||
-      !(await can(subject, 'pharmacy:dispense', undefined, options))
-    ) {
+    if (!(await prescriptionCaptureAllowed(ctx))) {
       throw new TRPCError({
         code: 'FORBIDDEN',
         message: 'Prescription file access is not permitted.',
@@ -88,6 +106,10 @@ async function readableSourceFile(
 }
 
 export const pharmacyPrescriptionsRouter = router({
+  /** Whether this user may capture prescriptions: exactly the decision `fileProcedure` enforces. */
+  captureAccess: protectedProcedure.query(async ({ ctx }) => ({
+    allowed: await prescriptionCaptureAllowed(ctx),
+  })),
   workspace: fileProcedure
     .input(
       z

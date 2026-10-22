@@ -373,12 +373,15 @@ export const navigation: NavItem[] = [
     adminOnly: true,
     module: 'pharmacy-crm',
   },
+  // #238: prescription capture needs the exact pharmacy:dispense grant, so a cashier is not
+  // offered a page whose capture form and images the server would refuse.
   {
     label: 'Prescriptions',
     href: '/pharmacy/prescriptions',
     icon: FileText,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
+    pharmacyCapabilities: ['pharmacy:dispense'],
   },
   {
     label: 'Pharmacist queue',
@@ -614,7 +617,19 @@ function useVisibleNavigation() {
     retry: false,
     staleTime: 30_000,
   });
-  const pharmacyCapabilities = safetyAccess.data?.allowed ? ['pharmacy:safety'] : [];
+  const dispensingModule =
+    entitlements.vertical === 'PHARMACY' &&
+    isModuleGranted('pharmacy-dispensing', entitlements.enabledModules);
+  // The same decision as the prescription upload and capture routes (see captureAccess).
+  const captureAccess = trpc.pharmacyPrescriptions.captureAccess.useQuery(undefined, {
+    enabled: dispensingModule,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const pharmacyCapabilities = [
+    ...(safetyAccess.data?.allowed ? ['pharmacy:safety'] : []),
+    ...(dispensingModule && captureAccess.data?.allowed ? ['pharmacy:dispense'] : []),
+  ];
   const filteredNav = visibleNavigation(
     entitlements,
     session?.user?.role,

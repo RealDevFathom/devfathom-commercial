@@ -241,6 +241,7 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
       accountId={user.id}
       evidenceAuthorized={user.role === 'ADMIN'}
       safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
+      dispensingLicensed={isModuleGranted('pharmacy-dispensing', entitlements.enabledModules)}
       accountEmail={user.email}
     />
   );
@@ -262,6 +263,7 @@ function ScopedPharmacyCounterConsole({
   accountId,
   evidenceAuthorized = false,
   safetyLicensed,
+  dispensingLicensed = false,
   accountEmail,
 }: ConsoleProps & {
   organizationId: string;
@@ -269,6 +271,8 @@ function ScopedPharmacyCounterConsole({
   evidenceAuthorized?: boolean;
   /** Pharmacy Safety owns the approving-pharmacist list; without it that read is refused. */
   safetyLicensed: boolean;
+  /** Pharmacy Dispensing owns prescription capture; without it the access read is not made. */
+  dispensingLicensed?: boolean;
   accountEmail: string;
 }) {
   const utils = trpc.useUtils();
@@ -299,6 +303,15 @@ function ScopedPharmacyCounterConsole({
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: safetyLicensed,
   });
+  // #238: offer prescription capture only to someone the upload route would accept. The server
+  // makes the decision (dispensing module + exact pharmacy:dispense through central ABAC);
+  // while it is unknown or refused, capture is not offered.
+  const captureAccessQuery = trpc.pharmacyPrescriptions.captureAccess.useQuery(undefined, {
+    enabled: dispensingLicensed,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const canCapturePrescriptions = dispensingLicensed && captureAccessQuery.data?.allowed === true;
   const [patientId, setPatientId] = useState<string | null>(null);
   const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
@@ -2375,6 +2388,7 @@ function ScopedPharmacyCounterConsole({
                     : null
               }
               disabled={busy}
+              canCapturePrescriptions={canCapturePrescriptions}
               onQueryChange={setPatientQuery}
               onSearch={() => setSubmittedPatientQuery(patientQuery.trim())}
               onSelectPatient={(id) => {
