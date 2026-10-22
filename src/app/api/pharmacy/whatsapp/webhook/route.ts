@@ -6,13 +6,10 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
 import { handleInboundWhatsAppMessage } from '@/lib/pharmacy/whatsapp/inbound';
+import { findWhatsAppConnectionByPhoneNumberId } from '@/lib/pharmacy/whatsapp/connection';
 import { createWhatsAppProvider, readWhatsAppConfig } from '@/lib/pharmacy/whatsapp/provider';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
-import {
-  isTenantLifecycleAccessible,
-  requestHost,
-  resolveExplicitOrganizationByHost,
-} from '@/lib/tenancy/host';
+import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
 
 /**
  * PH-B3 — Meta WhatsApp Cloud API webhook for pharmacy order intake.
@@ -20,7 +17,7 @@ import {
  * GET answers Meta's subscription handshake with the configured verify token.
  * POST is unauthenticated, so it verifies `X-Hub-Signature-256` over the raw
  * body BEFORE parsing (fail closed when no app secret is configured), resolves
- * the tenant strictly from an explicit pharmacy host, and handles each text
+ * the tenant from the globally unique phone_number_id, and handles each text
  * message idempotently by provider message id. See docs/pharmacy/whatsapp.md.
  */
 
@@ -67,25 +64,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const config = readWhatsAppConfig();
-  const provider = createWhatsAppProvider(config);
+  const sharedConfig = readWhatsAppConfig();
+  const verifier = createWhatsAppProvider(sharedConfig);
   const rawBody = await request.text();
-  if (!provider.verifyWebhook(rawBody, request.headers.get('x-hub-signature-256'))) {
+  if (!verifier.verifyWebhook(rawBody, request.headers.get('x-hub-signature-256'))) {
     return json({ error: 'Invalid signature.' }, 401);
-  }
-
-  const organization = await resolveExplicitOrganizationByHost(requestHost(request));
-  if (
-    !organization ||
-    organization.isDemo ||
-    organization.vertical !== 'PHARMACY' ||
-    !isTenantLifecycleAccessible(organization.status)
-  ) {
-    return json({ error: 'Unknown tenant.' }, 404);
-  }
-  // A shared app secret does not establish sender ownership for the host tenant.
-  if (!config.phoneNumberId || config.organizationId !== organization.id) {
-    return json({ error: 'Sender is not bound to this tenant.' }, 403);
   }
 
   let payload: unknown;
@@ -94,6 +77,49 @@ export async function POST(request: Request) {
   } catch {
     return json({ error: 'Invalid JSON body.' }, 400);
   }
+
+  // A webhook delivery belongs to one sender. Refuse missing or mixed sender
+  // metadata rather than allowing one tenant's payload to cross a DB scope.
+  const senderIds = new Set<string>();
+  const root = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : null;
+  for (const entry of Array.isArray(root?.entry) ? root.entry : []) {
+    const changes =
+      entry && typeof entry === 'object' && Array.isArray((entry as Record<string, unknown>).changes)
+        ? ((entry as Record<string, unknown>).changes as unknown[])
+        : [];
+    for (const change of changes) {
+      const value =
+        change && typeof change === 'object'
+          ? (change as Record<string, unknown>).value
+          : null;
+      const metadata =
+        value && typeof value === 'object' ? (value as Record<string, unknown>).metadata : null;
+      const sender =
+        metadata && typeof metadata === 'object'
+          ? (metadata as Record<string, unknown>).phone_number_id
+          : null;
+      if (typeof sender === 'string') senderIds.add(sender);
+    }
+  }
+  if (senderIds.size !== 1) return json({ error: 'Unknown sender.' }, 404);
+  const senderId = [...senderIds][0]!;
+  const connection = await findWhatsAppConnectionByPhoneNumberId(senderId);
+  if (!connection) return json({ error: 'Unknown sender.' }, 404);
+  const { config } = connection;
+  const provider = createWhatsAppProvider(config);
+  const organization = await withTenantDb(connection.organizationId, (db) =>
+    db.organization.findUnique({
+      where: { id: connection.organizationId },
+      select: { id: true, isDemo: true, vertical: true, status: true },
+    })
+  );
+  if (
+    !organization ||
+    organization.isDemo ||
+    organization.vertical !== 'PHARMACY' ||
+    !isTenantLifecycleAccessible(organization.status)
+  )
+    return json({ error: 'Unknown tenant.' }, 404);
 
   const callbackPayload = z
     .object({

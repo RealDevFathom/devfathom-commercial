@@ -1146,6 +1146,22 @@ model PharmacyCustomer {
   @@map("pharmacy_customers")
 }
 
+/// One Meta sender connected through Embedded Signup. The access token is an
+/// authenticated-encryption envelope; plaintext credentials are never stored.
+model PharmacyWhatsAppConnection {
+  id                   String   @id @default(cuid())
+  organizationId       String   @unique @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  phoneNumberId         String   @unique
+  wabaId                String?
+  encryptedAccessToken String
+  enabled               Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([organizationId, enabled])
+  @@map("pharmacy_whatsapp_connections")
+}
+
 enum PharmacyKhataEventKind {
   CHARGE
   PAYMENT
