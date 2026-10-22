@@ -15451,3 +15451,48 @@ model OutboundEffect {
   @@index([status, availableAt])
   @@map("outbound_effects")
 }
+
+// Hotel MVP Phase 0/1 security records. Database migration supplies forced RLS and immutable-money triggers.
+model HotelMvpRatePlan {
+  id String @id @default(cuid())
+  organizationId String
+  branchId String
+  roomTypeId String
+  nightlyRateMinor Int
+  taxConfig Json
+  currency String
+  active Boolean @default(true)
+  validFrom DateTime @db.Date
+  validTo DateTime? @db.Date
+  @@unique([organizationId, branchId, id])
+  @@map("hotel_rate_plans")
+}
+model HotelMvpReservation {
+  id String @id @default(cuid())
+  organizationId String
+  branchId String
+  confirmationNumber String
+  status String
+  arrivalDate DateTime @db.Date
+  departureDate DateTime @db.Date
+  currency String
+  version Int @default(1)
+  @@unique([organizationId, branchId, id])
+  @@map("hotel_reservations")
+}
+model HotelMvpFolioPosting {
+  id String @id @default(cuid())
+  organizationId String
+  branchId String
+  folioId String
+  kind String
+  reversesPostingId String?
+  unitAmountMinor Int
+  netMinor Int
+  taxMinor Int
+  totalMinor Int
+  currency String
+  reason String?
+  @@unique([organizationId, branchId, id])
+  @@map("hotel_folio_postings")
+}
