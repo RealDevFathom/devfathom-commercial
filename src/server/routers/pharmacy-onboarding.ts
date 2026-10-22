@@ -40,6 +40,7 @@ import {
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
+import { workspaceToday } from '@/lib/timezone';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
 /** The gates an operator may attest to; the rest are answered from data. */
@@ -267,11 +268,18 @@ export const pharmacyOnboardingRouter = router({
     .query(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements.organizationId;
       const now = new Date();
-      const branches = await ctx.db.pharmacyBranch.findMany({
-        where: { organizationId, active: true },
-        orderBy: { name: 'asc' },
-        select: { id: true, name: true, city: true, addressLine: true, provinceCode: true },
-      });
+      const [branches, organization] = await Promise.all([
+        ctx.db.pharmacyBranch.findMany({
+          where: { organizationId, active: true },
+          orderBy: { name: 'asc' },
+          select: { id: true, name: true, city: true, addressLine: true, provinceCode: true },
+        }),
+        ctx.db.organization.findUnique({
+          where: { id: organizationId },
+          select: { timezone: true },
+        }),
+      ]);
+      const workspaceDate = workspaceToday(organization?.timezone, now);
       const jurisdictions = await jurisdictionsInForce(ctx, now);
       // Never `branches[0]` as a fallback for "nothing chosen" (UX rule 5): a
       // requested branch outside this organization resolves to nothing, and the
@@ -320,8 +328,9 @@ export const pharmacyOnboardingRouter = router({
           // "In force" is a date comparison, not a flag, so a future-dated
           // version reads as scheduled rather than as the current one.
           inForce:
-            version.effectiveFrom <= now &&
-            (version.effectiveTo === null || version.effectiveTo > now),
+            version.effectiveFrom.toISOString().slice(0, 10) <= workspaceDate &&
+            (version.effectiveTo === null ||
+              version.effectiveTo.toISOString().slice(0, 10) > workspaceDate),
         })),
       };
     }),

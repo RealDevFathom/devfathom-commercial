@@ -281,6 +281,45 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     });
   });
 
+  it.each([
+    {
+      timezone: 'Asia/Karachi',
+      beforeLocalMidnight: '2026-09-30T18:59:59.999Z',
+      atLocalMidnight: '2026-09-30T19:00:00.000Z',
+    },
+    {
+      timezone: 'America/New_York',
+      beforeLocalMidnight: '2026-10-01T03:59:59.999Z',
+      atLocalMidnight: '2026-10-01T04:00:00.000Z',
+    },
+  ])(
+    'changes the current profile at local midnight in $timezone',
+    async ({ timezone, beforeLocalMidnight, atLocalMidnight }) => {
+      await owner.query(`UPDATE organizations SET timezone = $1 WHERE id = $2`, [
+        timezone,
+        organizationId,
+      ]);
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date(beforeLocalMidnight));
+        await withTenantDb(organizationId, async (db) => {
+          const listed = await caller(db).regulatory({ branchId });
+          expect(listed.versions.find((version) => version.version === 1)?.inForce).toBe(true);
+          expect(listed.versions.find((version) => version.version === 2)?.inForce).toBe(false);
+        });
+
+        vi.setSystemTime(new Date(atLocalMidnight));
+        await withTenantDb(organizationId, async (db) => {
+          const listed = await caller(db).regulatory({ branchId });
+          expect(listed.versions.find((version) => version.version === 2)?.inForce).toBe(true);
+          expect(listed.versions.find((version) => version.version === 1)?.inForce).toBe(false);
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
   it('refuses a version that starts on or before the one already on file', async () => {
     await withTenantDb(organizationId, async (db) => {
       await expect(

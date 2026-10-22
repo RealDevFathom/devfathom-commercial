@@ -19,6 +19,7 @@
  */
 import type { PrismaClient } from '@/generated/prisma/client';
 import { isPackageCompatibleWithVertical, roleTemplatesForVertical } from '@/lib/vertical-catalog';
+import { workspaceToday } from '@/lib/timezone';
 
 import { assertStoredBranchMayOperate, BranchOperationDeniedError } from './regulatory';
 
@@ -245,8 +246,14 @@ export async function evaluatePharmacyReadiness(
     .filter((template) => template.key !== 'owner-operator')
     .map((template) => template.key);
 
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { packageId: true, timezone: true, package: { select: { vertical: true } } },
+  });
+  const effectiveDate = new Date(
+    `${workspaceToday(organization?.timezone, at)}T00:00:00.000Z`
+  );
   const [
-    organization,
     claims,
     branch,
     seededRoleKeys,
@@ -254,10 +261,6 @@ export async function evaluatePharmacyReadiness(
     receivedLotCount,
     supplierCount,
   ] = await Promise.all([
-    db.organization.findUnique({
-      where: { id: organizationId },
-      select: { packageId: true, package: { select: { vertical: true } } },
-    }),
     db.pharmacyOnboardingGateState.findMany({
       where: { organizationId },
       select: { gate: true, status: true, evidenceRef: true, actorId: true, recordedAt: true },
@@ -268,8 +271,8 @@ export async function evaluatePharmacyReadiness(
     db.branchRegulatoryProfile.findFirst({
       where: {
         organizationId,
-        effectiveFrom: { lte: at },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+        effectiveFrom: { lte: effectiveDate },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: effectiveDate } }],
       },
       select: { branchId: true },
       orderBy: { effectiveFrom: 'desc' },

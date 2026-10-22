@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@/generated/prisma/client';
+import { workspaceToday } from '@/lib/timezone';
 import { recordAudit } from '@/server/audit';
 
 export type BranchOperationDenialReason =
@@ -24,6 +25,7 @@ export type BranchOperationAction = {
 
 export type BranchRegulatoryState = {
   branchId: string;
+  organizationTimezone: string;
   licenceCategory: string;
   licenceValidFrom: Date;
   licenceValidTo: Date;
@@ -60,6 +62,7 @@ export function assertBranchMayOperate(
   action: BranchOperationAction
 ): void {
   const at = action.at ?? new Date();
+  const workspaceDate = workspaceToday(branch.organizationTimezone, at);
   const deny = (reason: BranchOperationDenialReason): never => {
     branch.auditDenied(reason, action);
     throw new BranchOperationDeniedError(reason);
@@ -77,8 +80,8 @@ export function assertBranchMayOperate(
   if (
     !branch.licenceCategory.trim() ||
     !stringValues(branch.ruleSet.licenceCategories).includes(branch.licenceCategory) ||
-    at < branch.licenceValidFrom ||
-    at >= branch.licenceValidTo
+    workspaceDate < branch.licenceValidFrom.toISOString().slice(0, 10) ||
+    workspaceDate >= branch.licenceValidTo.toISOString().slice(0, 10)
   ) {
     deny('LICENCE_INVALID');
   }
@@ -87,8 +90,8 @@ export function assertBranchMayOperate(
     action.requiresQualifiedPerson !== false &&
     (!branch.qualifiedPersonRegistration.trim() ||
       !branch.qualifiedPersonCoverageRosterRef.trim() ||
-      at < branch.qualifiedPersonValidFrom ||
-      at >= branch.qualifiedPersonValidTo)
+      workspaceDate < branch.qualifiedPersonValidFrom.toISOString().slice(0, 10) ||
+      workspaceDate >= branch.qualifiedPersonValidTo.toISOString().slice(0, 10))
   ) {
     deny('QUALIFIED_PERSON_COVERAGE_MISSING');
   }
@@ -109,12 +112,19 @@ export async function assertStoredBranchMayOperate(
   action: BranchOperationAction
 ): Promise<void> {
   const at = action.at ?? new Date();
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { timezone: true },
+  });
+  const effectiveDate = new Date(
+    `${workspaceToday(organization?.timezone, at)}T00:00:00.000Z`
+  );
   const profile = await db.branchRegulatoryProfile.findFirst({
     where: {
       organizationId,
       branchId,
-      effectiveFrom: { lte: at },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+      effectiveFrom: { lte: effectiveDate },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: effectiveDate } }],
     },
     include: { jurisdictionRuleSet: true },
     orderBy: { effectiveFrom: 'desc' },
@@ -143,6 +153,7 @@ export async function assertStoredBranchMayOperate(
   assertBranchMayOperate(
     {
       ...profile,
+      organizationTimezone: organization?.timezone ?? 'UTC',
       ruleSet: profile.jurisdictionRuleSet,
       auditDenied,
     },
