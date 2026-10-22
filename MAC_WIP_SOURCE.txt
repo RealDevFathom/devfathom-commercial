@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/ux03-visual-lane
+Branch: (detached)
+HEAD: 215568faf361ee49807c95fe69e00fa71b6565f2
+Mode: applied
+Excluded (secrets): 2
