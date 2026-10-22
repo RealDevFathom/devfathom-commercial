@@ -1,4 +1,5 @@
 import { writePatientConsent } from '@/lib/pharmacy/consent-writer';
+import { Prisma } from '@/generated/prisma/client';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -17,6 +18,7 @@ import {
 } from '@/lib/pharmacy/counter-prescriptions';
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
 import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
+import { assertPrescriptionSaleLineReady, PharmacyDispensingError } from '@/lib/pharmacy/dispensing';
 import {
   configuredRxOcrAdapterName,
   proposeRxPrefill,
@@ -34,6 +36,10 @@ import {
 
 const purpose = z.enum(['DISPENSING', 'REMINDERS', 'LOYALTY', 'MARKETING']);
 const channel = z.enum(['IN_PERSON', 'PHONE', 'SMS', 'WHATSAPP', 'EMAIL']);
+
+function txDb(tx: unknown): ScopedDb {
+  return tx as ScopedDb;
+}
 
 // Suppress sensitive payload auditing before authentication/input validation,
 // including denied uploads. Keep the existing audited guards and ABAC engine.
@@ -392,11 +398,12 @@ export const pharmacyPrescriptionsRouter = router({
       return patient;
     }),
 
-  fill: protectedProcedure
+  fill: capabilityProcedure('pharmacy:dispense')
     .input(
       z
         .object({
           id: z.string().min(1),
+          saleLineId: z.string().min(1),
           prescriptionLineId: z.string().min(1),
           fillSequence: z.number().int().positive(),
           quantityCanonicalUnits: z.number().int().positive(),
@@ -404,9 +411,63 @@ export const pharmacyPrescriptionsRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.prescriptionFill.create({ data: { ...input, dispensedByUserId: ctx.session.user.id } })
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      return ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        const locked = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+          SELECT id FROM pharmacy_prescription_lines
+          WHERE id=${input.prescriptionLineId} AND "organizationId"=${organizationId}
+          FOR UPDATE`);
+        if (locked.length !== 1) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Prescription line not found.' });
+        }
+        const existing = await db.prescriptionFill.findFirst({
+          where: { organizationId, idempotencyKey: input.idempotencyKey },
+        });
+        if (existing) {
+          if (
+            existing.id !== input.id ||
+            existing.prescriptionLineId !== input.prescriptionLineId ||
+            existing.fillSequence !== input.fillSequence ||
+            existing.quantityCanonicalUnits !== input.quantityCanonicalUnits
+          ) {
+            throw new TRPCError({ code: 'CONFLICT', message: 'Idempotency key was already used.' });
+          }
+          return existing;
+        }
+        const saleLine = await db.pharmacySaleLine.findFirst({
+          where: { id: input.saleLineId, organizationId },
+          include: { medicine: true },
+        });
+        if (
+          !saleLine ||
+          !saleLine.medicine.rx ||
+          saleLine.medicine.controlled ||
+          saleLine.canonicalUnits !== input.quantityCanonicalUnits
+        ) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'A matching non-controlled Rx sale line is required.',
+          });
+        }
+        try {
+          await assertPrescriptionSaleLineReady(db, {
+            ...saleLine,
+            prescriptionLineId: input.prescriptionLineId,
+          });
+        } catch (error) {
+          if (error instanceof PharmacyDispensingError) {
+            throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+          }
+          throw error;
+        }
+        const { saleLineId: _saleLineId, ...fill } = input;
+        return db.prescriptionFill.create({
+          data: { ...fill, dispensedByUserId: ctx.session.user.id },
+        });
+      });
+    }),
 
   captureRefillReminder: capabilityProcedure('pharmacy:dispense')
     .input(

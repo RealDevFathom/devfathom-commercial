@@ -166,6 +166,67 @@ describe('POS sale voiding', () => {
     });
   });
 
+  it.each([
+    { name: 'OTC', medicine: { rx: false, controlled: false } },
+    { name: 'controlled', medicine: { rx: true, controlled: true } },
+  ])('leaves the $name completion path unchanged', async ({ medicine }) => {
+    let status = 'OPEN';
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({
+          id: 'sale-a',
+          status,
+          lines: [
+            {
+              id: 'line-a',
+              medicine,
+              medicineId: 'medicine-a',
+              presentationId: 'p-a',
+              canonicalUnits: 1,
+            },
+          ],
+          receiptNumber: 1,
+        }),
+        updateMany: async () => {
+          status = 'COMPLETED';
+          return { count: 1 };
+        },
+      },
+      pharmacySaleEvent: { create: async ({ data }: { data: Record<string, unknown> }) => data },
+    };
+    await expect(changeSaleStatus(db as never, scope, 'sale-a', 'complete')).resolves.toMatchObject({
+      status: 'COMPLETED',
+    });
+  });
+
+  it('refuses to complete a non-controlled Rx sale without prescription evidence', async () => {
+    const updateMany = vi.fn();
+    const db = {
+      pharmacySale: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'sale-a',
+          status: 'OPEN',
+          lines: [
+            {
+              id: 'line-a',
+              medicine: { rx: true, controlled: false },
+              medicineId: 'medicine-a',
+              presentationId: 'presentation-a',
+              canonicalUnits: 1,
+            },
+          ],
+        }),
+        updateMany,
+      },
+      pharmacyPharmacistReviewItem: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+
+    await expect(
+      changeSaleStatus(db as never, scope, 'sale-a', 'complete')
+    ).rejects.toMatchObject({ code: 'PRESCRIPTION_REQUIRED' });
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
   it('stops a losing add-line race before stock allocation', async () => {
     let medicineReads = 0;
     const db = {
