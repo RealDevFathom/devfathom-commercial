@@ -735,6 +735,20 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       });
       expect(res.status).toBe(200);
       expect(res.json.billId).toBe(billId);
+
+      const evidence = await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantCoAuthorization.findFirst({
+          where: { targetType: 'RestaurantBillLine', targetId: line!.id },
+          select: {
+            terminalSessionId: true,
+            terminalSession: { select: { deviceId: true, status: true } },
+          },
+        })
+      );
+      expect(evidence).toMatchObject({
+        terminalSessionId: expect.any(String),
+        terminalSession: { deviceId: ctx.posA.deviceId, status: 'ACTIVE' },
+      });
     });
 
     it('re-cuts an order by item with manager co-authorization (split)', async () => {
