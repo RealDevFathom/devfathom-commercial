@@ -54,6 +54,18 @@ describe('pharmacy voucher codes', () => {
     await expect(issueVoucher(db, { organizationId: 'org-a', branchId: 'b1', valueMinor: 1,
       phone: 'x', actorId: 'a' })).rejects.toMatchObject({ reason: 'ABUSE_LIMIT' });
   });
+
+  it.each([-1, 0, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'refuses to issue a voucher with invalid integer-paisa value %s',
+    async (valueMinor) => {
+      const db = store();
+      await expect(issueVoucher(db, {
+        organizationId: 'org-a', branchId: 'b1', valueMinor, actorId: 'owner',
+      })).rejects.toThrow('INVALID_MONEY');
+      expect(db.countActivity).not.toHaveBeenCalled();
+      expect(db.insertVoucher).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('voucher eligibility and privacy', () => {
@@ -68,6 +80,24 @@ describe('voucher eligibility and privacy', () => {
   it('excludes catalogue-classified Rx and OTC lines only in the owner option', () => {
     expect(voucherEligibleMinor('NON_DRUG_ONLY', lines)).toBe(900);
   });
+  it.each([
+    [{ quantity: 1, unitPriceMinor: -1, discountMinor: 0, rx: false, otc: false }],
+    [{ quantity: 1, unitPriceMinor: 1, discountMinor: 2, rx: false, otc: false }],
+    [{ quantity: 0.5, unitPriceMinor: 100, discountMinor: 0, rx: false, otc: false }],
+    [
+      { quantity: 1, unitPriceMinor: Number.MAX_SAFE_INTEGER, discountMinor: 0, rx: false, otc: false },
+      { quantity: 1, unitPriceMinor: 1, discountMinor: 0, rx: false, otc: false },
+    ],
+  ])('rejects non-integer, negative, and overflowing paisa arithmetic %#', (invalidLines) => {
+    expect(() => voucherEligibleMinor('WHOLE_BASKET', invalidLines)).toThrow('INVALID_MONEY');
+  });
+  it.each([-1, 0, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'never creates a negative or invalid redemption for voucher value %s',
+    (valueMinor) => {
+      expect(() => voucherRedemptionMinor({ valueMinor, minNextBasketMinor: 0,
+        scope: 'WHOLE_BASKET', lines })).toThrow('INVALID_MONEY');
+    }
+  );
   it.each([null, { status: 'EXPIRED', expiresAt: new Date('2026-01-01') },
     { status: 'REDEEMED', expiresAt: new Date('2027-01-01') }])('gives no enumeration hint', (voucher) => {
     expect(() => publicVoucherResult(voucher as never, new Date('2026-06-01')))
@@ -90,6 +120,8 @@ describe('owner settings', () => {
       actorId: 'owner', oldValue, newValue: next });
     await expect(updateLoyaltySettings(settingsStore, { organizationId: 'org-a', actorId: 'cashier',
       authorized: false, settings: oldValue })).rejects.toMatchObject({ reason: 'OVERRIDE_REQUIRED' });
+    expect(settingsStore.readSettings).toHaveBeenCalledTimes(1);
+    expect(settingsStore.updateSettingsAndAudit).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -102,11 +134,16 @@ describe('transactional redemption', () => {
     const db = store();
     await expect(redeemVoucher(db, input)).resolves.toMatchObject({ amountMinor: 1_000, scope: 'WHOLE_BASKET' });
     expect(db.markRedeemed).toHaveBeenCalledBefore(vi.mocked(db.createLoyaltyTender));
+    expect(db.createLoyaltyTender).toHaveBeenCalledWith(expect.objectContaining({
+      organizationId: 'org-a', branchId: 'b1', saleId: 's1', amountMinor: 1_000,
+      actorId: 'cashier', voucherId: 'v1', idempotencyKey: 'checkout-1',
+    }));
   });
   it('makes a double-redeem race have exactly one winner via conditional status update', async () => {
     const db = store({ markRedeemed: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false) });
     const outcomes = await Promise.allSettled([redeemVoucher(db, input), redeemVoucher(db, { ...input, saleId: 's2' })]);
     expect(outcomes.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(db.createLoyaltyTender).toHaveBeenCalledTimes(1);
   });
   it('blocks stacking and one-per-visit/sale', async () => {
     const db = store({ saleVoucherCount: vi.fn().mockResolvedValue(1) });
@@ -125,8 +162,15 @@ describe('transactional redemption', () => {
     }));
   });
   it('collapses a cross-tenant lookup to not-found', async () => {
-    const db = store({ lockVoucher: vi.fn().mockResolvedValue(null) });
+    const db = store({ lockVoucher: vi.fn().mockResolvedValue({
+      id: 'foreign-voucher', organizationId: 'org-a', branchId: 'b1', status: 'ISSUED',
+      valueMinor: 1_000, scope: 'WHOLE_BASKET', customerId: null, phone: null,
+      expiresAt: new Date('2026-12-01'), minNextBasketMinor: 0, redeemedSaleId: null,
+    }) });
     await expect(redeemVoucher(db, { ...input, organizationId: 'org-b' }))
       .rejects.toMatchObject({ reason: 'VOUCHER_NOT_FOUND' });
+    expect(db.lockVoucher).toHaveBeenCalledWith('org-b', input.code);
+    expect(db.markRedeemed).not.toHaveBeenCalled();
+    expect(db.createLoyaltyTender).not.toHaveBeenCalled();
   });
 });

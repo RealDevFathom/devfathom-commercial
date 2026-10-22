@@ -69,10 +69,16 @@ export type VoucherBasketLine = {
 
 export function voucherEligibleMinor(scope: VoucherScope, lines: readonly VoucherBasketLine[]) {
   return lines.reduce((total, line) => {
+    if (!Number.isSafeInteger(line.quantity) || line.quantity <= 0 ||
+        !Number.isSafeInteger(line.unitPriceMinor) || line.unitPriceMinor < 0 ||
+        !Number.isSafeInteger(line.discountMinor) || line.discountMinor < 0)
+      throw new RangeError('INVALID_MONEY');
     if (scope === 'NON_DRUG_ONLY' && (line.rx || line.otc)) return total;
     const lineMinor = line.quantity * line.unitPriceMinor - line.discountMinor;
     if (!Number.isSafeInteger(lineMinor) || lineMinor < 0) throw new RangeError('INVALID_MONEY');
-    return total + lineMinor;
+    const nextTotal = total + lineMinor;
+    if (!Number.isSafeInteger(nextTotal)) throw new RangeError('INVALID_MONEY');
+    return nextTotal;
   }, 0);
 }
 
@@ -82,6 +88,9 @@ export function voucherRedemptionMinor(input: {
   scope: VoucherScope;
   lines: readonly VoucherBasketLine[];
 }) {
+  if (!Number.isSafeInteger(input.valueMinor) || input.valueMinor <= 0 ||
+      !Number.isSafeInteger(input.minNextBasketMinor) || input.minNextBasketMinor < 0)
+    throw new RangeError('INVALID_MONEY');
   const basketMinor = voucherEligibleMinor('WHOLE_BASKET', input.lines);
   if (basketMinor < input.minNextBasketMinor) throw new PharmacyVoucherError('MINIMUM_BASKET');
   const eligibleMinor = voucherEligibleMinor(input.scope, input.lines);
@@ -126,6 +135,9 @@ export async function issueVoucher(
   },
   generate = generateVoucherCode
 ) {
+  if (!Number.isSafeInteger(input.valueMinor) || input.valueMinor <= 0 ||
+      !Number.isSafeInteger(input.minNextBasketMinor ?? 0) || (input.minNextBasketMinor ?? 0) < 0)
+    throw new RangeError('INVALID_MONEY');
   const issuedAt = input.issuedAt ?? new Date();
   const since = new Date(issuedAt.getTime() - (input.abusePeriodDays ?? 30) * 86_400_000);
   const counts = await store.countActivity({

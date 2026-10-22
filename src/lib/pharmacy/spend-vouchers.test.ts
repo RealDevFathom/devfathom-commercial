@@ -129,7 +129,10 @@ describe('spend-threshold voucher transaction effects', () => {
     ] });
     await issueSpendVoucherForCompletedSale(store as never, scope, 'sale-a');
     expect(store.pharmacyVoucher.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ valueMinor: 50_000 }),
+      data: expect.objectContaining({
+        organizationId: 'org-a', branchId: 'branch-a', valueMinor: 50_000,
+        issuedByActorId: 'cashier-a', issuedSaleId: 'sale-a',
+      }),
     }));
   });
 
@@ -170,6 +173,21 @@ describe('spend-threshold voucher transaction effects', () => {
     const store = db();
     await voidUnredeemedSpendVoucherForRefund(store as never, scope, 'sale-a');
     expect(store.pharmacyVoucher.updateMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org-a', branchId: 'branch-a', issuedSaleId: 'sale-a', status: 'ISSUED' },
+      data: { status: 'VOID' },
+    });
+  });
+
+  it('makes refund/void reversal idempotent without touching redeemed or foreign vouchers', async () => {
+    const store = db();
+    store.pharmacyVoucher.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
+    await expect(voidUnredeemedSpendVoucherForRefund(store as never, scope, 'sale-a'))
+      .resolves.toEqual({ count: 1 });
+    await expect(voidUnredeemedSpendVoucherForRefund(store as never, scope, 'sale-a'))
+      .resolves.toEqual({ count: 0 });
+    expect(store.pharmacyVoucher.updateMany).toHaveBeenNthCalledWith(2, {
       where: { organizationId: 'org-a', branchId: 'branch-a', issuedSaleId: 'sale-a', status: 'ISSUED' },
       data: { status: 'VOID' },
     });
