@@ -10,11 +10,32 @@ const store = vi.hoisted(() => ({
   failConsent: false,
   failCommit: false,
   failPlacement: false,
+  authorized: true,
+  authorizationCalls: [] as unknown[][],
+}));
+
+vi.mock('@/lib/abac', () => ({
+  subjectFromSession: (user: unknown) => user,
+  can: async (...args: unknown[]) => {
+    store.authorizationCalls.push(args);
+    return store.authorized;
+  },
 }));
 
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
     $queryRaw: async () => [{ id: 'patient-a', patientId: 'patient-a' }],
+    user: {
+      findFirst: async ({ where }: { where: { id: string; organizationId: string } }) =>
+        where.id === 'user-1' && where.organizationId === 'org_a'
+          ? {
+              id: 'user-1',
+              role: 'EMPLOYEE',
+              department: null,
+              status: 'ACTIVE',
+            }
+          : null,
+    },
     pharmacyCustomer: {
       findFirst: async () => ({ patientId: 'patient-a' }),
       findMany: async () =>
@@ -157,6 +178,8 @@ beforeEach(() => {
   store.failConsent = false;
   store.failCommit = false;
   store.failPlacement = false;
+  store.authorized = true;
+  store.authorizationCalls = [];
   provider = new MockWhatsAppProvider(readWhatsAppConfig({}));
 });
 afterEach(() => vi.useRealTimers());
@@ -207,6 +230,28 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     expect(store.logs.map((log) => [log.kind, log.status])).toEqual([
       ['ORDER_REQUEST', 'RECEIVED'],
       ['ORDER_CONFIRMATION', 'IGNORED'],
+    ]);
+  });
+
+  it('does not mutate stock when central authorization denies the linked user', async () => {
+    knownCustomer(true);
+    store.authorized = false;
+
+    await expect(
+      handleInboundWhatsAppMessage('org_a', provider, message('Panadol 2 packs'))
+    ).resolves.toBe('PHARMACIST_CALLBACK');
+
+    expect(store.placed).toEqual([]);
+    expect(store.authorizationCalls).toEqual([
+      [
+        expect.objectContaining({ id: 'user-1' }),
+        'pharmacy:orders',
+        undefined,
+        expect.objectContaining({ source: 'REST' }),
+      ],
+    ]);
+    expect(provider.calls).toEqual([
+      expect.objectContaining({ body: expect.stringContaining('A pharmacist will call you') }),
     ]);
   });
 

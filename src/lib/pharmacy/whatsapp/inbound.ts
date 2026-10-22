@@ -1,4 +1,7 @@
 import 'server-only';
+
+import { can, subjectFromSession } from '@/lib/abac';
+
 import { lockCustomerConsent } from '../consent-writer';
 
 import {
@@ -107,6 +110,18 @@ async function placeWhatsAppOrder(
 ) {
   const userId = customer.userId;
   if (!userId) return null;
+  const actor = await db.user.findFirst({
+    where: { id: userId, organizationId },
+    select: { id: true, role: true, department: true, status: true },
+  });
+  if (
+    !actor ||
+    !(await can(subjectFromSession(actor), 'pharmacy:orders', undefined, {
+      db,
+      source: 'REST',
+    }))
+  )
+    return null;
   const branch = await orderBranch(db, organizationId, customer.id);
   if (!branch) return null;
   const scope = { organizationId, branchId: branch.id, actorId: userId };
