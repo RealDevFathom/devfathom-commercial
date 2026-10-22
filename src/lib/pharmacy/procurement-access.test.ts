@@ -21,17 +21,29 @@ describe('procurementCapabilityGranted', () => {
     ).toBe(false);
   });
 
-  it('lets a pharmacy wildcard through and lets DENY win', () => {
+  it('requires an exact allow and lets any matching DENY win', () => {
     expect(
       procurementCapabilityGranted({
         overrides: [],
         role: [{ capability: 'pharmacy.*', effect: 'ALLOW' }],
       })
-    ).toBe(true);
+    ).toBe(false);
     expect(
       procurementCapabilityGranted({
         overrides: [{ capability: 'pharmacy.procurement', effect: 'DENY' }],
-        role: [{ capability: 'pharmacy.*', effect: 'ALLOW' }],
+        role: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
+      })
+    ).toBe(false);
+    expect(
+      procurementCapabilityGranted({
+        overrides: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
+        role: [{ capability: 'pharmacy:*', effect: 'DENY' }],
+      })
+    ).toBe(false);
+    expect(
+      procurementCapabilityGranted({
+        overrides: [{ capability: '*', effect: 'ALLOW' }],
+        role: [],
       })
     ).toBe(false);
   });

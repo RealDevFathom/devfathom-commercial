@@ -23,11 +23,18 @@ export function procurementCapabilityGranted(input: {
   role: readonly CapabilityRule[];
 }): boolean {
   const overrides = matching(input.overrides);
-  if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   const role = matching(input.role);
-  if (role.some((rule) => rule.effect === 'DENY')) return false;
-  return role.some((rule) => rule.effect === 'ALLOW');
+
+  // A broad deny still closes the pharmacy surface, but elevated pharmacy
+  // operations are never acquired through a wildcard allow. Requiring the
+  // named capability prevents a general tenant grant from silently expanding
+  // into regulated procurement access.
+  if ([...overrides, ...role].some((rule) => rule.effect === 'DENY')) return false;
+  return [...input.overrides, ...input.role].some(
+    (rule) =>
+      rule.effect === 'ALLOW' &&
+      PROCUREMENT_ACTIONS.some((action) => rule.capability === action)
+  );
 }
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';

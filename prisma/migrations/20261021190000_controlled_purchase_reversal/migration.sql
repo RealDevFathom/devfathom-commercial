@@ -1,7 +1,7 @@
 -- Permit a controlled PURCHASE to be corrected by the linked negative reversal movement.
 
 CREATE OR REPLACE FUNCTION pharmacy_rx_reconcile_controlled_register() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE actual integer; movement record; lot_batch text; original record; previous_balance bigint; derived_delta bigint; restored bigint;
+DECLARE actual integer; movement record; lot_batch text; lot_medicine text; lot_branch text; original record; previous_balance bigint; derived_delta bigint; restored bigint;
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended(NEW."organizationId"||':'||NEW."branchId",0));
   IF EXISTS (
@@ -91,25 +91,27 @@ BEGIN
   SELECT * INTO movement FROM "pharmacy_stock_movements"
     WHERE "organizationId"=NEW."organizationId" AND "id"=NEW."stockMovementId";
   IF NEW."entryKind" = 'PURCHASE' THEN
-    IF movement."kind"<>'RECEIPT' OR movement."branchId"<>NEW."branchId"
+    IF NOT FOUND OR movement."kind"<>'RECEIPT' OR movement."branchId"<>NEW."branchId"
        OR movement."inventoryLotId"<>NEW."inventoryLotId"
        OR movement."quantityUnits"<>NEW."quantityCanonicalUnits" THEN
       RAISE EXCEPTION 'controlled register purchase does not match stock ledger movement' USING ERRCODE='23514';
     END IF;
   ELSE
-    IF movement."kind"<>'SALE' OR movement."branchId"<>NEW."branchId"
+    IF NOT FOUND OR movement."kind"<>'SALE' OR movement."branchId"<>NEW."branchId"
        OR movement."inventoryLotId"<>NEW."inventoryLotId"
        OR movement."quantityUnits"<>-NEW."quantityCanonicalUnits" THEN
       RAISE EXCEPTION 'controlled register entry does not match stock ledger movement' USING ERRCODE='23514';
     END IF;
   END IF;
-  SELECT b."batchNumber" INTO lot_batch
+  SELECT b."batchNumber", b."medicineId", l."branchId" INTO lot_batch, lot_medicine, lot_branch
     FROM "pharmacy_inventory_lots" l
     JOIN "pharmacy_manufacturing_batches" b
       ON b."organizationId"=l."organizationId" AND b."id"=l."manufacturingBatchId"
     WHERE l."organizationId"=NEW."organizationId" AND l."id"=NEW."inventoryLotId";
-  IF lot_batch IS DISTINCT FROM NEW."batchNumber" THEN
-    RAISE EXCEPTION 'controlled register batch does not match stock lot' USING ERRCODE='23514';
+  IF lot_batch IS DISTINCT FROM NEW."batchNumber"
+     OR lot_medicine IS DISTINCT FROM NEW."medicineId"
+     OR lot_branch IS DISTINCT FROM NEW."branchId" THEN
+    RAISE EXCEPTION 'controlled register identity does not match stock lot' USING ERRCODE='23514';
   END IF;
   SELECT COALESCE(sum("onHandUnits"),0)::integer INTO actual FROM "pharmacy_stock_balances"
     WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId"
