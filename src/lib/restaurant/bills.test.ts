@@ -111,6 +111,7 @@ function order(
     quantity?: number;
     seatNumber?: number | null;
     status?: string;
+    remakeOfItemId?: string | null;
     modifiers?: string[];
   }>
 ) {
@@ -122,6 +123,7 @@ function order(
     items: items.map((i) => ({
       id: i.id,
       status: i.status ?? 'SERVED',
+      remakeOfItemId: i.remakeOfItemId ?? null,
       seatNumber: i.seatNumber ?? null,
       name: i.id,
       unitPrice: D(i.unitPrice),
@@ -415,6 +417,19 @@ describe('evaluateOrderSettlement reconciliation', () => {
 });
 
 describe('planBills — NONE / BY_ITEM / BY_SEAT (pure partition, C4)', () => {
+  it('charges the original purchase once and excludes its replacement remake', () => {
+    const [bill] = planBills(
+      order([
+        { id: 'original', unitPrice: '30.00', status: 'REMAKE_REQUESTED' },
+        { id: 'replacement', unitPrice: '30.00', remakeOfItemId: 'original' },
+      ]),
+      { kind: 'NONE' }
+    );
+
+    expect(bill?.subtotal.toString()).toBe('30');
+    expect(bill?.lines.map((line) => line.orderItemId)).toEqual(['original']);
+  });
+
   it('freezes DINE_IN policy evidence on exact pre-discount merchandise and modifier basis', () => {
     const [bill] = planBills(
       withServiceCharge(

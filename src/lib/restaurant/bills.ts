@@ -173,6 +173,7 @@ async function persistCoAuth(
 type LoadedBillItem = {
   id: string;
   status: string;
+  remakeOfItemId: string | null;
   seatNumber: number | null;
   name: string;
   unitPrice: Prisma.Decimal;
@@ -203,7 +204,7 @@ function itemLineSubtotal(item: LoadedBillItem): Prisma.Decimal {
 
 /**
  * The DERIVED order total: Σ (unitPrice + Σ modifier deltas) × quantity over the
- * non-voided items. There is no stored order total (C3) — this recomputes it from
+ * billable items. There is no stored order total (C3) — this recomputes it from
  * the frozen snapshots, matching `restaurant-orders.ts` `deriveSubtotal` exactly so
  * governance can reconcile bills ↔ order from durable rows. Tax/service-charge are
  * structurally zero in M5, so the subtotal IS the order total.
@@ -232,6 +233,7 @@ async function loadBillOrder(
         select: {
           id: true,
           status: true,
+          remakeOfItemId: true,
           seatNumber: true,
           name: true,
           unitPrice: true,
@@ -247,8 +249,10 @@ async function loadBillOrder(
   return order as LoadedBillOrder;
 }
 
-function nonVoidedItems(order: LoadedBillOrder): LoadedBillItem[] {
-  return order.items.filter((i) => i.status !== 'VOIDED');
+function billableItems(order: LoadedBillOrder): LoadedBillItem[] {
+  // A remake is operational replacement work, not additional guest consideration.
+  // Its original line remains billable unless that original is explicitly voided.
+  return order.items.filter((i) => i.status !== 'VOIDED' && i.remakeOfItemId === null);
 }
 
 // ── Split planning (pure) ────────────────────────────────────────────────────
@@ -327,9 +331,9 @@ function itemBill(
  * cents across runs (a named check).
  */
 export function planBills(order: LoadedBillOrder, split: SplitSpec): PlannedBill[] {
-  const items = nonVoidedItems(order);
+  const items = billableItems(order);
   if (items.length === 0) {
-    throw new BillCommandError('The order has no non-voided items to bill.', 'NO_ITEMS');
+    throw new BillCommandError('The order has no billable items.', 'NO_ITEMS');
   }
 
   if (split.kind === 'FRACTIONAL' && order.serviceChargePolicyVersion) {
@@ -410,7 +414,7 @@ function planByItem(
       const item = byId.get(itemId);
       if (!item) {
         throw new BillCommandError(
-          `Item ${itemId} is not a billable (non-voided) item on this order.`,
+          `Item ${itemId} is not a billable item on this order.`,
           'PARTITION_INCOMPLETE'
         );
       }
@@ -429,7 +433,7 @@ function planByItem(
   if (seen.size !== items.length) {
     const missing = items.filter((i) => !seen.has(i.id)).map((i) => i.id);
     throw new BillCommandError(
-      `Every non-voided item must be assigned to exactly one bill; unassigned: ${missing.join(', ')}.`,
+      `Every billable item must be assigned to exactly one bill; unassigned: ${missing.join(', ')}.`,
       'PARTITION_INCOMPLETE'
     );
   }
@@ -1780,7 +1784,7 @@ export async function evaluateOrderSettlement(
   orderId: string
 ): Promise<OrderSettlement> {
   const order = await loadBillOrder(tx, orderId);
-  const items = nonVoidedItems(order);
+  const items = billableItems(order);
   const allBills = await tx.restaurantBill.findMany({
     where: { orderId },
     orderBy: { createdAt: 'asc' },
