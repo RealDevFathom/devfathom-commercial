@@ -709,7 +709,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(after).toEqual(before);
     });
 
-    it('comps a bill line with manager co-authorization (payments:collect)', async () => {
+    it('comps a bill line with manager co-authorization (orders:complimentary)', async () => {
       const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['8.00']);
       const cut = await call(deps.routes.bill, {
         secret: ctx.posA.secret,

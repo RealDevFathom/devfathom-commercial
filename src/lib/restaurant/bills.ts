@@ -992,7 +992,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
     const coAuthorizationId = await persistCoAuth(tx, {
       actingStaffProfileId: input.actor.staffProfileId,
       approvingStaffProfileId: input.approvingStaffProfileId,
-      capability: 'orders:comp',
+      capability: 'orders:complimentary',
       reason,
       targetType: 'RestaurantBillLine',
       targetId: line.id,

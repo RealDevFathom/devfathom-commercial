@@ -912,7 +912,9 @@ describeIfDatabase('bills command layer (real DB)', () => {
           compAmount: true,
           lineTotal: true,
           compReason: true,
-          compCoAuthorization: { select: { approvingStaffProfileId: true, reason: true } },
+          compCoAuthorization: {
+            select: { approvingStaffProfileId: true, capability: true, reason: true },
+          },
         },
       })
     );
@@ -923,6 +925,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
     expect(after?.lineTotal.toString()).toBe('0');
     expect(after?.compReason).toBe('guest complaint');
     expect(after?.compCoAuthorization?.approvingStaffProfileId).toBe(ids.manager);
+    expect(after?.compCoAuthorization?.capability).toBe('orders:complimentary');
 
     // Bill totals: compTotal picks up the comp; grandTotal drops by it; the
     // settlement identity Σ(grandTotal + compTotal) ≡ order total still holds.

@@ -12,11 +12,11 @@ import {
  * Comp a bill line to zero (C4): the line keeps its snapshot price, its `compAmount` is
  * set so the effective total nets to zero, and the comp records a reason + an inline
  * manager co-authorization (verified here; the approver must hold `coauth:approve`). Only
- * an OPEN bill can be comped. Gated on `payments:collect`; idempotent on the money key.
+ * an OPEN bill can be comped. Gated on `orders:complimentary`; idempotent on the money key.
  */
 export const POST = moneyMutationRoute({
   schema: compBody,
-  capability: 'payments:collect',
+  capability: 'orders:complimentary',
   run: async ({ ctx, data, actor, now }) => {
     await requireBillInDeviceBranch(ctx.db, data.billId, ctx.device.branchId);
     const approver = await resolveApprover(ctx, data.approving, now);
