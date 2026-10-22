@@ -80,14 +80,18 @@ type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 
 const dispense: Permission[] = [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }];
 
-function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE') {
+function fixture(
+  permissions: Permission[],
+  role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE',
+  overrides: Permission[] = []
+) {
   const db = {
     user: {
       findUnique: vi.fn(async () => ({
         status: 'ACTIVE',
         organizationId: 'org-a',
         organizationRole: { permissions },
-        permissionOverrides: [] as Permission[],
+        permissionOverrides: overrides,
       })),
     },
     pharmacyBranch: {
@@ -289,6 +293,7 @@ describe('counter receipt authorization', () => {
   it('lets an assigned cashier use the receipt, the cart, return history, and cash tender', async () => {
     const f = fixture([
       { capability: 'pharmacy.counter', effect: 'ALLOW' },
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
       { capability: 'pharmacy:orders', effect: 'ALLOW' },
     ]);
     assign(f, ['branch-a']);
@@ -348,6 +353,28 @@ describe('counter receipt authorization', () => {
     expect(readCounterCart).toHaveBeenCalled();
     expect(readReturnHistory).toHaveBeenCalled();
     expect(applyPharmacyTender).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not let a user ALLOW override a role DENY when tendering', async () => {
+    const f = fixture(
+      [{ capability: 'pharmacy:counter', effect: 'DENY' }],
+      'EMPLOYEE',
+      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
+    );
+    assign(f, ['branch-a']);
+
+    await expect(
+      f.caller().tender({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        type: 'CASH',
+        amountMinor: 100,
+        idempotencyKey: 'role-deny',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 
   it('denies counter reads and cash tender when the cashier is not assigned', async () => {
