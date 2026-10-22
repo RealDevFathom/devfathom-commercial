@@ -10814,9 +10814,10 @@ model OrganizationModule {
   expiresAt      DateTime?
   overrides      Json?
   reason         String?
-  changedById    String?
-  createdAt      DateTime                 @default(now())
-  updatedAt      DateTime                 @updatedAt
+  changedById      String?
+  sourceContractId String?
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
 
   organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   module       PlatformModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
@@ -10824,6 +10825,7 @@ model OrganizationModule {
   @@unique([organizationId, moduleId])
   @@index([organizationId, status])
   @@index([moduleId])
+  @@index([sourceContractId])
   @@map("organization_modules")
 }
 

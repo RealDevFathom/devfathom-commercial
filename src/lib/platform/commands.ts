@@ -609,6 +609,7 @@ async function syncContractEntitlements(
   actor: PlatformIdentity,
   input: {
     organizationId: string;
+    contractId: string;
     number: string;
     status: string;
     seatLimit: number;
@@ -619,7 +620,35 @@ async function syncContractEntitlements(
 ) {
   if (!['ACTIVE', 'GRACE', 'RENEWAL_DUE'].includes(input.status)) return;
   const expiresAt = input.graceUntil ?? input.endDate;
+  // Only supersede grants carrying durable contract provenance. In particular,
+  // never remove an explicit administrator DENY (or an unproven legacy row).
+  await db.organizationModule.updateMany({
+    where: {
+      organizationId: input.organizationId,
+      sourceContractId: { not: input.contractId },
+      moduleId: { notIn: input.moduleIds },
+      status: 'ENABLED',
+    },
+    data: {
+      status: 'EXPIRED',
+      expiresAt: new Date(),
+      reason: `Superseded by Contract ${input.number}`,
+      changedById: actor.id,
+    },
+  });
   for (const moduleId of input.moduleIds) {
+    const existing = await db.organizationModule.findUnique({
+      where: {
+        organizationId_moduleId: {
+          organizationId: input.organizationId,
+          moduleId,
+        },
+      },
+      select: { sourceContractId: true },
+    });
+    // A row without contract provenance is an explicit/admin or legacy override.
+    // Contract ALLOW must not overwrite it, especially when it is a DENY.
+    if (existing && !existing.sourceContractId) continue;
     await db.organizationModule.upsert({
       where: {
         organizationId_moduleId: {
@@ -632,6 +661,7 @@ async function syncContractEntitlements(
         expiresAt,
         reason: `Contract ${input.number}`,
         changedById: actor.id,
+        sourceContractId: input.contractId,
       },
       create: {
         organizationId: input.organizationId,
@@ -640,6 +670,7 @@ async function syncContractEntitlements(
         expiresAt,
         reason: `Contract ${input.number}`,
         changedById: actor.id,
+        sourceContractId: input.contractId,
       },
     });
   }
@@ -1919,6 +1950,7 @@ async function runCommand(
           expiresAt: input.expiresAt,
           reason: input.reason,
           changedById: actor.id,
+          sourceContractId: null,
         },
         create: {
           organizationId: input.organizationId,
@@ -1928,6 +1960,7 @@ async function runCommand(
           expiresAt: input.expiresAt,
           reason: input.reason,
           changedById: actor.id,
+          sourceContractId: null,
         },
       });
       return {
@@ -2954,6 +2987,7 @@ async function runCommand(
       });
       await syncContractEntitlements(db, actor, {
         ...input,
+        contractId: saved.id,
         graceUntil: input.graceUntil ?? null,
         moduleIds,
       });
@@ -2990,6 +3024,7 @@ async function runCommand(
       });
       await syncContractEntitlements(db, actor, {
         organizationId: before.organizationId,
+        contractId: before.id,
         number: before.number,
         status: input.status,
         seatLimit: before.seatLimit,
@@ -3001,7 +3036,7 @@ async function runCommand(
         await db.organizationModule.updateMany({
           where: {
             organizationId: before.organizationId,
-            reason: `Contract ${before.number}`,
+            sourceContractId: before.id,
           },
           data: {
             status: 'EXPIRED',
