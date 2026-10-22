@@ -173,6 +173,46 @@ describe('restaurant food-cost and dish-profitability reports', () => {
     ]);
     expect(report.byVolume.slice(0, 2).map((row) => row.productId)).toEqual(['star', 'plowhorse']);
   });
+
+  it('caps only food-cost details while calculating totals and menu thresholds from every sale', async () => {
+    const db = {
+      $queryRaw: vi.fn(async () => [
+        salesRow('p1', 'One', 1, 1),
+        salesRow('p2', 'Two', 2, 4),
+        salesRow('p3', 'Three', 100, 10_000),
+      ]),
+      restaurantRecipe: {
+        findMany: vi.fn(async () =>
+          ['p1', 'p2', 'p3'].map((productId) => ({
+            id: `r-${productId}`,
+            organizationId: 'org1',
+            productId,
+            variantId: null,
+          }))
+        ),
+      },
+    } as unknown as ScopedDb;
+    recipeMocks.computeRecipeCost.mockResolvedValue(recipeCost(0));
+
+    const foodCost = await readFoodCostReport(db, boundedRange, 2);
+    expect(foodCost.totals).toMatchObject({ netSales: '10005', costedNetSales: '10005' });
+    expect(foodCost.products).toHaveLength(2);
+    expect(foodCost.truncated).toBe(true);
+
+    const profitability = await readDishProfitabilityReport(db, boundedRange, 2);
+    expect(profitability.thresholds).toEqual({ medianVolume: '2', medianMargin: '2' });
+    expect(profitability.quadrantCounts).toEqual({
+      STAR: 2,
+      PLOWHORSE: 0,
+      PUZZLE: 0,
+      DOG: 1,
+    });
+    expect(profitability.menuEngineering).toHaveLength(2);
+    expect(profitability.truncated).toBe(true);
+    expect(queryText((db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0]?.[0])).not.toContain(
+      'LIMIT'
+    );
+  });
 });
 
 describe('restaurant catering report', () => {
