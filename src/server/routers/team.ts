@@ -60,6 +60,7 @@ async function lockActiveOrganizationAdmins(
     WHERE "organizationId" = ${organizationId}
       AND "role" = 'ADMIN'
       AND "status" = 'ACTIVE'
+    ORDER BY "id"
     FOR UPDATE
   `;
 }
@@ -759,9 +760,10 @@ export const teamRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      const organizationId = workspaceId(ctx);
       if (input.department) {
         const department = await ctx.db.organizationDepartment.findFirst({
-          where: { key: input.department, active: true },
+          where: { organizationId, key: input.department, active: true },
           select: { id: true },
         });
         if (!department)
@@ -779,7 +781,7 @@ export const teamRouter = router({
         'status',
       ] as const;
       const before = await ctx.db.user.findUnique({
-        where: { id },
+        where: { id, organizationId },
         select: Object.fromEntries(auditFields.map((f) => [f, true])) as Record<
           (typeof auditFields)[number],
           true
@@ -791,24 +793,30 @@ export const teamRouter = router({
       // sole remaining admin could otherwise lock everyone out by editing self.
       const demoting = input.role !== undefined && input.role !== 'ADMIN';
       const deactivating = input.status !== undefined && input.status !== 'ACTIVE';
-      const removingActiveAdmin =
-        (before as { role?: string; status?: string } | null)?.role === 'ADMIN' &&
-        (before as { status?: string } | null)?.status === 'ACTIVE' &&
-        (demoting || deactivating);
       const updated = await ctx.db.$transaction(async (tx) => {
-        if (removingActiveAdmin) {
-          await lockActiveOrganizationAdmins(tx, workspaceId(ctx));
-          const otherActiveAdmins = await tx.user.count({
-            where: { id: { not: id }, role: 'ADMIN', status: 'ACTIVE' },
+        if (input.role !== undefined || input.status !== undefined) {
+          await lockActiveOrganizationAdmins(tx, organizationId);
+          const current = await tx.user.findUnique({
+            where: { id, organizationId },
+            select: { role: true, status: true },
           });
-          if (otherActiveAdmins === 0) {
-            throw new TRPCError({
-              code: 'BAD_REQUEST',
-              message: 'Cannot demote or deactivate the last active admin.',
+          const removingActiveAdmin =
+            current?.role === 'ADMIN' &&
+            current.status === 'ACTIVE' &&
+            (demoting || deactivating);
+          if (removingActiveAdmin) {
+            const otherActiveAdmins = await tx.user.count({
+              where: { organizationId, id: { not: id }, role: 'ADMIN', status: 'ACTIVE' },
             });
+            if (otherActiveAdmins === 0) {
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: 'Cannot demote or deactivate the last active admin.',
+              });
+            }
           }
         }
-        return tx.user.update({ where: { id }, data });
+        return tx.user.update({ where: { id, organizationId }, data });
       });
       annotateAudit(ctx, {
         targetType: 'User',
@@ -866,50 +874,61 @@ export const teamRouter = router({
       if (input.id === ctx.session.user.id) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot lay off yourself' });
       }
-      const before = await ctx.db.user.findUnique({
-        where: { id: input.id },
-        select: { status: true, name: true, email: true, role: true },
-      });
-      if (!before) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found' });
-      }
-      // ABAC: admins may lay off anyone; HR may lay off non-admins only. The
-      // coarse hrProcedure gate already required ADMIN/HR; this resource-level
-      // check enforces the "HR can't terminate an admin" attribute condition.
-      const subject = subjectFromSession(ctx.session.user);
-      if (
-        !(await can(
-          subject,
-          'team:layoff',
-          { type: 'User', targetRole: before.role },
-          { source: 'TRPC', db: ctx.db }
-        ))
-      ) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'You do not have permission to lay off this member.',
-        });
-      }
-      // Never strand the workspace without an admin: if the target is the last
-      // active ADMIN, block the lay-off.
-      if (before.role === 'ADMIN') {
-        const otherActiveAdmins = await ctx.db.user.count({
-          where: { id: { not: input.id }, role: 'ADMIN', status: 'ACTIVE' },
-        });
-        if (otherActiveAdmins === 0) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'You cannot lay off the last active admin',
-          });
-        }
-      }
+      const organizationId = workspaceId(ctx);
       const reason = input.reason.trim();
       // AUTH-01: revoke the laid-off member's live sessions immediately (the
       // status flip already blocks new auth; bumping tokenVersion cuts off any
       // already-issued JWT on its next revalidation rather than at token expiry).
-      const updated = await ctx.db.user.update({
-        where: { id: input.id },
-        data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+      const { before, updated } = await ctx.db.$transaction(async (tx) => {
+        // Serialize this guard with adminUpdateMember. Without the shared lock,
+        // two different endpoints could each observe the other active admin and
+        // remove both concurrently.
+        await lockActiveOrganizationAdmins(tx, organizationId);
+        const before = await tx.user.findUnique({
+          where: { id: input.id, organizationId },
+          select: { status: true, name: true, email: true, role: true },
+        });
+        if (!before) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found' });
+        }
+        // Resolve authorization after taking the same lock used by role changes.
+        // Otherwise an HR user could authorize against a stale EMPLOYEE role
+        // while a concurrent request promotes the target to ADMIN.
+        const subject = subjectFromSession(ctx.session.user);
+        if (
+          !(await can(
+            subject,
+            'team:layoff',
+            { type: 'User', targetRole: before.role },
+            { source: 'TRPC', db: tx }
+          ))
+        ) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have permission to lay off this member.',
+          });
+        }
+        if (before.role === 'ADMIN' && before.status === 'ACTIVE') {
+          const otherActiveAdmins = await tx.user.count({
+            where: {
+              organizationId,
+              id: { not: input.id },
+              role: 'ADMIN',
+              status: 'ACTIVE',
+            },
+          });
+          if (otherActiveAdmins === 0) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'You cannot lay off the last active admin',
+            });
+          }
+        }
+        const updated = await tx.user.update({
+          where: { id: input.id, organizationId },
+          data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+        });
+        return { before, updated };
       });
       annotateAudit(ctx, {
         targetType: 'User',

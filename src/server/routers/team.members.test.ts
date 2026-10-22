@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   count: vi.fn(),
   update: vi.fn(),
   queryRaw: vi.fn(),
+  can: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -14,6 +15,10 @@ vi.mock('@/lib/entitlements', async () => {
   const actual = await vi.importActual<typeof import('@/lib/entitlements')>('@/lib/entitlements');
   return { ...actual, resolveOrganizationEntitlements: vi.fn() };
 });
+vi.mock('@/lib/abac', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+  return { ...actual, can: mocks.can };
+});
 vi.mock('@/server/audit', () => ({
   annotateAudit: vi.fn(),
   diffChanges: vi.fn(() => ({})),
@@ -21,7 +26,13 @@ vi.mock('@/server/audit', () => ({
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
 }));
-vi.mock('@/lib/email', () => ({ appUrl: vi.fn(), sendEmail: vi.fn(), templates: {} }));
+vi.mock('@/lib/email', () => ({
+  appUrl: vi.fn(),
+  sendEmail: vi.fn(),
+  templates: {
+    accountDeactivated: vi.fn(() => ({ subject: 'Deactivated', html: '', text: '' })),
+  },
+}));
 vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
 
 import type { TRPCContext } from '../trpc';
@@ -73,6 +84,7 @@ function caller() {
 describe('team.adminUpdateMember', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
     db.$transaction = (fn) => fn(db);
   });
 
@@ -100,7 +112,7 @@ describe('team.adminUpdateMember', () => {
       status: 'ACTIVE',
     }));
     mocks.count.mockImplementation(
-      async ({ where }: { where: { id: { not: string } } }) =>
+      async ({ where }: { where: { organizationId: string; id: { not: string } } }) =>
         [...activeAdmins].filter((adminId) => adminId !== where.id.not).length
     );
     mocks.update.mockImplementation(async ({ where }: { where: { id: string } }) => {
@@ -117,10 +129,161 @@ describe('team.adminUpdateMember', () => {
     expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
     expect(activeAdmins.size).toBe(1);
     expect(mocks.queryRaw).toHaveBeenCalledTimes(2);
-    for (const [query] of mocks.queryRaw.mock.calls) {
+    for (const [query, organizationId] of mocks.queryRaw.mock.calls) {
       const sql = Array.isArray(query) ? query.join('?') : String(query?.sql ?? query);
       expect(sql).toContain('FROM "users"');
+      expect(sql).toContain('WHERE "organizationId" = ?');
+      expect(sql).toContain('ORDER BY "id"');
       expect(sql).toContain('FOR UPDATE');
+      expect(organizationId).toBe('org_a');
     }
+    expect(mocks.count).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        id: { not: expect.any(String) },
+        role: 'ADMIN',
+        status: 'ACTIVE',
+      },
+    });
+    for (const [{ where }] of mocks.update.mock.calls) {
+      expect(where).toMatchObject({ organizationId: 'org_a' });
+    }
+  });
+
+  it('shares the admin lock with layoff so the two endpoints cannot remove every admin', async () => {
+    const activeAdmins = new Set(['admin_a', 'admin_b']);
+    let transactionTail = Promise.resolve();
+
+    db.$transaction = async (fn) => {
+      const previousTransaction = transactionTail;
+      let releaseTransaction!: () => void;
+      transactionTail = new Promise<void>((resolve) => {
+        releaseTransaction = resolve;
+      });
+      await previousTransaction;
+      try {
+        return await fn(db);
+      } finally {
+        releaseTransaction();
+      }
+    };
+    mocks.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+      id: where.id,
+      name: where.id,
+      email: `${where.id}@example.test`,
+      role: 'ADMIN',
+      status: 'ACTIVE',
+    }));
+    mocks.count.mockImplementation(
+      async ({ where }: { where: { id: { not: string } } }) =>
+        [...activeAdmins].filter((adminId) => adminId !== where.id.not).length
+    );
+    mocks.update.mockImplementation(
+      async ({ where, data }: { where: { id: string }; data: { role?: string; status?: string } }) => {
+        activeAdmins.delete(where.id);
+        return {
+          id: where.id,
+          name: where.id,
+          email: `${where.id}@example.test`,
+          role: data.role ?? 'ADMIN',
+          status: data.status ?? 'ACTIVE',
+        };
+      }
+    );
+
+    const results = await Promise.allSettled([
+      caller().adminUpdateMember({ id: 'admin_a', role: 'EMPLOYEE' }),
+      caller().layOffMember({ id: 'admin_b', reason: 'Role eliminated' }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(activeAdmins.size).toBe(1);
+    expect(mocks.queryRaw).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses to remove the only active admin inside the transaction', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'admin_actor',
+      name: 'Only Admin',
+      role: 'ADMIN',
+      status: 'ACTIVE',
+    });
+    mocks.count.mockResolvedValue(0);
+
+    await expect(
+      caller().adminUpdateMember({ id: 'admin_actor', status: 'INACTIVE' })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Cannot demote or deactivate the last active admin.',
+    });
+
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.count).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        id: { not: 'admin_actor' },
+        role: 'ADMIN',
+        status: 'ACTIVE',
+      },
+    });
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when current-role layoff authorization is denied', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'admin_b',
+      name: 'Protected Admin',
+      email: 'admin_b@example.test',
+      role: 'ADMIN',
+      status: 'ACTIVE',
+    });
+    mocks.can.mockResolvedValue(false);
+
+    await expect(
+      caller().layOffMember({ id: 'admin_b', reason: 'Role eliminated' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission to lay off this member.',
+    });
+
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.any(Object),
+      'team:layoff',
+      { type: 'User', targetRole: 'ADMIN' },
+      { source: 'TRPC', db }
+    );
+    expect(mocks.count).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('does not count an inactive admin as the last active admin', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'admin_old',
+      name: 'Former Admin',
+      role: 'ADMIN',
+      status: 'INACTIVE',
+    });
+    mocks.update.mockResolvedValue({
+      id: 'admin_old',
+      name: 'Former Admin',
+      role: 'EMPLOYEE',
+      status: 'INACTIVE',
+    });
+
+    await expect(
+      caller().adminUpdateMember({ id: 'admin_old', role: 'EMPLOYEE' })
+    ).resolves.toMatchObject({ role: 'EMPLOYEE' });
+
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.count).not.toHaveBeenCalled();
+    expect(mocks.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'admin_old', organizationId: 'org_a' } })
+    );
+    expect(mocks.update).toHaveBeenCalledWith({
+      where: { id: 'admin_old', organizationId: 'org_a' },
+      data: { role: 'EMPLOYEE' },
+    });
   });
 });
