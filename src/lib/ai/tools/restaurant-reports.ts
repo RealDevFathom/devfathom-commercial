@@ -288,7 +288,7 @@ export function buildRestaurantReportTools(h: AssistantHelpers): ToolSet {
                 refunds: {
                   value: values.refundTotal,
                   definition:
-                    'Refund amounts on their processing business date, possibly for earlier sales. Already deducted from netSales; do not subtract again. Not evidence of the cause of a refund.',
+                    'Refunded sales principal, tax and service charges on their processing business date, possibly for earlier sales; delivery-fee refunds are reported separately. Only the sales-principal component reduces netSales; do not subtract this total again. Not evidence of the cause of a refund.',
                 },
                 tax: {
                   value: values.taxTotal,
@@ -380,7 +380,7 @@ export function buildRestaurantReportTools(h: AssistantHelpers): ToolSet {
                 netSales: {
                   value: values.netSales,
                   definition:
-                    'Gross sales minus comps, discounts and refunds (refunds on their processing date); excludes delivery fees, tax, service charges and tips.',
+                    'Gross sales minus comps, discounts and refunded pre-tax sales principal (on the refund processing date); excludes delivery fees, tax, service charges and tips.',
                 },
                 comps: {
                   value: values.compTotal,
@@ -394,7 +394,7 @@ export function buildRestaurantReportTools(h: AssistantHelpers): ToolSet {
                 refunds: {
                   value: values.refundTotal,
                   definition:
-                    'Refund amounts on their processing business date, which may differ from the original sale date. Already deducted from netSales; not an additional sale.',
+                    'Refunded sales principal, tax and service charges on their processing business date, which may differ from the original sale date; delivery-fee refunds are reported separately. Only the sales-principal component reduces netSales; do not subtract this total again.',
                 },
               },
               openUnpaid: {
