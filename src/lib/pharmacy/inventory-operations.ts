@@ -116,6 +116,12 @@ export async function approveCount(
   countId: string,
   idempotencyKeyPrefix: string
 ) {
+  // Serialize every approval attempt on the count itself. Idempotency keys only
+  // deduplicate an individual request; callers may legitimately supply different
+  // prefixes, so the state check below must happen after this row lock.
+  await db.$queryRaw(
+    Prisma.sql`SELECT "id" FROM "pharmacy_inventory_counts" WHERE "id" = ${countId} AND "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId} FOR UPDATE`
+  );
   const count = await db.pharmacyInventoryCount.findFirst({
     where: { id: countId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: { lines: true },
