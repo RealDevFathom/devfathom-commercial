@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1243-staging-qa
+Branch: WHA-1243-staging-qa
+HEAD: d105210b875269b15ba396528651efd54019e747
+Mode: applied
+Excluded (secrets): 1
