@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "otc-happy-path",
+      "permission": true,
+      "configuration": { "enabled": true, "providerSecretConfigured": true, "model": "standard-model" },
+      "context": { "organizationId": "abbasi-pharmacie", "actorId": "pharmacist-01", "cart": [{ "id": "ors", "name": "ORS", "rxOnly": false, "controlled": false, "scheduled": false }] },
+      "candidates": [
+        { "id": "water", "name": "Bottled Water", "rxOnly": false, "controlled": false, "scheduled": false, "coPurchaseCount": 18 },
+        { "id": "antibiotic", "name": "Prescription Antibiotic", "rxOnly": true, "controlled": false, "scheduled": false, "coPurchaseCount": 91 }
+      ],
+      "ranked": [{ "productId": "water", "message": "Often purchased with this item." }],
+      "expected": [{ "productId": "water", "name": "Bottled Water", "message": "Often purchased with this item.", "advisoryOnly": true }]
+    },
+    {
+      "id": "ai-off-by-default",
+      "permission": true,
+      "configuration": { "enabled": false, "providerSecretConfigured": false, "model": null },
+      "context": { "organizationId": "new-pharmacy", "actorId": "owner-01", "cart": [{ "id": "soap", "name": "Soap", "rxOnly": false, "controlled": false, "scheduled": false }] },
+      "candidates": [{ "id": "tissues", "name": "Tissues", "rxOnly": false, "controlled": false, "scheduled": false, "coPurchaseCount": 8 }],
+      "ranked": [{ "productId": "tissues", "message": "Often bought together." }],
+      "expected": []
+    },
+    {
+      "id": "controlled-cart-suppression",
+      "permission": true,
+      "configuration": { "enabled": true, "providerSecretConfigured": true, "model": "standard-model" },
+      "context": { "organizationId": "abbasi-pharmacie", "actorId": "pharmacist-02", "cart": [{ "id": "controlled", "name": "Controlled medicine", "rxOnly": true, "controlled": true, "scheduled": true }] },
+      "candidates": [{ "id": "water", "name": "Water", "rxOnly": false, "controlled": false, "scheduled": false, "coPurchaseCount": 20 }],
+      "ranked": [{ "productId": "water", "message": "Often bought together." }],
+      "expected": []
+    },
+    {
+      "id": "permission-denied",
+      "permission": false,
+      "configuration": { "enabled": true, "providerSecretConfigured": true, "model": "standard-model" },
+      "context": { "organizationId": "abbasi-pharmacie", "actorId": "cashier-01", "cart": [{ "id": "soap", "name": "Soap", "rxOnly": false, "controlled": false, "scheduled": false }] },
+      "candidates": [], "ranked": [], "expected": []
+    }
+  ]
+}
