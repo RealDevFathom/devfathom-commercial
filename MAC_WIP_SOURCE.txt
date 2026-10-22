@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-gate-expiring-fixture
+Branch: WHA-gate-expiring-fixture
+HEAD: 25aae5adf921534d04eb5b58aef567c6afc706e6
+Mode: applied
+Excluded (secrets): 0
