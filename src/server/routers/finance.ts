@@ -240,8 +240,16 @@ export const financeRouter = router({
         },
       });
       if (!invoice) return null;
+      const issuer = await ctx.db.organization.findUniqueOrThrow({
+        where: { id: workspaceId(ctx) },
+        select: {
+          legalName: true,
+          displayName: true,
+          brand: { select: { logoUrl: true } },
+        },
+      });
       const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
-      return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
+      return { ...invoice, issuer, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
     }),
 
   createInvoice: adminProcedure.input(createInvoiceInputSchema).mutation(async ({ ctx, input }) => {
