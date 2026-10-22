@@ -2,12 +2,11 @@ import { NextResponse } from 'next/server';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
-import { can, subjectFromSession, type Action } from '@/lib/abac';
+import { can, subjectFromSession } from '@/lib/abac';
 import {
-  PrintJobRequestSchema,
   RawPrintValidationError,
   PrintRoutingRequestSchema,
-  type PrintDocumentType,
+  ExpectedPrintDestinationSchema,
 } from '@/lib/restaurant/printing/contract';
 import {
   acknowledgePrintJob,
@@ -22,11 +21,14 @@ import { withDeviceAuth } from '@/lib/restaurant/terminal-auth';
 import { createTRPCContext, type TRPCContext } from '@/server/trpc';
 import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
 
-const ACTION_FOR_DOCUMENT: Record<PrintDocumentType, Action> = {
-  KITCHEN_TICKET: 'orders:read',
-  BAR_TICKET: 'orders:read',
-  RECEIPT: 'money:read',
-};
+const PrintTestRequestSchema = z
+  .object({
+    branchId: z.string().trim().min(1).max(128),
+    idempotencyKey: z.string().trim().min(8).max(160),
+    createdAt: z.string().datetime(),
+    expectedDestination: ExpectedPrintDestinationSchema,
+  })
+  .strict();
 
 const bridgeAckBody = z
   .object({
@@ -126,7 +128,7 @@ async function branchAccessError(
 }
 
 /**
- * Web sessions manage routes and enqueue manual jobs. A branch-bound registered
+ * Web sessions manage routes and enqueue server-authored printer tests. A branch-bound registered
  * device token long-polls and acknowledges the durable bridge queue.
  */
 export async function GET(request: Request) {
@@ -209,42 +211,44 @@ export async function POST(request: Request) {
   if (!sameOrigin(request)) return NextResponse.json({ error: 'Forbidden.' }, { status: 403 });
   const ctx = await context(request);
   if (!ctx) return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
-  const parsed = PrintJobRequestSchema.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: 'Invalid print job.' }, { status: 400 });
-  if (!(await permitted(ctx, ACTION_FOR_DOCUMENT[parsed.data.document.type]))) {
+  if (!(await permitted(ctx, 'restaurant:configure'))) {
     return NextResponse.json(
-      { error: 'You do not have permission to print this document.' },
+      { error: 'You do not have permission to test printing.' },
       { status: 403 }
     );
   }
+  const parsed = PrintTestRequestSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success)
+    return NextResponse.json({ error: 'Invalid printer test.' }, { status: 400 });
   const branchError = await branchAccessError(ctx, parsed.data.branchId);
   if (branchError) return branchError;
   const organizationId = ctx.organization?.id ?? ctx.session.user.organizationId;
-  const { expectedDestination, ...job } = parsed.data;
+  const { expectedDestination } = parsed.data;
+  const job = {
+    branchId: parsed.data.branchId,
+    stationId: null,
+    idempotencyKey: parsed.data.idempotencyKey,
+    document: {
+      type: 'RECEIPT' as const,
+      reference: parsed.data.idempotencyKey,
+      title: 'RECEIPT PRINTER TEST',
+      createdAt: parsed.data.createdAt,
+      lines: [{ quantity: 1, label: 'Setup test - not a sale or payment' }],
+      footer: 'Confirm this test at the selected printer. No financial transaction.',
+    },
+  };
   let result;
   try {
     result = await ctx.db.$transaction(
       async (db) => {
-        const routes = expectedDestination
-          ? []
-          : await db.restaurantPrintRoute.findMany({
-              where: { branchId: parsed.data.branchId },
-              select: {
-                documentType: true,
-                stationId: true,
-                printerId: true,
-                registeredPrinterId: true,
-                enabled: true,
-              },
-            });
         return new PrintBridgeService(db).enqueue(
           organizationId,
-          { branchId: parsed.data.branchId, routes },
+          { branchId: parsed.data.branchId, routes: [] },
           job,
           expectedDestination
         );
       },
-      expectedDestination ? { isolationLevel: 'ReadCommitted' } : undefined
+      { isolationLevel: 'ReadCommitted' }
     );
   } catch (error) {
     if (error instanceof PrintRoutingError) {

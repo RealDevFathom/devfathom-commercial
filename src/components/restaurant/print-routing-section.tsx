@@ -401,19 +401,11 @@ function PrintRoutingEditor({ ownerKey }: { ownerKey: string }) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           branchId: saved.id,
-          stationId: null,
           idempotencyKey: attempt.key,
+          createdAt: attempt.createdAt,
           expectedDestination: {
             printerId: route.printerId,
             registeredPrinterId: route.registeredPrinterId ?? null,
-          },
-          document: {
-            type: 'RECEIPT',
-            reference: attempt.key,
-            title: 'RECEIPT PRINTER TEST',
-            createdAt: attempt.createdAt,
-            lines: [{ quantity: 1, label: 'Setup test - not a sale or payment' }],
-            footer: 'Confirm this test at the selected printer. No financial transaction.',
           },
         }),
       });
