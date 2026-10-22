@@ -436,13 +436,11 @@ export const pharmacyPrescriptionsRouter = router({
         .strict()
     )
     .mutation(({ ctx, input }) =>
-      ctx.db.$transaction((tx) =>
-        dispenseRxSaleLine(txDb(tx), {
-          ...input,
-          organizationId: ctx.entitlements.organizationId,
-          actorId: ctx.session!.user.id,
-        })
-      )
+      ctx.db.$transaction((tx) => dispenseRxSaleLine(txDb(tx), {
+        ...input,
+        organizationId: ctx.entitlements.organizationId,
+        actorId: ctx.session!.user.id,
+      }))
     ),
 
   captureRefillReminder: capabilityProcedure('pharmacy:dispense')

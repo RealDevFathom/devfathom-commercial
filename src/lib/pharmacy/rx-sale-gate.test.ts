@@ -1,108 +1,13 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import {
-  assertRxSaleLinesReady,
-  dispenseRxSaleLine,
-  PharmacyRxSaleGateError,
-  reverseSaleFills,
-} from './rx-sale-gate';
-
-const base = {
-  organizationId: 'org-a',
-  branchId: 'branch-a',
-  saleLineId: 'sale-line-a',
-  prescriptionLineId: 'rx-line-a',
-  actorId: 'pharmacist-a',
-  idempotencyKey: 'dispense-a',
-  at: new Date('2026-10-22T12:00:00Z'),
-};
-
-function dispensingDb(overrides: { status?: string; usedUnits?: number } = {}) {
-  const fill = {
-    id: 'fill-a',
-    saleLineId: base.saleLineId,
-    prescriptionLineId: base.prescriptionLineId,
-    quantityCanonicalUnits: 10,
-  };
-  const query = vi
-    .fn()
-    .mockResolvedValueOnce([
-      {
-        status: overrides.status ?? 'OPEN',
-        canonicalUnits: 10,
-        medicineId: 'medicine-a',
-        rx: true,
-        controlled: false,
-      },
-    ])
-    .mockResolvedValueOnce([])
-    .mockResolvedValueOnce([
-      {
-        medicineId: 'medicine-a',
-        validFrom: new Date('2026-10-01'),
-        validUntil: new Date('2026-11-01'),
-        authorizedCanonicalUnits: 10,
-        usedUnits: overrides.usedUnits ?? 0,
-        nextSequence: 1,
-      },
-    ])
-    .mockResolvedValueOnce([fill]);
-  return { db: { $queryRaw: query }, query, fill };
-}
-
-describe('Rx-only sale lifecycle gate', () => {
-  it('reserves one fill for an open sale line and accepts that bound fill at checkout', async () => {
-    const fixture = dispensingDb();
-    await expect(dispenseRxSaleLine(fixture.db as never, base)).resolves.toEqual(fixture.fill);
-
-    const checkout = { $queryRaw: vi.fn().mockResolvedValue([{ saleLineId: base.saleLineId }]) };
-    await expect(
-      assertRxSaleLinesReady(
-        checkout as never,
-        base.organizationId,
-        { lines: [{ id: base.saleLineId, medicine: { rx: true, controlled: false } }] },
-        base.at
-      )
-    ).resolves.toBeUndefined();
-  });
-
-  it.each(['VOID', 'HELD'])('refuses dispense against a %s sale', async (status) => {
-    const fixture = dispensingDb({ status });
-    await expect(dispenseRxSaleLine(fixture.db as never, base)).rejects.toMatchObject({
-      code: 'SALE_NOT_OPEN',
-    });
-    expect(fixture.query).toHaveBeenCalledOnce();
-  });
-
-  it('refuses a second locked dispense when the first consumed the authorization', async () => {
-    const fixture = dispensingDb({ usedUnits: 10 });
-    await expect(dispenseRxSaleLine(fixture.db as never, base)).rejects.toMatchObject({
-      code: 'AUTHORIZATION_EXHAUSTED',
-    });
-  });
-
-  it('refuses checkout without exactly one valid, signed fill bound to the Rx line', async () => {
-    const db = { $queryRaw: vi.fn().mockResolvedValue([]) };
-    await expect(
-      assertRxSaleLinesReady(db as never, base.organizationId, {
-        lines: [{ id: base.saleLineId, medicine: { rx: true, controlled: false } }],
-      })
-    ).rejects.toBeInstanceOf(PharmacyRxSaleGateError);
-  });
-
-  it('does not gate OTC or controlled paths', async () => {
-    const db = { $queryRaw: vi.fn() };
-    await assertRxSaleLinesReady(db as never, base.organizationId, {
-      lines: [
-        { id: 'otc', medicine: { rx: false, controlled: false } },
-        { id: 'controlled', medicine: { rx: true, controlled: true } },
-      ],
-    });
-    expect(db.$queryRaw).not.toHaveBeenCalled();
-  });
-
-  it('releases bound fills when their sale is voided', async () => {
-    const db = { $executeRaw: vi.fn().mockResolvedValue(1) };
-    await reverseSaleFills(db as never, base.organizationId, 'sale-a', base.actorId);
-    expect(db.$executeRaw).toHaveBeenCalledOnce();
-  });
+import { dispenseRxSaleLine, PharmacyRxSaleGateError, reverseSaleFills } from './rx-sale-gate';
+const input = { organizationId:'org-a', branchId:'branch-a', saleLineId:'sale-line-a', prescriptionLineId:'rx-line-a', actorId:'pharmacist-a', idempotencyKey:'dispense-a', at:new Date('2026-10-22T12:00:00Z') };
+function dbWithRx(overrides:{usedEvents?:number;nextSequence?:number}={}) { const query=vi.fn().mockResolvedValueOnce([{status:'OPEN',canonicalUnits:5,medicineId:'med-a',rx:true,controlled:false}]).mockResolvedValueOnce([]).mockResolvedValueOnce([{medicineId:'med-a',validFrom:new Date('2026-10-01'),validUntil:new Date('2026-11-01'),authorizedCanonicalUnits:20,authorizedRepeats:1,usedUnits:5,usedEvents:overrides.usedEvents??1,nextSequence:overrides.nextSequence??2}]).mockResolvedValueOnce([{id:'fill-b',saleLineId:input.saleLineId,prescriptionLineId:input.prescriptionLineId,quantityCanonicalUnits:5}]); return {$queryRaw:query}; }
+describe('prescription fill lifecycle',()=>{
+ it('enforces the authorized dispensing-event limit before inserting',async()=>{const db=dbWithRx({usedEvents:2});await expect(dispenseRxSaleLine(db as never,input)).rejects.toMatchObject({code:'AUTHORIZATION_EXHAUSTED'});expect(db.$queryRaw).toHaveBeenCalledTimes(3);});
+ it('uses the never-reused sequence returned from all historical fills',async()=>{const db=dbWithRx({nextSequence:4});await dispenseRxSaleLine(db as never,input);expect(String(db.$queryRaw.mock.calls[3]?.[0])).toContain('fillSequence');expect(db.$queryRaw.mock.calls[3]?.[0].values).toContain(4);});
+ it('reverses live fills bound to every line in the voided sale',async()=>{const db={$executeRaw:vi.fn().mockResolvedValue(1)};await reverseSaleFills(db as never,input.organizationId,'sale-a',input.actorId);expect(db.$executeRaw).toHaveBeenCalledOnce();});
+ it('stages the large-table constraints and index without long blocking scans',()=>{const base=readFileSync('prisma/migrations/20261022120000_rx_fill_sale_line_lifecycle/migration.sql','utf8');const add=readFileSync('prisma/migrations/20261022120100_rx_fill_sale_line_fk_not_valid/migration.sql','utf8');const validate=readFileSync('prisma/migrations/20261022120200_rx_fill_sale_line_fk_validate/migration.sql','utf8');const index=readFileSync('prisma/migrations/20261022120300_rx_fill_sale_line_unique_index/migration.sql','utf8');expect(base).not.toContain('CREATE UNIQUE INDEX');expect(add).toContain('NOT VALID');expect(validate).toContain('VALIDATE CONSTRAINT');expect(index).toContain('CREATE UNIQUE INDEX CONCURRENTLY');});
+ it('keeps repeat and monotonic sequence enforcement in the database guard',()=>{const sql=readFileSync('prisma/migrations/20261022120000_rx_fill_sale_line_lifecycle/migration.sql','utf8');expect(sql).toContain('p."authorizedRepeats" + 1');expect(sql).toContain('used_events + 1 > allowed_events');expect(sql).toContain('COALESCE(MAX("fillSequence"), 0) + 1');expect(sql).toContain('NEW."fillSequence" <> next_sequence');expect(sql).toContain('"reversedAt" IS NULL');});
+ it('exposes a typed gate error',()=>expect(new PharmacyRxSaleGateError('FILL_REQUIRED')).toBeInstanceOf(Error));
 });

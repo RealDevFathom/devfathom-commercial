@@ -22,8 +22,8 @@ import {
 import { appendControlledRestorations } from './controlled-register';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
-import { postSaleReturnEntry } from './finance-postings';
-import { assertRxSaleLinesReady, reverseSaleFills } from './rx-sale-gate';
+import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+import { reverseSaleFills } from './rx-sale-gate';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
