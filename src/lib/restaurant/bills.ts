@@ -1750,16 +1750,6 @@ export async function evaluateOrderSettlement(
 ): Promise<OrderSettlement> {
   const order = await loadBillOrder(tx, orderId);
   const items = nonVoidedItems(order);
-  const derivedOrderTotal = add(
-    add(
-      deriveOrderTotal(items),
-      order.serviceChargePolicyVersion
-        ? roundMoney(multiply(deriveOrderTotal(items), order.serviceChargePolicyVersion.rate))
-        : ZERO
-    ),
-    order.deliveryFulfillment?.deliveryFeeSnapshot ?? ZERO
-  );
-
   const allBills = await tx.restaurantBill.findMany({
     where: { orderId },
     orderBy: { createdAt: 'asc' },
@@ -1768,6 +1758,7 @@ export async function evaluateOrderSettlement(
       status: true,
       splitKind: true,
       grandTotal: true,
+      serviceChargeTotal: true,
       deliveryFeeTotal: true,
       compTotal: true,
       discountTotal: true,
@@ -1778,6 +1769,13 @@ export async function evaluateOrderSettlement(
     },
   });
   const liveBills = allBills.filter((b) => b.status !== 'VOID');
+  // Service is frozen on each bill from its payable (post-comp) basis. Recomputing
+  // it from the order's gross merchandise would restore the service removed by a
+  // comp and make an otherwise balanced settlement fail by that removed amount.
+  const derivedOrderTotal = add(
+    add(deriveOrderTotal(items), sum(liveBills.map((bill) => bill.serviceChargeTotal))),
+    order.deliveryFulfillment?.deliveryFeeSnapshot ?? ZERO
+  );
   const exclusiveTaxByBill = await exclusiveTaxByLiveBill(
     tx,
     liveBills.map((bill) => bill.id)
