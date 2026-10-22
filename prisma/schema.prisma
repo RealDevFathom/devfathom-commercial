@@ -14534,6 +14534,7 @@ model HotelProperty {
   guests HotelGuest[]
   reservations HotelReservation[]
   reservationStayUnits HotelReservationStayUnit[]
+  ratePlans HotelRatePlan[]
   roomAssignments HotelRoomAssignment[]
   reservationEvents HotelReservationEvent[]
   confirmationNumberSequences HotelConfirmationNumberSequence[]
@@ -14749,6 +14750,7 @@ model HotelRoomType {
   rooms       HotelRoom[]   @relation("HotelRoomTypeScoped")
   roomsByKind HotelRoom[]   @relation("HotelRoomTypeKind")
   reservationStayUnits HotelReservationStayUnit[]
+  ratePlans HotelRatePlan[]
 
   @@unique([organizationId, branchId, id], map: "hotel_room_types_scope_key")
   @@unique([organizationId, branchId, code], map: "hotel_room_types_org_branch_code_key")
@@ -15049,6 +15051,36 @@ model HotelReservationStayUnit {
   @@index([organizationId, branchId, roomTypeId, arrivalDate, departureDate])
   @@index([organizationId, branchId, reservationId])
   @@map("hotel_reservation_stay_units")
+}
+
+/// Authoritative, effective-dated room pricing. Reservation callers select a
+/// plan and version; only the server resolves and snapshots its money fields.
+model HotelRatePlan {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  roomTypeId String
+  /// Versioned external tax configuration this price was calculated under.
+  taxProfileId String
+  code String
+  name String
+  validFrom DateTime @db.Date
+  validTo DateTime @db.Date
+  minAdults Int @default(1)
+  maxAdults Int
+  maxChildren Int @default(0)
+  nightlyRateMinor Int
+  taxRateBps Int @default(0)
+  active Boolean @default(true)
+  version Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  roomType HotelRoomType @relation(fields: [organizationId, branchId, roomTypeId], references: [organizationId, branchId, id], onDelete: Restrict)
+  @@unique([organizationId, branchId, id])
+  @@unique([organizationId, branchId, code, version])
+  @@index([organizationId, branchId, roomTypeId, validFrom, validTo, active])
+  @@map("hotel_rate_plans")
 }
 
 model HotelRoomAssignment {
