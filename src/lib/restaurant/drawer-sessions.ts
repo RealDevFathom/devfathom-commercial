@@ -8,6 +8,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { buildCoAuthorizationRecord } from './co-authorization';
+import { assertMoneyDayOpen } from './daily-close';
 import { add, isNegative, money, sub, ZERO } from './money';
 
 /**
@@ -460,6 +461,7 @@ export async function openDrawerSession(
     const businessDate = businessDateToUtcDate(
       resolveBusinessDate(at, branch.timezone, branch.businessDayCutoff)
     );
+    await assertMoneyDayOpen(tx, branch.id, businessDate);
 
     let sessionId: string;
     try {

@@ -70,6 +70,7 @@ type Deps = {
   createTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['createTenantDb'];
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
   drawer: typeof import('./drawer-sessions');
+  close: typeof import('./daily-close');
 };
 
 let deps: Deps;
@@ -94,10 +95,11 @@ async function newDevice(label: string): Promise<string> {
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, drawer] = await Promise.all([
+  const [scopedDb, devices, drawer, close] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('@/lib/restaurant/devices'),
     import('./drawer-sessions'),
+    import('./daily-close'),
   ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
@@ -105,6 +107,7 @@ beforeAll(async () => {
     createTenantDb: scopedDb.createTenantDb,
     enrollDevice: devices.enrollDevice,
     drawer,
+    close,
   };
 
   await deps.withPlatformDb((tx) =>
@@ -189,6 +192,36 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
         now: AT,
       })
     ).rejects.toMatchObject({ reason: 'DRAWER_ALREADY_OPEN' });
+  });
+
+  it('rejects opening a drawer on an already-closed business day', async () => {
+    const closedAt = new Date('2026-08-20T18:00:00.000Z');
+    const closingDeviceId = await newDevice('POS-close-day');
+    await deps.close.cutClose(deps.createTenantDb(orgId), {
+      branchId: ids.branch,
+      businessDate: '2026-08-20',
+      actor: actor(closingDeviceId),
+    });
+
+    const openingDeviceId = await newDevice('POS-open-closed-day');
+    await expect(
+      deps.drawer.openDrawerSession(deps.createTenantDb(orgId), {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
+        branchId: ids.branch,
+        openingFloat: '100.00',
+        actor: actor(openingDeviceId),
+        now: closedAt,
+      })
+    ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
+
+    expect(
+      await read((tx) =>
+        tx.restaurantDrawerSession.count({
+          where: { deviceId: openingDeviceId, businessDate: new Date('2026-08-20T00:00:00.000Z') },
+        })
+      )
+    ).toBe(0);
   });
 
   it('allows at most one OPEN session per register under a concurrent race', async () => {
