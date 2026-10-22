@@ -18,7 +18,8 @@
  * CONCURRENCY. `submitPurchaseReturn` locks the lot's AVAILABLE balance rows
  * FOR UPDATE before it measures what is still claimable, so two clerks claiming
  * the same last units serialize and the loser is refused rather than both
- * succeeding against a stale read.
+ * succeeding against a stale read. Credit allocation likewise locks both the
+ * credit and debit-note rows before measuring either remaining balance.
  */
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -412,6 +413,25 @@ export async function allocateSupplierCredit(
   scope: LedgerScope,
   input: { supplierCreditId: string; debitNoteId: string; amountMinor: number; at: Date }
 ) {
+  // These parent rows are the serialization points for both possible races:
+  // one credit allocated to competing notes, and competing credits allocated
+  // to one note. Always acquire them in this order to avoid lock-order cycles.
+  // `ScopedDb` is the request's tenant transaction, so the locks remain held
+  // through the allocation insert and the resulting status updates.
+  await db.$queryRaw(
+    Prisma.sql`SELECT "id" FROM "pharmacy_supplier_credits"
+      WHERE "organizationId" = ${scope.organizationId}
+        AND "id" = ${input.supplierCreditId}
+      FOR UPDATE`
+  );
+  await db.$queryRaw(
+    Prisma.sql`SELECT "id" FROM "pharmacy_debit_notes"
+      WHERE "organizationId" = ${scope.organizationId}
+        AND "branchId" = ${scope.branchId}
+        AND "id" = ${input.debitNoteId}
+      FOR UPDATE`
+  );
+
   const [credit, note] = await Promise.all([
     db.pharmacySupplierCredit.findFirst({
       where: { id: input.supplierCreditId, organizationId: scope.organizationId },
