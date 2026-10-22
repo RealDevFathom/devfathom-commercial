@@ -8,13 +8,14 @@ export type TemperatureReading = Readonly<{
   temperatureC: number;
   recordedAt: Date;
   deviceIdentifier?: string | null;
+  externalReadingId?: string | null;
 }>;
 
-export type TemperatureReadingSourceKind = 'MANUAL' | 'IMPORT';
+export type TemperatureReadingSourceKind = 'MANUAL' | 'IMPORT' | 'SENSOR';
 
 /**
- * The ingestion boundary shared by staff entry and data-logger files. It is
- * intentionally pull-only: live device connections, credentials and vendor
+ * The ingestion boundary shared by staff entry, data-logger files and verified
+ * live pushes. Device authentication stays at the HTTP boundary and vendor
  * SDKs do not belong in this seam.
  */
 export interface TemperatureReadingSource {
@@ -24,6 +25,15 @@ export interface TemperatureReadingSource {
 
 export class ManualTemperatureReadingSource implements TemperatureReadingSource {
   readonly kind = 'MANUAL' as const;
+  constructor(private readonly reading: TemperatureReading) {}
+  async read(): Promise<readonly TemperatureReading[]> {
+    return [this.reading];
+  }
+}
+
+/** A verified live-device reading. Authentication happens at the HTTP boundary. */
+export class SensorTemperatureReadingSource implements TemperatureReadingSource {
+  readonly kind = 'SENSOR' as const;
   constructor(private readonly reading: TemperatureReading) {}
   async read(): Promise<readonly TemperatureReading[]> {
     return [this.reading];
@@ -189,7 +199,10 @@ function assertReading(reading: TemperatureReading): void {
     Number.isNaN(reading.recordedAt.getTime()) ||
     (reading.deviceIdentifier !== undefined &&
       reading.deviceIdentifier !== null &&
-      reading.deviceIdentifier.trim().length === 0)
+      reading.deviceIdentifier.trim().length === 0) ||
+    (reading.externalReadingId !== undefined &&
+      reading.externalReadingId !== null &&
+      reading.externalReadingId.trim().length === 0)
   ) {
     throw new PharmacyInventoryError('INVALID_STATE');
   }
@@ -204,6 +217,12 @@ export async function ingestTemperatureReadings(
   const readings = await source.read();
   if (readings.length === 0) throw new PharmacyInventoryError('INVALID_STATE');
   readings.forEach(assertReading);
+  if (
+    source.kind === 'SENSOR' &&
+    readings.some((reading) => !reading.deviceIdentifier || !reading.externalReadingId)
+  ) {
+    throw new PharmacyInventoryError('INVALID_STATE');
+  }
 
   return db.$transaction(async (transaction) => {
     const tx = transaction as ScopedDb;
@@ -218,6 +237,7 @@ export async function ingestTemperatureReadings(
     if (!location) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
 
     const result = await tx.pharmacyTemperatureLog.createMany({
+      skipDuplicates: source.kind === 'SENSOR',
       data: readings.map((reading) => ({
         organizationId: scope.organizationId,
         branchId: scope.branchId,
@@ -234,12 +254,16 @@ export async function ingestTemperatureReadings(
             : false,
         source: source.kind,
         deviceIdentifier:
-          source.kind === 'IMPORT' ? (reading.deviceIdentifier?.trim() ?? null) : null,
+          source.kind === 'IMPORT' || source.kind === 'SENSOR'
+            ? (reading.deviceIdentifier?.trim() ?? null)
+            : null,
+        externalReadingId:
+          source.kind === 'SENSOR' ? (reading.externalReadingId?.trim() ?? null) : null,
       })),
     });
     // CAM-3: an excursion in a zone a cold-chain camera watches requests a
     // still in this same transaction, so rolled-back readings request nothing.
-    await requestExcursionEvidence(tx, scope, stockLocationId, new Date());
+    if (result.count > 0) await requestExcursionEvidence(tx, scope, stockLocationId, new Date());
     return { count: result.count };
   });
 }

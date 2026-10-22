@@ -1831,6 +1831,7 @@ model PharmacyStockLocation {
   discrepancies           PharmacyStockDiscrepancy[]
   deviceQuotas            PharmacyDeviceLotQuota[]
   temperatureLogs         PharmacyTemperatureLog[]
+  temperatureDevices      PharmacyTemperatureDevice[]
   unidentifiedReturnHolds PharmacyUnidentifiedReturnHold[]
 
   @@unique([organizationId, id], map: "pharmacy_stock_locations_org_id_key")
@@ -1843,11 +1844,34 @@ model PharmacyStockLocation {
 enum PharmacyTemperatureReadingSource {
   MANUAL
   IMPORT
+  SENSOR
 }
 
-/// INV-05: immutable storage-zone temperature evidence. Staff entry and
-/// data-logger files append through the same source seam; live devices remain
-/// outside this boundary.
+/// A tenant- and zone-bound live cold-chain sensor. The shared HMAC secret is
+/// encrypted at rest; `keyId` is the non-secret identifier sent by the device.
+model PharmacyTemperatureDevice {
+  id                    String   @id @default(cuid())
+  organizationId        String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId              String
+  stockLocationId       String
+  keyId                 String
+  name                  String
+  encryptedSigningSecret String
+  active                Boolean  @default(true)
+  lastSeenAt            DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  location PharmacyStockLocation @relation(fields: [organizationId, branchId, stockLocationId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_temperature_devices_org_id_key")
+  @@unique([organizationId, keyId], map: "pharmacy_temperature_devices_org_key_id_key")
+  @@index([organizationId, branchId, active], map: "pharmacy_temperature_devices_org_branch_active_idx")
+  @@map("pharmacy_temperature_devices")
+}
+
+/// INV-05: immutable storage-zone temperature evidence. Staff entry,
+/// data-logger files and authenticated sensors append through one source seam.
 model PharmacyTemperatureLog {
   id               String                           @id @default(cuid())
   organizationId   String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -1859,11 +1883,13 @@ model PharmacyTemperatureLog {
   outOfRange       Boolean
   source           PharmacyTemperatureReadingSource @default(MANUAL)
   deviceIdentifier String?
+  externalReadingId String?
   createdAt        DateTime                         @default(now())
 
   location PharmacyStockLocation @relation(fields: [organizationId, branchId, stockLocationId], references: [organizationId, branchId, id], onDelete: Restrict)
 
   @@unique([organizationId, id], map: "pharmacy_temperature_logs_org_id_key")
+  @@unique([organizationId, deviceIdentifier, externalReadingId], map: "pharmacy_temperature_logs_sensor_reading_key")
   @@index([organizationId, branchId, stockLocationId, recordedAt], map: "pharmacy_temperature_logs_zone_time_idx")
   @@map("pharmacy_temperature_logs")
 }
