@@ -4,6 +4,7 @@ import { router } from '../trpc';
 import { hotelPropertyRouter } from './hotel-property';
 import { hotelRatesRouter } from './hotel-rates';
 import { hotelReservationsRouter } from './hotel-reservations';
+import { hotelHousekeepingRouter } from './hotel-housekeeping';
 import { restaurantPromotionsRouter } from './restaurant-promotions';
 import { platformHealthRouter } from './platform-health';
 import { pharmacyOfflineRouter } from './pharmacy-offline';
@@ -75,6 +76,7 @@ export const appRouter = router({
   hotelProperty: hotelPropertyRouter,
   hotelRates: hotelRatesRouter,
   hotelReservations: hotelReservationsRouter,
+  hotelHousekeeping: hotelHousekeepingRouter,
   restaurantPromotions: restaurantPromotionsRouter,
   platformHealth: platformHealthRouter,
   pharmacyOffline: pharmacyOfflineRouter,
