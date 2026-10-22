@@ -1,16 +1,22 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import pg from 'pg';
 import { describe, expect, it } from 'vitest';
 
-const migrationPath = 'prisma/migrations/20261021160000_outbound_effect_worker/migration.sql';
+const migrationPath = 'prisma/migrations/20261023000285_outbound_effect_worker/migration.sql';
 const migration = readFileSync(migrationPath, 'utf8');
 
 describe('outbound effect worker migration', () => {
   it('uses a timestamp after the pharmacy register migrations', () => {
     expect(existsSync(migrationPath)).toBe(true);
+    expect(existsSync('prisma/migrations/20261021160000_outbound_effect_worker')).toBe(false);
     expect(existsSync('prisma/migrations/20261021140000_outbound_effect_worker')).toBe(false);
     expect(existsSync('prisma/migrations/20261021150000_outbound_effect_worker')).toBe(false);
+
+    const matchingTimestamp = readdirSync('prisma/migrations').filter((directory) =>
+      directory.startsWith('20261023000285_')
+    );
+    expect(matchingTimestamp).toEqual(['20261023000285_outbound_effect_worker']);
   });
 
   it('schedules retries, strips webhook copies, and deletes leftover secrets', () => {

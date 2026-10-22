@@ -1,27 +1,28 @@
-# GitHub issue #285 is already fixed
+# GitHub issue #285: migration timestamp collision fix
 
-Issue #285 reported that two proposed migrations shared the
-`20261021180000` timestamp:
+The two `20261021180000` migrations named in issue #285 are not in the current
+tree. However, verification of every current migration timestamp found the
+same collision class at `20261021160000`:
 
-- `20261021180000_pharmacy_rx_fill_release`
-- `20261021180000_repair_package_module_cleanup`
+- `20261021160000_controlled_correction_invariants`
+- the formerly named `20261021160000_outbound_effect_worker`
 
-Neither migration is present in the current tree, so the reported collision
-cannot occur on this branch. The current migration sequence for that date
-continues through the independently named controlled-correction migration
-([`prisma/migrations/20261021160000_controlled_correction_invariants/migration.sql`,
-line 1](../prisma/migrations/20261021160000_controlled_correction_invariants/migration.sql#L1))
-and outbound-effect worker migration
-([`prisma/migrations/20261021160000_outbound_effect_worker/migration.sql`, line
-1](../prisma/migrations/20261021160000_outbound_effect_worker/migration.sql#L1)).
+The outbound-effect-worker migration now has the issue-specific, unique
+timestamp `20261023000285`. Its SQL remains unchanged. The migration's focused
+contract test also references the renamed path, so a stale or missing path
+fails explicitly.
 
-This was verified from the tracked tree with:
+Verification must inspect timestamp prefixes rather than only the two names
+from the original report. The following command prints every duplicate prefix;
+`20261021160000` and `20261023000285` must not appear in its output:
 
 ```sh
-git ls-files 'prisma/migrations/*/migration.sql' |
-  rg '20261021180000|pharmacy_rx_fill_release|repair_package_module_cleanup'
+find prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf '%f\n' |
+  cut -d_ -f1 | sort | uniq -d
 ```
 
-The command produces no matches. No migration was added or renamed because
-doing so would manufacture migration history for changes that are not on the
-current branch.
+Older duplicate prefixes reported by that repository-wide audit are existing
+migration-history debt and are intentionally not renamed here: renaming
+already-shipped migrations would make Prisma treat them as unapplied. This fix
+is limited to the newly identified collision and preserves migration contents
+and ordering semantics.
