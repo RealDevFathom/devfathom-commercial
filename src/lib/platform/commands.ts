@@ -599,7 +599,6 @@ async function syncContractEntitlements(
     organizationId: string;
     number: string;
     status: string;
-    seatLimit: number;
     endDate: Date;
     graceUntil: Date | null;
     moduleIds: string[];
@@ -637,10 +636,9 @@ async function syncContractEntitlements(
       },
     });
   }
-  await db.organization.update({
-    where: { id: input.organizationId },
-    data: { seatLimit: input.seatLimit },
-  });
+  // Contract seats remain contract-scoped. The entitlement resolver combines
+  // live contracts with this organization's durable base limit, so copying the
+  // allowance here would make it survive expiry or termination.
 }
 
 const organizationInput = z
@@ -2988,7 +2986,6 @@ async function runCommand(
         organizationId: before.organizationId,
         number: before.number,
         status: input.status,
-        seatLimit: before.seatLimit,
         endDate: before.endDate,
         graceUntil: before.graceUntil,
         moduleIds: before.modules.map((module) => module.moduleId),

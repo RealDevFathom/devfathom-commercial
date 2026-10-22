@@ -127,4 +127,45 @@ describe('baseline entitlement resolution', () => {
     expect(result.enabledModules).toContain('restaurant-menu');
     expect(result.modules[0]?.source).toBe('PACKAGE');
   });
+
+  it('falls back to the organization base seat limit after contract expiry', async () => {
+    const now = new Date('2026-10-22T00:00:00.000Z');
+    const findContracts = vi.fn().mockResolvedValue([]);
+    const db = {
+      organization: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'org_337',
+          seatLimit: 10,
+          packageId: null,
+          vertical: 'AGENCY',
+        }),
+      },
+      organizationModule: { findMany: vi.fn().mockResolvedValue([]) },
+      organizationLimit: { findMany: vi.fn().mockResolvedValue([]) },
+      user: { count: vi.fn().mockResolvedValue(10) },
+    };
+    const platformDb = {
+      platformModule: { findMany: vi.fn().mockResolvedValue([]) },
+      platformPackage: { findUnique: vi.fn() },
+      platformContract: { findMany: findContracts },
+    };
+    mocks.withPlatformDb.mockImplementation((run: (client: typeof platformDb) => unknown) =>
+      run(platformDb)
+    );
+
+    const result = await resolveOrganizationEntitlements('org_337', db as never, now);
+
+    expect(findContracts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org_337',
+          status: { in: ['ACTIVE', 'GRACE', 'RENEWAL_DUE'] },
+          startDate: { lte: now },
+          OR: [{ endDate: { gte: now } }, { graceUntil: { gte: now } }],
+        }),
+      })
+    );
+    expect(result.seatLimit).toBe(10);
+    expect(result.activeSeats).toBe(10);
+  });
 });
