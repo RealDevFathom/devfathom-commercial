@@ -4,6 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
 import { postSaleLineEntry } from './finance-postings';
+import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
 
 export const completionSaleInclude = {
@@ -26,6 +27,9 @@ export async function completePaidPharmacySale(
   /** F2: a leased offline receipt number the caller already consumed in this transaction. */
   leasedReceiptNumber: number | null = null
 ) {
+  // #633: re-check every batch under lock before a receipt number is drawn. The receipt
+  // snapshot below records these checked facts, not the ones loaded with the sale.
+  const checkedBatches = await assertSaleBatchesSellable(db, scope, sale.id);
   let receiptNumber = leasedReceiptNumber;
   if (receiptNumber === null) {
     // Reserved (leased) numbers never return to this online sequence.
@@ -92,13 +96,16 @@ export async function completePaidPharmacySale(
               .join(' + ')
           : null,
         presentation: line.presentation.presentation,
-        allocations: line.allocations.map((allocation) => ({
-          allocationId: allocation.id,
-          inventoryLotId: allocation.inventoryLotId,
-          batchNumber: allocation.lot.batch.batchNumber,
-          expiresAt: allocation.lot.batch.expiresAt.toISOString(),
-          canonicalUnits: allocation.canonicalUnits,
-        })),
+        allocations: line.allocations.map((allocation) => {
+          const batch = checkedBatches.get(allocation.inventoryLotId) ?? allocation.lot.batch;
+          return {
+            allocationId: allocation.id,
+            inventoryLotId: allocation.inventoryLotId,
+            batchNumber: batch.batchNumber,
+            expiresAt: batch.expiresAt.toISOString(),
+            canonicalUnits: allocation.canonicalUnits,
+          };
+        }),
       })),
     },
     {
