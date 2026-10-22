@@ -1,4 +1,4 @@
-# GitHub issue #427: archived growth G2 follow-ups are obsolete
+# GitHub issue #427: archived growth G2 follow-ups recovery
 
 ## Decision
 
@@ -17,8 +17,10 @@ demand rather than maintaining a second nightly customer-metrics store.
 - `src/lib/pharmacy/growth-insights.ts:224-290` rechecks the branch, locks the selected insight,
   accepts only a ready pharmacy `RETAIL_REVIEW` recommendation, prevents conflicting replay, and
   creates a draft rather than sending a campaign.
-- `src/server/routers/pharmacy-marketing.ts:141-205` re-resolves current entitlements, active-admin
-  status, and branch access in a transaction both before generation and after provider latency.
+- `src/server/routers/pharmacy-marketing.ts` sends every growth and marketing operation through the
+  central `can()` evaluator for `pharmacy:manage`, so custom DENY rules take precedence over role
+  grants. It also re-resolves current entitlements, active membership, and branch access in a
+  transaction both before generation and after provider latency.
 - `prisma/migrations/20261006160000_growth_insights/migration.sql:1-58` supplies the replacement
   append-only growth ledger, composite tenant/branch lineage checks, and forced RLS for insights
   and reviews.
@@ -45,5 +47,6 @@ be ported:
 | `97e9d2c4`, `67df65b5`, `25834be5`, `f6463f25` | Skip | These are WIP/blocker/validation documentation for the old G1/G2 implementation, not product fixes. This note records the final disposition against current code instead. |
 | `ecfc2f76`, `6e152825`, `3e3851a5` | Skip | Merge commits carry no independently valuable fix and would also pull unrelated or superseded history. |
 
-No migration or runtime change is warranted. This resolution deliberately leaves tenant isolation,
-deny precedence, exact-grant pharmacy capabilities, and the live-send block unchanged.
+No migration is warranted. The only runtime correction replaces the router's legacy literal
+`ADMIN` authorization with central `can()` evaluation; it leaves tenant isolation, exact-grant
+pharmacy capabilities, and the live-send block unchanged while restoring DENY precedence.

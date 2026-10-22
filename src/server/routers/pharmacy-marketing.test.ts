@@ -17,6 +17,11 @@ const mocks = vi.hoisted(() => ({
   settings: vi.fn(),
   assist: vi.fn(),
   capture: vi.fn(),
+  can: vi.fn(),
+}));
+vi.mock('@/lib/abac', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
+  can: mocks.can,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -84,6 +89,7 @@ function caller(role = 'ADMIN') {
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.licensed.mockReturnValue(true);
+  mocks.can.mockResolvedValue(true);
   mocks.entitlements.mockResolvedValue({
     organizationId: 'org-a',
     enabledModules: ['pharmacy-crm'],
@@ -130,13 +136,31 @@ describe('marketing workflow authorization', () => {
     );
   });
   it.each(['STAFF', 'MANAGER', 'PHARMACIST'])(
-    'denies nonowner %s before reading data',
+    'honors a central denial for %s before reading data',
     async (role) => {
+      mocks.can.mockResolvedValue(false);
       await expect(caller(role).history(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect(mocks.organization).not.toHaveBeenCalled();
       expect(mocks.history).not.toHaveBeenCalled();
     }
   );
+  it('allows a non-admin with the central pharmacy management grant', async () => {
+    await caller('MANAGER').history(input);
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'owner-a', role: 'MANAGER' }),
+      'pharmacy:manage',
+      undefined,
+      { db: expect.anything() }
+    );
+    expect(mocks.history).toHaveBeenCalledTimes(1);
+  });
+  it('lets a central DENY override the legacy ADMIN role before a mutation', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().capture({ ...input, campaignId: 'campaign-a' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.capture).not.toHaveBeenCalled();
+  });
   it('denies the wrong package before reading data', async () => {
     mocks.licensed.mockReturnValue(false);
     await expect(caller().history(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -148,7 +172,7 @@ describe('marketing workflow authorization', () => {
       code: 'FORBIDDEN',
     });
     expect(mocks.capture).not.toHaveBeenCalled();
-    expect(mocks.transaction).not.toHaveBeenCalled();
+    expect(mocks.transaction).toHaveBeenCalledTimes(1);
   });
   it.each([
     { status: 'SUSPENDED', vertical: 'PHARMACY' },
@@ -212,7 +236,7 @@ describe('growth current authorization', () => {
     expect(transactionDb).not.toHaveProperty('$transaction');
     expect(mocks.growthHistory.mock.calls[0][0]).toBe(transactionDb);
     expect(mocks.actor).toHaveBeenCalledWith({
-      where: { id: 'owner-a', organizationId: 'org-a', role: 'ADMIN', status: 'ACTIVE' },
+      where: { id: 'owner-a', organizationId: 'org-a', status: 'ACTIVE' },
       select: { id: true },
     });
     expect(mocks.entitlements).toHaveBeenCalledWith(

@@ -41,16 +41,22 @@ import {
 } from '@/lib/pharmacy/marketing-service';
 import { draftMarketingCopy, marketingAssistanceInput } from '@/lib/pharmacy/marketing-assistance';
 import { protectedProcedure, router, type TRPCContext } from '../trpc';
+import { can, subjectFromSession } from '@/lib/abac';
 
 type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'audit'> & {
-  db: Pick<ScopedDb, 'organization' | 'pharmacyBranch'>;
+  db: Pick<ScopedDb, 'organization' | 'pharmacyBranch' | 'user'>;
 };
 
 async function owner(ctx: MarketingAccessContext) {
-  if (ctx.session?.user.role !== 'ADMIN' || !hasModule(ctx.entitlements, 'pharmacy-crm'))
+  const user = ctx.session?.user;
+  if (
+    !user ||
+    !(await can(subjectFromSession(user), 'pharmacy:manage', undefined, { db: ctx.db })) ||
+    !hasModule(ctx.entitlements, 'pharmacy-crm')
+  )
     throw new TRPCError({
       code: 'FORBIDDEN',
-      message: 'Owner access and Pharmacy CRM are required.',
+      message: 'Pharmacy management access and Pharmacy CRM are required.',
     });
   const organization = await ctx.db.organization.findUnique({
     where: { id: ctx.entitlements.organizationId },
@@ -92,9 +98,15 @@ async function execute<T>(
   branchId: string,
   fn: (db: ScopedDb, scope: MarketingScope) => Promise<T>
 ) {
-  const resolved = await scope(ctx, branchId);
   try {
-    return await ctx.db.$transaction((db) => fn(db as ScopedDb, resolved));
+    return await ctx.db.$transaction(async (db) => {
+      const entitlements = await resolveOrganizationEntitlements(
+        ctx.entitlements.organizationId,
+        db
+      );
+      const resolved = await scope({ ...ctx, db, entitlements }, branchId);
+      return fn(db as ScopedDb, resolved);
+    });
   } catch (error) {
     if (error instanceof MarketingWorkflowError || error instanceof z.ZodError)
       throw new TRPCError({
@@ -117,7 +129,6 @@ function sandboxTransaction(ctx: TRPCContext, branchId: string): MarketingTransa
           where: {
             organizationId: ctx.entitlements.organizationId,
             id: userId,
-            role: 'ADMIN',
             status: 'ACTIVE',
           },
           select: { id: true },
@@ -151,7 +162,6 @@ async function growthExecute<T>(
       where: {
         id: resolved.actorId,
         organizationId: resolved.organizationId,
-        role: 'ADMIN',
         status: 'ACTIVE',
       },
       select: { id: true },
