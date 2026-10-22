@@ -85,8 +85,13 @@ export function createAIDiscountApprovalRouter(
         const orgId = await authorize(ctx);
         await enabled(port, orgId);
         const oldDraft = await port.getDraft(orgId, input.id);
-        if (!oldDraft || oldDraft.status !== 'SCHEDULED')
-          throw new TRPCError({ code: 'NOT_FOUND' });
+        if (!oldDraft) throw new TRPCError({ code: 'NOT_FOUND' });
+        const alreadyDecided =
+          (input.decision === 'REJECT' && oldDraft.status === 'REJECTED') ||
+          (input.decision === 'APPROVE' &&
+            (oldDraft.status === 'APPROVED' || oldDraft.status === 'ACTIVE'));
+        if (alreadyDecided) return oldDraft;
+        if (oldDraft.status !== 'SCHEDULED') throw new TRPCError({ code: 'NOT_FOUND' });
         const now = new Date();
         let next = await port.transitionDraft(
           orgId,

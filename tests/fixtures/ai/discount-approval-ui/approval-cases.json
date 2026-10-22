@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "feature": "discount-approval-ui",
+  "cases": [
+    {
+      "id": "scheduled-happy-path",
+      "organizationId": "org-abbasi",
+      "aiConfigured": true,
+      "aiEnabled": true,
+      "permission": "ALLOW",
+      "decision": "APPROVE",
+      "expectedStatus": "APPROVED",
+      "expectedAuditEntries": 1
+    },
+    {
+      "id": "explicit-deny-wins",
+      "organizationId": "org-abbasi",
+      "aiConfigured": true,
+      "aiEnabled": true,
+      "permission": "DENY",
+      "decision": "APPROVE",
+      "expectedError": "FORBIDDEN",
+      "expectedPortCalls": 0
+    },
+    {
+      "id": "ai-off-without-org-opt-in",
+      "organizationId": "org-abbasi",
+      "aiConfigured": true,
+      "aiEnabled": false,
+      "permission": "ALLOW",
+      "expectedError": "PRECONDITION_FAILED"
+    },
+    {
+      "id": "ai-off-without-provider-secret",
+      "organizationId": "org-abbasi",
+      "aiConfigured": false,
+      "aiEnabled": true,
+      "permission": "ALLOW",
+      "expectedError": "PRECONDITION_FAILED"
+    },
+    {
+      "id": "tenant-collision-isolated",
+      "organizationId": "org-abbasi",
+      "otherOrganizationId": "org-neighbour",
+      "draftId": "shared-draft-id",
+      "expectedVisibleOrganizationIds": ["org-abbasi"]
+    },
+    {
+      "id": "approve-retry-idempotent",
+      "organizationId": "org-abbasi",
+      "decision": "APPROVE",
+      "attempts": 2,
+      "expectedTransitions": 1,
+      "expectedAuditEntries": 1
+    }
+  ]
+}
