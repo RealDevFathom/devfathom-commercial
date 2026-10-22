@@ -459,6 +459,9 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
     vi.mocked(can).mockResolvedValueOnce(false);
     expect((await f.call('lease', { size: 1 })).status).toBe(403);
     expect(vi.mocked(can).mock.calls.at(-1)?.[1]).toBe('admin:access');
+    vi.mocked(can).mockResolvedValueOnce(false);
+    expect((await f.replay()).status).toBe(403);
+    expect(vi.mocked(can).mock.calls.at(-1)?.[1]).toBe('pharmacy:dispense');
     expect((await f.call('snapshot', {}, { origin: 'https://other.test' })).status).toBe(403);
     expect((await f.call('snapshot', {}, { 'x-terminal-session': 'bad' })).status).toBe(401);
   });

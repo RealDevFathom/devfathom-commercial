@@ -44,6 +44,10 @@ import {
   PharmacySaleError,
 } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import {
+  BranchOperationDeniedError,
+  PharmacyOrganizationNotOperationalError,
+} from '@/lib/pharmacy/regulatory';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { adminProcedure, router } from '../trpc';
 
@@ -462,10 +466,15 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         )
           throw new CounterTransportError('module_disabled', 403);
         const manager = operation === 'lease' || operation === 'quota';
+        const capability = manager
+          ? 'admin:access'
+          : operation === 'replay'
+            ? 'pharmacy:dispense'
+            : 'pharmacy:orders';
         if (
           !(await can(
             subjectFromSession(actor.session.user),
-            manager ? 'admin:access' : 'pharmacy:orders',
+            capability,
             undefined,
             { db, source: 'REST', ip: clientIp(request) }
           ))
@@ -626,6 +635,11 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         );
       if (error instanceof TRPCError)
         return Response.json({ error: error.message }, { status: 403 });
+      if (
+        error instanceof BranchOperationDeniedError ||
+        error instanceof PharmacyOrganizationNotOperationalError
+      )
+        return Response.json({ error: 'pharmacy_not_operational' }, { status: 403 });
       // Known domain reason strings only; never serialize Prisma/provider errors.
       if (
         error instanceof Error &&

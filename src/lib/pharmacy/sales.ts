@@ -17,6 +17,7 @@ import { appendControlledRestorations } from './controlled-register';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+import { assertPharmacySaleMayProceed } from './regulatory';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -201,6 +202,12 @@ async function event(
 }
 
 export async function createSale(db: ScopedDb, scope: LedgerScope, quotation = false) {
+  await assertPharmacySaleMayProceed(
+    db,
+    scope.organizationId,
+    scope.branchId,
+    'SALE_CREATE'
+  );
   const sale = await db.pharmacySale.create({
     data: {
       organizationId: scope.organizationId,

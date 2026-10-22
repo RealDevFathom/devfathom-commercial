@@ -55,8 +55,8 @@ import {
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
 import {
-  assertStoredBranchMayOperate,
   BranchOperationDeniedError,
+  PharmacyOrganizationNotOperationalError,
 } from '@/lib/pharmacy/regulatory';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -147,36 +147,6 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   return { organizationId, branchId: branch, actorId };
 }
 
-async function assertSaleOperationMayProceed(
-  ctx: TRPCContext,
-  scope: LedgerScope,
-  operation: 'SALE_CREATE' | 'SALE_SETTLE'
-): Promise<void> {
-  if (
-    ctx.organization?.id !== scope.organizationId ||
-    (ctx.organization.status !== 'ACTIVE' && ctx.organization.status !== 'GRACE')
-  ) {
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: 'Pharmacy sales are unavailable until the organization is active.',
-    });
-  }
-  try {
-    await assertStoredBranchMayOperate(ctx.db, scope.organizationId, scope.branchId, {
-      name: operation,
-      requiresQualifiedPerson: true,
-    });
-  } catch (error) {
-    if (error instanceof BranchOperationDeniedError) {
-      throw new TRPCError({
-        code: 'FORBIDDEN',
-        message: 'This branch does not have an operable regulatory profile.',
-      });
-    }
-    throw error;
-  }
-}
-
 async function khataScope(ctx: TRPCContext, branch: string) {
   const scope = await scopeFor(ctx, branch);
   if (
@@ -210,6 +180,16 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof PharmacyOrganizationNotOperationalError)
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy sales are unavailable until the organization is active.',
+    });
+  if (error instanceof BranchOperationDeniedError)
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'This branch does not have an operable regulatory profile.',
+    });
   if (error instanceof ControlledRestorationDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyPaymentSandboxError)
@@ -434,6 +414,23 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     return scope;
   }
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+}
+
+async function requireDispenseAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await requireCounterReceiptAccess(ctx, branch);
+  if (
+    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }))
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy counter permission required.',
+    });
+  }
+  return scope;
 }
 
 const closeDate = z
@@ -751,14 +748,12 @@ export const pharmacySalesRouter = router({
             code: 'BAD_REQUEST',
             message: 'Khata fields require Khata tender.',
           });
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
-        await assertSaleOperationMayProceed(ctx, scope, 'SALE_SETTLE');
+        const scope = await requireDispenseAccess(ctx, input.branchId);
         return await ctx.db.$transaction((tx) =>
           applyPharmacyTender(txDb(tx), scope, ledgerTender(input))
         );
       }
       const scope = await khataScope(ctx, input.branchId);
-      await assertSaleOperationMayProceed(ctx, scope, 'SALE_SETTLE');
       if (!input.familyAccountId) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
       const normalized = ledgerTender(input);
       const ownerAuthorized =
@@ -884,9 +879,14 @@ export const pharmacySalesRouter = router({
   create: protectedProcedure
     .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
     .mutation(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
-      await assertSaleOperationMayProceed(ctx, scope, 'SALE_CREATE');
-      return ctx.db.$transaction(async (tx) => createSale(txDb(tx), scope, input.quotation));
+      try {
+        const scope = await requireDispenseAccess(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) =>
+          createSale(txDb(tx), scope, input.quotation)
+        );
+      } catch (error) {
+        fail(error);
+      }
     }),
   addLine: protectedProcedure
     .input(

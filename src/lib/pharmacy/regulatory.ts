@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@/generated/prisma/client';
+import { Prisma, type PrismaClient } from '@/generated/prisma/client';
 import { recordAudit } from '@/server/audit';
 
 export type BranchOperationDenialReason =
@@ -12,6 +12,13 @@ export class BranchOperationDeniedError extends Error {
   constructor(readonly reason: BranchOperationDenialReason) {
     super(reason);
     this.name = 'BranchOperationDeniedError';
+  }
+}
+
+export class PharmacyOrganizationNotOperationalError extends Error {
+  constructor() {
+    super('PHARMACY_ORGANIZATION_NOT_OPERATIONAL');
+    this.name = 'PharmacyOrganizationNotOperationalError';
   }
 }
 
@@ -148,4 +155,37 @@ export async function assertStoredBranchMayOperate(
     },
     { ...action, at }
   );
+}
+
+/**
+ * Transactional admission gate for every pharmacy sale write. The organization
+ * and branch locks serialize lifecycle/profile changes with the decision, so a
+ * profile cannot be withdrawn between admission and the protected write.
+ */
+export async function assertPharmacySaleMayProceed(
+  db: PrismaClient,
+  organizationId: string,
+  branchId: string,
+  operation: 'SALE_CREATE' | 'SALE_SETTLE'
+): Promise<void> {
+  const organizations = await db.$queryRaw<Array<{ status: string }>>(Prisma.sql`
+    SELECT status FROM organizations
+    WHERE id = ${organizationId}
+    FOR SHARE
+  `);
+  if (!organizations[0] || !['ACTIVE', 'GRACE'].includes(organizations[0].status)) {
+    throw new PharmacyOrganizationNotOperationalError();
+  }
+
+  const branches = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT id FROM pharmacy_branches
+    WHERE id = ${branchId} AND "organizationId" = ${organizationId} AND active = true
+    FOR SHARE
+  `);
+  if (!branches[0]) throw new BranchOperationDeniedError('PROFILE_MISSING');
+
+  await assertStoredBranchMayOperate(db, organizationId, branchId, {
+    name: operation,
+    requiresQualifiedPerson: true,
+  });
 }

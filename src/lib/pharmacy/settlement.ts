@@ -17,6 +17,7 @@ import type { LedgerScope } from './stock-ledger';
 import { paymentSandboxAdmitted } from './payment-sandbox-admission';
 import { authenticatePharmacyCommand, validateLeasedReceiptReplay } from './sales';
 import type { PharmacyCommandAuthentication, PharmacyLeasedReceipt } from './sales';
+import { assertPharmacySaleMayProceed } from './regulatory';
 
 export type PharmacyTenderType = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT';
 
@@ -266,6 +267,12 @@ export async function applyPharmacyTender(
   authentication?: PharmacyCommandAuthentication
 ) {
   assertPositiveMinor(input.amountMinor);
+  await assertPharmacySaleMayProceed(
+    db,
+    scope.organizationId,
+    scope.branchId,
+    'SALE_SETTLE'
+  );
   if (input.leasedReceipt) {
     await authenticatePharmacyCommand(
       db,

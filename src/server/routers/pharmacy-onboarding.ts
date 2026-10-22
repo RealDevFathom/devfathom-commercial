@@ -446,6 +446,11 @@ export const pharmacyOnboardingRouter = router({
       }
 
       await ctx.db.$transaction(async (tx) => {
+        await tx.$queryRaw`
+          SELECT id FROM pharmacy_branches
+          WHERE id = ${branch.id} AND "organizationId" = ${organizationId}
+          FOR UPDATE
+        `;
         if (latest && latest.effectiveTo === null) {
           await tx.branchRegulatoryProfile.update({
             where: { id: latest.id },

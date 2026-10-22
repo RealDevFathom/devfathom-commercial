@@ -67,11 +67,11 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue(recorded as never);
   db = {
-    // The capability check: this staff member holds `pharmacy:orders`.
+    // Remittance settles a sale, so this staff member needs the exact dispense grant.
     user: {
       findUnique: vi.fn().mockResolvedValue({
         organizationRole: null,
-        permissionOverrides: [{ capability: 'pharmacy:orders', effect: 'ALLOW' }],
+        permissionOverrides: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
       }),
     },
     // Unknown, inactive and another tenant's branch all read as "no such active branch".
