@@ -21,7 +21,7 @@ export function GrowthPanel({
   unavailable?: boolean;
 }) {
   return (
-    <SectionCard title="AI growth insights" titleLevel={2}>
+    <SectionCard title="DevFathom AI growth insights" titleLevel={2}>
       <div className="space-y-6">
         <p className="text-sm text-text-body">
           Review hypotheses grounded in aggregate receipt counts and posted Finance amounts. Small
@@ -113,6 +113,8 @@ export function GrowthPanel({
             {insight.status === 'READY' &&
               insight.output?.recommendations.map((rec, index) => {
                 const card = presentGrowthRecommendation(insight.snapshot, rec);
+                const actionKind = insight.snapshot.actions.find((a) => a.ref === rec.actionRef)?.kind;
+                const inventoryReview = actionKind === 'INVENTORY_COST_REVIEW';
                 const records = history.reviews.filter(
                   (r) => r.insightId === insight.id && r.recommendation === index
                 );
@@ -147,6 +149,16 @@ export function GrowthPanel({
                       <p className="text-sm">
                         {final.decision === 'REJECT' ? (
                           'Rejected. No campaign created.'
+                        ) : inventoryReview ? (
+                          <>
+                            Inventory-cost review approved.{' '}
+                            <Link
+                              className="underline focus-visible:outline-2 focus-visible:outline-ring"
+                              href={`/pharmacy/inventory?branch=${encodeURIComponent(branchId)}`}
+                            >
+                              Open inventory review
+                            </Link>
+                          </>
                         ) : (
                           <>
                             Draft created.{' '}
@@ -168,18 +180,20 @@ export function GrowthPanel({
                         >
                           <input type="hidden" name="insightId" value={insight.id} />
                           <input type="hidden" name="recommendation" value={index} />
+                          <input type="hidden" name="actionKind" value={actionKind ?? ''} />
                           <label className="block text-sm">
                             Decision
                             <select name="decision" className={control} defaultValue="EDIT">
                               <option value="EDIT">Save edits for review</option>
-                              <option value="APPROVE" disabled={!templates.length}>
-                                Approve insight and create draft
+                              <option value="APPROVE" disabled={!inventoryReview && !templates.length}>
+                                {inventoryReview ? 'Approve and open inventory review' : 'Approve insight and create draft'}
                               </option>
                               <option value="REJECT">Reject insight</option>
                             </select>
                           </label>
-                          <div className="grid gap-4 sm:grid-cols-2">
-                            <label className="text-sm">
+                          {!inventoryReview && (
+                            <div className="grid gap-4 sm:grid-cols-2">
+                              <label className="text-sm">
                               Draft name
                               <Input
                                 name="name"
@@ -211,14 +225,15 @@ export function GrowthPanel({
                                 defaultValue={edit?.scheduledAt}
                                 className="mt-1 min-h-11"
                               />
-                            </label>
-                          </div>
+                              </label>
+                            </div>
+                          )}
                           <p className="text-sm text-text-muted">
                             Draft uses completed receipt count ≥ 1, a weekly cap of one, and quiet
                             hours 22:00–08:00. Current consent, STOP and eligibility are rechecked
                             during capture and dispatch. This decision never approves sending.
                           </p>
-                          {!templates.length && (
+                          {!inventoryReview && !templates.length && (
                             <p className="text-sm">
                               Approve a generic template below before creating a draft.
                             </p>

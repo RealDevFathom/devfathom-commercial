@@ -59,6 +59,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe('shared grounded growth generator', () => {
+  it('accepts pharmacy loyalty and inventory-cost actions while rejecting catering', () => {
+    expect(() =>
+      prepareGrowthInput({
+        ...facts,
+        actions: [
+          { ref: 'a1', kind: 'LOYALTY_REVIEW' },
+          { ref: 'a2', kind: 'INVENTORY_COST_REVIEW' },
+        ],
+      })
+    ).not.toThrow();
+    expect(() =>
+      prepareGrowthInput({ ...facts, actions: [{ ref: 'a1', kind: 'CATERING_REVIEW' }] })
+    ).toThrow('Unsupported pharmacy action');
+  });
   it('uses structured output and attaches actual server values, not provider numbers', async () => {
     const r = await generateGrowthRecommendations(facts);
     expect(r.status).toBe('READY');

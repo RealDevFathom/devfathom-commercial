@@ -110,7 +110,12 @@ export const growthInputSchema = z
     for (const list of [input.facts, input.actions])
       if (new Set(list.map((x) => x.ref)).size !== list.length)
         ctx.addIssue({ code: 'custom', message: 'Duplicate references.' });
-    if (input.vertical === 'PHARMACY' && input.actions.some((a) => a.kind !== 'RETAIL_REVIEW'))
+    if (
+      input.vertical === 'PHARMACY' &&
+      input.actions.some(
+        (a) => !['RETAIL_REVIEW', 'LOYALTY_REVIEW', 'INVENTORY_COST_REVIEW'].includes(a.kind)
+      )
+    )
       ctx.addIssue({ code: 'custom', message: 'Unsupported pharmacy action.' });
   });
 export const growthOutputSchema = z

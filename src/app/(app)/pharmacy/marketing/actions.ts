@@ -48,7 +48,7 @@ export async function marketingAction(
           insightId: text('insightId'),
           recommendation: Number(text('recommendation')),
           decision,
-          ...(decision === 'REJECT'
+          ...(decision === 'REJECT' || text('actionKind') === 'INVENTORY_COST_REVIEW'
             ? {}
             : {
                 edit: {

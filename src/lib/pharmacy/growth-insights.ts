@@ -59,6 +59,7 @@ export type GrowthReviewRow = {
   campaignId: string | null;
   createdAt: Date;
 };
+export type PharmacyGrowthTier = 'STANDARD' | 'SMART';
 export function growthPeriods(from: Date, cutoff: Date, now = new Date()) {
   const duration = cutoff.getTime() - from.getTime();
   if (!Number.isFinite(duration) || duration < 86400000 || duration > 90 * 86400000 || cutoff > now)
@@ -77,7 +78,8 @@ export async function buildPharmacyGrowthInput(
   scope: MarketingScope,
   from: Date,
   cutoff: Date,
-  now = new Date()
+  now = new Date(),
+  tier: PharmacyGrowthTier = 'STANDARD'
 ): Promise<GrowthInput> {
   const periods = growthPeriods(from, cutoff, now);
   const facts: GrowthInput['facts'] = [];
@@ -144,6 +146,27 @@ export async function buildPharmacyGrowthInput(
         coverage: 'COMPLETE',
         freshAt: now.toISOString(),
       });
+    const loyalty = await db.$queryRaw<Array<{ count: number }>>(Prisma.sql`
+      SELECT COUNT(*)::integer AS count FROM pharmacy_customers c
+      JOIN LATERAL (SELECT granted,"revokedAt","recordedAt" FROM pharmacy_patient_consents p
+        WHERE p."organizationId"=c."organizationId" AND p."patientId"=c."patientId" AND p.purpose='LOYALTY'
+        ORDER BY p.version DESC,p.id ASC LIMIT 1) consent ON true
+      WHERE c."organizationId"=${scope.organizationId} AND c.active
+        AND consent.granted AND consent."revokedAt" IS NULL AND consent."recordedAt"<=${now}
+        AND EXISTS (SELECT 1 FROM pharmacy_sales s WHERE s."organizationId"=c."organizationId"
+          AND s."branchId"=${scope.branchId} AND s."customerId"=c.id AND s.status='COMPLETED'
+          AND s."receiptNumber" IS NOT NULL AND s."completedAt">=${new Date(p.from)} AND s."completedAt"<${new Date(p.cutoff)})
+    `);
+    if ((loyalty[0]?.count ?? 0) >= 10)
+      facts.push({
+        ref: `e${facts.length + 1}`,
+        metric: 'loyalty_eligible_count',
+        value: String(loyalty[0].count),
+        period: label,
+        cohortSize: loyalty[0].count,
+        coverage: 'COMPLETE',
+        freshAt: now.toISOString(),
+      });
     // Report's date interface is UTC-day bounded; never silently widen sub-day periods.
     if (p.from.endsWith('T00:00:00.000Z') && p.cutoff.endsWith('T00:00:00.000Z')) {
       const report = await readPharmacyMarketingReport(db, scope.organizationId, {
@@ -194,13 +217,47 @@ export async function buildPharmacyGrowthInput(
         });
     }
   }
+  if (tier === 'SMART') {
+    const inventory = await db.$queryRaw<Array<{ lots: number; value: string; wastage: string }>>(
+      Prisma.sql`SELECT COUNT(DISTINCT lot.id)::integer AS lots,
+        COALESCE(SUM(balance."onHandUnits"::bigint * lot."unitCostMinor"),0)::text AS value,
+        COALESCE((SELECT -SUM(m."quantityUnits"::bigint * source."unitCostMinor")
+          FROM pharmacy_stock_movements m JOIN pharmacy_inventory_lots source
+            ON source."organizationId"=m."organizationId" AND source."branchId"=m."branchId" AND source.id=m."inventoryLotId"
+          WHERE m."organizationId"=${scope.organizationId} AND m."branchId"=${scope.branchId}
+            AND m.kind='WRITE_OFF' AND m."createdAt">=${from} AND m."createdAt"<${cutoff}),0)::text AS wastage
+      FROM pharmacy_inventory_lots lot JOIN pharmacy_stock_balances balance
+        ON balance."organizationId"=lot."organizationId" AND balance."branchId"=lot."branchId" AND balance."inventoryLotId"=lot.id
+      WHERE lot."organizationId"=${scope.organizationId} AND lot."branchId"=${scope.branchId}`
+    );
+    if ((inventory[0]?.lots ?? 0) >= 10)
+      for (const [metric, value] of [
+        ['inventory_value_minor', inventory[0].value],
+        ['wastage_minor', inventory[0].wastage],
+      ] as const)
+        facts.push({
+          ref: `e${facts.length + 1}`,
+          metric,
+          value,
+          period: 'CURRENT',
+          cohortSize: inventory[0].lots,
+          coverage: 'COMPLETE',
+          freshAt: now.toISOString(),
+        });
+  }
   // Pharmacy Finance is PKR minor units; no client-supplied currency or values.
   return prepareGrowthInput({
     vertical: 'PHARMACY',
     ...periods,
     currency: 'PKR',
     facts,
-    actions: [{ ref: 'a1', kind: 'RETAIL_REVIEW' }],
+    actions: [
+      { ref: 'a1', kind: 'RETAIL_REVIEW' },
+      { ref: 'a2', kind: 'LOYALTY_REVIEW' },
+      ...(tier === 'SMART'
+        ? ([{ ref: 'a3', kind: 'INVENTORY_COST_REVIEW' }] as const)
+        : []),
+    ],
   });
 }
 export async function saveGrowthInsight(db: ScopedDb, scope: MarketingScope, result: GrowthResult) {
@@ -208,6 +265,19 @@ export async function saveGrowthInsight(db: ScopedDb, scope: MarketingScope, res
   await db.$executeRaw(Prisma.sql`INSERT INTO growth_insights
     (id,"organizationId","branchId",vertical,"actorId","schemaVersion","inputHash",status,"failureCode",provider,model,snapshot,output)
     VALUES (${id},${scope.organizationId},${scope.branchId},'PHARMACY',${scope.actorId},${result.schemaVersion},${result.inputHash},${result.status},${result.failureCode},${result.provider},${result.model},${JSON.stringify(result.input)}::jsonb,${result.output ? JSON.stringify(result.output) : null}::jsonb)`);
+  await db.auditLog.create({
+    data: {
+      organizationId: scope.organizationId,
+      actorId: scope.actorId,
+      source: 'TRPC',
+      category: 'PHARMACY',
+      operation: 'EXECUTE',
+      action: 'pharmacyGrowth.generate',
+      targetType: 'GrowthInsight',
+      targetId: id,
+      result: { status: result.status, failureCode: result.failureCode, inputHash: result.inputHash },
+    },
+  });
   return { id, status: result.status, failureCode: result.failureCode };
 }
 export async function listGrowthInsights(db: ScopedDb, scope: MarketingScope) {
@@ -226,7 +296,8 @@ export async function reviewGrowthInsight(
   db: ScopedDb,
   scope: MarketingScope,
   raw: z.infer<typeof growthReviewInput>,
-  now = new Date()
+  now = new Date(),
+  allowInventoryReview = false
 ) {
   const input = growthReviewInput.parse(raw);
   if (input.branchId !== scope.branchId) throw new MarketingWorkflowError('Branch mismatch.');
@@ -239,8 +310,12 @@ export async function reviewGrowthInsight(
   const snapshot = growthInputSchema.parse(insight.snapshot);
   const output = validateGrowthOutput(insight.output, snapshot);
   const rec = output.recommendations[input.recommendation];
-  if (!rec || snapshot.actions.find((a) => a.ref === rec.actionRef)?.kind !== 'RETAIL_REVIEW')
+  const action = snapshot.actions.find((a) => a.ref === rec?.actionRef)?.kind;
+  if (!rec || !action || action === 'CATERING_REVIEW')
     throw new MarketingWorkflowError('Unsupported recommendation.');
+  if (action === 'INVENTORY_COST_REVIEW' && !allowInventoryReview)
+    throw new MarketingWorkflowError('Inventory review permission is required.');
+  const createsCampaign = action === 'RETAIL_REVIEW' || action === 'LOYALTY_REVIEW';
   const prior = await db.$queryRaw<
     Array<{ decision: string; campaignId: string | null; settings: GrowthReviewRow['settings'] }>
   >(
@@ -250,7 +325,7 @@ export async function reviewGrowthInsight(
     if (prior[0].decision !== input.decision)
       throw new MarketingWorkflowError('Recommendation already resolved.');
     if (
-      input.decision === 'APPROVE' &&
+      input.decision === 'APPROVE' && createsCampaign &&
       (!input.edit ||
         prior[0].settings?.name !== input.edit.name ||
         prior[0].settings?.templateId !== input.edit.templateId ||
@@ -260,7 +335,7 @@ export async function reviewGrowthInsight(
     return { decision: prior[0].decision, campaignId: prior[0].campaignId, replay: true };
   }
   if (
-    input.decision !== 'REJECT' &&
+    input.decision !== 'REJECT' && createsCampaign &&
     (!input.edit ||
       input.edit.scheduledAt < now ||
       now.getTime() - insight.createdAt.getTime() > 7 * 86400000)
@@ -269,7 +344,7 @@ export async function reviewGrowthInsight(
       'Provide reviewed draft settings and a future schedule; regenerate insights older than seven days.'
     );
   let campaignId: string | null = null;
-  if (input.decision === 'APPROVE') {
+  if (input.decision === 'APPROVE' && createsCampaign) {
     const campaign = await createMarketingDraft(
       db,
       scope,
@@ -287,5 +362,19 @@ export async function reviewGrowthInsight(
   await db.$executeRaw(
     Prisma.sql`INSERT INTO pharmacy_growth_reviews (id,"organizationId","branchId","insightId",recommendation,decision,"actorId",settings,"campaignId") VALUES (${randomUUID()},${scope.organizationId},${scope.branchId},${input.insightId},${input.recommendation},${input.decision},${scope.actorId},${input.edit ? JSON.stringify(input.edit) : null}::jsonb,${campaignId})`
   );
+  await db.auditLog.create({
+    data: {
+      organizationId: scope.organizationId,
+      actorId: scope.actorId,
+      source: 'TRPC',
+      category: 'PHARMACY',
+      operation: 'UPDATE',
+      action: 'pharmacyGrowth.review',
+      targetType: 'GrowthInsight',
+      targetId: input.insightId,
+      metadata: { recommendation: input.recommendation, recommendationAction: action },
+      result: { decision: input.decision, campaignId },
+    },
+  });
   return { decision: input.decision, campaignId, replay: false };
 }

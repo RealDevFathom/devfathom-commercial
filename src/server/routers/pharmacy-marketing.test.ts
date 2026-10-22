@@ -17,6 +17,17 @@ const mocks = vi.hoisted(() => ({
   settings: vi.fn(),
   assist: vi.fn(),
   capture: vi.fn(),
+  can: vi.fn(),
+  providerConfig: vi.fn(),
+}));
+vi.mock('@/lib/abac', () => ({
+  can: mocks.can,
+  subjectFromSession: (user: unknown) => user,
+}));
+vi.mock('@/lib/ai/provider', () => ({
+  readAIConfig: mocks.providerConfig,
+  readAIAvailability: () => ({ available: false, reason: 'DISABLED' }),
+  createAIModel: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -100,6 +111,8 @@ beforeEach(() => {
   mocks.branch.mockResolvedValue({ id: 'branch-a' });
   mocks.history.mockResolvedValue({ campaigns: [] });
   mocks.capture.mockResolvedValue({ prepared: 1 });
+  mocks.can.mockResolvedValue(true);
+  mocks.providerConfig.mockReturnValue({ provider: 'google', model: 'configured', apiKey: 'redacted' });
 });
 const input = { branchId: 'branch-a' };
 describe('marketing workflow authorization', () => {
@@ -206,6 +219,43 @@ describe('growth current authorization', () => {
       expect(mocks.growthReview).not.toHaveBeenCalled();
     }
   );
+  it('keeps DevFathom AI off when the server provider credential is incomplete', async () => {
+    mocks.settings.mockResolvedValue({ askFathomEnabled: true });
+    mocks.providerConfig.mockImplementation(() => {
+      throw new Error('missing credential');
+    });
+    await expect(
+      caller().generateGrowth({
+        ...input,
+        from: new Date('2026-09-01'),
+        cutoff: new Date('2026-10-01'),
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'DevFathom AI is not configured.' });
+    expect(mocks.growthBuild).not.toHaveBeenCalled();
+    expect(mocks.growthGenerate).not.toHaveBeenCalled();
+  });
+  it('uses the smart tier only with current inventory permission and entitlement', async () => {
+    mocks.settings.mockResolvedValue({ askFathomEnabled: true });
+    mocks.entitlements.mockResolvedValue({
+      organizationId: 'org-a',
+      enabledModules: ['pharmacy-crm', 'pharmacy-inventory'],
+    });
+    mocks.growthBuild.mockResolvedValue({ facts: [] });
+    mocks.growthGenerate.mockResolvedValue({ status: 'INSUFFICIENT_DATA' });
+    await caller().generateGrowth({
+      ...input,
+      from: new Date('2026-09-01'),
+      cutoff: new Date('2026-10-01'),
+    });
+    expect(mocks.growthBuild).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.any(Date),
+      expect.any(Date),
+      expect.any(Date),
+      'SMART'
+    );
+  });
   it('re-resolves licence inside the transaction', async () => {
     await caller().growthHistory(input);
     const transactionDb = mocks.entitlements.mock.calls[0][1];

@@ -1,5 +1,6 @@
 import { Prisma } from '@/generated/prisma/client';
 import { generateGrowthRecommendations } from '@/lib/ai/growth-recommendations';
+import { readAIConfig } from '@/lib/ai/provider';
 import {
   buildPharmacyGrowthInput,
   growthPeriodInput,
@@ -12,6 +13,7 @@ import { generateMarketingAttribution } from '@/lib/pharmacy/marketing-attributi
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { can, subjectFromSession } from '@/lib/abac';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -40,7 +42,7 @@ import {
   type MarketingScope,
 } from '@/lib/pharmacy/marketing-service';
 import { draftMarketingCopy, marketingAssistanceInput } from '@/lib/pharmacy/marketing-assistance';
-import { protectedProcedure, router, type TRPCContext } from '../trpc';
+import { auditedProtectedProcedure, protectedProcedure, router, type TRPCContext } from '../trpc';
 
 type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'audit'> & {
   db: Pick<ScopedDb, 'organization' | 'pharmacyBranch'>;
@@ -142,7 +144,7 @@ function sandboxTransaction(ctx: TRPCContext, branchId: string): MarketingTransa
 async function growthExecute<T>(
   ctx: TRPCContext,
   branchId: string,
-  fn: (db: ScopedDb, resolved: MarketingScope) => Promise<T>
+  fn: (db: ScopedDb, resolved: MarketingScope, inventoryAllowed: boolean) => Promise<T>
 ) {
   return ctx.db.$transaction(async (db) => {
     const entitlements = await resolveOrganizationEntitlements(ctx.entitlements.organizationId, db);
@@ -164,8 +166,19 @@ async function growthExecute<T>(
         code: 'FORBIDDEN',
         message: 'Current owner and branch access are required.',
       });
+    const subject = subjectFromSession(ctx.session!.user);
+    if (!(await can(subject, 'pharmacy:manage', undefined, { db, source: 'TRPC' })))
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Growth review permission is required.' });
+    const inventoryAllowed = await can(subject, 'pharmacy:inventory', undefined, {
+      db,
+      source: 'TRPC',
+    });
     try {
-      return await fn(db as ScopedDb, resolved);
+      return await fn(
+        db as ScopedDb,
+        resolved,
+        inventoryAllowed && hasModule(entitlements, 'pharmacy-inventory')
+      );
     } catch (error) {
       if (error instanceof MarketingWorkflowError || error instanceof z.ZodError)
         throw new TRPCError({
@@ -180,28 +193,46 @@ async function growthExecute<T>(
 
 // Integration export for WHA-1618; root.ts is outside this issue's ownership.
 export const pharmacyMarketingRouter = router({
-  growthHistory: protectedProcedure
+  growthHistory: auditedProtectedProcedure
     .input(marketingScopeInput)
     .query(({ ctx, input }) => growthExecute(ctx, input.branchId, listGrowthInsights)),
-  generateGrowth: protectedProcedure.input(growthPeriodInput).mutation(async ({ ctx, input }) => {
-    const facts = await growthExecute(ctx, input.branchId, async (db, resolved) => {
+  generateGrowth: auditedProtectedProcedure.input(growthPeriodInput).mutation(async ({ ctx, input }) => {
+    const facts = await growthExecute(ctx, input.branchId, async (db, resolved, smart) => {
       const settings = await readAskFathomSettings(db, resolved.organizationId);
       if (!settings?.askFathomEnabled)
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'AI insights are disabled. Manual campaigns remain available.',
         });
-      return buildPharmacyGrowthInput(db, resolved, input.from, input.cutoff);
+      // The organization toggle is not enough: remain off until the server can
+      // resolve a complete provider configuration (including its credential).
+      try {
+        const config = readAIConfig();
+        if (!('apiKey' in config) || !config.apiKey?.trim())
+          throw new Error('Missing provider secret');
+      } catch {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'DevFathom AI is not configured.' });
+      }
+      return buildPharmacyGrowthInput(
+        db,
+        resolved,
+        input.from,
+        input.cutoff,
+        new Date(),
+        smart ? 'SMART' : 'STANDARD'
+      );
     });
     const result = await generateGrowthRecommendations(facts);
     return growthExecute(ctx, input.branchId, (db, resolved) =>
       saveGrowthInsight(db, resolved, result)
     );
   }),
-  reviewGrowth: protectedProcedure
+  reviewGrowth: auditedProtectedProcedure
     .input(growthReviewInput)
     .mutation(({ ctx, input }) =>
-      growthExecute(ctx, input.branchId, (db, resolved) => reviewGrowthInsight(db, resolved, input))
+      growthExecute(ctx, input.branchId, (db, resolved, inventoryAllowed) =>
+        reviewGrowthInsight(db, resolved, input, new Date(), inventoryAllowed)
+      )
     ),
   branches: protectedProcedure.query(async ({ ctx }) => {
     const organization = await owner(ctx);
