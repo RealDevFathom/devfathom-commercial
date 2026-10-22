@@ -68,6 +68,9 @@ the token source in `src/app/globals.css`.
 | Faint ink | `#a3a39e`   | Low-emphasis metadata                  |
 | Coral     | `#bd3f2a`   | Brand signal and focus                 |
 
+Fog is exposed as `--surface-fog` (`#e8e8e5` in light mode and `#111110` in dark mode), so the
+surround remains darker than the application shell in either theme.
+
 Dark-theme primitives are already defined under `[data-theme='dark']` in `globals.css`. Do not
 recreate theme logic inside a page or component.
 
