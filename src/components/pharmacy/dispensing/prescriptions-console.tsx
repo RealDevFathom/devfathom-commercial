@@ -4,14 +4,17 @@ import { useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 
 import { CalendarClock, Plus, Upload } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import type { PrescriptionUpload } from '@/lib/pharmacy/prescription-files';
+import {
+  formatPrescriptionCalendarDate,
+  parsePrescriptionCalendarDate,
+} from '@/lib/pharmacy/prescription-calendar';
+import { workspaceToday } from '@/lib/timezone';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Field, WorkspaceState, fieldClass } from './field';
 import { MedicationCard } from './medication-card';
-
-const today = () => new Date().toISOString().slice(0, 10);
 
 /** Private, authenticated, no-store evidence thumbnail; next/image would cache it. */
 function EvidenceThumbnail({ url, label }: { url: string; label: string }) {
@@ -209,8 +212,8 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
         sourceKind: String(data.get('sourceKind')) as 'PAPER_IMAGE' | 'WHATSAPP_PHOTO',
         sourceFileRef: evidence.url,
         custodyState: String(data.get('custodyState')) as 'NOT_HELD' | 'HELD_AT_PHARMACY',
-        validFrom: new Date(String(data.get('validFrom'))),
-        validUntil: new Date(String(data.get('validUntil'))),
+        validFrom: parsePrescriptionCalendarDate(String(data.get('validFrom'))),
+        validUntil: parsePrescriptionCalendarDate(String(data.get('validUntil'))),
         authorizedRepeats: Number(data.get('authorizedRepeats')),
         lines: [
           {
@@ -366,7 +369,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                         required
                         name="validFrom"
                         type="date"
-                        defaultValue={today()}
+                        defaultValue={workspaceToday(workspace.data.timezone)}
                         className={fieldClass}
                       />
                     </Field>
@@ -530,8 +533,8 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                             </td>
                             <td className="py-4">{rx.prescriber.name}</td>
                             <td className="py-4 tabular-nums">
-                              {rx.validFrom.toLocaleDateString()}–
-                              {rx.validUntil.toLocaleDateString()}
+                              {formatPrescriptionCalendarDate(rx.validFrom)}–
+                              {formatPrescriptionCalendarDate(rx.validUntil)}
                             </td>
                             <td className="py-4">
                               {line.medicine.productName}

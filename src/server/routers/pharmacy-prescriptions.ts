@@ -24,6 +24,8 @@ import {
   RxOcrError,
 } from '@/lib/pharmacy/rx-ocr';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { isPrescriptionCalendarDate } from '@/lib/pharmacy/prescription-calendar';
+import { workspaceTimezone } from '@/lib/timezone';
 import {
   auditedProtectedProcedure,
   capabilityProcedure,
@@ -34,6 +36,9 @@ import {
 
 const purpose = z.enum(['DISPENSING', 'REMINDERS', 'LOYALTY', 'MARKETING']);
 const channel = z.enum(['IN_PERSON', 'PHONE', 'SMS', 'WHATSAPP', 'EMAIL']);
+const prescriptionCalendarDate = z
+  .date()
+  .refine(isPrescriptionCalendarDate, 'Use a prescription calendar date.');
 
 // Suppress sensitive payload auditing before authentication/input validation,
 // including denied uploads. Keep the existing audited guards and ABAC engine.
@@ -144,6 +149,11 @@ export const pharmacyPrescriptionsRouter = router({
       );
       return {
         branches,
+        timezone: workspaceTimezone(
+          ctx.organization?.id === ctx.entitlements.organizationId
+            ? ctx.organization.timezone
+            : null
+        ),
         selectedBranchId: selectedBranch?.id ?? null,
         patients: patients.map(maskedPatient),
         prescribers,
@@ -270,8 +280,8 @@ export const pharmacyPrescriptionsRouter = router({
           custodyState: z
             .enum(['NOT_HELD', 'HELD_AT_PHARMACY', 'RETURNED_TO_PATIENT', 'TRANSFERRED'])
             .optional(),
-          validFrom: z.date(),
-          validUntil: z.date(),
+          validFrom: prescriptionCalendarDate,
+          validUntil: prescriptionCalendarDate,
           authorizedRepeats: z.number().int().nonnegative(),
           lines: z
             .array(
@@ -484,7 +494,11 @@ export const pharmacyPrescriptionsRouter = router({
         const panel = await readCounterPatientPanel(
           ctx.db,
           ctx.entitlements.organizationId,
-          input.patientId
+          input.patientId,
+          new Date(),
+          ctx.organization?.id === ctx.entitlements.organizationId
+            ? ctx.organization.timezone
+            : null
         );
         auditPatientRead({
           organizationId: ctx.entitlements.organizationId,

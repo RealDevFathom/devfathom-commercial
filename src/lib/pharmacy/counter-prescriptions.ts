@@ -16,6 +16,7 @@
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { maskedPatient } from './patient-prescriptions';
+import { prescriptionIsValidOn } from './prescription-calendar';
 
 export type CounterPrescriptionLine = {
   prescriptionLineId: string;
@@ -42,7 +43,7 @@ export type CounterPrescription = {
   custodyState: string;
   validFrom: string;
   validUntil: string;
-  /** False once `validUntil` has passed, computed against the caller's clock. */
+  /** Valid on both endpoint calendar days in the workspace timezone. */
   inDate: boolean;
   authorizedRepeats: number;
   lines: CounterPrescriptionLine[];
@@ -105,7 +106,8 @@ export async function readCounterPatientPanel(
   db: ScopedDb,
   organizationId: string,
   patientId: string,
-  at: Date = new Date()
+  at: Date = new Date(),
+  timeZone: string | null | undefined = 'UTC'
 ): Promise<CounterPatientPanel> {
   const patient = await db.pharmacyPatient.findFirst({
     where: { id: patientId, organizationId },
@@ -178,9 +180,12 @@ export async function readCounterPatientPanel(
       custodyState: prescription.custodyState,
       validFrom: prescription.validFrom.toISOString(),
       validUntil: prescription.validUntil.toISOString(),
-      inDate:
-        prescription.validFrom.getTime() <= at.getTime() &&
-        prescription.validUntil.getTime() > at.getTime(),
+      inDate: prescriptionIsValidOn(
+        prescription.validFrom,
+        prescription.validUntil,
+        timeZone,
+        at
+      ),
       authorizedRepeats: prescription.authorizedRepeats,
       lines: prescription.lines.map((line) => {
         const filledCanonicalUnits = line.fills.reduce(
