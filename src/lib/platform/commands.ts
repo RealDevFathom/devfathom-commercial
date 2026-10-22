@@ -243,6 +243,9 @@ const sensitiveReason = z.string().trim().min(10).max(500);
 
 function capabilityFor(action: string): string {
   if (sensitiveCommand(action)) return 'organizations:security:write';
+  // Converting an opportunity is tenant provisioning, not an ordinary CRM
+  // mutation: it creates an organization and its first administrator.
+  if (action === 'crm.opportunity.convert') return 'organizations:write';
   const domain = action.split('.')[0] ?? '';
   const capability = COMMAND_CAPABILITY[domain];
   if (!capability) throw new PlatformSecurityError('Unknown platform command.', 400);
