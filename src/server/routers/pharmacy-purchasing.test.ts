@@ -613,6 +613,12 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       },
       permissionOverrides: [],
     });
+    db.user.findFirst.mockResolvedValue({
+      id: 'user_manager',
+      role: 'EMPLOYEE',
+      department: 'pharmacy',
+      status: 'ACTIVE',
+    });
     db.medicineBarcode.findFirst.mockResolvedValue({
       presentation: { medicineId: 'medicine_a' },
     });
@@ -683,6 +689,12 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       bypassReason: 'Emergency insulin.',
       bypassApprovedByUserId: 'user_manager',
     });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_manager', status: 'ACTIVE' }),
+      'pharmacy:dispense',
+      undefined,
+      expect.objectContaining({ db, source: 'TRPC' })
+    );
   });
 
   it('refuses a bypass the receiver approved for themselves', async () => {
@@ -692,6 +704,41 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
         directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_counter' },
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a bypass approver who is not an active user in the tenant', async () => {
+    db.user.findFirst.mockResolvedValue(null);
+    await expect(
+      caller('user_counter').createGoodsReceipt({
+        ...withoutOrder(),
+        directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_unknown' },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'APPROVER_NOT_AUTHORIZED' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a bypass approver whose old procurement capability is their only allow', async () => {
+    mocks.can.mockImplementation(async (subject, action) => {
+      if ((subject as { id: string }).id === 'user_counter') {
+        return action === 'pharmacy:procurement';
+      }
+      // This models the attempt-1 bug: the approver holds the old capability,
+      // but not the exact dispensing grant required for a clinical approver.
+      return action === 'pharmacy:procurement';
+    });
+    await expect(
+      caller('user_counter').createGoodsReceipt({
+        ...withoutOrder(),
+        directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_manager' },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'APPROVER_NOT_AUTHORIZED' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_manager' }),
+      'pharmacy:dispense',
+      undefined,
+      expect.objectContaining({ db, source: 'TRPC' })
+    );
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 

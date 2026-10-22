@@ -66,3 +66,4 @@ docker/livekit/livekit.dev.keys.yaml
 /test-results/
 /playwright-artifacts/
 /playwright-report/
+/error.log

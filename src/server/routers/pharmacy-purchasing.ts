@@ -56,7 +56,6 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
-import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import {
   assertDirectPurchaseAuthorized,
   PharmacyReceivingError,
@@ -129,6 +128,7 @@ function domainError(error: unknown): never {
               error.reason === 'CROSS_BRANCH_REFERENCE' ||
               error.reason === 'SUPPLIER_NOT_AUTHORIZED' ||
               error.reason === 'SUPPLIER_LICENCE_EXPIRED' ||
+              error.reason === 'APPROVER_NOT_AUTHORIZED' ||
               error.reason === 'SELF_APPROVAL'
             ? 'FORBIDDEN'
             : 'BAD_REQUEST',
@@ -184,8 +184,14 @@ function serialUniqueViolation(error: unknown): boolean {
 }
 
 async function assertProcurement(ctx: TRPCContext) {
-  const actorId = ctx.session?.user?.id;
-  if (!actorId || !(await actorCanProcure(ctx.db, actorId))) {
+  const actor = ctx.session?.user;
+  if (
+    !actor ||
+    !(await can(subjectFromSession(actor), 'pharmacy:procurement', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }))
+  ) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
@@ -976,6 +982,23 @@ const purchasingRouter = router({
             bypassApprovedByUserId: input.directPurchase.approvedByUserId,
             receivedByUserId: scope.actorId,
           });
+          const approver = await ctx.db.user.findFirst({
+            where: {
+              id: input.directPurchase.approvedByUserId,
+              organizationId: scope.organizationId,
+              status: 'ACTIVE',
+            },
+            select: { id: true, role: true, department: true, status: true },
+          });
+          if (
+            !approver ||
+            !(await can(subjectFromSession(approver), 'pharmacy:dispense', undefined, {
+              db: ctx.db,
+              source: 'TRPC',
+            }))
+          ) {
+            throw new PharmacyReceivingError('APPROVER_NOT_AUTHORIZED');
+          }
         }
         if (
           input.purchaseOrderId &&
