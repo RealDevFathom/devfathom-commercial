@@ -34,6 +34,7 @@ export function isReservedHostLabel(value: string): boolean {
 const SHARED_HOST_LABELS = new Set(RESERVED_HOST_LABELS.filter((label) => label !== 'admin'));
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+const LOCAL_DEVELOPMENT_DOMAINS = new Set([...LOCAL_HOSTS, 'lvh.me']);
 
 export function normalizeHost(value: string | null | undefined): string {
   const first = value?.split(',')[0]?.trim().toLowerCase() ?? '';
@@ -158,7 +159,18 @@ export function isSharedHost(hostValue: string | null | undefined): boolean {
 export function tenantHostUrl(slug: string, path = '/login'): string | null {
   const baseDomain = configuredBaseDomain();
   if (!baseDomain || !slug) return null;
+  const configuredPort = (() => {
+    const value = process.env.PLATFORM_BASE_DOMAIN?.trim();
+    if (!value) return '';
+    try {
+      return new URL(value.includes('://') ? value : `http://${value}`).port;
+    } catch {
+      return '';
+    }
+  })();
   const protocol =
-    LOCAL_HOSTS.has(baseDomain) || baseDomain.endsWith('.localhost') ? 'http' : 'https';
-  return `${protocol}://${slug}.${baseDomain}${path}`;
+    LOCAL_DEVELOPMENT_DOMAINS.has(baseDomain) || baseDomain.endsWith('.localhost')
+      ? 'http'
+      : 'https';
+  return `${protocol}://${slug}.${baseDomain}${configuredPort ? `:${configuredPort}` : ''}${path}`;
 }

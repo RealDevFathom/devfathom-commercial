@@ -44,6 +44,22 @@ describe('tenant host classification', () => {
   });
 });
 
+describe('tenant host URLs', () => {
+  it('keeps HTTP and the configured port for lvh.me development hosts', async () => {
+    process.env.PLATFORM_BASE_DOMAIN = 'lvh.me:3100';
+    const { tenantHostUrl } = await import('./host-routing');
+
+    expect(tenantHostUrl('cafe', '/invite/T')).toBe('http://cafe.lvh.me:3100/invite/T');
+  });
+
+  it('continues to require HTTPS for non-development domains', async () => {
+    process.env.PLATFORM_BASE_DOMAIN = 'devfathom.com';
+    const { tenantHostUrl } = await import('./host-routing');
+
+    expect(tenantHostUrl('cafe', '/invite/T')).toBe('https://cafe.devfathom.com/invite/T');
+  });
+});
+
 describe('reserved infrastructure host labels', () => {
   it.each([
     'www',
