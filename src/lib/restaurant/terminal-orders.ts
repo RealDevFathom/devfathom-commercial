@@ -678,7 +678,7 @@ export async function resolveTerminalEffectiveMenu(
         where: {
           branchId: input.branchId,
           status: 'PUBLISHED',
-          channels: { has: input.channel },
+          OR: [{ channels: { has: input.channel } }, { channels: { isEmpty: true } }],
         },
         orderBy: [{ publishedAt: 'desc' }, { createdAt: 'desc' }],
         select: publicationSelect,
