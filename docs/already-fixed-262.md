@@ -6,7 +6,7 @@ Verified against the current code at commit
 No production or test code change is required:
 
 - The webhook calls `handleInboundWhatsAppMessage` directly rather than passing a restricted
-  `growthStore` adapter (`src/app/api/pharmacy/whatsapp/webhook/route.ts`, lines 163–171).
+  `growthStore` adapter (`src/app/api/pharmacy/whatsapp/webhook/route.ts`, lines 153–163).
 - The handler claims the inbound provider message and updates consent in the same tenant-scoped
   transaction (`src/lib/pharmacy/whatsapp/inbound.ts`, lines 155–196). The claim is keyed by the
   provider message ID (lines 159–168), and the opt-out update is constrained by both
