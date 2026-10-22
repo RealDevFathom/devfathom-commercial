@@ -3,8 +3,7 @@
 import { z } from 'zod';
 import { requirePlatformSession } from '@/lib/platform/auth';
 import { backfillPharmacyCatalog } from '@/lib/pharmacy/catalog/backfill';
-import { PlatformSecurityError } from '@/lib/platform/security';
-import { canPlatformRole } from '@/lib/platform/capabilities';
+import { assertCanBackfillPharmacyCatalog } from '@/lib/pharmacy/catalog/platform-authz';
 
 const inputSchema = z.union([
   z
@@ -24,8 +23,9 @@ const inputSchema = z.union([
 ]);
 export async function backfillPharmacyCatalogAction(input: unknown) {
   const actor = await requirePlatformSession();
-  if (!canPlatformRole(actor.role, 'pharmacy:catalog-backfill'))
-    throw new PlatformSecurityError('SuperAdmin access is required.', 403);
+  // Central can() for the modeled platform actor, before any input parsing or
+  // database access. The service repeats the same decision for non-HTTP callers.
+  await assertCanBackfillPharmacyCatalog(actor);
   const parsed = inputSchema.parse(input);
   const target = parsed.allPharmacy
     ? { allPharmacy: true as const }

@@ -17,6 +17,7 @@ vi.mock('./preload', () => ({
   seedPharmacyCatalog: mocks.seed,
 }));
 import { backfillPharmacyCatalog } from './backfill';
+import { PLATFORM_RULE_SOURCES } from './platform-authz';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -30,20 +31,46 @@ beforeEach(() => {
   );
   mocks.tenant.mockImplementation((_id, run) => run({}));
 });
+
+function expectNoDatabaseAccess() {
+  expect(mocks.platform).not.toHaveBeenCalled();
+  expect(mocks.tenant).not.toHaveBeenCalled();
+  expect(mocks.load).not.toHaveBeenCalled();
+  expect(mocks.seed).not.toHaveBeenCalled();
+}
+
 describe('catalogue backfill', () => {
   it('rejects every non-SuperAdmin before database access', async () => {
     await expect(
+      backfillPharmacyCatalog({ id: 'actor', role: 'OPERATIONS' }, { allPharmacy: true }, false)
+    ).rejects.toMatchObject({ status: 403 });
+    expectNoDatabaseAccess();
+  });
+
+  it('rejects a deactivated SuperAdmin (the CLI path) before database access', async () => {
+    await expect(
       backfillPharmacyCatalog(
-        { id: 'actor', role: 'OPERATIONS' } as never,
+        { id: 'actor', role: 'SUPER_ADMIN', active: false },
         { allPharmacy: true },
-        false
+        true
       )
     ).rejects.toMatchObject({ status: 403 });
-    expect(mocks.platform).not.toHaveBeenCalled();
+    expectNoDatabaseAccess();
   });
+
+  it('rejects a SuperAdmin with an explicit DENY (mixed grant) through the same central decision', async () => {
+    await expect(
+      backfillPharmacyCatalog({ id: 'actor', role: 'SUPER_ADMIN' }, { allPharmacy: true }, true, {
+        roleRules: PLATFORM_RULE_SOURCES.roleRules,
+        actorRules: () => [{ capability: 'pharmacy:catalog-backfill', effect: 'DENY' }],
+      })
+    ).rejects.toMatchObject({ status: 403 });
+    expectNoDatabaseAccess();
+  });
+
   it('makes no seed or audit writes during dry-run', async () => {
     const result = await backfillPharmacyCatalog(
-      { id: 'actor', role: 'SUPER_ADMIN' } as never,
+      { id: 'actor', role: 'SUPER_ADMIN' },
       { organizationId: 'org_a' },
       false
     );

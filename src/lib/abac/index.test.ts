@@ -245,9 +245,11 @@ describe('custom ABAC decisions', () => {
       // Catalogue preload: bundled-catalogue prices and availability. Default deny;
       // reached only through an organization role (the Owner's pharmacy:*).
       'pharmacy:catalog-settings',
+      // Platform-only catalogue backfill, decided for a modeled platform actor.
+      'pharmacy:catalog-backfill',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(47);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);

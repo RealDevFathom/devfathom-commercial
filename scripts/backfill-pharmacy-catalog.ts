@@ -12,11 +12,15 @@ if (orgAt >= 0 === allPharmacy || (orgAt >= 0 && !args[orgAt + 1]))
 const actorId = process.env.PLATFORM_ACTOR_ID;
 if (!actorId) throw new Error('PLATFORM_ACTOR_ID is required.');
 const actor = await withPlatformDb((db) =>
-  db.platformUser.findUnique({ where: { id: actorId }, select: { id: true, role: true } })
+  db.platformUser.findUnique({
+    where: { id: actorId },
+    select: { id: true, role: true, active: true },
+  })
 );
 if (!actor) throw new Error('Platform actor not found.');
+// The service authorizes this actor through the central can() decision.
 const result = await backfillPharmacyCatalog(
-  actor as never,
+  actor,
   allPharmacy ? { allPharmacy: true } : { organizationId: args[orgAt + 1]! },
   apply
 );

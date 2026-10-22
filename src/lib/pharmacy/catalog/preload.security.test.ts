@@ -34,16 +34,17 @@ const catalog: PharmacyCatalog = {
   ],
 };
 
-function seedDb(useCatalogDefaultPrices: boolean) {
+/** Records every delegate touched and every raw statement the seed issues. */
+function seedDb() {
   const writes = new Map<string, Row[]>();
-  const order: string[] = [];
+  const touched = new Set<string>();
+  const raw: string[] = [];
   const delegate = (name: string) => ({
     findUnique: vi.fn(async () => null),
     upsert: vi.fn(async () => ({})),
     update: vi.fn(async () => ({})),
     count: vi.fn(async () => (name === 'medicine' ? catalog.count : 0)),
     createMany: vi.fn(async ({ data }: { data: Row[] }) => {
-      order.push(`createMany:${name}`);
       writes.set(name, [...(writes.get(name) ?? []), ...data]);
       return { count: data.length };
     }),
@@ -52,23 +53,23 @@ function seedDb(useCatalogDefaultPrices: boolean) {
     {},
     {
       get: (_target, name: string) => {
-        if (name === '$executeRaw') return vi.fn(async () => 1);
-        if (name === '$queryRaw') {
-          return vi.fn(async (query: { strings: readonly string[] }) => {
-            if (query.strings.join('?').includes('FOR UPDATE')) order.push('lock:setting');
-            return [{ useCatalogDefaultPrices }];
+        if (name.startsWith('$')) {
+          return vi.fn(async (query: { strings?: readonly string[] }) => {
+            raw.push(query?.strings?.join('?') ?? name);
+            return [];
           });
         }
+        touched.add(name);
         return delegate(name);
       },
     }
   ) as ScopedDb;
-  return { db, writes, order };
+  return { db, writes, touched, raw };
 }
 
-describe('catalogue seed review quarantine (finding 3)', () => {
+describe('catalogue seed: reference rows only (finding 3, CAT-SEC-02/03)', () => {
   it('creates every medicine unsaleable with its catalogue origin, even when the source says active', async () => {
-    const { db, writes } = seedDb(false);
+    const { db, writes } = seedDb();
     await seedPharmacyCatalog(db, 'org-a', catalog);
     expect(writes.get('medicine')).toEqual(
       catalog.items.map(() =>
@@ -90,32 +91,38 @@ describe('catalogue seed review quarantine (finding 3)', () => {
     );
   });
 
-  it('leaves tenant prices empty while catalogue default prices are off', async () => {
-    const { db, writes } = seedDb(false);
+  it('stores the catalogue defaults as reference values on the packs, and no applied price', async () => {
+    const { db, writes } = seedDb();
     await seedPharmacyCatalog(db, 'org-a', catalog);
-    expect(writes.get('packLevel')).toEqual([
+    const packs = writes.get('packLevel')!;
+    expect(packs).toEqual([
       expect.objectContaining({
         catalogDefaultSalePriceMinor: 1200,
-        sellingPriceMinor: null,
-        purchasePriceMinor: null,
+        catalogDefaultPurchasePriceMinor: 900,
       }),
       expect.objectContaining({
+        catalogDefaultSalePriceMinor: null,
         catalogDefaultPurchasePriceMinor: 400,
-        sellingPriceMinor: null,
-        purchasePriceMinor: null,
       }),
     ]);
+    for (const pack of packs) {
+      expect(pack).not.toHaveProperty('sellingPriceMinor');
+      expect(pack).not.toHaveProperty('purchasePriceMinor');
+      expect(pack).not.toHaveProperty('catalogSellingPriceCount');
+    }
   });
 
-  it('seeds the defaults when the tenant already turned them on (finding 2: no stale state)', async () => {
-    const { db, writes, order } = seedDb(true);
+  it('never writes a branch price, a branch setting or a raw statement', async () => {
+    const { db, touched, raw } = seedDb();
     await seedPharmacyCatalog(db, 'org-a', catalog);
-    expect(writes.get('packLevel')).toEqual([
-      expect.objectContaining({ sellingPriceMinor: 1200, purchasePriceMinor: 900 }),
-      expect.objectContaining({ sellingPriceMinor: null, purchasePriceMinor: 400 }),
+    expect([...touched].sort()).toEqual([
+      'catalogSeedRun',
+      'medicine',
+      'medicineAlias',
+      'medicineProvenance',
+      'packLevel',
+      'presentation',
     ]);
-    // The setting row is held before any pack is written, serializing with the toggle.
-    expect(order.indexOf('lock:setting')).toBeGreaterThanOrEqual(0);
-    expect(order.indexOf('lock:setting')).toBeLessThan(order.indexOf('createMany:packLevel'));
+    expect(raw).toEqual([]);
   });
 });

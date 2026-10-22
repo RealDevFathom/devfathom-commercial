@@ -113,6 +113,13 @@ describe('sensitive pharmacy actions need an exact grant', () => {
     }
   });
 
+  it('keeps the platform-only catalogue backfill out of every tenant wildcard', () => {
+    expect(capabilityMatches('pharmacy:*', 'pharmacy:catalog-backfill')).toBe(false);
+    expect(capabilityMatches('*', 'pharmacy:catalog-backfill')).toBe(false);
+    expect(capabilityMatches('pharmacy:catalog-backfill', 'pharmacy:catalog-backfill')).toBe(true);
+    expect(capabilityMatches('pharmacy:*', 'pharmacy:catalog-backfill', 'DENY')).toBe(true);
+  });
+
   it('still lets a wildcard DENY revoke them', () => {
     for (const action of sensitive) {
       expect(capabilityMatches('*', action, 'DENY')).toBe(true);

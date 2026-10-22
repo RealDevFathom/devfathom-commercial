@@ -1,20 +1,31 @@
 import 'server-only';
 
-import type { PlatformIdentity } from '@/lib/platform/auth';
 import { PlatformSecurityError } from '@/lib/platform/security';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
+import {
+  assertCanBackfillPharmacyCatalog,
+  PLATFORM_RULE_SOURCES,
+  type PlatformCatalogActor,
+  type PlatformRuleSources,
+} from './platform-authz';
 import { catalogSeedPreview, loadBundledPharmacyCatalog, seedPharmacyCatalog } from './preload';
-import { canPlatformRole } from '@/lib/platform/capabilities';
 
 export type CatalogBackfillTarget = { organizationId: string } | { allPharmacy: true };
 
+/**
+ * Platform backfill of the bundled catalogue into existing pharmacy tenants.
+ * The seed writes catalogue reference rows only: it never writes a branch price,
+ * a branch setting or availability, which exist only behind the tenant writers
+ * in ./commercial (and their branch-scoped RLS refuses a session with no user).
+ */
 export async function backfillPharmacyCatalog(
-  actor: Pick<PlatformIdentity, 'id' | 'role'>,
+  actor: PlatformCatalogActor,
   target: CatalogBackfillTarget,
-  apply: boolean
+  apply: boolean,
+  sources: PlatformRuleSources = PLATFORM_RULE_SOURCES
 ) {
-  if (!canPlatformRole(actor.role, 'pharmacy:catalog-backfill'))
-    throw new PlatformSecurityError('SuperAdmin access is required.', 403);
+  // Same central decision as the server action; nothing below runs without it.
+  await assertCanBackfillPharmacyCatalog(actor, sources);
   const organizations = await withPlatformDb((db) =>
     db.organization.findMany({
       where:

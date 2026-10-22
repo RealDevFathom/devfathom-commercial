@@ -7,7 +7,6 @@ import path from 'node:path';
 import { z } from 'zod';
 import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { lockCatalogSetting } from './commercial';
 
 export const PHARMACY_CATALOG_VERSION = 'pharmacy-catalog-v1';
 export const PHARMACY_CATALOG_JOB = 'PHARMACY_CATALOG_SEED_V1' as const;
@@ -88,6 +87,13 @@ export async function catalogSeedPreview(
  * source row's `active` flag says (that flag is kept only as unreviewed provenance). The
  * database refuses a saleable catalogue insert, and only an explicit change with a valid
  * price can make one saleable later (see `./commercial`).
+ *
+ * CAT-SEC-02/03: this is the platform path (onboarding job and backfill), so it writes
+ * catalogue reference rows only. It never writes a branch price, a branch setting or a
+ * saleable medicine: those exist only behind the authorized tenant writers in
+ * `./commercial`, and the branch tables' forced RLS refuses a session without a user
+ * assigned to the branch. A branch applies the reference defaults afterwards with
+ * setCatalogDefaultPrices (idempotent: it fills only what that branch has not priced).
  */
 export async function seedPharmacyCatalog(
   db: ScopedDb,
@@ -112,9 +118,6 @@ export async function seedPharmacyCatalog(
     },
     update: {},
   });
-  // Held until commit: a concurrent default-price toggle waits, so seeded packs either
-  // receive the defaults now (toggle already on) or are covered by the toggle afterwards.
-  const { useCatalogDefaultPrices } = await lockCatalogSetting(db, organizationId);
 
   const medicines = catalog.items.map((item, i) => ({
     id: id('med', organizationId, i),
@@ -141,10 +144,10 @@ export async function seedPharmacyCatalog(
     level: 'BOX',
     unitsPerParent: item.packQty,
     effectiveFrom: new Date(0),
+    // Reference values from the bundled asset. A branch applies them only through the
+    // authorized setCatalogDefaultPrices writer.
     catalogDefaultSalePriceMinor: item.defaultSalePriceMinor,
     catalogDefaultPurchasePriceMinor: item.defaultPurchasePriceMinor,
-    sellingPriceMinor: useCatalogDefaultPrices ? item.defaultSalePriceMinor : null,
-    purchasePriceMinor: useCatalogDefaultPrices ? item.defaultPurchasePriceMinor : null,
   }));
   // Aliases carry the canonical normalization; the alias trigger recomputes and compares it.
   const aliases = catalog.items.map((item, i) => ({

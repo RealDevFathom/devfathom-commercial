@@ -470,9 +470,12 @@ model Medicine {
   coldChain                    Boolean                              @default(false)
   saleable                     Boolean                              @default(false)
   /// Bundled-catalogue origin (e.g. `pharmacy-catalog-v1`), set only by the catalogue
-  /// seed and immutable. A trigger keeps such a medicine unsaleable until an explicit
-  /// change with a positive current-pack selling price (20261023150200).
+  /// seed and immutable. A trigger keeps such a medicine unsaleable unless at least one
+  /// branch holds a positive selling price for it (20261023150300).
   catalogVersion               String?
+  /// Positive catalogue branch selling prices this medicine holds (one per branch and
+  /// pack). Maintained only by the pharmacy_catalog_branch_prices triggers (20261023150300).
+  catalogSellingPriceCount     Int                                  @default(0)
   createdAt                    DateTime                             @default(now())
   updatedAt                    DateTime                             @updatedAt
   strengths                    MedicineStrengthComponent[]
@@ -552,8 +555,10 @@ model PackLevel {
   referencedAt          DateTime?
   catalogDefaultSalePriceMinor     Int?
   catalogDefaultPurchasePriceMinor Int?
-  sellingPriceMinor                Int?
-  purchasePriceMinor               Int?
+  /// Branches holding a positive catalogue selling price for this pack. Maintained only by
+  /// the pharmacy_catalog_branch_prices triggers; while positive, the pack is neither
+  /// superseded nor moved (20261023150300).
+  catalogSellingPriceCount         Int                         @default(0)
   supersedesPackLevelId String?
   createdAt             DateTime                    @default(now())
   presentation          Presentation                @relation(fields: [presentationId], references: [id], onDelete: Restrict)
@@ -4859,7 +4864,6 @@ enum RestaurantActivationAcknowledgementKind {
 model Organization {
   pharmacyMigrationSources PharmacyMigrationSource[]
   pharmacyCatalogSeedRuns  CatalogSeedRun[]
-  pharmacyCatalogSettings  PharmacyCatalogSetting?
   pharmacyMessageLogs      PharmacyMessageLog[]
   id                       String                     @id @default(cuid())
   slug                     String                     @unique
@@ -11570,16 +11574,40 @@ model CatalogSeedRun {
   @@map("pharmacy_catalog_seed_runs")
 }
 
-model PharmacyCatalogSetting {
-  organizationId          String       @id @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  useCatalogDefaultPrices Boolean      @default(false)
+/// CAT-SEC-03: "use catalogue default prices" is decided per branch. Forced RLS
+/// (pharmacy_catalog_branch_visible) admits only a caller assigned to the active
+/// branch. Foreign keys to pharmacy_branches live in 20261023150300.
+model PharmacyCatalogBranchSetting {
+  organizationId          String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                String
+  useCatalogDefaultPrices Boolean   @default(false)
   enabledById             String?
   enabledAt               DateTime?
-  createdAt               DateTime     @default(now())
-  updatedAt               DateTime     @updatedAt
-  organization            Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @default(now())
 
-  @@map("pharmacy_catalog_settings")
+  @@id([organizationId, branchId])
+  @@map("pharmacy_catalog_branch_settings")
+}
+
+/// CAT-SEC-03: the applied selling/purchase price of one catalogue pack in one
+/// branch. Written only by src/lib/pharmacy/catalog/commercial.ts; triggers keep
+/// the pack and medicine catalogSellingPriceCount in step and the identity immutable.
+model PharmacyCatalogBranchPrice {
+  id                 String   @id
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  medicineId         String
+  packLevelId        String
+  sellingPriceMinor  Int?
+  purchasePriceMinor Int?
+  updatedById        String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @default(now())
+
+  @@unique([organizationId, branchId, packLevelId], map: "pharmacy_catalog_branch_prices_branch_pack_key")
+  @@index([organizationId, medicineId], map: "pharmacy_catalog_branch_prices_medicine_idx")
+  @@map("pharmacy_catalog_branch_prices")
 }
 
 /// MIG-01 — immutable evidence of one incumbent export. The file bytes are NOT

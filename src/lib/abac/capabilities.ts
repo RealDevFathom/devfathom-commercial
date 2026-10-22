@@ -11,6 +11,8 @@ export const EXACT_GRANT_ONLY_ACTIONS: ReadonlySet<string> = new Set([
   'pharmacy:dispense',
   'pharmacy:safety',
   'pharmacy:catalogue-review',
+  // Platform-only (SuperAdmin's exact grant): a tenant role's `pharmacy:*` must never reach it.
+  'pharmacy:catalog-backfill',
 ]);
 
 export function capabilityMatches(

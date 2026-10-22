@@ -24,9 +24,10 @@ import {
 import { MANUAL_FILE_RIGHTS, type ConnectorRights } from '@/lib/pharmacy/reference-connectors';
 import {
   catalogAvailabilityInput,
+  catalogDefaultPricesInput,
   catalogMedicineDetail,
+  catalogMedicineInput,
   catalogPackPriceInput,
-  hasCurrentCatalogSellingPrice,
   setCatalogDefaultPrices,
   setCatalogMedicineAvailability,
   setCatalogPackPrice,
@@ -196,15 +197,14 @@ function catalogActor(ctx: {
 
 export const pharmacyMedicineRouter = router({
   // Bundled-catalogue prices and availability: one capability, checked by the
-  // procedure and again (fail-closed) inside each writer in catalog/commercial.
+  // procedure and again (fail-closed, with the branch as a resource attribute and
+  // the caller's branch assignment) inside each writer in catalog/commercial.
   setCatalogDefaultPrices: capabilityProcedure('pharmacy:catalog-settings')
-    .input(z.object({ enabled: z.boolean() }).strict())
-    .mutation(({ ctx, input }) =>
-      setCatalogDefaultPrices(ctx.db, catalogActor(ctx), input.enabled)
-    ),
+    .input(catalogDefaultPricesInput)
+    .mutation(({ ctx, input }) => setCatalogDefaultPrices(ctx.db, catalogActor(ctx), input)),
   catalogMedicine: capabilityProcedure('pharmacy:catalog-settings')
-    .input(z.object({ medicineId: z.string().trim().min(1).max(128) }).strict())
-    .query(({ ctx, input }) => catalogMedicineDetail(ctx.db, catalogActor(ctx), input.medicineId)),
+    .input(catalogMedicineInput)
+    .query(({ ctx, input }) => catalogMedicineDetail(ctx.db, catalogActor(ctx), input)),
   setCatalogPackPrice: capabilityProcedure('pharmacy:catalog-settings')
     .input(catalogPackPriceInput)
     .mutation(({ ctx, input }) => setCatalogPackPrice(ctx.db, catalogActor(ctx), input)),
@@ -686,6 +686,13 @@ export const pharmacyMedicineRouter = router({
       ctx.db.$transaction(async (tx) => {
         const current = await tx.packLevel.findFirst({ where: { id: input.id } });
         if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack level not found.' });
+        // A pack that branches have priced from the bundled catalogue keeps those prices
+        // on its current version; the database guard (20261023150300) refuses the same.
+        if (current.catalogSellingPriceCount > 0)
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Remove the catalogue branch selling prices on this pack before revising it.',
+          });
         await tx.packLevel.update({
           where: { id: current.id },
           data: { effectiveTo: input.effectiveFrom },
@@ -1076,15 +1083,13 @@ export const pharmacyMedicineRouter = router({
             });
           const medicine = await tx.medicine.findUniqueOrThrow({ where: { id: medicineId } });
           // Publication makes a medicine saleable. A bundled-catalogue medicine also
-          // needs a valid price first; the database trigger enforces the same rule.
-          if (
-            medicine.catalogVersion !== null &&
-            !(await hasCurrentCatalogSellingPrice(tx, medicine.organizationId, medicineId))
-          ) {
+          // needs a positive selling price in at least one branch; the database
+          // guard (20261023150300) enforces the same rule at write time.
+          if (medicine.catalogVersion !== null && medicine.catalogSellingPriceCount <= 0) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
               message:
-                'Set a positive selling price on this catalogue medicine before publishing it as saleable.',
+                'Set a positive selling price for this catalogue medicine in at least one branch before publishing it as saleable.',
             });
           }
           const ingredientName = values.get('alias') ?? values.get('productName')!;
