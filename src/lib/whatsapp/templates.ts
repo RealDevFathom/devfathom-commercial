@@ -169,7 +169,11 @@ export async function approveWhatsAppTemplate(
 ) {
   await authorize(context);
   const current = await ports.store.findById(context.organizationId, id);
-  if (!current || current.state !== 'DRAFT') throw new Error('Draft not found.');
+  if (!current) throw new Error('Draft not found.');
+  // Provider registration is an external side effect. Treat an approval retry as
+  // a successful replay rather than registering and auditing the same template
+  // twice (for example, after a client times out while receiving the response).
+  if (current.state === 'APPROVED') return current;
   // Registration receives the owner's approved representation, never a draft.
   await ports.register(context.organizationId, {
     ...current,

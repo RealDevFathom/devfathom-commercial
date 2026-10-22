@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import happyPath from '../../../tests/fixtures/ai/wa-templates/happy-path.json';
+import rejectedSensitiveVariable from '../../../tests/fixtures/ai/wa-templates/rejected-sensitive-variable.json';
+import safeVariables from '../../../tests/fixtures/ai/wa-templates/safe-variables.json';
 
 const mocks = vi.hoisted(() => ({ can: vi.fn(), generateText: vi.fn(), routeAI: vi.fn() }));
 vi.mock('@/lib/abac', () => ({ can: mocks.can }));
@@ -118,11 +121,18 @@ describe('AI-drafted WhatsApp templates', () => {
 
   it('rejects non-whitelisted AI variables', async () => {
     const { ports, rows } = fixture();
-    mocks.generateText.mockResolvedValue({ text: 'Hello {{full_name}}', usage: {} });
+    mocks.generateText.mockResolvedValue({
+      text: rejectedSensitiveVariable.modelOutput,
+      usage: {},
+    });
     await expect(draftWhatsAppTemplate(context, { kind: 'OFFER' }, ports)).rejects.toThrow(
       'non-whitelisted'
     );
     expect(rows).toHaveLength(0);
+  });
+
+  it('keeps the eval fixture variable allowlist synchronized with the product contract', () => {
+    expect(safeVariables.allowedVariables).toEqual(['name', 'shop', 'offer']);
   });
 
   it('registers only on owner approval and records the state transition', async () => {
@@ -141,8 +151,21 @@ describe('AI-drafted WhatsApp templates', () => {
     });
   });
 
+  it('replays approval idempotently without duplicate registration or audit entries', async () => {
+    const { ports, audits, register } = fixture();
+    const draft = await draftWhatsAppTemplate(context, { kind: 'REFILL' }, ports);
+
+    const first = await approveWhatsAppTemplate(context, draft.id, ports);
+    const replay = await approveWhatsAppTemplate(context, draft.id, ports);
+
+    expect(replay).toEqual(first);
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(audits.filter((entry) => entry.action === 'APPROVE')).toHaveLength(1);
+  });
+
   it('sends only approved templates to opted-in recipients using first name only', async () => {
     const { ports, audits, send } = fixture();
+    mocks.generateText.mockResolvedValue({ text: happyPath.modelOutput, usage: {} });
     const draft = await draftWhatsAppTemplate(context, { kind: 'OFFER' }, ports);
     await expect(
       sendWhatsAppTemplate(
@@ -150,7 +173,7 @@ describe('AI-drafted WhatsApp templates', () => {
         {
           templateId: draft.id,
           customerId: 'customer-1',
-          values: { name: 'Ayesha', shop: 'Corner Shop', offer: '10% off' },
+          values: happyPath.values,
         },
         ports
       )
@@ -161,7 +184,7 @@ describe('AI-drafted WhatsApp templates', () => {
       {
         templateId: draft.id,
         customerId: 'customer-1',
-        values: { name: 'Ayesha', shop: 'Corner Shop', offer: '10% off' },
+        values: happyPath.values,
       },
       ports
     );
@@ -169,7 +192,7 @@ describe('AI-drafted WhatsApp templates', () => {
       expect.objectContaining({
         organizationId: 'org-1',
         phone: '+15550001111',
-        body: 'Hi Ayesha, visit Corner Shop for 10% off. Reply STOP to opt out.',
+        body: happyPath.expectedRendered,
       })
     );
     expect(audits.at(-1)).toMatchObject({
@@ -216,5 +239,17 @@ describe('AI-drafted WhatsApp templates', () => {
       approvedById: null,
     });
     await expect(approveWhatsAppTemplate(context, 'foreign', ports)).rejects.toThrow('not found');
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('uses the context organization for the provider-secret check', async () => {
+    const { ports } = fixture();
+    const foreignContext = { ...context, organizationId: 'org-2' };
+
+    await expect(
+      draftWhatsAppTemplate(foreignContext, { kind: 'OFFER' }, ports)
+    ).rejects.toThrow('not configured');
+    expect(ports.hasConfiguredProviderSecret).toHaveBeenCalledWith('org-2');
+    expect(mocks.routeAI).not.toHaveBeenCalled();
   });
 });

@@ -1,0 +1,6 @@
+{
+  "name": "reject prescription disclosure",
+  "kind": "REFILL",
+  "modelOutput": "Hi {{name}}, your {{prescription}} is ready at {{shop}}. Reply STOP to opt out.",
+  "rejectedVariable": "prescription"
+}

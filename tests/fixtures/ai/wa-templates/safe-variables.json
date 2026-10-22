@@ -1,0 +1,6 @@
+{
+  "name": "allowed non-health variables",
+  "kind": "WIN_BACK",
+  "modelOutput": "Hello {{name}} from {{shop}}: {{offer}}. Reply STOP to opt out.",
+  "allowedVariables": ["name", "shop", "offer"]
+}

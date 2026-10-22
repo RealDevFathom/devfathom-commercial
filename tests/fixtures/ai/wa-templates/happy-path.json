@@ -1,0 +1,11 @@
+{
+  "name": "approved promotional template",
+  "kind": "OFFER",
+  "modelOutput": "Hi {{name}}, visit {{shop}} for {{offer}}. Reply STOP to opt out.",
+  "values": {
+    "name": "Ayesha",
+    "shop": "Abbasi Pharmacie",
+    "offer": "10% off"
+  },
+  "expectedRendered": "Hi Ayesha, visit Abbasi Pharmacie for 10% off. Reply STOP to opt out."
+}
