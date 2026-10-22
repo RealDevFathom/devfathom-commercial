@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => {
     findStaffProfiles: fn(),
     findBranchAssignments: fn(),
     findPurchaseOrder: fn(),
+    findReceipt: fn(),
     findStockLocation: fn(),
     annotateAudit: fn(),
   };
@@ -108,6 +109,7 @@ function caller() {
         ),
       },
       restaurantPurchaseOrder: { findUnique: mocks.findPurchaseOrder },
+      restaurantPurchaseReceipt: { findUnique: mocks.findReceipt },
       restaurantStockLocation: { findUnique: mocks.findStockLocation },
     } as never,
     entitlements: {
@@ -142,6 +144,7 @@ beforeEach(() => {
   mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff_server', primaryBranchId: 'b1' }]);
   mocks.findBranchAssignments.mockResolvedValue([]);
   mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b1', locationId: 'loc1' });
+  mocks.findReceipt.mockResolvedValue({ branchId: 'b1' });
   mocks.findStockLocation.mockResolvedValue({ branchId: 'b1' });
 });
 
@@ -187,6 +190,36 @@ describe('strict inputs', () => {
       caller().receivePurchaseOrder({ purchaseOrderId: 'po1', lines: [] })
     ).rejects.toBeDefined();
     expect(mocks.receivePurchaseOrder).not.toHaveBeenCalled();
+  });
+});
+
+describe('branch-scoped reads', () => {
+  it('limits an unfiltered order list to the actor assigned branches', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'inventory:read');
+    mocks.findBranchAssignments.mockResolvedValue([{ branchId: 'b2' }]);
+    mocks.listPurchaseOrders.mockResolvedValue({ orders: [], nextCursor: null });
+
+    await caller().listPurchaseOrders({});
+
+    expect(mocks.listPurchaseOrders).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ branchIds: ['b1', 'b2'] })
+    );
+  });
+
+  it('rejects order and receipt reads outside the actor branch before loading details', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'inventory:read');
+    mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b2', locationId: 'loc2' });
+    mocks.findReceipt.mockResolvedValue({ branchId: 'b2' });
+
+    await expect(caller().getPurchaseOrder({ purchaseOrderId: 'po2' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(caller().getReceipt({ receiptId: 'receipt2' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.getPurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.getPurchaseReceipt).not.toHaveBeenCalled();
   });
 });
 

@@ -385,7 +385,10 @@ export type ReceiveDiscrepancyInput = {
 
 export type ReceiveLineInput = {
   purchaseOrderLineId: string;
+  /** Total delivered quantity, including rejected or quarantined goods. */
   receivedQuantity: Prisma.Decimal | string | number;
+  /** Quantity accepted into usable stock; defaults to the delivered quantity. */
+  acceptedQuantity?: Prisma.Decimal | string | number;
   /** Receiving unit; defaults to the PO line's ordering unit. */
   unitId?: string | null;
   /** Actual received unit cost; defaults to the PO line's expected cost. */
@@ -468,6 +471,12 @@ export async function receivePurchaseOrder(
       });
     }
 
+    // Serialize receipt/status transitions at the order boundary. A concurrent
+    // receiver waits here and then observes every receipt committed before it.
+    await tx.$queryRaw<Array<{ id: string }>>(
+      Prisma.sql`SELECT "id" FROM "restaurant_purchase_orders" WHERE "id" = ${input.purchaseOrderId} FOR UPDATE`
+    );
+
     const order = await tx.restaurantPurchaseOrder.findUnique({
       where: { id: input.purchaseOrderId },
       select: {
@@ -528,6 +537,22 @@ export async function receivePurchaseOrder(
       const unitId = line.unitId ?? poLine.unitId;
       const unitCost = line.unitCost != null ? decimal(line.unitCost) : poLine.unitCost;
       const receivedQuantity = decimal(line.receivedQuantity);
+      const hasUnusableDiscrepancy = line.discrepancies?.some((discrepancy) =>
+        ['DAMAGED', 'EXPIRED', 'REJECTED'].includes(discrepancy.kind)
+      );
+      if (hasUnusableDiscrepancy && line.acceptedQuantity == null) {
+        throw new PurchasingError(
+          'Accepted quantity is required for damaged, expired, or rejected goods.',
+          'INVALID'
+        );
+      }
+      const acceptedQuantity = decimal(line.acceptedQuantity ?? line.receivedQuantity);
+      if (acceptedQuantity.isNegative() || acceptedQuantity.greaterThan(receivedQuantity)) {
+        throw new PurchasingError(
+          'Accepted quantity must be between zero and the received quantity.',
+          'INVALID'
+        );
+      }
 
       let batchId: string | null = null;
       if (line.batch) {
@@ -547,17 +572,19 @@ export async function receivePurchaseOrder(
         select: { id: true },
       });
 
-      movementInputs.push({
-        stockItemId,
-        locationId,
-        reason: 'PURCHASE_RECEIPT',
-        quantity: receivedQuantity,
-        unitId,
-        unitCost,
-        occurredAt: at,
-        batchId,
-        receiptId: receipt.id,
-      });
+      if (!acceptedQuantity.isZero()) {
+        movementInputs.push({
+          stockItemId,
+          locationId,
+          reason: 'PURCHASE_RECEIPT',
+          quantity: acceptedQuantity,
+          unitId,
+          unitCost,
+          occurredAt: at,
+          batchId,
+          receiptId: receipt.id,
+        });
+      }
 
       // Auto price-variance discrepancy (§AC) — only comparable when the receipt
       // line is priced in the same unit as the order line.
@@ -593,15 +620,17 @@ export async function receivePurchaseOrder(
     // key here — the whole command's replay is governed by the outer key above,
     // and this call runs inside the same transaction (unit conversion + cost
     // inversion happen in the primitive; the returned quantities are canonical).
-    await postStockMovements(tx, {
-      actor: {
-        staffProfileId: input.actor?.staffProfileId ?? null,
-        deviceId: input.actor?.deviceId ?? null,
-      },
-      movements: movementInputs,
-      commandType: 'purchasing.receive',
-      now: at,
-    });
+    if (movementInputs.length) {
+      await postStockMovements(tx, {
+        actor: {
+          staffProfileId: input.actor?.staffProfileId ?? null,
+          deviceId: input.actor?.deviceId ?? null,
+        },
+        movements: movementInputs,
+        commandType: 'purchasing.receive',
+        now: at,
+      });
+    }
 
     // Auto overage discrepancies + PO status advance from DERIVED received qty.
     const touchedLineIds = [...new Set(input.lines.map((line) => line.purchaseOrderLineId))];
@@ -720,6 +749,8 @@ export async function createSupplierReturn(
 
 export type ListPurchaseOrdersInput = {
   branchId?: string;
+  /** Server-resolved authorization scope; never accepted directly from clients. */
+  branchIds?: readonly string[];
   supplierId?: string;
   status?: PurchaseOrderStatus;
   limit?: number;
@@ -730,7 +761,7 @@ export async function listPurchaseOrders(db: ScopedDb, input: ListPurchaseOrders
   const limit = input.limit ?? 50;
   const rows = await db.restaurantPurchaseOrder.findMany({
     where: {
-      branchId: input.branchId,
+      branchId: input.branchIds ? { in: [...input.branchIds] } : input.branchId,
       supplierId: input.supplierId,
       status: input.status,
     },

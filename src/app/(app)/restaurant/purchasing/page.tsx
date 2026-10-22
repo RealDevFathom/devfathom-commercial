@@ -437,6 +437,11 @@ export default async function PurchasingPage({
           errors[`receivedQuantity:${line.id}`] =
             'Enter a positive decimal quantity, or 0 to omit this line.';
         }
+        const enteredAcceptedQuantity = optionalField(form, `acceptedQuantity:${line.id}`);
+        const acceptedQuantity = enteredAcceptedQuantity ?? receivedQuantity;
+        if (!nonNegativeDecimal.test(acceptedQuantity)) {
+          errors[`acceptedQuantity:${line.id}`] = 'Enter a non-negative usable quantity.';
+        }
         const unitCost = optionalField(form, `unitCost:${line.id}`);
         if (unitCost && !nonNegativeDecimal.test(unitCost)) {
           errors[`unitCost:${line.id}`] = 'Enter a non-negative decimal unit cost.';
@@ -464,6 +469,14 @@ export default async function PurchasingPage({
         ) {
           errors[`discrepancyKind:${line.id}`] = 'Choose a listed discrepancy kind.';
         }
+        if (
+          discrepancyKind &&
+          ['DAMAGED', 'EXPIRED', 'REJECTED'].includes(discrepancyKind) &&
+          !enteredAcceptedQuantity
+        ) {
+          errors[`acceptedQuantity:${line.id}`] =
+            'Enter how much of the affected delivery is usable stock.';
+        }
         if (discrepancyNote && !discrepancyKind) {
           errors[`discrepancyKind:${line.id}`] = 'Choose a kind for this discrepancy note.';
         }
@@ -471,6 +484,7 @@ export default async function PurchasingPage({
           {
             purchaseOrderLineId: line.id,
             receivedQuantity,
+            acceptedQuantity,
             unitId: line.unitId,
             unitCost,
             batch: batchCode ? { code: batchCode, expiryDate } : undefined,
@@ -892,6 +906,7 @@ export default async function PurchasingPage({
                       ['reference', ''],
                       ...loaded.selectedOrder.lines.flatMap((line) => [
                         [`receivedQuantity:${line.id}`, '0'],
+                        [`acceptedQuantity:${line.id}`, ''],
                         [`unitCost:${line.id}`, line.unitCost],
                         [`batchCode:${line.id}`, ''],
                         [`expiryDate:${line.id}`, ''],

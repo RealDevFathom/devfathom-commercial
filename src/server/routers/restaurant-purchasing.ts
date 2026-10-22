@@ -4,7 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
-import { resolveRestaurantActor } from '../restaurant-actor';
+import { resolveRestaurantActor, resolveRestaurantActorBranchScope } from '../restaurant-actor';
 import {
   PurchasingError,
   createSupplier,
@@ -77,6 +77,7 @@ const RECEIVE_LINE_INPUT = z
   .object({
     purchaseOrderLineId: ID,
     receivedQuantity: DECIMAL,
+    acceptedQuantity: DECIMAL.optional(),
     unitId: ID.optional(),
     unitCost: DECIMAL.optional(),
     batch: z.object({ code: ID, expiryDate: DATE_ONLY.optional() }).strict().optional(),
@@ -112,6 +113,15 @@ async function requirePurchaseOrderScope(ctx: TRPCContext, purchaseOrderId: stri
   });
   if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'Purchase order not found.' });
   return order;
+}
+
+async function requireReceiptScope(ctx: TRPCContext, receiptId: string) {
+  const receipt = await ctx.db.restaurantPurchaseReceipt.findUnique({
+    where: { id: receiptId },
+    select: { branchId: true },
+  });
+  if (!receipt) throw new TRPCError({ code: 'NOT_FOUND', message: 'Receipt not found.' });
+  return receipt;
 }
 
 async function requireLocationInBranch(
@@ -212,20 +222,33 @@ export const restaurantPurchasingRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const result = await listPurchaseOrders(ctx.db, input);
+      const scope = await resolveRestaurantActorBranchScope(ctx);
+      if (input.branchId) await resolveRestaurantActor(ctx, [input.branchId]);
+      const result = await listPurchaseOrders(ctx.db, {
+        ...input,
+        ...(!input.branchId && scope.branchIds !== null ? { branchIds: scope.branchIds } : {}),
+      });
       return { orders: result.orders.map(serializeOrderSummary), nextCursor: result.nextCursor };
     }),
 
   getPurchaseOrder: readProcedure
     .input(z.object({ purchaseOrderId: ID }).strict())
     .query(({ ctx, input }) =>
-      run(async () => serializePurchaseOrder(await getPurchaseOrder(ctx.db, input.purchaseOrderId)))
+      run(async () => {
+        const scope = await requirePurchaseOrderScope(ctx, input.purchaseOrderId);
+        await resolveRestaurantActor(ctx, [scope.branchId]);
+        return serializePurchaseOrder(await getPurchaseOrder(ctx.db, input.purchaseOrderId));
+      })
     ),
 
   getReceipt: readProcedure
     .input(z.object({ receiptId: ID }).strict())
     .query(({ ctx, input }) =>
-      run(async () => serializeReceipt(await getPurchaseReceipt(ctx.db, input.receiptId)))
+      run(async () => {
+        const scope = await requireReceiptScope(ctx, input.receiptId);
+        await resolveRestaurantActor(ctx, [scope.branchId]);
+        return serializeReceipt(await getPurchaseReceipt(ctx.db, input.receiptId));
+      })
     ),
 
   // ── Purchase orders — creation & line editing (DRAFT) ────────────────────────────
@@ -399,6 +422,7 @@ export const restaurantPurchasingRouter = router({
           lines: input.lines.map((line) => ({
             purchaseOrderLineId: line.purchaseOrderLineId,
             receivedQuantity: line.receivedQuantity,
+            acceptedQuantity: line.acceptedQuantity,
             unitId: line.unitId,
             unitCost: line.unitCost,
             batch: line.batch

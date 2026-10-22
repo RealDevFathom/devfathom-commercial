@@ -26,6 +26,7 @@ type ReceivingFormProps = {
 
 const lineFields = [
   ['receivedQuantity', 'Received quantity'],
+  ['acceptedQuantity', 'Usable quantity'],
   ['unitCost', 'Unit cost'],
   ['batchCode', 'Batch'],
   ['expiryDate', 'Expiry'],
@@ -227,7 +228,7 @@ export function ReceivingForm({
                         {...fieldProps(name)}
                         type={field === 'expiryDate' ? 'date' : 'text'}
                         inputMode={
-                          field === 'receivedQuantity' || field === 'unitCost'
+                          field === 'receivedQuantity' || field === 'acceptedQuantity' || field === 'unitCost'
                             ? 'decimal'
                             : undefined
                         }

@@ -314,6 +314,37 @@ describeIfDatabase('M6 purchasing — receiving', () => {
     expect(order.lines[0]!.fullyReceived).toBe(true);
   }, 30_000);
 
+  it('adds only the explicitly accepted portion of a delivery to usable stock', async () => {
+    const { orderId, lineId } = await approvedOrder({ orderedQuantity: '10', unitCost: '2.00' });
+    const result = await deps.withTenantDb(orgId, (tx) =>
+      deps.purchasing.receivePurchaseOrder(tx, {
+        purchaseOrderId: orderId,
+        lines: [
+          {
+            purchaseOrderLineId: lineId,
+            receivedQuantity: '10',
+            acceptedQuantity: '6',
+            discrepancies: [
+              {
+                kind: 'DAMAGED',
+                expectedQuantity: '10',
+                receivedQuantity: '10',
+                note: 'Four damaged',
+              },
+            ],
+          },
+        ],
+      })
+    );
+
+    expect(result.movements).toHaveLength(1);
+    eq(result.movements[0]!.quantity, '6');
+    const balances = await deps.withTenantDb(orgId, (tx) =>
+      deps.purchasing.getPurchaseOrder(tx, orderId)
+    );
+    eq(balances.lines[0]!.receivedQuantityCanonical, '10');
+  }, 30_000);
+
   it('receives partially then completes, tracking PARTIALLY_RECEIVED → RECEIVED', async () => {
     const { orderId, lineId } = await approvedOrder({ orderedQuantity: '10' });
     const partial = await deps.withTenantDb(orgId, (tx) =>
@@ -335,6 +366,25 @@ describeIfDatabase('M6 purchasing — receiving', () => {
     const order = await deps.withTenantDb(orgId, (tx) =>
       deps.purchasing.getPurchaseOrder(tx, orderId)
     );
+    eq(order.lines[0]!.receivedQuantityCanonical, '10');
+  }, 30_000);
+
+  it('serializes concurrent partial receipts and persists the terminal status', async () => {
+    const { orderId, lineId } = await approvedOrder({ orderedQuantity: '10' });
+    const receiveFive = () =>
+      deps.withTenantDb(orgId, (tx) =>
+        deps.purchasing.receivePurchaseOrder(tx, {
+          purchaseOrderId: orderId,
+          lines: [{ purchaseOrderLineId: lineId, receivedQuantity: '5' }],
+        })
+      );
+
+    await Promise.all([receiveFive(), receiveFive()]);
+
+    const order = await deps.withTenantDb(orgId, (tx) =>
+      deps.purchasing.getPurchaseOrder(tx, orderId)
+    );
+    expect(order.status).toBe('RECEIVED');
     eq(order.lines[0]!.receivedQuantityCanonical, '10');
   }, 30_000);
 
