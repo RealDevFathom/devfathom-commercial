@@ -809,7 +809,6 @@ export async function readCateringReport(
       eventDate: { gte: parsed.from, lte: parsed.to },
     },
     orderBy: [{ eventDate: 'asc' }, { id: 'asc' }],
-    take: limit + 1,
     select: {
       id: true,
       organizationId: true,
@@ -857,7 +856,7 @@ export async function readCateringReport(
   let deliveredCount = 0;
   let deliveredOnTimeCount = 0;
   const orders = [];
-  for (const order of rows.slice(0, limit)) {
+  for (const order of rows) {
     let orderIngredientCost = ZERO;
     let orderMissingCostLineCount = 0;
     for (const line of order.lines) {
@@ -917,26 +916,28 @@ export async function readCateringReport(
     if (orderMargin) status.knownMargin = status.knownMargin.plus(orderMargin);
     else status.incompleteMarginCount += 1;
     statusRows.set(order.status, status);
-    orders.push({
-      id: order.id,
-      eventName: order.eventName,
-      eventDate: dateKey(order.eventDate),
-      branchId: order.branch.id,
-      branchName: order.branch.name,
-      status: order.status,
-      quotedTotal: order.quotedTotal ? serializeDecimal(order.quotedTotal) : null,
-      ingredientCost:
-        orderMissingCostLineCount === 0 ? serializeDecimal(orderIngredientCost) : null,
-      extras: serializeDecimal(orderExtras),
-      margin: orderMargin ? serializeDecimal(orderMargin) : null,
-      missingCostLineCount: orderMissingCostLineCount,
-      deliveredOnTime,
-    });
+    if (orders.length < limit) {
+      orders.push({
+        id: order.id,
+        eventName: order.eventName,
+        eventDate: dateKey(order.eventDate),
+        branchId: order.branch.id,
+        branchName: order.branch.name,
+        status: order.status,
+        quotedTotal: order.quotedTotal ? serializeDecimal(order.quotedTotal) : null,
+        ingredientCost:
+          orderMissingCostLineCount === 0 ? serializeDecimal(orderIngredientCost) : null,
+        extras: serializeDecimal(orderExtras),
+        margin: orderMargin ? serializeDecimal(orderMargin) : null,
+        missingCostLineCount: orderMissingCostLineCount,
+        deliveredOnTime,
+      });
+    }
   }
   return {
     range,
     totals: {
-      orderCount: orders.length,
+      orderCount: rows.length,
       revenue: serializeDecimal(revenue),
       knownIngredientCost: serializeDecimal(knownIngredientCost),
       extras: serializeDecimal(extras),

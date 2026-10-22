@@ -296,6 +296,52 @@ describe('restaurant catering report', () => {
     expect(exported.content).toContain("'=Launch");
     expect(exported.content).toContain('Event o3');
   });
+
+  it('caps detail rows without truncating totals, statuses, or delivery KPIs', async () => {
+    const order = (id: string, status: string, deliveredAt: string) => ({
+      id,
+      organizationId: 'org1',
+      eventName: `Event ${id}`,
+      eventDate: new Date('2026-01-10T00:00:00Z'),
+      status,
+      quotedTotal: new Prisma.Decimal(100),
+      branch: { id: 'b1', name: 'Main' },
+      lines: [],
+      extraCosts: [],
+      delivery: {
+        scheduledAt: new Date('2026-01-10T12:00:00Z'),
+        deliveredAt: new Date(deliveredAt),
+      },
+    });
+    const db = {
+      restaurantCateringOrder: {
+        findMany: vi.fn(async () => [
+          order('o1', 'DELIVERED', '2026-01-10T11:55:00Z'),
+          order('o2', 'DELIVERED', '2026-01-10T11:55:00Z'),
+          order('o3', 'CLOSED', '2026-01-10T12:05:00Z'),
+        ]),
+      },
+    } as unknown as ScopedDb;
+
+    const report = await readCateringReport(db, boundedRange, 2);
+
+    expect(report.orders.map((row) => row.id)).toEqual(['o1', 'o2']);
+    expect(report.truncated).toBe(true);
+    expect(report.totals).toMatchObject({
+      orderCount: 3,
+      revenue: '300',
+      deliveredCount: 3,
+      deliveredOnTimeCount: 2,
+      deliveredOnTimeRate: '66.67',
+    });
+    expect(report.byStatus).toEqual([
+      expect.objectContaining({ status: 'CLOSED', orderCount: 1, revenue: '100' }),
+      expect.objectContaining({ status: 'DELIVERED', orderCount: 2, revenue: '200' }),
+    ]);
+    expect(db.restaurantCateringOrder.findMany).toHaveBeenCalledWith(
+      expect.not.objectContaining({ take: expect.anything() })
+    );
+  });
 });
 
 describe('restaurant corrected-close backbone', () => {
