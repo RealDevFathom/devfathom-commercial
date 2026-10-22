@@ -78,6 +78,7 @@ const lines = {
   voided: '',
   completed: '',
   retried: '',
+  fullCompletion: '',
   concurrent: '',
 };
 
@@ -378,7 +379,7 @@ beforeAll(async () => {
       medicine: otc,
       authorizedCanonicalUnits: 100,
     });
-    for (const name of ['voided', 'completed', 'retried', 'concurrent'] as const) {
+    for (const name of ['voided', 'completed', 'fullCompletion', 'retried', 'concurrent'] as const) {
       lines[name] = await prescriptionLine(tx, ids.org, {
         ...forAyesha,
         ...current,
@@ -503,7 +504,7 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
         await recordCompletedPrescriptionReference(
           tx,
           { organizationId: ids.org, branchId: ids.branch, actorId: ids.pharmacist },
-          { ...saleLine, prescriptionLineId: saleLine.prescriptionLineId }
+          { ...saleLine, prescriptionLineId: saleLine.prescriptionLineId, saleId: saleLine.saleId }
         );
       },
       { userId: ids.pharmacist }
@@ -542,6 +543,42 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     ).resolves.toMatchObject({
       quantityCanonicalUnits: 10,
       dispensedByUserId: ids.pharmacist,
+      idempotencyKey: `rx-reference:${added.saleLineId}`,
+    });
+  });
+
+  it('completes a referenced sale through completePaidPharmacySale and records the fill', async () => {
+    // Exercises the real completion path (no mocks in this case): QA found completion
+    // dropped prescriptionPatientId/saleId when recording the reference.
+    const added = await addReferencedSale(lines.fullCompletion);
+    const { completePaidPharmacySale, completionSaleInclude } = await import(
+      '@/lib/pharmacy/sale-completion'
+    );
+    await withTenantDb(
+      ids.org,
+      async (tx) => {
+        const sale = await tx.pharmacySale.findFirstOrThrow({
+          where: { id: added.saleId, organizationId: ids.org, branchId: ids.branch },
+          include: completionSaleInclude,
+        });
+        await completePaidPharmacySale(
+          tx,
+          { organizationId: ids.org, branchId: ids.branch, actorId: ids.pharmacist },
+          sale,
+          { deviceId: `dev_r518_${suffix}`, businessDate: new Date('2026-10-23T00:00:00.000Z') }
+        );
+      },
+      { userId: ids.pharmacist }
+    );
+    const state = await withTenantDb(ids.org, async (tx) => ({
+      sale: await tx.pharmacySale.findFirstOrThrow({ where: { id: added.saleId } }),
+      fill: await tx.prescriptionFill.findFirst({
+        where: { prescriptionLineId: lines.fullCompletion },
+      }),
+    }));
+    expect(state.sale.status).toBe('COMPLETED');
+    expect(state.fill).toMatchObject({
+      quantityCanonicalUnits: 10,
       idempotencyKey: `rx-reference:${added.saleLineId}`,
     });
   });

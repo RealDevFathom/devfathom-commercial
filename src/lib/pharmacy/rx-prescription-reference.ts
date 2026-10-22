@@ -104,13 +104,18 @@ export async function attachPrescriptionReference(
   scope: LedgerScope,
   input: { prescriptionLineId: string; patientId: string; saleLineId: string }
 ): Promise<void> {
-  await db.pharmacySaleLine.update({
-    where: { organizationId_id: { organizationId: scope.organizationId, id: input.saleLineId } },
+  const updated = await db.pharmacySaleLine.updateMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      id: input.saleLineId,
+    },
     data: {
       prescriptionLineId: input.prescriptionLineId,
       prescriptionPatientId: input.patientId,
     },
   });
+  if (updated.count !== 1) throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_FOUND');
 }
 
 /** Creates the fill for a referenced line while completion holds the surrounding sale lock. */

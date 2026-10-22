@@ -69,6 +69,8 @@ export async function completePaidPharmacySale(
           presentationId: line.presentationId,
           canonicalUnits: line.canonicalUnits,
           prescriptionLineId: line.prescriptionLineId,
+          prescriptionPatientId: line.prescriptionPatientId ?? null,
+          saleId: sale.id,
         },
         issuedAt
       );
