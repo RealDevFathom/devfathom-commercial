@@ -71,6 +71,41 @@ beforeEach(() => {
 });
 
 describe('pharmacy medicine tenant and entitlement boundaries', () => {
+  it('rejects oversized medicine arrays before ingredient lookups or writes', async () => {
+    const strength = { ingredientId: 'ingredient_a', value: 500, unit: 'mg' };
+    const assertion = {
+      field: 'productName',
+      source: 'operator',
+      sourceType: 'USER' as const,
+      retrievedAt: new Date('2026-10-22'),
+      status: 'UNREVIEWED' as const,
+    };
+    for (const input of [
+      { strengths: Array.from({ length: 21 }, () => strength) },
+      { provenance: Array.from({ length: 51 }, () => assertion) },
+    ]) {
+      await expect(
+        caller().createMedicine({
+          productName: 'Medicine',
+          productFamily: 'PHARMACEUTICAL',
+          ...input,
+        })
+      ).rejects.toBeDefined();
+    }
+    expect(db.ingredient.findFirst).not.toHaveBeenCalled();
+    expect(db.medicine.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized publication assertion lists and IDs before opening a transaction', async () => {
+    for (const assertionIds of [
+      Array.from({ length: 21 }, (_, index) => `assertion_${index}`),
+      ['a'.repeat(201)],
+    ]) {
+      await expect(caller().publishAssertions({ assertionIds })).rejects.toBeDefined();
+    }
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
   it('rejects a cross-tenant ingredient ID substitution', async () => {
     await expect(
       caller().createMedicine({

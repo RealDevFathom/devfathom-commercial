@@ -119,6 +119,27 @@ beforeEach(() => {
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 
+describe('requisition input bounds', () => {
+  const line = {
+    medicineId: 'medicine_a',
+    packLevelId: 'pack_a',
+    quantityPacks: 1,
+    canonicalUnitsPerPack: 10,
+  };
+
+  it('rejects oversized line collections and identifiers before catalog lookups', async () => {
+    for (const lines of [
+      Array.from({ length: 101 }, () => line),
+      [{ ...line, medicineId: 'm'.repeat(201) }],
+    ]) {
+      await expect(caller().createRequisition({ reference: 'REQ-1', lines })).rejects.toBeDefined();
+    }
+    expect(db.medicine.findFirst).not.toHaveBeenCalled();
+    expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
+  });
+});
+
 describe.each(['purchaseReturns', 'supplierCredits'] as const)(
   '%s live read contract',
   (endpoint) => {

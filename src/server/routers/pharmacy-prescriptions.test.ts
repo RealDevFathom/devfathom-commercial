@@ -123,6 +123,19 @@ describe('prescription capture and private delivery', () => {
     mocks.context.mockResolvedValue(context());
   });
 
+  it('rejects oversized prescription lines and directions before reading storage or the DB', async () => {
+    const input = captureInput('/api/pharmacy/prescription-files?id=unused');
+    for (const lines of [
+      Array.from({ length: 101 }, (_, index) => ({ ...input.lines[0], lineNumber: index + 1 })),
+      [{ ...input.lines[0], directions: 'd'.repeat(1_001) }],
+    ]) {
+      await expect(caller().capture({ ...input, lines })).rejects.toBeDefined();
+    }
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+    expect(mocks.patient).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
   it('records consent under the shared patient lock with server-owned version', async () => {
     const ctx = context();
     const lock = vi.fn().mockResolvedValue([{ id: 'patient-a' }]);

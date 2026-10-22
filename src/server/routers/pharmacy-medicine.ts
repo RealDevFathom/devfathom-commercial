@@ -112,7 +112,7 @@ const connectorProposalPayload = z
 
 const assertionIdsPayload = z
   .object({
-    assertionIds: z.array(z.string().min(1)).min(1).max(20),
+    assertionIds: z.array(z.string().min(1).max(200)).min(1).max(20),
   })
   .strict();
 
@@ -537,14 +537,15 @@ export const pharmacyMedicineRouter = router({
             .array(
               z
                 .object({
-                  ingredientId: z.string().min(1),
+                  ingredientId: z.string().min(1).max(200),
                   value: z.number().positive(),
                   unit: z.string().trim().min(1).max(50),
                 })
                 .strict()
             )
+            .max(20)
             .default([]),
-          provenance: z.array(provenance).default([]),
+          provenance: z.array(provenance).max(50).default([]),
           saleable: z.boolean().default(false),
         })
         .strict()
@@ -956,7 +957,7 @@ export const pharmacyMedicineRouter = router({
   ),
 
   publishAssertions: adminProcedure
-    .input(z.object({ assertionIds: z.array(z.string().min(1)).min(1) }).strict())
+    .input(z.object({ assertionIds: z.array(z.string().min(1).max(200)).min(1).max(20) }).strict())
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {
         const assertionIds = [...new Set(input.assertionIds)];
