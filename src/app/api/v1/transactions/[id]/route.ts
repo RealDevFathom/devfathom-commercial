@@ -22,8 +22,8 @@ const updateSchema = z.object({
     ])
     .nullable()
     .optional(),
-  projectId: z.string().nullable().optional(),
-  clientId: z.string().nullable().optional(),
+  projectId: z.string().min(1).nullable().optional(),
+  clientId: z.string().min(1).nullable().optional(),
   date: z.string().datetime().optional(),
 });
 
@@ -47,10 +47,31 @@ export const PATCH = withApiAuth(
     });
     if (!existing) return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
 
-    const { date, ...data } = parsed.data;
+    const { date, projectId, clientId, ...data } = parsed.data;
+    if (
+      projectId !== undefined &&
+      projectId !== null &&
+      !(await authCtx.db.project.findUnique({
+        where: { id: projectId },
+        select: { id: true },
+      }))
+    ) {
+      return NextResponse.json({ error: 'projectId does not exist.' }, { status: 400 });
+    }
+    if (
+      clientId !== undefined &&
+      clientId !== null &&
+      !(await authCtx.db.client.findUnique({
+        where: { id: clientId },
+        select: { id: true },
+      }))
+    ) {
+      return NextResponse.json({ error: 'clientId does not exist.' }, { status: 400 });
+    }
+
     const transaction = await authCtx.db.transaction.update({
       where: { id },
-      data: { ...data, ...(date && { date: new Date(date) }) },
+      data: { ...data, projectId, clientId, ...(date && { date: new Date(date) }) },
     });
     return NextResponse.json({ data: transaction });
   }
