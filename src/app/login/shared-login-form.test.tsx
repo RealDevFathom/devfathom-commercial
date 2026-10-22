@@ -95,3 +95,14 @@ describe('SharedLoginForm rate-limit reporting', () => {
     expect(mocks.replace).not.toHaveBeenCalled();
   });
 });
+
+describe('SharedLoginForm password visibility', () => {
+  it('keeps the show-password button in the keyboard tab order', () => {
+    render(<SharedLoginForm callbackUrl="/dashboard" />);
+
+    expect(screen.getByRole('button', { name: 'Show password' })).not.toHaveAttribute(
+      'tabindex',
+      '-1'
+    );
+  });
+});
