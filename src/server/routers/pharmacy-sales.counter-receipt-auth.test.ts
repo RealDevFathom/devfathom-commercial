@@ -377,6 +377,44 @@ describe('counter receipt authorization', () => {
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 
+  it('lets a role DENY on pharmacy:receipt beat a user ALLOW on pharmacy:counter for reads and tender', async () => {
+    const f = fixture(
+      [{ capability: 'pharmacy:receipt', effect: 'DENY' }],
+      'EMPLOYEE',
+      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
+    );
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      f.caller().tender({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        type: 'CASH',
+        amountMinor: 100,
+        idempotencyKey: 'cross-alias-deny',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(readCounterCart).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('lets a user DENY on pharmacy:counter beat a role ALLOW on pharmacy:receipt', async () => {
+    const f = fixture(
+      [{ capability: 'pharmacy:receipt', effect: 'ALLOW' }],
+      'EMPLOYEE',
+      [{ capability: 'pharmacy:counter', effect: 'DENY' }]
+    );
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(readCounterCart).not.toHaveBeenCalled();
+  });
+
   it('denies counter reads and cash tender when the cashier is not assigned', async () => {
     const f = fixture([{ capability: 'pharmacy.counter', effect: 'ALLOW' }]);
     await expect(

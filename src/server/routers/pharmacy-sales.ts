@@ -384,10 +384,9 @@ async function requireCounterReceiptAccess(
   const roleRules = member.organizationRole?.permissions ?? [];
   // Treat the names as one capability family. Otherwise an ALLOW on one alias
   // can accidentally outrun an explicit DENY on another alias.
-  const override = counterCapabilityDecision(overrides);
-  const capable =
-    override !== 'DENY' &&
-    (override === 'ALLOW' || counterCapabilityDecision(roleRules) === 'ALLOW');
+  // Combine user overrides and role rules into ONE family decision so any
+  // explicit DENY (user or role, on any alias) beats any ALLOW.
+  const capable = counterCapabilityDecision([...overrides, ...roleRules]) === 'ALLOW';
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
