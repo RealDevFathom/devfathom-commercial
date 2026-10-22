@@ -100,3 +100,14 @@ it('labels the read-only list DevFathom AI and renders risk badges', () => {
   expect(screen.getByText('HIGH risk')).toHaveAttribute('data-tone', 'danger');
   expect(screen.queryByRole('button')).toBeNull();
 });
+
+it('renders the churn list in Urdu with RTL semantics', () => {
+  render(<ChurnRiskList locale="ur" result={{ status: 'AI_OFF' }} />);
+
+  expect(screen.getByText('گاہک کے چھوٹ جانے کا خطرہ')).toBeTruthy();
+  expect(screen.getByText(/جب تک اس ادارے کے لیے/)).toBeTruthy();
+  expect(screen.getByText('گاہک کے چھوٹ جانے کا خطرہ').closest('[dir="rtl"]')).toHaveAttribute(
+    'lang',
+    'ur'
+  );
+});
