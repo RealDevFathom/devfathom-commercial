@@ -1,6 +1,7 @@
 'use server';
 
 import { TRPCError } from '@trpc/server';
+import { ZodError } from 'zod';
 import { createTRPCContext } from '@/server/trpc';
 import { appRouter } from '@/server/routers/_app';
 import {
@@ -40,9 +41,24 @@ export async function listGrowth(raw: unknown) {
     return { status: 'UNAVAILABLE' as const };
   }
 }
+export async function listGrowthBranches() {
+  return appRouter.createCaller(await createTRPCContext()).restaurantGrowth.branches();
+}
 export async function generateGrowth(raw: unknown) {
   const { growthGenerateInput } = await import('@/lib/restaurant/growth-generation');
-  return appRouter
-    .createCaller(await createTRPCContext())
-    .restaurantGrowth.generate(growthGenerateInput.parse(raw));
+  try {
+    const result = await appRouter
+      .createCaller(await createTRPCContext())
+      .restaurantGrowth.generate(growthGenerateInput.parse(raw));
+    return { status: 'SAVED' as const, result };
+  } catch (error) {
+    if (error instanceof ZodError)
+      return {
+        status: 'INVALID' as const,
+        message: 'Choose an ordered date range containing no more than 45 calendar dates.',
+      };
+    if (error instanceof TRPCError && error.code === 'BAD_REQUEST')
+      return { status: 'INVALID' as const, message: error.message };
+    throw error;
+  }
 }

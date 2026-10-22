@@ -3,6 +3,7 @@ import {
   growthGenerateInput,
   growthListInput,
   generateRestaurantGrowth,
+  listRestaurantGrowthBranches,
   listRestaurantGrowth,
 } from '@/lib/restaurant/growth-generation';
 import { TRPCError } from '@trpc/server';
@@ -43,6 +44,9 @@ function actor(ctx: TRPCContext): GrowthActor {
 /** Coordinator owns central registration and accepted shared binding. */
 export function createRestaurantGrowthRouter(binding: RestaurantGrowthBinding | null = null) {
   return router({
+    branches: auditedProtectedProcedure.query(({ ctx }) =>
+      listRestaurantGrowthBranches(actor(ctx))
+    ),
     list: auditedProtectedProcedure
       .input(growthListInput)
       .query(({ ctx, input }) => listRestaurantGrowth(actor(ctx), input)),
@@ -52,13 +56,18 @@ export function createRestaurantGrowthRouter(binding: RestaurantGrowthBinding | 
         try {
           return await generateRestaurantGrowth(actor(ctx), input);
         } catch (error) {
+          if (!(error instanceof GrowthReviewError)) throw error;
           throw new TRPCError({
             code:
-              error instanceof GrowthReviewError && error.code === 'DENIED'
+              error.code === 'DENIED'
                 ? 'FORBIDDEN'
-                : 'BAD_REQUEST',
+                : error.code === 'CONFLICT'
+                  ? 'CONFLICT'
+                  : 'BAD_REQUEST',
             message:
-              'Insight could not be saved. Reconcile the same request before trying another.',
+              error.code === 'INVALID'
+                ? 'Choose an ordered date range containing no more than 45 calendar dates.'
+                : 'Insight could not be saved. Reconcile the same request before trying another.',
           });
         }
       }),

@@ -11,7 +11,11 @@ vi.mock('@/lib/ai/provider', () => ({
   readAIAvailability: mocks.availability,
 }));
 vi.mock('ai', async () => ({ ...(await vi.importActual('ai')), generateText: mocks.generateText }));
-import { generateRestaurantGrowth, listRestaurantGrowth } from './growth-generation';
+import {
+  generateRestaurantGrowth,
+  listRestaurantGrowth,
+  listRestaurantGrowthBranches,
+} from './growth-generation';
 import { validateRestaurantGrowthPersisted, restaurantGrowthBinding } from './growth-binding';
 import { cateringGrowthInput, growthSourceHash } from './growth-source';
 import { restaurantGrowthInputHash } from './growth-snapshot';
@@ -62,7 +66,14 @@ beforeEach(() => {
     $queryRawUnsafe: query,
     $executeRawUnsafe: write,
     organization: { findFirst: vi.fn(async () => ({ vertical: 'RESTAURANT' })) },
-    restaurantBranch: { findFirst: vi.fn(async () => ({ id: 'branch' })) },
+    restaurantBranch: {
+      findFirst: vi.fn(async () => ({ id: 'branch' })),
+      findMany: vi.fn(async () => [
+        { id: 'branch', name: 'Main', code: 'MAIN', active: true, isDefault: true },
+      ]),
+    },
+    restaurantStaffProfile: { findFirst: vi.fn(async () => ({ primaryBranchId: 'branch' })) },
+    restaurantBranchAssignment: { findMany: vi.fn(async () => []) },
     $transaction: vi.fn(),
   };
   db.$transaction.mockImplementation((fn) => fn(db));
@@ -224,6 +235,28 @@ it('lists bounded scoped summaries', async () => {
     expect(list.items).toHaveLength(20);
     expect(list.truncated).toBe(true);
   }
+});
+it('denies listing summaries before insight SQL without catering read', async () => {
+  vi.mocked(h.can).mockImplementation(async (permission) => permission !== 'catering:read');
+  expect(await listRestaurantGrowth(h, { branchId: 'branch' })).toEqual({ status: 'DENIED' });
+  expect(query).not.toHaveBeenCalledWith(
+    expect.stringContaining('SELECT id,status'),
+    'org',
+    'branch'
+  );
+});
+it('lists only authorized named branches and prefers the staff primary branch', async () => {
+  const scope = await listRestaurantGrowthBranches(h);
+  expect(scope).toMatchObject({
+    status: 'AVAILABLE',
+    defaultBranchId: 'branch',
+    branches: [{ id: 'branch', name: 'Main' }],
+  });
+  expect(h.db.restaurantBranch.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: expect.objectContaining({ organizationId: 'org', id: { in: ['branch'] } }),
+    })
+  );
 });
 it('bare/legacy READY is rejected and output cannot invent supported evidence', () => {
   expect(() =>

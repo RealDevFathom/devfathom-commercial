@@ -23,11 +23,79 @@ export type GrowthList =
       truncated: boolean;
     }
   | { status: 'DENIED' | 'UNAVAILABLE' };
+export type GrowthBranchScope =
+  | {
+      status: 'AVAILABLE';
+      branches: Array<{
+        id: string;
+        name: string;
+        code?: string;
+        active: boolean;
+        isDefault: boolean;
+      }>;
+      defaultBranchId: string | null;
+    }
+  | { status: 'DENIED' | 'UNAVAILABLE' };
+
+export async function listRestaurantGrowthBranches(h: GrowthActor): Promise<GrowthBranchScope> {
+  try {
+    if (
+      h.ctx.vertical !== 'RESTAURANT' ||
+      !h.ctx.enabledModules?.includes('restaurant-core') ||
+      !h.ctx.enabledModules.includes('restaurant-pos') ||
+      !(await h.can('reports:financial')) ||
+      !(await h.can('catering:read'))
+    )
+      throw new GrowthReviewError('DENIED');
+
+    const configuresAllBranches = await h.can('restaurant:configure');
+    const staff = configuresAllBranches
+      ? null
+      : await h.db.restaurantStaffProfile.findFirst({
+          where: {
+            organizationId: h.ctx.organizationId,
+            userId: h.ctx.userId,
+            status: 'ACTIVE',
+          },
+          select: { primaryBranchId: true },
+        });
+    const assignments = configuresAllBranches
+      ? []
+      : await h.db.restaurantBranchAssignment.findMany({
+          where: { organizationId: h.ctx.organizationId, userId: h.ctx.userId },
+          select: { branchId: true },
+        });
+    const branchIds = new Set(assignments.map((assignment) => assignment.branchId));
+    if (staff?.primaryBranchId) branchIds.add(staff.primaryBranchId);
+    const branches = await h.db.restaurantBranch.findMany({
+      where: {
+        organizationId: h.ctx.organizationId,
+        active: true,
+        ...(configuresAllBranches ? {} : { id: { in: [...branchIds] } }),
+      },
+      orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+      select: { id: true, name: true, code: true, active: true, isDefault: true },
+    });
+    const defaultBranchId =
+      (staff?.primaryBranchId && branches.some((branch) => branch.id === staff.primaryBranchId)
+        ? staff.primaryBranchId
+        : branches.find((branch) => branch.isDefault)?.id) ??
+      branches[0]?.id ??
+      null;
+    return { status: 'AVAILABLE', branches, defaultBranchId };
+  } catch (error) {
+    return {
+      status:
+        error instanceof GrowthReviewError && error.code === 'DENIED' ? 'DENIED' : 'UNAVAILABLE',
+    };
+  }
+}
 export async function listRestaurantGrowth(h: GrowthActor, raw: unknown): Promise<GrowthList> {
   const input = growthListInput.parse(raw);
   try {
     return await h.db.$transaction(async (tx) => {
       await authorizeRestaurantGrowth({ ...h, db: tx as ScopedDb }, input.branchId, false);
+      if (!(await h.can('catering:read'))) throw new GrowthReviewError('DENIED');
       await tx.$queryRawUnsafe(
         `SELECT set_config('app.current_branch_id',$1,true)`,
         input.branchId
@@ -59,7 +127,11 @@ export async function listRestaurantGrowth(h: GrowthActor, raw: unknown): Promis
 export async function generateRestaurantGrowth(h: GrowthActor, raw: unknown) {
   const input = growthGenerateInput.parse(raw);
   const request = { branchId: input.branchId, from: input.from, to: input.to };
-  restaurantComparisonWindows({ ...request, branchIds: [request.branchId] });
+  try {
+    restaurantComparisonWindows({ ...request, branchIds: [request.branchId] });
+  } catch {
+    throw new GrowthReviewError('INVALID');
+  }
   const fingerprint = JSON.stringify({ actorId: h.ctx.userId, input });
   const id =
     'restaurant-growth-' +

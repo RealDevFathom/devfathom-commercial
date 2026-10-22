@@ -68,6 +68,7 @@ describe('composed Restaurant growth entry points', () => {
     expect(
       Object.keys(appRouter._def.procedures).filter((name) => name.startsWith('restaurantGrowth.'))
     ).toEqual([
+      'restaurantGrowth.branches',
       'restaurantGrowth.list',
       'restaurantGrowth.generate',
       'restaurantGrowth.read',
@@ -118,5 +119,14 @@ describe('composed Restaurant growth entry points', () => {
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(query).not.toHaveBeenCalled();
+  });
+  it('does not enumerate saved insights without catering read', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'catering:read');
+    await expect(listGrowth({ branchId: 'branch-a' })).resolves.toEqual({ status: 'DENIED' });
+    expect(query).not.toHaveBeenCalledWith(
+      expect.stringContaining('SELECT id,status'),
+      'org-a',
+      'branch-a'
+    );
   });
 });

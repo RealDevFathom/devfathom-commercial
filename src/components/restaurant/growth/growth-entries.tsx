@@ -6,19 +6,34 @@ import { browserUuid } from '@/lib/browser-uuid';
 import { SectionCard } from '@/components/ui/section-card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import type { GrowthList } from '@/lib/restaurant/growth-generation';
+import { RestaurantBranchSelect } from '@/components/restaurant/restaurant-branch-select';
+import type { GrowthBranchScope, GrowthList } from '@/lib/restaurant/growth-generation';
+
+function validGrowthRange(from: string, to: string) {
+  const start = Date.parse(`${from}T00:00:00Z`);
+  const end = Date.parse(`${to}T00:00:00Z`);
+  const days = (end - start) / 86_400_000 + 1;
+  return Number.isInteger(days) && days >= 1 && days <= 45;
+}
 export function GrowthEntries({
   branchId,
+  branchScope,
   entries,
   onGenerate,
 }: {
   branchId: string;
+  branchScope: GrowthBranchScope;
   entries: GrowthList | null;
-  onGenerate: (input: unknown) => Promise<{ insightId: string; status: string }>;
+  onGenerate: (
+    input: unknown
+  ) => Promise<
+    | { status: 'SAVED'; result: { insightId: string; status: string } }
+    | { status: 'INVALID'; message: string }
+  >;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<{
     branchId: string;
     from: string;
@@ -29,13 +44,13 @@ export function GrowthEntries({
     <SectionCard title="Saved insights" titleLevel={2}>
       <form method="get" className="mb-4 flex flex-wrap items-end gap-3">
         <label>
-          Branch ID
-          <Input
-            className="min-h-11"
+          Branch
+          <RestaurantBranchSelect
             name="branch"
             defaultValue={branchId}
+            branches={branchScope.status === 'AVAILABLE' ? branchScope.branches : []}
+            error={branchScope.status === 'UNAVAILABLE'}
             required
-            maxLength={200}
           />
         </label>
         <Button className="min-h-11" type="submit" variant="outline">
@@ -69,17 +84,28 @@ export function GrowthEntries({
                 to: String(fields.get('to')),
                 requestId: browserUuid(),
               };
+              if (!validGrowthRange(input.from, input.to)) {
+                setError('Choose an ordered date range containing no more than 45 calendar dates.');
+                return;
+              }
               setPending(input);
               setBusy(true);
-              setError(false);
+              setError(null);
               try {
                 const result = await onGenerate(input);
+                if (result.status === 'INVALID') {
+                  setPending(null);
+                  setError(result.message);
+                  return;
+                }
                 setPending(null);
                 router.push(
-                  `/restaurant/growth?${new URLSearchParams({ branch: branchId, insight: result.insightId })}`
+                  `/restaurant/growth?${new URLSearchParams({ branch: branchId, insight: result.result.insightId })}`
                 );
               } catch {
-                setError(true);
+                setError(
+                  'The result is unknown. Reconcile this same request before generating another.'
+                );
               } finally {
                 setBusy(false);
               }
@@ -118,16 +144,12 @@ export function GrowthEntries({
                   ? 'Reconcile saved request'
                   : 'Generate insight'}
             </Button>
-            {error && (
-              <p role="alert">
-                The result is unknown. Reconcile this same request before generating another.
-              </p>
-            )}
+            {error && <p role="alert">{error}</p>}
           </form>
         </>
       ) : (
         <p role="status">
-          {entries?.status === 'DENIED'
+          {entries?.status === 'DENIED' || branchScope.status === 'DENIED'
             ? 'You do not have access to this branch.'
             : branchId
               ? 'Saved insights are unavailable.'

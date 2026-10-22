@@ -1,6 +1,12 @@
 import { GrowthReviewPanel } from '@/components/restaurant/growth/growth-review-panel';
 import { GrowthEntries } from '@/components/restaurant/growth/growth-entries';
-import { loadGrowthReview, submitGrowthReview, listGrowth, generateGrowth } from './actions';
+import {
+  loadGrowthReview,
+  submitGrowthReview,
+  listGrowth,
+  listGrowthBranches,
+  generateGrowth,
+} from './actions';
 
 export default async function RestaurantGrowthPage({
   searchParams,
@@ -8,7 +14,13 @@ export default async function RestaurantGrowthPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const query = await searchParams;
-  const branch = typeof query.branch === 'string' ? query.branch : '';
+  const branchScope = await listGrowthBranches();
+  const branch =
+    typeof query.branch === 'string'
+      ? query.branch
+      : branchScope.status === 'AVAILABLE'
+        ? (branchScope.defaultBranchId ?? '')
+        : '';
   const entries = branch ? await listGrowth({ branchId: branch }) : null;
   const view =
     query.branch && query.insight
@@ -20,7 +32,12 @@ export default async function RestaurantGrowthPage({
       view={view}
       onReview={submitGrowthReview}
     >
-      <GrowthEntries branchId={branch} entries={entries} onGenerate={generateGrowth} />
+      <GrowthEntries
+        branchId={branch}
+        branchScope={branchScope}
+        entries={entries}
+        onGenerate={generateGrowth}
+      />
     </GrowthReviewPanel>
   );
 }
