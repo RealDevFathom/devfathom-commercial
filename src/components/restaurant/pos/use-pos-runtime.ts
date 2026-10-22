@@ -688,6 +688,14 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
   async function closeForPayment() {
     const activeOrder = order;
     if (!activeOrder || pending) return;
+    if (
+      activeOrder.channel === 'DELIVERY' &&
+      activeOrder.deliveryStatus === 'DELIVERED' &&
+      activeOrder.status === 'PAYMENT_PENDING'
+    ) {
+      await mutate('close', { orderId: activeOrder.id }, 'Order closed.');
+      return;
+    }
     if (activeOrder.status === 'PAYMENT_PENDING') {
       setCheckoutOrderId(activeOrder.id);
       return;

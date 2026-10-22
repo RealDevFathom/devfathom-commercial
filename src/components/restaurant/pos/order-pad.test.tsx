@@ -1113,6 +1113,30 @@ describe('OrderPad transport', () => {
     expect(headers.get('Idempotency-Key')).toBe('00000000-0000-4000-8000-000000000062');
   });
 
+  it('closes a delivered payment-pending delivery order instead of reopening checkout', async () => {
+    const fetch = transport({
+      detailResponse: {
+        ...detail,
+        channel: 'DELIVERY',
+        status: 'PAYMENT_PENDING',
+        deliveryStatus: 'DELIVERED',
+        tables: [],
+      },
+    });
+    await unlock(fetch);
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Order 42');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close order' }));
+
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/close'))
+      ).toHaveLength(1)
+    );
+    expect(screen.queryByRole('heading', { name: 'Collect payment' })).not.toBeInTheDocument();
+  });
+
   it('retains checkout idempotency across ambiguous failures and releases it after a client error', async () => {
     const messages = [
       'Request timed out.',
