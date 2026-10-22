@@ -39,6 +39,7 @@ import { publicProcedure, router } from '@/server/trpc';
 import { anonymousFallbackRouter } from './anonymous-fallback';
 import { invitationsRouter } from './invitations';
 import { passwordResetRouter } from './password-reset';
+import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
 
 const TRPC_ENDPOINT = '/api/trpc';
 
@@ -65,6 +66,7 @@ const realRouter = router({
 const productionPublicRouter = router({
   invitations: invitationsRouter,
   passwordReset: passwordResetRouter,
+  pharmacySupplierLinks: pharmacySupplierLinksRouter,
 });
 
 type ServedResponse = {
@@ -191,6 +193,28 @@ describe('fallback and production routers validate anonymous input identically',
     [
       'passwordReset.reset',
       () => mutation('passwordReset.reset', { token: '', newPassword: 'not-acceptable' }),
+    ],
+    ['pharmacySupplierLinks.get', () => query('pharmacySupplierLinks.get', { token: '' })],
+    [
+      'pharmacySupplierLinks.submit',
+      () =>
+        mutation('pharmacySupplierLinks.submit', {
+          token: '',
+          kind: 'ACKNOWLEDGEMENT',
+          idempotencyKey: '',
+          payload: {},
+        }),
+    ],
+    [
+      'pharmacySupplierLinks.uploadDocument',
+      () =>
+        mutation('pharmacySupplierLinks.uploadDocument', {
+          token: '',
+          idempotencyKey: '',
+          fileName: '',
+          declaredMimeType: 'text/plain',
+          contentBase64: '',
+        }),
     ],
   ])('matches production %s for malformed input', async (_path, request) => {
     const real = await serve(productionPublicRouter, request());

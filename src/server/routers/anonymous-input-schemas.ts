@@ -3,7 +3,16 @@ import { z } from 'zod';
 import { emailLookupSchema } from '@/lib/email-address';
 import { passwordSchema } from '@/lib/password-policy';
 
-const supplierId = z.string().trim().min(1).max(200);
+// Export these primitives so the authenticated supplier-link procedures cannot
+// silently drift from the anonymous endpoints which share the same values.
+export const supplierLinkId = z.string().trim().min(1).max(200);
+export const supplierResponseKind = z.enum([
+  'ACKNOWLEDGEMENT',
+  'REJECTION',
+  'PARTIAL_ACCEPTANCE',
+  'ETA',
+  'SUBSTITUTION_PROPOSAL',
+]);
 
 export const invitationTokenInput = z.object({ token: z.string().min(1) });
 
@@ -22,26 +31,20 @@ export const passwordResetInput = z.object({
   newPassword: passwordSchema,
 });
 
-export const supplierLinkGetInput = z.object({ token: supplierId }).strict();
+export const supplierLinkGetInput = z.object({ token: supplierLinkId }).strict();
 export const supplierLinkSubmitInput = z
   .object({
-    token: supplierId,
-    kind: z.enum([
-      'ACKNOWLEDGEMENT',
-      'REJECTION',
-      'PARTIAL_ACCEPTANCE',
-      'ETA',
-      'SUBSTITUTION_PROPOSAL',
-    ]),
-    idempotencyKey: supplierId,
+    token: supplierLinkId,
+    kind: supplierResponseKind,
+    idempotencyKey: supplierLinkId,
     payload: z.record(z.string(), z.unknown()),
-    supersedesId: supplierId.optional(),
+    supersedesId: supplierLinkId.optional(),
   })
   .strict();
 export const supplierLinkUploadInput = z
   .object({
-    token: supplierId,
-    idempotencyKey: supplierId,
+    token: supplierLinkId,
+    idempotencyKey: supplierLinkId,
     fileName: z.string().trim().min(1).max(255),
     declaredMimeType: z.enum(['application/pdf', 'image/png', 'image/jpeg']),
     contentBase64: z.string().min(1).max(14_000_000),

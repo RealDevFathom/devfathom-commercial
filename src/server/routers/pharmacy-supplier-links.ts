@@ -12,18 +12,12 @@ import {
 } from '@/lib/pharmacy/supplier-action-links';
 import {
   supplierLinkGetInput,
+  supplierLinkId,
+  supplierResponseKind,
   supplierLinkSubmitInput,
   supplierLinkUploadInput,
 } from './anonymous-input-schemas';
 
-const id = z.string().trim().min(1).max(200);
-const kind = z.enum([
-  'ACKNOWLEDGEMENT',
-  'REJECTION',
-  'PARTIAL_ACCEPTANCE',
-  'ETA',
-  'SUBSTITUTION_PROPOSAL',
-]);
 const genericLinkError = () =>
   new TRPCError({
     code: 'NOT_FOUND',
@@ -74,7 +68,7 @@ export const pharmacySupplierLinksRouter = router({
       }
     }),
   createRelationship: protectedProcedure
-    .input(z.object({ branchId: id, supplierId: id }).strict())
+    .input(z.object({ branchId: supplierLinkId, supplierId: supplierLinkId }).strict())
     .mutation(async ({ ctx, input }) => {
       await assertBranch(ctx, input.branchId);
       return ctx.db.pharmacySupplierRelationship.create({
@@ -84,7 +78,12 @@ export const pharmacySupplierLinksRouter = router({
   issue: protectedProcedure
     .input(
       z
-        .object({ branchId: id, relationshipId: id, purchaseOrderId: id, expiresAt: z.date() })
+        .object({
+          branchId: supplierLinkId,
+          relationshipId: supplierLinkId,
+          purchaseOrderId: supplierLinkId,
+          expiresAt: z.date(),
+        })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
@@ -101,22 +100,24 @@ export const pharmacySupplierLinksRouter = router({
         mapError(error);
       }
     }),
-  revoke: protectedProcedure.input(z.object({ linkId: id }).strict()).mutation(({ ctx, input }) =>
-    ctx.db.pharmacySupplierActionLink.update({
-      where: { id: input.linkId },
-      data: { revokedAt: new Date() },
-    })
-  ),
+  revoke: protectedProcedure
+    .input(z.object({ linkId: supplierLinkId }).strict())
+    .mutation(({ ctx, input }) =>
+      ctx.db.pharmacySupplierActionLink.update({
+        where: { id: input.linkId },
+        data: { revokedAt: new Date() },
+      })
+    ),
   recordManual: protectedProcedure
     .input(
       z
         .object({
-          actionLinkId: id,
-          branchId: id,
-          kind,
+          actionLinkId: supplierLinkId,
+          branchId: supplierLinkId,
+          kind: supplierResponseKind,
           source: z.enum(['PHONE', 'WHATSAPP']),
           sourceEvidence: z.string().trim().min(1).max(2000),
-          idempotencyKey: id,
+          idempotencyKey: supplierLinkId,
           payload: z.record(z.string(), z.unknown()),
         })
         .strict()
@@ -133,8 +134,8 @@ export const pharmacySupplierLinksRouter = router({
     .input(
       z
         .object({
-          submissionId: id,
-          branchId: id,
+          submissionId: supplierLinkId,
+          branchId: supplierLinkId,
           approved: z.boolean(),
           reason: z.string().trim().max(1000).optional(),
         })
