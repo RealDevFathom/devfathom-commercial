@@ -250,9 +250,9 @@ describe('prescription capture and private delivery', () => {
     );
   });
 
-  it('rejects controlled prescription fills before recording them outside the witnessed flow', async () => {
+  it('rejects every legacy fill before reading or writing dispensing state', async () => {
     const ctx = context();
-    const findFirst = vi.fn().mockResolvedValue({ medicine: { controlled: true } });
+    const findFirst = vi.fn();
     const create = vi.fn();
     (ctx.db as unknown as Record<string, unknown>).prescriptionLine = { findFirst };
     (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
@@ -266,43 +266,8 @@ describe('prescription capture and private delivery', () => {
         idempotencyKey: 'fill-key-a',
       })
     ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
-    expect(findFirst).toHaveBeenCalledWith({
-      where: { id: 'line-a', organizationId: 'org-a' },
-      select: { medicine: { select: { controlled: true } } },
-    });
+    expect(findFirst).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
-  });
-
-  it('records a non-controlled fill after checking the tenant-scoped prescription line', async () => {
-    const ctx = context();
-    const findFirst = vi.fn().mockResolvedValue({ medicine: { controlled: false } });
-    const create = vi.fn(async ({ data }) => data);
-    (ctx.db as unknown as Record<string, unknown>).prescriptionLine = { findFirst };
-    (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
-
-    await expect(
-      caller(ctx).fill({
-        id: 'fill-a',
-        prescriptionLineId: 'line-a',
-        fillSequence: 1,
-        quantityCanonicalUnits: 1,
-        idempotencyKey: 'fill-key-a',
-      })
-    ).resolves.toMatchObject({ id: 'fill-a', dispensedByUserId: 'user-a' });
-    expect(findFirst).toHaveBeenCalledWith({
-      where: { id: 'line-a', organizationId: 'org-a' },
-      select: { medicine: { select: { controlled: true } } },
-    });
-    expect(create).toHaveBeenCalledWith({
-      data: {
-        id: 'fill-a',
-        prescriptionLineId: 'line-a',
-        fillSequence: 1,
-        quantityCanonicalUnits: 1,
-        idempotencyKey: 'fill-key-a',
-        dispensedByUserId: 'user-a',
-      },
-    });
   });
 
   it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
