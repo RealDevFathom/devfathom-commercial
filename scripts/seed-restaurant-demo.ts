@@ -410,6 +410,7 @@ type StaffSeed = {
   /** Staff who take tables; orders are attributed round-robin across these. */
   server: boolean;
   manager: boolean;
+  kitchen?: boolean;
 };
 
 /** Demo workspace password shared by every seeded login. Local demo only. */
@@ -463,6 +464,7 @@ const STAFF: readonly StaffSeed[] = [
     pin: '909090',
     server: false,
     manager: false,
+    kitchen: true,
   },
 ];
 
@@ -1277,6 +1279,11 @@ async function seedBranchAndFloor(tx: Tx): Promise<void> {
 
 async function seedPeople(tx: Tx): Promise<void> {
   const passwordHash = hashSync(DEMO_PASSWORD, DEMO_SALT);
+  const kitchenRole = await tx.organizationRole.findUniqueOrThrow({
+    where: {
+      organizationId_key: { organizationId: BASE.organizationId, key: 'kitchen' },
+    },
+  });
 
   // Workspace owner: an ADMIN login for the console tour, on the manager role
   // the base fixture already granted `*` to.
@@ -1349,12 +1356,23 @@ async function seedPeople(tx: Tx): Promise<void> {
   }
 
   for (const member of STAFF) {
+    const organizationRoleId = member.manager
+      ? BASE.managerRoleId
+      : member.kitchen
+        ? kitchenRole.id
+        : BASE.operatorRoleId;
     await tx.user.upsert({
       where: { id: id.user(member.key) },
-      update: { password: passwordHash, name: member.name, title: member.title, updatedAt: AT },
+      update: {
+        organizationRoleId,
+        password: passwordHash,
+        name: member.name,
+        title: member.title,
+        updatedAt: AT,
+      },
       create: {
         id: id.user(member.key),
-        organizationRoleId: member.manager ? BASE.managerRoleId : BASE.operatorRoleId,
+        organizationRoleId,
         name: member.name,
         email: member.email,
         password: passwordHash,

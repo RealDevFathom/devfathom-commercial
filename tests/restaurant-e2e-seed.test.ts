@@ -8,6 +8,7 @@ const seed = readFileSync(resolve(process.cwd(), 'scripts/seed-restaurant-e2e.ts
 const runner = readFileSync(resolve(process.cwd(), 'scripts/run-restaurant-e2e.ts'), 'utf8');
 const database = readFileSync(resolve(process.cwd(), 'scripts/restaurant-e2e-database.ts'), 'utf8');
 const demoSeed = readFileSync(resolve(process.cwd(), 'scripts/seed-restaurant-demo.ts'), 'utf8');
+const demoSeedSource = ts.createSourceFile('demo-seed.ts', demoSeed, ts.ScriptTarget.Latest, true);
 
 // Parse function boundaries so adjacent, independently owned fixtures cannot bleed
 // into a guard. Missing/renamed functions fail instead of producing empty slices.
@@ -22,6 +23,15 @@ function seedFunction(name: string) {
 }
 const firstRunRoles = seedFunction('seedFirstRunRoles');
 const restorableFixtures = seed.replace(firstRunRoles, '');
+
+function demoSeedFunction(name: string) {
+  const declaration = demoSeedSource.statements.find(
+    (node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) && node.name?.text === name
+  );
+  if (!declaration?.body) throw new Error(`Missing demo seed function: ${name}`);
+  return declaration.getText(demoSeedSource);
+}
 
 describe('Restaurant E2E seed restoration guards', () => {
   test('first-run role bootstrap preserves existing actor grants', () => {
@@ -144,6 +154,20 @@ describe('Restaurant E2E seed restoration guards', () => {
       /for \(const module of RESTAURANT_MODULE_ROWS\)[\s\S]*?platformPackageModule\.upsert\([\s\S]*?update: \{ enabled: true \}/
     );
     expect(demoSeed).toContain("key: 'restaurant-pos'");
+  });
+
+  test('assigns the Head Chef to the kitchen role on create and replay', () => {
+    const seedPeople = demoSeedFunction('seedPeople');
+
+    expect(demoSeed).toMatch(/key: 'kashif',[\s\S]*?title: 'Head Chef',[\s\S]*?kitchen: true/);
+    expect(seedPeople).toContain(
+      "organizationId_key: { organizationId: BASE.organizationId, key: 'kitchen' }"
+    );
+    expect(seedPeople).toMatch(
+      /const organizationRoleId = member\.manager[\s\S]*?: member\.kitchen[\s\S]*?\? kitchenRole\.id[\s\S]*?: BASE\.operatorRoleId/
+    );
+    expect(seedPeople).toMatch(/update: \{\s*organizationRoleId,/);
+    expect(seedPeople).toMatch(/create: \{\s*id: id\.user\(member\.key\),\s*organizationRoleId,/);
   });
 
   test('keeps all seeded branches at the restaurant location limit', () => {
