@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PreferenceBootstrap } from './preference-bootstrap';
 
 function getBootstrapScript() {
-  const markup = renderToStaticMarkup(<PreferenceBootstrap />);
+  const markup = renderToStaticMarkup(<PreferenceBootstrap nonce="request-nonce" />);
   const document = new DOMParser().parseFromString(markup, 'text/html');
 
   return { markup, script: document.querySelector('script') };
@@ -31,6 +31,7 @@ describe('PreferenceBootstrap', () => {
     expect(markup.match(/id="apply-user-preferences"/g)).toHaveLength(1);
     expect(script).not.toBeNull();
     expect(script?.hasAttribute('data-nscript')).toBe(false);
+    expect(script?.nonce).toBe('request-nonce');
   });
 
   it('preserves the saved preference allowlist and defaults', () => {

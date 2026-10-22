@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getPlatformSession } from '@/lib/platform/auth';
+import { contentSecurityPolicy } from '@/lib/security/content-security-policy';
 import {
   canReadPlatformRoute,
   platformReadHrefForPathname,
@@ -9,6 +10,7 @@ import {
 const TENANT_HOST_HEADER = 'x-devfathom-host';
 const REQUEST_ID_HEADER = 'x-devfathom-request-id';
 const INTERNAL_ORGANIZATION_QUERY = 'organizationId';
+const NONCE_HEADER = 'x-nonce';
 
 const publicPaths = [
   '/login',
@@ -45,19 +47,30 @@ export async function proxy(request: Request) {
   const hostWithPort = forwardedHost?.split(',')[0]?.trim().toLowerCase() ?? '';
   const host = hostWithPort.replace(/:\d+$/, '').replace(/\.$/, '');
   const requestHeaders = new Headers(request.headers);
+  const nonce = crypto.randomUUID().replaceAll('-', '');
+  const csp = contentSecurityPolicy(nonce);
   // Host classification ignores ports, but downstream login redirects need the
   // original authority to keep local tenant navigation on the same dev server.
   requestHeaders.set(TENANT_HOST_HEADER, hostWithPort);
+  // Next reads the request policy to apply this nonce to its own bootstrap and
+  // hydration scripts. The explicit header also makes it available to the root
+  // layout's preference bootstrap script.
+  requestHeaders.set('Content-Security-Policy', csp);
+  requestHeaders.set(NONCE_HEADER, nonce);
   requestHeaders.set(
     REQUEST_ID_HEADER,
     request.headers.get(REQUEST_ID_HEADER) ?? crypto.randomUUID()
   );
+  const secure = <T extends NextResponse>(response: T): T => {
+    response.headers.set('Content-Security-Policy', csp);
+    return response;
+  };
   const next = () => {
     const response = NextResponse.next({ request: { headers: requestHeaders } });
     if (pathname === '/demo' || pathname.startsWith('/demo/')) {
       response.headers.set('X-Robots-Tag', 'noindex, nofollow');
     }
-    return response;
+    return secure(response);
   };
   const baseDomain = (process.env.PLATFORM_BASE_DOMAIN ?? '')
     .trim()
@@ -77,25 +90,27 @@ export async function proxy(request: Request) {
   // remain in place as defense in depth.
   if (isPlatformPath) {
     if (!isPlatformHost) {
-      return NextResponse.redirect(new URL('/dashboard', request.url));
+      return secure(NextResponse.redirect(new URL('/dashboard', request.url)));
     }
     if (pathname === '/platform/login') {
       if (!hasPlatformSession) return next();
       const identity = await getPlatformSession(request);
-      return identity ? NextResponse.redirect(new URL('/platform', request.url)) : next();
+      return identity
+        ? secure(NextResponse.redirect(new URL('/platform', request.url)))
+        : next();
     }
     if (!hasPlatformSession) {
-      return NextResponse.redirect(new URL('/platform/login', request.url));
+      return secure(NextResponse.redirect(new URL('/platform/login', request.url)));
     }
     const identity = await getPlatformSession(request);
     if (!identity) {
-      return NextResponse.redirect(new URL('/platform/login', request.url));
+      return secure(NextResponse.redirect(new URL('/platform/login', request.url)));
     }
     const readHref = platformReadHrefForPathname(pathname);
     if (readHref && !canReadPlatformRoute(identity.role, readHref)) {
       const fallback = platformSafeFallback(identity.role);
-      if (fallback) return NextResponse.redirect(new URL(fallback, request.url));
-      return new NextResponse(null, { status: 403 });
+      if (fallback) return secure(NextResponse.redirect(new URL(fallback, request.url)));
+      return secure(new NextResponse(null, { status: 403 }));
     }
     return next();
   }
@@ -104,7 +119,7 @@ export async function proxy(request: Request) {
   // The worker endpoint is the only exception because Vercel Cron invokes the
   // deployment's canonical URL and authenticates with its own bearer secret.
   if (isPlatformApi && !isCronWorker && !isPlatformHost) {
-    return NextResponse.json({ error: 'Not found.' }, { status: 404 });
+    return secure(NextResponse.json({ error: 'Not found.' }, { status: 404 }));
   }
 
   // Framework assets and API routes must bypass host-level page redirects.
@@ -127,13 +142,13 @@ export async function proxy(request: Request) {
     url.searchParams.has(INTERNAL_ORGANIZATION_QUERY)
   ) {
     url.searchParams.delete(INTERNAL_ORGANIZATION_QUERY);
-    return NextResponse.redirect(url);
+    return secure(NextResponse.redirect(url));
   }
 
   // An admin host never falls through into a tenant workspace. This keeps
   // tenant and control-plane cookies, navigation, and mental models separate.
   if (isPlatformHost && !pathname.startsWith('/api')) {
-    return NextResponse.redirect(new URL('/platform', request.url));
+    return secure(NextResponse.redirect(new URL('/platform', request.url)));
   }
 
   // Allow public paths
@@ -150,12 +165,14 @@ export async function proxy(request: Request) {
   if (!hasSession) {
     const loginUrl = new URL('/login', request.url);
     loginUrl.searchParams.set('callbackUrl', `${pathname}${url.search}`);
-    return NextResponse.redirect(loginUrl);
+    return secure(NextResponse.redirect(loginUrl));
   }
 
   // Redirect root to dashboard
   if (pathname === '/') {
-    return NextResponse.redirect(new URL(isPlatformHost ? '/platform' : '/dashboard', request.url));
+    return secure(
+      NextResponse.redirect(new URL(isPlatformHost ? '/platform' : '/dashboard', request.url))
+    );
   }
 
   return next();

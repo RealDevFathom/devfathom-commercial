@@ -96,6 +96,20 @@ describe('platform host routing', () => {
 });
 
 describe('public paths', () => {
+  it('uses a distinct nonce-based script policy and forwards the nonce to rendering', async () => {
+    const first = await proxy(tenantRequest('/login'));
+    const second = await proxy(tenantRequest('/login'));
+    const policy = first.headers.get('content-security-policy') ?? '';
+    const nonce = policy.match(/'nonce-([^']+)'/)?.[1];
+
+    expect(nonce).toBeTruthy();
+    expect(policy).toContain("script-src 'self'");
+    expect(policy).toContain("'strict-dynamic'");
+    expect(policy.match(/script-src[^;]+/)?.[0]).not.toContain("'unsafe-inline'");
+    expect(first.headers.get('x-middleware-request-x-nonce')).toBe(nonce);
+    expect(second.headers.get('content-security-policy')).not.toBe(policy);
+  });
+
   it('stays public for an entry and every path beneath it', async () => {
     for (const path of [
       '/login',
