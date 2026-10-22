@@ -8,8 +8,13 @@ import type { AuthzDb } from '@/lib/authz';
 import { routeAI } from '@/lib/ai/router';
 import { getTierForFeature, type AITier } from '@/lib/ai/tiers';
 import type { WhatsAppOptInPort } from '@/lib/ai/shared/wa-optin.types';
+import {
+  WHATSAPP_TEMPLATE_COPY,
+  type WhatsAppTemplateLocale,
+  whatsappTemplateCopy,
+} from './templates.i18n';
 
-export const WHATSAPP_AI_LABEL = 'DevFathom AI';
+export const WHATSAPP_AI_LABEL = WHATSAPP_TEMPLATE_COPY.en.aiLabel;
 export const WHATSAPP_TEMPLATE_VARIABLES = ['name', 'shop', 'offer'] as const;
 export type WhatsAppTemplateKind = 'WIN_BACK' | 'REFILL' | 'OFFER';
 export type WhatsAppTemplateState = 'DRAFT' | 'APPROVED';
@@ -65,6 +70,7 @@ export type WhatsAppTemplateContext = {
   organizationId: string;
   actor: Subject;
   db: AuthzDb;
+  locale?: WhatsAppTemplateLocale;
 };
 
 const draftInput = z.object({ kind: z.enum(['WIN_BACK', 'REFILL', 'OFFER']) }).strict();
@@ -77,7 +83,8 @@ const valuesSchema = z
   .strict();
 const VARIABLE = /{{\s*([a-zA-Z0-9_]+)\s*}}/g;
 
-function assertTemplateText(raw: string): string {
+function assertTemplateText(raw: string, locale: WhatsAppTemplateLocale): string {
+  const copy = whatsappTemplateCopy(locale);
   const text = z.string().trim().min(1).max(1000).parse(raw);
   for (const match of text.matchAll(VARIABLE)) {
     if (
@@ -85,10 +92,10 @@ function assertTemplateText(raw: string): string {
         match[1] as (typeof WHATSAPP_TEMPLATE_VARIABLES)[number]
       )
     )
-      throw new Error('AI returned a non-whitelisted template variable.');
+      throw new Error(copy.errorVariableNotAllowed);
   }
   if (/{{|}}/.test(text.replace(VARIABLE, '')))
-    throw new Error('AI returned malformed template variables.');
+    throw new Error(copy.errorVariableMalformed);
   return text;
 }
 
@@ -101,7 +108,7 @@ async function authorize(context: WhatsAppTemplateContext): Promise<void> {
       { db: context.db, source: 'SYSTEM' }
     ))
   )
-    throw new Error('Forbidden');
+    throw new Error(whatsappTemplateCopy(context.locale ?? 'en').errorForbidden);
 }
 
 export async function draftWhatsAppTemplate(
@@ -110,12 +117,14 @@ export async function draftWhatsAppTemplate(
   ports: WhatsAppTemplatePorts
 ): Promise<WhatsAppTemplate> {
   await authorize(context);
+  const locale = context.locale ?? 'en';
+  const copy = whatsappTemplateCopy(locale);
   const choice = draftInput.parse(input);
   if (!(await ports.hasConfiguredProviderSecret(context.organizationId)))
-    throw new Error('DevFathom AI is not configured for this organization.');
+    throw new Error(copy.errorNotConfigured);
 
   const tier = getTierForFeature('whatsapp');
-  if (tier !== 'standard') throw new Error('WhatsApp drafting requires the growth tier.');
+  if (tier !== 'standard') throw new Error(copy.errorGrowthTier);
   const generated = await routeAI({
     tier,
     feature: 'whatsapp',
@@ -124,16 +133,15 @@ export async function draftWhatsAppTemplate(
       const result = await generateText({
         model: selection.model,
         providerOptions: selection.providerOptions,
-        system:
-          'Draft one concise WhatsApp marketing template. Use only {{name}}, {{shop}}, and {{offer}} variables. Never request or include personal, health, purchase, or other sensitive data. {{name}} means first name only. Include Reply STOP to opt out. The owner must approve this draft before registration or use. Return text only.',
-        prompt: `Template type: ${choice.kind}.`,
+        system: copy.draftSystemPrompt,
+        prompt: copy.draftKindPrompt.replace('{{kind}}', choice.kind),
         maxOutputTokens: 250,
         maxRetries: 0,
         abortSignal: AbortSignal.timeout(15_000),
       });
       return {
         value: {
-          text: assertTemplateText(result.text),
+          text: assertTemplateText(result.text, locale),
           provider: selection.provider,
           model: selection.modelId,
         },
@@ -168,8 +176,9 @@ export async function approveWhatsAppTemplate(
   ports: WhatsAppTemplatePorts
 ) {
   await authorize(context);
+  const copy = whatsappTemplateCopy(context.locale ?? 'en');
   const current = await ports.store.findById(context.organizationId, id);
-  if (!current || current.state !== 'DRAFT') throw new Error('Draft not found.');
+  if (!current || current.state !== 'DRAFT') throw new Error(copy.errorDraftNotFound);
   // Registration receives the owner's approved representation, never a draft.
   await ports.register(context.organizationId, {
     ...current,
@@ -199,17 +208,18 @@ export async function sendWhatsAppTemplate(
   ports: WhatsAppTemplatePorts
 ): Promise<void> {
   await authorize(context);
+  const copy = whatsappTemplateCopy(context.locale ?? 'en');
   const values = valuesSchema.parse(input.values);
   const template = await ports.store.findById(context.organizationId, input.templateId);
-  if (!template || template.state !== 'APPROVED') throw new Error('Approved template not found.');
+  if (!template || template.state !== 'APPROVED') throw new Error(copy.errorApprovedNotFound);
   const recipient = await ports.optIn.findEligibleRecipient(
     context.organizationId,
     input.customerId
   );
-  if (!recipient) throw new Error('Recipient is not opted in.');
+  if (!recipient) throw new Error(copy.errorRecipientNotOptedIn);
   const firstName = recipient.firstName.trim().split(/\s+/)[0] ?? '';
   if (values.name.trim() !== firstName)
-    throw new Error('Only the recipient first name may be used.');
+    throw new Error(copy.errorFirstNameOnly);
   const rendered = template.text.replace(VARIABLE, (_, key: keyof typeof values) => values[key]);
   await ports.send({
     organizationId: context.organizationId,
