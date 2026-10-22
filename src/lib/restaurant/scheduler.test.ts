@@ -26,6 +26,7 @@ import {
 // The binding >=8-way concurrency + exactly-once evidence lives in the DB
 // battery tests/restaurant-m7-scheduler-concurrency.test.ts.
 type Row = Record<string, unknown>;
+const FIELD_MAX_ATTEMPTS = Symbol('RestaurantJob.maxAttempts');
 
 function coerceNumber(value: unknown): number {
   return typeof value === 'number' ? value : 0;
@@ -52,10 +53,17 @@ function applyData(target: Row, data: Row): void {
 function matchWhere(row: Row, where: Row): boolean {
   for (const [key, condition] of Object.entries(where)) {
     if (condition && typeof condition === 'object' && !(condition instanceof Date)) {
-      const cond = condition as { lt?: Date; not?: unknown };
-      if ('lt' in cond) {
+      const cond = condition as { lt?: Date | unknown; gte?: unknown; not?: unknown };
+      if ('gte' in cond) {
+        const compared = cond.gte === FIELD_MAX_ATTEMPTS ? row.maxAttempts : cond.gte;
+        if (coerceNumber(row[key]) < coerceNumber(compared)) return false;
+      } else if ('lt' in cond) {
+        if (cond.lt === FIELD_MAX_ATTEMPTS) {
+          if (coerceNumber(row[key]) >= coerceNumber(row.maxAttempts)) return false;
+          continue;
+        }
         const current = row[key] as Date | null | undefined;
-        if (!(current instanceof Date) || !(current < cond.lt!)) return false;
+        if (!(current instanceof Date) || !(current < (cond.lt as Date))) return false;
       } else if ('not' in cond) {
         if (row[key] === cond.not) return false;
       } else {
@@ -75,6 +83,7 @@ function createFakeDb(seed: Row[] = []) {
   for (const row of seed) jobs.set(row.id as string, { ...row });
 
   const restaurantJob = {
+    fields: { maxAttempts: FIELD_MAX_ATTEMPTS },
     findFirst: async ({ where }: { where: Row }) => {
       for (const row of jobs.values()) {
         if (where.idempotencyKey !== undefined && row.idempotencyKey !== where.idempotencyKey) {
@@ -327,6 +336,23 @@ describe('recoverStaleJobs', () => {
     expect(recovered).toBe(1);
     expect(jobs.get('stale')!.status).toBe('QUEUED');
     expect(jobs.get('fresh')!.status).toBe('RUNNING');
+  });
+
+  it('dead-letters a stale crash once its spent attempt exhausts the budget', async () => {
+    const stale = new Date(T0.getTime() - DEFAULT_LEASE_MS - 1_000);
+    const { db, jobs } = createFakeDb([
+      { id: 'exhausted', status: 'RUNNING', attempts: 3, maxAttempts: 3, claimedAt: stale },
+      { id: 'retryable', status: 'RUNNING', attempts: 2, maxAttempts: 3, claimedAt: stale },
+    ]);
+
+    expect(await recoverStaleJobs(db, { now: T0 })).toBe(2);
+    expect(jobs.get('exhausted')).toMatchObject({
+      status: 'DEAD',
+      claimedAt: null,
+      claimedBy: null,
+      lastError: 'Worker lease expired after the retry budget was exhausted.',
+    });
+    expect(jobs.get('retryable')).toMatchObject({ status: 'QUEUED', nextAttemptAt: T0 });
   });
 
   it('recovers only the requested job type', async () => {
