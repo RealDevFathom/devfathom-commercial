@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "feature": "restaurant-checkout-upsell",
+  "cases": [
+    {
+      "id": "happy-path",
+      "organizationId": "org-a",
+      "branchId": "branch-a",
+      "orderId": "order-1",
+      "organizationOptIn": true,
+      "providerConfigured": true,
+      "effectiveCapability": "ALLOW",
+      "expectedSuggestion": "item-dessert",
+      "expectedAuditAction": "ai.restaurant.checkout-upsell"
+    },
+    {
+      "id": "tenant-isolation",
+      "organizationId": "org-b",
+      "branchId": "branch-b",
+      "orderId": "order-from-org-a",
+      "organizationOptIn": true,
+      "providerConfigured": true,
+      "effectiveCapability": "ALLOW",
+      "expectedSuggestion": null,
+      "expectedAuditAction": null
+    },
+    {
+      "id": "deny-over-allow",
+      "organizationId": "org-a",
+      "branchId": "branch-a",
+      "orderId": "order-1",
+      "organizationOptIn": true,
+      "providerConfigured": true,
+      "roleCapability": "ALLOW",
+      "overrideCapability": "DENY",
+      "expectedHttpStatus": 403,
+      "expectedSuggestion": null,
+      "expectedAuditAction": null
+    },
+    {
+      "id": "ai-default-off-no-org-opt-in",
+      "organizationId": "org-a",
+      "branchId": "branch-a",
+      "orderId": "order-1",
+      "organizationOptIn": false,
+      "providerConfigured": true,
+      "effectiveCapability": "ALLOW",
+      "expectedSuggestion": null,
+      "expectedAuditAction": null
+    },
+    {
+      "id": "ai-default-off-no-provider-secret",
+      "organizationId": "org-a",
+      "branchId": "branch-a",
+      "orderId": "order-1",
+      "organizationOptIn": true,
+      "providerConfigured": false,
+      "effectiveCapability": "ALLOW",
+      "expectedSuggestion": null,
+      "expectedAuditAction": null
+    },
+    {
+      "id": "idempotent-add",
+      "organizationId": "org-a",
+      "branchId": "branch-a",
+      "orderId": "order-1",
+      "suggestedItemId": "item-dessert",
+      "clicksBeforeResponse": 2,
+      "expectedCommandCount": 1,
+      "expectedIntent": "add-item:{\"orderId\":\"order-1\",\"menuItemId\":\"item-dessert\",\"quantity\":1,\"modifierOptionIds\":[]}"
+    }
+  ]
+}

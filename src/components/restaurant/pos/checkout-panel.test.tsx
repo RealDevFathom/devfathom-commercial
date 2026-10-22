@@ -81,6 +81,41 @@ describe('CheckoutPanel', () => {
     expect(screen.queryByText('DevFathom AI')).not.toBeInTheDocument();
   });
 
+  it('submits an AI upsell once with the stable cart-command idempotency intent', async () => {
+    let finishAdd!: () => void;
+    const pendingAdd = new Promise<void>((resolve) => {
+      finishAdd = resolve;
+    });
+    const addCalls: TerminalRequestOptions[] = [];
+    const suggestion = {
+      menuItemId: 'item-dessert',
+      name: 'Chocolate cake',
+      reason: 'Pairs with this order.',
+    };
+    const request: TerminalRequest = async <T,>(path: string, options?: TerminalRequestOptions) => {
+      if (path === '/api/restaurant/orders/add-item') {
+        addCalls.push(options!);
+        await pendingAdd;
+      }
+      return { ...unbilled, aiUpsell: suggestion } as T;
+    };
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+    const add = await screen.findByRole('button', { name: 'Add Chocolate cake' });
+
+    fireEvent.click(add);
+    fireEvent.click(add);
+
+    expect(addCalls).toHaveLength(1);
+    expect(addCalls[0]).toMatchObject({
+      method: 'POST',
+      intent:
+        'add-item:{"orderId":"order-1","menuItemId":"item-dessert","quantity":1,"modifierOptionIds":[]}',
+    });
+    expect(add).toBeDisabled();
+    finishAdd();
+    await waitFor(() => expect(screen.queryByText('DevFathom AI')).not.toBeInTheDocument());
+  });
+
   it('hides the AI panel when the server reports AI off and allows dismissal', async () => {
     const off: TerminalRequest = async <T,>() => ({ ...unbilled, aiUpsell: null }) as T;
     const view = render(<CheckoutPanel open orderId="order-1" request={off} onClose={vi.fn()} />);
