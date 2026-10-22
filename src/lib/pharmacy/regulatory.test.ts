@@ -10,6 +10,8 @@ const at = new Date('2026-09-02T12:00:00.000Z');
 function validState(): BranchRegulatoryState {
   return {
     branchId: 'branch-a',
+    provinceCode: 'PK-PB',
+    branch: { active: true, provinceCode: 'PK-PB' },
     licenceCategory: 'PHARMACY',
     licenceValidFrom: new Date('2026-01-01T00:00:00.000Z'),
     licenceValidTo: new Date('2027-01-01T00:00:00.000Z'),
@@ -61,6 +63,18 @@ describe('assertBranchMayOperate', () => {
     const state = validState();
     state.licenceValidTo = at;
     expectDenied(state, 'LICENCE_INVALID');
+  });
+
+  it('fails closed and audits a sale at an inactive branch', () => {
+    const state = validState();
+    state.branch.active = false;
+    expectDenied(state, 'BRANCH_INACTIVE');
+  });
+
+  it('fails closed and audits a sale when the profile province differs from the branch', () => {
+    const state = validState();
+    state.provinceCode = 'PK-SD';
+    expectDenied(state, 'PROVINCE_MISMATCH');
   });
 
   it('fails closed and audits missing qualified-person coverage', () => {

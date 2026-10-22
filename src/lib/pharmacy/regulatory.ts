@@ -3,6 +3,8 @@ import { recordAudit } from '@/server/audit';
 
 export type BranchOperationDenialReason =
   | 'PROFILE_MISSING'
+  | 'BRANCH_INACTIVE'
+  | 'PROVINCE_MISMATCH'
   | 'RULE_SET_UNCONFIRMED'
   | 'LICENCE_INVALID'
   | 'QUALIFIED_PERSON_COVERAGE_MISSING'
@@ -24,6 +26,11 @@ export type BranchOperationAction = {
 
 export type BranchRegulatoryState = {
   branchId: string;
+  provinceCode: string;
+  branch: {
+    active: boolean;
+    provinceCode: string;
+  };
   licenceCategory: string;
   licenceValidFrom: Date;
   licenceValidTo: Date;
@@ -64,6 +71,11 @@ export function assertBranchMayOperate(
     branch.auditDenied(reason, action);
     throw new BranchOperationDeniedError(reason);
   };
+
+  // A valid licence snapshot cannot make a closed branch operational, and a
+  // snapshot issued for another province cannot authorize this premises.
+  if (!branch.branch.active) deny('BRANCH_INACTIVE');
+  if (branch.provinceCode !== branch.branch.provinceCode) deny('PROVINCE_MISMATCH');
 
   const relevantRules = [
     branch.ruleSet.licenceCategories,
@@ -116,7 +128,10 @@ export async function assertStoredBranchMayOperate(
       effectiveFrom: { lte: at },
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
     },
-    include: { jurisdictionRuleSet: true },
+    include: {
+      jurisdictionRuleSet: true,
+      branch: { select: { active: true, provinceCode: true } },
+    },
     orderBy: { effectiveFrom: 'desc' },
   });
   const auditDenied = (reason: BranchOperationDenialReason, deniedAction: BranchOperationAction) =>

@@ -1110,6 +1110,8 @@ function pharmacyOrg() {
  */
 const VALID_PROFILE = {
   branchId: 'branch-p',
+  provinceCode: 'PK-PB',
+  branch: { active: true, provinceCode: 'PK-PB' },
   licenceCategory: 'PHARMACY',
   licenceValidFrom: new Date('2026-01-01'),
   licenceValidTo: new Date('2027-01-01'),
@@ -1189,6 +1191,44 @@ describe('pharmacy activation preflight', () => {
         reason: 'Attempt pharmacy activation',
       })
     ).rejects.toThrow(/onboarding gates not passed/);
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses activation when the licensed branch is inactive', async () => {
+    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
+    mocks.regulatoryProfileFindFirst.mockResolvedValue({
+      ...VALID_PROFILE,
+      branch: { ...VALID_PROFILE.branch, active: false },
+    });
+    allGatesClaimedPassed();
+    allReadinessEvidence();
+
+    await expect(
+      run('organization.transition', {
+        id: 'org_p',
+        status: 'ACTIVE',
+        reason: 'Attempt pharmacy activation with a closed branch',
+      })
+    ).rejects.toThrow(/BRANCH_INACTIVE/);
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses activation when the regulatory profile province differs from its branch', async () => {
+    mocks.orgFindUnique.mockResolvedValue(pharmacyOrg());
+    mocks.regulatoryProfileFindFirst.mockResolvedValue({
+      ...VALID_PROFILE,
+      provinceCode: 'PK-SD',
+    });
+    allGatesClaimedPassed();
+    allReadinessEvidence();
+
+    await expect(
+      run('organization.transition', {
+        id: 'org_p',
+        status: 'ACTIVE',
+        reason: 'Attempt pharmacy activation with a foreign-province licence',
+      })
+    ).rejects.toThrow(/PROVINCE_MISMATCH/);
     expect(mocks.orgUpdate).not.toHaveBeenCalled();
   });
 

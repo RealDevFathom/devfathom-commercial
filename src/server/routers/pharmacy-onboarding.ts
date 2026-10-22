@@ -346,6 +346,10 @@ export const pharmacyOnboardingRouter = router({
               assertBranchMayOperate(
                 {
                   ...version,
+                  branch: {
+                    active: true,
+                    provinceCode: selected.provinceCode,
+                  },
                   permittedSchedules: Array.isArray(version.permittedSchedules)
                     ? version.permittedSchedules.filter(
                         (schedule): schedule is string => typeof schedule === 'string'
