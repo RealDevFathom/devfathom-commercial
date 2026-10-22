@@ -20,6 +20,7 @@ import * as authz from '@/lib/authz';
 import { appUrl, templates } from '@/lib/email';
 import { computePunctuality } from '@/lib/meeting-occurrence';
 import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
+import { MEETING_TIME_RANGE_ERROR, meetingEndsAfterStart } from '@/lib/meetings/validation';
 import { materializeMeetingOccurrences } from '@/lib/meetings/materialize';
 import { resolveRelevantOccurrence } from '@/lib/meetings/occurrences';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
@@ -267,8 +268,8 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
         const end = parseDate(endTime);
         if (!end)
           return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
-        if (end.getTime() <= start.getTime()) {
-          return { error: 'The end time must be after the start time.' };
+        if (!meetingEndsAfterStart(start, end)) {
+          return { error: MEETING_TIME_RANGE_ERROR };
         }
 
         // Resolve every attendee name up front so we can ask for clarification
@@ -415,6 +416,25 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
           if (!d)
             return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
           data.endTime = d;
+        }
+
+        // Either endpoint may be omitted by the assistant. Validate the
+        // effective range against the persisted counterpart before replacing
+        // attendees or making any other write.
+        if (data.startTime instanceof Date || data.endTime instanceof Date) {
+          const current = await db.meeting.findUnique({
+            where: { id: meetingId },
+            select: { startTime: true, endTime: true },
+          });
+          if (!current) return { error: 'That meeting was not found.' };
+          if (
+            !meetingEndsAfterStart(
+              data.startTime instanceof Date ? data.startTime : current.startTime,
+              data.endTime instanceof Date ? data.endTime : current.endTime
+            )
+          ) {
+            return { error: MEETING_TIME_RANGE_ERROR };
+          }
         }
 
         // Replace the attendee list when provided (mirrors the router: the
