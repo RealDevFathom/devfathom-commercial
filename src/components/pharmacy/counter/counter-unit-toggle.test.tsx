@@ -155,12 +155,19 @@ describe('CounterUnitToggle (POS-03)', () => {
   it('explains itself when the lot has no priceable sale unit', () => {
     renderToggle({ options: [], selected: null, preview: null, availableUnits: 10 });
     expect(screen.queryAllByRole('radio')).toHaveLength(0);
-    expect(screen.getByRole('status').textContent).toContain('No sale unit is available');
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'No sale unit is available for this medicine. Its pack hierarchy does not match the received lot, so no price can be derived.'
+    );
   });
 
   it('reports out-of-stock medicine instead of blaming its pack hierarchy', () => {
     renderToggle({ options: [], selected: null, preview: null, availableUnits: 0 });
-    expect(screen.getByRole('status').textContent).toBe('This medicine is out of stock.');
-    expect(screen.getByRole('status').textContent).not.toContain('pack hierarchy');
+    expect(screen.getByRole('status')).toHaveTextContent(/^This medicine is out of stock\.$/);
+    expect(screen.getByRole('status')).not.toHaveTextContent('pack hierarchy');
+  });
+
+  it('fails closed as out of stock if an invalid negative availability reaches the control', () => {
+    renderToggle({ options: [], selected: null, preview: null, availableUnits: -1 });
+    expect(screen.getByRole('status')).toHaveTextContent(/^This medicine is out of stock\.$/);
   });
 });

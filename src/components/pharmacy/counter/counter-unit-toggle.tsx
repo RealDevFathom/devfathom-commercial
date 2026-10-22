@@ -55,7 +55,7 @@ export function CounterUnitToggle({
   if (options.length === 0) {
     return (
       <p className="text-sm text-text-muted" role="status">
-        {availableUnits === 0 ? (
+        {availableUnits <= 0 ? (
           <>This medicine is out of stock.</>
         ) : (
           <>
