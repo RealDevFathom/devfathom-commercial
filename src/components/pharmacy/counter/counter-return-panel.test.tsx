@@ -164,6 +164,42 @@ describe('counter returns', () => {
     expect(screen.queryByText(/Return recorded/)).not.toBeInTheDocument();
     expect(localStorage.getItem('pharmacy-return:o:a:b')).toBeNull();
   });
+  it('collects a new PIN to replay a sanitized controlled return', async () => {
+    localStorage.setItem(
+      'pharmacy-return:o:a:b',
+      JSON.stringify({
+        kind: 'return',
+        saleId: 'sale',
+        controlled: true,
+        input: {
+          branchId: 'b',
+          saleLineId: 'line',
+          canonicalUnits: 1,
+          disposition: 'QUARANTINE',
+          quarantineLocationId: 'q',
+          reason: 'WRONG_ITEM',
+          integrityDecision: 'sealed',
+          idempotencyKey: 'same-key',
+        },
+      })
+    );
+    render(<ReturnForm {...props} />);
+    const retry = screen.getByRole('button', { name: 'Retry saved return' });
+    expect(retry).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Witness pharmacist'), {
+      target: { value: 'pharmacist-2' },
+    });
+    fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '5678' } });
+    fireEvent.click(retry);
+    await waitFor(() =>
+      expect(mocks.returnLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          idempotencyKey: 'same-key',
+          controlledWitness: { staffProfileId: 'pharmacist-2', pin: '5678' },
+        })
+      )
+    );
+  });
   it('caps refunds at returned value and requires explicit cash fallback for card', () => {
     render(<ReturnForm {...props} />);
     chooseReceipt();

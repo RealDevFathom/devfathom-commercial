@@ -402,6 +402,19 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
 }
 
+async function requireReturnAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await requireCounterReceiptAccess(ctx, branch);
+  if (
+    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }))
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Dispense permission is required.' });
+  }
+  return scope;
+}
+
 const closeDate = z
   .date()
   .refine(
@@ -1278,9 +1291,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await requireReturnAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => {
           try {
-            return await returnSaleLine(txDb(tx), await scopeFor(ctx, input.branchId), input);
+            return await returnSaleLine(txDb(tx), scope, input);
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
               return { blocked: error.message };

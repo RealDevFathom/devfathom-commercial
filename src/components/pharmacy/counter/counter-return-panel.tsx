@@ -16,6 +16,7 @@ const attemptSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('return'),
     saleId: z.string(),
+    controlled: z.boolean().optional(),
     input: z.object({
       branchId: z.string(),
       saleLineId: z.string(),
@@ -93,6 +94,74 @@ function subscribeConnection(changed: () => void) {
   };
 }
 
+function WitnessFields({
+  staffProfileId,
+  pin,
+  setStaffProfileId,
+  setPin,
+  resetConfirmation,
+  witnesses,
+}: {
+  staffProfileId: string;
+  pin: string;
+  setStaffProfileId: (value: string) => void;
+  setPin: (value: string) => void;
+  resetConfirmation: () => void;
+  witnesses: {
+    data?: Array<{ id: string; name: string }>;
+    isLoading?: boolean;
+    isError?: boolean;
+  };
+}) {
+  return (
+    <div className="space-y-3 rounded-md border border-border-subtle p-3">
+      <p className="text-sm font-semibold">Second pharmacist witness required</p>
+      <p className="text-sm text-text-muted">
+        A different pharmacist must authorize restoration with their fresh PIN.
+      </p>
+      <Label htmlFor="return-witness">Witness pharmacist</Label>
+      <select
+        id="return-witness"
+        className={selectClass}
+        value={staffProfileId}
+        disabled={witnesses.isLoading || witnesses.isError}
+        onChange={(event) => {
+          setStaffProfileId(event.target.value);
+          setPin('');
+          resetConfirmation();
+        }}
+      >
+        <option value="">Choose pharmacist</option>
+        {witnesses.data?.map((staff) => (
+          <option key={staff.id} value={staff.id}>
+            {staff.name}
+          </option>
+        ))}
+      </select>
+      {witnesses.isLoading && <p role="status">Loading pharmacists…</p>}
+      {witnesses.isError && (
+        <p role="alert">Pharmacists could not be loaded. Retry by reopening the panel.</p>
+      )}
+      <Label htmlFor="return-witness-pin">Witness PIN</Label>
+      <Input
+        id="return-witness-pin"
+        type="password"
+        inputMode="numeric"
+        autoComplete="off"
+        minLength={4}
+        maxLength={8}
+        className="h-11"
+        disabled={!staffProfileId}
+        value={pin}
+        onChange={(event) => {
+          setPin(event.target.value);
+          resetConfirmation();
+        }}
+      />
+    </div>
+  );
+}
+
 export function ReturnForm({ branchId, organizationId, accountId, deviceId, businessDate }: Props) {
   const storageKey = `pharmacy-return:${organizationId}:${accountId}:${branchId}`;
   // This form mounts only after opening the client-side dialog. Read recovery once,
@@ -159,7 +228,10 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const returnLine = trpc.pharmacySales.returnLine.useMutation();
   const refund = trpc.pharmacySales.refundTender.useMutation();
   const witnesses = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
-    enabled: ready && online && Boolean(line?.controlled),
+    enabled:
+      ready &&
+      online &&
+      Boolean(line?.controlled || (attempt?.kind === 'return' && attempt.controlled)),
     retry: false,
   });
   const selectedLot = line?.lots.find((row) => row.lotId === lotId);
@@ -281,13 +353,44 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       )}
       {message && <p role="status">{message}</p>}
       {attempt && (
-        <Button
-          className="h-11"
-          disabled={busy || !online || !ready}
-          onClick={() => void execute(attempt)}
-        >
-          Retry saved {attempt.kind}
-        </Button>
+        <div className="space-y-3">
+          {attempt.kind === 'return' && attempt.controlled && (
+            <WitnessFields
+              staffProfileId={witnessStaffProfileId}
+              pin={witnessPin}
+              setStaffProfileId={setWitnessStaffProfileId}
+              setPin={setWitnessPin}
+              resetConfirmation={() => setConfirmed(false)}
+              witnesses={witnesses}
+            />
+          )}
+          <Button
+            className="h-11"
+            disabled={
+              busy ||
+              !online ||
+              !ready ||
+              (attempt.kind === 'return' &&
+                Boolean(attempt.controlled) &&
+                (!witnessStaffProfileId || !/^\d{4,8}$/.test(witnessPin)))
+            }
+            onClick={() =>
+              void execute(
+                attempt.kind === 'return' && attempt.controlled
+                  ? {
+                      ...attempt,
+                      input: {
+                        ...attempt.input,
+                        controlledWitness: { staffProfileId: witnessStaffProfileId, pin: witnessPin },
+                      },
+                    }
+                  : attempt
+              )
+            }
+          >
+            Retry saved {attempt.kind}
+          </Button>
+        </div>
       )}
       <form
         className="flex flex-wrap items-end gap-2"
@@ -517,51 +620,14 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               or recalled lots are refused by the server.
             </p>
             {line?.controlled && (
-              <div className="space-y-3 rounded-md border border-border-subtle p-3">
-                <p className="text-sm font-semibold">Second pharmacist witness required</p>
-                <p className="text-sm text-text-muted">
-                  A different pharmacist must authorize restoration with their fresh PIN.
-                </p>
-                <Label htmlFor="return-witness">Witness pharmacist</Label>
-                <select
-                  id="return-witness"
-                  className={selectClass}
-                  value={witnessStaffProfileId}
-                  disabled={witnesses.isLoading || witnesses.isError}
-                  onChange={(event) => {
-                    setWitnessStaffProfileId(event.target.value);
-                    setWitnessPin('');
-                    setConfirmed(false);
-                  }}
-                >
-                  <option value="">Choose pharmacist</option>
-                  {witnesses.data?.map((staff) => (
-                    <option key={staff.id} value={staff.id}>
-                      {staff.name}
-                    </option>
-                  ))}
-                </select>
-                {witnesses.isLoading && <p role="status">Loading pharmacists…</p>}
-                {witnesses.isError && (
-                  <p role="alert">Pharmacists could not be loaded. Retry by reopening the panel.</p>
-                )}
-                <Label htmlFor="return-witness-pin">Witness PIN</Label>
-                <Input
-                  id="return-witness-pin"
-                  type="password"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  minLength={4}
-                  maxLength={8}
-                  className="h-11"
-                  disabled={!witnessStaffProfileId}
-                  value={witnessPin}
-                  onChange={(event) => {
-                    setWitnessPin(event.target.value);
-                    setConfirmed(false);
-                  }}
-                />
-              </div>
+              <WitnessFields
+                staffProfileId={witnessStaffProfileId}
+                pin={witnessPin}
+                setStaffProfileId={setWitnessStaffProfileId}
+                setPin={setWitnessPin}
+                resetConfirmation={() => setConfirmed(false)}
+                witnesses={witnesses}
+              />
             )}
             <label className="flex min-h-11 items-center gap-2">
               <input
@@ -590,6 +656,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 void execute({
                   kind: 'return',
                   saleId,
+                  controlled: line.controlled,
                   input: {
                     branchId,
                     saleLineId: lineId,

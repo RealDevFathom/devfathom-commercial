@@ -134,6 +134,20 @@ describe('counter return boundaries', () => {
       returnSaleLine(db as never, scope, { ...input, canonicalUnits: 3 })
     ).rejects.toThrow('IDEMPOTENCY_CONFLICT');
   });
+  it('replays a committed controlled return without retaining its witness PIN', async () => {
+    const { db, line } = fixture();
+    line.medicine.controlled = true;
+    const fingerprint = JSON.stringify(input);
+    db.pharmacySaleEvent.findFirst.mockResolvedValue({
+      payload: { fingerprint, returnId: 'return' },
+    });
+
+    await expect(returnSaleLine(db as never, scope, input)).resolves.toMatchObject({
+      returnId: 'return',
+      replayed: true,
+    });
+    expect(db.pharmacySaleReturn.create).not.toHaveBeenCalled();
+  });
   it('rounds cumulative partial value to the exact discounted total', () => {
     const line = { quantity: 1, unitPriceMinor: 100, discountMinor: 2, canonicalUnits: 3 };
     expect([1, 2, 3].map((n) => returnedLineValue(line, n))).toEqual([32, 65, 98]);

@@ -7,6 +7,10 @@ vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
   resolveOrganizationEntitlements: vi.fn(),
 }));
+vi.mock('@/lib/abac', async (original) => ({
+  ...(await original<typeof import('@/lib/abac')>()),
+  can: vi.fn(),
+}));
 vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(),
   isAuditExcludedPath: vi.fn(() => false),
@@ -33,6 +37,7 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
+  returnSaleLine: vi.fn(async () => ({ returnId: 'return-1' })),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
@@ -62,6 +67,7 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 }));
 
 import { hasModule } from '@/lib/entitlements';
+import { can } from '@/lib/abac';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { readReturnHistory } from '@/lib/pharmacy/sales';
@@ -163,6 +169,7 @@ const reads = () => [readCounterReceipt, readPharmacyReceiptFormat, readDispensi
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(hasModule).mockReturnValue(true);
+  vi.mocked(can).mockResolvedValue(true);
   vi.mocked(readCounterReceipt).mockResolvedValue({
     receiptNumber: 7,
     completedAt: '2026-10-01T00:00:00.000Z',
@@ -211,6 +218,31 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it('requires the central exact dispense decision before returning stock', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    vi.mocked(can).mockResolvedValue(false);
+
+    await expect(
+      f.caller().returnLine({
+        branchId: 'branch-a',
+        saleLineId: 'line-a',
+        canonicalUnits: 1,
+        disposition: 'QUARANTINE',
+        quarantineLocationId: 'quarantine-a',
+        reason: 'WRONG_ITEM',
+        integrityDecision: 'sealed',
+        idempotencyKey: 'return-a',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(can).toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:dispense',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
   it('rejects status-only completion before opening a transaction', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
