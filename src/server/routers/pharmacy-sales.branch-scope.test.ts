@@ -6,7 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // `assertInOrganization` lookup); the counter's cash tender reaches it through
 // `branchScopeOrForbidden`, which words that refusal as a scope denial. Every one
 // of these nine procedures must refuse such a branch before the settlement
-// library takes a lock, reads a drawer or writes anything. The close procedures
+// library takes a lock, reads a drawer or writes anything. Refunds additionally
+// use the counter receipt-access path. The close procedures
 // keep their administrator gate in front of that check; no capability is added
 // for the counter.
 vi.mock('server-only', () => ({}));
@@ -114,7 +115,7 @@ const procedures: Array<[string, (caller: Caller) => Promise<unknown>, Refusal]>
         reason: 'Returned medicine',
         idempotencyKey: 'refund-1',
       }),
-    NOT_IN_WORKSPACE,
+    OUTSIDE,
   ],
 ];
 const closeProcedures = procedures.filter(([name]) =>

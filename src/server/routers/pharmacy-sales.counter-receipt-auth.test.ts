@@ -33,10 +33,12 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
+  returnSaleLine: vi.fn(async () => ({ returnLineId: 'return-line-1' })),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
+  refundPharmacyTender: vi.fn(async () => ({ refundId: 'refund-1' })),
 }));
 vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),
@@ -64,8 +66,8 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { readReturnHistory } from '@/lib/pharmacy/sales';
-import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import { readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
+import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
@@ -124,6 +126,7 @@ function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOY
         },
       ]),
     },
+    pharmacyTender: { findFirst: vi.fn(async () => ({ type: 'CASH' })) },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     $transaction: vi.fn(),
   };
@@ -373,6 +376,71 @@ describe('counter receipt authorization', () => {
     expect(readReturnHistory).not.toHaveBeenCalled();
     expect(applyPharmacyTender).not.toHaveBeenCalled();
     expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  const moneyWrites = [
+    {
+      name: 'refundTender',
+      run: (caller: Caller) =>
+        caller.refundTender({
+          branchId: 'branch-a',
+          originalTenderId: 'tender-1',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          amountMinor: 100,
+          reason: 'Returned medicine',
+          idempotencyKey: 'refund-1',
+        }),
+      write: refundPharmacyTender,
+    },
+    {
+      name: 'returnLine',
+      run: (caller: Caller) =>
+        caller.returnLine({
+          branchId: 'branch-a',
+          saleLineId: 'line-1',
+          canonicalUnits: 1,
+          disposition: 'QUARANTINE',
+          reason: 'Customer return',
+          integrityDecision: 'Sealed package',
+          idempotencyKey: 'return-1',
+        }),
+      write: returnSaleLine,
+    },
+  ] as const;
+
+  it.each(moneyWrites)(
+    '$name denies an unassigned counter user before a transaction',
+    async (path) => {
+      const f = fixture(dispense);
+      await expect(path.run(f.caller())).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Branch is outside your scope.',
+      });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(path.write).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(moneyWrites)(
+    '$name denies an assigned user without a counter capability',
+    async (path) => {
+      const f = fixture([{ capability: 'pharmacy:orders', effect: 'ALLOW' }]);
+      assign(f, ['branch-a']);
+      await expect(path.run(f.caller())).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(path.write).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(moneyWrites)('$name allows an assigned dispenser', async (path) => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    await expect(path.run(f.caller())).resolves.toBeDefined();
+    expect(path.write).toHaveBeenCalledOnce();
   });
 
   it('keeps Khata tender off the branch-assignment guard', async () => {
