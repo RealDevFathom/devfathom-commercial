@@ -2518,15 +2518,46 @@ async function runCommand(
         data: {
           password,
           passwordChangedAt: new Date(),
+          // An operator-selected password is only a bootstrap credential. The
+          // tenant user must replace it before continuing in the workspace.
+          mustChangePassword: true,
           tokenVersion: { increment: 1 },
+        },
+      });
+      const notice = {
+        to: { email: saved.email, name: saved.name },
+        subject: 'Your DevFathom password was reset',
+        text: 'A platform administrator reset your DevFathom password. Your existing sessions were ended, and you must choose a new password when you next sign in. If you did not expect this, contact your organization administrator immediately.',
+        html: '<p>A platform administrator reset your DevFathom password.</p><p>Your existing sessions were ended, and you must choose a new password when you next sign in. If you did not expect this, contact your organization administrator immediately.</p>',
+      };
+      await db.notification.create({
+        data: {
+          organizationId: saved.organizationId,
+          userId: saved.id,
+          type: 'password_reset_by_platform',
+          title: 'Your password was reset',
+          message:
+            'A platform administrator reset your password. Existing sessions were ended, and you must choose a new password when you next sign in.',
+          entityType: 'User',
+          entityId: saved.id,
+        },
+      });
+      // Commit the out-of-band warning with the credential change. Delivery is
+      // retried by the existing outbox worker; the temporary password is never
+      // included in either notification channel.
+      await db.outboundEffect.create({
+        data: {
+          organizationId: saved.organizationId,
+          kind: 'email',
+          payload: notice,
         },
       });
       return {
         targetType: 'User',
         targetId: saved.id,
         organizationId: saved.organizationId,
-        data: { id: saved.id, passwordReset: true },
-        audit: { id: saved.id, passwordReset: true },
+        data: { id: saved.id, passwordReset: true, mustChangePassword: true },
+        audit: { id: saved.id, passwordReset: true, mustChangePassword: true },
       };
     }
     // PROP-04 G2 — break-glass property recovery. The tenant write policy on

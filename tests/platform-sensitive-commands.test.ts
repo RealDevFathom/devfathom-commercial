@@ -12,7 +12,16 @@ const db = {
     create: vi.fn(async ({ data }: any) => ({ id: 'new_1', ...data })),
   },
   platformSession: { updateMany: vi.fn() },
-  user: { update: vi.fn(async () => ({ id: 'user_1', organizationId: 'org_1' })) },
+  user: {
+    update: vi.fn(async () => ({
+      id: 'user_1',
+      organizationId: 'org_1',
+      name: 'Tenant Admin',
+      email: 'admin@tenant.test',
+    })),
+  },
+  notification: { create: vi.fn(async ({ data }: any) => data) },
+  outboundEffect: { create: vi.fn(async ({ data }: any) => data) },
   organization: { findUnique: vi.fn(async () => ({ id: 'org_1', vertical: 'AGENCY' })) },
   platformAuditLog: {
     create: vi.fn(async ({ data }: any) => {
@@ -72,11 +81,32 @@ describe('sensitive commands', () => {
       reason: 'Verified owner recovery',
     });
     expect(db.user.update).toHaveBeenCalledOnce();
+    expect(db.user.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ mustChangePassword: true }) })
+    );
+    expect(db.notification.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org_1',
+        userId: 'user_1',
+        type: 'password_reset_by_platform',
+      }),
+    });
+    expect(db.outboundEffect.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org_1',
+        kind: 'email',
+        payload: expect.objectContaining({
+          to: { email: 'admin@tenant.test', name: 'Tenant Admin' },
+        }),
+      }),
+    });
     expect(state.audits[0].after).toMatchObject({
       reason: 'Verified owner recovery',
       passwordReset: true,
+      mustChangePassword: true,
     });
     expect(JSON.stringify(state.audits)).not.toContain('a-secret-password');
+    expect(JSON.stringify(db.outboundEffect.create.mock.calls)).not.toContain('a-secret-password');
   });
   it('denies an OPERATIONS vertical correction before mutation', async () => {
     await expect(

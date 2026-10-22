@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { PlatformCommandForm } from '@/components/platform/platform-command-form';
@@ -78,4 +79,14 @@ it('preserves destructive confirmation before submitting a reason', () => {
   expect(confirm).toHaveBeenCalledWith('Revoke token?');
   expect(fetchMock).not.toHaveBeenCalled();
   confirm.mockRestore();
+});
+
+it('names the tenant, target user, and session consequence in password reset confirmation', () => {
+  const source = readFileSync(
+    'src/app/platform/(console)/organizations/[id]/page.tsx',
+    'utf8'
+  );
+  expect(source).toMatch(
+    /confirm=\{`Reset \$\{user\.name\}'s password for \$\{organization\.name\}\? Their existing sessions will end, and they will be required to choose a new password at next sign-in\.`\}/
+  );
 });

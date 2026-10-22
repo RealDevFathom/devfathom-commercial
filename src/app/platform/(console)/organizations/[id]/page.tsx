@@ -1053,6 +1053,7 @@ export default async function OrganizationDetailPage({
                       compact
                       action="organization.user.password"
                       submitLabel="Reset password"
+                      confirm={`Reset ${user.name}'s password for ${organization.name}? Their existing sessions will end, and they will be required to choose a new password at next sign-in.`}
                       fields={[
                         { name: 'id', label: 'User', type: 'hidden', defaultValue: user.id },
                         {
