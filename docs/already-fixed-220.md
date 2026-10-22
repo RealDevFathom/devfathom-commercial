@@ -10,9 +10,13 @@ Issue #220 is already fixed in the current code, so no implementation change is 
   formatter, so neither response exposes a server stack.
 - `src/server/routers/anonymous-fallback.test.ts:127-150` covers the reported
   `invitations.get` and `passwordReset.reset` refusals, compares the fallback response with the real
-  router response, and asserts matching stack presence and response bodies.
+  router response, and records stack presence separately from the response-body comparison.
 - `src/server/routers/anonymous-fallback.test.ts:74-94` detects and removes any nested `stack` key
-  only for comparison, ensuring the separate `hasStack` assertions detect a regression.
+  only for comparison. The absence guarantee itself comes from the unconditional deletion in both
+  formatters above; this helper prevents a stack value from obscuring formatter-parity failures.
+
+The follow-up security review classified this issue's documentation-only delta as passing. Its
+shared authorization hold is outside issue #220 and does not change the stack-removal conclusion.
 
 Per the issue instructions, this conclusion was reached by inspecting the current source and Git
 history only. No dependencies were installed and no tests were run.
