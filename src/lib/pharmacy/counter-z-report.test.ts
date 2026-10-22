@@ -4,6 +4,7 @@ const report = {
   id: 'close-1',
   branchName: '<script>private</script>',
   businessDate: '2026-09-29',
+  currency: 'USD',
   sequence: 1,
   grossSalesMinor: 2500,
   refundTotalMinor: 0,
@@ -19,6 +20,8 @@ describe('Z report', () => {
     const html = buildCounterBrowserZReport(report, 'en');
     expect(html).toContain('Expected cash: 125.00');
     expect(html).toContain('Variance: -1.00');
+    expect(html).toContain('USD');
+    expect(html).not.toContain('PKR');
     expect(html).not.toContain('<script>');
     expect(html).not.toContain('<img');
     expect(html).toContain('&lt;script&gt;');
