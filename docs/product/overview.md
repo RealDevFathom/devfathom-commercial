@@ -65,7 +65,7 @@ Some counter devices can be set up to work offline.
 - **Everyone has a role.** Owners decide what each staff member can see and do. You can adjust permissions for individual people.
 - **Three pharmacy jobs are specially protected.** Dispensing medicines, safety (the controlled-drugs register and its incidents), and approving regulated changes to the medicine list must each be given by name. Being an admin, or holding "all permissions", does not include them. See the [pharmacy guide](pharmacy-guide.md#the-three-protected-jobs) for details.
 - **Actions are recorded.** The system keeps an activity log so you can see who did what. TODO(confirm): what is recorded and who can view it.
-- **Extra login protection:** two-step sign-in (a code from an authenticator app) is supported. TODO(confirm): whether it is switched on for pharmacy staff by default.
+- **Extra login protection:** two-step sign-in (a code from an authenticator app) is supported. It is not switched on by default; each person turns it on for their own account. TODO(confirm): whether owners can require it for staff.
 
 ## Features and packages
 

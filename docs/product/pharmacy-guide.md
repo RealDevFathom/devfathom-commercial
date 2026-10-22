@@ -236,7 +236,13 @@ Three pharmacy jobs carry extra risk, so DevFathom treats them differently from 
 2. **"Give them everything" does not include these jobs.** If you give someone all permissions, or all pharmacy permissions, they still will **not** be able to dispense, work on the controlled-drugs register or review the catalogue. You must give each of the three by name.
 3. **Each job is checked on its own.** Having one of them does not give you the others.
 4. **One person may hold all three.** In a shop with a single pharmacist, that pharmacist can be given all three jobs.
-5. **Taking permissions away.** Removing permissions is meant to win over giving them, so blocking someone's permissions also removes these jobs. TODO(confirm): how blocks and grants interact is still being finalised by the technical team; do not rely on this rule yet.
+5. **Taking permissions away.** DevFathom checks permissions in this order and stops at the first match:
+   1. a block set for that person
+   2. an allow set for that person
+   3. a block on their role
+   4. an allow on their role
+
+   So a block set on the person always removes the job. A block on their role does **not** remove it if the person also has their own allow. To take a job away from one person for certain, block it on that person. A block on "all permissions" also removes all three jobs. TODO(confirm): this order may change when the technical team's planned fix lands (`fix/abac-deny-precedence`).
 
 ### Why it works this way
 Keeping these jobs separate means a mistake or misuse in one place is less likely to go unnoticed. It also means owners always decide, on purpose, who can hand over medicines and who can change the medicine list.
