@@ -45,7 +45,10 @@ const line = {
   },
 };
 
-function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'DENY' }>) {
+function callerFor(
+  permissions: Array<{ capability: string; effect: 'ALLOW' | 'DENY' }>,
+  permissionOverrides: Array<{ capability: string; effect: 'ALLOW' | 'DENY' }> = []
+) {
   const credential = vi.fn();
   const register = vi.fn();
   const db = {
@@ -58,7 +61,7 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
       findUnique: async () => ({
         status: 'ACTIVE',
         organizationRole: { permissions },
-        permissionOverrides: [],
+        permissionOverrides,
       }),
     },
     restaurantOperatorCredential: { findFirst: credential },
@@ -102,6 +105,17 @@ describe('pharmacySales.addLine controlled actor', () => {
     ]);
     await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(credential).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('honors a role deny even when the cashier has a user dispense allow', async () => {
+    const { caller, credential, register } = callerFor(
+      [{ capability: 'pharmacy:dispense', effect: 'DENY' }],
+      [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]
+    );
+    await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(credential).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
   });
 
