@@ -103,7 +103,21 @@ describe('checkout money serialization', () => {
           receiptNumber: 1,
           settledAt: new Date('2026-09-01T01:00:00.000Z'),
           branch: { name: 'Branch', timezone: 'UTC' },
-          order: { orderNumber: 'ORDER-1', channel: 'DELIVERY' },
+          order: {
+            orderNumber: 'ORDER-1',
+            channel: 'DELIVERY',
+            customer: {
+              loyaltyAccount: {
+                id: 'loyalty-1',
+                active: true,
+                walletPasses: [
+                  { platform: 'APPLE' },
+                  { platform: 'APPLE' },
+                  { platform: 'GOOGLE' },
+                ],
+              },
+            },
+          },
           lines: [
             {
               id: 'line-1',
@@ -127,10 +141,14 @@ describe('checkout money serialization', () => {
           ],
         }),
       },
+      loyaltyPointsEntry: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { points: 640 } }),
+      },
     } as unknown as ScopedDb;
     const receipt = await buildReceiptForBranch(receiptDb, 'bill-1', 'branch-1');
 
     expect(receipt).toMatchObject({
+      loyaltyWallet: { balance: 640, platforms: ['APPLE', 'GOOGLE'] },
       lines: [
         {
           unitPrice: expected,
