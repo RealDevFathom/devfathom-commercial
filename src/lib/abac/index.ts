@@ -26,6 +26,12 @@ export type CanOptions = {
   db?: AuthzDb;
 };
 
+const EXACT_GRANT_ACTIONS = new Set<string>([
+  'pharmacy:dispense',
+  'pharmacy:safety',
+  'pharmacy:catalogue-review',
+]);
+
 async function customDecision(
   db: AuthzDb,
   userId: string,
@@ -45,15 +51,16 @@ async function customDecision(
     },
   });
   if (!user) return false;
-  const overrides = user.permissionOverrides.filter((rule) =>
-    capabilityMatches(rule.capability, action)
-  );
+  const matches = (rule: { capability: string; effect: string }) =>
+    capabilityMatches(rule.capability, action) &&
+    (rule.effect === 'DENY' || !EXACT_GRANT_ACTIONS.has(action) || rule.capability === action);
+  const overrides = user.permissionOverrides.filter((rule) => matches(rule));
   if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
-    capabilityMatches(rule.capability, action)
+    matches(rule)
   );
   if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
+  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
   return null;
 }

@@ -125,6 +125,39 @@ describe('custom ABAC decisions', () => {
     ).resolves.toBe(false);
   });
 
+  it('gives a role deny precedence over a user allow', async () => {
+    const db = authorizationDb({
+      overrides: [{ capability: 'finance:read', effect: 'ALLOW' }],
+      rolePermissions: [{ capability: 'finance:*', effect: 'DENY' }],
+    });
+
+    await expect(can(employee, 'finance:read', undefined, { db })).resolves.toBe(false);
+  });
+
+  it.each(['pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review'] as const)(
+    'requires an exact allow for %s while retaining wildcard deny precedence',
+    async (action) => {
+      await expect(
+        can(employee, action, undefined, {
+          db: authorizationDb({ rolePermissions: [{ capability: 'pharmacy:*', effect: 'ALLOW' }] }),
+        })
+      ).resolves.toBe(false);
+      await expect(
+        can(employee, action, undefined, {
+          db: authorizationDb({ rolePermissions: [{ capability: action, effect: 'ALLOW' }] }),
+        })
+      ).resolves.toBe(true);
+      await expect(
+        can(employee, action, undefined, {
+          db: authorizationDb({
+            overrides: [{ capability: action, effect: 'ALLOW' }],
+            rolePermissions: [{ capability: 'pharmacy:*', effect: 'DENY' }],
+          }),
+        })
+      ).resolves.toBe(false);
+    }
+  );
+
   it('falls back to built-in policy only when no custom rule matches', async () => {
     const db = authorizationDb({});
 

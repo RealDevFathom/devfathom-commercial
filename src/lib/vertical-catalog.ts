@@ -754,7 +754,16 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+    capabilities: [
+      'pharmacy:*',
+      // Clinical/regulatory actions require exact grants; the namespace wildcard
+      // deliberately does not imply them in the central ABAC decision.
+      'pharmacy:dispense',
+      'pharmacy:safety',
+      'pharmacy:catalogue-review',
+      'reports:operational',
+      'reports:financial',
+    ],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN
