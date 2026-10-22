@@ -16,6 +16,11 @@ describe('Agency E2E owned fixture restoration', () => {
     expect(runner.match(/seed-agency-e2e\.ts/g)).toHaveLength(2);
   });
 
+  test('enables Notes for the agency MVP note flow', () => {
+    expect(seed).toContain("['notes', 'Notes', 'Knowledge', '/notes']");
+    expect(seed).toContain("enabled: key !== 'api' && key !== 'webhooks'");
+  });
+
   test('runs the database safety checks from a caught async entry point', () => {
     expect(seed).toContain('async function main()');
     expect(seed).toMatch(/main\(\)\.catch\(\(error: unknown\) => \{/);
