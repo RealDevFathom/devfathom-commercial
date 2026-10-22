@@ -29,6 +29,11 @@ Use one status on every capability claim:
 | Release owners | [Living status ledger](status-ledger.md) | Evidence, blockers, owners, and next gates |
 | Documentation owners | [Documentation QA](qa.md) | Link, stale-reference, and consistency checks |
 
+## Restaurant
+
+- [Restaurant guide](product/restaurant-guide.md) — plain-language guide for owners, managers and cashiers (draft)
+- [Restaurant glossary](product/restaurant-glossary.md) — restaurant words in plain language (draft)
+
 ## Module PRDs
 
 - [Kitchen Display System (KDS)](product/modules/kds.md) — station queue, ticket lifecycle, actions, permissions, and acceptance criteria
