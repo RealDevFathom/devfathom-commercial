@@ -1,13 +1,16 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ generate: vi.fn(), model: vi.fn() }));
 vi.mock('ai', () => ({ generateText: mocks.generate }));
 vi.mock('@/lib/ai/provider', () => ({ createAIModel: mocks.model }));
 import { draftMarketingCopy } from './marketing-assistance';
 beforeEach(() => {
+  // This suite covers the unchanged legacy path; router behavior has its own tests.
+  vi.stubEnv('AI_PROVIDER', 'azure');
   vi.clearAllMocks();
   mocks.model.mockReturnValue({ model: 'test-model' });
   mocks.generate.mockResolvedValue({ text: 'Welcome to our store. Reply STOP to opt out.' });
 });
+afterEach(() => vi.unstubAllEnvs());
 it('sends only allowlisted generic choices and leaves output unapproved', async () => {
   expect(await draftMarketingCopy({ occasion: 'WELCOME', tone: 'FRIENDLY' })).toMatchObject({
     available: true,

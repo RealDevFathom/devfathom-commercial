@@ -42,8 +42,11 @@ export function readAIAvailability(env: Env = process.env): AIAvailability {
 }
 
 export class AIUnavailableError extends Error {
-  constructor(readonly reason: 'DISABLED' | 'INVALID_PROVIDER' | 'NOT_CONFIGURED') {
-    super('AI is currently unavailable.');
+  constructor(
+    readonly reason: 'DISABLED' | 'INVALID_PROVIDER' | 'NOT_CONFIGURED',
+    message = 'AI is currently unavailable.'
+  ) {
+    super(message);
     this.name = 'AIUnavailableError';
   }
 }
