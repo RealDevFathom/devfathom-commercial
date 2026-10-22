@@ -33,6 +33,11 @@ export class PharmacyRxReferenceError extends Error {
 
 export type PrescriptionReference = { prescriptionLineId: string; patientId: string };
 
+/** The idempotency key of the fill an accepted reference records for one sale line. */
+export function prescriptionReferenceFillKey(saleLineId: string): string {
+  return `rx-reference:${saleLineId}`;
+}
+
 /**
  * #518: a prescription reference must resolve to a real prescription line of this organization,
  * for this patient (and the sale's linked customer, if it has one), for this medicine and
@@ -113,7 +118,7 @@ export async function recordPrescriptionReference(
       fillSequence: input.fillSequence,
       quantityCanonicalUnits: input.units,
       dispensedByUserId: scope.actorId,
-      idempotencyKey: `rx-reference:${input.saleLineId}`,
+      idempotencyKey: prescriptionReferenceFillKey(input.saleLineId),
     },
   });
 }

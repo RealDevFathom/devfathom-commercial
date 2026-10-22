@@ -30,6 +30,8 @@ import {
 import { counterReceiptTotals, type CounterReceipt } from './counter-receipt';
 import { normalizeMedicineText } from './medicine';
 import { readReceiptIdentity } from './receipt-identity';
+import { approvedRxLineIds } from './rx-line-approval';
+import { needsRxSaleGrant } from './rx-sale-gate';
 import type { LedgerScope } from './stock-ledger';
 
 export class PharmacyCounterError extends Error {
@@ -507,6 +509,12 @@ export type CounterCartLine = {
   coldChain: boolean;
   /** An emergency controlled supply was recorded for this line (open follow-up). */
   emergencySupply: boolean;
+  /**
+   * #341: a pharmacist approved this prescription-only/restricted, non-controlled line, or
+   * dispensed it against a validated prescription. It clears the POS-09 prescription block only.
+   * Always set by readCounterCart; optional so older cart fixtures stay valid.
+   */
+  rxApproved?: boolean;
   /** What FEFO actually took, batch by batch (POS-03: cart shows allocation). */
   allocations: Array<{
     inventoryLotId: string;
@@ -580,6 +588,11 @@ export async function readCounterCart(
       })
     : [];
   const emergencyLineIds = new Set(emergencyFollowUps.map((row) => row.saleLineId));
+  const approvedRxLines = await approvedRxLineIds(
+    db,
+    scope.organizationId,
+    sale.lines.filter((line) => needsRxSaleGrant(line.medicine)).map((line) => line.id)
+  );
 
   const lines: CounterCartLine[] = sale.lines.map((line) => {
     // The earliest expiry among this line's own allocations is what FEFO would
@@ -611,6 +624,7 @@ export async function readCounterCart(
       lasa: line.medicine.lasa,
       coldChain: line.medicine.coldChain,
       emergencySupply: emergencyLineIds.has(line.id),
+      rxApproved: approvedRxLines.has(line.id),
       allocations: line.allocations.map((allocation) => ({
         inventoryLotId: allocation.inventoryLotId,
         batchNumber: allocation.lot.batch.batchNumber,
