@@ -23,7 +23,8 @@ import {
   resolveRxOcrAdapter,
   RxOcrError,
 } from '@/lib/pharmacy/rx-ocr';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { dispenseRxSaleLine } from '@/lib/pharmacy/rx-sale-gate';
+import { txDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   auditedProtectedProcedure,
   capabilityProcedure,
@@ -389,20 +390,23 @@ export const pharmacyPrescriptionsRouter = router({
       return patient;
     }),
 
-  fill: protectedProcedure
+  fill: capabilityProcedure('pharmacy:dispense')
     .input(
       z
         .object({
-          id: z.string().min(1),
+          branchId: z.string().min(1),
+          saleLineId: z.string().min(1),
           prescriptionLineId: z.string().min(1),
-          fillSequence: z.number().int().positive(),
-          quantityCanonicalUnits: z.number().int().positive(),
           idempotencyKey: z.string().trim().min(1).max(200),
         })
         .strict()
     )
     .mutation(({ ctx, input }) =>
-      ctx.db.prescriptionFill.create({ data: { ...input, dispensedByUserId: ctx.session.user.id } })
+      ctx.db.$transaction((tx) => dispenseRxSaleLine(txDb(tx), {
+        ...input,
+        organizationId: ctx.entitlements.organizationId,
+        actorId: ctx.session!.user.id,
+      }))
     ),
 
   captureRefillReminder: capabilityProcedure('pharmacy:dispense')
