@@ -211,6 +211,20 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it('rejects status-only completion before opening a transaction', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+
+    await expect(
+      f.caller().transition({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        action: 'complete' as never,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
   it.each(paths)('$name allows an assigned dispenser on their own branch', async (path) => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
