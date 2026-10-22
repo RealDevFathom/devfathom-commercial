@@ -79,6 +79,10 @@ export const invitationsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const invitation = await loadPendingInvitation(ctx.db, input.token);
+      // Keep the token identity captured by the initial lookup. A resend updates
+      // this row in place, so its id alone does not prove that this request still
+      // owns the current invitation after the deliberately slow password hash.
+      const tokenHash = hashInviteToken(input.token);
       const hashed = await hash(input.password, 12);
 
       // Hash BEFORE opening the transaction.
@@ -107,7 +111,12 @@ export const invitationsRouter = router({
         // Between the two statements the invitation can lapse, and expiry that is
         // only enforced on the read is enforced nowhere that the write can see.
         const claimed = await tx.invitation.updateMany({
-          where: { id: invitation.id, acceptedAt: null, expiresAt: { gt: now } },
+          where: {
+            id: invitation.id,
+            tokenHash,
+            acceptedAt: null,
+            expiresAt: { gt: now },
+          },
           data: { acceptedAt: now },
         });
         if (claimed.count !== 1) throw invalidInvitation();
