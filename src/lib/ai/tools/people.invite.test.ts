@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   invitationUpsert: vi.fn(),
   departmentFindFirst: vi.fn(),
+  executeRaw: vi.fn(),
+  resolveEntitlements: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -21,6 +23,14 @@ vi.mock('@/lib/email', () => ({
 }));
 vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/entitlements', () => ({
+  resolveOrganizationEntitlements: mocks.resolveEntitlements,
+  assertSeatAvailable: vi.fn((entitlements: { activeSeats: number; seatLimit: number }) => {
+    if (entitlements.activeSeats >= entitlements.seatLimit) {
+      throw new Error(`Seat limit reached (${entitlements.activeSeats}/${entitlements.seatLimit}).`);
+    }
+  }),
+}));
 
 import { buildPeopleTools } from './people';
 import type { AssistantHelpers } from '@/lib/ai/context';
@@ -35,6 +45,7 @@ const db = {
     run({
       user: { create: mocks.create, update: mocks.update },
       invitation: { upsert: mocks.invitationUpsert },
+      $executeRaw: mocks.executeRaw,
     }),
 };
 
@@ -44,7 +55,7 @@ function inviteTool() {
     isAdmin: true,
     isHr: false,
     isAdminOrHr: true,
-    ctx: { userId: 'user_admin', name: 'Admin' },
+    ctx: { organizationId: 'org_1', userId: 'user_admin', name: 'Admin' },
     can: vi.fn(async () => true),
     audit: vi.fn(),
   } as unknown as AssistantHelpers;
@@ -67,6 +78,7 @@ describe('assistant inviteMember duplicate guard', () => {
     mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
     mocks.invitationUpsert.mockResolvedValue({});
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_1' });
+    mocks.resolveEntitlements.mockResolvedValue({ activeSeats: 1, seatLimit: 10 });
   });
 
   it.each([['ALEX@COMPANY.COM'], ['Alex@Company.com'], ['  alex@company.com  ']])(
@@ -124,13 +136,11 @@ describe('assistant inviteMember duplicate guard', () => {
       isAdmin: true,
       isHr: false,
       isAdminOrHr: true,
-      ctx: { userId: 'user_admin', name: 'Admin' },
-      can: vi.fn(async () => true),
+      ctx: { organizationId: 'org_1', userId: 'user_admin', name: 'Admin' },
+      can: vi.fn(async () => false),
       audit: vi.fn(),
     } as unknown as AssistantHelpers;
     const tools = buildPeopleTools(helpers);
-    helpers.isAdmin = false;
-
     const result = await (
       tools.inviteMember as unknown as {
         execute: (input: Record<string, unknown>) => Promise<{ error?: string }>;
@@ -140,6 +150,30 @@ describe('assistant inviteMember duplicate guard', () => {
     expect(result.error).toBe('Only admins can invite members.');
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
+  it('refuses a new invite at the live seat ceiling before creating a user', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.resolveEntitlements.mockResolvedValue({ activeSeats: 10, seatLimit: 10 });
+
+    const result = await inviteTool().execute({ ...base, email: 'new.person@company.com' });
+
+    expect(result.error).toBe('Seat limit reached (10/10).');
+    expect(mocks.executeRaw).toHaveBeenCalledOnce();
+    expect(mocks.resolveEntitlements).toHaveBeenCalledWith('org_1', expect.anything());
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
+  it('does not consume a second seat when refreshing a pending invite', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_invited', status: 'INVITED' });
+    mocks.update.mockResolvedValue({ id: 'user_invited', name: 'Alex Carter' });
+
+    await inviteTool().execute({ ...base, email: 'alex@company.com' });
+
+    expect(mocks.executeRaw).not.toHaveBeenCalled();
+    expect(mocks.resolveEntitlements).not.toHaveBeenCalled();
+    expect(mocks.update).toHaveBeenCalled();
   });
 
   it('accepts a non-agency department key the workspace does configure', async () => {

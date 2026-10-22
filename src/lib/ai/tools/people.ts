@@ -19,6 +19,7 @@ import { appUrl, templates, sendEmail } from '@/lib/email';
 import { normalizeEmail } from '@/lib/email-address';
 import { generateInviteToken } from '@/lib/invite-token';
 import { passwordMeetsPolicy } from '@/lib/password-policy';
+import { assertSeatAvailable, resolveOrganizationEntitlements } from '@/lib/entitlements';
 
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin"; the acronym role stays as-is.
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
@@ -756,7 +757,10 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
       }),
       needsApproval: true,
       execute: async ({ name, email, role, department, title, phone, bio, skills }) => {
-        if (!h.isAdmin) return { error: 'Only admins can invite members.' };
+        // Authorize again at execution time through the central ABAC decision
+        // point. In particular, an explicit user/role DENY must override the
+        // ADMIN role that made this tool available for approval.
+        if (!(await h.can('admin:access'))) return { error: 'Only admins can invite members.' };
         // D10: normalize BEFORE validating, so a padded or upper-cased address
         // the model echoed back from a chat message is accepted and stored in the
         // one canonical form used by the guard, the create, and the invitation.
@@ -796,28 +800,47 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           skills: skills ?? [],
         };
 
-        const user = await h.db.$transaction(async (tx) => {
-          const u = existing
-            ? await tx.user.update({
-                where: { id: existing.id },
-                data: { ...profile, password: null, status: 'INVITED' },
-              })
-            : await tx.user.create({
-                data: { ...profile, email: lowerEmail, password: null, status: 'INVITED' },
-              });
-          await tx.invitation.upsert({
-            where: { userId: u.id },
-            create: {
-              userId: u.id,
-              email: lowerEmail,
-              tokenHash,
-              invitedById: ctx.userId,
-              expiresAt,
-            },
-            update: { tokenHash, expiresAt, acceptedAt: null, invitedById: ctx.userId },
+        let user: { id: string; name: string };
+        try {
+          user = await h.db.$transaction(async (tx) => {
+            if (!existing) {
+              // Serialize every assistant invite for this tenant, then resolve
+              // the live entitlement/count snapshot while holding the lock.
+              // Re-invites do not consume another seat and deliberately skip it.
+              await tx.$executeRaw(
+                Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`team-seats:${ctx.organizationId}`}, 0))`
+              );
+              const entitlements = await resolveOrganizationEntitlements(ctx.organizationId, tx);
+              assertSeatAvailable(entitlements);
+            }
+
+            const u = existing
+              ? await tx.user.update({
+                  where: { id: existing.id },
+                  data: { ...profile, password: null, status: 'INVITED' },
+                })
+              : await tx.user.create({
+                  data: { ...profile, email: lowerEmail, password: null, status: 'INVITED' },
+                });
+            await tx.invitation.upsert({
+              where: { userId: u.id },
+              create: {
+                userId: u.id,
+                email: lowerEmail,
+                tokenHash,
+                invitedById: ctx.userId,
+                expiresAt,
+              },
+              update: { tokenHash, expiresAt, acceptedAt: null, invitedById: ctx.userId },
+            });
+            return u;
           });
-          return u;
-        });
+        } catch (error) {
+          if (error instanceof Error && error.message.startsWith('Seat limit reached')) {
+            return { error: error.message };
+          }
+          throw error;
+        }
 
         const inviteUrl = `${appUrl()}/invite/${token}`;
         let emailed = true;
