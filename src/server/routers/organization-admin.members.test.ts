@@ -289,6 +289,34 @@ describe('organization member last-admin guard', () => {
     expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
 
+  it('uses the member state read after the organization lock', async () => {
+    mocks.userFindFirst.mockResolvedValue({
+      id: 'admin_b',
+      email: 'admin@example.test',
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+    });
+    mocks.queryRaw.mockImplementation(async () => {
+      mocks.userFindFirst.mockResolvedValue({
+        id: 'admin_b',
+        email: 'admin@example.test',
+        role: 'ADMIN',
+        status: 'ACTIVE',
+      });
+      return [{ id: 'org_a' }];
+    });
+
+    await expect(caller().updateMember(updateInput)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Cannot demote or deactivate the last active admin.',
+    });
+
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.userFindFirst.mock.invocationCallOrder[0]!
+    );
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+
   it('serializes concurrent two-admin demotions so one active admin remains', async () => {
     let activeAdmins = 2;
     let transactionTail = Promise.resolve();

@@ -481,17 +481,11 @@ export const organizationAdminRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
-      const before = await ctx.db.user.findFirst({
-        where: { id: input.id, organizationId: id },
-        select: { id: true, status: true, role: true, email: true },
-      });
-      if (!before) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
       const department = await ctx.db.organizationDepartment.findFirst({
         where: { organizationId: id, key: input.department, active: true },
         select: { id: true },
       });
       if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
-      const activating = !occupiesSeat(before.status) && occupiesSeat(input.status);
       if (input.organizationRoleId) {
         const role = await ctx.db.organizationRole.findFirst({
           where: { id: input.organizationRoleId, organizationId: id },
@@ -499,20 +493,25 @@ export const organizationAdminRouter = router({
         });
         if (!role) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid custom role.' });
       }
-      if (before.id === ctx.session.user.id && input.status === 'INACTIVE') {
+      if (input.id === ctx.session.user.id && input.status === 'INACTIVE') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot deactivate yourself.' });
       }
-      const saved = await ctx.db.$transaction(async (tx) => {
+      const { before, saved } = await ctx.db.$transaction(async (tx) => {
+        // Lock before reading the member so admin promotions and removals cannot
+        // make this decision from a stale pre-transaction snapshot.
+        await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${id} FOR UPDATE`;
+        const before = await tx.user.findFirst({
+          where: { id: input.id, organizationId: id },
+          select: { id: true, status: true, role: true, email: true },
+        });
+        if (!before) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
+
         const removesActiveAdmin =
           before.role === 'ADMIN' &&
           before.status === 'ACTIVE' &&
           (input.role !== 'ADMIN' || input.status !== 'ACTIVE');
 
-        // Serialize every transition that can remove an active admin. Reading the
-        // count before taking this lock would let two concurrent demotions both
-        // observe the other admin and leave the organization with none.
         if (removesActiveAdmin) {
-          await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${id} FOR UPDATE`;
           const activeAdmins = await tx.user.count({
             where: { organizationId: id, role: 'ADMIN', status: 'ACTIVE' },
           });
@@ -522,10 +521,10 @@ export const organizationAdminRouter = router({
               message: 'Cannot demote or deactivate the last active admin.',
             });
           }
-        } else if (activating) {
+        } else if (!occupiesSeat(before.status) && occupiesSeat(input.status)) {
           await lockOrganizationSeat(tx, id, ctx.entitlements.seatLimit);
         }
-        return tx.user.update({
+        const saved = await tx.user.update({
           where: { id: input.id },
           data: {
             role: input.role,
@@ -539,6 +538,7 @@ export const organizationAdminRouter = router({
                 : undefined,
           },
         });
+        return { before, saved };
       });
       annotateAudit(ctx, {
         targetType: 'User',
