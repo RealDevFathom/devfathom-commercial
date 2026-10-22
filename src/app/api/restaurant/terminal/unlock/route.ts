@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { readJson } from '@/lib/api-json';
 import { rateLimit } from '@/lib/rate-limit';
+import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
 import { recordTerminalOperatorAudit } from '@/lib/restaurant/terminal-audit';
 import { describeShiftDenial } from '@/lib/restaurant/shifts';
 import { authenticateOperator, withTerminalAuth } from '@/lib/restaurant/terminal-auth';
@@ -80,6 +81,25 @@ export const POST = withTerminalAuth(async (ctx, request) => {
       );
     }
     return NextResponse.json({ error: 'Invalid operator credential.' }, { status: 401 });
+  }
+
+  // Authenticate before authorization so the capability result cannot be used
+  // to discover which operators may access a kitchen display without first
+  // proving possession of that operator's credential.
+  if (
+    ctx.device.kind === 'KDS' &&
+    !(await operatorHasCapability(
+      ctx.db,
+      staffProfileId,
+      'kitchen:operate',
+      now,
+      ctx.device.branchId
+    ))
+  ) {
+    return NextResponse.json(
+      { error: 'This operator lacks the "kitchen:operate" capability.' },
+      { status: 403 }
+    );
   }
 
   const session = await bindOperator(ctx.db, ctx.session.id, staffProfileId, now);
