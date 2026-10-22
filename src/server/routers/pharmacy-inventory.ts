@@ -21,6 +21,7 @@ import {
   reverseRecallQuarantine,
   type DrapNotice,
 } from '@/lib/pharmacy/drap-monitoring';
+import { postWriteOffEntry } from '@/lib/pharmacy/finance-postings';
 import {
   acknowledgeRecall,
   allocateTransfer,
@@ -1032,9 +1033,16 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          writeOff(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = await scopeFor(ctx, input.branchId);
+          const written = await writeOff(db, scope, input);
+          const journalEntry = await postWriteOffEntry(db, scope, {
+            stockMovementId: written.movement.id,
+            at: new Date(),
+          });
+          return { ...written, journalEntry };
+        });
       } catch (error) {
         domainError(error);
       }

@@ -13,7 +13,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
-  return { hasModule };
+  const postWriteOffEntry = vi.fn();
+  return { hasModule, postWriteOffEntry };
 });
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -26,6 +27,9 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
+}));
+vi.mock('@/lib/pharmacy/finance-postings', () => ({
+  postWriteOffEntry: mocks.postWriteOffEntry,
 }));
 
 import { moduleForProcedure } from '@/lib/module-catalog';
@@ -53,6 +57,7 @@ function makeDb() {
     pharmacyInventoryLot: model(),
     pharmacyStockMovement: model(),
     pharmacyStockBalance: model(),
+    pharmacyCustodyRecord: model(),
     pharmacyAllocationOverride: model(),
     pharmacyStockDiscrepancy: model(),
     pharmacySafetyStock: Object.assign(model(), {
@@ -110,6 +115,7 @@ function caller(overrides: { enabledModules?: string[]; userId?: string | null }
 beforeEach(() => {
   db = makeDb();
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
+  mocks.postWriteOffEntry.mockReset();
 });
 
 describe('pharmacy inventory entitlement and tenant boundaries', () => {
@@ -229,6 +235,31 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       })
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(db.pharmacyStockLocation.create).not.toHaveBeenCalled();
+  });
+
+  it('posts the write-off journal in the same transaction as the stock movement', async () => {
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({ id: 'lot_1', unitsPerPack: 10 });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({ onHandUnits: 20, looseUnits: 10 });
+    mocks.postWriteOffEntry.mockResolvedValue({ id: 'journal_1' });
+
+    const result = await caller().writeOff({
+      branchId: 'branch_a',
+      inventoryLotId: 'lot_1',
+      stockLocationId: 'location_1',
+      units: 5,
+      witnessId: 'user_b',
+      reason: 'Expired stock destroyed',
+      evidenceRef: 'DEST-617',
+      idempotencyKey: 'writeoff-617',
+    });
+
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(mocks.postWriteOffEntry).toHaveBeenCalledWith(
+      db,
+      { organizationId: 'org_a', branchId: 'branch_a', actorId: 'user_a' },
+      { stockMovementId: 'new', at: expect.any(Date) }
+    );
+    expect(result.journalEntry).toEqual({ id: 'journal_1' });
   });
 });
 
