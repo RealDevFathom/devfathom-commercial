@@ -40,6 +40,8 @@ import {
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { buildOwnerInsights } from '@/lib/pharmacy/owner-insights';
+import { Prisma } from '@/generated/prisma/client';
 
 const reports = capabilityProcedure('reports:operational');
 const widget = z
@@ -162,6 +164,58 @@ async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
 }
 
 export const pharmacyReportsRouter = router({
+  ownerInsights: reports.query(async ({ ctx }) => {
+    const organizationId = ctx.entitlements.organizationId;
+    const allowed = await can(subjectFromSession(ctx.session!.user), 'owner:insights', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    });
+    if (!allowed) throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner insights are not available.' });
+    const available = await scope(ctx);
+    if (!available.branches.length)
+      return buildOwnerInsights({ organizationId, day: new Date().toISOString().slice(0, 10), aggregates: { dailyRevenueMinor: 0, grossMarginMinor: null, nearExpiryStockValueMinor: 0, churnRiskCount: 0 }, aiEnabled: false });
+    const day = new Date().toISOString().slice(0, 10);
+    const report = await readPharmacyOwnerCommandCentre(ctx.db, { from: day, to: day, branchIds: available.branches.map((branch) => branch.id) });
+    const churn = await ctx.db.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`
+      SELECT COUNT(*)::bigint AS count FROM (
+        SELECT "customerId" FROM "pharmacy_sales"
+        WHERE "organizationId" = ${organizationId} AND "customerId" IS NOT NULL AND status = 'COMPLETED'
+        GROUP BY "customerId"
+        HAVING MAX("completedAt") < NOW() - INTERVAL '30 days'
+      ) customers`);
+    const organizations = await ctx.db.$queryRaw<Array<{ enabled: boolean }>>(Prisma.sql`
+      SELECT "aiOwnerInsightsEnabled" AS enabled FROM "organizations"
+      WHERE id = ${organizationId} LIMIT 1`);
+    const providerSecretConfigured = Boolean(process.env.ANTHROPIC_API_KEY?.trim() || process.env.AWS_ACCESS_KEY_ID?.trim());
+    return buildOwnerInsights({
+      organizationId,
+      day,
+      aggregates: {
+        dailyRevenueMinor: report.metrics.salesMinor ?? 0,
+        grossMarginMinor: report.metrics.marginMinor,
+        nearExpiryStockValueMinor: report.metrics.expiryValueMinor30 ?? 0,
+        churnRiskCount: Number(churn[0]?.count ?? 0),
+      },
+      aiEnabled: Boolean(organizations[0]?.enabled && providerSecretConfigured),
+      auditGenerated: async (model) => {
+        await ctx.db.auditLog.create({
+          data: {
+            organizationId,
+            actorId: ctx.session!.user.id,
+            actorRole: ctx.session!.user.role,
+            source: 'TRPC',
+            category: 'AI',
+            operation: 'OTHER',
+            action: 'pharmacy.ownerInsights.generate',
+            description: 'Generated aggregate-only owner insight tips.',
+            changes: { old: null, new: { tipsGenerated: true } },
+            metadata: model,
+          },
+        });
+      },
+    });
+  }),
   marketing: reports
     .input(filters.pick({ branchId: true, from: true, to: true }))
     .query(async ({ ctx, input }) => {

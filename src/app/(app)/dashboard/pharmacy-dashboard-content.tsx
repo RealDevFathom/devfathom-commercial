@@ -189,6 +189,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
   const catalog = trpc.pharmacyReports.catalog.useQuery(undefined, { retry: false });
   const preferences = trpc.pharmacyReports.getPreferences.useQuery(undefined, { retry: false });
   const update = trpc.pharmacyReports.updatePreferences.useMutation();
+  const insights = trpc.pharmacyReports.ownerInsights.useQuery(undefined, { retry: false });
   const [branchId, setBranchId] = useState('');
   const [editing, setEditing] = useState(false);
   const fallback = useMemo(() => pharmacyDashboardDefault(role), [role]);
@@ -275,6 +276,31 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                 : 'Loading today’s figures…'}
         </p>
       </SectionCard>
+      {!insights.error ? (
+        <SectionCard eyebrow="Owner insights" title="DevFathom AI" titleLevel={2}>
+          {insights.isLoading || !insights.data ? (
+            <div role="status" aria-label="Loading DevFathom AI" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {[0, 1, 2, 3].map((item) => <Skeleton key={item} className="h-20" />)}
+            </div>
+          ) : (
+            <>
+              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+                <Stat label="Daily revenue" value={formatMetric('dailyRevenueMinor', insights.data.aggregates.dailyRevenueMinor)} />
+                <Stat label="Gross margin" value={formatMetric('grossMarginMinor', insights.data.aggregates.grossMarginMinor)} />
+                <Stat label="Near-expiry stock" value={formatMetric('nearExpiryStockValueMinor', insights.data.aggregates.nearExpiryStockValueMinor)} />
+                <Stat label="Churn risk" value={insights.data.aggregates.churnRiskCount} />
+              </div>
+              {insights.data.tips.length ? (
+                <ul className="mt-5 list-disc space-y-2 border-t border-border-subtle pt-5 pl-5 text-sm text-text-body">
+                  {insights.data.tips.map((tip) => <li key={tip}>{tip}</li>)}
+                </ul>
+              ) : (
+                <p className="mt-5 border-t border-border-subtle pt-5 text-sm text-text-muted">AI tips are off. Your read-only daily figures remain available.</p>
+              )}
+            </>
+          )}
+        </SectionCard>
+      ) : null}
       {editing ? (
         <SectionCard
           eyebrow="Edit mode"

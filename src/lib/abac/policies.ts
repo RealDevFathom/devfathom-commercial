@@ -66,6 +66,7 @@ export const ALL_ACTIONS = [
   'customers:manage', // restaurant customer mutations and full-profile export — org-role driven
   'loyalty:redeem', // restaurant M8: loyalty redemption — org-role driven
   'reports:financial', // restaurant M8: financial reports and exports — org-role driven
+  'owner:insights', // read-only, aggregate-only owner dashboard intelligence
   'workforce:rates', // restaurant M8: restricted labour-cost facts — org-role driven, default deny
   'restaurant:configure', // restaurant M8: loyalty configuration and consolidated access — org-role driven
   'menu:import', // R-lane WHA-194: OCR menu import — upload, review queue, confirmed catalog import
@@ -220,6 +221,7 @@ export const POLICIES: Record<Action, Policy[]> = {
   'customers:manage': [],
   'loyalty:redeem': [],
   'reports:financial': [],
+  'owner:insights': [],
   'workforce:rates': [],
   'restaurant:configure': [],
 
