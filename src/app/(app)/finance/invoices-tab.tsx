@@ -312,6 +312,8 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
   const [projectId, setProjectId] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [notes, setNotes] = useState('');
+  const [tax, setTax] = useState('');
+  const [discount, setDiscount] = useState('');
   const [items, setItems] = useState([{ description: '', quantity: 1, rate: 0 }]);
 
   const addItem = () => setItems([...items, { description: '', quantity: 1, rate: 0 }]);
@@ -323,16 +325,20 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
   };
 
   const subtotal = items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
-  const total = subtotal;
+  const taxAmount = parseFloat(tax) || 0;
+  const discountAmount = parseFloat(discount) || 0;
+  const total = subtotal - discountAmount + taxAmount;
+  const invalidDiscount = discountAmount > subtotal;
 
   const handleSubmit = () => {
-    if (!clientId || !dueDate || items.some((i) => !i.description)) return;
+    if (!clientId || !dueDate || invalidDiscount || items.some((i) => !i.description)) return;
     createInvoice.mutate({
       clientId,
       projectId: projectId || undefined,
       items: items.map((i) => ({ ...i, amount: i.quantity * i.rate })),
       subtotal,
-      tax: 0,
+      tax: taxAmount,
+      discount: discountAmount,
       total,
       dueDate: new Date(dueDate),
       notes: notes || undefined,
@@ -438,13 +444,45 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {/* Total */}
+        {/* Adjustments + total */}
         <div className="flex justify-end border-t border-border/60 pt-3">
-          <div className="text-right">
-            <p className="text-xs text-muted-foreground">Total</p>
-            <p className="font-display text-xl font-bold text-foreground">
-              ${total.toLocaleString()}
-            </p>
+          <div className="w-full max-w-xs space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-foreground">Discount</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={discount}
+                  onChange={(e) => setDiscount(e.target.value)}
+                  placeholder="0.00"
+                  aria-invalid={invalidDiscount}
+                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-right text-sm text-foreground focus:border-primary focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-foreground">Tax</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={tax}
+                  onChange={(e) => setTax(e.target.value)}
+                  placeholder="0.00"
+                  className="w-full rounded-xl border border-border bg-background px-3 py-2 text-right text-sm text-foreground focus:border-primary focus:outline-none"
+                />
+              </div>
+            </div>
+            {invalidDiscount && (
+              <p className="text-xs text-destructive">Discount cannot exceed the subtotal.</p>
+            )}
+            <div className="text-right">
+              <p className="text-xs text-muted-foreground">Total</p>
+              <p className="font-display text-xl font-bold text-foreground">
+                ${total.toLocaleString()}
+              </p>
+            </div>
           </div>
         </div>
 
@@ -468,7 +506,7 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!clientId || !dueDate || createInvoice.isPending}
+            disabled={!clientId || !dueDate || invalidDiscount || createInvoice.isPending}
             className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {createInvoice.isPending ? (

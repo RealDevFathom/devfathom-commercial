@@ -25,7 +25,7 @@ const MAX_MONEY = 9_999_999_999.99;
 
 type LineItem = { description: string; quantity: number; rate: number; amount: number };
 
-// getInvoices ships every scalar field (items/tax/notes/dueDate) plus relations and
+// getInvoices ships every scalar field (items/tax/discount/notes/dueDate) plus relations and
 // the computed amountPaid/balance. Money fields cross the wire as Decimal → coerced
 // with Number(), matching the other finance views.
 type ManageInvoice = {
@@ -35,6 +35,7 @@ type ManageInvoice = {
   currency: string;
   total: unknown;
   tax: unknown;
+  discount: unknown;
   dueDate: Date | string;
   notes: string | null;
   items: unknown;
@@ -212,6 +213,7 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
 
   const [items, setItems] = useState(initialItems);
   const [tax, setTax] = useState(String(Number(inv.tax) || 0));
+  const [discount, setDiscount] = useState(String(Number(inv.discount) || 0));
   const [dueDate, setDueDate] = useState(format(new Date(inv.dueDate), 'yyyy-MM-dd'));
   const [notes, setNotes] = useState(inv.notes ?? '');
 
@@ -222,14 +224,19 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
   const updateItem = (i: number, field: 'description' | 'quantity' | 'rate', value: string | number) =>
     setItems((cur) => cur.map((it, idx) => (idx === i ? { ...it, [field]: value } : it)));
 
-  // Live preview — recomputed exactly as the server will (qty × rate, + tax).
+  // Live preview — recomputed exactly as the server will (subtotal - discount + tax).
   const taxNum = parseFloat(tax) || 0;
+  const discountNum = parseFloat(discount) || 0;
   const subtotal = items.reduce((s, it) => s + it.quantity * it.rate, 0);
-  const total = subtotal + taxNum;
+  const total = subtotal - discountNum + taxNum;
 
-  const hasValidItems = items.length > 0 && items.every((it) => it.description.trim() && it.quantity > 0 && it.rate > 0);
+  const hasValidItems =
+    items.length > 0 &&
+    items.every((it) => it.description.trim() && it.quantity > 0 && it.rate > 0);
   const taxTooLarge = taxNum > MAX_MONEY;
-  const canSave = hasValidItems && !taxTooLarge && !!dueDate && !updateInvoice.isPending;
+  const invalidDiscount = discountNum > subtotal || discountNum > MAX_MONEY;
+  const canSave =
+    hasValidItems && !taxTooLarge && !invalidDiscount && !!dueDate && !updateInvoice.isPending;
 
   const submit = () => {
     if (!canSave) return;
@@ -241,6 +248,7 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
         rate: it.rate,
       })),
       tax: taxNum,
+      discount: discountNum,
       dueDate: new Date(dueDate),
       notes: notes.trim() || undefined,
     });
@@ -300,8 +308,26 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
         </button>
       </div>
 
-      {/* Tax + due date */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {/* Discount, tax + due date */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div>
+          <label className="mb-1 block text-xs font-medium text-foreground">
+            Discount ({inv.currency})
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            max={MAX_MONEY}
+            value={discount}
+            onChange={(e) => setDiscount(e.target.value)}
+            aria-invalid={invalidDiscount}
+            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-right text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+          />
+          {invalidDiscount && (
+            <p className="mt-1 text-xs text-destructive">Cannot exceed subtotal</p>
+          )}
+        </div>
         <div>
           <label className="mb-1 block text-xs font-medium text-foreground">
             Tax ({inv.currency})
@@ -350,6 +376,10 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
           <div className="flex justify-between text-muted-foreground">
             <span>Subtotal</span>
             <span className="tabular-nums">{moneyLabel(subtotal, inv.currency)}</span>
+          </div>
+          <div className="flex justify-between text-muted-foreground">
+            <span>Discount</span>
+            <span className="tabular-nums">-{moneyLabel(discountNum, inv.currency)}</span>
           </div>
           <div className="flex justify-between text-muted-foreground">
             <span>Tax</span>

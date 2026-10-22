@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { logActivity } from '@/server/activity';
 import { readJson } from '@/lib/api-json';
+import { calculateInvoiceTotals } from '@/lib/finance/invoice-totals';
 
 export const GET = withApiAuth('finance:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -50,6 +51,7 @@ const createInvoiceSchema = z.object({
   items: z.array(lineItemSchema).min(1),
   // subtotal/total are intentionally NOT accepted — they are derived server-side.
   tax: z.number().nonnegative().max(MAX_MONEY).default(0),
+  discount: z.number().nonnegative().max(MAX_MONEY).default(0),
   currency: z.enum(['USD', 'PKR']).default('USD'),
   dueDate: z.string().datetime(),
   notes: z.string().optional(),
@@ -74,9 +76,15 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
     rate: it.rate,
     amount: round2(it.quantity * it.rate),
   }));
-  const subtotal = round2(items.reduce((s, it) => s + it.amount, 0));
-  const tax = round2(parsed.data.tax);
-  const total = round2(subtotal + tax);
+  let amounts;
+  try {
+    amounts = calculateInvoiceTotals(items, parsed.data.tax, parsed.data.discount);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Invalid invoice totals' },
+      { status: 400 }
+    );
+  }
 
   // FIN-09: per-year sequence — scope the count to this year so it resets to -001.
   const year = new Date().getFullYear();
@@ -91,9 +99,7 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
       clientId: parsed.data.clientId,
       projectId: parsed.data.projectId || null,
       items,
-      subtotal,
-      tax,
-      total,
+      ...amounts,
       currency: parsed.data.currency,
       status: 'DRAFT',
       dueDate: new Date(parsed.data.dueDate),

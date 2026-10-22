@@ -453,7 +453,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
   tools.createInvoice = tool({
     description:
-      'Create a DRAFT invoice for a client. Give the client name, the line items as [{ description, quantity, unitPrice }] (totals are computed for you), an optional tax amount, currency and due date. Use for "invoice <client> for ...", "draft an invoice". ADMIN ONLY.',
+      'Create a DRAFT invoice for a client. Give the client name, line items, optional discount and tax amounts, currency and due date. Totals are computed for you. ADMIN ONLY.',
     inputSchema: z.object({
       clientName: z.string().describe('Client to bill (fuzzy name match)'),
       projectName: z.string().nullish().describe('Optional project to attach the invoice to'),
@@ -468,12 +468,13 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         .min(1)
         .describe('Line items; each amount = quantity × unitPrice'),
       tax: nonNegativeMoney().nullish().describe('Tax amount to add to the subtotal (default 0)'),
+      discount: nonNegativeMoney().nullish().describe('Discount amount to subtract (default 0)'),
       currency: z.enum(['USD', 'PKR']).nullish().describe('Default USD'),
       dueDate: z.string().describe('ISO date the invoice is due'),
       notes: z.string().nullish(),
     }),
     needsApproval: true,
-    execute: async ({ clientName, projectName, items, tax, currency, dueDate, notes }) => {
+    execute: async ({ clientName, projectName, items, tax, discount, currency, dueDate, notes }) => {
       if (!h.isAdmin) return { error: FINANCE_RESTRICTED };
 
       const rc = await resolveClient(clientName);
@@ -500,7 +501,9 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       }));
       const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
       const taxAmount = round2(tax ?? 0);
-      const total = round2(subtotal + taxAmount);
+      const discountAmount = round2(discount ?? 0);
+      if (discountAmount > subtotal) return { error: 'Discount cannot exceed the subtotal.' };
+      const total = round2(subtotal - discountAmount + taxAmount);
       const invCurrency = currency ?? 'USD';
 
       // Invoice number: INV-<year>-<sequence>. Mirrors the tRPC mutation.
@@ -518,6 +521,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
           projectId,
           items: lineItems,
           subtotal,
+          discount: discountAmount,
           tax: taxAmount,
           total,
           currency: invCurrency,
@@ -557,6 +561,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         client: invoice.client.name,
         project: resolvedProject ?? null,
         subtotal,
+        discount: discountAmount,
         tax: taxAmount,
         total,
         currency: invCurrency,
