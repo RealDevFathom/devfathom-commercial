@@ -8,6 +8,7 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
+import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
   appendControlledSaleEntries,
   earlierRegisterEntry,
@@ -53,6 +54,7 @@ import {
   redeemSalePoints,
 } from '@/lib/pharmacy/customer-loyalty';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
+import { PharmacySaleBatchError } from '@/lib/pharmacy/sale-batch-safety';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -100,7 +102,13 @@ import {
 } from '@/lib/pharmacy/settlement';
 
 import { assertInOrganization } from '../org-refs';
-import { adminProcedure, auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import {
+  adminProcedure,
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  protectedProcedure,
+  router,
+} from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
@@ -182,6 +190,9 @@ function fail(error: unknown): never {
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof FamilyKhataError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
+  // #633: the transaction rolled back, so the counter may treat this as a refused payment.
+  if (error instanceof PharmacySaleBatchError)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyInventoryError && error.reason === 'BLOCKED_STOCK') {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -283,16 +294,24 @@ const RECEIPT_READ_CAPABILITIES = [
 ] as const;
 
 function capabilityCovers(rule: string, action: string): boolean {
+  // Dispensing is regulated: only its canonical, exact ALLOW can grant it. The
+  // central matcher still lets wildcard DENYs revoke that exact grant.
+  if (action === 'pharmacy:dispense') return capabilityMatches(rule, action, 'ALLOW');
   if (rule === '*' || rule === action) return true;
   if (rule.endsWith(':*') || rule.endsWith('.*')) return action.startsWith(rule.slice(0, -1));
   return false;
 }
 
-function capabilityDecision(
-  rules: { capability: string; effect: string }[],
-  action: string
+function counterCapabilityDecision(
+  rules: { capability: string; effect: string }[]
 ): 'ALLOW' | 'DENY' | null {
-  const matched = rules.filter((rule) => capabilityCovers(rule.capability, action));
+  const matched = rules.filter((rule) =>
+    RECEIPT_READ_CAPABILITIES.some((action) =>
+      action === 'pharmacy:dispense' && rule.effect === 'DENY'
+        ? capabilityMatches(rule.capability, action, 'DENY')
+        : capabilityCovers(rule.capability, action)
+    )
+  );
   if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
   if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
   return null;
@@ -317,11 +336,25 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
   }
 }
 
-async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+async function requireCounterReceiptAccess(
+  ctx: TRPCContext,
+  branch: string,
+  requireCanonicalCounter = false
+): Promise<LedgerScope> {
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
   if (!user.organizationId || user.organizationId !== scope.organizationId) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+
+  if (
+    requireCanonicalCounter &&
+    !(await can(subjectFromSession(user), 'pharmacy:counter', undefined, { db: ctx.db }))
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
   }
 
   const member = await ctx.db.user.findUnique({
@@ -349,12 +382,11 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
 
   const overrides = member.permissionOverrides;
   const roleRules = member.organizationRole?.permissions ?? [];
-  const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
-    const override = capabilityDecision(overrides, action);
-    if (override === 'DENY') return false;
-    if (override === 'ALLOW') return true;
-    return capabilityDecision(roleRules, action) === 'ALLOW';
-  });
+  // Treat the names as one capability family. Otherwise an ALLOW on one alias
+  // can accidentally outrun an explicit DENY on another alias.
+  // Combine user overrides and role rules into ONE family decision so any
+  // explicit DENY (user or role, on any alias) beats any ALLOW.
+  const capable = counterCapabilityDecision([...overrides, ...roleRules]) === 'ALLOW';
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -585,7 +617,7 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  redeemPoints: protectedProcedure
+  redeemPoints: capabilityProcedure('pharmacy:dispense')
     .input(
       z
         .object({
@@ -717,7 +749,7 @@ export const pharmacySalesRouter = router({
             code: 'BAD_REQUEST',
             message: 'Khata fields require Khata tender.',
           });
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction((tx) =>
           applyPharmacyTender(txDb(tx), scope, ledgerTender(input))
         );

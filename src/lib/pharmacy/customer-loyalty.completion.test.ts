@@ -5,6 +5,8 @@ import { requestCounterEvidence } from './counter-evidence';
 
 vi.mock('./finance-postings', () => ({ postSaleLineEntry: vi.fn(), postTenderEntry: vi.fn() }));
 vi.mock('./counter-evidence', () => ({ requestCounterEvidence: vi.fn() }));
+// #633: the batch re-check has its own PostgreSQL suite (sale-batch-safety.db.test.ts).
+vi.mock('./sale-batch-safety', () => ({ assertSaleBatchesSellable: vi.fn(async () => new Map()) }));
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'actor-a' };
 const input = {

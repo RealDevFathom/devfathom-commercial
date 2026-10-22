@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
 import { postTenderEntry } from './finance-postings';
 import { requestCounterEvidence } from './counter-evidence';
@@ -150,6 +151,8 @@ export async function redeemSalePoints(
   });
   if (!sale) throw new PharmacyLoyaltyError('SALE_NOT_OPEN');
   if (!sale.customerId) throw new PharmacyLoyaltyError('SALE_NOT_LINKED');
+  // #633: a points tender is a tender: refuse it while any batch on the bill is unsafe.
+  await assertSaleBatchesSellable(db, scope, sale.id);
   await lockCustomerConsent(db, scope.organizationId, sale.customerId);
   const customer = await db.pharmacyCustomer.findFirst({
     where: { id: sale.customerId, organizationId: scope.organizationId, active: true },
