@@ -231,7 +231,7 @@ describe('prescription capture and private delivery', () => {
     mocks.can.mockResolvedValue(false);
     const ctx = context();
     const create = vi.fn();
-    (ctx.db as Record<string, unknown>).prescriptionFill = { create };
+    (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
     await expect(
       caller(ctx).fill({
         id: 'fill-a',

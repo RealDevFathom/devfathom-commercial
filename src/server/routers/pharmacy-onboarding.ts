@@ -300,6 +300,7 @@ export const pharmacyOnboardingRouter = router({
             orderBy: { version: 'desc' },
             select: {
               id: true,
+              branchId: true,
               version: true,
               effectiveFrom: true,
               effectiveTo: true,
