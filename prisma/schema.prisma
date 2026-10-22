@@ -1024,12 +1024,82 @@ model PharmacyLoyaltySettings {
   maxRedeemedPerPhonePerPeriod  Int                  @default(5)
   abusePeriodDays               Int                  @default(30)
   expiryOverrideGraceDays       Int                  @default(0)
+  winBackEnabled                 Boolean              @default(false)
+  winBackInactivityDays          Int                  @default(45)
+  winBackWindowDays              Int                  @default(30)
+  winBackMinimumSpendMinor       Int                  @default(0)
+  winBackMinNextBasketMinor      Int                  @default(0)
+  winBackDefaultMarginBasisPoints Int                 @default(1450)
+  winBackRedemptionBasisPoints   Int                  @default(2500)
+  winBackEnabledPreviewId        String?
+  winBackEnabledPreviewHash      String?
   createdAt                     DateTime              @default(now())
   updatedAt                     DateTime              @updatedAt
 
   @@unique([organizationId])
   @@unique([organizationId, id])
   @@map("pharmacy_loyalty_settings")
+}
+
+model PharmacyWinBackTier {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  minimumSpendMinor Int
+  maximumSpendMinor Int?
+  voucherValueMinor Int
+  position         Int
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, position])
+  @@map("pharmacy_win_back_tiers")
+}
+
+model PharmacyWinBackCategoryMargin {
+  id                String   @id @default(cuid())
+  organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  categoryId        String
+  marginBasisPoints Int      @default(1450)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, categoryId])
+  @@map("pharmacy_win_back_category_margins")
+}
+
+model PharmacyWinBackPreview {
+  id                       String   @id @default(cuid())
+  organizationId           String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  settingsHash             String
+  eligibleCustomerCount    Int
+  totalVoucherLiabilityMinor Int
+  expectedRedemptions      Int
+  expectedVoucherCostMinor Int
+  expectedMarginMinor      Int
+  netMarginImpactMinor     Int
+  redemptionBasisPoints    Int
+  generatedByActorId       String
+  generatedAt              DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@index([organizationId, generatedAt])
+  @@map("pharmacy_win_back_previews")
+}
+
+model PharmacyWinBackIssuance {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId       String
+  voucherId        String
+  campaignWindowStart DateTime
+  issuedAt         DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, customerId, campaignWindowStart])
+  @@unique([organizationId, voucherId])
+  @@map("pharmacy_win_back_issuances")
 }
 
 model PharmacyLoyaltySettingsAudit {
