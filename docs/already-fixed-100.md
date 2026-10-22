@@ -7,6 +7,9 @@ The root and all three delivered helper planners now use one canonical namespace
 lane-specific rename or adapter is needed. No production code, authorization rule, grant,
 regulatory fact, or migration was changed for this issue.
 
+This conclusion is based on source inspection only, as requested: the exported root producer and
+each exported planner are compared directly below without exercising a database or live service.
+
 ## File-and-line evidence
 
 1. The shared contract explicitly says that every lane consumes the canonical namespace unchanged
