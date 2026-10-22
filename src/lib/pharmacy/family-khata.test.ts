@@ -235,7 +235,6 @@ describe('counter Khata ledger gate', () => {
   function fixture() {
     return {
       $queryRaw: vi.fn().mockResolvedValue([]),
-      financeJournalEntry: { findFirstOrThrow: vi.fn().mockResolvedValue({}) },
       pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
       pharmacyFamilyAccount: {
         findMany: vi.fn().mockResolvedValue([
