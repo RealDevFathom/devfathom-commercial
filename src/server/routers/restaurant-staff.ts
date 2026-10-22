@@ -264,10 +264,22 @@ export const restaurantStaffRouter = router({
     const organizationId = workspaceOrganizationId(ctx);
     const eligibleProfileWhere = {
       organizationId,
-      OR: [
-        { primaryBranchId: { in: authorization.branchIds } },
-        { jobRoles: { some: { branchId: { in: authorization.branchIds } } } },
-        { directCapabilityGrants: { some: { branchId: { in: authorization.branchIds } } } },
+      AND: [
+        {
+          OR: [
+            { primaryBranchId: { in: authorization.branchIds } },
+            { jobRoles: { some: { branchId: { in: authorization.branchIds } } } },
+            { directCapabilityGrants: { some: { branchId: { in: authorization.branchIds } } } },
+          ],
+        },
+        {
+          OR: [
+            { primaryBranchId: null },
+            { primaryBranchId: { in: authorization.branchIds } },
+          ],
+        },
+        { jobRoles: { every: { branchId: { in: authorization.branchIds } } } },
+        { directCapabilityGrants: { every: { branchId: { in: authorization.branchIds } } } },
       ],
     };
     return ctx.db.user.findMany({

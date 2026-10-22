@@ -183,7 +183,7 @@ describe('staff CRUD', () => {
     );
   });
 
-  it('limits eligible users and returned profiles to a branch manager scope', async () => {
+  it('returns only users whose complete staff profile is within a branch manager scope', async () => {
     mocks.can.mockImplementation(async (_subject, capability) => capability === 'staff:manage');
     mocks.staffFindMany.mockResolvedValue([
       {
@@ -198,10 +198,19 @@ describe('staff CRUD', () => {
 
     const eligibleProfileWhere = {
       organizationId: 'org_workspace',
-      OR: [
-        { primaryBranchId: { in: ['branch_1'] } },
-        { jobRoles: { some: { branchId: { in: ['branch_1'] } } } },
-        { directCapabilityGrants: { some: { branchId: { in: ['branch_1'] } } } },
+      AND: [
+        {
+          OR: [
+            { primaryBranchId: { in: ['branch_1'] } },
+            { jobRoles: { some: { branchId: { in: ['branch_1'] } } } },
+            { directCapabilityGrants: { some: { branchId: { in: ['branch_1'] } } } },
+          ],
+        },
+        {
+          OR: [{ primaryBranchId: null }, { primaryBranchId: { in: ['branch_1'] } }],
+        },
+        { jobRoles: { every: { branchId: { in: ['branch_1'] } } } },
+        { directCapabilityGrants: { every: { branchId: { in: ['branch_1'] } } } },
       ],
     };
     expect(mocks.userFindMany).toHaveBeenCalledWith(
