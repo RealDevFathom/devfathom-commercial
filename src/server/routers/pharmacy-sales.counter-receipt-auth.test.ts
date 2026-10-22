@@ -421,6 +421,43 @@ describe('counter receipt authorization', () => {
     }
   });
 
+  it('lets a DENY on any counter capability alias override an ALLOW on another', async () => {
+    const denied = fixture([
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+      { capability: 'pharmacy.receipt', effect: 'DENY' },
+    ]);
+    assign(denied, ['branch-a']);
+
+    await expect(
+      denied.caller().tender({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        type: 'CASH',
+        amountMinor: 100,
+        idempotencyKey: 'alias-deny',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('does not treat wildcard, prefix, legacy, or receipt grants as dispense grants', async () => {
+    for (const capability of ['*', 'pharmacy:*', 'pharmacy.dispense', 'pharmacy:receipt']) {
+      const f = fixture([{ capability, effect: 'ALLOW' }]);
+      await expect(
+        f.caller().redeemPoints({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          points: 1,
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          idempotencyKey: `redeem-${capability}`,
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+  });
+
   it('denies an inactive database user and an inactive assignment', async () => {
     const inactive = fixture(dispense);
     inactive.db.user.findUnique.mockResolvedValue({

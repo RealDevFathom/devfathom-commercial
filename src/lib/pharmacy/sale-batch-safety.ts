@@ -7,7 +7,10 @@ import { blockReasonFor, type BatchState, type BlockReason } from './inventory';
 import type { LedgerScope } from './stock-ledger';
 
 export type SaleBatchErrorReason =
-  'SALE_BATCH_RECALLED' | 'SALE_BATCH_QUARANTINED' | 'SALE_BATCH_EXPIRED' | 'SALE_BATCH_BLOCKED';
+  | 'SALE_BATCH_RECALLED'
+  | 'SALE_BATCH_QUARANTINED'
+  | 'SALE_BATCH_EXPIRED'
+  | 'SALE_BATCH_BLOCKED';
 
 /** #633: a batch on the sale stopped being sellable after its line was added. */
 export class PharmacySaleBatchError extends Error {
@@ -77,8 +80,7 @@ function rank(reason: BlockReason): number {
 export async function assertSaleBatchesSellable(
   db: ScopedDb,
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
-  saleId: string,
-  at: Date = new Date()
+  saleId: string
 ): Promise<Map<string, CheckedSaleBatch>> {
   const allocations = await db.$queryRaw<AllocationRow[]>(Prisma.sql`
     SELECT allocation."saleLineId", allocation."inventoryLotId", allocation."stockLocationId",
@@ -104,6 +106,13 @@ export async function assertSaleBatchesSellable(
       AND lot.id IN (${Prisma.join(lotIds)})
     ORDER BY batch.id, lot.id
     FOR SHARE OF batch`);
+  // PostgreSQL's transaction timestamp is fixed at BEGIN, and a JavaScript time
+  // captured before the query can become stale while FOR SHARE waits. Read the
+  // wall clock only after every batch lock has been acquired.
+  const [{ at }] = await db.$queryRaw<Array<{ at: Date }>>(
+    Prisma.sql`SELECT clock_timestamp() AS at`
+  );
+  if (!at) throw new Error('DATABASE_CLOCK_UNAVAILABLE');
   const lotById = new Map(lots.map((lot) => [lot.inventoryLotId, lot]));
 
   let refusal: PharmacySaleBatchError | null = null;

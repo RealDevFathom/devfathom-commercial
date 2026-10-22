@@ -8,6 +8,7 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
+import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
   appendControlledSaleEntries,
   earlierRegisterEntry,
@@ -101,7 +102,13 @@ import {
 } from '@/lib/pharmacy/settlement';
 
 import { assertInOrganization } from '../org-refs';
-import { adminProcedure, auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import {
+  adminProcedure,
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  protectedProcedure,
+  router,
+} from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
@@ -287,16 +294,24 @@ const RECEIPT_READ_CAPABILITIES = [
 ] as const;
 
 function capabilityCovers(rule: string, action: string): boolean {
+  // Dispensing is regulated: only its canonical, exact ALLOW can grant it. The
+  // central matcher still lets wildcard DENYs revoke that exact grant.
+  if (action === 'pharmacy:dispense') return capabilityMatches(rule, action, 'ALLOW');
   if (rule === '*' || rule === action) return true;
   if (rule.endsWith(':*') || rule.endsWith('.*')) return action.startsWith(rule.slice(0, -1));
   return false;
 }
 
-function capabilityDecision(
-  rules: { capability: string; effect: string }[],
-  action: string
+function counterCapabilityDecision(
+  rules: { capability: string; effect: string }[]
 ): 'ALLOW' | 'DENY' | null {
-  const matched = rules.filter((rule) => capabilityCovers(rule.capability, action));
+  const matched = rules.filter((rule) =>
+    RECEIPT_READ_CAPABILITIES.some((action) =>
+      action === 'pharmacy:dispense' && rule.effect === 'DENY'
+        ? capabilityMatches(rule.capability, action, 'DENY')
+        : capabilityCovers(rule.capability, action)
+    )
+  );
   if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
   if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
   return null;
@@ -353,12 +368,12 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
 
   const overrides = member.permissionOverrides;
   const roleRules = member.organizationRole?.permissions ?? [];
-  const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
-    const override = capabilityDecision(overrides, action);
-    if (override === 'DENY') return false;
-    if (override === 'ALLOW') return true;
-    return capabilityDecision(roleRules, action) === 'ALLOW';
-  });
+  // Treat the names as one capability family. Otherwise an ALLOW on one alias
+  // can accidentally outrun an explicit DENY on another alias.
+  const override = counterCapabilityDecision(overrides);
+  const capable =
+    override !== 'DENY' &&
+    (override === 'ALLOW' || counterCapabilityDecision(roleRules) === 'ALLOW');
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -589,7 +604,7 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  redeemPoints: protectedProcedure
+  redeemPoints: capabilityProcedure('pharmacy:dispense')
     .input(
       z
         .object({

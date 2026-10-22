@@ -328,6 +328,50 @@ describeDatabase('#633 batch safety is rechecked at tender and completion', () =
     expect(await outcome).toBe('SALE_BATCH_RECALLED');
     expect((await moneyAndStock(f.saleId, f.lotId)).sale.status).toBe('OPEN');
   });
+
+  it('uses the database clock after a batch-lock wait and rolls back a partial tender', async () => {
+    const f = await cart('expires-while-waiting');
+    expect(f.totalMinor).toBeGreaterThan(1);
+    const before = await moneyAndStock(f.saleId, f.lotId);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let locked!: () => void;
+    const batchLocked = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+
+    // Set a near expiry and retain the row lock. The tender begins while the
+    // batch is still valid, but cannot acquire FOR SHARE until after expiry.
+    const blocker = tenant(async (db) => {
+      await db.$queryRaw`
+        UPDATE pharmacy_manufacturing_batches
+        SET "expiresAt" = clock_timestamp() + interval '500 milliseconds'
+        WHERE id = ${f.batchId}
+        RETURNING id`;
+      locked();
+      await gate;
+    });
+    await batchLocked;
+    const tender = tenant((db) =>
+      settlement.applyPharmacyTender(db, scope, tenderInput(f.saleId, 1))
+    );
+    const outcome = tender.then(
+      () => 'accepted',
+      (error: { reason?: string }) => error.reason ?? 'error'
+    );
+    try {
+      await waitForLockWaiter();
+      await new Promise((resolve) => setTimeout(resolve, 650));
+    } finally {
+      release();
+    }
+    await blocker;
+
+    expect(await outcome).toBe('SALE_BATCH_EXPIRED');
+    expect(await moneyAndStock(f.saleId, f.lotId)).toEqual(before);
+  });
 });
 
 /** Until some backend on this database waits on a row lock (the tender, behind the recall). */

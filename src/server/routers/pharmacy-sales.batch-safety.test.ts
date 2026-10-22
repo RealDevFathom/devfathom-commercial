@@ -29,15 +29,23 @@ import { pharmacySalesRouter } from './pharmacy-sales';
 const app = router({ pharmacySales: pharmacySalesRouter });
 const BRANCH = 'branch-1';
 
-function caller() {
+function caller(granted = true) {
   const db = {
-    $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
-      callback(db)
+    $transaction: vi.fn(
+      async (callback: (tx: unknown) => unknown): Promise<unknown> => callback(db)
     ),
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
+    },
+    user: {
+      findUnique: vi.fn(async () => ({
+        organizationRole: {
+          permissions: granted ? [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }] : [],
+        },
+        permissionOverrides: [],
+      })),
     },
   };
   return app.createCaller({
@@ -57,6 +65,20 @@ function caller() {
 beforeEach(() => loyalty.redeemSalePoints.mockReset());
 
 describe('#633 batch refusal at tender', () => {
+  it('forbids loyalty redemption when the session has no dispense grant', async () => {
+    await expect(
+      caller(false).redeemPoints({
+        branchId: BRANCH,
+        saleId: 'sale-1',
+        points: 200,
+        deviceId: 'device-1',
+        businessDate: new Date('2026-10-22T00:00:00.000Z'),
+        idempotencyKey: 'redeem-denied',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(loyalty.redeemSalePoints).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['SALE_BATCH_RECALLED', 'RECALLED'],
     ['SALE_BATCH_QUARANTINED', 'QUARANTINED'],
