@@ -16,7 +16,14 @@ export async function lockOrganizationSeat(
 ): Promise<void> {
   await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
   if (existingUserId) {
-    const current = await tx.user.findUnique({ where: { id: existingUserId }, select: { status: true } });
+    // Keep the exemption tenant-bound even when this helper is called from a
+    // platform-scoped transaction. An id from another organization must never
+    // make this organization look as though it is only reusing an occupied
+    // seat.
+    const current = await tx.user.findFirst({
+      where: { id: existingUserId, organizationId },
+      select: { status: true },
+    });
     if (current && occupiesSeat(current.status)) return;
   }
   seatLimit ??= (await resolveOrganizationEntitlements(organizationId, tx)).seatLimit;
