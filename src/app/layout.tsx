@@ -1,14 +1,13 @@
 import type { Metadata, Viewport } from 'next';
-import { IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google';
+import { Instrument_Sans, IBM_Plex_Mono } from 'next/font/google';
 import Script from 'next/script';
 import './globals.css';
 import { Providers } from '@/components/providers';
 
-// IBM Plex Sans — body & UI workhorse (legible long-form).
-const plexSans = IBM_Plex_Sans({
+// Instrument Sans gives the workspace its precise, editorial geometry.
+const instrumentSans = Instrument_Sans({
   variable: '--font-sans',
   subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
   display: 'swap',
 });
 
@@ -73,8 +72,8 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#F7F1E5' },
-    { media: '(prefers-color-scheme: dark)', color: '#18211B' },
+    { media: '(prefers-color-scheme: light)', color: '#E8E8E5' },
+    { media: '(prefers-color-scheme: dark)', color: '#181817' },
   ],
 };
 
@@ -87,7 +86,7 @@ export default function RootLayout({
     <html
       lang="en"
       data-theme="light"
-      className={`${plexSans.variable} ${plexMono.variable} h-full`}
+      className={`${instrumentSans.variable} ${plexMono.variable} h-full`}
       suppressHydrationWarning
     >
       <body className="min-h-full">

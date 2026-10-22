@@ -128,8 +128,8 @@ export function Sidebar({
       aria-label="Main navigation"
       data-collapsed={collapsed || undefined}
       className={cn(
-        'fieldbook-rail fixed left-0 top-0 z-40 flex h-dvh flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-out',
-        collapsed ? 'w-16' : 'w-72'
+        'studio-drawer fixed left-0 top-0 z-40 flex h-dvh flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-out',
+        collapsed ? 'w-16' : 'w-[min(20rem,88vw)]'
       )}
     >
       {/* Wordmark */}
@@ -139,14 +139,14 @@ export function Sidebar({
           collapsed ? 'justify-center' : 'gap-3'
         )}
       >
-        <FathomMark className="h-9 w-9 shrink-0" variant="white" />
+        <FathomMark className="h-9 w-9 shrink-0" variant="brand" />
         {!collapsed && (
           <div className="flex flex-col overflow-hidden animate-fade-in">
             <span className="font-display text-[15px] font-semibold tracking-[-0.025em] text-sidebar-accent-foreground">
               DevFathom
             </span>
             <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-sidebar-foreground/55">
-              Fieldbook / 01
+              Company workspace
             </span>
           </div>
         )}
@@ -176,7 +176,7 @@ export function Sidebar({
                     onClick={onNavigate}
                     aria-current={isActive ? 'page' : undefined}
                     className={cn(
-                      'group relative flex min-h-11 items-center gap-3 rounded-[3px] px-3 py-2.5 text-sm font-medium transition-colors duration-150',
+                      'group relative flex min-h-11 items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors duration-150',
                       collapsed && 'justify-center px-0',
                       isActive
                         ? 'text-sidebar-accent-foreground'
@@ -186,7 +186,7 @@ export function Sidebar({
                     {isActive && (
                       <m.span
                         layoutId="sidebar-active"
-                        className="absolute inset-0 rounded-[3px] bg-white/[0.1] shadow-sm"
+                        className="absolute inset-0 rounded-xl bg-sidebar-accent shadow-sm"
                         style={{ boxShadow: 'inset 3px 0 0 0 var(--sidebar-primary)' }}
                         transition={{ type: 'spring', stiffness: 420, damping: 34 }}
                       />
@@ -253,7 +253,7 @@ export function Sidebar({
         <button
           onClick={toggleCollapsed}
           className={cn(
-            'mx-3 mb-3 flex min-h-11 items-center rounded-[3px] p-2 font-mono text-[9px] uppercase tracking-[0.16em] text-sidebar-foreground/55 transition-colors hover:bg-white/[0.06] hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
+            'mx-3 mb-3 flex min-h-11 items-center rounded-xl p-2 font-mono text-[9px] uppercase tracking-[0.16em] text-sidebar-foreground/55 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
             collapsed ? 'justify-center' : 'justify-between px-3'
           )}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -269,9 +269,9 @@ export function Sidebar({
       >
         {session?.user && (
           <div className={cn('flex items-center gap-3', collapsed ? 'justify-center' : '')}>
-            <Avatar className="h-9 w-9 shrink-0 rounded-[3px]">
+            <Avatar className="h-9 w-9 shrink-0">
               <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
-              <AvatarFallback className="rounded-[3px] bg-sidebar-primary/20 text-xs font-medium text-sidebar-primary">
+              <AvatarFallback className="bg-sidebar-primary/20 text-xs font-medium text-sidebar-primary">
                 {getInitials(session.user.name)}
               </AvatarFallback>
             </Avatar>
@@ -298,10 +298,10 @@ export function TopNavigation() {
   const numbered = icons !== 'architectural';
 
   return (
-    <div className="hidden border-b border-border-subtle bg-background lg:block">
+    <div className="studio-navigation hidden border-b border-border-subtle bg-card lg:block">
       <nav
         aria-label="Primary navigation"
-        className="mx-auto flex h-12 w-full max-w-[1440px] items-stretch overflow-x-auto px-[clamp(1.25rem,5vw,4rem)]"
+        className="mx-auto flex h-14 w-full max-w-[1540px] items-center gap-1 overflow-x-auto px-8"
       >
         {filteredNav.map((item, index) => {
           const isActive = item.href === bestMatch;
@@ -315,9 +315,9 @@ export function TopNavigation() {
               href={item.href}
               aria-current={isActive ? 'page' : undefined}
               className={cn(
-                'group relative flex shrink-0 items-center gap-2 px-3 text-xs font-medium text-text-muted transition-colors hover:text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
-                isActive && 'text-text-strong',
-                beginsFirmGroup && 'ml-3 border-l border-border-default pl-5'
+                'group relative isolate flex h-9 shrink-0 items-center gap-2 rounded-full px-3.5 text-xs font-medium text-text-muted transition-colors hover:bg-muted hover:text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                isActive && 'text-primary-foreground hover:text-primary-foreground',
+                beginsFirmGroup && 'ml-3'
               )}
             >
               {numbered ? (
@@ -341,7 +341,7 @@ export function TopNavigation() {
               {isActive && (
                 <m.span
                   layoutId="topnav-active"
-                  className="absolute inset-x-3 bottom-0 h-0.5 bg-accent-brand"
+                  className="absolute inset-0 -z-10 rounded-full bg-foreground"
                   transition={{ type: 'spring', stiffness: 420, damping: 34 }}
                 />
               )}
