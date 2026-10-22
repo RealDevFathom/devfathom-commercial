@@ -59,6 +59,19 @@ export const POST = withApiAuth(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    if (parsed.data.parentId) {
+      const parent = await authCtx.db.taskComment.findUnique({
+        where: { id: parsed.data.parentId },
+        select: { taskId: true },
+      });
+      if (!parent || parent.taskId !== id) {
+        return NextResponse.json(
+          { error: 'Reply target does not belong to this task' },
+          { status: 400 }
+        );
+      }
+    }
+
     const comment = await authCtx.db.taskComment.create({
       data: {
         content: parsed.data.content,
