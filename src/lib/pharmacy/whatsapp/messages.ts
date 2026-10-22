@@ -51,6 +51,7 @@ function normalizeText(text: string): string {
 const STOP_KEYWORDS = new Set([
   'stop',
   'stop all',
+  'stop refill',
   'stopall',
   'unsubscribe',
   'opt out',

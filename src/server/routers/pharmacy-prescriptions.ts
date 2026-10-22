@@ -17,6 +17,7 @@ import {
 } from '@/lib/pharmacy/counter-prescriptions';
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
 import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
+import { setRefillReminderPreference } from '@/lib/pharmacy/refill-reminder-sender';
 import {
   configuredRxOcrAdapterName,
   proposeRxPrefill,
@@ -445,6 +446,33 @@ export const pharmacyPrescriptionsRouter = router({
         }
         throw error;
       }
+    }),
+
+  // Counter staff may record the patient's refill-specific choice. The central
+  // capability evaluator preserves explicit-DENY precedence.
+  setRefillReminderOptOut: capabilityProcedure('pharmacy:counter')
+    .input(
+      z
+        .object({
+          patientId: z.string().trim().min(1).max(128),
+          optedOut: z.boolean(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const patient = await ctx.db.pharmacyPatient.findFirst({
+        where: { organizationId: ctx.entitlements.organizationId, id: input.patientId },
+        select: { id: true },
+      });
+      if (!patient) throw new TRPCError({ code: 'NOT_FOUND', message: 'Patient not found.' });
+      await setRefillReminderPreference(ctx.db, {
+        organizationId: ctx.entitlements.organizationId,
+        patientId: patient.id,
+        optedOut: input.optedOut,
+        source: 'STAFF',
+        actorUserId: ctx.session.user.id,
+      });
+      return { patientId: patient.id, optedOut: input.optedOut };
     }),
 
   // ── POS-09: the prescription panel beside the cart ────────────────────────

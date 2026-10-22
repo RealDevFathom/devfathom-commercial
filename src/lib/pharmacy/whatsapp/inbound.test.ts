@@ -14,6 +14,7 @@ const store = vi.hoisted(() => ({
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
     $queryRaw: async () => [{ id: 'patient-a', patientId: 'patient-a' }],
+    $executeRaw: async () => 1,
     pharmacyCustomer: {
       findFirst: async () => ({ patientId: 'patient-a' }),
       findMany: async () =>

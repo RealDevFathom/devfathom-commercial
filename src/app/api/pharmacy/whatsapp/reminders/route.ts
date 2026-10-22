@@ -2,13 +2,13 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { NextResponse } from 'next/server';
 
-import { processDueWhatsAppRefillReminders } from '@/lib/pharmacy/whatsapp/refill-reminders';
+import { queueDueRefillReminders } from '@/lib/pharmacy/refill-reminder-sender';
 
 /**
  * PH-B3 — scheduled WhatsApp refill-reminder job. Called by the platform
  * scheduler with `Authorization: Bearer $CRON_SECRET`; safe to call as often
- * as desired because every reminder is claimed once per patient x medicine x
- * due date before it is sent.
+ * as desired because every capture has one deterministic transactional outbox
+ * claim. This endpoint never invokes the live provider.
  */
 export const maxDuration = 300;
 
@@ -26,5 +26,5 @@ export async function POST(request: Request) {
   }
   const input = (await request.json().catch(() => ({}))) as { limit?: unknown };
   const limit = typeof input.limit === 'number' && Number.isFinite(input.limit) ? input.limit : 100;
-  return NextResponse.json(await processDueWhatsAppRefillReminders({ limit }));
+  return NextResponse.json(await queueDueRefillReminders({ limit }));
 }

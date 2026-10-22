@@ -24,6 +24,7 @@ import {
   type ParsedOrderMessage,
 } from './messages';
 import type { WhatsAppInboundMessage, WhatsAppProvider } from './provider';
+import { setRefillReminderPreference } from '@/lib/pharmacy/refill-reminder-sender';
 
 export type InboundOutcome =
   | 'DUPLICATE'
@@ -38,6 +39,7 @@ export type InboundOutcome =
 
 type KnownCustomer = {
   id: string;
+  patientId: string;
   userId: string | null;
   active: boolean;
   whatsappOptIn: boolean | null;
@@ -58,6 +60,7 @@ export async function findCustomerByWhatsApp(
     where: { organizationId, active: true, patient: { phone: { endsWith: last4 } } },
     select: {
       id: true,
+      patientId: true,
       userId: true,
       active: true,
       whatsappOptIn: true,
@@ -72,6 +75,7 @@ export async function findCustomerByWhatsApp(
   const match = matches[0]!;
   return {
     id: match.id,
+    patientId: match.patientId,
     userId: match.userId,
     active: match.active,
     whatsappOptIn: match.whatsappOptIn,
@@ -186,6 +190,15 @@ export async function handleInboundWhatsAppMessage(
         data: { whatsappOptIn: optIn, whatsappOptInChangedAt: message.receivedAt },
       });
       staleConsent = changed.count === 0;
+      if (!staleConsent && keyword === 'STOP') {
+        await setRefillReminderPreference(db, {
+          organizationId,
+          patientId: customer.patientId,
+          optedOut: true,
+          source: 'KEYWORD',
+          now: message.receivedAt,
+        });
+      }
       if (staleConsent)
         await db.pharmacyMessageLog.update({
           where: { id: inboundId },

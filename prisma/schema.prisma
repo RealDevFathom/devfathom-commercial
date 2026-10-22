@@ -12249,6 +12249,7 @@ model PharmacyPatient {
   restockInterests          PharmacyRestockInterest[]
   retailCustomers           PharmacyCustomer[]
   refillReminderCaptures    PharmacyRefillReminderCapture[]
+  refillReminderPreference  PharmacyRefillReminderPreference?
   pharmacovigilanceReports  PharmacyPharmacovigilanceReport[]
 
   @@unique([organizationId, id])
@@ -12275,6 +12276,23 @@ model PatientConsent {
   @@unique([organizationId, id])
   @@unique([organizationId, patientId, purpose, channel, version])
   @@map("pharmacy_patient_consents")
+}
+
+/// Loyalty L5: refill messaging preference. This is deliberately independent
+/// of customer-wide WhatsApp and every other loyalty preference.
+model PharmacyRefillReminderPreference {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  patientId      String
+  optedOut       Boolean  @default(false)
+  source         String
+  changedByUserId String?
+  changedAt      DateTime @default(now())
+  patient        PharmacyPatient @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, patientId])
+  @@map("pharmacy_refill_reminder_preferences")
 }
 
 model PharmacyPrescriber {
@@ -12413,6 +12431,9 @@ model PharmacyRefillReminderCapture {
   expectedExhaustionAt DateTime
   reminderAt           DateTime
   status               String                            @default("CAPTURED")
+  statusReason         String?
+  queuedAt             DateTime?
+  sentAt               DateTime?
   captureMode          Boolean                           @default(true)
   capturedByUserId     String
   capturedAt           DateTime                          @default(now())
@@ -14506,6 +14527,8 @@ model PharmacyMessageLog {
   orderId           String?
   dueDate           String?
   error             String?
+  templateLocale    String?
+  templatePayload   Json?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
