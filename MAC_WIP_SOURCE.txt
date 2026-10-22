@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-763-implement-targeted-btree_gist-public-execute-revocation-for-kds
+Branch: WHA-763-implement-targeted-btree_gist-public-execute-revocation-for-kds
+HEAD: 27b4e51165428e00248edc12d1b6e175f31933a6
+Mode: applied
+Excluded (secrets): 2
