@@ -52,7 +52,7 @@ const logins = {
     email: env.STAGING_DEMO_PHARMACY_EMAIL?.trim() || `pharmacy.admin@${baseDomain}`,
     password: secret('pharmacy', env.STAGING_DEMO_PHARMACY_PASSWORD),
     url: `https://pharmacy-counter-e2e.${baseDomain}/login`,
-    note: 'Same password for cashier.counter@pharmacy-counter-e2e.devfathom.invalid',
+    note: 'Same password for cashier.counter@ and pharmacist.counter@pharmacy-counter-e2e.devfathom.invalid',
   },
   restaurant: {
     accessCode: secret('restaurant-demo-access', env.DEMO_ACCESS_CODE),
@@ -109,6 +109,7 @@ async function main(): Promise<void> {
       STAGING_DEMO_DATABASE_URL: appUrl,
       DATABASE_URL: appUrl,
       PHARMACY_E2E_GRANTS_ONLY: '1',
+      PHARMACY_E2E_ADMIN_PASSWORD: logins.pharmacy.password,
     });
     console.log('\n✓ Staging demo grants top-up complete.');
     return;

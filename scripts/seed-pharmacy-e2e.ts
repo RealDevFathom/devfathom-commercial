@@ -334,6 +334,87 @@ async function seedStagingDemoSensitiveGrants() {
   );
 }
 
+/** Staging demo only: a Pharmacist (dispense + catalogue review, explicit grants; never `*`). */
+const STAGING_DEMO_PHARMACIST = {
+  roleId: 'role_pharmacy_counter_e2e_pharmacist',
+  userId: 'user_pharmacy_counter_e2e_pharmacist',
+  email: 'pharmacist.counter@pharmacy-counter-e2e.devfathom.invalid',
+  assignmentId: 'pba_pharmacy_counter_e2e_pharmacist',
+  capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'] as const,
+};
+
+async function seedStagingDemoPharmacist(passwordHash: string) {
+  await asTenant(async (tx) => {
+    const role = await tx.organizationRole.upsert({
+      where: {
+        organizationId_key: { organizationId: PHARMACY_E2E.organizationId, key: 'pharmacist' },
+      },
+      update: { name: 'Pharmacist', isSystem: true },
+      create: {
+        id: STAGING_DEMO_PHARMACIST.roleId,
+        organizationId: PHARMACY_E2E.organizationId,
+        key: 'pharmacist',
+        name: 'Pharmacist',
+        isSystem: true,
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+    for (const capability of STAGING_DEMO_PHARMACIST.capabilities) {
+      await tx.organizationRolePermission.upsert({
+        where: { organizationRoleId_capability: { organizationRoleId: role.id, capability } },
+        update: { effect: 'ALLOW' },
+        create: {
+          organizationId: PHARMACY_E2E.organizationId,
+          organizationRoleId: role.id,
+          capability,
+          effect: 'ALLOW',
+        },
+      });
+    }
+    // Never a wildcard on the pharmacist role.
+    await tx.organizationRolePermission.deleteMany({
+      where: { organizationRoleId: role.id, capability: { in: ['*', 'pharmacy:*'] } },
+    });
+    const user = {
+      organizationId: PHARMACY_E2E.organizationId,
+      organizationRoleId: role.id,
+      name: 'Demo Pharmacist',
+      email: STAGING_DEMO_PHARMACIST.email,
+      password: passwordHash,
+      role: 'EMPLOYEE' as const,
+      department: 'LEADERSHIP',
+      title: 'Pharmacist',
+      status: 'ACTIVE' as const,
+    };
+    await tx.user.upsert({
+      where: { id: STAGING_DEMO_PHARMACIST.userId },
+      update: user,
+      create: { id: STAGING_DEMO_PHARMACIST.userId, ...user, createdAt: FIXED_AT, updatedAt: FIXED_AT },
+    });
+    await tx.pharmacyBranchAssignment.upsert({
+      where: {
+        organizationId_branchId_userId: {
+          organizationId: PHARMACY_E2E.organizationId,
+          branchId: PHARMACY_E2E.branchId,
+          userId: STAGING_DEMO_PHARMACIST.userId,
+        },
+      },
+      update: { active: true },
+      create: {
+        id: STAGING_DEMO_PHARMACIST.assignmentId,
+        organizationId: PHARMACY_E2E.organizationId,
+        branchId: PHARMACY_E2E.branchId,
+        userId: STAGING_DEMO_PHARMACIST.userId,
+        active: true,
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+  });
+  console.log(`Staging demo pharmacist ensured: ${STAGING_DEMO_PHARMACIST.email}.`);
+}
+
 async function seedCashier(passwordHash: string) {
   await asTenant(async (tx) => {
     const role = await tx.organizationRole.upsert({
@@ -873,6 +954,9 @@ async function main() {
     if (process.env.PHARMACY_E2E_GRANTS_ONLY === '1') {
       if (!stagingDemo) throw new Error('PHARMACY_E2E_GRANTS_ONLY is staging-demo only.');
       await seedStagingDemoSensitiveGrants();
+      const pw = process.env.PHARMACY_E2E_ADMIN_PASSWORD?.trim();
+      if (!pw) throw new Error('PHARMACY_E2E_ADMIN_PASSWORD is required for the demo pharmacist.');
+      await seedStagingDemoPharmacist(hashSync(pw, 10));
       return;
     }
 
@@ -886,7 +970,10 @@ async function main() {
     await seedMedicines();
     await seedStock();
     await seedPrescription();
-    if (stagingDemo) await seedStagingDemoSensitiveGrants();
+    if (stagingDemo) {
+      await seedStagingDemoSensitiveGrants();
+      await seedStagingDemoPharmacist(passwordHash);
+    }
 
     console.log('Pharmacy counter E2E seed complete.');
   } finally {
