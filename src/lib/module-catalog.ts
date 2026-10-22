@@ -266,25 +266,10 @@ export const ACCOUNT_PROCEDURES: ReadonlySet<string> = new Set([
   'team.updateNotificationPrefs',
 ]);
 
-/**
- * Exact procedure exceptions to the namespace-level module map.
- *
- * Keep these separate from `PROCEDURE_MODULES`: entries in that registry own
- * an entire router, while these entries intentionally grant only the named
- * operation. In particular, a counter licence must not accidentally grant the
- * dispensing mutations that share the `pharmacyPrescriptions` router.
- */
-export const PROCEDURE_MODULE_OVERRIDES: Readonly<Record<string, string>> = {
-  'pharmacyPrescriptions.counterPatients': 'pharmacy-counter',
-  'pharmacyPrescriptions.counterPatientPanel': 'pharmacy-counter',
-};
-
 export function moduleForProcedure(path: string): string | null {
   // Inviting workspace users is baseline administration in every vertical.
   if (path === 'team.inviteMember') return 'admin';
   if (ACCOUNT_PROCEDURES.has(path)) return null;
-  const procedureOverride = PROCEDURE_MODULE_OVERRIDES[path];
-  if (procedureOverride) return procedureOverride;
   if (
     /^pharmacyFinance\.(perpetualValuation|grossMargin|leakageReport|marginComparison|financialStatements)$/.test(
       path
