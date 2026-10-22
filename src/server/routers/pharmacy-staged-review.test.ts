@@ -55,13 +55,17 @@ function makeDb() {
       }),
       count: vi.fn().mockResolvedValue(1),
       findMany: vi.fn().mockResolvedValue([]),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     pharmacyMigrationRow: {
       findMany: vi.fn().mockResolvedValue([row]),
       findFirst: vi.fn().mockResolvedValue(row),
       count: vi.fn().mockResolvedValue(26),
     },
-    pharmacyMigrationException: { groupBy: vi.fn().mockResolvedValue([]) },
+    pharmacyMigrationException: {
+      groupBy: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
+    },
   };
 }
 function importCaller(options: { tenant?: string } = {}) {
@@ -255,5 +259,83 @@ describe('import mapping preset RBAC and tenant isolation', () => {
     });
     await expect(importCaller().presets()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.importMappingPreset.findMany).not.toHaveBeenCalled();
+  });
+
+  it('never reads or commits a batch from another branch', async () => {
+    db.pharmacyMigrationBatch.findFirst.mockResolvedValueOnce(null);
+    await expect(
+      importCaller().preview({ id: 'batch_b', branchId: 'branch_a' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(db.pharmacyMigrationBatch.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org_a', branchId: 'branch_a', id: 'batch_b' },
+      })
+    );
+
+    db.pharmacyMigrationBatch.updateMany.mockResolvedValueOnce({ count: 0 });
+    db.pharmacyMigrationBatch.findFirst.mockResolvedValueOnce(null);
+    await expect(
+      importCaller().queueCommit({ id: 'batch_b', branchId: 'branch_a' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(db.pharmacyMigrationBatch.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org_a', branchId: 'branch_a' }),
+      })
+    );
+  });
+
+  it('atomically gates commit on blocking exceptions and makes retries idempotent', async () => {
+    await expect(
+      importCaller().queueCommit({ id: 'batch_a', branchId: 'branch_a' })
+    ).resolves.toEqual({ status: 'COMMITTING' });
+    expect(db.pharmacyMigrationBatch.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: 'PREVIEW',
+          exceptions: { none: { status: 'OPEN', severity: 'BLOCKING' } },
+        }),
+      })
+    );
+
+    db.pharmacyMigrationBatch.updateMany.mockResolvedValueOnce({ count: 0 });
+    db.pharmacyMigrationBatch.findFirst.mockResolvedValueOnce({
+      status: 'COMMITTING',
+      _count: { exceptions: 0 },
+    });
+    await expect(
+      importCaller().queueCommit({ id: 'batch_a', branchId: 'branch_a' })
+    ).resolves.toEqual({ status: 'COMMITTING' });
+  });
+
+  it('covers preset update, delete-not-found, and mapping validation edges', async () => {
+    db.importMappingPreset.update.mockResolvedValueOnce({
+      id: 'preset_a',
+      name: 'Updated',
+      mapping: { Item: 'product_name' },
+    });
+    await importCaller().savePreset({
+      id: 'preset_a',
+      name: 'Updated',
+      mapping: { Item: 'product_name' },
+    });
+    expect(db.importMappingPreset.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId_id: { organizationId: 'org_a', id: 'preset_a' } },
+        data: expect.objectContaining({ updatedByUserId: 'user_a' }),
+      })
+    );
+
+    await expect(
+      importCaller().savePreset({
+        name: 'Duplicate target',
+        mapping: { Item: 'product_name', Description: 'product_name' },
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.importMappingPreset.create).not.toHaveBeenCalled();
+
+    db.importMappingPreset.deleteMany.mockResolvedValueOnce({ count: 0 });
+    await expect(importCaller().deletePreset({ id: 'missing' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
   });
 });

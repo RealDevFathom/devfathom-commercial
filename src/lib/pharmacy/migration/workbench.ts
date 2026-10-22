@@ -111,6 +111,7 @@ export async function persistProfile(
   db: ScopedDb,
   input: {
     sourceId: string;
+    branchId: string;
     label: string;
     profiler: Pick<SourceProfiler, 'version'>;
     result: ProfileResult;
@@ -122,6 +123,7 @@ export async function persistProfile(
   const batch = await db.pharmacyMigrationBatch.create({
     data: {
       sourceId: input.sourceId,
+      branchId: input.branchId,
       label: input.label,
       profilerVersion: input.profiler.version,
       createdByUserId: input.createdByUserId,

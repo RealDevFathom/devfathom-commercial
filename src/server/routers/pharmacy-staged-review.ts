@@ -18,6 +18,7 @@ const mappingSchema = z
     'Each target field can be mapped only once.'
   );
 const presetId = z.object({ id: z.string().min(1).max(128) }).strict();
+const branchBatchId = presetId.extend({ branchId: z.string().min(1).max(128) }).strict();
 
 function organizationId(ctx: TRPCContext): string {
   const id = ctx.session?.user.organizationId;
@@ -35,22 +36,29 @@ function organizationId(ctx: TRPCContext): string {
 export const pharmacyStagedReviewRouter = router({
   importCore: router({
     /** Import operations use central can(); an explicit DENY wins over role grants. */
-    batches: capabilityProcedure('pharmacy:data-import').query(({ ctx }) => {
-      const org = organizationId(ctx);
-      return ctx.db.pharmacyMigrationBatch.findMany({
-        where: { organizationId: org, source: { organizationId: org } },
-        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
-        select: {
-          id: true,
-          label: true,
-          status: true,
-          rowCount: true,
-          exceptionCount: true,
-          createdByUserId: true,
-          source: { select: { fileName: true, contentHash: true, byteSize: true } },
-        },
-      });
-    }),
+    batches: capabilityProcedure('pharmacy:data-import')
+      .input(z.object({ branchId: z.string().min(1).max(128) }).strict())
+      .query(async ({ ctx, input }) => {
+        const org = organizationId(ctx);
+        await assertReviewBranch(ctx.db, org, input.branchId);
+        return ctx.db.pharmacyMigrationBatch.findMany({
+          where: {
+            organizationId: org,
+            branchId: input.branchId,
+            source: { organizationId: org },
+          },
+          orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+          select: {
+            id: true,
+            label: true,
+            status: true,
+            rowCount: true,
+            exceptionCount: true,
+            createdByUserId: true,
+            source: { select: { fileName: true, contentHash: true, byteSize: true } },
+          },
+        });
+      }),
     presets: capabilityProcedure('pharmacy:data-import').query(({ ctx }) => {
       const org = organizationId(ctx);
       return ctx.db.importMappingPreset.findMany({
@@ -100,11 +108,11 @@ export const pharmacyStagedReviewRouter = router({
         return { deleted: true };
       }),
     preview: capabilityProcedure('pharmacy:data-import')
-      .input(presetId)
+      .input(branchBatchId)
       .query(async ({ ctx, input }) => {
         const org = organizationId(ctx);
         const batch = await ctx.db.pharmacyMigrationBatch.findFirst({
-          where: { organizationId: org, id: input.id },
+          where: { organizationId: org, branchId: input.branchId, id: input.id },
         });
         if (!batch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Import batch not found.' });
         const [entities, errors, dedupeMatches] = await Promise.all([
@@ -128,26 +136,43 @@ export const pharmacyStagedReviewRouter = router({
         };
       }),
     queueCommit: capabilityProcedure('pharmacy:data-import')
-      .input(presetId)
+      .input(branchBatchId)
       .mutation(async ({ ctx, input }) => {
         const org = organizationId(ctx);
-        const blocking = await ctx.db.pharmacyMigrationException.count({
-          where: { organizationId: org, batchId: input.id, status: 'OPEN', severity: 'BLOCKING' },
-        });
-        if (blocking)
-          throw new TRPCError({
-            code: 'PRECONDITION_FAILED',
-            message: 'Resolve blocking preview errors before commit.',
-          });
         const queued = await ctx.db.pharmacyMigrationBatch.updateMany({
-          where: { organizationId: org, id: input.id, status: 'PREVIEW' },
+          where: {
+            organizationId: org,
+            branchId: input.branchId,
+            id: input.id,
+            status: 'PREVIEW',
+            exceptions: { none: { status: 'OPEN', severity: 'BLOCKING' } },
+          },
           data: { status: 'COMMITTING' },
         });
-        if (queued.count !== 1)
+        if (queued.count !== 1) {
+          const batch = await ctx.db.pharmacyMigrationBatch.findFirst({
+            where: { organizationId: org, branchId: input.branchId, id: input.id },
+            select: {
+              status: true,
+              _count: {
+                select: {
+                  exceptions: { where: { status: 'OPEN', severity: 'BLOCKING' } },
+                },
+              },
+            },
+          });
+          // A retry after the atomic transition is successful and side-effect free.
+          if (batch?.status === 'COMMITTING') return { status: 'COMMITTING' as const };
+          if (batch?._count.exceptions)
+            throw new TRPCError({
+              code: 'PRECONDITION_FAILED',
+              message: 'Resolve blocking preview errors before commit.',
+            });
           throw new TRPCError({
             code: 'CONFLICT',
             message: 'Only a previewed batch can be committed.',
           });
+        }
         return { status: 'COMMITTING' as const };
       }),
   }),
@@ -164,7 +189,11 @@ export const pharmacyStagedReviewRouter = router({
       .query(async ({ ctx, input }) => {
         const org = organizationId(ctx);
         await assertReviewBranch(ctx.db, org, input.branchId);
-        const where = { organizationId: org, source: { organizationId: org } };
+        const where = {
+          organizationId: org,
+          branchId: input.branchId,
+          source: { organizationId: org },
+        };
         const total = await ctx.db.pharmacyMigrationBatch.count({ where });
         const batches = await ctx.db.pharmacyMigrationBatch.findMany({
           where,

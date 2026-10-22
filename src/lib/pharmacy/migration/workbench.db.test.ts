@@ -44,6 +44,7 @@ const suffix = randomBytes(6).toString('hex');
 const orgA = `org_wha1163_a_${suffix}`;
 const orgB = `org_wha1163_b_${suffix}`;
 const signerA = `user_wha1163_a_${suffix}`;
+const branchA = `branch_wha1163_a_${suffix}`;
 
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
@@ -74,6 +75,7 @@ async function profileMissingFieldsFixture(db: ScopedDb, label: string) {
   const result = profileTable(excelCsvProfiler, parseDelimitedText(bytes.toString('utf8')));
   const persisted = await deps.workbench.persistProfile(db, {
     sourceId: source.id,
+    branchId: branchA,
     label,
     profiler: excelCsvProfiler,
     result,
@@ -143,6 +145,12 @@ beforeAll(async () => {
        VALUES ($1, $2, 'Migration Lead', $3, 'ADMIN', 'LEADERSHIP', 'Pharmacist',
          CURRENT_TIMESTAMP, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
       [signerA, orgA, `${signerA}@example.test`]
+    );
+    await owner.query(
+      `INSERT INTO "pharmacy_branches"
+        ("id", "organizationId", "code", "name", "addressLine", "city", "provinceCode", "createdAt", "updatedAt")
+       VALUES ($1, $2, 'MAIN', 'Main', 'Test', 'Lahore', 'PB', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [branchA, orgA]
     );
     await owner.query('COMMIT');
   } catch (error) {

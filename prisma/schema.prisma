@@ -235,6 +235,7 @@ model PharmacyBranch {
   visibilityUnfulfilledDemandEvent         UnfulfilledDemandEvent[]          @relation("UnfulfilledDemandEventVisibilityAnchor")
   visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
   branchAssignments                        PharmacyBranchAssignment[]
+  migrationBatches                         PharmacyMigrationBatch[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -11590,6 +11591,7 @@ model PharmacyMigrationBatch {
   id              String                       @id @default(cuid())
   organizationId  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   sourceId        String
+  branchId        String
   label           String
   status          PharmacyMigrationBatchStatus @default(UPLOADED)
   rowCount        Int                          @default(0)
@@ -11604,12 +11606,14 @@ model PharmacyMigrationBatch {
   updatedAt       DateTime                     @updatedAt
 
   source        PharmacyMigrationSource        @relation(fields: [organizationId, sourceId], references: [organizationId, id], onDelete: Restrict)
+  branch        PharmacyBranch                 @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
   rows          PharmacyMigrationRow[]
   exceptions    PharmacyMigrationException[]
   entities      PharmacyMigrationBatchEntity[]
   importedSales PharmacyImportedSale[]
 
   @@unique([organizationId, id])
+  @@index([organizationId, branchId, status])
   @@index([organizationId, sourceId, status])
   @@map("pharmacy_migration_batches")
 }
