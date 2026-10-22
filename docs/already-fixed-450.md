@@ -20,10 +20,14 @@ without changing product behaviour.
   `src/lib/abac/capabilities.ts:7-26`. `pharmacy:dispense`,
   `pharmacy:safety`, and `pharmacy:catalogue-review` reject wildcard ALLOW
   grants, while wildcard DENY rules continue to match.
-- The authorization decision in `src/lib/abac/index.ts:48-58` evaluates matching
-  DENY rules before ALLOW rules for both user overrides and role permissions.
+- The authorization decision in `src/lib/abac/index.ts:48-56` collects matching
+  user overrides and role permissions before evaluating them, so a DENY from
+  either source takes precedence over every ALLOW.
   Missing tenant-scoped database context and permission lookup failures deny
   access at `src/lib/abac/index.ts:73-83`.
+- Focused coverage in `src/lib/abac/index.test.ts:148-169` pins DENY precedence
+  in both directions: a user DENY defeats a role ALLOW, and a role DENY defeats
+  a user ALLOW.
 - Focused coverage in `src/lib/abac/capabilities.test.ts:56-64` and
   `src/lib/abac/capabilities.test.ts:97-113` pins exact-grant-only behaviour for
   all three sensitive pharmacy actions.
@@ -39,5 +43,6 @@ without changing product behaviour.
 | `d76bc8ec` | Skip | Pharmacy QA results and draft issue text are historical evidence, not a product fix. Current authorization and live-send safeguards have direct code and regression-test coverage listed above. |
 | `256fd034` | Skip | Restaurant QA results and draft issue text are historical evidence, not a product fix. Porting a stale QA snapshot would add no runtime behaviour or focused regression coverage. |
 
-No migration, runtime code, secrets, or generated logs are added for this
-already-fixed issue.
+No migration, secrets, or generated logs are added. The only runtime correction
+is the DENY-precedence fix described above; none of the archived QA-note files
+are restored.
