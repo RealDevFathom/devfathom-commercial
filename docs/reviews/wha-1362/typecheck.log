@@ -1,0 +1,5 @@
+scripts/print-bridge.ts(128,12): error TS2352: Conversion of type '{ PATH: string; LANG: string; }' to type 'ProcessEnv' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Property 'NODE_ENV' is missing in type '{ PATH: string; LANG: string; }' but required in type 'ProcessEnv'.
+scripts/print-bridge.ts(144,10): error TS2352: Conversion of type '{ SystemRoot: string; WINDIR: string; TEMP: string | undefined; TMP: string | undefined; PATH: string; DEVFATHOM_PRINT_QUEUE: string; }' to type 'ProcessEnv' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Property 'NODE_ENV' is missing in type '{ SystemRoot: string; WINDIR: string; TEMP: string | undefined; TMP: string | undefined; PATH: string; DEVFATHOM_PRINT_QUEUE: string; }' but required in type 'ProcessEnv'.
+src/lib/restaurant/printing/printing.db.test.ts(158,13): error TS2554: Expected 3 arguments, but got 2.

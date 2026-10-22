@@ -1,0 +1,31 @@
+{
+  "mapping": [
+    {
+      "original": "bdea63a2cd3d35eab300dc585e7e1352cf64c4e4",
+      "local": "a0a01c6f113727dc8235467fb7246b1cb70d0f45"
+    },
+    {
+      "original": "513d05ad34f3268c2229c2ea5703786726e7ccde",
+      "local": "3ce6cbf96ffb8a571c802fb8a67cf2770e6024fb"
+    },
+    {
+      "original": "5c222a54ef24993693b4c07d4066c89a2ac5fb9b",
+      "local": "aac8172fb7efbbe09b38a2b4bf04dbec5a09b6d8"
+    },
+    {
+      "original": "ceed2f40a78bafbc24d68506f010218c30a0a6fe",
+      "local": "2b5ab7974116051e1075ab7f3006969b1959e697"
+    }
+  ],
+  "preserved_artifacts": {
+    "docs/reviews/wha-1362/db.json": "b77a6985e135ff67589ca9a867900fac4373da435596401dc4d5da852932c42e",
+    "docs/reviews/wha-1362/lint.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "docs/reviews/wha-1362/wha1362-review.db.test.ts.txt": "c68523b1c3c2abb0209455482925db8dbe4437d967b3c32b8386a9109e9ecef5",
+    "docs/reviews/wha-1362/review-repro.json": "2f4ddbfa0eeb391a92be2360267304a3cfb8f014d896e7655280f306bfbf06f7",
+    "docs/reviews/wha-1362/typecheck.log": "e0642bd82f38b4cf588167e13ca5541601b8a22d2e2d96e6dcf780494b70ee46",
+    "docs/reviews/wha-1362/tsconfig.verify.json": "17e01e55b90beef61b29972785192da650f1ad179bbe8671794b2d3d1e2dca6f",
+    "docs/reviews/wha-1362/unit.json": "ecd87ba9d9b050b45f708aaad15575c45f271bce6731345b4dae4b6681e656d5",
+    "docs/reviews/wha-1362/REVIEW.md": "c89b19a6aaeaca880bc28fbbef9a52bea31012da9c41326c35be545d9b1a533a"
+  },
+  "head_tree_parent": "2b5ab7974116051e1075ab7f3006969b1959e697 11730372c68263db4fb76edeb1ee58029713fcca aac8172fb7efbbe09b38a2b4bf04dbec5a09b6d8"
+}

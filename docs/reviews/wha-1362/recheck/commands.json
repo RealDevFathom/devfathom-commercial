@@ -1,0 +1,64 @@
+[
+  {
+    "name": "unit",
+    "command": [
+      "node",
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      "tests/print-bridge.test.ts",
+      "src/lib/restaurant/printing/printing.test.ts",
+      "src/lib/restaurant/printing/receipt-snapshot.test.ts",
+      "src/app/api/restaurant/print-bridge/route.test.ts",
+      "src/lib/receipts/configuration.test.ts",
+      "src/lib/receipts/restaurant-settings.test.ts",
+      "src/app/api/restaurant/receipt-layout/route.test.ts",
+      "src/components/receipts/receipt-designer.test.tsx",
+      "--maxWorkers=1",
+      "--no-file-parallelism",
+      "--reporter=json",
+      "--outputFile=/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1362-verify-hw-combined-receipt-layout-queue-authorization-and-printer-runtime-review/docs/reviews/wha-1362/recheck/unit.json"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "typecheck",
+    "command": [
+      "node",
+      "node_modules/typescript/bin/tsc",
+      "--noEmit",
+      "-p",
+      "tsconfig.verify.json"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "lint",
+    "command": [
+      "node",
+      "node_modules/eslint/bin/eslint.js",
+      "scripts/print-bridge.ts",
+      "src/app/(app)/settings/receipts/page.tsx",
+      "src/app/(app)/settings/settings-content.tsx",
+      "src/app/api/restaurant/print-bridge/route.test.ts",
+      "src/app/api/restaurant/print-bridge/route.ts",
+      "src/app/api/restaurant/receipt-layout/route.test.ts",
+      "src/app/api/restaurant/receipt-layout/route.ts",
+      "src/components/receipts/receipt-designer.test.tsx",
+      "src/components/receipts/receipt-designer.tsx",
+      "src/lib/receipts/configuration.test.ts",
+      "src/lib/receipts/configuration.ts",
+      "src/lib/receipts/preview.ts",
+      "src/lib/receipts/restaurant-settings.db.test.ts",
+      "src/lib/receipts/restaurant-settings.test.ts",
+      "src/lib/receipts/restaurant-settings.ts",
+      "src/lib/restaurant/printing/claim.db.test.ts",
+      "src/lib/restaurant/printing/contract.ts",
+      "src/lib/restaurant/printing/esc-pos.ts",
+      "src/lib/restaurant/printing/printing.db.test.ts",
+      "src/lib/restaurant/printing/receipt-snapshot.test.ts",
+      "src/lib/restaurant/printing/service.ts",
+      "tests/print-bridge.test.ts"
+    ],
+    "exit": 0
+  }
+]

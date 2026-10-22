@@ -1,0 +1,183 @@
+import {randomUUID} from 'node:crypto';
+import {claimNextPrintJob,acknowledgePrintJob} from '@/lib/restaurant/printing/service';
+import {receiptPrintState} from '@/app/api/restaurant/checkout/receipt/receipt-dispatch';
+import {buildReceiptForBranch} from '@/lib/restaurant/checkout-routes';
+import { randomBytes } from 'node:crypto';
+import { beforeAll, describe, expect, it } from 'vitest';
+import type { TerminalContext } from '@/lib/restaurant/terminal-auth';
+import type { MoneyCommandArgs } from '@/lib/restaurant/checkout-routes';
+import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
+import { saveRestaurantReceiptLayout } from '@/lib/receipts/restaurant-settings';
+import { PrintDocumentSchema } from '@/lib/restaurant/printing/contract';
+import { renderEscPos } from '@/lib/restaurant/printing/esc-pos';
+import { buildReceiptPreview } from '@/lib/receipts/preview';
+import { dispatchReceipt, receiptPrintBody } from '@/app/api/restaurant/checkout/receipt/receipt-dispatch';
+
+const database = process.env.TEST_DATABASE_URL;
+if (database) process.env.DATABASE_URL = database;
+const suffix = randomBytes(6).toString('hex');
+const orgA = `wha1355_a_${suffix}`;
+const orgB = `wha1355_b_${suffix}`;
+const branchA = `wha1355_branch_a_${suffix}`;
+const branchOther = `wha1355_branch_other_${suffix}`;
+const staff = `wha1355_staff_${suffix}`;
+const device = `wha1355_device_${suffix}`;
+const product = `wha1355_product_${suffix}`;
+const date = new Date('2026-09-05T10:00:00Z');
+let tenancy: typeof import('@/lib/tenancy/scoped-db');
+let orderNumber = 0;
+
+async function bill() {
+  return tenancy.withTenantDb(orgA, async (db) => {
+    const order = await db.restaurantOrder.create({
+      data: {
+        branchId: branchA,
+        staffProfileId: staff,
+        deviceId: device,
+        orderNumber: ++orderNumber,
+        businessDate: date,
+        channel: 'DINE_IN',
+        status: 'SERVED',
+      },
+    });
+    const item = await db.restaurantOrderItem.create({
+      data: {
+        orderId: order.id,
+        productId: product,
+        name: 'Meal',
+        quantity: 2,
+        unitPrice: '12',
+        status: 'SERVED',
+      },
+    });
+    return db.restaurantBill.create({
+      data: {
+        orderId: order.id,
+        branchId: branchA,
+        openerStaffProfileId: staff,
+        deviceId: device,
+        businessDate: date,
+        status: 'SETTLED',
+        receiptNumber: orderNumber,
+        settledAt: date,
+        subtotal: '24',
+        taxTotal: '2',
+        serviceChargeTotal: '1',
+        deliveryFeeTotal: '3',
+        compTotal: '4',
+        discountTotal: '0.50',
+        roundingAdjustment: '0.05',
+        grandTotal: '25.55',
+        lines: {
+          create: {
+            orderItemId: item.id,
+            name: 'Meal',
+            quantity: 2,
+            unitPrice: '12',
+            lineSubtotal: '24',
+            compAmount: '4',
+            taxAmount: '2',
+            serviceChargeAmount: '1',
+            lineTotal: '20',
+          },
+        },
+        tenders: {
+          create: {
+            type: 'CASH',
+            amount: '25.55',
+            tipAmount: '1.50',
+            cashReceived: '30',
+            changeGiven: '4.45',
+            staffProfileId: staff,
+            deviceId: device,
+            businessDate: date,
+          },
+        },
+      },
+    });
+  });
+}
+
+function args(
+  db: TerminalContext['db'],
+  billId: string,
+  branchId = branchA,
+  organizationId = orgA
+): MoneyCommandArgs<typeof receiptPrintBody> {
+  return {
+    ctx: {
+      db,
+      organizationId,
+      device: { id: device, name: 'Counter', kind: 'POS', branchId },
+    } as TerminalContext,
+    data: { billId, action: 'print' },
+    actor: { staffProfileId: staff, deviceId: device, idempotencyKey: `dispatch-${billId}` },
+    now: date,
+  };
+}
+
+// Requires a NEW disposable migrated database. Fixtures remain only until its owner drops it;
+// do not bypass append-only event rules to clean up rows or run against an existing test DB.
+describe.skipIf(!database)('receipt caller snapshots with enforcing RLS', () => {
+  beforeAll(async () => {
+    tenancy = await import('@/lib/tenancy/scoped-db');
+    const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
+    await assertRlsEnforcingRole(tenancy.withPlatformDb);
+    await tenancy.withPlatformDb((db) =>
+      db.organization.createMany({
+        data: [orgA, orgB].map((id) => ({ id, slug: id, legalName: id, displayName: id })),
+      })
+    );
+    await tenancy.withTenantDb(orgA, async (db) => {
+      await db.restaurantBranch.createMany({
+        data: [branchA, branchOther].map((id) => ({ id, name: id, organizationId: orgA })),
+      });
+      await db.restaurantStaffProfile.create({
+        data: { id: staff, displayName: 'Operator', primaryBranchId: branchA },
+      });
+      await db.restaurantRegisteredDevice.create({
+        data: {
+          id: device,
+          branchId: branchA,
+          name: 'Counter',
+          deviceSecretHash: `synthetic-${suffix}`,
+        },
+      });
+      await db.restaurantProduct.create({ data: { id: product, name: 'Meal' } });
+      await db.restaurantPrintRoute.create({
+        data: {
+          branchId: branchA,
+          documentType: 'RECEIPT',
+          stationId: null,
+          printerId: 'queue:///Synthetic',
+          enabled: true,
+        },
+      });
+    });
+  });
+
+
+ it('independent concurrent reprint persists one copy/event and changed reason is denied',async()=>{
+  const receipt=await bill();
+  await tenancy.withTenantDb(orgA,db=>dispatchReceipt(args(db,receipt.id)));
+  await tenancy.withTenantDb(orgA,async db=>{const job=await claimNextPrintJob(db,branchA,device);expect(job).not.toBeNull();expect(await acknowledgePrintJob(db,{branchId:branchA,deviceId:device,jobId:job!.id,claimToken:job!.claimToken,status:'PRINTED'})).toMatchObject({acknowledged:true});});
+  const requestId=randomUUID();const reason='Customer copy\nReprint: Full reason';
+  const run=(why=reason)=>tenancy.withTenantDb(orgA,db=>dispatchReceipt({...args(db,receipt.id),data:{billId:receipt.id,action:'reprint',reason:why,requestId}}));
+  const results=await Promise.all([run(),run()]);
+  expect(results.every(x=>!(x instanceof Response))).toBe(true);
+  expect(results.filter(x=>!(x instanceof Response)&&x.replayed)).toHaveLength(1);
+  const changed=await run('Full reason');expect(changed).toBeInstanceOf(Response);expect((changed as Response).status).toBe(409);
+  const rows=await tenancy.withTenantDb(orgA,async db=>({jobs:await db.restaurantPrintJob.findMany(),events:await db.restaurantOrderEvent.count({where:{orderId:receipt.orderId,eventType:'receipt.reprint_requested'}}),outbox:await db.restaurantEventOutbox.count({where:{aggregateId:receipt.orderId,eventType:'receipt.reprint_requested'}})}));
+  expect(rows.jobs).toHaveLength(2);expect(rows.events).toBe(1);expect(rows.outbox).toBe(1);
+  const copy=rows.jobs.find(j=>j.idempotencyKey.endsWith(requestId))!;const doc=PrintDocumentSchema.parse(copy.document);expect(doc.footer).toBe('Receipt copy\nReprint: '+reason);expect(doc.receiptSnapshot!.facts.invoiceNumber).toContain('COPY');expect(doc.receiptSnapshot!.facts.totals).toContain('Reprint: '+reason);
+ });
+ it('independent saved Unicode preview stays complete while raw dispatch creates no job/event',async()=>{
+  const receipt=await bill();const label='چائے e\u0301 👩‍🍳 <img src=x onerror=alert(1)>';
+  await tenancy.withTenantDb(orgA,db=>db.restaurantBillLine.updateMany({where:{billId:receipt.id},data:{name:label}}));
+  const before=await tenancy.withTenantDb(orgA,db=>db.restaurantPrintJob.count());
+  const state=await tenancy.withTenantDb(orgA,async db=>{const context=args(db,receipt.id).ctx;const saved=await buildReceiptForBranch(db,receipt.id,branchA);return receiptPrintState(context,saved!);});
+  expect(state.preview.text).toContain(label);expect(state.preview.text).toContain('TOTAL 25.55');expect(state.preview.validation).toMatchObject({code:'UNSUPPORTED_PRINT_TEXT',fallback:'BROWSER_OS'});
+  const result=await tenancy.withTenantDb(orgA,db=>dispatchReceipt(args(db,receipt.id)));expect(result).toBeInstanceOf(Response);expect((result as Response).status).toBe(422);expect(await(result as Response).json()).toMatchObject({code:'UNSUPPORTED_PRINT_TEXT',fallback:'BROWSER_OS'});
+  const counts=await tenancy.withTenantDb(orgA,async db=>({jobs:await db.restaurantPrintJob.count(),events:await db.restaurantOrderEvent.count({where:{orderId:receipt.orderId}}),outbox:await db.restaurantEventOutbox.count({where:{aggregateId:receipt.orderId}})}));expect(counts).toEqual({jobs:before,events:0,outbox:0});
+ });
+});
