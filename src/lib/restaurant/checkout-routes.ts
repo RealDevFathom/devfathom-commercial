@@ -186,7 +186,13 @@ export const drawerMovementBody = z
   })
   .strict();
 
-export const drawerCloseBody = z.object({ drawerSessionId: ID, countedCash: MONEY }).strict();
+export const drawerCloseBody = z
+  .object({
+    drawerSessionId: ID,
+    countedCash: MONEY,
+    varianceReason: z.string().trim().min(1).max(240).optional(),
+  })
+  .strict();
 
 export const dayCloseBody = z.object({ businessDate: BUSINESS_DATE }).strict();
 

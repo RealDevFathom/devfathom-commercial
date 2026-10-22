@@ -255,6 +255,8 @@ describe('daily close reads (C12)', () => {
         createdAt: new Date('2026-08-19T20:00:00Z'),
         grossSales: D('500.00'),
         netSales: D('480.00'),
+        deliveryFeeSales: D('8.00'),
+        deliveryFeeRefunds: D('1.00'),
         refundTotal: D('0.00'),
         cashVariance: D('0.00'),
       },
@@ -266,6 +268,8 @@ describe('daily close reads (C12)', () => {
         createdAt: new Date('2026-08-19T22:00:00Z'),
         grossSales: D('500.00'),
         netSales: D('480.00'),
+        deliveryFeeSales: D('8.00'),
+        deliveryFeeRefunds: D('1.00'),
         refundTotal: D('12.00'),
         cashVariance: D('-1.00'),
       },
@@ -278,6 +282,8 @@ describe('daily close reads (C12)', () => {
     expect(chain.closes.find((c) => c.id === 'c1')!.isTip).toBe(false);
     expect(chain.closes.find((c) => c.id === 'c2')!.isTip).toBe(true);
     expect(chain.closes[1].refundTotal).toBe('12.00');
+    expect(chain.closes[1].deliveryFeeSales).toBe('8.00');
+    expect(chain.closes[1].deliveryFeeRefunds).toBe('1.00');
   });
 
   it('serializes every close total as a string with tender totals and drawer variances', async () => {
@@ -293,6 +299,8 @@ describe('daily close reads (C12)', () => {
       createdAt: new Date(),
       grossSales: D('500.00'),
       netSales: D('480.00'),
+      deliveryFeeSales: D('8.00'),
+      deliveryFeeRefunds: D('1.00'),
       taxTotal: D('0.00'),
       serviceChargeTotal: D('0.00'),
       tipTotal: D('15.00'),
@@ -331,6 +339,8 @@ describe('daily close reads (C12)', () => {
     ]);
     const result = await caller().getDailyClose({ dailyCloseId: 'c1' });
     expect(result.close.totals.grossSales).toBe('500.00');
+    expect(result.close.totals.deliveryFeeSales).toBe('8.00');
+    expect(result.close.totals.deliveryFeeRefunds).toBe('1.00');
     expect(result.close.totals.tipTotal).toBe('15.00');
     expect(result.close.totals.compTotal).toBe('20.00');
     expect(result.close.totals.voidTotal).toBe('7.50');

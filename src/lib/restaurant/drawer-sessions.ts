@@ -65,7 +65,13 @@ export class DrawerSessionError extends Error {
 }
 
 export type DrawerMovementKind =
-  'OPENING_FLOAT' | 'CASH_SALE' | 'CASH_REFUND' | 'PAID_IN' | 'PAID_OUT' | 'DROP' | 'CLOSING_COUNT';
+  | 'OPENING_FLOAT'
+  | 'CASH_SALE'
+  | 'CASH_REFUND'
+  | 'PAID_IN'
+  | 'PAID_OUT'
+  | 'DROP'
+  | 'CLOSING_COUNT';
 
 /** The manual adjustment kinds a `cash:adjust` command may post (C8). Opening
  * float, sales, refunds and the closing count are written by their own commands /
@@ -349,6 +355,16 @@ export type CurrentDrawerSessionResult = {
   drawerSessionId: string;
   businessDate: Date;
   openingFloat: Prisma.Decimal;
+  expectedCash: Prisma.Decimal;
+  movements: Array<{
+    id: string;
+    kind: DrawerMovementKind;
+    amount: Prisma.Decimal;
+    reason: string | null;
+    staffProfileId: string;
+    deviceId: string;
+    createdAt: Date;
+  }>;
 };
 
 export async function enforceConcurrentRegisterLimit(
@@ -387,13 +403,31 @@ export async function getCurrentDrawerSession(
 ): Promise<CurrentDrawerSessionResult | null> {
   const session = await db.restaurantDrawerSession.findFirst({
     where: { branchId: input.branchId, deviceId: input.deviceId, status: 'OPEN' },
-    select: { id: true, businessDate: true, openingFloat: true },
+    select: {
+      id: true,
+      businessDate: true,
+      openingFloat: true,
+      movements: {
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: {
+          id: true,
+          kind: true,
+          amount: true,
+          reason: true,
+          staffProfileId: true,
+          deviceId: true,
+          createdAt: true,
+        },
+      },
+    },
   });
   return session
     ? {
         drawerSessionId: session.id,
         businessDate: session.businessDate,
         openingFloat: session.openingFloat,
+        expectedCash: foldExpectedCash(session.movements as FoldableMovement[]),
+        movements: session.movements,
       }
     : null;
 }
@@ -560,6 +594,7 @@ export async function recordDrawerAdjustment(
 export type CloseDrawerSessionInput = {
   drawerSessionId: string;
   countedCash: Prisma.Decimal | string;
+  varianceReason?: string;
   actor: MoneyActor;
   now?: Date;
 };
@@ -618,6 +653,9 @@ export async function closeDrawerSession(
     const countedCash = requireNonNegative(money(input.countedCash), 'The counted cash');
     const expectedCash = foldExpectedCash(session.movements as FoldableMovement[]);
     const variance = sub(countedCash, expectedCash);
+    const varianceReason = variance.isZero()
+      ? undefined
+      : requireReason(input.varianceReason ?? '');
 
     // The closing count joins the append-only ledger while the drawer is still
     // OPEN (CLOSING_COUNT folds to zero in `expectedCash`), then the session flips.
@@ -625,6 +663,7 @@ export async function closeDrawerSession(
       drawerSessionId: session.id,
       kind: 'CLOSING_COUNT',
       amount: countedCash,
+      reason: varianceReason,
       staffProfileId: input.actor.staffProfileId,
       deviceId: input.actor.deviceId,
     });

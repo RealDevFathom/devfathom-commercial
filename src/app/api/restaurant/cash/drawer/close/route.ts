@@ -21,6 +21,7 @@ export const POST = moneyMutationRoute({
       await closeDrawerSession(ctx.db, {
         drawerSessionId: data.drawerSessionId,
         countedCash: data.countedCash,
+        varianceReason: data.varianceReason,
         actor,
         now,
       })

@@ -17,6 +17,12 @@ export const GET = moneyReadRoute({
             drawerSessionId: drawer.drawerSessionId,
             businessDate: drawer.businessDate.toISOString().slice(0, 10),
             openingFloat: drawer.openingFloat.toString(),
+            expectedCash: drawer.expectedCash.toFixed(2),
+            movements: drawer.movements.map((movement) => ({
+              ...movement,
+              amount: movement.amount.toFixed(2),
+              createdAt: movement.createdAt.toISOString(),
+            })),
             replayed: false,
           }
         : null

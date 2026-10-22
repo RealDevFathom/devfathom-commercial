@@ -160,6 +160,8 @@ const mocks = vi.hoisted(() => {
               createdAt: new Date('2026-08-19T21:00:00Z'),
               grossSales: '200.00',
               netSales: '180.00',
+              deliveryFeeSales: '8.00',
+              deliveryFeeRefunds: '1.00',
               refundTotal: '2.00',
               cashVariance: '-1.00',
             },
@@ -182,6 +184,8 @@ const mocks = vi.hoisted(() => {
         totals: {
           grossSales: '200.00',
           netSales: '180.00',
+          deliveryFeeSales: '8.00',
+          deliveryFeeRefunds: '1.00',
           taxTotal: '10.00',
           serviceChargeTotal: '10.00',
           tipTotal: '2.00',
@@ -519,6 +523,8 @@ describe('MoneyConsole', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Daily close' }));
     expect(screen.getAllByText('close_1').length).toBeGreaterThan(0);
     expect(screen.getByText('Authoritative tip')).toBeInTheDocument();
+    expect(screen.getAllByText('8.00').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1.00').length).toBeGreaterThan(0);
   });
 
   it('enables a card payment selection and renders its event trail', () => {

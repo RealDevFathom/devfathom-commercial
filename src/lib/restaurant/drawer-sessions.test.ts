@@ -301,9 +301,18 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
       actor: actor(deviceId),
     });
 
+    await expect(
+      deps.drawer.closeDrawerSession(db, {
+        drawerSessionId: opened.drawerSessionId,
+        countedCash: '130.00',
+        actor: actor(deviceId),
+      })
+    ).rejects.toMatchObject({ reason: 'REASON_REQUIRED' });
+
     const closed = await deps.drawer.closeDrawerSession(db, {
       drawerSessionId: opened.drawerSessionId,
       countedCash: '130.00',
+      varianceReason: 'Count included an unrecorded cash top-up',
       actor: actor(deviceId),
     });
     // expected = 100 + 30 - 4 = 126; variance = 130 - 126 = 4
@@ -319,7 +328,10 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
           expectedCash: true,
           countedCash: true,
           variance: true,
-          movements: { where: { kind: 'CLOSING_COUNT' }, select: { amount: true } },
+          movements: {
+            where: { kind: 'CLOSING_COUNT' },
+            select: { amount: true, reason: true },
+          },
         },
       })
     );
@@ -327,6 +339,7 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     expect(session?.expectedCash?.toString()).toBe('126');
     expect(session?.variance?.toString()).toBe('4');
     expect(session?.movements[0]?.amount.toString()).toBe('130');
+    expect(session?.movements[0]?.reason).toBe('Count included an unrecorded cash top-up');
 
     // Write-once: a second close is rejected.
     await expect(

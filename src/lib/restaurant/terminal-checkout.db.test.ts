@@ -546,6 +546,10 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(drawer.status).toBe(200);
       expect(drawer.json.drawerSessionId).toBe(drawerSessionId);
       expect(drawer.json.businessDate).toBe(TODAY);
+      eqMoney(drawer.json.expectedCash, '100.00');
+      expect(drawer.json.movements).toMatchObject([
+        { kind: 'OPENING_FLOAT', amount: '100.00', staffProfileId: ctx.staffA },
+      ]);
 
       const day = await call(deps.routes.dayCurrent, {
         method: 'GET',

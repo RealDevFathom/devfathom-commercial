@@ -1565,6 +1565,8 @@ function DailyCloseLedger({
                         <TableHead>Correction</TableHead>
                         <TableHead numeric>Gross</TableHead>
                         <TableHead numeric>Net</TableHead>
+                        <TableHead numeric>Delivery fees</TableHead>
+                        <TableHead numeric>Fee refunds</TableHead>
                         <TableHead numeric>Refunds</TableHead>
                         <TableHead numeric>Cash variance</TableHead>
                         <TableHead className="text-right">Detail</TableHead>
@@ -1589,6 +1591,8 @@ function DailyCloseLedger({
                           <TableCell>{close.correctionReason ?? 'Original close'}</TableCell>
                           <TableCell numeric>{close.grossSales}</TableCell>
                           <TableCell numeric>{close.netSales}</TableCell>
+                          <TableCell numeric>{close.deliveryFeeSales}</TableCell>
+                          <TableCell numeric>{close.deliveryFeeRefunds}</TableCell>
                           <TableCell numeric>{close.refundTotal}</TableCell>
                           <TableCell numeric>{close.cashVariance}</TableCell>
                           <TableCell className="text-right">
@@ -1654,6 +1658,8 @@ function DailyCloseDetailPanel({
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Gross sales" value={totals.grossSales} />
         <Stat label="Net sales" value={totals.netSales} />
+        <Stat label="Delivery fee sales" value={totals.deliveryFeeSales} />
+        <Stat label="Delivery fee refunds" value={totals.deliveryFeeRefunds} />
         <Stat label="Tax" value={totals.taxTotal} />
         <Stat label="Service charge" value={totals.serviceChargeTotal} />
         <Stat label="Tips" value={totals.tipTotal} />

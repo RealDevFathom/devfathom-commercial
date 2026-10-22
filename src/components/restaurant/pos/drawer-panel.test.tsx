@@ -8,6 +8,18 @@ const activeDrawer = {
   drawerSessionId: 'drawer-1',
   businessDate: '2026-08-19',
   openingFloat: '100.00',
+  expectedCash: '100.00',
+  movements: [
+    {
+      id: 'movement-1',
+      kind: 'OPENING_FLOAT',
+      amount: '100.00',
+      reason: null,
+      staffProfileId: 'staff-1',
+      deviceId: 'device-1',
+      createdAt: '2026-08-19T09:00:00.000Z',
+    },
+  ],
   replayed: false,
 };
 
@@ -205,6 +217,43 @@ describe('DrawerPanel', () => {
     expect(panel.getByRole('button', { name: 'Close drawer' })).toBeEnabled();
     expect(panel.queryByRole('button', { name: 'Open drawer' })).not.toBeInTheDocument();
     expect(panel.queryByText('Drawer state unknown')).not.toBeInTheDocument();
+    expect(panel.getByText('100.00')).toBeVisible();
+    expect(panel.getByRole('list', { name: 'Current drawer movements' })).toHaveTextContent(
+      'opening float'
+    );
+  });
+
+  it('requires and submits an explanation when counted cash differs from expected cash', async () => {
+    const { requestMock, request } = mockRequest();
+    requestMock.mockResolvedValueOnce(activeDrawer).mockResolvedValueOnce({
+      drawerSessionId: 'drawer-1',
+      expectedCash: '100.00',
+      countedCash: '99.50',
+      variance: '-0.50',
+      replayed: false,
+    });
+    render(<DrawerPanel request={request} />);
+    const panel = openPanel();
+    await panel.findByText('Active drawer');
+    fireEvent.change(panel.getByLabelText('Counted cash'), { target: { value: '99.50' } });
+    fireEvent.click(panel.getByRole('button', { name: 'Close drawer' }));
+    expect(panel.getByRole('alert')).toHaveTextContent('Explain the cash variance');
+    expect(requestMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(panel.getByLabelText('Variance explanation'), {
+      target: { value: ' Till count checked twice ' },
+    });
+    fireEvent.click(panel.getByRole('button', { name: 'Close drawer' }));
+    await panel.findByText('Drawer closed.');
+    const body = {
+      drawerSessionId: 'drawer-1',
+      countedCash: '99.50',
+      varianceReason: 'Till count checked twice',
+    };
+    expect(requestMock.mock.calls[1]).toEqual([
+      '/api/restaurant/cash/drawer/close',
+      { method: 'POST', body, intent: `drawer-close:${JSON.stringify(body)}` },
+    ]);
   });
 
   it('marks cached open state stale, blocks submissions and preserves drafts across failed refresh', async () => {
@@ -220,6 +269,9 @@ describe('DrawerPanel', () => {
     fireEvent.change(panel.getByLabelText('Amount'), { target: { value: '10.50' } });
     fireEvent.change(panel.getByLabelText('Reason'), { target: { value: 'Petty cash' } });
     fireEvent.change(panel.getByLabelText('Counted cash'), { target: { value: '89.50' } });
+    fireEvent.change(panel.getByLabelText('Variance explanation'), {
+      target: { value: 'Count checked twice' },
+    });
 
     panel = await reopenPanel();
     await panel.findByRole('alert');
@@ -350,7 +402,11 @@ describe('DrawerPanel', () => {
       amount: '10.50',
       reason: 'Petty cash',
     };
-    const closeBody = { drawerSessionId: 'drawer-1', countedCash: '89.50' };
+    const closeBody = {
+      drawerSessionId: 'drawer-1',
+      countedCash: '89.50',
+      varianceReason: 'Count checked twice',
+    };
     expect(requestMock.mock.calls[1]).toEqual([
       '/api/restaurant/cash/drawer/movement',
       {

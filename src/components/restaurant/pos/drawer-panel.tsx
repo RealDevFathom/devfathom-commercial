@@ -25,6 +25,16 @@ type OpenResult = {
   drawerSessionId: string;
   businessDate: string;
   openingFloat: string;
+  expectedCash?: string;
+  movements?: Array<{
+    id: string;
+    kind: string;
+    amount: string;
+    reason: string | null;
+    staffProfileId: string;
+    deviceId: string;
+    createdAt: string;
+  }>;
   replayed: boolean;
 };
 type CloseResult = {
@@ -35,7 +45,8 @@ type CloseResult = {
   replayed: boolean;
 };
 type DrawerReadState =
-  { status: 'loading' | 'empty' | 'open' } | { status: 'error' | 'denied'; message: string };
+  | { status: 'loading' | 'empty' | 'open' }
+  | { status: 'error' | 'denied'; message: string };
 
 type DrawerPanelProps = {
   request: TerminalRequest;
@@ -64,6 +75,7 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
   const [movementAmount, setMovementAmount] = useState('');
   const [movementReason, setMovementReason] = useState('');
   const [countedCash, setCountedCash] = useState('');
+  const [varianceReason, setVarianceReason] = useState('');
   const [closed, setClosed] = useState<CloseResult | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -163,7 +175,18 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
       setError('Counted cash must be a non-negative decimal with at most two places.');
       return;
     }
-    const body = { drawerSessionId: drawer.drawerSessionId, countedCash };
+    const hasVariance =
+      drawer.expectedCash !== undefined &&
+      minorUnits(countedCash) !== minorUnits(drawer.expectedCash);
+    if (hasVariance && !varianceReason.trim()) {
+      setError('Explain the cash variance before closing the drawer.');
+      return;
+    }
+    const body = {
+      drawerSessionId: drawer.drawerSessionId,
+      countedCash,
+      ...(hasVariance ? { varianceReason: varianceReason.trim() } : {}),
+    };
     setPending('close');
     setError(null);
     setNotice(null);
@@ -177,6 +200,7 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
       setDrawer(null);
       setReadState({ status: 'empty' });
       setCountedCash('');
+      setVarianceReason('');
       setNotice('Drawer closed.');
     } catch (requestError) {
       setError(message(requestError));
@@ -188,6 +212,11 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
   const busy = pending !== null;
   const stateKnown = readState.status === 'empty' || readState.status === 'open';
   const writesDisabled = disabled || busy || !stateKnown;
+
+  function minorUnits(value: string): bigint {
+    const [whole, fraction = ''] = value.split('.');
+    return BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+  }
 
   return (
     <Dialog open={open} onOpenChange={(next) => void setPanelOpen(next)}>
@@ -368,6 +397,52 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
               </form>
             </SectionCard>
 
+            <SectionCard
+              eyebrow="Cash ledger"
+              title="Current balance and movements"
+              actions={
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={writesDisabled}
+                  onClick={() => void loadDrawerState()}
+                >
+                  {pending === 'load' ? 'Refreshing…' : 'Refresh ledger'}
+                </Button>
+              }
+            >
+              <div className="mb-4">
+                <p className="text-xs text-text-muted">Expected cash</p>
+                <p className="font-mono text-lg font-semibold tabular-nums text-text-strong">
+                  {drawer.expectedCash ?? 'Refresh to calculate'}
+                </p>
+              </div>
+              {drawer.movements?.length ? (
+                <ol className="divide-y divide-border-subtle" aria-label="Current drawer movements">
+                  {drawer.movements.map((movement) => (
+                    <li
+                      key={movement.id}
+                      className="grid gap-1 py-3 text-sm sm:grid-cols-[1fr_auto]"
+                    >
+                      <div>
+                        <p className="font-medium text-text-strong">
+                          {movement.kind.replaceAll('_', ' ').toLowerCase()}
+                        </p>
+                        <p className="text-xs text-text-muted">
+                          {movement.reason ?? 'System-posted movement'} ·{' '}
+                          {new Date(movement.createdAt).toLocaleString()}
+                        </p>
+                      </div>
+                      <p className="font-mono tabular-nums text-text-strong">{movement.amount}</p>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="text-sm text-text-muted">No movements are available yet.</p>
+              )}
+            </SectionCard>
+
             <SectionCard eyebrow="Closing count" title="Close drawer">
               <form onSubmit={closeDrawer} className="space-y-3">
                 <div className="space-y-1.5">
@@ -382,6 +457,24 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
                     className="h-11 font-mono tabular-nums"
                   />
                 </div>
+                {drawer.expectedCash !== undefined &&
+                MONEY.test(countedCash) &&
+                minorUnits(countedCash) !== minorUnits(drawer.expectedCash) ? (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="drawer-variance-reason">Variance explanation</Label>
+                    <Input
+                      id="drawer-variance-reason"
+                      value={varianceReason}
+                      disabled={writesDisabled}
+                      onChange={(event) => setVarianceReason(event.target.value)}
+                      maxLength={240}
+                      className="h-11"
+                    />
+                    <p className="text-xs text-text-muted">
+                      Required because counted cash differs from expected cash.
+                    </p>
+                  </div>
+                ) : null}
                 <Button
                   type="submit"
                   variant="outline"
