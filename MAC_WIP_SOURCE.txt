@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/codex/pharmacy-demo-runner
+Branch: codex/pharmacy-demo-runner
+HEAD: 79008e4b10be94eac73324f4a1f2d19257103264
+Mode: applied
+Excluded (secrets): 0
