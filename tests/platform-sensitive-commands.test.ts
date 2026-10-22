@@ -93,6 +93,25 @@ describe('sensitive commands', () => {
     ).rejects.toMatchObject({ status: 403 });
     expect(state.audits.at(-1).success).toBe(false);
   });
+  it('denies CRM opportunity conversion to SALES before provisioning', async () => {
+    const secret = 'conversion-admin-password';
+
+    await expect(
+      execute(
+        'crm.opportunity.convert',
+        { opportunityId: 'opportunity_1', adminPassword: secret },
+        'SALES'
+      )
+    ).rejects.toMatchObject({ status: 403 });
+
+    expect(db.organization.findUnique).not.toHaveBeenCalled();
+    expect(state.audits.at(-1)).toMatchObject({
+      action: 'crm.opportunity.convert',
+      success: false,
+      metadata: { outcomeCategory: 'capability_denied' },
+    });
+    expect(JSON.stringify(state.audits)).not.toContain(secret);
+  });
   it('requires a reason on SA vertical corrections', async () => {
     await expect(
       execute('organization.update', { id: 'org_1', vertical: 'RESTAURANT', packageId: 'pkg_1' })
