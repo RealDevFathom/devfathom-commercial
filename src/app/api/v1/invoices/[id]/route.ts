@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
+import { readInvoiceIssuer } from '@/lib/finance/invoice-issuer';
 import {
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
@@ -21,7 +22,8 @@ export const GET = withApiAuth(
       },
     });
     if (!invoice) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 });
-    return NextResponse.json({ data: invoice });
+    const issuer = await readInvoiceIssuer(authCtx.db, authCtx.organizationId);
+    return NextResponse.json({ data: { ...invoice, issuer } });
   }
 );
 

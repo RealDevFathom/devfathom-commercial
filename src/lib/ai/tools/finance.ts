@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
+import { readInvoiceIssuer } from '@/lib/finance/invoice-issuer';
 import {
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
@@ -350,12 +351,14 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
           }>)
         : [];
       const primary = invoice.client.contacts[0];
+      const issuer = await readInvoiceIssuer(db, h.ctx.organizationId);
 
       return {
         invoiceNumber: invoice.invoiceNumber,
         status: invoice.status,
         client: invoice.client.name,
         clientContact: primary ? { name: primary.name, email: primary.email ?? null } : null,
+        issuer,
         project: invoice.project?.name ?? null,
         currency: invoice.currency,
         subtotal: Number(invoice.subtotal),

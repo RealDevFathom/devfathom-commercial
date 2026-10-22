@@ -14,6 +14,7 @@ import {
   moneyLabel,
   type CurrencyAmount,
 } from '@/lib/finance/currency';
+import { readInvoiceIssuer } from '@/lib/finance/invoice-issuer';
 import {
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
@@ -243,8 +244,14 @@ export const financeRouter = router({
         },
       });
       if (!invoice) return null;
+      const issuer = await readInvoiceIssuer(ctx.db, workspaceId(ctx));
       const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
-      return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
+      return {
+        ...invoice,
+        issuer,
+        amountPaid,
+        balance: round2(Number(invoice.total) - amountPaid),
+      };
     }),
 
   createInvoice: adminProcedure

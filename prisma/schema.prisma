@@ -4874,6 +4874,8 @@ model Organization {
   dataResidency            String?
   primaryContactName       String?
   primaryContactEmail      String?
+  invoiceAddress           String?
+  invoiceTaxId             String?
   notes                    String?
   createdAt                DateTime                   @default(now())
   updatedAt                DateTime                   @updatedAt

@@ -40,6 +40,8 @@ const profile = {
   locale: 'en-PK',
   primaryContactName: null,
   primaryContactEmail: '',
+  invoiceAddress: '15 Market Street',
+  invoiceTaxId: 'US-TIN 12-3456789',
 };
 
 function context(): TRPCContext {
