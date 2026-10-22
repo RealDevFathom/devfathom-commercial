@@ -27,6 +27,10 @@ export const MIGRATION_TARGET_KEYS = {
   LOCATION: 'inv.location',
   /** A supplier or customer party. */
   PARTY: 'party',
+  /** A retail customer (kept distinct so commit cannot guess from column names). */
+  CUSTOMER: 'party.customer',
+  /** A procurement supplier (kept distinct so commit cannot guess from column names). */
+  SUPPLIER: 'party.supplier',
   /** A party's opening balance. */
   PARTY_BALANCE: 'party.balance',
   /** A historical incumbent document (invoice, return, receipt). */

@@ -204,6 +204,24 @@ export function readExpiryDate(raw: string | undefined): Date | null {
   if (isBlank(raw)) return null;
   const value = raw!.trim();
 
+  // Tally XML commonly emits an unseparated YYYYMMDD value.
+  const tally = /^(\d{4})(\d{2})(\d{2})$/.exec(value);
+  if (tally) return exactDate(Number(tally[1]), Number(tally[2]), Number(tally[3]));
+
+  // Excel's 1900 system (including its historic leap-year bug). CSV exports
+  // carry the serial as text, so parse it here as well as in XLSX adapters.
+  if (/^\d{1,7}$/.test(value)) {
+    const serial = Number(value);
+    if (serial >= 1 && serial <= 2_958_465) {
+      const candidate = new Date(Date.UTC(1899, 11, 30) + serial * 86_400_000);
+      return exactDate(
+        candidate.getUTCFullYear(),
+        candidate.getUTCMonth() + 1,
+        candidate.getUTCDate()
+      );
+    }
+  }
+
   const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
   if (iso) return exactDate(Number(iso[1]), Number(iso[2]), Number(iso[3]));
 
@@ -267,6 +285,7 @@ export function readPackFactor(raw: string | undefined): bigint | null {
   const value = raw!
     .trim()
     .toLowerCase()
+    .replace(/^(?:pack[_ ]?size|box[_ ]?size|conversion[_ ]?factor)\s*[:=]?\s*/, '')
     .replace(/['’]s\b/g, '');
 
   const grid = /^(\d+)\s*[x*]\s*(\d+)(?:\s*[a-z]+)?$/.exec(value);

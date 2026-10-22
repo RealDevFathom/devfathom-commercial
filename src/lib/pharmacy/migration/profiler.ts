@@ -250,9 +250,8 @@ function classify(input: {
 }): MigrationTargetKey {
   if (input.productName) return MIGRATION_TARGET_KEYS.PRODUCT;
   if (input.supplierName || input.customerName) {
-    return input.balanceMinor === null
-      ? MIGRATION_TARGET_KEYS.PARTY
-      : MIGRATION_TARGET_KEYS.PARTY_BALANCE;
+    if (input.balanceMinor !== null) return MIGRATION_TARGET_KEYS.PARTY_BALANCE;
+    return input.supplierName ? MIGRATION_TARGET_KEYS.SUPPLIER : MIGRATION_TARGET_KEYS.CUSTOMER;
   }
   if (input.columnMap.product !== undefined) return MIGRATION_TARGET_KEYS.PRODUCT;
   if (input.columnMap.balance !== undefined) return MIGRATION_TARGET_KEYS.PARTY_BALANCE;
@@ -280,7 +279,9 @@ function deriveNaturalKey(
   }
 
   const party = input.supplierName ?? input.customerName;
-  return party ? naturalKey(MIGRATION_TARGET_KEYS.PARTY, party) : null;
+  const partyTarget =
+    target === MIGRATION_TARGET_KEYS.PARTY_BALANCE ? MIGRATION_TARGET_KEYS.PARTY : target;
+  return party ? naturalKey(partyTarget, party) : null;
 }
 
 /**
