@@ -301,6 +301,8 @@ export const organizationAdminRouter = router({
         locale: z.string().trim().min(2).max(20),
         primaryContactName: z.string().trim().max(150).nullable(),
         primaryContactEmail: optionalEmail,
+        invoiceAddress: z.string().trim().max(500).nullable(),
+        invoiceTaxId: z.string().trim().max(100).nullable(),
       })
     )
     .mutation(async ({ ctx, input }) => {

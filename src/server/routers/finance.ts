@@ -14,6 +14,7 @@ import {
   moneyLabel,
   type CurrencyAmount,
 } from '@/lib/finance/currency';
+import { readInvoiceIssuer } from '@/lib/finance/invoice-issuer';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -218,8 +219,14 @@ export const financeRouter = router({
         },
       });
       if (!invoice) return null;
+      const issuer = await readInvoiceIssuer(ctx.db, workspaceId(ctx));
       const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
-      return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
+      return {
+        ...invoice,
+        issuer,
+        amountPaid,
+        balance: round2(Number(invoice.total) - amountPaid),
+      };
     }),
 
   createInvoice: adminProcedure
