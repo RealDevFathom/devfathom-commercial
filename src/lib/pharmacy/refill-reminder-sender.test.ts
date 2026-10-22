@@ -5,6 +5,8 @@ const state = vi.hoisted(() => ({
   reason: null as string | null,
   organizationId: 'org_a',
   branchId: 'branch_a',
+  outboxConflict: false,
+  outboxWrites: 0,
   executions: [] as Array<{ sql: string; values: unknown[] }>,
   tenantCalls: [] as string[],
 }));
@@ -14,9 +16,18 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     $queryRaw: async (query: { sql: string; values: unknown[] }) => {
       if (query.sql.includes('ORDER BY "reminderAt"')) {
         return state.status === 'CAPTURED'
-          ? [{ id: 'capture_a', organizationId: state.organizationId, branchId: state.branchId }]
+          ? [{
+              id: 'capture_a', organizationId: state.organizationId,
+              branchId: state.branchId, patientId: 'patient_a',
+            }]
           : [];
       }
+      if (query.sql.includes('INSERT INTO "pharmacy_message_logs"')) {
+        if (state.outboxConflict) return [];
+        state.outboxWrites++;
+        return [{ id: 'message_a' }];
+      }
+      if (query.sql.includes('FROM "pharmacy_patients"')) return [{ id: 'patient_a' }];
       return state.status === 'CAPTURED'
         ? [{
             id: 'capture_a', patientId: 'patient_a',
@@ -26,8 +37,10 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     },
     $executeRaw: async (query: { sql: string; values: unknown[] }) => {
       state.executions.push(query);
-      if (query.sql.includes('SET "status" = \'QUEUED\'')) state.status = 'QUEUED';
-      if (query.sql.includes('SET "status" = \'SKIPPED\'')) state.status = 'SKIPPED';
+      const correctBranch = query.values.includes(state.branchId);
+      if (correctBranch && query.sql.includes('SET "status" = \'QUEUED\'')) state.status = 'QUEUED';
+      if (correctBranch && query.sql.includes('SET "status" = \'SKIPPED\'')) state.status = 'SKIPPED';
+      if (correctBranch && query.sql.includes('SET "status" = \'SENT\'')) state.status = 'SENT';
       return 1;
     },
   };
@@ -40,13 +53,19 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
   };
 });
 
-import { queueDueRefillReminders, refillReminderPayload } from './refill-reminder-sender';
+import {
+  markRefillReminderSent,
+  queueDueRefillReminders,
+  refillReminderPayload,
+} from './refill-reminder-sender';
 
 beforeEach(() => {
   state.status = 'CAPTURED';
   state.reason = null;
   state.organizationId = 'org_a';
   state.branchId = 'branch_a';
+  state.outboxConflict = false;
+  state.outboxWrites = 0;
   state.executions = [];
   state.tenantCalls = [];
 });
@@ -58,7 +77,7 @@ describe('refill reminder transactional queue', () => {
     await expect(queueDueRefillReminders({ now: new Date('2026-10-23T00:00:00Z') }))
       .resolves.toEqual({ scanned: 0, queued: 0, skipped: 0, duplicate: 0 });
     expect(state.tenantCalls).toEqual(['org_a']);
-    expect(state.executions.some((query) => query.sql.includes('pharmacy_message_logs'))).toBe(true);
+    expect(state.outboxWrites).toBe(1);
   });
 
   it.each(['CONSENT_MISSING', 'CONSENT_REVOKED', 'PATIENT_OPTED_OUT'])(
@@ -66,7 +85,7 @@ describe('refill reminder transactional queue', () => {
     async (reason) => {
       state.reason = reason;
       await expect(queueDueRefillReminders()).resolves.toMatchObject({ skipped: 1, queued: 0 });
-      expect(state.executions.some((query) => query.sql.includes('pharmacy_message_logs'))).toBe(false);
+      expect(state.outboxWrites).toBe(0);
       expect(state.executions.flatMap((query) => query.values)).toContain(reason);
     }
   );
@@ -76,6 +95,24 @@ describe('refill reminder transactional queue', () => {
     state.branchId = 'branch_b';
     await queueDueRefillReminders();
     expect(state.tenantCalls).toEqual(['tenant_b']);
+  });
+
+  it('does not queue a capture when its outbox claim conflicts', async () => {
+    state.outboxConflict = true;
+    await expect(queueDueRefillReminders()).resolves.toMatchObject({ duplicate: 1, queued: 0 });
+    expect(state.status).toBe('CAPTURED');
+  });
+
+  it('does not mark a queued capture sent through another branch', async () => {
+    state.status = 'QUEUED';
+    const db = {
+      $executeRaw: async (query: { values: unknown[] }) => {
+        if (query.values.includes(state.branchId)) state.status = 'SENT';
+        return Number(query.values.includes(state.branchId));
+      },
+    };
+    await markRefillReminderSent(db as never, 'org_a', 'branch_b', 'capture_a');
+    expect(state.status).toBe('QUEUED');
   });
 
   it('keeps clinical PHI out of the bilingual transactional payload', () => {

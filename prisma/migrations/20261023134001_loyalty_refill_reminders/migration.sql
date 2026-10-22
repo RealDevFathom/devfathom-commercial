@@ -20,9 +20,41 @@ ALTER TABLE "pharmacy_refill_reminder_captures"
   ADD COLUMN "statusReason" TEXT,
   ADD COLUMN "queuedAt" TIMESTAMP(3),
   ADD COLUMN "sentAt" TIMESTAMP(3);
+
+-- The original capture-only constraint and generic append-only trigger reject
+-- every lifecycle transition. Replace them with a narrow state machine while
+-- keeping all clinical/capture evidence immutable and DELETE forbidden.
 ALTER TABLE "pharmacy_refill_reminder_captures"
-  ADD CONSTRAINT "pharmacy_refill_reminder_capture_status_check"
-  CHECK ("status" IN ('CAPTURED', 'QUEUED', 'SENT', 'SKIPPED'));
+  DROP CONSTRAINT "pharmacy_refill_capture_mode_check",
+  ADD CONSTRAINT "pharmacy_refill_capture_mode_check" CHECK ("captureMode"),
+  ADD CONSTRAINT "pharmacy_refill_reminder_capture_status_check" CHECK (
+    ("status" = 'CAPTURED' AND "statusReason" IS NULL AND "queuedAt" IS NULL AND "sentAt" IS NULL) OR
+    ("status" = 'QUEUED' AND "statusReason" IS NULL AND "queuedAt" IS NOT NULL AND "sentAt" IS NULL) OR
+    ("status" = 'SENT' AND "statusReason" IS NULL AND "queuedAt" IS NOT NULL AND "sentAt" IS NOT NULL) OR
+    ("status" = 'SKIPPED' AND "statusReason" IS NOT NULL AND "queuedAt" IS NULL AND "sentAt" IS NULL)
+  );
+
+DROP TRIGGER "pharmacy_refill_capture_append_only" ON "pharmacy_refill_reminder_captures";
+CREATE FUNCTION pharmacy_refill_capture_guard_transition() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    RAISE EXCEPTION '% is append-only', TG_TABLE_NAME USING ERRCODE = '23514';
+  END IF;
+  IF (to_jsonb(NEW) - ARRAY['status','statusReason','queuedAt','sentAt'])
+       IS DISTINCT FROM
+     (to_jsonb(OLD) - ARRAY['status','statusReason','queuedAt','sentAt']) THEN
+    RAISE EXCEPTION 'refill capture evidence is immutable' USING ERRCODE = '23514';
+  END IF;
+  IF NOT ((OLD."status" = 'CAPTURED' AND NEW."status" IN ('QUEUED','SKIPPED')) OR
+          (OLD."status" = 'QUEUED' AND NEW."status" = 'SENT')) THEN
+    RAISE EXCEPTION 'invalid refill capture status transition' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER "pharmacy_refill_capture_lifecycle_guard"
+  BEFORE UPDATE OR DELETE ON "pharmacy_refill_reminder_captures"
+  FOR EACH ROW EXECUTE FUNCTION pharmacy_refill_capture_guard_transition();
+
 CREATE INDEX "pharmacy_refill_reminder_due_idx"
   ON "pharmacy_refill_reminder_captures"("organizationId", "status", "reminderAt", "id");
 

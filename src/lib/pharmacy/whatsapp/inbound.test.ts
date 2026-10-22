@@ -7,6 +7,7 @@ const store = vi.hoisted(() => ({
   logs: [] as Row[],
   catalog: [] as Row[],
   placed: [] as unknown[],
+  refillPreferences: [] as Array<{ organizationId: unknown; patientId: unknown; optedOut: unknown }>,
   failConsent: false,
   failCommit: false,
 }));
@@ -14,7 +15,14 @@ const store = vi.hoisted(() => ({
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
     $queryRaw: async () => [{ id: 'patient-a', patientId: 'patient-a' }],
-    $executeRaw: async () => 1,
+    $executeRaw: async (query: { values: unknown[] }) => {
+      store.refillPreferences.push({
+        organizationId: query.values[1],
+        patientId: query.values[2],
+        optedOut: query.values[3],
+      });
+      return 1;
+    },
     pharmacyCustomer: {
       findFirst: async () => ({ patientId: 'patient-a' }),
       findMany: async () =>
@@ -69,6 +77,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     withTenantDb: async (_organizationId: string, run: (tx: unknown) => unknown) => {
       const customers = store.customers.map((row) => ({ ...row }));
       const logs = store.logs.map((row) => ({ ...row }));
+      const refillPreferences = store.refillPreferences.map((row) => ({ ...row }));
       try {
         const result = await run(db);
         if (store.failCommit) throw new Error('transaction commit failed');
@@ -76,6 +85,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       } catch (error) {
         store.customers = customers;
         store.logs = logs;
+        store.refillPreferences = refillPreferences;
         throw error;
       }
     },
@@ -130,6 +140,7 @@ beforeEach(() => {
   store.customers = [];
   store.logs = [];
   store.placed = [];
+  store.refillPreferences = [];
   store.catalog = [
     {
       id: 'row',
@@ -235,6 +246,16 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
       handleInboundWhatsAppMessage('org_a', provider, message('Panadol 2 packs'))
     ).resolves.toBe('NO_CONSENT');
     expect(provider.calls).toHaveLength(1);
+  });
+
+  it('STOP REFILL records an organization-wide refill opt-out', async () => {
+    knownCustomer(true);
+    await expect(
+      handleInboundWhatsAppMessage('org_a', provider, message('STOP REFILL'))
+    ).resolves.toBe('OPTED_OUT');
+    expect(store.refillPreferences).toEqual([
+      { organizationId: 'org_a', patientId: 'patient-a', optedOut: true },
+    ]);
   });
 
   it('Urdu STOP and START toggle the flag', async () => {

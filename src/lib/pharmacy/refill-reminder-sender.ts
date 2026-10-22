@@ -13,7 +13,7 @@ export type RefillSkipReason =
   | 'PATIENT_OPTED_OUT'
   | 'BRANCH_UNAVAILABLE';
 
-type DueCapture = { id: string; organizationId: string; branchId: string };
+type DueCapture = { id: string; organizationId: string; branchId: string; patientId: string };
 
 /**
  * The queue payload intentionally contains no patient name, medicine, dosage or
@@ -45,6 +45,13 @@ export async function setRefillReminderPreference(
   }
 ) {
   const now = input.now ?? new Date();
+  // This patient row is the serialization point shared with the scheduler. It
+  // prevents a preference/consent change racing a reminder eligibility claim.
+  await db.$queryRaw(Prisma.sql`
+    SELECT "id" FROM "pharmacy_patients"
+    WHERE "organizationId" = ${input.organizationId} AND "id" = ${input.patientId}
+    FOR UPDATE
+  `);
   await db.$executeRaw(Prisma.sql`
     INSERT INTO "pharmacy_refill_reminder_preferences"
       ("id", "organizationId", "patientId", "optedOut", "source", "changedByUserId", "changedAt")
@@ -66,7 +73,7 @@ export async function queueDueRefillReminders(options: { now?: Date; limit?: num
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   const captures = await withPlatformDb((db) =>
     db.$queryRaw<DueCapture[]>(Prisma.sql`
-      SELECT "id", "organizationId", "branchId"
+      SELECT "id", "organizationId", "branchId", "patientId"
       FROM "pharmacy_refill_reminder_captures"
       WHERE "status" = 'CAPTURED' AND "channel" = 'WHATSAPP' AND "reminderAt" <= ${now}
       ORDER BY "reminderAt", "id" LIMIT ${limit}
@@ -76,6 +83,16 @@ export async function queueDueRefillReminders(options: { now?: Date; limit?: num
 
   for (const candidate of captures) {
     const outcome = await withTenantDb(candidate.organizationId, async (db) => {
+      // Consent events reference the patient row, preference writes take the
+      // same lock, and branch availability changes update the branch row.
+      // Eligibility therefore remains true through the outbox claim.
+      await db.$queryRaw(Prisma.sql`
+        SELECT p."id" FROM "pharmacy_patients" p
+        JOIN "pharmacy_branches" b ON b."organizationId" = p."organizationId"
+          AND b."id" = ${candidate.branchId}
+        WHERE p."organizationId" = ${candidate.organizationId} AND p."id" = ${candidate.patientId}
+        FOR UPDATE OF p, b
+      `);
       const rows = await db.$queryRaw<
         Array<{ id: string; patientId: string; reminderAt: Date; reason: RefillSkipReason | null }>
       >(Prisma.sql`
@@ -110,12 +127,14 @@ export async function queueDueRefillReminders(options: { now?: Date; limit?: num
         await db.$executeRaw(Prisma.sql`
           UPDATE "pharmacy_refill_reminder_captures"
           SET "status" = 'SKIPPED', "statusReason" = ${capture.reason}
-          WHERE "organizationId" = ${candidate.organizationId} AND "id" = ${capture.id}
+          WHERE "organizationId" = ${candidate.organizationId}
+            AND "branchId" = ${candidate.branchId} AND "id" = ${capture.id}
+            AND "status" = 'CAPTURED'
         `);
         return 'SKIPPED' as const;
       }
       const payload = refillReminderPayload(capture.reminderAt);
-      await db.$executeRaw(Prisma.sql`
+      const inserted = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         INSERT INTO "pharmacy_message_logs"
           ("id", "organizationId", "branchId", "patientId", "direction", "kind", "status",
            "dedupeKey", "templateName", "refillCaptureId", "dueDate", "templateLocale",
@@ -125,7 +144,12 @@ export async function queueDueRefillReminders(options: { now?: Date; limit?: num
           ${REFILL_REMINDER_TEMPLATE}, ${capture.id}, ${payload.parameters.reminderDate}, 'en-ur',
           ${JSON.stringify(payload)}::jsonb, ${now}, ${now})
         ON CONFLICT ("organizationId", "dedupeKey") DO NOTHING
+        RETURNING "id"
       `);
+      // Never advance the capture when this transaction did not create the
+      // matching outbox record. This makes an unexpected dedupe collision fail
+      // closed rather than authorizing delivery from unrelated evidence.
+      if (inserted.length !== 1) return 'DUPLICATE' as const;
       await db.$executeRaw(Prisma.sql`
         UPDATE "pharmacy_refill_reminder_captures"
         SET "status" = 'QUEUED', "statusReason" = NULL, "queuedAt" = ${now}
@@ -145,12 +169,14 @@ export async function queueDueRefillReminders(options: { now?: Date; limit?: num
 export async function markRefillReminderSent(
   db: ScopedDb,
   organizationId: string,
+  branchId: string,
   captureId: string,
   sentAt = new Date()
 ) {
   return db.$executeRaw(Prisma.sql`
     UPDATE "pharmacy_refill_reminder_captures"
     SET "status" = 'SENT', "sentAt" = ${sentAt}, "statusReason" = NULL
-    WHERE "organizationId" = ${organizationId} AND "id" = ${captureId} AND "status" = 'QUEUED'
+    WHERE "organizationId" = ${organizationId} AND "branchId" = ${branchId}
+      AND "id" = ${captureId} AND "status" = 'QUEUED'
   `);
 }
