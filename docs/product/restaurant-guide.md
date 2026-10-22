@@ -68,7 +68,7 @@ The back office then shows a first-run checklist, in this order:
 
 You also set up your floor (areas and tables) in Restaurant → Floor.
 
-**Printing today.** Print routing is recorded and simulated. DevFathom does **not** yet print to real receipt or kitchen printers, or open a real cash drawer. TODO(confirm): when physical printing (the **print bridge**) will be supported and what a restaurant must install.
+**Printing.** Receipts and kitchen tickets print through the **print bridge**, a small program that runs on a computer in your restaurant and sends tickets to your printers (over the network, or through a macOS print queue). It has not yet been tested on real printers, and it does not open a cash drawer. Setting it up is a technical job: follow the [printing guide](modules/printing.md) and test one receipt and one kitchen ticket before you open.
 
 **Logins.** Each person gets their own login and their own PIN. Never share a login or a PIN.
 
@@ -124,9 +124,9 @@ Related docs: [POS and terminal](modules/pos-terminal.md).
 - **Routing** decides which items go to which station: a rule for a product beats a rule for a category, and anything left over goes to the default station. For example, you can send drinks to a bar station.
 - Kitchen staff press **Start**, then **Mark ready**. **Recall** brings a ticket back.
 - For delivery orders, the KDS has a handoff board: **Dispatch order**, then **Mark delivered**.
-- Printing is simulated today (see [section 2](#2-setting-up-one-time)).
+- Kitchen tickets and receipts can also print through the print bridge. It is not yet tested on real printers (see [section 2](#2-setting-up-one-time) and the [printing guide](modules/printing.md)).
 
-TODO(confirm): whether the cashier sees on the POS when an order is ready.
+- The cashier's POS does not show when an order is ready. Ready status is shown on the KDS only.
 
 Related docs: [KDS](modules/kds.md), [Printing](modules/printing.md).
 
@@ -193,6 +193,8 @@ Each staff member has one or more **job roles** at a branch. The standard roles 
 | Host | Seeing orders and customers |
 | Kitchen / Line Cook | Working the KDS |
 | Barista | Taking orders and working a KDS |
+| Accountant | Money and financial reports |
+| Delivery Rider | Delivery orders |
 
 Every role can read the menu and complete SOPs. A job role has **capabilities** (things the person may do). You can give one person an extra capability (**capability grant**) or block one, and every change is recorded.
 
@@ -211,7 +213,7 @@ The two layers do not read each other. Being an admin on the website does not gi
 - **SOPs** are checklists, such as opening and closing. Staff complete them on time, attaching evidence when asked (**SOP execution**). Managers verify, reject or waive them in SOP oversight. A waiver needs a second person.
 - SOP reports show results. If nothing was scored, they say "No data", not 0%.
 
-TODO(confirm): what a manager is alerted to when an SOP is missed (notifications are sent for SOP events; see [section 13](#13-other-features)).
+**When an SOP is missed.** If a checklist is not done in time, DevFathom marks it **Missed**. It then sends an alert called "SOP Escalation: <checklist name>" to each person or group in the escalation chain, one step at a time. It waits during quiet hours and stops once someone verifies or acknowledges it. Today alerts arrive in the app and, if set up, at your webhook. Email, SMS, push and WhatsApp alerts are not sent yet.
 
 Related docs: [SOP](sop.md), [Auth and roles (technical)](../dev/auth-and-roles.md).
 
@@ -225,9 +227,9 @@ Related docs: [SOP](sop.md), [Auth and roles (technical)](../dev/auth-and-roles.
 - Record waste as waste. Never edit a balance to hide it.
 - **Purchasing** steps: draft a purchase order, submit, approve, then receive the goods. Receiving adds stock.
 - Every stock change is recorded as a movement.
-- Recipes are the basis for using up stock when food is made. For catering, stock is used up when an event is marked Ready.
-
-TODO(confirm): whether a normal POS sale reduces stock automatically today.
+- When an order is closed, DevFathom uses up the ingredients in each item's recipe. Items with no active recipe do not reduce stock.
+- If an item is voided after the kitchen started it, the manager chooses: **Waste** records it as wastage; **Restock** or **None** record no stock change.
+- For catering, stock is used up when an event is marked Ready.
 
 Related docs: [Restaurant administrator guide](restaurant-administrator-guide.md) (sections 4 and 12).
 

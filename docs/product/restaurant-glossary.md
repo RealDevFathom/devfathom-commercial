@@ -25,7 +25,7 @@ Short meanings of restaurant words used in DevFathom. General DevFathom words (o
 |---|---|
 | **Order** | What a table or customer asks for. It is dine-in, takeaway or delivery. |
 | **Routing** | Rules that send each item to the right kitchen station. |
-| **Print bridge** | The planned link to real printers in your restaurant. Printing is simulated today. |
+| **Print bridge** | A small program on a computer in your restaurant that sends receipts and kitchen tickets to your printers. Not yet tested on real printers; it does not open a cash drawer. |
 | **Bill** | What the customer pays. It can be split by item, seat or fraction. |
 | **Tender** | A way to pay: Cash, Card or Other. A bill can have more than one tender. Card is recorded by the cashier; it is not a real card payment yet. |
 | **Drawer** | The cash drawer, tracked through the day with the opening float, paid-ins, paid-outs and drops. |
@@ -51,7 +51,7 @@ Short meanings of restaurant words used in DevFathom. General DevFathom words (o
 
 | Word | Meaning |
 |---|---|
-| **Job role** | A staff member's job on the floor. Standard roles: Owner, Manager, Shift Supervisor, Cashier, Server, Host, Kitchen / Line Cook, Barista. |
+| **Job role** | A staff member's job on the floor. Standard roles: Owner, Manager, Shift Supervisor, Cashier, Server, Host, Kitchen / Line Cook, Barista, Accountant, Delivery Rider. |
 | **Back-office role** | The role on a person's web login. Separate from their job role. |
 | **Capability** | Something a person is allowed to do. Job roles come with capabilities. |
 | **Capability grant** | Giving one person an extra capability. Every grant is recorded. |
