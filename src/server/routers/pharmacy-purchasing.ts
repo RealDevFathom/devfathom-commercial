@@ -977,25 +977,37 @@ const purchasingRouter = router({
             receivedByUserId: scope.actorId,
           });
         }
-        if (
-          input.purchaseOrderId &&
-          !(await ctx.db.pharmacyPurchaseOrder.findFirst({
-            where: { id: input.purchaseOrderId, supplierId: input.supplierId },
-          }))
-        ) {
+        const purchaseOrder = input.purchaseOrderId
+          ? await ctx.db.pharmacyPurchaseOrder.findFirst({
+              where: { id: input.purchaseOrderId, supplierId: input.supplierId },
+              include: { lines: { orderBy: { lineNumber: 'asc' } } },
+            })
+          : null;
+        if (input.purchaseOrderId && !purchaseOrder) {
           throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
         }
 
-        const ownOrderLines = input.purchaseOrderId
-          ? new Set(
-              (
-                await ctx.db.pharmacyPurchaseOrderLine.findMany({
-                  where: { purchaseOrderId: input.purchaseOrderId },
-                  select: { id: true },
-                })
-              ).map((line) => line.id)
-            )
-          : new Set<string>();
+        const orderLines = purchaseOrder?.lines ?? [];
+        const ownOrderLines = new Map(orderLines.map((line) => [line.id, line]));
+        const orderCosts = purchaseOrder
+          ? landedCost({
+              lines: orderLines.map((line) => ({
+                orderedPacks: line.orderedPacks,
+                bonusPacks: line.bonusPacks,
+                canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+                listPricePerPackMinor: line.listPricePerPackMinor,
+                discountBps: line.discountBps,
+                rebateBps: line.rebateBps,
+                taxBps: line.taxBps,
+                taxCreditable: line.taxCreditable,
+              })),
+              freightMinor: purchaseOrder.freightMinor,
+              otherChargesMinor: purchaseOrder.otherChargesMinor,
+            }).lines
+          : [];
+        const orderCostByLine = new Map(
+          orderLines.map((line, index) => [line.id, orderCosts[index]!])
+        );
 
         const lines = [];
         const seenSerials = new Set<string>();
@@ -1011,6 +1023,12 @@ const purchasingRouter = router({
           // something they were never ordered on.
           if (line.purchaseOrderLineId && !ownOrderLines.has(line.purchaseOrderLineId))
             throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+          const orderLine = line.purchaseOrderLineId
+            ? ownOrderLines.get(line.purchaseOrderLineId)
+            : undefined;
+          const orderCost = line.purchaseOrderLineId
+            ? orderCostByLine.get(line.purchaseOrderLineId)
+            : undefined;
 
           const quantities = receiptLineQuantities({
             receivedPacks: line.receivedPacks,
@@ -1077,8 +1095,18 @@ const purchasingRouter = router({
               canonicalUnitsPerPack: line.canonicalUnitsPerPack,
               invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
               discountBps: line.discountBps,
+              rebateBps: orderLine?.rebateBps,
               taxBps: line.taxBps,
               taxCreditable: line.taxCreditable,
+              // Preserve the PO allocation rate for partial receipts. The
+              // receipt payload cannot inflate or suppress stored order costs.
+              allocatedChargeMinor:
+                orderLine && orderCost
+                  ? Math.round(
+                      (orderCost.allocatedChargeMinor * line.receivedPacks) /
+                        orderLine.orderedPacks
+                    )
+                  : 0,
             }),
             stockLocationId: line.stockLocationId,
             quarantineLocationId: line.quarantineLocationId ?? null,

@@ -599,8 +599,25 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
 
   /** A resolvable purchase order whose one line the receipt may name. */
   function resolvableOrder() {
-    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'po_a', supplierId: 'supplier_a' });
-    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([{ id: 'poline_a' }]);
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      freightMinor: 0,
+      otherChargesMinor: 0,
+      lines: [
+        {
+          id: 'poline_a',
+          orderedPacks: 10,
+          bonusPacks: 2,
+          canonicalUnitsPerPack: 10,
+          listPricePerPackMinor: 10_000,
+          discountBps: 0,
+          rebateBps: 0,
+          taxBps: 0,
+          taxCreditable: false,
+        },
+      ],
+    });
   }
 
   beforeEach(() => {
@@ -642,6 +659,36 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     // The tenant and branch are not repeated on the nested line: they travel in
     // the composite key of the header.
     expect(line).not.toHaveProperty('organizationId');
+  });
+
+  it('carries stored PO freight, other charges and rebate into receipt unit cost', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      freightMinor: 4_000,
+      otherChargesMinor: 2_000,
+      lines: [
+        {
+          id: 'poline_a',
+          orderedPacks: 10,
+          bonusPacks: 0,
+          canonicalUnitsPerPack: 10,
+          listPricePerPackMinor: 10_000,
+          discountBps: 1_000,
+          rebateBps: 500,
+          taxBps: 1_000,
+          taxCreditable: false,
+        },
+      ],
+    });
+
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [{ ...RECEIPT_LINE, bonusPacks: 0, discountBps: 1_000, taxBps: 1_000 }],
+    });
+
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    expect(line.unitCostMinor).toBe(1_001);
   });
 
   it('takes the receiver from the session, never from the payload', async () => {

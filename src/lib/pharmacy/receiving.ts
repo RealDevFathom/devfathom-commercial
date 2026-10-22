@@ -234,9 +234,13 @@ export type ReceiptLineCostInput = {
   canonicalUnitsPerPack: number;
   invoicedPricePerPackMinor: number;
   discountBps?: number;
+  /** Supplier rebate off the discounted invoice value. */
+  rebateBps?: number;
   taxBps?: number;
   /** A creditable input tax is recovered from the authority, so it is not cost. */
   taxCreditable?: boolean;
+  /** This receipt line's share of order-level freight and other charges. */
+  allocatedChargeMinor?: number;
 };
 
 /**
@@ -254,8 +258,10 @@ export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
     canonicalUnitsPerPack,
     invoicedPricePerPackMinor,
     discountBps = 0,
+    rebateBps = 0,
     taxBps = 0,
     taxCreditable = false,
+    allocatedChargeMinor = 0,
   } = input;
 
   assertUnits(receivedPacks);
@@ -265,12 +271,16 @@ export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
     !Number.isSafeInteger(discountBps) ||
     discountBps < 0 ||
     discountBps > BPS ||
+    !Number.isSafeInteger(rebateBps) ||
+    rebateBps < 0 ||
+    rebateBps > BPS ||
     !Number.isSafeInteger(taxBps) ||
     taxBps < 0 ||
     taxBps > BPS
   ) {
     throw new PharmacyReceivingError('INVALID_MONEY');
   }
+  assertMoney(allocatedChargeMinor);
   if (!Number.isSafeInteger(canonicalUnitsPerPack) || canonicalUnitsPerPack <= 0) {
     throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
   }
@@ -284,8 +294,13 @@ export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
   const grossMinor = receivedPacks * invoicedPricePerPackMinor;
   assertMoney(grossMinor);
   const netMinor = grossMinor - divideRoundHalfUp(grossMinor * discountBps, BPS);
-  const taxMinor = divideRoundHalfUp(netMinor * taxBps, BPS);
-  return divideRoundHalfUp(netMinor + (taxCreditable ? 0 : taxMinor), canonicalUnits);
+  const rebateMinor = divideRoundHalfUp(netMinor * rebateBps, BPS);
+  const taxableMinor = netMinor - rebateMinor;
+  const taxMinor = divideRoundHalfUp(taxableMinor * taxBps, BPS);
+  return divideRoundHalfUp(
+    taxableMinor + (taxCreditable ? 0 : taxMinor) + allocatedChargeMinor,
+    canonicalUnits
+  );
 }
 
 // ---------------------------------------------------------------------------
