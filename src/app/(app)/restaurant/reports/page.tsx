@@ -107,6 +107,18 @@ function DetailLimitNotice({ detail }: { detail: string }) {
   );
 }
 
+function CashCoverageNotice({ detail }: { detail: string }) {
+  return (
+    <div
+      className="flex flex-wrap items-center gap-3 rounded-sm border border-border-default bg-surface-sunken px-4 py-3 text-sm text-text-muted"
+      role="status"
+    >
+      <StatusPill status="Cash evidence incomplete" tone="warning" />
+      <span>{detail}</span>
+    </div>
+  );
+}
+
 function TableFrame({ children, label }: { children: React.ReactNode; label: string }) {
   return (
     <div
@@ -755,7 +767,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                 ) : null}
                 {catering.data.truncated ? (
                   <DetailLimitNotice
-                    detail={`Showing the first ${MAX_INTERACTIVE_ROWS.toLocaleString()} catering orders. Export is limited to ${MAX_EXPORT_ROWS.toLocaleString()} rows.`}
+                    detail={`Showing the first ${MAX_INTERACTIVE_ROWS.toLocaleString()} catering orders. Headline and status totals use all ${catering.data.totals.orderCount.toLocaleString()} matching orders; export detail is limited to ${MAX_EXPORT_ROWS.toLocaleString()} rows.`}
                   />
                 ) : null}
                 <div className="grid gap-6 xl:grid-cols-2">
@@ -987,9 +999,40 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
               <Stat label="Tips" value={displayNumber(payments.data.tipTotal)} />
               <Stat label="Discounts" value={displayNumber(payments.data.discountTotal)} />
               <Stat label="Cash expected" value={displayNumber(payments.data.cashExpected)} />
-              <Stat label="Cash counted" value={displayNumber(payments.data.cashCounted)} />
-              <Stat label="Drawer variance" value={displayNumber(payments.data.cashVariance)} />
+              <Stat
+                label="Cash counted"
+                value={
+                  payments.data.cashCountCoverage.status === 'COMPLETE'
+                    ? displayNumber(payments.data.cashCounted)
+                    : 'Unavailable'
+                }
+                sub={
+                  payments.data.cashCountCoverage.status === 'COMPLETE'
+                    ? undefined
+                    : 'Cash-count evidence is incomplete'
+                }
+              />
+              <Stat
+                label="Drawer variance"
+                value={
+                  payments.data.cashCountCoverage.status === 'COMPLETE'
+                    ? displayNumber(payments.data.cashVariance)
+                    : 'Unavailable'
+                }
+                sub={
+                  payments.data.cashCountCoverage.status === 'COMPLETE'
+                    ? undefined
+                    : 'Cash-count evidence is incomplete'
+                }
+              />
             </div>
+            {payments.data.cashCountCoverage.status !== 'COMPLETE' ? (
+              <div className="mt-6">
+                <CashCoverageNotice
+                  detail={`Cash count coverage: ${payments.data.cashCountCoverage.status.replaceAll('_', ' ')} · ${payments.data.cashCountCoverage.drawerSessionCount} drawer session(s) · ${payments.data.cashCountCoverage.missingCountSessionCount} missing count(s) · ${payments.data.cashCountCoverage.unverifiedCloseSessionCount} unverified close(s) · ${payments.data.cashCountCoverage.mismatchedCloseDayCount} mismatched close day(s).`}
+                />
+              </div>
+            ) : null}
             {payments.data.tenders.length ? (
               <div className="mt-6">
                 <TableFrame label="Tender totals">

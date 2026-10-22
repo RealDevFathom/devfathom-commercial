@@ -803,13 +803,12 @@ export async function readCateringReport(
   limit = MAX_INTERACTIVE_ROWS
 ) {
   const parsed = validateRestaurantReportRange(range);
-  const rows = await db.restaurantCateringOrder.findMany({
+  const query = {
     where: {
       branchId: { in: range.branchIds },
       eventDate: { gte: parsed.from, lte: parsed.to },
     },
     orderBy: [{ eventDate: 'asc' }, { id: 'asc' }],
-    take: limit + 1,
     select: {
       id: true,
       organizationId: true,
@@ -830,7 +829,7 @@ export async function readCateringReport(
       extraCosts: { select: { amount: true } },
       delivery: { select: { scheduledAt: true, deliveredAt: true } },
     },
-  });
+  } satisfies Prisma.RestaurantCateringOrderFindManyArgs;
   const costCache = new Map<
     string,
     Awaited<ReturnType<typeof computeRecipeCost>> | RecipeCostingError
@@ -857,86 +856,100 @@ export async function readCateringReport(
   let deliveredCount = 0;
   let deliveredOnTimeCount = 0;
   const orders = [];
-  for (const order of rows.slice(0, limit)) {
-    let orderIngredientCost = ZERO;
-    let orderMissingCostLineCount = 0;
-    for (const line of order.lines) {
-      let costPerPortion = line.costPerPortionSnapshot;
-      if (!costPerPortion && line.recipeId) {
-        let cost = costCache.get(line.recipeId);
-        if (!cost) {
-          try {
-            cost = await computeRecipeCost({
-              organizationId: order.organizationId,
-              recipeId: line.recipeId,
-            });
-          } catch (error) {
-            if (!(error instanceof RecipeCostingError)) throw error;
-            cost = error;
-          }
-          costCache.set(line.recipeId, cost);
-        }
-        if (!(cost instanceof RecipeCostingError) && cost.missing.length === 0)
-          costPerPortion = cost.costPerPortion;
-      }
-      if (!costPerPortion) orderMissingCostLineCount += 1;
-      else orderIngredientCost = orderIngredientCost.plus(line.portions.times(costPerPortion));
-    }
-    const orderExtras = add(order.extraCosts.map((cost) => cost.amount));
-    const orderMargin =
-      order.quotedTotal && orderMissingCostLineCount === 0
-        ? order.quotedTotal.minus(orderIngredientCost).minus(orderExtras)
-        : null;
-    revenue = revenue.plus(order.quotedTotal ?? ZERO);
-    knownIngredientCost = knownIngredientCost.plus(orderIngredientCost);
-    extras = extras.plus(orderExtras);
-    missingCostLineCount += orderMissingCostLineCount;
-    if (!order.quotedTotal) missingRevenueOrderCount += 1;
-    if (orderMargin) knownMargin = knownMargin.plus(orderMargin);
-    else incompleteMarginCount += 1;
-    const deliveredOnTime = order.delivery?.deliveredAt
-      ? order.delivery.deliveredAt <= order.delivery.scheduledAt
-      : null;
-    if (order.delivery?.deliveredAt) {
-      deliveredCount += 1;
-      if (deliveredOnTime) deliveredOnTimeCount += 1;
-    }
-    const status = statusRows.get(order.status) ?? {
-      status: order.status,
-      orderCount: 0,
-      revenue: ZERO,
-      knownIngredientCost: ZERO,
-      extras: ZERO,
-      knownMargin: ZERO,
-      incompleteMarginCount: 0,
-    };
-    status.orderCount += 1;
-    status.revenue = status.revenue.plus(order.quotedTotal ?? ZERO);
-    status.knownIngredientCost = status.knownIngredientCost.plus(orderIngredientCost);
-    status.extras = status.extras.plus(orderExtras);
-    if (orderMargin) status.knownMargin = status.knownMargin.plus(orderMargin);
-    else status.incompleteMarginCount += 1;
-    statusRows.set(order.status, status);
-    orders.push({
-      id: order.id,
-      eventName: order.eventName,
-      eventDate: dateKey(order.eventDate),
-      branchId: order.branch.id,
-      branchName: order.branch.name,
-      status: order.status,
-      quotedTotal: order.quotedTotal ? serializeDecimal(order.quotedTotal) : null,
-      ingredientCost:
-        orderMissingCostLineCount === 0 ? serializeDecimal(orderIngredientCost) : null,
-      extras: serializeDecimal(orderExtras),
-      margin: orderMargin ? serializeDecimal(orderMargin) : null,
-      missingCostLineCount: orderMissingCostLineCount,
-      deliveredOnTime,
+  let orderCount = 0;
+  let cursor: string | undefined;
+  do {
+    const page = await db.restaurantCateringOrder.findMany({
+      ...query,
+      take: 500,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     });
-  }
+    for (const order of page) {
+      orderCount += 1;
+      let orderIngredientCost = ZERO;
+      let orderMissingCostLineCount = 0;
+      for (const line of order.lines) {
+        let costPerPortion = line.costPerPortionSnapshot;
+        if (!costPerPortion && line.recipeId) {
+          let cost = costCache.get(line.recipeId);
+          if (!cost) {
+            try {
+              cost = await computeRecipeCost({
+                organizationId: order.organizationId,
+                recipeId: line.recipeId,
+              });
+            } catch (error) {
+              if (!(error instanceof RecipeCostingError)) throw error;
+              cost = error;
+            }
+            costCache.set(line.recipeId, cost);
+          }
+          if (!(cost instanceof RecipeCostingError) && cost.missing.length === 0)
+            costPerPortion = cost.costPerPortion;
+        }
+        if (!costPerPortion) orderMissingCostLineCount += 1;
+        else orderIngredientCost = orderIngredientCost.plus(line.portions.times(costPerPortion));
+      }
+      const orderExtras = add(order.extraCosts.map((cost) => cost.amount));
+      const orderMargin =
+        order.quotedTotal && orderMissingCostLineCount === 0
+          ? order.quotedTotal.minus(orderIngredientCost).minus(orderExtras)
+          : null;
+      revenue = revenue.plus(order.quotedTotal ?? ZERO);
+      knownIngredientCost = knownIngredientCost.plus(orderIngredientCost);
+      extras = extras.plus(orderExtras);
+      missingCostLineCount += orderMissingCostLineCount;
+      if (!order.quotedTotal) missingRevenueOrderCount += 1;
+      if (orderMargin) knownMargin = knownMargin.plus(orderMargin);
+      else incompleteMarginCount += 1;
+      const deliveredOnTime = order.delivery?.deliveredAt
+        ? order.delivery.deliveredAt <= order.delivery.scheduledAt
+        : null;
+      if (order.delivery?.deliveredAt) {
+        deliveredCount += 1;
+        if (deliveredOnTime) deliveredOnTimeCount += 1;
+      }
+      const status = statusRows.get(order.status) ?? {
+        status: order.status,
+        orderCount: 0,
+        revenue: ZERO,
+        knownIngredientCost: ZERO,
+        extras: ZERO,
+        knownMargin: ZERO,
+        incompleteMarginCount: 0,
+      };
+      status.orderCount += 1;
+      status.revenue = status.revenue.plus(order.quotedTotal ?? ZERO);
+      status.knownIngredientCost = status.knownIngredientCost.plus(orderIngredientCost);
+      status.extras = status.extras.plus(orderExtras);
+      if (orderMargin) status.knownMargin = status.knownMargin.plus(orderMargin);
+      else status.incompleteMarginCount += 1;
+      statusRows.set(order.status, status);
+      if (orders.length < limit) {
+        orders.push({
+          id: order.id,
+          eventName: order.eventName,
+          eventDate: dateKey(order.eventDate),
+          branchId: order.branch.id,
+          branchName: order.branch.name,
+          status: order.status,
+          quotedTotal: order.quotedTotal ? serializeDecimal(order.quotedTotal) : null,
+          ingredientCost:
+            orderMissingCostLineCount === 0 ? serializeDecimal(orderIngredientCost) : null,
+          extras: serializeDecimal(orderExtras),
+          margin: orderMargin ? serializeDecimal(orderMargin) : null,
+          missingCostLineCount: orderMissingCostLineCount,
+          deliveredOnTime,
+        });
+      }
+    }
+    if (page.length < 500) break;
+    cursor = page[page.length - 1].id;
+  } while (true);
   return {
     range,
     totals: {
-      orderCount: orders.length,
+      orderCount,
       revenue: serializeDecimal(revenue),
       knownIngredientCost: serializeDecimal(knownIngredientCost),
       extras: serializeDecimal(extras),
@@ -964,7 +977,7 @@ export async function readCateringReport(
         incompleteMarginCount: row.incompleteMarginCount,
       })),
     orders,
-    truncated: rows.length > limit,
+    truncated: orderCount > limit,
   };
 }
 
@@ -1274,10 +1287,7 @@ function stockLocationClause(range: RestaurantStockReportRange) {
     : Prisma.empty;
 }
 
-function valuedWastageCte(
-  range: RestaurantStockReportRange,
-  parsed: ReturnType<typeof validateRestaurantReportRange>
-) {
+function valuedWastageCte(range: RestaurantStockReportRange) {
   return Prisma.sql`
     WITH current_costs AS (
       SELECT
@@ -1300,6 +1310,10 @@ function valuedWastageCte(
         COALESCE(unit."abbreviation", unit."name") AS "canonicalUnit",
         movement."reason"::text AS "reason",
         movement."occurredAt",
+        (
+          movement."occurredAt" AT TIME ZONE branch."timezone"
+          - (branch."businessDayCutoff"::time - TIME '00:00')
+        )::date AS "businessDate",
         ABS(movement."quantity") AS "quantity",
         COALESCE(
           movement."unitCost",
@@ -1323,8 +1337,12 @@ function valuedWastageCte(
        AND current_costs."locationId" = movement."locationId"
       WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
         ${stockLocationClause(range)}
-        AND movement."occurredAt" >= ${parsed.from}
-        AND movement."occurredAt" < ${parsed.toExclusive}
+        AND movement."occurredAt" >= (
+          CAST(${range.from} AS date) + branch."businessDayCutoff"::time
+        ) AT TIME ZONE branch."timezone"
+        AND movement."occurredAt" < (
+          CAST(${range.to} AS date) + INTERVAL '1 day' + branch."businessDayCutoff"::time
+        ) AT TIME ZONE branch."timezone"
         AND (
           movement."reason" IN ('WASTAGE', 'SPOILAGE', 'STAFF_MEAL')
           OR (movement."reason" = 'MANUAL_CORRECTION' AND movement."quantity" < 0)
@@ -1372,9 +1390,9 @@ async function readWastageIngredientRows(
   range: RestaurantStockReportRange,
   limit: number
 ) {
-  const parsed = validateRestaurantReportRange(range);
+  validateRestaurantReportRange(range);
   const rows = await db.$queryRaw<WastageIngredientRow[]>(Prisma.sql`
-    ${valuedWastageCte(range, parsed)}
+    ${valuedWastageCte(range)}
     SELECT
       "stockItemId",
       "ingredientName",
@@ -1390,20 +1408,20 @@ async function readWastageIngredientRows(
 }
 
 export async function readWastageReport(db: ScopedDb, range: RestaurantStockReportRange) {
-  const parsed = validateRestaurantReportRange(range);
+  validateRestaurantReportRange(range);
   const [reasonRows, dayRows, ingredients] = await Promise.all([
     db.$queryRaw<WastageReasonRow[]>(Prisma.sql`
-      ${valuedWastageCte(range, parsed)}
+      ${valuedWastageCte(range)}
       SELECT "reason", ${wastageAggregateSelect()}
       FROM valued_wastage
       GROUP BY "reason"
       ORDER BY "reason" ASC
     `),
     db.$queryRaw<WastageDayRow[]>(Prisma.sql`
-      ${valuedWastageCte(range, parsed)}
-      SELECT TO_CHAR("occurredAt", 'YYYY-MM-DD') AS "day", ${wastageAggregateSelect()}
+      ${valuedWastageCte(range)}
+      SELECT TO_CHAR("businessDate", 'YYYY-MM-DD') AS "day", ${wastageAggregateSelect()}
       FROM valued_wastage
-      GROUP BY TO_CHAR("occurredAt", 'YYYY-MM-DD')
+      GROUP BY "businessDate"
       ORDER BY "day" ASC
     `),
     readWastageIngredientRows(db, range, MAX_INTERACTIVE_ROWS),
@@ -1482,7 +1500,7 @@ async function readStockMovementRows(
   range: RestaurantStockReportRange,
   limit: number
 ) {
-  const parsed = validateRestaurantReportRange(range);
+  validateRestaurantReportRange(range);
   const rows = await db.$queryRaw<StockMovementGroupRow[]>(Prisma.sql`
     WITH current_costs AS (
       SELECT
@@ -1501,6 +1519,9 @@ async function readStockMovementRows(
         movement."quantity",
         movement."unitCost",
         movement."occurredAt",
+        (
+          CAST(${range.from} AS date) + branch."businessDayCutoff"::time
+        ) AT TIME ZONE branch."timezone" AS "rangeStart",
         COALESCE(
           movement."unitCost",
           current_costs."weightedAverageCost",
@@ -1510,6 +1531,7 @@ async function readStockMovementRows(
           AS "balanceUnitCost"
       FROM "restaurant_stock_movements" movement
       JOIN "restaurant_stock_locations" location ON location."id" = movement."locationId"
+      JOIN "restaurant_branches" branch ON branch."id" = location."branchId"
       JOIN "restaurant_stock_items" item ON item."id" = movement."stockItemId"
       JOIN "restaurant_ingredients" ingredient ON ingredient."id" = item."ingredientId"
       JOIN "restaurant_units" unit ON unit."id" = item."canonicalUnitId"
@@ -1518,46 +1540,48 @@ async function readStockMovementRows(
        AND current_costs."locationId" = movement."locationId"
       WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
         ${stockLocationClause(range)}
-        AND movement."occurredAt" < ${parsed.toExclusive}
+        AND movement."occurredAt" < (
+          CAST(${range.to} AS date) + INTERVAL '1 day' + branch."businessDayCutoff"::time
+        ) AT TIME ZONE branch."timezone"
     ), grouped AS (
       SELECT
         "stockItemId",
         "ingredientName",
         "canonicalUnit",
-        COUNT(*) FILTER (WHERE "occurredAt" >= ${parsed.from})::int AS "movementCount",
-        COALESCE(SUM("quantity") FILTER (WHERE "occurredAt" < ${parsed.from}), 0)
+        COUNT(*) FILTER (WHERE "occurredAt" >= "rangeStart")::int AS "movementCount",
+        COALESCE(SUM("quantity") FILTER (WHERE "occurredAt" < "rangeStart"), 0)
           AS "openingQuantity",
         COALESCE(SUM("quantity") FILTER (
-          WHERE "occurredAt" >= ${parsed.from} AND "quantity" > 0
+          WHERE "occurredAt" >= "rangeStart" AND "quantity" > 0
         ), 0) AS "inQuantity",
         COALESCE(SUM(ABS("quantity")) FILTER (
-          WHERE "occurredAt" >= ${parsed.from} AND "quantity" < 0
+          WHERE "occurredAt" >= "rangeStart" AND "quantity" < 0
         ), 0) AS "outQuantity",
-        COALESCE(SUM("quantity") FILTER (WHERE "occurredAt" >= ${parsed.from}), 0)
+        COALESCE(SUM("quantity") FILTER (WHERE "occurredAt" >= "rangeStart"), 0)
           AS "netQuantity",
         COALESCE(SUM("quantity"), 0) AS "closingQuantity",
         COALESCE(SUM("quantity" * COALESCE("balanceUnitCost", 0)) FILTER (
-          WHERE "occurredAt" < ${parsed.from}
+          WHERE "occurredAt" < "rangeStart"
         ), 0) AS "openingCost",
         COALESCE(SUM("quantity" * COALESCE("effectiveUnitCost", 0)) FILTER (
-          WHERE "occurredAt" >= ${parsed.from} AND "quantity" > 0
+          WHERE "occurredAt" >= "rangeStart" AND "quantity" > 0
         ), 0) AS "inCost",
         COALESCE(SUM(ABS("quantity") * COALESCE("effectiveUnitCost", 0)) FILTER (
-          WHERE "occurredAt" >= ${parsed.from} AND "quantity" < 0
+          WHERE "occurredAt" >= "rangeStart" AND "quantity" < 0
         ), 0) AS "outCost",
         COALESCE(SUM("quantity" * COALESCE("effectiveUnitCost", 0)) FILTER (
-          WHERE "occurredAt" >= ${parsed.from}
+          WHERE "occurredAt" >= "rangeStart"
         ), 0) AS "netCost",
         COALESCE(SUM("quantity" * COALESCE("balanceUnitCost", 0)), 0) AS "closingCost",
         COUNT(*) FILTER (
-          WHERE "occurredAt" >= ${parsed.from} AND "unitCost" IS NULL
+          WHERE "occurredAt" >= "rangeStart" AND "unitCost" IS NULL
         )::int AS "estimatedMovementCount",
         COUNT(*) FILTER (
-          WHERE "occurredAt" >= ${parsed.from} AND "effectiveUnitCost" IS NULL
+          WHERE "occurredAt" >= "rangeStart" AND "effectiveUnitCost" IS NULL
         )::int AS "unvaluedMovementCount"
       FROM scoped_movements
       GROUP BY "stockItemId", "ingredientName", "canonicalUnit"
-      HAVING COUNT(*) FILTER (WHERE "occurredAt" >= ${parsed.from}) > 0
+      HAVING COUNT(*) FILTER (WHERE "occurredAt" >= "rangeStart") > 0
     )
     SELECT
       grouped.*,
@@ -1633,7 +1657,7 @@ export async function readStockMovementReport(db: ScopedDb, range: RestaurantSto
 }
 
 async function readWastageExportRows(db: ScopedDb, range: RestaurantStockReportRange) {
-  const parsed = validateRestaurantReportRange(range);
+  validateRestaurantReportRange(range);
   const rows = await db.$queryRaw<
     Array<{
       id: string;
@@ -1649,10 +1673,10 @@ async function readWastageExportRows(db: ScopedDb, range: RestaurantStockReportR
       valuationSource: string;
     }>
   >(Prisma.sql`
-    ${valuedWastageCte(range, parsed)}
+    ${valuedWastageCte(range)}
     SELECT
       "id",
-      TO_CHAR("occurredAt", 'YYYY-MM-DD') AS "day",
+      TO_CHAR("businessDate", 'YYYY-MM-DD') AS "day",
       "branchName",
       "locationName",
       "ingredientName",
