@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const schema = readFileSync('prisma/schema.prisma', 'utf8');
-const migration = readFileSync('prisma/migrations/20261023360001_pharmacy_stored_value_wallet/migration.sql', 'utf8');
+const migration = readFileSync('prisma/migrations/20261023136001_pharmacy_stored_value_wallet/migration.sql', 'utf8');
 const ledger = readFileSync('src/lib/stored-value/ledger.ts', 'utf8');
 
 describe('stored-value persistence contract', () => {
