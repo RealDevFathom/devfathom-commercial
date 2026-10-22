@@ -35,6 +35,8 @@ Use one status on every capability claim:
 
 ## Technical reference
 
+- Operations and security (AWS staging): [AWS staging](ops/aws-staging.md), [runbook](ops/runbook.md), [environment variables](ops/environment-variables.md), [security overview](ops/security-overview.md)
+
 - [Tenant/RLS architecture](admin-platform/architecture-tenancy.md)
 - [Identity and access](admin-platform/identity-access.md)
 - [Platform control desk](admin-platform/control-plane.md)

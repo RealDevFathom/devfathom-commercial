@@ -1,0 +1,120 @@
+# Security overview
+
+> Checked against `origin/main` 6e425380 (`src/lib/tenancy`, `src/lib/abac`, `src/lib/vertical-catalog.ts`, `src/lib/platform`, the health routes and `infra/aws`) plus CTO facts dated 2026-10-22.
+> Items marked `TODO(confirm)` are not verified.
+
+**Audience:** security reviewers, the CTO, ops and engineers.
+**Related:** [AWS staging](aws-staging.md) · [Environment variables](environment-variables.md) · [Runbook](runbook.md) · [Auth and roles (developer)](../dev/auth-and-roles.md)
+
+> **⚠️ Azure is DEPRECATED. Never deploy to Azure.**
+> `.github/workflows/deploy-staging.yml` is Azure-only and manual-dispatch. **Never start it.** `promote-production.yml`, `infra/*.bicep`, `docs/azure-deployment.md`, `infra/deploy-staging.sh` and `infra/configure-github-oidc.sh` are legacy Azure material. They are kept, not deleted, and must not be run. The only live environment is AWS staging in `ap-southeast-1`.
+
+---
+
+## 1. Tenant isolation
+
+Tenant data is separated at three layers.
+
+1. **Postgres row-level security (RLS).**
+   - Policies allow a row only when `app.is_platform_admin = 'true'` or its `organizationId` equals `NULLIF(current_setting('app.current_organization_id', true), '')`.
+   - RLS and composite constraints exist **only in migrations**, which is why `db:push` is disabled. Examples: `20260728092000_row_level_security`, `20260818160000_restaurant_brands_catalog_menus`.
+   - **Where the tenant ID is set:** `withTenantDb` in `src/lib/tenancy/scoped-db.ts` opens a transaction and sets `app.current_organization_id`, `app.current_user_id` and `app.is_platform_admin = 'false'` transaction-locally (`set_config(..., true)`), so nothing leaks between requests on a pooled connection.
+   - **Missing or bad tenant ID:** a malformed organization ID throws before any query. If the setting is empty or unset, `NULLIF` turns it into NULL, so **no tenant rows are visible and writes fail the policy check**. It fails closed.
+   - **Platform access:** `withPlatformDb` clears the tenant ID and sets `app.is_platform_admin = 'true'` for authorized control-plane work.
+2. **A restricted runtime role.**
+   - The running app's `DATABASE_URL` is the app login set up by `prisma/prepare-runtime-role.ts`: no create-database or create-role rights; only connect, schema usage, and read/write on tables and sequences (including future ones).
+   - The script fails if the login has extra powers, if `APP_DATABASE_URL` is not that login, or if it targets a different server or database from `DATABASE_URL`.
+   - A production process refuses to start if the app role is `SUPERUSER` or `BYPASSRLS`, and `/api/ready` reports `runtime_role_privileged`.
+3. **Branch scoping** inside each organization, in the server layer (for example `src/server/restaurant-branch-scope.ts` and pharmacy branch assignments).
+
+**Tests:** RLS tests exist per milestone; `bun run test:rls` runs the tenant-isolation check on a disposable database; `qa.yml` runs RLS regressions against Postgres 16.
+
+TODO(confirm): the list of tables deliberately outside RLS (for example `rate_limit_buckets` and other platform tables). A quick scan of migrations could not determine this reliably, because RLS is enabled in more than one way.
+
+## 2. Roles
+
+### Tenant users
+- `Role` enum: `ADMIN`, `EMPLOYEE`, `HR`. It feeds only the static policies in `src/lib/abac/policies.ts`.
+- Finer control through ABAC: `OrganizationRole`, `RolePermission` and `UserPermissionOverride`. Engine: `can()` in `src/lib/abac/index.ts`.
+- **Evaluation order today** (`src/lib/abac/index.ts:49-57`): per-user DENY → per-user ALLOW → role DENY → role ALLOW → static policies → deny. A per-user ALLOW beats a role DENY. This may change when `fix/abac-deny-precedence` lands. TODO(confirm) after that branch merges.
+- Two-step sign-in (TOTP plus recovery codes) is available to tenant users and is off until each user enables it.
+
+### Platform staff
+- Separate `PlatformUser`, `PlatformSession` and `PlatformRole`. The first platform sign-in always enrols an authenticator.
+- Capabilities per role (`src/lib/platform/capabilities.ts`):
+
+| PlatformRole | Can |
+|---|---|
+| `SUPER_ADMIN` | Everything (`*`), plus organization security changes |
+| `OPERATIONS` | Read and write organizations, deployments and jobs; open support sessions; read the catalog |
+| `SALES` | Read organizations; read and write CRM and commercial; read the catalog |
+| `FINANCE` | Read organizations; read and write commercial; read CRM and the catalog |
+| `SUPPORT` | Read organizations, deployments and jobs; open support sessions; read the catalog |
+| `AUDITOR` | Read-only across organizations, CRM, commercial, deployments, jobs and the catalog, plus the platform audit log |
+
+### Support sessions (`src/lib/tenancy/support-session.ts`)
+- Need the `support:write` platform capability (`SUPER_ADMIN`, `OPERATIONS`, `SUPPORT`).
+- Need a written **reason of 10–500 characters**.
+- Last **5–60 minutes** (default 30), then expire.
+- Act as an active tenant **ADMIN** of that organization; refused if the organization has none.
+- Start through a one-use launch token.
+- Are written to `PlatformAuditLog`, and **every active tenant admin gets an in-app notification** with the staff member's name, the reason and the end time.
+- Tenant consent is **not** required before a session starts. TODO(confirm): whether that is the intended policy.
+
+### Restaurant staff
+`RestaurantJobRole` and capabilities, audited `StaffCapabilityGrant`, operator credentials, registered devices and co-authorization for sensitive actions.
+
+### Audit
+`AuditLog` covers tenant actions; `PlatformAuditLog` covers platform actions, including support sessions.
+
+## 3. Pharmacy separation of duties
+
+Three capabilities are **exact-grant-only** (`EXACT_GRANT_ONLY_ACTIONS`, `src/lib/abac/capabilities.ts`):
+
+| Capability | Covers | Enforced in |
+|---|---|---|
+| `pharmacy:dispense` | Pharmacist decisions, substitution evidence, dispensing | `pharmacy-dispensing`, `pharmacy-prescriptions` |
+| `pharmacy:safety` | Controlled-drugs register: view, corrections, register incidents, inspection packs, retention and legal holds | `pharmacy-safety` |
+| `pharmacy:catalogue-review` | Confirm or reject regulated catalogue proposals | `pharmacy-medicine`, `pharmacy-staged-review` |
+
+- **No default policy grants them.** Their static policies are `[]`, so no `Role`, including `ADMIN`, gets them.
+- **Wildcards never grant them.** Neither `*` nor `pharmacy:*` ALLOWs any of the three. A wildcard **DENY** does revoke them.
+- **Role templates grant them by exact name** (`PHARMACY_ROLE_TEMPLATES` in `src/lib/vertical-catalog.ts`, provisional): **Pharmacist** gets `dispense` and `catalogue-review`; **Owner / Operator** (optional, explicitly assigned) gets all three; **Owner** (`pharmacy:*`) and every other template get none.
+- **One person may hold all three**, for example in a single-pharmacist shop.
+- DENY handling follows the evaluation order in section 2 and is not final until `fix/abac-deny-precedence` lands.
+
+## 4. Platform and infrastructure (AWS staging)
+
+- `ap-southeast-1`; no production. See [AWS staging](aws-staging.md).
+- **Network:** load balancer and Fargate tasks in public subnets; the tasks admit only the load balancer and have no NAT. The database is in private subnets with no internet route, reachable only from the tasks' security group.
+- **Database:** RDS PostgreSQL 16, encrypted at rest, not public, `rds.force_ssl=1`. The app and `bun prisma/*.ts` scripts verify the server certificate against the bundled RDS CA. `prisma migrate deploy` encrypts but does not verify.
+- **HTTP:** plain HTTP is never served; with a certificate, port 80 redirects to HTTPS (TLS 1.2 minimum).
+- **Uploads:** private, versioned, TLS-only S3 bucket; the web task may only get, put, delete and list it.
+- **Health:** the load balancer checks `/api/live`; `/api/ready` is the deploy-time check. Failure bodies carry a short reason code only, never error text.
+- TODO(confirm): a review of the IAM roles for CodeBuild, ECS tasks and the jobs Lambda.
+
+## 5. Secrets handling
+
+**There is no CI secrets scan. Run gitleaks locally before every push**, for example `gitleaks detect --source .` from the repo root. TODO(confirm): an agreed gitleaks config file.
+
+- **Staging secrets** live in AWS Secrets Manager under `devfathom/<env>/…`. They are generated by Secrets Manager at stack creation and never appear in a template, parameter or stack event. ECS injects them into the task definitions. The database passwords and the two encryption keys are kept if the stack is deleted. TODO(confirm): who has IAM read access to them.
+- Docs-only PRs skip QA but **still require a gitleaks run**.
+- If gitleaks finds a secret: don't push; remove it from history, not just the latest file; tell the CTO so it is rotated. Assume any secret that reached a remote is compromised.
+- Never commit `.env` or `.env.local`. Only `.env.example`, with placeholders.
+- No secrets, connection strings, hostnames, AWS account IDs, ARNs or logins in docs, PRs, issues, chat or screenshots.
+- Admin and seed script output can contain credentials. Never paste it anywhere.
+
+## 6. Change review
+
+- Policy (not branch protection): one CTO review on every PR, plus QA for code changes.
+- Docs PRs go to `main` through a PR with CTO approval. They skip QA but still need gitleaks.
+- Branch prefixes in use: `fix/`, `improve/`, `release/`, `docs/`, `qa/`, `codex/`.
+- Regulatory content (DRAP, controlled register) is labelled **"DRAFT – pending legal review"** until pharmacist or legal review, which is part of the lawyer sign-off before production.
+
+## 7. Open items
+
+- `fix/abac-deny-precedence` is unmerged. Update sections 2 and 3 when it lands.
+- Tables outside RLS (section 1).
+- Whether support sessions should need tenant consent (section 2).
+- IAM review and access to secrets (sections 4 and 5).
+- `vercel.json` and the Vercel variables can probably be removed.
