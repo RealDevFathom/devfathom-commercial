@@ -1,0 +1,29 @@
+[
+  {
+    "name": "pharmacist safety review",
+    "organizationId": "org-abbasi",
+    "actorId": "user-pharmacist",
+    "capability": "pharmacy:safety",
+    "idempotencyKey": "safety:rx-100:v1",
+    "providerSecretConfigured": true,
+    "expected": "ALLOW"
+  },
+  {
+    "name": "explicit dispense denial",
+    "organizationId": "org-abbasi",
+    "actorId": "user-pharmacist",
+    "capability": "pharmacy:dispense",
+    "idempotencyKey": "dispense:rx-101:v1",
+    "providerSecretConfigured": true,
+    "expected": "DENY"
+  },
+  {
+    "name": "unconfigured organisation",
+    "organizationId": "org-new-pharmacy",
+    "actorId": "user-owner",
+    "capability": "pharmacy:catalogue-review",
+    "idempotencyKey": "catalogue:batch-20:v1",
+    "providerSecretConfigured": false,
+    "expected": "AI_OFF"
+  }
+]
