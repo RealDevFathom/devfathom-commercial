@@ -2,18 +2,36 @@
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { FileText, Plus, ChevronDown, X, Loader2 } from 'lucide-react';
+import { FileText, Plus, ChevronDown, X, Loader2, Wallet } from 'lucide-react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { toast } from 'sonner';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { moneyLabel } from '@/lib/finance/currency';
+import {
+  INVOICE_STATUS_VALUES,
+  PAYMENT_EPSILON,
+  invoiceStatusLeavesUnissued,
+  invoiceStatusTargets,
+  type InvoiceStatusValue,
+} from '@/lib/finance/invoice-status';
 import { format } from 'date-fns';
 
-type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
+type InvoiceStatus = InvoiceStatusValue;
 
-const INVOICE_STATUSES: InvoiceStatus[] = ['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED'];
+const isInvoiceStatus = (value: string): value is InvoiceStatus =>
+  (INVOICE_STATUS_VALUES as readonly string[]).includes(value);
+
+// #398 / #584: PAID is never a status-only choice — the server refuses it so a
+// paid invoice always carries the payment that settles it. The menu offers the
+// valid status moves plus "Record payment…", which opens the invoice's payment
+// entry (where "Mark paid in full" records the outstanding balance).
+function canRecordPayment(inv: Pick<InvoiceRowData, 'status' | 'balance'>) {
+  if (inv.status !== 'SENT' && inv.status !== 'OVERDUE' && inv.status !== 'PAID') return false;
+  return inv.balance > PAYMENT_EPSILON;
+}
 
 const statusConfig: Record<string, { bg: string; label: string }> = {
   DRAFT: { bg: 'bg-muted text-muted-foreground', label: 'Draft' },
@@ -30,11 +48,18 @@ type InvoiceRowData = {
   currency: string;
   total: unknown;
   dueDate: Date | string;
+  amountPaid: number;
+  balance: number;
   client: { name: string };
   project: { name: string } | null;
 };
 
-export function InvoicesTab() {
+export function InvoicesTab({
+  onRecordPayment,
+}: {
+  /** Opens the payment entry for an invoice (the Payments & balances panel). */
+  onRecordPayment: (invoiceId: string) => void;
+}) {
   const utils = trpc.useUtils();
   const { data: invoices, isLoading } = trpc.finance.getInvoices.useQuery();
   const [showCreate, setShowCreate] = useState(false);
@@ -49,10 +74,12 @@ export function InvoicesTab() {
       );
       return { previous };
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       if (ctx?.previous) {
         utils.finance.getInvoices.setData(undefined, ctx.previous);
       }
+      // Never roll back silently: say why the status didn't change (#584).
+      toast.error(err.message || "Couldn't change the invoice status.");
     },
     onSettled: () => {
       utils.finance.getFinancialSummary.invalidate();
@@ -153,7 +180,11 @@ export function InvoicesTab() {
                       className="absolute left-0 top-0 w-full"
                       style={{ transform: `translateY(${vi.start - scrollMargin}px)` }}
                     >
-                      <InvoiceRow inv={inv} onUpdateStatus={handleUpdateStatus} />
+                      <InvoiceRow
+                        inv={inv}
+                        onUpdateStatus={handleUpdateStatus}
+                        onRecordPayment={onRecordPayment}
+                      />
                     </div>
                   );
                 })}
@@ -172,14 +203,19 @@ export function InvoicesTab() {
 const InvoiceRow = memo(function InvoiceRow({
   inv,
   onUpdateStatus,
+  onRecordPayment,
 }: {
   inv: InvoiceRowData;
   onUpdateStatus: (id: string, status: InvoiceStatus) => void;
+  onRecordPayment: (invoiceId: string) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const config = statusConfig[inv.status] || statusConfig.DRAFT;
+  const targets = isInvoiceStatus(inv.status) ? invoiceStatusTargets(inv.status) : [];
+  const hasPayments = inv.amountPaid > PAYMENT_EPSILON;
+  const paymentOffered = canRecordPayment(inv);
 
   // Anchor the menu to the button's viewport rect and render it in a portal, so it
   // escapes the virtualizer's per-row transform stacking contexts (which otherwise
@@ -187,7 +223,7 @@ const InvoiceRow = memo(function InvoiceRow({
   const openMenu = useCallback(() => {
     const rect = btnRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const MENU_HEIGHT = 160; // ~5 status rows
+    const MENU_HEIGHT = 190; // current status + up to 3 moves + "Record payment…"
     const below = rect.bottom + 4;
     const openUp = below + MENU_HEIGHT > window.innerHeight;
     setMenuPos({
@@ -244,36 +280,51 @@ const InvoiceRow = memo(function InvoiceRow({
             <>
               <div className="fixed inset-0 z-[60]" onClick={() => setMenuOpen(false)} />
               <div
-                className="fixed z-[61] w-32 -translate-x-1/2 rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10"
+                role="menu"
+                aria-label={`Change status of ${inv.invoiceNumber}`}
+                className="fixed z-[61] w-40 -translate-x-1/2 rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10"
                 style={{ top: menuPos.top, left: menuPos.left }}
               >
-                {INVOICE_STATUSES.map((s) => (
+                <div
+                  aria-current="true"
+                  className="flex w-full items-center gap-2 bg-secondary px-3 py-1.5 text-xs font-medium"
+                >
+                  <StatusDot status={inv.status} />
+                  {config.label}
+                </div>
+                {targets.map((s) => {
+                  // A DRAFT or CANCELLED invoice can't keep payments (#398).
+                  const blocked = hasPayments && invoiceStatusLeavesUnissued(s);
+                  return (
+                    <button
+                      key={s}
+                      role="menuitem"
+                      disabled={blocked}
+                      title={blocked ? 'Delete the recorded payments first' : undefined}
+                      onClick={() => {
+                        onUpdateStatus(inv.id, s);
+                        setMenuOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-secondary disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                    >
+                      <StatusDot status={s} />
+                      {statusConfig[s].label}
+                    </button>
+                  );
+                })}
+                {paymentOffered && (
                   <button
-                    key={s}
+                    role="menuitem"
                     onClick={() => {
-                      onUpdateStatus(inv.id, s);
+                      onRecordPayment(inv.id);
                       setMenuOpen(false);
                     }}
-                    className={cn(
-                      'flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-secondary',
-                      inv.status === s && 'bg-secondary font-medium'
-                    )}
+                    className="flex w-full items-center gap-2 border-t border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-secondary"
                   >
-                    <div
-                      className={cn(
-                        'h-1.5 w-1.5 rounded-full',
-                        s === 'PAID'
-                          ? 'bg-emerald-500'
-                          : s === 'OVERDUE'
-                            ? 'bg-red-500'
-                            : s === 'SENT'
-                              ? 'bg-blue-500'
-                              : 'bg-muted-foreground'
-                      )}
-                    />
-                    {statusConfig[s].label}
+                    <Wallet className="h-3 w-3 text-success" />
+                    Record payment…
                   </button>
-                ))}
+                )}
               </div>
             </>,
             document.body
@@ -292,6 +343,24 @@ const InvoiceRow = memo(function InvoiceRow({
     </div>
   );
 });
+
+function StatusDot({ status }: { status: string }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        'h-1.5 w-1.5 shrink-0 rounded-full',
+        status === 'PAID'
+          ? 'bg-emerald-500'
+          : status === 'OVERDUE'
+            ? 'bg-red-500'
+            : status === 'SENT'
+              ? 'bg-blue-500'
+              : 'bg-muted-foreground'
+      )}
+    />
+  );
+}
 
 /* ============================================
    Create Invoice Form

@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
   DollarSign,
@@ -29,6 +29,8 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { moneyListLabel, baseEquivalentLabel, moneyLabel } from '@/lib/finance/currency';
+import { PAYMENT_EPSILON } from '@/lib/finance/invoice-status';
+import { toast } from 'sonner';
 import { InvoicesTab } from './invoices-tab';
 import { InvoiceManagePanel } from '@/components/finance/invoice-manage-panel';
 
@@ -65,9 +67,17 @@ const categoryLabels: Record<string, string> = {
   MISCELLANEOUS: 'Miscellaneous',
 };
 
+/** A request from the invoice list to open one invoice's payment entry (#398/#584). */
+type PaymentEntryRequest = { invoiceId: string; requestedAt: number };
+
 export function FinanceContent() {
   const summary = trpc.finance.getFinancialSummary.useQuery();
   const transactions = trpc.finance.getTransactions.useQuery({});
+  const [paymentRequest, setPaymentRequest] = useState<PaymentEntryRequest | null>(null);
+  const openPaymentEntry = useCallback(
+    (invoiceId: string) => setPaymentRequest({ invoiceId, requestedAt: Date.now() }),
+    []
+  );
 
   return (
     <div className="space-y-6">
@@ -134,11 +144,11 @@ export function FinanceContent() {
 
         {/* INVOICES */}
         <TabsContent value="invoices" className="space-y-6">
-          <InvoicesTab />
+          <InvoicesTab onRecordPayment={openPaymentEntry} />
           {/* IMP-FIN-01: full edit (line items / tax / due / notes), email, print/PDF. */}
           <InvoiceManagePanel />
           {/* IMP-FIN-04: partial payments + overdue automation. */}
-          <InvoicePaymentsPanel />
+          <InvoicePaymentsPanel paymentRequest={paymentRequest} />
         </TabsContent>
 
         {/* P&L */}
@@ -219,7 +229,16 @@ function TransactionsTab({
   // IMP-FIN-06: export the currently-filtered transactions to CSV.
   const exportCsv = useCallback(() => {
     const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const header = ['Date', 'Type', 'Amount', 'Currency', 'Category', 'Description', 'Project', 'Client'];
+    const header = [
+      'Date',
+      'Type',
+      'Amount',
+      'Currency',
+      'Category',
+      'Description',
+      'Project',
+      'Client',
+    ];
     const rows = filtered.map((t) => [
       format(new Date(t.date), 'yyyy-MM-dd'),
       t.type,
@@ -769,7 +788,10 @@ function RecurringTab() {
                   </div>
                   <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-secondary">
                     <div
-                      className={cn('h-full rounded-full', b.overBudget ? 'bg-red-500' : 'bg-primary')}
+                      className={cn(
+                        'h-full rounded-full',
+                        b.overBudget ? 'bg-red-500' : 'bg-primary'
+                      )}
                       style={{ width: `${Math.min(100, b.pct)}%` }}
                     />
                   </div>
@@ -952,9 +974,8 @@ function RecurringTab() {
    IMP-FIN-04: Invoice Payments & Overdue automation
    ============================================ */
 
-// Mirror the server's half-cent payoff tolerance so the UI's "paid in full" and
-// overpayment hints agree with what the router actually accepts.
-const PAYMENT_EPSILON = 0.005;
+// PAYMENT_EPSILON is the server's half-cent payoff tolerance (shared module), so the
+// UI's "paid in full" and overpayment hints agree with what the router accepts.
 
 // getInvoices now ships payments + computed amountPaid/balance. Money fields stay
 // `unknown` (Decimal over the wire) and are coerced with Number(), matching the
@@ -981,7 +1002,12 @@ type PayableInvoice = {
   payments: PaymentItem[];
 };
 
-function InvoicePaymentsPanel() {
+export function InvoicePaymentsPanel({
+  paymentRequest = null,
+}: {
+  /** "Record payment…" in the invoice list opens that invoice's payment entry here. */
+  paymentRequest?: PaymentEntryRequest | null;
+}) {
   const utils = trpc.useUtils();
   const { data: invoices, isLoading } = trpc.finance.getInvoices.useQuery();
 
@@ -1060,7 +1086,14 @@ function InvoicePaymentsPanel() {
         ) : (
           <div className="divide-y divide-border/60">
             {payable.map((inv) => (
-              <InvoicePaymentRow key={inv.id} inv={inv} onInvalidate={invalidate} />
+              <InvoicePaymentRow
+                key={inv.id}
+                inv={inv}
+                onInvalidate={invalidate}
+                requestedAt={
+                  paymentRequest?.invoiceId === inv.id ? paymentRequest.requestedAt : null
+                }
+              />
             ))}
           </div>
         )}
@@ -1072,18 +1105,43 @@ function InvoicePaymentsPanel() {
 const InvoicePaymentRow = memo(function InvoicePaymentRow({
   inv,
   onInvalidate,
+  requestedAt,
 }: {
   inv: PayableInvoice;
   onInvalidate: () => void;
+  /** Set when the invoice list asked to record a payment for this invoice. */
+  requestedAt: number | null;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
+  // Open the row for a new request while rendering (no effect-driven state).
+  const [openedFor, setOpenedFor] = useState<number | null>(null);
+  if (requestedAt !== null && requestedAt !== openedFor) {
+    setOpenedFor(requestedAt);
+    setExpanded(true);
+  }
+  // …then bring its payment entry into view and focus the amount.
+  useEffect(() => {
+    if (requestedAt === null) return;
+    const row = rowRef.current;
+    const reduceMotion =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    row?.scrollIntoView?.({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' });
+    row
+      ?.querySelector<HTMLInputElement>('input[data-payment-amount]')
+      ?.focus({ preventScroll: true });
+  }, [requestedAt]);
   const total = Number(inv.total);
   const isOverdue = inv.status === 'OVERDUE';
   const isPaid = inv.status === 'PAID';
   const fullyPaid = inv.balance <= PAYMENT_EPSILON;
+  // #398: a PAID invoice that still shows a balance was marked paid without its
+  // payment (before the mark-paid workflow). Keep payment entry open for it.
+  const unrecordedPaid = isPaid && !fullyPaid;
 
   return (
-    <div className={cn('bg-card transition-colors', expanded && 'bg-secondary/20')}>
+    <div ref={rowRef} className={cn('bg-card transition-colors', expanded && 'bg-secondary/20')}>
       <button
         onClick={() => setExpanded((v) => !v)}
         className="flex w-full items-center gap-4 px-6 py-3.5 text-left transition-colors hover:bg-secondary/30"
@@ -1152,7 +1210,15 @@ const InvoicePaymentRow = memo(function InvoicePaymentRow({
             <p className="text-xs text-muted-foreground">No payments recorded yet.</p>
           )}
 
-          {!isPaid && (
+          {unrecordedPaid && (
+            <p role="status" className="text-xs text-warning">
+              Marked paid, but {moneyLabel(inv.balance, inv.currency)} of it has no recorded
+              payment. Record the payment to reconcile the balance.
+            </p>
+          )}
+
+          {/* Payment entry stays open while anything is owed, whatever the status. */}
+          {!fullyPaid && (
             <AddPaymentForm
               invoiceId={inv.id}
               currency={inv.currency}
@@ -1195,7 +1261,10 @@ function PaymentStat({
 }
 
 function PaymentLine({ p, onInvalidate }: { p: PaymentItem; onInvalidate: () => void }) {
-  const deletePayment = trpc.finance.deletePayment.useMutation({ onSuccess: onInvalidate });
+  const deletePayment = trpc.finance.deletePayment.useMutation({
+    onSuccess: onInvalidate,
+    onError: (err) => toast.error(err.message || "Couldn't delete the payment."),
+  });
   return (
     <div className="group flex items-center gap-3 rounded-lg border border-border/60 bg-background px-3 py-2">
       <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10">
@@ -1244,30 +1313,53 @@ function AddPaymentForm({
   const [method, setMethod] = useState('');
   const [note, setNote] = useState('');
   const [paidAt, setPaidAt] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const amountId = useId();
 
+  const resetFields = () => {
+    setAmount('');
+    setMethod('');
+    setNote('');
+  };
   const addPayment = trpc.finance.addPayment.useMutation({
     onSuccess: () => {
       onInvalidate();
-      setAmount('');
-      setMethod('');
-      setNote('');
+      resetFields();
     },
   });
+  // #398: the mark-paid workflow — the server records whatever is still owed as
+  // one payment and flips the invoice to PAID in the same transaction.
+  const markPaid = trpc.finance.markInvoicePaid.useMutation({
+    onSuccess: (result) => {
+      onInvalidate();
+      resetFields();
+      toast.success(
+        result.payment
+          ? `Marked paid. ${moneyLabel(Number(result.payment.amount), currency)} recorded.`
+          : 'Invoice is paid in full.'
+      );
+    },
+  });
+  const pending = addPayment.isPending || markPaid.isPending;
+  const error = addPayment.error ?? markPaid.error;
 
   const amountNum = parseFloat(amount);
   const amountValid = amount !== '' && amountNum > 0 && amountNum <= MAX_MONEY;
   // Flag overpayment client-side using the same half-cent tolerance the server uses.
   const overpay = amountValid && amountNum > balance + PAYMENT_EPSILON;
 
+  const details = () => ({
+    method: method.trim() || undefined,
+    note: note.trim() || undefined,
+    paidAt: paidAt ? new Date(paidAt) : undefined,
+  });
   const submit = () => {
     if (!amountValid || overpay) return;
-    addPayment.mutate({
-      invoiceId,
-      amount: amountNum,
-      method: method.trim() || undefined,
-      note: note.trim() || undefined,
-      paidAt: paidAt ? new Date(paidAt) : undefined,
-    });
+    markPaid.reset();
+    addPayment.mutate({ invoiceId, amount: amountNum, ...details() });
+  };
+  const markPaidInFull = () => {
+    addPayment.reset();
+    markPaid.mutate({ id: invoiceId, ...details() });
   };
 
   return (
@@ -1278,10 +1370,15 @@ function AddPaymentForm({
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div>
-          <label className="mb-1 block text-[11px] font-medium text-muted-foreground">
+          <label
+            htmlFor={amountId}
+            className="mb-1 block text-[11px] font-medium text-muted-foreground"
+          >
             Amount ({currency}) *
           </label>
           <input
+            id={amountId}
+            data-payment-amount=""
             type="number"
             step="0.01"
             min="0"
@@ -1318,7 +1415,7 @@ function AddPaymentForm({
         <div className="flex items-end">
           <button
             onClick={submit}
-            disabled={!amountValid || overpay || addPayment.isPending}
+            disabled={!amountValid || overpay || pending}
             className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
           >
             {addPayment.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
@@ -1326,21 +1423,33 @@ function AddPaymentForm({
           </button>
         </div>
       </div>
-      <div className="mt-2">
+      <div className="mt-2 flex flex-col gap-2 sm:flex-row">
         <input
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="Note (optional)"
+          aria-label="Payment note"
           className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
         />
+        <button
+          type="button"
+          onClick={markPaidInFull}
+          disabled={pending}
+          className="flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
+        >
+          {markPaid.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          Mark paid in full ({moneyLabel(balance, currency)})
+        </button>
       </div>
       {overpay && (
         <p className="mt-1.5 text-xs text-red-500">
           Amount exceeds the {moneyLabel(balance, currency)} balance.
         </p>
       )}
-      {addPayment.error && (
-        <p className="mt-1.5 text-xs text-red-500">{addPayment.error.message}</p>
+      {error && (
+        <p role="alert" className="mt-1.5 text-xs text-red-500">
+          {error.message}
+        </p>
       )}
     </div>
   );

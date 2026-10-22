@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { format } from 'date-fns';
+import type { Prisma } from '@/generated/prisma/client';
 import { router, adminProcedure } from '../trpc';
 import { logActivity } from '../activity';
 import { emitEvent } from '@/lib/webhooks';
@@ -14,7 +15,17 @@ import {
   moneyLabel,
   type CurrencyAmount,
 } from '@/lib/finance/currency';
-import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
+import {
+  PAYMENT_EPSILON,
+  invoiceStatusTransitionError,
+  invoiceStatusUpdate,
+  reopenedInvoiceStatus,
+} from '@/lib/finance/invoice-status';
+import {
+  invoiceStatusChangeError,
+  lockInvoiceRow,
+  recordedInvoicePayments,
+} from '@/lib/finance/invoice-payments';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -58,10 +69,127 @@ export const createInvoiceInputSchema = z.object({
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 // IMP-FIN-04: money is Decimal(12,2), so a partial payment can legitimately pay an
-// invoice off to the exact cent. Compare paid-vs-total with a half-cent tolerance
-// so a sub-cent float artifact never tips an exact payoff into "overpayment" — and
-// never leaves a fully-paid invoice a hair short of PAID.
-const PAYMENT_EPSILON = 0.005;
+// invoice off to the exact cent. Paid-vs-total comparisons use the shared half-cent
+// PAYMENT_EPSILON so a sub-cent float artifact never tips an exact payoff into
+// "overpayment" — and never leaves a fully-paid invoice a hair short of PAID.
+
+type InvoicePaidEvent = { invoiceId: string; total: number; currency: string; clientId: string };
+
+/**
+ * #398: the one place money is recorded against an invoice, shared by
+ * `addPayment` (a stated amount) and `markInvoicePaid` (whatever is still owed).
+ * It keeps the invoice's status and its payments in agreement: PAID exactly when
+ * recorded payments cover the total, never on a DRAFT (not owed yet) or a
+ * CANCELLED (void) invoice, and never beyond the total. The invoice row is locked
+ * first so concurrent payments, deletions and status changes see each other's
+ * committed effects instead of acting on the same stale balance.
+ *
+ * A PAID invoice whose payments fall short of its total can only predate this
+ * rule (a status-only "mark paid"); it may take payments up to the shortfall so
+ * its balance can be reconciled without reopening it.
+ */
+async function recordInvoicePayment(
+  tx: Prisma.TransactionClient,
+  input: {
+    invoiceId: string;
+    amount: number | 'OUTSTANDING';
+    method?: string;
+    note?: string;
+    paidAt?: Date;
+  }
+) {
+  await lockInvoiceRow(tx, input.invoiceId);
+  const invoice = await tx.invoice.findUnique({
+    where: { id: input.invoiceId },
+    select: {
+      id: true,
+      invoiceNumber: true,
+      status: true,
+      total: true,
+      currency: true,
+      clientId: true,
+    },
+  });
+  if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
+
+  // A DRAFT isn't owed yet, and a CANCELLED invoice is void — reject each as a
+  // clean validation error rather than a DB write.
+  if (invoice.status === 'DRAFT') {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Send the invoice before recording a payment.',
+    });
+  }
+  if (invoice.status === 'CANCELLED') {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Cannot record a payment against a cancelled invoice.',
+    });
+  }
+
+  const total = round2(Number(invoice.total));
+  const alreadyPaid = await recordedInvoicePayments(tx, invoice.id);
+  const outstanding = round2(total - alreadyPaid);
+
+  let amount: number;
+  if (input.amount === 'OUTSTANDING') {
+    amount = Math.max(outstanding, 0);
+  } else {
+    if (outstanding <= PAYMENT_EPSILON) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'This invoice is already paid in full.',
+      });
+    }
+    // Reject overpayment beyond a half-cent rounding tolerance.
+    if (round2(alreadyPaid + input.amount) > total + PAYMENT_EPSILON) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: `Payment exceeds the outstanding balance of ${outstanding.toFixed(2)}.`,
+      });
+    }
+    amount = input.amount;
+  }
+
+  const payment =
+    amount > PAYMENT_EPSILON
+      ? await tx.payment.create({
+          data: {
+            invoiceId: invoice.id,
+            amount,
+            // The payment's currency is inherited from the invoice, never caller-supplied.
+            currency: invoice.currency,
+            method: input.method?.trim() || null,
+            note: input.note?.trim() || null,
+            ...(input.paidAt && { paidAt: input.paidAt }),
+          },
+        })
+      : null;
+
+  const amountPaid = round2(alreadyPaid + (payment ? amount : 0));
+  const settled = amountPaid >= total - PAYMENT_EPSILON;
+  // Balance covered → PAID. Otherwise the status is left as-is (SENT/OVERDUE).
+  const becamePaid = settled && invoice.status !== 'PAID';
+  if (becamePaid) {
+    await tx.invoice.update({
+      where: { id: invoice.id },
+      data: { status: 'PAID', paidAt: new Date() },
+    });
+  }
+
+  const paidEvent: InvoicePaidEvent | null = becamePaid
+    ? { invoiceId: invoice.id, total, currency: invoice.currency, clientId: invoice.clientId }
+    : null;
+
+  return {
+    invoice,
+    payment,
+    amountPaid,
+    balance: round2(total - amountPaid),
+    status: settled ? ('PAID' as const) : invoice.status,
+    paidEvent,
+  };
+}
 
 // A recurring expense's stored nextDueDate doesn't advance on its own, so once a
 // due date passes it goes stale (e.g. seeded "May 1" still showing in June). Roll
@@ -323,48 +451,93 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const current = await ctx.db.invoice.findUnique({
-        where: { id: input.id },
-        select: { status: true },
-      });
-      if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
-      if (current.status !== 'DRAFT' && current.status !== 'SENT') {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `A ${current.status.toLowerCase()} invoice can't be edited — only draft or sent invoices.`,
+      const { invoice, paidEvent } = await ctx.db.$transaction(async (tx) => {
+        // #398: the edit re-derives the total, so it reads what has been paid
+        // under the same row lock the payment writers take.
+        await lockInvoiceRow(tx, input.id);
+        const current = await tx.invoice.findUnique({
+          where: { id: input.id },
+          select: { status: true, currency: true, clientId: true },
         });
-      }
+        if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
+        if (current.status !== 'DRAFT' && current.status !== 'SENT') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `A ${current.status.toLowerCase()} invoice can't be edited — only draft or sent invoices.`,
+          });
+        }
 
-      // Recompute money server-side, identical to createInvoice.
-      const lineItems = input.items.map((it) => ({
-        description: it.description,
-        quantity: it.quantity,
-        rate: it.rate,
-        amount: round2(it.quantity * it.rate),
-      }));
-      const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
-      const tax = round2(input.tax ?? 0);
-      const total = round2(subtotal + tax);
+        // Recompute money server-side, identical to createInvoice.
+        const lineItems = input.items.map((it) => ({
+          description: it.description,
+          quantity: it.quantity,
+          rate: it.rate,
+          amount: round2(it.quantity * it.rate),
+        }));
+        const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
+        const tax = round2(input.tax ?? 0);
+        const total = round2(subtotal + tax);
 
-      const data: Record<string, unknown> = { items: lineItems, subtotal, tax, total };
-      if (input.dueDate) data.dueDate = input.dueDate;
-      if (input.notes !== undefined) data.notes = input.notes.trim() || null;
-      if (input.status && input.status !== current.status) {
-        data.status = input.status;
-        // Keep sentAt consistent with the status the same way updateInvoiceStatus does.
-        if (input.status === 'SENT') data.sentAt = new Date();
-        if (input.status === 'DRAFT') data.sentAt = null;
-      }
+        const nextStatus = input.status ?? current.status;
+        const amountPaid = await recordedInvoicePayments(tx, input.id);
+        if (amountPaid > PAYMENT_EPSILON) {
+          // Payments belong to an issued invoice: refuse to un-issue it, and refuse
+          // a total below what the client has already paid.
+          const statusError = invoiceStatusTransitionError(current.status, nextStatus, {
+            amountPaid,
+          });
+          if (statusError) throw new TRPCError({ code: 'BAD_REQUEST', message: statusError });
+          if (amountPaid > total + PAYMENT_EPSILON) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `The new total (${total.toFixed(2)}) is less than the ${amountPaid.toFixed(2)} already paid. Delete payments before lowering it.`,
+            });
+          }
+        }
+        // A sent invoice whose total is lowered to exactly what has been paid is settled.
+        const settles =
+          nextStatus === 'SENT' &&
+          amountPaid > PAYMENT_EPSILON &&
+          amountPaid >= total - PAYMENT_EPSILON;
 
-      const invoice = await ctx.db.invoice.update({
-        where: { id: input.id },
-        data,
-        include: {
-          client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
-          project: { select: { id: true, name: true } },
-          payments: { orderBy: { paidAt: 'desc' } },
-        },
+        const data: Record<string, unknown> = { items: lineItems, subtotal, tax, total };
+        if (input.dueDate) data.dueDate = input.dueDate;
+        if (input.notes !== undefined) data.notes = input.notes.trim() || null;
+        if (input.status && input.status !== current.status) {
+          data.status = input.status;
+          // Keep sentAt consistent with the status the same way updateInvoiceStatus does.
+          if (input.status === 'SENT') data.sentAt = new Date();
+          if (input.status === 'DRAFT') data.sentAt = null;
+        }
+        if (settles) {
+          data.status = 'PAID';
+          data.paidAt = new Date();
+        }
+
+        const updated = await tx.invoice.update({
+          where: { id: input.id },
+          data,
+          include: {
+            client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
+            project: { select: { id: true, name: true } },
+            payments: { orderBy: { paidAt: 'desc' } },
+          },
+        });
+        const event: InvoicePaidEvent | null = settles
+          ? { invoiceId: updated.id, total, currency: current.currency, clientId: current.clientId }
+          : null;
+        return { invoice: updated, paidEvent: event };
       });
+
+      if (paidEvent) {
+        logActivity(ctx.db, ctx.session.user.id, {
+          type: 'invoice_paid',
+          message: `settled invoice ${invoice.invoiceNumber} by lowering its total to the ${moneyLabel(paidEvent.total, invoice.currency)} already paid`,
+          entityType: 'Invoice',
+          entityId: invoice.id,
+        });
+        emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', paidEvent);
+      }
 
       const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
       return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
@@ -479,19 +652,26 @@ export const financeRouter = router({
         });
       }
 
-      const changed = await ctx.db.invoice.updateMany({
-        where: { id: input.id, status: prior },
-        data: invoiceStatusUpdate(prior, next, new Date()),
-      });
-      if (changed.count !== 1) {
-        throw new TRPCError({
-          code: 'CONFLICT',
-          message: 'Invoice status changed concurrently. Refresh and try again.',
+      const invoice = await ctx.db.$transaction(async (tx) => {
+        // #398: DRAFT and CANCELLED invoices are not owed, so a change into either
+        // is refused while payments are recorded (checked under the row lock).
+        const paymentError = await invoiceStatusChangeError(tx, input.id, prior, next);
+        if (paymentError) throw new TRPCError({ code: 'BAD_REQUEST', message: paymentError });
+
+        const changed = await tx.invoice.updateMany({
+          where: { id: input.id, status: prior },
+          data: invoiceStatusUpdate(prior, next, new Date()),
         });
-      }
-      const invoice = await ctx.db.invoice.findUniqueOrThrow({
-        where: { id: input.id },
-        include: { client: { select: { name: true } } },
+        if (changed.count !== 1) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'Invoice status changed concurrently. Refresh and try again.',
+          });
+        }
+        return tx.invoice.findUniqueOrThrow({
+          where: { id: input.id },
+          include: { client: { select: { name: true } } },
+        });
       });
 
       if (next === 'SENT') {
@@ -507,10 +687,11 @@ export const financeRouter = router({
     }),
 
   // IMP-FIN-04: record a (partial) payment against an invoice. The payment's
-  // currency is inherited from the invoice (never caller-supplied). We re-sum every
-  // payment for the invoice inside the transaction and flip it to PAID the moment
-  // the balance is covered; a payment that doesn't cover the total leaves the status
-  // untouched (still SENT/OVERDUE). Overpayment beyond a half-cent is rejected.
+  // currency is inherited from the invoice (never caller-supplied). Every payment
+  // for the invoice is re-summed under its row lock and the invoice flips to PAID
+  // the moment the balance is covered; a payment that doesn't cover the total
+  // leaves the status untouched (still SENT/OVERDUE). Overpayment beyond a
+  // half-cent is rejected. See recordInvoicePayment (#398).
   addPayment: adminProcedure
     .input(
       z.object({
@@ -522,105 +703,75 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // IMP-REST-03: captured inside the tx, fired only AFTER it commits.
-      let paidEvent: {
-        invoiceId: string;
-        total: number;
-        currency: string;
-        clientId: string;
-      } | null = null;
-
-      const result = await ctx.db.$transaction(async (tx) => {
-        const invoice = await tx.invoice.findUnique({
-          where: { id: input.invoiceId },
-          select: { id: true, status: true, total: true, currency: true, clientId: true },
-        });
-        if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
-
-        // A DRAFT isn't owed yet, and a PAID/CANCELLED invoice shouldn't accrue more
-        // payments — reject each as a clean validation error rather than a DB write.
-        if (invoice.status === 'DRAFT') {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Send the invoice before recording a payment.',
-          });
-        }
-        if (invoice.status === 'PAID') {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'This invoice is already paid in full.',
-          });
-        }
-        if (invoice.status === 'CANCELLED') {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Cannot record a payment against a cancelled invoice.',
-          });
-        }
-
-        const total = round2(Number(invoice.total));
-        const prior = await tx.payment.aggregate({
-          where: { invoiceId: invoice.id },
-          _sum: { amount: true },
-        });
-        const alreadyPaid = round2(Number(prior._sum.amount ?? 0));
-        const newPaid = round2(alreadyPaid + input.amount);
-
-        // Reject overpayment beyond a half-cent rounding tolerance.
-        if (newPaid > total + PAYMENT_EPSILON) {
-          const balance = round2(total - alreadyPaid);
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: `Payment exceeds the outstanding balance of ${balance.toFixed(2)}.`,
-          });
-        }
-
-        const payment = await tx.payment.create({
-          data: {
-            invoiceId: invoice.id,
+      const { invoice, payment, amountPaid, balance, status, paidEvent } =
+        await ctx.db.$transaction((tx) =>
+          recordInvoicePayment(tx, {
+            invoiceId: input.invoiceId,
             amount: input.amount,
-            currency: invoice.currency,
-            method: input.method?.trim() || null,
-            note: input.note?.trim() || null,
-            ...(input.paidAt && { paidAt: input.paidAt }),
-          },
-        });
-
-        // Balance covered → mark PAID (the DRAFT/PAID guards above mean we only ever
-        // flip from SENT/OVERDUE here). Otherwise leave the status as-is.
-        const fullyPaid = newPaid >= total - PAYMENT_EPSILON;
-        if (fullyPaid) {
-          await tx.invoice.update({
-            where: { id: invoice.id },
-            data: { status: 'PAID', paidAt: new Date() },
-          });
-          paidEvent = {
-            invoiceId: invoice.id,
-            total,
-            currency: invoice.currency,
-            clientId: invoice.clientId,
-          };
-        }
-
-        return {
-          payment,
-          amountPaid: newPaid,
-          balance: round2(total - newPaid),
-          status: fullyPaid ? ('PAID' as const) : invoice.status,
-        };
-      });
+            method: input.method,
+            note: input.note,
+            paidAt: input.paidAt,
+          })
+        );
 
       // IMP-REST-03: fan out invoice.paid once the invoice has truly flipped to
       // PAID and the transaction has committed. Fire-and-forget — emitEvent
       // never throws, so it can't affect the recorded payment.
-      if (paidEvent) emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', paidEvent);
+      if (paidEvent) {
+        logActivity(ctx.db, ctx.session.user.id, {
+          type: 'invoice_paid',
+          message: `recorded the payment that settled invoice ${invoice.invoiceNumber} (${moneyLabel(paidEvent.total, invoice.currency)})`,
+          entityType: 'Invoice',
+          entityId: invoice.id,
+        });
+        emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', paidEvent);
+      }
 
-      return result;
+      return { payment, amountPaid, balance, status };
+    }),
+
+  // #398: the mark-paid workflow. A status-only change can't make an invoice
+  // PAID (that left its balance showing the whole total as owed); this records
+  // whatever is still outstanding as one payment and flips the invoice to PAID in
+  // the same transaction, so status and balance always agree. Idempotent: an
+  // invoice already paid in full is returned unchanged with no new payment.
+  markInvoicePaid: adminProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        method: z.string().max(100).optional(),
+        note: z.string().max(1000).optional(),
+        paidAt: z.date().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { invoice, payment, amountPaid, balance, status, paidEvent } =
+        await ctx.db.$transaction((tx) =>
+          recordInvoicePayment(tx, {
+            invoiceId: input.id,
+            amount: 'OUTSTANDING',
+            method: input.method,
+            note: input.note,
+            paidAt: input.paidAt,
+          })
+        );
+
+      if (paidEvent) {
+        logActivity(ctx.db, ctx.session.user.id, {
+          type: 'invoice_paid',
+          message: `marked invoice ${invoice.invoiceNumber} as paid (${moneyLabel(paidEvent.total, invoice.currency)})`,
+          entityType: 'Invoice',
+          entityId: invoice.id,
+        });
+        emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', paidEvent);
+      }
+
+      return { invoiceId: invoice.id, payment, amountPaid, balance, status };
     }),
 
   // IMP-FIN-04: remove a payment and recompute. If deleting it drops a PAID invoice
-  // back below its total, revert the invoice to SENT and clear paidAt so it re-enters
-  // the outstanding pipeline.
+  // back below its total, reopen the invoice — OVERDUE when it is past due, else
+  // SENT — and clear paidAt so it re-enters the outstanding pipeline (#398).
   deletePayment: adminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
@@ -631,29 +782,34 @@ export const financeRouter = router({
         });
         if (!payment) throw new TRPCError({ code: 'NOT_FOUND', message: 'Payment not found' });
 
-        await tx.payment.delete({ where: { id: payment.id } });
+        await lockInvoiceRow(tx, payment.invoiceId);
+        // Another request may have deleted it while this one waited for the lock.
+        const removed = await tx.payment.deleteMany({ where: { id: payment.id } });
+        if (removed.count !== 1) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Payment not found' });
+        }
 
         const invoice = await tx.invoice.findUnique({
           where: { id: payment.invoiceId },
-          select: { id: true, status: true, total: true },
+          select: { id: true, status: true, total: true, dueDate: true },
         });
-        if (!invoice) return { invoiceId: payment.invoiceId, amountPaid: 0, balance: 0 };
+        if (!invoice) {
+          return { invoiceId: payment.invoiceId, amountPaid: 0, balance: 0, status: null };
+        }
 
         const total = round2(Number(invoice.total));
-        const agg = await tx.payment.aggregate({
-          where: { invoiceId: invoice.id },
-          _sum: { amount: true },
-        });
-        const amountPaid = round2(Number(agg._sum.amount ?? 0));
+        const amountPaid = await recordedInvoicePayments(tx, invoice.id);
 
+        let status = invoice.status;
         if (invoice.status === 'PAID' && amountPaid < total - PAYMENT_EPSILON) {
+          status = reopenedInvoiceStatus(invoice.dueDate, new Date());
           await tx.invoice.update({
             where: { id: invoice.id },
-            data: { status: 'SENT', paidAt: null },
+            data: { status, paidAt: null },
           });
         }
 
-        return { invoiceId: invoice.id, amountPaid, balance: round2(total - amountPaid) };
+        return { invoiceId: invoice.id, amountPaid, balance: round2(total - amountPaid), status };
       });
     }),
 

@@ -8,6 +8,7 @@ import {
   invoiceStatusUpdate,
   type InvoiceStatusValue,
 } from '@/lib/finance/invoice-status';
+import { invoiceStatusChangeError } from '@/lib/finance/invoice-payments';
 
 export const GET = withApiAuth(
   'finance:read',
@@ -60,6 +61,17 @@ export const PATCH = withApiAuth(
 
     if (next === existing.status) return NextResponse.json({ data: existing });
     if (!next) return NextResponse.json({ data: existing });
+
+    // #398: DRAFT and CANCELLED invoices are not owed, so a change into either is
+    // refused while payments are recorded. The handler already runs in the
+    // request's tenant transaction, which holds the row lock this check takes.
+    const paymentError = await invoiceStatusChangeError(
+      authCtx.db,
+      id,
+      existing.status as InvoiceStatusValue,
+      next
+    );
+    if (paymentError) return NextResponse.json({ error: paymentError }, { status: 400 });
 
     // Compare-and-set makes the state check and write one atomic operation. Only
     // the request that wins this update may emit transition side effects.

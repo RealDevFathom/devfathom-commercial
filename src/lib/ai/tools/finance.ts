@@ -23,6 +23,7 @@ import {
   invoiceStatusUpdate,
   PAID_STATUS_ERROR,
 } from '@/lib/finance/invoice-status';
+import { invoiceStatusChangeError } from '@/lib/finance/invoice-payments';
 
 // Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
 // Bound amounts here so an oversized input is a clean validation error, not a
@@ -608,17 +609,29 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         };
       }
 
-      const changed = await db.invoice.updateMany({
-        where: { id: matches[0].id, status: priorStatus },
-        data: invoiceStatusUpdate(priorStatus, status, now()),
+      // One transaction, so the row lock the payment check takes (#398: no move to
+      // DRAFT/CANCELLED while payments are recorded) covers the write as well.
+      const outcome = await db.$transaction(async (tx) => {
+        const paymentError = await invoiceStatusChangeError(tx, matches[0].id, priorStatus, status);
+        if (paymentError) return { ok: false as const, error: paymentError };
+        const changed = await tx.invoice.updateMany({
+          where: { id: matches[0].id, status: priorStatus },
+          data: invoiceStatusUpdate(priorStatus, status, now()),
+        });
+        if (changed.count !== 1) {
+          return {
+            ok: false as const,
+            error: 'Invoice status changed concurrently. Refresh and try again.',
+          };
+        }
+        const updated = await tx.invoice.findUniqueOrThrow({
+          where: { id: matches[0].id },
+          include: { client: { select: { name: true } } },
+        });
+        return { ok: true as const, invoice: updated };
       });
-      if (changed.count !== 1) {
-        return { error: 'Invoice status changed concurrently. Refresh and try again.' };
-      }
-      const invoice = await db.invoice.findUniqueOrThrow({
-        where: { id: matches[0].id },
-        include: { client: { select: { name: true } } },
-      });
+      if (!outcome.ok) return { error: outcome.error };
+      const { invoice } = outcome;
 
       const totalLabel = `$${Number(invoice.total).toLocaleString()}`;
       if (status === 'SENT') {

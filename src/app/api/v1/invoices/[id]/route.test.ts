@@ -19,21 +19,25 @@ const invoice = {
   client: { name: 'Acme' },
 };
 
-function context(status: string) {
+function context(status: string, amountPaid: number | null = null) {
   return {
     userId: 'user-1',
     db: {
+      $queryRaw: vi.fn().mockResolvedValue([]),
       invoice: {
         findUnique: vi.fn().mockResolvedValue({ id: invoice.id, status }),
         findUniqueOrThrow: vi.fn().mockResolvedValue(invoice),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
+      payment: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { amount: amountPaid } }),
+      },
     },
   };
 }
 
-async function patch(status: string, currentStatus: string) {
-  const authCtx = context(currentStatus);
+async function patch(status: string, currentStatus: string, amountPaid: number | null = null) {
+  const authCtx = context(currentStatus, amountPaid);
   const patchHandler = PATCH as unknown as (
     authCtx: unknown,
     request: Request,
@@ -93,6 +97,23 @@ describe('PATCH /api/v1/invoices/:id invoice status', () => {
       data: { status, sentAt: null },
     });
   });
+
+  it.each([
+    ['PAID', 'CANCELLED', 'Delete them before cancelling it.'],
+    ['SENT', 'DRAFT', 'Delete them before moving it back to draft.'],
+  ])(
+    'refuses %s to %s while payments are recorded (#398)',
+    async (currentStatus, status, advice) => {
+      const { authCtx, response, body } = await patch(status, currentStatus, 250);
+
+      expect(response.status).toBe(400);
+      expect(body).toEqual({ error: `This invoice has recorded payments. ${advice}` });
+      // The payment check runs under the invoice's row lock.
+      expect(authCtx.db.$queryRaw).toHaveBeenCalledOnce();
+      expect(authCtx.db.invoice.updateMany).not.toHaveBeenCalled();
+      expect(mocks.logActivity).not.toHaveBeenCalled();
+    }
+  );
 
   it('suppresses side effects when another request wins the transition', async () => {
     const authCtx = context('DRAFT');

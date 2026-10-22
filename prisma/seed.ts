@@ -905,7 +905,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
   ];
 
   for (const inv of invoices) {
-    await tx.invoice.create({
+    const created = await tx.invoice.create({
       data: {
         invoiceNumber: inv.number,
         clientId: inv.client.id,
@@ -940,6 +940,19 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         sentAt: inv.status !== 'DRAFT' ? new Date(inv.date) : null,
       },
     });
+    // #398: a PAID invoice carries the payment that settled it, so its derived
+    // balance is zero (the app never marks an invoice paid without one).
+    if (inv.status === 'PAID' && inv.paidDate) {
+      await tx.payment.create({
+        data: {
+          invoiceId: created.id,
+          amount: inv.total,
+          currency: 'USD',
+          method: 'Bank transfer',
+          paidAt: new Date(inv.paidDate),
+        },
+      });
+    }
   }
 
   // Transactions — Income from paid invoices

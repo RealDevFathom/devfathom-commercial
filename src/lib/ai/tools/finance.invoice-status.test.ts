@@ -17,8 +17,10 @@ const invoice = {
   client: { name: 'Acme' },
 };
 
-function setup(prior: string, changed = 1) {
+function setup(prior: string, changed = 1, amountPaid: number | null = null) {
   const db = {
+    $queryRaw: vi.fn().mockResolvedValue([]),
+    $transaction: vi.fn(),
     invoice: {
       findMany: vi
         .fn()
@@ -28,7 +30,11 @@ function setup(prior: string, changed = 1) {
       updateMany: vi.fn().mockResolvedValue({ count: changed }),
       findUniqueOrThrow: vi.fn().mockResolvedValue({ ...invoice, status: prior }),
     },
+    payment: {
+      aggregate: vi.fn().mockResolvedValue({ _sum: { amount: amountPaid } }),
+    },
   };
+  db.$transaction.mockImplementation(async (run: (tx: typeof db) => Promise<unknown>) => run(db));
   const helpers = {
     db,
     isAdmin: true,
@@ -71,6 +77,24 @@ describe('assistant updateInvoiceStatus', () => {
       where: { id: invoice.id, status: 'SENT' },
       data: { status: 'OVERDUE', sentAt: null },
     });
+  });
+
+  it('refuses to cancel an invoice with recorded payments, inside one transaction (#398)', async () => {
+    const { db, helpers, tool } = setup('PAID', 1, 300);
+
+    const result = await tool.execute({
+      invoiceNumber: invoice.invoiceNumber,
+      status: 'CANCELLED',
+    });
+
+    expect(result.error).toBe(
+      'This invoice has recorded payments. Delete them before cancelling it.'
+    );
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    expect(db.invoice.updateMany).not.toHaveBeenCalled();
+    expect(helpers.activity).not.toHaveBeenCalled();
+    expect(helpers.audit).not.toHaveBeenCalled();
   });
 
   it('suppresses every side effect when the compare-and-set loses a race', async () => {

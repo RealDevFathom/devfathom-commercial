@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  INVOICE_STATUS_VALUES,
+  invoiceStatusTargets,
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
   PAID_STATUS_ERROR,
+  reopenedInvoiceStatus,
   type InvoiceStatusValue,
 } from './invoice-status';
 
@@ -36,6 +39,39 @@ describe('invoice status contract shared by REST, tRPC, and AI', () => {
       });
     }
   );
+
+  // #398: DRAFT and CANCELLED invoices are not owed, so they cannot keep payments.
+  it.each([
+    ['SENT', 'CANCELLED', 'Delete them before cancelling it.'],
+    ['OVERDUE', 'CANCELLED', 'Delete them before cancelling it.'],
+    ['PAID', 'CANCELLED', 'Delete them before cancelling it.'],
+    ['SENT', 'DRAFT', 'Delete them before moving it back to draft.'],
+  ] as const)('refuses %s to %s while payments are recorded', (prior, next, advice) => {
+    expect(invoiceStatusTransitionError(prior, next, { amountPaid: 0.01 })).toBe(
+      `This invoice has recorded payments. ${advice}`
+    );
+    // Below the half-cent tolerance there is nothing to strand.
+    expect(invoiceStatusTransitionError(prior, next, { amountPaid: 0.004 })).toBeNull();
+    expect(invoiceStatusTransitionError(prior, next)).toBeNull();
+  });
+
+  it('keeps payments compatible with moves between issued states', () => {
+    expect(invoiceStatusTransitionError('SENT', 'OVERDUE', { amountPaid: 50 })).toBeNull();
+    expect(invoiceStatusTransitionError('OVERDUE', 'SENT', { amountPaid: 50 })).toBeNull();
+  });
+
+  it.each(INVOICE_STATUS_VALUES)('never offers PAID as a status-only target from %s', (prior) => {
+    expect(invoiceStatusTargets(prior)).not.toContain('PAID');
+    for (const next of invoiceStatusTargets(prior)) {
+      expect(invoiceStatusTransitionError(prior, next)).toBeNull();
+    }
+  });
+
+  it('reopens a past-due invoice as OVERDUE and any other as SENT', () => {
+    const now = new Date('2026-10-22T12:00:00Z');
+    expect(reopenedInvoiceStatus(new Date('2026-10-21T00:00:00Z'), now)).toBe('OVERDUE');
+    expect(reopenedInvoiceStatus(new Date('2026-10-23T00:00:00Z'), now)).toBe('SENT');
+  });
 
   it('stamps SENT and clears paidAt whenever PAID is exited', () => {
     const at = new Date('2026-10-21T00:00:00Z');

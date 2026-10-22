@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
   findUniqueOrThrow: vi.fn(),
   updateMany: vi.fn(),
+  queryRaw: vi.fn(async () => []),
+  aggregate: vi.fn(async () => ({ _sum: { amount: null as number | null } })),
   logActivity: vi.fn(),
 }));
 
@@ -25,14 +27,18 @@ import type { TRPCContext } from '../trpc';
 import { financeRouter } from './finance';
 
 function caller() {
-  return financeRouter.createCaller({
-    db: {
-      invoice: {
-        findUnique: mocks.findUnique,
-        findUniqueOrThrow: mocks.findUniqueOrThrow,
-        updateMany: mocks.updateMany,
-      },
+  const db: Record<string, unknown> = {
+    invoice: {
+      findUnique: mocks.findUnique,
+      findUniqueOrThrow: mocks.findUniqueOrThrow,
+      updateMany: mocks.updateMany,
     },
+    payment: { aggregate: mocks.aggregate },
+    $queryRaw: mocks.queryRaw,
+  };
+  db.$transaction = vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(db));
+  return financeRouter.createCaller({
+    db,
     entitlements: { organizationId: 'org-1', enabledModules: [], modules: [] },
     session: {
       expires: 'later',
@@ -78,6 +84,24 @@ describe('finance.updateInvoiceStatus', () => {
       where: { id: 'invoice-1', status: 'SENT' },
       data: { status: 'CANCELLED', sentAt: null },
     });
+  });
+
+  it('refuses to cancel an invoice that has recorded payments, under its row lock', async () => {
+    mocks.findUnique.mockResolvedValue({ status: 'PAID' });
+    mocks.aggregate.mockResolvedValueOnce({ _sum: { amount: 100 } });
+
+    await expect(
+      caller().updateInvoiceStatus({ id: 'invoice-1', status: 'CANCELLED' })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'This invoice has recorded payments. Delete them before cancelling it.',
+    });
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.aggregate.mock.invocationCallOrder[0]
+    );
+    expect(mocks.updateMany).not.toHaveBeenCalled();
+    expect(mocks.logActivity).not.toHaveBeenCalled();
   });
 
   it('reports a conflict and emits no activity if another caller wins', async () => {
