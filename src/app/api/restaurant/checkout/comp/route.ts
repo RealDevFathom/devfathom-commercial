@@ -27,6 +27,7 @@ export const POST = moneyMutationRoute({
       billLineId: data.billLineId,
       reason: data.reason,
       approvingStaffProfileId: approver.staffProfileId,
+      terminalSessionId: ctx.session.id,
       actor,
     });
   },

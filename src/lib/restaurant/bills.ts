@@ -850,6 +850,8 @@ export type CompLineInput = {
   billLineId: string;
   reason: string;
   approvingStaffProfileId: string;
+  /** Trusted active terminal session, when the command originates at a terminal. */
+  terminalSessionId?: string;
   actor: MoneyCommandActor;
 };
 
@@ -997,6 +999,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       targetType: 'RestaurantBillLine',
       targetId: line.id,
       deviceId: input.actor.deviceId,
+      terminalSessionId: input.terminalSessionId,
     });
 
     await tx.restaurantBillLine.update({
