@@ -212,6 +212,25 @@ export const projectsRouter = router({
       }
       await assertInOrganization(ctx.db.user, workspaceId(ctx), [input.userId]);
 
+      // Existing members can reach this mutation too, so preserve the same
+      // last-lead invariant enforced by setMemberRole.
+      if (input.role === 'MEMBER') {
+        const [target, leadCount] = await Promise.all([
+          ctx.db.projectMember.findUnique({
+            where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+          }),
+          ctx.db.projectMember.count({
+            where: { projectId: input.projectId, role: 'LEAD' },
+          }),
+        ]);
+        if (target?.role === 'LEAD' && leadCount <= 1) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Cannot demote the last lead. Promote another member first.',
+          });
+        }
+      }
+
       // Idempotent — if already a member, just update the role
       const membership = await ctx.db.projectMember.upsert({
         where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
