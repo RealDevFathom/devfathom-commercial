@@ -1,19 +1,15 @@
 import { createHash } from 'node:crypto';
-
 import { z } from 'zod';
-
 export const hotelDate = z.coerce.date().refine(
   (date) => date.getUTCHours() === 0 && date.getUTCMinutes() === 0,
   'Use a hotel-local calendar date.'
 );
-
 export const stayRangeInput = z
   .object({ arrivalDate: hotelDate, departureDate: hotelDate })
   .refine(({ arrivalDate, departureDate }) => departureDate > arrivalDate, {
     path: ['departureDate'],
     message: 'Departure must be after arrival.',
   });
-
 export type AvailabilityRoom = {
   id: string;
   roomTypeId: string;
@@ -22,7 +18,6 @@ export type AvailabilityRoom = {
   blocks: readonly unknown[];
   assignments: readonly unknown[];
 };
-
 export type AvailabilityType = {
   id: string;
   code: string;
@@ -31,7 +26,6 @@ export type AvailabilityType = {
   rooms: readonly AvailabilityRoom[];
   stayUnits: readonly { quantity: number }[];
 };
-
 /** One canonical projection powers reservation availability and the calendar. */
 export function summarizeAvailability(roomTypes: readonly AvailabilityType[]) {
   return roomTypes.map((roomType) => {
@@ -60,7 +54,6 @@ export function summarizeAvailability(roomTypes: readonly AvailabilityType[]) {
     };
   });
 }
-
 /** Stable object hashing for property-scoped idempotency records. */
 export function reservationRequestHash(value: unknown): string {
   const canonical = (input: unknown): unknown => {
@@ -76,7 +69,6 @@ export function reservationRequestHash(value: unknown): string {
   };
   return createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 }
-
 export function confirmationNumber(year: number, sequence: number): string {
   return `RSV-${year}-${String(sequence).padStart(6, '0')}`;
 }
