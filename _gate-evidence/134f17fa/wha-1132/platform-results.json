@@ -1,0 +1,625 @@
+{
+  "config": {
+    "argv": [
+      "/Users/Saad/.hermes/node/bin/node",
+      "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/node_modules/.bin/playwright",
+      "test",
+      "--config",
+      "tests/e2e/platform-control-plane.config.ts",
+      "--reporter=list,json"
+    ],
+    "configFile": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane.config.ts",
+    "rootDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/playwright-artifacts/platform-control-plane",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "platform-control-plane-chromium",
+        "name": "platform-control-plane-chromium",
+        "testDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "platform-control-plane*.spec.ts"
+        ],
+        "timeout": 120000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list"
+      ],
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.62.0",
+    "workers": 1,
+    "webServer": {
+      "command": "bunx next start --port 4319",
+      "cwd": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se",
+      "url": "http://admin.localhost:4319",
+      "reuseExistingServer": false,
+      "timeout": 120000,
+      "env": {
+        "AUTH_TRUST_HOST": "true",
+        "SHARED_APP_HOSTS": "www.localhost",
+        "PLATFORM_BASE_DOMAIN": "localhost"
+      }
+    }
+  },
+  "suites": [
+    {
+      "title": "platform-control-plane-activation-gates.spec.ts",
+      "file": "platform-control-plane-activation-gates.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "activation checklist lists the unmet deployment gate and the shared default resolves it",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 120000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "platform-control-plane-chromium",
+              "projectName": "platform-control-plane-chromium",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 13130,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:23:05.749Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "63d11d79231750044aa7-e3ac038f9b138a74cb0b",
+          "file": "platform-control-plane-activation-gates.spec.ts",
+          "line": 70,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "platform-control-plane-administrator-staff.spec.ts",
+      "file": "platform-control-plane-administrator-staff.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "the administrator SuperAdmin creates is provisioned a staff profile and is served notifications",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 120000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "platform-control-plane-chromium",
+              "projectName": "platform-control-plane-chromium",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 5593,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:23:19.987Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "98aa49da739e346e6d07-c48aecf8e0622ae84602",
+          "file": "platform-control-plane-administrator-staff.spec.ts",
+          "line": 71,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "platform-control-plane-pharmacy-lifecycle.spec.ts",
+      "file": "platform-control-plane-pharmacy-lifecycle.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "SuperAdmin completes the audited PHARMACY lifecycle and cross-vertical requests fail closed",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 120000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "platform-control-plane-chromium",
+              "projectName": "platform-control-plane-chromium",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 3547,
+                  "error": {
+                    "message": "error: pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version",
+                    "stack": "error: pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/node_modules/pg/lib/client.js:652:17\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts:217:5\n    at withAdminDatabase (/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/fixtures/platform-control-plane.ts:172:12)\n    at seedMinimalReadiness (/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts:208:3)\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts:115:3",
+                    "location": {
+                      "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts",
+                      "column": 5,
+                      "line": 217
+                    },
+                    "snippet": "  215 |       );\n  216 |     }\n> 217 |     await db.query(\n      |     ^\n  218 |       `UPDATE pharmacy_branch_regulatory_profiles SET \"effectiveTo\"='2026-09-02T01:00:00.000Z' WHERE id='e2e_pharmacy_profile_provisional'`\n  219 |     );\n  220 |     await db.query("
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts",
+                        "column": 5,
+                        "line": 217
+                      },
+                      "message": "error: pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version\n\n  215 |       );\n  216 |     }\n> 217 |     await db.query(\n      |     ^\n  218 |       `UPDATE pharmacy_branch_regulatory_profiles SET \"effectiveTo\"='2026-09-02T01:00:00.000Z' WHERE id='e2e_pharmacy_profile_provisional'`\n  219 |     );\n  220 |     await db.query(\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/node_modules/pg/lib/client.js:652:17\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts:217:5\n    at withAdminDatabase (/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/fixtures/platform-control-plane.ts:172:12)\n    at seedMinimalReadiness (/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts:208:3)\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts:115:3"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:23:25.654Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "screenshot",
+                      "contentType": "image/png",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/playwright-artifacts/platform-control-plane/platform-control-plane-pha-89389-rtical-requests-fail-closed-platform-control-plane-chromium/test-failed-1.png"
+                    },
+                    {
+                      "name": "video",
+                      "contentType": "video/webm",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/playwright-artifacts/platform-control-plane/platform-control-plane-pha-89389-rtical-requests-fail-closed-platform-control-plane-chromium/video.webm"
+                    },
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/playwright-artifacts/platform-control-plane/platform-control-plane-pha-89389-rtical-requests-fail-closed-platform-control-plane-chromium/error-context.md"
+                    },
+                    {
+                      "name": "trace",
+                      "contentType": "application/zip",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/playwright-artifacts/platform-control-plane/platform-control-plane-pha-89389-rtical-requests-fail-closed-platform-control-plane-chromium/trace.zip"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts",
+                    "column": 5,
+                    "line": 217
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "ab0ce8c949e4c9d98d54-7fde66e7cf45f0b12899",
+          "file": "platform-control-plane-pharmacy-lifecycle.spec.ts",
+          "line": 55,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "platform-control-plane-pharmacy-onboarding.spec.ts",
+      "file": "platform-control-plane-pharmacy-onboarding.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "a fresh pharmacy fills its regulatory profile, watches the steps flip, and is refused activation until the last one",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 300000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "platform-control-plane-chromium",
+              "projectName": "platform-control-plane-chromium",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 6074,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:23:32.669Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "ffaa48921fdf332d7362-457d8404afce27bc0fcd",
+          "file": "platform-control-plane-pharmacy-onboarding.spec.ts",
+          "line": 151,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "platform-control-plane.spec.ts",
+      "file": "platform-control-plane.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "full administrator can load every declared route and matching navigation",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 120000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "platform-control-plane-chromium",
+              "projectName": "platform-control-plane-chromium",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 3567,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:23:38.961Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "010b114c6ec2897776d0-3ee409cb461e5cc4c5d4",
+          "file": "platform-control-plane.spec.ts",
+          "line": 40,
+          "column": 5
+        },
+        {
+          "title": "restricted operator sees only grants and denied document/data requests fail safely",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 120000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "platform-control-plane-chromium",
+              "projectName": "platform-control-plane-chromium",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 3913,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:23:42.845Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "010b114c6ec2897776d0-304fda5dbfb6ae45be56",
+          "file": "platform-control-plane.spec.ts",
+          "line": 61,
+          "column": 5
+        },
+        {
+          "title": "failure ledger records denial, validation, rollback, success, replay, and redaction",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 120000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "platform-control-plane-chromium",
+              "projectName": "platform-control-plane-chromium",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1050,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:23:46.769Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "010b114c6ec2897776d0-efb2560666d500f3d857",
+          "file": "platform-control-plane.spec.ts",
+          "line": 113,
+          "column": 5
+        },
+        {
+          "title": "restaurant onboarding time field exposes the HH:MM input contract",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 120000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "platform-control-plane-chromium",
+              "projectName": "platform-control-plane-chromium",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1353,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:23:47.828Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "010b114c6ec2897776d0-4aa4186083a99f6baf36",
+          "file": "platform-control-plane.spec.ts",
+          "line": 215,
+          "column": 5
+        },
+        {
+          "title": "restaurant onboarding reaches ACTIVE",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 120000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "platform-control-plane-chromium",
+              "projectName": "platform-control-plane-chromium",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 8030,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByText('Use 24-hour time, e.g. 09:30')\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByText('Use 24-hour time, e.g. 09:30')\u001b[22m\n",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByText('Use 24-hour time, e.g. 09:30')\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByText('Use 24-hour time, e.g. 09:30')\u001b[22m\n\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane.spec.ts:251:64",
+                    "location": {
+                      "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane.spec.ts",
+                      "column": 64,
+                      "line": 251
+                    },
+                    "snippet": "  249 |   await onboardingCutoff.fill('24:30');\n  250 |   await page.getByRole('button', { name: 'Create onboarding record' }).click();\n> 251 |   await expect(page.getByText('Use 24-hour time, e.g. 09:30')).toBeVisible();\n      |                                                                ^\n  252 |   await expect(onboardingCutoff).toBeFocused();\n  253 |   await onboardingCutoff.fill('04:30');\n  254 |   await page.getByLabel('Primary contact', { exact: true }).fill('Restaurant Owner');"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane.spec.ts",
+                        "column": 64,
+                        "line": 251
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: getByText('Use 24-hour time, e.g. 09:30')\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for getByText('Use 24-hour time, e.g. 09:30')\u001b[22m\n\n\n  249 |   await onboardingCutoff.fill('24:30');\n  250 |   await page.getByRole('button', { name: 'Create onboarding record' }).click();\n> 251 |   await expect(page.getByText('Use 24-hour time, e.g. 09:30')).toBeVisible();\n      |                                                                ^\n  252 |   await expect(onboardingCutoff).toBeFocused();\n  253 |   await onboardingCutoff.fill('04:30');\n  254 |   await page.getByLabel('Primary contact', { exact: true }).fill('Restaurant Owner');\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane.spec.ts:251:64"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:23:49.190Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "screenshot",
+                      "contentType": "image/png",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/playwright-artifacts/platform-control-plane/platform-control-plane-restaurant-onboarding-reaches-ACTIVE-platform-control-plane-chromium/test-failed-1.png"
+                    },
+                    {
+                      "name": "video",
+                      "contentType": "video/webm",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/playwright-artifacts/platform-control-plane/platform-control-plane-restaurant-onboarding-reaches-ACTIVE-platform-control-plane-chromium/video.webm"
+                    },
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/playwright-artifacts/platform-control-plane/platform-control-plane-restaurant-onboarding-reaches-ACTIVE-platform-control-plane-chromium/error-context.md"
+                    },
+                    {
+                      "name": "trace",
+                      "contentType": "application/zip",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/playwright-artifacts/platform-control-plane/platform-control-plane-restaurant-onboarding-reaches-ACTIVE-platform-control-plane-chromium/trace.zip"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane.spec.ts",
+                    "column": 64,
+                    "line": 251
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "010b114c6ec2897776d0-36bb05e5b7e8167638d7",
+          "file": "platform-control-plane.spec.ts",
+          "line": 226,
+          "column": 5
+        },
+        {
+          "title": "agency onboarding exposes no Restaurant setup fields",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 120000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "platform-control-plane-chromium",
+              "projectName": "platform-control-plane-chromium",
+              "results": [
+                {
+                  "workerIndex": -1,
+                  "parallelIndex": -1,
+                  "status": "skipped",
+                  "duration": 0,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:23:57.964Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "skipped"
+            }
+          ],
+          "id": "010b114c6ec2897776d0-46a7a9d31ad8a3022d01",
+          "file": "platform-control-plane.spec.ts",
+          "line": 373,
+          "column": 5
+        },
+        {
+          "title": "shared-host login succeeds and forged tenant selection is generic",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 120000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "platform-control-plane-chromium",
+              "projectName": "platform-control-plane-chromium",
+              "results": [
+                {
+                  "workerIndex": -1,
+                  "parallelIndex": -1,
+                  "status": "skipped",
+                  "duration": 0,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:23:57.972Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "skipped"
+            }
+          ],
+          "id": "010b114c6ec2897776d0-895e38f0eedd99593d81",
+          "file": "platform-control-plane.spec.ts",
+          "line": 383,
+          "column": 5
+        },
+        {
+          "title": "compact navigation preserves keyboard focus and has no hydration/request errors",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 120000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "platform-control-plane-chromium",
+              "projectName": "platform-control-plane-chromium",
+              "results": [
+                {
+                  "workerIndex": -1,
+                  "parallelIndex": -1,
+                  "status": "skipped",
+                  "duration": 0,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:23:57.977Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "skipped"
+            }
+          ],
+          "id": "010b114c6ec2897776d0-7e941b7bb2872922e0e5",
+          "file": "platform-control-plane.spec.ts",
+          "line": 429,
+          "column": 5
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-09-02T23:22:57.038Z",
+    "duration": 61177.12,
+    "expected": 7,
+    "skipped": 3,
+    "unexpected": 2,
+    "flaky": 0
+  }
+}
