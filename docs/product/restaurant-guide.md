@@ -228,7 +228,7 @@ Related docs: [SOP](sop.md), [Auth and roles (technical)](../dev/auth-and-roles.
 - **Purchasing** steps: draft a purchase order, submit, approve, then receive the goods. Receiving adds stock.
 - Every stock change is recorded as a movement.
 - When an order is closed, DevFathom uses up the ingredients in each item's recipe. Items with no active recipe do not reduce stock.
-- If an item is voided after the kitchen started it, the manager chooses: **Waste** records it as wastage; **Restock** or **None** record no stock change.
+- If an item is voided after the kitchen started it, the void is marked as one of three options: **Waste** records it as wastage; **Restock** or **None** record no stock change.
 - For catering, stock is used up when an event is marked Ready.
 
 Related docs: [Restaurant administrator guide](restaurant-administrator-guide.md) (sections 4 and 12).
