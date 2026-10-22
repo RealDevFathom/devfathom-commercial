@@ -38,7 +38,11 @@ vi.mock('@/lib/trpc', () => ({
     pharmacySales: {
       counterBranches: {
         useQuery: () => ({
-          data: { branches: [{ id: 'b', name: 'Main' }], timezone: mocks.zone },
+          data: {
+            branches: [{ id: 'b', name: 'Main' }],
+            currency: 'USD',
+            timezone: mocks.zone,
+          },
           isSuccess: true,
         }),
       },
@@ -102,6 +106,14 @@ describe('day-close console', () => {
     expect(
       drawerOpenedLabel({ openedAt: '2026-09-29T04:12:00Z', openedBy: null }, WORKSPACE_ZONE)
     ).toMatch(/^Opened \d{2}:\d{2}$/);
+  });
+  it('uses the organization currency throughout reconciliation', () => {
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Pharmacy · USD')).toBeInTheDocument();
+    expect(screen.getByText('Expected cash · USD')).toBeInTheDocument();
+    expect(screen.getByText('Expected: USD 125.00')).toBeInTheDocument();
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toBeInTheDocument();
+    expect(screen.queryByText(/PKR/)).not.toBeInTheDocument();
   });
   it('reads every time on the screen in the workspace zone, not the browser’s', () => {
     // The guard that makes this test mean something wherever it runs.
@@ -194,7 +206,7 @@ describe('day-close console', () => {
     render(<PharmacyDayCloseConsole />);
     const submit = screen.getByRole('button', { name: 'Close and lock day' });
     expect(submit).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (PKR)'), {
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (USD)'), {
       target: { value: '124.00' },
     });
     expect(screen.getByTestId('Variance')).toHaveTextContent('-1.00');
