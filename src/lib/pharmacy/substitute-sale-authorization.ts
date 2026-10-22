@@ -10,6 +10,18 @@ export type SaleSubstitution = {
   priceOverrideReason?: string;
 };
 
+function moneyProduct(left: number, right: number): number | null {
+  if (
+    !Number.isSafeInteger(left) ||
+    !Number.isSafeInteger(right) ||
+    left < 0 ||
+    right <= 0
+  )
+    return null;
+  const product = left * right;
+  return Number.isSafeInteger(product) ? product : null;
+}
+
 /** Called inside addLine's transaction; a listing-time override grants nothing. */
 export async function authorizeSubstituteSale<
   T extends {
@@ -47,17 +59,26 @@ export async function authorizeSubstituteSale<
       p.presentationId === result.line.presentationId &&
       p.packLevelId === result.line.packLevelId
   );
+  const suppliedPrice = moneyProduct(result.line.unitPriceMinor, result.line.quantity);
+  const referencePrice = proposal
+    ? proposal.priceMinor + proposal.priceDifferenceMinor
+    : null;
   if (
     !proposal ||
-    result.allocation.allocations.some((a) => a.inventoryLotId !== input.inventoryLotId)
+    result.line.canonicalUnits !== quantityCanonicalUnits ||
+    result.allocation.allocations.length === 0 ||
+    result.allocation.allocations.some((a) => a.inventoryLotId !== input.inventoryLotId) ||
+    suppliedPrice === null ||
+    referencePrice === null ||
+    !Number.isSafeInteger(referencePrice) ||
+    referencePrice < 0
   ) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'Substitute no longer matches the authorized lot or price. Refresh suggestions.',
     });
   }
-  const referencePrice = proposal.priceMinor + proposal.priceDifferenceMinor;
-  if (result.line.unitPriceMinor * result.line.quantity > referencePrice && !reason) {
+  if (suppliedPrice > referencePrice && !reason) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'A pricier substitute requires a pharmacist override reason.',
@@ -80,7 +101,7 @@ export async function authorizeSubstituteSale<
         requestedPresentationId: input.requestedPresentationId,
         inventoryLotId: input.inventoryLotId,
         referencePriceMinor: referencePrice,
-        suppliedPriceMinor: result.line.unitPriceMinor * result.line.quantity,
+        suppliedPriceMinor: suppliedPrice,
         reason: reason ?? null,
       },
     },

@@ -42,7 +42,12 @@ const input = {
 
 function caller(
   branch: { id: string } | null,
-  options?: { role?: 'EMPLOYEE' | 'ADMIN'; assignedBranchIds?: string[]; denyDispense?: boolean }
+  options?: {
+    role?: 'EMPLOYEE' | 'ADMIN';
+    assignedBranchIds?: string[];
+    capability?: string;
+    denyDispense?: boolean;
+  }
 ) {
   const assignedBranchIds = options?.assignedBranchIds ?? (branch ? [branch.id] : []);
   const db = {
@@ -51,7 +56,7 @@ function caller(
         status: 'ACTIVE',
         organizationId: 'org-1',
         organizationRole: {
-          permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+          permissions: [{ capability: options?.capability ?? 'pharmacy:dispense', effect: 'ALLOW' }],
         },
         permissionOverrides: options?.denyDispense
           ? [{ capability: 'pharmacy:dispense', effect: 'DENY' }]
@@ -176,6 +181,17 @@ describe('substitute proposals', () => {
   it('refuses a DENY override even with a branch assignment', async () => {
     await expect(
       caller({ id: 'branch-1' }, { denyDispense: true }).substituteProposals(input)
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(findSubstituteProposals).not.toHaveBeenCalled();
+  });
+
+  it('allows an exact counter grant and rejects a pharmacy wildcard', async () => {
+    await expect(
+      caller({ id: 'branch-1' }, { capability: 'pharmacy.counter' }).substituteProposals(input)
+    ).resolves.toEqual([]);
+    vi.mocked(findSubstituteProposals).mockClear();
+    await expect(
+      caller({ id: 'branch-1' }, { capability: 'pharmacy:*' }).substituteProposals(input)
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(findSubstituteProposals).not.toHaveBeenCalled();
   });

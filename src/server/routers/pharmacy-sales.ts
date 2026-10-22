@@ -1,5 +1,4 @@
 import { authorizeSubstituteSale } from '@/lib/pharmacy/substitute-sale-authorization';
-import { readCounterBranchAssignments } from '@/lib/pharmacy/counter-branch-access';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { hasModule } from '@/lib/entitlements';
 import {
@@ -166,73 +165,6 @@ async function khataScope(ctx: TRPCContext, branch: string) {
   return scope;
 }
 
-/**
- * Dispense or receipt capability, then an active pharmacy branch assignment in
- * the session organization. Restaurant staff profiles are not consulted. An
- * empty assignment denies. A session `ADMIN` of this organization may read a
- * branch they are not assigned to; that exception is recorded on the audit.
- */
-async function requireSubstituteAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
-  const scope = await branchScopeOrForbidden(ctx, branch);
-  const user = ctx.session!.user;
-  if (!user.organizationId || user.organizationId !== scope.organizationId) {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
-  }
-
-  const member = await ctx.db.user.findUnique({
-    where: { id: user.id },
-    select: {
-      status: true,
-      organizationId: true,
-    },
-  });
-  if (
-    !member ||
-    member.organizationId !== scope.organizationId ||
-    !member.status ||
-    !ACTIVE_STATUSES.has(member.status)
-  ) {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
-  }
-
-  const capable = await can(subjectFromSession(user), 'pharmacy:dispense', undefined, {
-    db: ctx.db,
-    source: 'TRPC',
-  });
-  if (!capable) {
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: 'You do not have permission for this action.',
-    });
-  }
-
-  const available = await ctx.db.pharmacyBranch.findFirst({
-    where: { id: branch, organizationId: scope.organizationId, active: true },
-    select: { id: true },
-  });
-  if (!available) {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
-  }
-
-  const rows = await readCounterBranchAssignments(ctx.db, scope.organizationId, user.id);
-  const assigned = new Set(rows.map((row) => row.branchId));
-  if (assigned.has(branch)) return scope;
-
-  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
-  if (assigned.size === 0 && orgAdmin) {
-    annotateAudit(ctx, {
-      targetType: 'PharmacyBranch',
-      targetId: branch,
-      metadata: {
-        branchId: branch,
-        reason: 'org-admin-receipt-access-without-branch-assignment',
-      },
-    });
-    return scope;
-  }
-  throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
-}
-
 async function bindKhataBranch(db: ScopedDb, scope: LedgerScope) {
   await db.$queryRaw(
     Prisma.sql`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`
@@ -348,22 +280,6 @@ const RECEIPT_READ_CAPABILITIES = [
   'pharmacy.counter',
 ] as const;
 
-function capabilityCovers(rule: string, action: string): boolean {
-  if (rule === '*' || rule === action) return true;
-  if (rule.endsWith(':*') || rule.endsWith('.*')) return action.startsWith(rule.slice(0, -1));
-  return false;
-}
-
-function capabilityDecision(
-  rules: { capability: string; effect: string }[],
-  action: string
-): 'ALLOW' | 'DENY' | null {
-  const matched = rules.filter((rule) => capabilityCovers(rule.capability, action));
-  if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
-  if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
-  return null;
-}
-
 /**
  * Dispense, receipt, or counter capability, then an active pharmacy branch
  * assignment in the session organization. Restaurant staff profiles are not
@@ -383,14 +299,21 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
   }
 }
 
-async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+async function requireCounterReceiptAccess(
+  ctx: TRPCContext,
+  branch: string,
+  db: ScopedDb = ctx.db
+): Promise<LedgerScope> {
+  if (!hasModule(ctx.entitlements, 'pharmacy-counter')) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter access is required.' });
+  }
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
   if (!user.organizationId || user.organizationId !== scope.organizationId) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const member = await ctx.db.user.findUnique({
+  const member = await db.user.findUnique({
     where: { id: user.id },
     select: {
       status: true,
@@ -413,14 +336,29 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const overrides = member.permissionOverrides;
-  const roleRules = member.organizationRole?.permissions ?? [];
-  const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
-    const override = capabilityDecision(overrides, action);
-    if (override === 'DENY') return false;
-    if (override === 'ALLOW') return true;
-    return capabilityDecision(roleRules, action) === 'ALLOW';
-  });
+  // Pharmacy counter capabilities are an exact-grant boundary: broad wildcards
+  // do not implicitly grant access, and any applicable denial wins globally.
+  const rules = [
+    ...member.permissionOverrides,
+    ...(member.organizationRole?.permissions ?? []),
+  ];
+  const isExactCounterCapability = (capability: string) =>
+    RECEIPT_READ_CAPABILITIES.includes(
+      capability as (typeof RECEIPT_READ_CAPABILITIES)[number]
+    );
+  const denied = rules.some(
+    (rule) =>
+      rule.effect === 'DENY' &&
+      (isExactCounterCapability(rule.capability) ||
+        rule.capability === '*' ||
+        rule.capability === 'pharmacy:*' ||
+        rule.capability === 'pharmacy.*')
+  );
+  const capable =
+    !denied &&
+    rules.some(
+      (rule) => rule.effect === 'ALLOW' && isExactCounterCapability(rule.capability)
+    );
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -428,7 +366,7 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     });
   }
 
-  const available = await ctx.db.pharmacyBranch.findFirst({
+  const available = await db.pharmacyBranch.findFirst({
     where: { id: branch, organizationId: scope.organizationId, active: true },
     select: { id: true },
   });
@@ -436,7 +374,7 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const rows = await ctx.db.pharmacyBranchAssignment.findMany({
+  const rows = await db.pharmacyBranchAssignment.findMany({
     where: {
       organizationId: scope.organizationId,
       userId: user.id,
@@ -991,7 +929,7 @@ export const pharmacySalesRouter = router({
           const db = txDb(tx);
           const scope = await scopeFor(ctx, input.branchId);
           const addAuthorizedLine = async () => {
-            if (input.substitution) await requireSubstituteAccess(ctx, input.branchId);
+            if (input.substitution) await requireCounterReceiptAccess(ctx, input.branchId, db);
             if (input.substitution)
               return authorizeSubstituteSale(
                 db,
@@ -1409,7 +1347,7 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
-        const scope = await requireSubstituteAccess(ctx, input.branchId);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         return await findSubstituteProposals(ctx.db, scope, {
           medicineId: input.medicineId,
           presentationId: input.presentationId,
@@ -1435,7 +1373,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await requireSubstituteAccess(ctx, input.branchId);
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       return findSubstituteProposals(ctx.db, scope, {
         medicineId: input.medicineId,
         presentationId: input.presentationId,

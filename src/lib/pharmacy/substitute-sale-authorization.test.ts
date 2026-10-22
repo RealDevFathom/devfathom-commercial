@@ -76,6 +76,25 @@ it('refuses a changed allocation even with a recorded reason', async () => {
     )
   ).rejects.toMatchObject({ code: 'FORBIDDEN' });
 });
+it.each([
+  ['an empty allocation', { ...result, allocation: { allocations: [] } }],
+  ['a changed canonical quantity', { ...result, line: { ...result.line, canonicalUnits: 3 } }],
+  [
+    'an unsafe money product',
+    { ...result, line: { ...result.line, unitPriceMinor: Number.MAX_SAFE_INTEGER } },
+  ],
+] as const)('refuses %s', async (_label, changed) => {
+  await expect(
+    authorizeSubstituteSale(
+      db,
+      scope,
+      { ...substitution, priceOverrideReason: 'Available brand' },
+      2,
+      async () => changed
+    )
+  ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(create).not.toHaveBeenCalled();
+});
 it('checks stock before adding the line so the final units can be sold', async () => {
   const add = vi.fn(async () => {
     expect(findSubstituteProposals).toHaveBeenCalled();
