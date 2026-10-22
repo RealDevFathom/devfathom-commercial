@@ -7,6 +7,7 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { signOutEverything } from '@/lib/auth/sign-out';
+import { tenantSignOut } from '@/lib/auth/tenant-sign-out';
 import {
   Search,
   Bell,
@@ -302,7 +303,7 @@ export function Topbar({
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onClick={() => void signOutEverything()}
+                  onClick={() => void tenantSignOut()}
                   className="text-destructive focus:text-destructive"
                 >
                   <LogOut className="mr-2 h-4 w-4" />

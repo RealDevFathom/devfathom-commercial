@@ -20,7 +20,9 @@ const mocks = vi.hoisted(() => ({
     organizationAdmin: { askFathomSettings: { cancel: vi.fn().mockResolvedValue(undefined) } },
     team: { getNotifications: {} },
   },
+  tenantSignOut: vi.fn(),
 }));
+vi.mock('@/lib/auth/tenant-sign-out', () => ({ tenantSignOut: mocks.tenantSignOut }));
 vi.mock('next-auth/react', () => ({ useSession: () => mocks.session }));
 vi.mock('next/navigation', () => ({
   usePathname: () => '/dashboard',
@@ -145,6 +147,15 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('both real Ask Fathom launch buttons and shell lifecycle', () => {
+  it('submits the tenant sign-out server action from the account menu', () => {
+    render(<Topbar />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open account menu' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }));
+
+    expect(mocks.tenantSignOut).toHaveBeenCalledOnce();
+  });
+
   it('disables both buttons while unknown and keeps the ordinary dashboard available', () => {
     render(shell());
     for (const button of launchers()) {
