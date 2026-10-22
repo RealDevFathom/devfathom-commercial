@@ -544,7 +544,7 @@ export const organizationAdminRouter = router({
         // user's status, providing defense in depth for concurrent requests.
         if (before.status === 'INVITED' && input.status !== 'INVITED') {
           await tx.invitation.updateMany({
-            where: { userId: before.id, acceptedAt: null },
+            where: { organizationId: id, userId: before.id, acceptedAt: null },
             data: { expiresAt: new Date() },
           });
         }

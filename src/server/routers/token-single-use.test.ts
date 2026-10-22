@@ -216,6 +216,12 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
   it('rejects an unexpired invitation when the invitee has been deactivated', async () => {
     await expect(
       deps.withTenantDb(organizationId, (db) =>
+        caller(deps.invitationsRouter, db).get({ token: deactivatedInviteToken })
+      )
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: deps.INVITATION_GENERIC_MESSAGE });
+
+    await expect(
+      deps.withTenantDb(organizationId, (db) =>
         caller(deps.invitationsRouter, db).accept({
           token: deactivatedInviteToken,
           password: 'Str0ng!Passw0rd',

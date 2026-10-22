@@ -375,7 +375,7 @@ describe('organization member creation', () => {
     });
 
     expect(mocks.invitationUpdateMany).toHaveBeenCalledWith({
-      where: { userId: 'member_invited', acceptedAt: null },
+      where: { organizationId: 'org_a', userId: 'member_invited', acceptedAt: null },
       data: { expiresAt: expect.any(Date) },
     });
     expect(mocks.invitationUpdateMany.mock.invocationCallOrder[0]).toBeLessThan(

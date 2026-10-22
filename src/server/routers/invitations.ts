@@ -113,7 +113,12 @@ export const invitationsRouter = router({
         // Between the two statements the invitation can lapse, and expiry that is
         // only enforced on the read is enforced nowhere that the write can see.
         const claimed = await tx.invitation.updateMany({
-          where: { id: invitation.id, acceptedAt: null, expiresAt: { gt: now } },
+          where: {
+            id: invitation.id,
+            organizationId: invitation.organizationId,
+            acceptedAt: null,
+            expiresAt: { gt: now },
+          },
           data: { acceptedAt: now },
         });
         if (claimed.count !== 1) throw invalidInvitation();
@@ -122,7 +127,11 @@ export const invitationsRouter = router({
         // Make activation conditional as well, so that race cannot reactivate a
         // user whose invitation has just been withdrawn.
         const activated = await tx.user.updateMany({
-          where: { id: invitation.userId, status: 'INVITED' },
+          where: {
+            id: invitation.userId,
+            organizationId: invitation.organizationId,
+            status: 'INVITED',
+          },
           data: {
             password: hashed,
             status: 'ACTIVE',
