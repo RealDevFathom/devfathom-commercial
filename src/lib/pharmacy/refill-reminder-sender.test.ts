@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   branchId: 'branch_a',
   outboxConflict: false,
   outboxWrites: 0,
+  queries: [] as Array<{ sql: string; values: unknown[] }>,
   executions: [] as Array<{ sql: string; values: unknown[] }>,
   tenantCalls: [] as string[],
 }));
@@ -14,6 +15,7 @@ const state = vi.hoisted(() => ({
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
     $queryRaw: async (query: { sql: string; values: unknown[] }) => {
+      state.queries.push(query);
       if (query.sql.includes('ORDER BY "reminderAt"')) {
         return state.status === 'CAPTURED'
           ? [{
@@ -57,6 +59,7 @@ import {
   markRefillReminderSent,
   queueDueRefillReminders,
   refillReminderPayload,
+  setRefillReminderPreference,
 } from './refill-reminder-sender';
 
 beforeEach(() => {
@@ -66,6 +69,7 @@ beforeEach(() => {
   state.branchId = 'branch_a';
   state.outboxConflict = false;
   state.outboxWrites = 0;
+  state.queries = [];
   state.executions = [];
   state.tenantCalls = [];
 });
@@ -80,7 +84,7 @@ describe('refill reminder transactional queue', () => {
     expect(state.outboxWrites).toBe(1);
   });
 
-  it.each(['CONSENT_MISSING', 'CONSENT_REVOKED', 'PATIENT_OPTED_OUT'])(
+  it.each(['CONSENT_MISSING', 'CONSENT_REVOKED', 'PATIENT_OPTED_OUT', 'BRANCH_UNAVAILABLE'])(
     'marks the capture skipped for %s without creating an outbox row',
     async (reason) => {
       state.reason = reason;
@@ -95,6 +99,10 @@ describe('refill reminder transactional queue', () => {
     state.branchId = 'branch_b';
     await queueDueRefillReminders();
     expect(state.tenantCalls).toEqual(['tenant_b']);
+    const eligibilityRead = state.queries.find((query) =>
+      query.sql.includes('FROM "pharmacy_refill_reminder_captures" c')
+    );
+    expect(eligibilityRead?.values).toEqual(expect.arrayContaining(['tenant_b', 'branch_b']));
   });
 
   it('does not queue a capture when its outbox claim conflicts', async () => {
@@ -123,5 +131,52 @@ describe('refill reminder transactional queue', () => {
       parameters: { reminderDate: '2026-10-23', optOutKeyword: 'STOP REFILL' },
     });
     expect(serialized).not.toMatch(/patient|medicine|dosage|direction|name|phone/i);
+  });
+
+  it('writes the refill-only preference with tenant and patient predicates', async () => {
+    const queries: Array<{ sql: string; values: unknown[] }> = [];
+    const db = {
+      $queryRaw: vi.fn(async (query: { sql: string; values: unknown[] }) => {
+        queries.push(query);
+        return [{ id: 'patient_a' }];
+      }),
+      $executeRaw: vi.fn(async (query: { sql: string; values: unknown[] }) => {
+        queries.push(query);
+        return 1;
+      }),
+    };
+
+    await setRefillReminderPreference(db as never, {
+      organizationId: 'org_a',
+      patientId: 'patient_a',
+      optedOut: true,
+      source: 'STAFF',
+      actorUserId: 'staff_a',
+      now: new Date('2026-10-23T12:00:00Z'),
+    });
+
+    expect(queries).toHaveLength(2);
+    expect(queries[0]?.sql).toContain('"organizationId" =');
+    expect(queries[0]?.sql).toContain('"id" =');
+    expect(queries[0]?.values).toEqual(['org_a', 'patient_a']);
+    expect(queries[1]?.sql).toContain('ON CONFLICT ("organizationId", "patientId")');
+    expect(queries[1]?.values).toEqual(expect.arrayContaining([
+      'org_a', 'patient_a', true, 'STAFF', 'staff_a', new Date('2026-10-23T12:00:00Z'),
+    ]));
+  });
+
+  it('records one tenant-scoped outbox audit row before advancing the capture', async () => {
+    await queueDueRefillReminders({ now: new Date('2026-10-23T00:00:00Z') });
+
+    expect(state.outboxWrites).toBe(1);
+    const outboxInsert = state.queries.find((query) =>
+      query.sql.includes('INSERT INTO "pharmacy_message_logs"')
+    );
+    expect(outboxInsert?.values).toEqual(expect.arrayContaining([
+      'org_a', 'branch_a', 'capture_a', 'refill-capture:capture_a',
+    ]));
+    expect(state.status).toBe('QUEUED');
+    await queueDueRefillReminders({ now: new Date('2026-10-23T00:00:00Z') });
+    expect(state.outboxWrites).toBe(1);
   });
 });

@@ -257,6 +257,22 @@ describe('prescription capture and private delivery', () => {
     expect(mocks.putUpload).not.toHaveBeenCalled();
   });
 
+  it('honors a central DENY before changing a refill reminder preference', async () => {
+    mocks.can.mockResolvedValue(false);
+
+    await expect(
+      caller().setRefillReminderOptOut({ patientId: 'patient-a', optedOut: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:counter',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+    expect(mocks.patient).not.toHaveBeenCalled();
+  });
+
   it.each(['capture://rx.png', '/api/files/foreign.png', 'https://foreign.test/image.png'])(
     'rejects fake or shared references: %s',
     async (ref) => {
