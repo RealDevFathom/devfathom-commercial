@@ -6880,7 +6880,8 @@ model RestaurantOrderItemModifier {
 /// `linkReason` records why it was made (seated, moved, merged). Merge = several
 /// active table links under one order; combining two OPEN orders into one is
 /// deferred (BUILD-ASSUMPTIONS). At most one active link per (order, table) is
-/// enforced by a partial unique index in the migration.
+/// enforced by partial unique indexes in the migrations. Active MOVE links are
+/// additionally unique per (organization, order), while MERGE links may coexist.
 model RestaurantOrderTable {
   id             String                         @id @default(cuid())
   organizationId String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
