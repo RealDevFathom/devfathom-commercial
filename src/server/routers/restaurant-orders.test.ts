@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   ticketFindMany: vi.fn(),
   openOrder: vi.fn(),
   closeOrder: vi.fn(),
+  cancelOrder: vi.fn(),
   sendOrder: vi.fn(),
   voidItem: vi.fn(),
 }));
@@ -49,6 +50,7 @@ vi.mock('@/lib/restaurant/orders', async () => {
     ...actual,
     openOrder: mocks.openOrder,
     closeOrder: mocks.closeOrder,
+    cancelOrder: mocks.cancelOrder,
     sendOrder: mocks.sendOrder,
     voidItem: mocks.voidItem,
   };
@@ -265,6 +267,26 @@ describe('capability gating + strict inputs', () => {
     mocks.closeOrder.mockResolvedValue({ orderId: 'o1', replayed: false });
     await caller().close({ orderId: 'o1', actor: ACTOR });
     expect(mocks.can.mock.calls.some((c) => c[1] === 'orders:manage')).toBe(true);
+  });
+
+  it('gates cancellation on orders:void rather than orders:manage', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'orders:manage');
+
+    await expect(
+      caller().cancel({ orderId: 'o1', reason: 'Customer request', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenCalledTimes(1);
+    expect(mocks.can.mock.calls[0]?.[1]).toBe('orders:void');
+  });
+
+  it('allows cancellation with the exact orders:void grant', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'orders:void');
+    mocks.cancelOrder.mockResolvedValue({ orderId: 'o1', replayed: false });
+
+    await expect(
+      caller().cancel({ orderId: 'o1', reason: 'Customer request', actor: ACTOR })
+    ).resolves.toEqual({ orderId: 'o1', replayed: false });
+    expect(mocks.cancelOrder).toHaveBeenCalledOnce();
   });
 
   it('rejects unknown input fields (strict)', async () => {
