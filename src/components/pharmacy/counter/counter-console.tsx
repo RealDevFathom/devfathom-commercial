@@ -4,7 +4,7 @@ import { browserUuid } from '@/lib/browser-uuid';
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
-import { signIn, useSession } from 'next-auth/react';
+import { useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { isModuleGranted } from '@/lib/module-catalog';
@@ -262,7 +262,6 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
       accountId={user.id}
       evidenceAuthorized={user.role === 'ADMIN'}
       safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
-      accountEmail={user.email}
     />
   );
 }
@@ -283,14 +282,12 @@ function ScopedPharmacyCounterConsole({
   accountId,
   evidenceAuthorized = false,
   safetyLicensed,
-  accountEmail,
 }: ConsoleProps & {
   organizationId: string;
   accountId: string;
   evidenceAuthorized?: boolean;
   /** Pharmacy Safety owns the approving-pharmacist list; without it that read is refused. */
   safetyLicensed: boolean;
-  accountEmail: string;
 }) {
   const utils = trpc.useUtils();
 
@@ -1111,33 +1108,14 @@ function ScopedPharmacyCounterConsole({
     return utils.client.pharmacySales.khataAccounts.query({ branchId, saleId });
   }, [branchId, saleId, utils]);
   const reauthenticateOwner = useCallback(
-    async (password: string, totp: string) => {
-      const response = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ email: accountEmail, password }),
+    async (password: string, totp: string, approval: { familyAccountId: string; amountMinor: number; reason: string }) => {
+      if (!saleId) throw new Error('Open a bill');
+      const result = await utils.client.pharmacySales.authorizeKhataOverride.mutate({
+        branchId, saleId, ...approval, password, totp: totp || undefined,
       });
-      let result;
-      if (response.status === 404) {
-        result = await signIn('credentials', {
-          email: accountEmail,
-          password,
-          totp,
-          redirect: false,
-        });
-      } else {
-        if (!response.ok) throw new Error('Owner re-authentication failed');
-        const body = (await response.json()) as {
-          organizations?: Array<{ id: string; ssoEnforced?: boolean }>;
-        };
-        if (!body.organizations?.some((row) => row.id === organizationId && !row.ssoEnforced))
-          throw new Error('Current workspace is not eligible');
-        result = await signIn('login-intent', { organizationId, totp, redirect: false });
-      }
-      if (!result?.ok || result.error) throw new Error('Owner re-authentication failed');
+      return result.approvalId;
     },
-    [accountEmail, organizationId]
+    [branchId, saleId, utils]
   );
   const printKhataStatement = useCallback(
     async (familyAccountId: string) => {
@@ -1190,6 +1168,7 @@ function ScopedPharmacyCounterConsole({
         familyAccountId?: string;
         ownerOverride?: boolean;
         overrideReason?: string;
+        approvalId?: string;
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
@@ -1234,11 +1213,7 @@ function ScopedPharmacyCounterConsole({
             ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
             : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
           ...(input.familyAccountId
-            ? {
-                familyAccountId: input.familyAccountId,
-                ownerOverride: input.ownerOverride,
-                overrideReason: input.overrideReason,
-              }
+            ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride, overrideReason: input.overrideReason, approvalId: input.approvalId }
             : {}),
           ...(input.providerRef !== undefined ? { providerRef: input.providerRef } : {}),
           ...(input.payerName !== undefined ? { payerName: input.payerName } : {}),

@@ -36,6 +36,9 @@ import { workspaceTimezone } from '@/lib/timezone';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { compare } from 'bcryptjs';
+import { randomUUID } from 'node:crypto';
+import { verifyTotp } from '@/lib/totp';
 import { Prisma } from '@/generated/prisma/client';
 import {
   authorizeKhataCharge,
@@ -139,6 +142,7 @@ const tenderInput = z
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
     overrideReason: z.string().trim().min(1).max(500).optional(),
+    approvalId: z.string().uuid().optional(),
   })
   .strict()
   .superRefine((input, ctx) => {
@@ -827,6 +831,30 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  authorizeKhataOverride: protectedProcedure
+    .input(z.object({ branchId, saleId: z.string().min(1), familyAccountId: z.string().trim().min(1).max(128),
+      amountMinor: z.number().int().positive(), reason: z.string().trim().min(1).max(500),
+      password: z.string().min(1), totp: z.string().optional() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await khataScope(ctx, input.branchId);
+      const user = await ctx.db.user.findUnique({ where: { id: scope.actorId },
+        select: { password: true, status: true, twoFactorEnabledAt: true, twoFactorSecret: true } });
+      const passwordValid = Boolean(user?.password) && await compare(input.password, user!.password!);
+      const secondFactorValid = !user?.twoFactorEnabledAt || Boolean(user.twoFactorSecret && input.totp && verifyTotp(user.twoFactorSecret, input.totp));
+      if (user?.status !== 'ACTIVE' || !passwordValid || !secondFactorValid ||
+          !(await can(subjectFromSession(ctx.session!.user), 'admin:access', undefined, { db: ctx.db, source: 'TRPC' })))
+        throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+      const approvalId = randomUUID();
+      await ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        await bindKhataBranch(db, scope);
+        await db.$executeRaw(Prisma.sql`INSERT INTO pharmacy_khata_override_approvals
+          (id, "organizationId", "branchId", "approverId", "saleId", "familyAccountId", "amountMinor", reason, "expiresAt")
+          VALUES (${approvalId}, ${scope.organizationId}, ${scope.branchId}, ${scope.actorId}, ${input.saleId},
+            ${input.familyAccountId}, ${input.amountMinor}, ${input.reason}, NOW() + INTERVAL '5 minutes')`);
+      });
+      return { approvalId };
+    }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
     if (isManualTender(input.type)) annotateAudit(ctx, { skipInput: true });
     const scope =
@@ -841,11 +869,7 @@ export const pharmacySalesRouter = router({
     if (isManualTender(input.type)) annotateAudit(ctx, { skipInput: true });
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
-        if (
-          input.familyAccountId !== undefined ||
-          input.ownerOverride !== undefined ||
-          input.overrideReason !== undefined
-        )
+        if (input.familyAccountId !== undefined || input.ownerOverride !== undefined || input.overrideReason !== undefined || input.approvalId !== undefined)
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message: 'Khata fields require Khata tender.',
@@ -870,11 +894,7 @@ export const pharmacySalesRouter = router({
           db,
           scope,
           { ...input, familyAccountId: input.familyAccountId! },
-          {
-            approverId: ctx.session!.user.id,
-            reason: input.overrideReason,
-            reauthenticatedAt: ctx.session!.user.passwordAuthenticatedAt,
-          }
+          { approvalId: input.approvalId, subject: subjectFromSession(ctx.session!.user) }
         );
         const result = await applyPharmacyTender(db, scope, normalized);
         if (!('tenderId' in result) || typeof result.tenderId !== 'string')

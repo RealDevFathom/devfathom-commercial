@@ -37,6 +37,7 @@ const storedSchema = z
         familyAccountId: id.optional(),
         ownerOverride: z.boolean().optional(),
         overrideReason: z.string().trim().min(1).max(500).optional(),
+        approvalId: z.string().uuid().optional(),
       })
       .strict()
       .superRefine((input, ctx) => {

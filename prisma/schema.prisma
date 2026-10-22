@@ -1256,6 +1256,24 @@ model PharmacyKhataLimitDecision {
   @@map("pharmacy_khata_limit_decisions")
 }
 
+/// Single-use proof of an interactive, operation-bound Khata limit approval.
+model PharmacyKhataOverrideApproval {
+  id              String    @id
+  organizationId  String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  approverId      String
+  saleId          String
+  familyAccountId String
+  amountMinor     Int
+  reason          String
+  createdAt       DateTime  @default(now())
+  expiresAt       DateTime
+  consumedAt      DateTime?
+
+  @@index([organizationId, branchId, id])
+  @@map("pharmacy_khata_override_approvals")
+}
+
 /// Append-only, signed whole-point ledger. Branch is stamped at posting time;
 /// sale and idempotency constraints make settlement replay safe.
 model PharmacyLoyaltyPointsEntry {

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
+import { can, type Subject } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { auditPatientRead } from './patient-prescriptions';
@@ -358,12 +359,8 @@ export async function readSaleKhataStatement(
 export async function authorizeKhataCharge(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: { saleId: string; familyAccountId: string; amountMinor: number; ownerOverride?: boolean },
-  approval: {
-    approverId?: string;
-    reason?: string;
-    reauthenticatedAt?: number;
-  }
+  input: { saleId: string; familyAccountId: string; amountMinor: number; ownerOverride?: boolean; overrideReason?: string },
+  approval: { approvalId?: string; subject?: Subject }
 ) {
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
@@ -382,40 +379,37 @@ export async function authorizeKhataCharge(
     throw new FamilyKhataError('INVALID_AMOUNT');
   if (projected > account.creditLimitMinor) {
     if (!input.ownerOverride) throw new FamilyKhataError('CREDIT_LIMIT_EXCEEDED');
-    const reason = approval.reason?.trim();
+    const approvals = approval.approvalId
+      ? await db.$queryRaw<Array<{ id: string; approverId: string; reason: string; createdAt: Date }>>(Prisma.sql`
+          SELECT id, "approverId", reason, "createdAt" FROM pharmacy_khata_override_approvals
+          WHERE id=${approval.approvalId} AND "organizationId"=${scope.organizationId}
+            AND "branchId"=${scope.branchId} AND "saleId"=${input.saleId}
+            AND "familyAccountId"=${input.familyAccountId} AND "amountMinor"=${input.amountMinor}
+            AND reason=${input.overrideReason ?? ''}
+            AND "consumedAt" IS NULL AND "expiresAt" >= NOW() FOR UPDATE`)
+      : [];
+    const evidence = approvals[0];
+    const reason = evidence?.reason.trim();
     const sale = await db.pharmacySale.findFirst({
       where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
       select: { createdByUserId: true },
     });
-    if (!sale || !approval.approverId || approval.approverId === sale.createdByUserId || !reason)
+    if (!sale || !evidence || evidence.approverId === sale.createdByUserId || !reason)
       throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
-    // This lock and the account lock above are deliberately acquired through the caller's
-    // transaction. Revocation, deactivation, or reassignment before this point is observed here.
-    const approvers = await db.$queryRaw<
-      Array<{
-        id: string;
-        status: string;
-        organizationId: string;
-        roleKey: string;
-        isSystem: boolean;
-      }>
-    >(Prisma.sql`
+    const approvers = await db.$queryRaw<Array<{ id: string; status: string; organizationId: string; roleKey: string; isSystem: boolean }>>(Prisma.sql`
       SELECT u.id, u.status, u."organizationId", r.key AS "roleKey", r."isSystem"
-      FROM users u
-      JOIN organization_roles r
-        ON r.id = u."organizationRoleId" AND r."organizationId" = u."organizationId"
-      WHERE u.id = ${approval.approverId} AND u."organizationId" = ${scope.organizationId}
-      FOR SHARE OF u, r
-    `);
+      FROM users u JOIN organization_roles r ON r.id = u."organizationRoleId" AND r."organizationId" = u."organizationId"
+      WHERE u.id=${evidence.approverId} AND u."organizationId"=${scope.organizationId} FOR SHARE OF u, r`);
     const approver = approvers[0];
-    if (
-      !approver ||
-      approver.organizationId !== scope.organizationId ||
-      approver.status !== 'ACTIVE' ||
-      !approver.isSystem ||
-      (approver.roleKey !== 'owner' && approver.roleKey !== 'manager')
-    )
+    if (!approver || approver.status !== 'ACTIVE' || !approver.isSystem ||
+        (approver.roleKey !== 'owner' && approver.roleKey !== 'manager') ||
+        approval.subject?.id !== evidence.approverId ||
+        !(await can(approval.subject, 'admin:access', undefined, { db, source: 'TRPC' })))
       throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+    const consumed = await db.$executeRaw(Prisma.sql`
+      UPDATE pharmacy_khata_override_approvals SET "consumedAt"=NOW()
+      WHERE id=${evidence.id} AND "consumedAt" IS NULL`);
+    if (consumed !== 1) throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
     const now = new Date();
     const windowStart = new Date(now.getTime() - 180 * DAY_MS);
     // The durable override evidence must describe this account's real ledger. Keep the
@@ -446,12 +440,9 @@ export async function authorizeKhataCharge(
         now
       ),
       ownerAuthorized: true,
-      ownerAuthorizedByUserId: approval.approverId,
+      ownerAuthorizedByUserId: evidence.approverId,
       overrideReason: reason,
-      ownerReauthenticatedAt:
-        approval.reauthenticatedAt === undefined
-          ? undefined
-          : new Date(approval.reauthenticatedAt),
+      ownerReauthenticatedAt: evidence.createdAt,
       overrideLimitMinor: projected,
     });
   }
