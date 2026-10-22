@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   update: vi.fn(),
   addLine: vi.fn(),
+  updateLine: vi.fn(),
   removeLine: vi.fn(),
   addExtra: vi.fn(),
   removeExtra: vi.fn(),
@@ -58,7 +59,16 @@ const orderA = {
   quotedTotal: '1200',
   depositAmount: '200',
   notes: null,
-  lines: [{ id: 'line_a', description: 'Lunch', portions: '40', unitPrice: '4.1234' }],
+  lines: [
+    {
+      id: 'line_a',
+      productId: 'product_1',
+      recipeId: null,
+      description: 'Lunch',
+      portions: '40',
+      unitPrice: '4.1234',
+    },
+  ],
   extraCosts: [{ id: 'extra_a', label: 'Transport', amount: '30.1234' }],
   delivery: {
     scheduledAt: '2026-09-20T10:00:00Z',
@@ -234,6 +244,9 @@ vi.mock('@/lib/trpc', () => ({
       },
       addLine: {
         useMutation: (options: MutationOptions) => useTestMutation(mocks.addLine, options),
+      },
+      updateLine: {
+        useMutation: (options: MutationOptions) => useTestMutation(mocks.updateLine, options),
       },
       removeLine: {
         useMutation: (options: MutationOptions) => useTestMutation(mocks.removeLine, options),
@@ -551,6 +564,30 @@ describe('CateringConsole', () => {
     expect(
       screen.getByRole('dialog', { name: 'Discard unsaved event edits?' })
     ).toBeInTheDocument();
+  });
+
+  it('edits an existing line without removing and recreating it', async () => {
+    mount();
+    select();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Lunch' }));
+    change('Edit product or recipe', 'recipe:recipe_1');
+    change('Edit description', 'Updated lunch');
+    change('Edit portions', '42.5');
+    change('Edit unit price', '5.25');
+    fireEvent.submit(form('Edit Lunch'));
+
+    await waitFor(() =>
+      expect(mocks.updateLine).toHaveBeenCalledWith({
+        orderId: 'order_a',
+        lineId: 'line_a',
+        productId: null,
+        recipeId: 'recipe_1',
+        description: 'Updated lunch',
+        portions: '42.5',
+        unitPrice: '5.25',
+      })
+    );
+    expect(mocks.removeLine).not.toHaveBeenCalled();
   });
   it('refuses a form with an ID different from the visible event', () => {
     mount();

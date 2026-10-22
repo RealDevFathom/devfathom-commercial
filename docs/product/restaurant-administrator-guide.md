@@ -328,10 +328,11 @@ total cost`; margin % is `margin ÷ quoted total × 100` and is unavailable with
 - **Stock at READY and cancellation:** Moving IN_PRODUCTION → READY posts negative
   `RECIPE_CONSUMPTION` movements for stock-linked requirements to the branch's earliest-created
   active stock location. If there is no active location, no linked stock item, or no recipe
-  requirement, nothing is posted for that part. The consumption command is idempotent. Cancelling
-  from READY or DELIVERED reverses the posted catering movements once as positive `SALE_REVERSAL`
-  movements. Cancelling before READY has no consumption to reverse; CLOSED orders cannot be
-  cancelled.
+  requirement, nothing is posted for that part. The consumption command is idempotent. Cancellation
+  never returns prepared inventory automatically. After cancelling an order, record the physical
+  disposition of each consumed movement: `UNUSED_RETURN` restores only the quantity actually
+  returned as a positive `SALE_REVERSAL`; waste and no-return dispositions do not restore stock.
+  Cancelling before READY has no consumption to disposition; CLOSED orders cannot be cancelled.
 - **Common failure/recovery:** Resolve a missing active recipe version or exact unit conversion in
   Catalog before preparing or costing the event. Review quote, lines, portions, recipe costs,
   extras, production quantities, delivery assignment, and status before each transition; a skipped

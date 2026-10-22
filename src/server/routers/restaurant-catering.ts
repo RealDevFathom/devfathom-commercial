@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import * as operations from '@/lib/restaurant/catering-operations';
 import { hasModule } from '@/lib/entitlements';
+import { can, subjectFromSession } from '@/lib/abac';
 import { resolveRestaurantActor } from '../restaurant-actor';
 import { computeRecipeCost, explodeRecipeInDb } from '@/lib/restaurant/recipe-costing';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -337,17 +338,41 @@ export const restaurantCateringRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
+      let readableBranchIds: string[] | undefined;
+      if (!input.branchId) {
+        const configuresAllBranches = await can(
+          subjectFromSession(ctx.session!.user),
+          'restaurant:configure',
+          undefined,
+          { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+        );
+        if (!configuresAllBranches) {
+          const actor = await ctx.db.restaurantStaffProfile.findFirst({
+            where: { id: ctx.cateringActor, status: 'ACTIVE' },
+            select: { primaryBranchId: true },
+          });
+          const assignments = await ctx.db.restaurantBranchAssignment.findMany({
+            where: { userId: ctx.session!.user.id },
+            select: { branchId: true },
+          });
+          readableBranchIds = [
+            ...new Set([
+              ...(actor?.primaryBranchId ? [actor.primaryBranchId] : []),
+              ...assignments.map(({ branchId }) => branchId),
+            ]),
+          ];
+        }
+      }
       const orders = await ctx.db.restaurantCateringOrder.findMany({
         where: {
           organizationId: organizationId(ctx),
-          branchId: input.branchId,
+          branchId: input.branchId ?? (readableBranchIds ? { in: readableBranchIds } : undefined),
           status: input.status,
           eventDate: { gte: input.eventDateFrom, lte: input.eventDateTo },
         },
         include: orderInclude,
         orderBy: [{ eventDate: 'asc' }, { createdAt: 'asc' }],
       });
-      for (const order of orders) await resolveRestaurantActor(ctx, [order.branchId]);
       return orders.map(serializeOrder);
     }),
 

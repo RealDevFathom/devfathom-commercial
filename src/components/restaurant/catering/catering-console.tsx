@@ -212,6 +212,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [selectedId, setSelectedId] = useState('');
+  const [editingLineId, setEditingLineId] = useState('');
   const [editor, setEditor] = useState<Editor>(null);
   const editorTrigger = useRef<HTMLButtonElement | null>(null);
   const [orderCustomerId, setOrderCustomerId] = useState('');
@@ -311,6 +312,13 @@ export function CateringConsole({ currency }: { currency: string | null }) {
   });
   const addLine = trpc.restaurantCatering.addLine.useMutation({
     onSuccess: () => succeed('Order line added.'),
+    onError: fail,
+  });
+  const updateLine = trpc.restaurantCatering.updateLine.useMutation({
+    onSuccess: () => {
+      setEditingLineId('');
+      succeed('Order line updated.');
+    },
     onError: fail,
   });
   const removeLine = trpc.restaurantCatering.removeLine.useMutation({
@@ -454,6 +462,23 @@ export function CateringConsole({ currency }: { currency: string | null }) {
         },
       }
     );
+  };
+  const submitLineUpdate = (event: FormEvent<HTMLFormElement>, lineId: string) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const orderId = formOrderId(form);
+    if (!orderId) return;
+    const data = new FormData(form);
+    const [kind, sourceId] = value(data, 'source').split(':');
+    updateLine.mutate({
+      orderId,
+      lineId,
+      productId: kind === 'product' ? sourceId : null,
+      recipeId: kind === 'recipe' ? sourceId : null,
+      description: value(data, 'description'),
+      portions: value(data, 'portions'),
+      unitPrice: value(data, 'unitPrice'),
+    });
   };
   const submitExtra = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1219,32 +1244,125 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                   </form>
                   <div className="mt-5 space-y-2">
                     {order.lines.length ? (
-                      order.lines.map((line) => (
-                        <div
-                          key={line.id}
-                          className="flex items-center justify-between gap-4 border-t border-border-subtle py-3 text-sm"
-                        >
-                          <span>
-                            {line.description} · {line.portions.toString()} portions @{' '}
-                            {money(line.unitPrice)}
-                          </span>
-                          <Button
-                            className="min-h-11"
-                            variant="ghost"
-                            size="sm"
-                            disabled={actionsDisabled || !editable}
-                            aria-label={`Remove ${line.description} from ${eventIdentity(order)}`}
-                            onClick={() =>
-                              removeLine.mutate({
-                                orderId: order.id,
-                                lineId: line.id,
-                              })
-                            }
+                      order.lines.map((line) =>
+                        editingLineId === line.id ? (
+                          <form
+                            key={line.id}
+                            data-order-id={order.id}
+                            aria-label={`Edit ${line.description}`}
+                            className="grid gap-3 border-t border-border-subtle py-3 sm:grid-cols-2"
+                            onSubmit={(event) => submitLineUpdate(event, line.id)}
                           >
-                            Remove
-                          </Button>
-                        </div>
-                      ))
+                            <Field label="Edit product or recipe">
+                              <select
+                                required
+                                name="source"
+                                aria-label="Edit product or recipe"
+                                className={inputClass}
+                                defaultValue={
+                                  line.productId
+                                    ? `product:${line.productId}`
+                                    : `recipe:${line.recipeId}`
+                                }
+                              >
+                                {products.data?.map((item) => (
+                                  <option key={item.id} value={`product:${item.id}`}>
+                                    {item.name}
+                                  </option>
+                                ))}
+                                {recipes.data
+                                  ?.filter((item) => item.activeVersionId)
+                                  .map((item) => {
+                                    const cost = recipeCosts.data?.find(
+                                      (cost) => cost.recipeId === item.id
+                                    );
+                                    return (
+                                      <option
+                                        key={item.id}
+                                        value={`recipe:${item.id}`}
+                                        disabled={Boolean(cost?.error)}
+                                      >
+                                        {item.name}
+                                      </option>
+                                    );
+                                  })}
+                              </select>
+                            </Field>
+                            <Field label="Edit description">
+                              <Input required name="description" defaultValue={line.description} />
+                            </Field>
+                            <Field label="Edit portions">
+                              <Input
+                                required
+                                name="portions"
+                                type="number"
+                                min="0.001"
+                                step="0.001"
+                                defaultValue={line.portions.toString()}
+                              />
+                            </Field>
+                            <Field label="Edit unit price">
+                              <Input
+                                required
+                                name="unitPrice"
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                defaultValue={line.unitPrice.toString()}
+                              />
+                            </Field>
+                            <div className="flex gap-2 sm:col-span-2">
+                              <Button type="submit" disabled={actionsDisabled}>
+                                Save line
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                onClick={() => setEditingLineId('')}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </form>
+                        ) : (
+                          <div
+                            key={line.id}
+                            className="flex items-center justify-between gap-4 border-t border-border-subtle py-3 text-sm"
+                          >
+                            <span>
+                              {line.description} · {line.portions.toString()} portions @{' '}
+                              {money(line.unitPrice)}
+                            </span>
+                            <div className="flex gap-2">
+                              <Button
+                                className="min-h-11"
+                                variant="ghost"
+                                size="sm"
+                                disabled={actionsDisabled || !editable}
+                                aria-label={`Edit ${line.description}`}
+                                onClick={() => setEditingLineId(line.id)}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                className="min-h-11"
+                                variant="ghost"
+                                size="sm"
+                                disabled={actionsDisabled || !editable}
+                                aria-label={`Remove ${line.description} from ${eventIdentity(order)}`}
+                                onClick={() =>
+                                  removeLine.mutate({
+                                    orderId: order.id,
+                                    lineId: line.id,
+                                  })
+                                }
+                              >
+                                Remove
+                              </Button>
+                            </div>
+                          </div>
+                        )
+                      )
                     ) : (
                       <p className="text-sm text-text-muted">
                         No items yet. Add products or active recipes.

@@ -80,6 +80,7 @@ function makeDb(status = 'DRAFT') {
     },
     restaurantStaffProfile: {
       findMany: vi.fn().mockResolvedValue([{ id: 'staff_1', primaryBranchId: 'branch_1' }]),
+      findFirst: vi.fn().mockResolvedValue({ id: 'staff_1', primaryBranchId: 'branch_1' }),
     },
     restaurantBranch: {
       findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
@@ -265,6 +266,24 @@ describe('restaurant catering capability and scope', () => {
     expect(db.restaurantCateringOrder.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ organizationId: 'org_1', branchId: 'branch_1' }),
+      })
+    );
+  });
+
+  it('limits an unfiltered ledger to branches readable by a branch-scoped actor', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'restaurant:configure'
+    );
+    db.restaurantBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_2' }]);
+
+    await caller('EMPLOYEE').list({});
+
+    expect(db.restaurantCateringOrder.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org_1',
+          branchId: { in: ['branch_1', 'branch_2'] },
+        }),
       })
     );
   });
