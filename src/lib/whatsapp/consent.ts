@@ -1,6 +1,7 @@
 import 'server-only';
 
 import type { Action, Subject } from '@/lib/abac';
+import { WHATSAPP_CONSENT_COPY } from './copy';
 import { getTierForFeature, type AITier } from '@/lib/ai/tiers';
 import type {
   WhatsAppAdapterPort,
@@ -8,7 +9,7 @@ import type {
   WhatsAppSendReceipt,
 } from '@/lib/ai/shared/wa-adapter.types';
 
-export const WHATSAPP_AI_LABEL = 'DevFathom AI';
+export const WHATSAPP_AI_LABEL = WHATSAPP_CONSENT_COPY.en.aiLabel;
 export type WhatsAppConsentSource = 'OWNER' | 'CUSTOMER' | 'WEBHOOK' | 'IMPORT';
 export type WhatsAppConsentActor = { id: string; type: 'USER' | 'CUSTOMER' | 'SYSTEM' };
 export type WhatsAppConsentEvent = {
