@@ -405,15 +405,20 @@ Resources:
         PasswordLength: 48
         ExcludePunctuation: true
 
-  # Intentionally has no value/version in CloudFormation. The operator supplies
-  # the API key out of band before starting a task that references this secret.
+  # Create an AWSCURRENT placeholder so adding this resource to an environment
+  # with running tasks is atomic: ECS can resolve the secret during the same
+  # stack update. Rotate the generated value to the real API key out of band.
+  # CloudFormation never receives or exposes either value.
   AnthropicApiKeySecret:
     Type: AWS::SecretsManager::Secret
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
       Name: !Sub devfathom/${EnvironmentName}/anthropic-api-key
-      Description: ANTHROPIC_API_KEY supplied out of band; CloudFormation never stores its value.
+      Description: Replace the generated placeholder with ANTHROPIC_API_KEY out of band.
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
 
   # Initialization-only credentials, passed to the migration task only when it
   # seeds (staging) or bootstraps (production): sign-in passwords for the seeded
@@ -627,15 +632,38 @@ Resources:
                 Resource:
                   - !Ref DatabaseAdminUrlSecret
                   - !Ref DatabaseAppUrlSecret
-                  - !Ref AuthSecret
-                  - !Ref PlatformEncryptionKeySecret
-                  - !Ref CameraCredentialKeySecret
-                  - !Ref CronSecret
                   - !Ref SeedPasswordSecret
                   - !Ref AdminPasswordSecret
                   - !Ref PlatformAdminPasswordSecret
                   - !If [MigrationSeeds, !Ref DemoAccessCodeSecret, !Ref AWS::NoValue]
+
+  WebTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: read-web-task-secrets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DatabaseAppUrlSecret
+                  - !Ref AuthSecret
+                  - !Ref PlatformEncryptionKeySecret
+                  - !Ref CameraCredentialKeySecret
+                  - !Ref CronSecret
                   - !Ref AnthropicApiKeySecret
+                  - !If [MigrationSeeds, !Ref DemoAccessCodeSecret, !Ref AWS::NoValue]
 
   WebTaskRole:
     Type: AWS::IAM::Role
@@ -702,7 +730,7 @@ Resources:
       RuntimePlatform:
         CpuArchitecture: X86_64
         OperatingSystemFamily: LINUX
-      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      ExecutionRoleArn: !GetAtt WebTaskExecutionRole.Arn
       TaskRoleArn: !GetAtt WebTaskRole.Arn
       ContainerDefinitions:
         - Name: web
