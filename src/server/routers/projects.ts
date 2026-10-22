@@ -700,6 +700,18 @@ export const projectsRouter = router({
       const isSameColumn = sourceColumnId === input.targetColumnId;
 
       await ctx.db.$transaction(async (tx) => {
+        // Serialise concurrent reorders: lock both columns (sorted ids, so no
+        // deadlock), then re-check the task has not moved since the access check.
+        const lockIds = [...new Set([sourceColumnId, input.targetColumnId])].sort();
+        await tx.$queryRaw`SELECT id FROM columns WHERE id = ANY(${lockIds}) ORDER BY id FOR UPDATE`;
+        const current = await tx.task.findUnique({
+          where: { id: input.taskId },
+          select: { columnId: true },
+        });
+        if (!current) throw new TRPCError({ code: 'NOT_FOUND' });
+        if (current.columnId !== sourceColumnId) {
+          throw new TRPCError({ code: 'CONFLICT', message: 'Task moved concurrently; retry' });
+        }
         // PROJ-02: rebuild a contiguous 0..n order from the actual ordered list
         // rather than trusting `order` to be gap-free. Trello-imported boards (and
         // any column that has had a task deleted) can carry gaps, which broke the
@@ -821,6 +833,8 @@ export const projectsRouter = router({
       }
 
       await ctx.db.$transaction(async (tx) => {
+        // Serialise concurrent bulk moves/reorders on the destination column.
+        await tx.$queryRaw`SELECT id FROM columns WHERE id = ${input.targetColumnId} FOR UPDATE`;
         const targetColumn = await tx.column.findUnique({
           where: { id: input.targetColumnId },
           select: { board: { select: { projectId: true } } },
