@@ -67,7 +67,7 @@ export async function readImportedStock(query: ImportedStockQuery) {
       ON b.id = r."batchId" AND b."organizationId" = r."organizationId"
     WHERE r."organizationId" = ${organizationId}
       AND b."organizationId" = ${organizationId}
-      AND b.status = 'PROFILED' AND r."targetModelKey" = 'med.product'
+      AND b.status = 'PREVIEW' AND r."targetModelKey" = 'med.product'
   `;
   const matches = Prisma.sql`strpos(lower(coalesce(r."productName", '')), lower(${search})) > 0`;
   const [totals] = await ctx.db.$queryRaw<

@@ -1,6 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { adminProcedure, router, type TRPCContext } from '../trpc';
+import { adminProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 import {
   assertReviewBranch,
   listStagedMedicines,
@@ -24,6 +24,25 @@ function organizationId(ctx: TRPCContext): string {
 
 /** Server-page caller only. Nesting preserves the existing pharmacy-core entitlement path. */
 export const pharmacyStagedReviewRouter = router({
+  importCore: router({
+    /** Import operations use central can(); an explicit DENY wins over role grants. */
+    batches: capabilityProcedure('pharmacy:data-import').query(({ ctx }) => {
+      const org = organizationId(ctx);
+      return ctx.db.pharmacyMigrationBatch.findMany({
+        where: { organizationId: org, source: { organizationId: org } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        select: {
+          id: true,
+          label: true,
+          status: true,
+          rowCount: true,
+          exceptionCount: true,
+          createdByUserId: true,
+          source: { select: { fileName: true, contentHash: true, byteSize: true } },
+        },
+      });
+    }),
+  }),
   pharmacyMedicine: router({
     stagedBranches: adminProcedure.query(({ ctx }) =>
       ctx.db.pharmacyBranch.findMany({

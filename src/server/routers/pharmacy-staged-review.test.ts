@@ -38,7 +38,7 @@ function makeDb() {
       findFirst: vi.fn().mockResolvedValue({
         id: 'batch_a',
         label: 'Example',
-        status: 'PROFILED',
+        status: 'PREVIEW',
         profilerVersion: '1',
         source: { id: 'source_a', fileName: 'synthetic', contentHash: 'a'.repeat(64) },
       }),

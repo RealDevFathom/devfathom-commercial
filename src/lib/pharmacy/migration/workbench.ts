@@ -51,7 +51,12 @@ export type RecordedSource = {
  */
 export async function recordSource(
   db: ScopedDb,
-  input: { kind: MigrationSourceKind; fileName: string; bytes: Uint8Array | string }
+  input: {
+    kind: MigrationSourceKind;
+    fileName: string;
+    bytes: Uint8Array | string;
+    createdByUserId: string;
+  }
 ): Promise<RecordedSource> {
   const contentHash = hashSourceBytes(input.bytes);
   const byteSize = BigInt(
@@ -70,7 +75,13 @@ export async function recordSource(
   }
 
   const created = await db.pharmacyMigrationSource.create({
-    data: { kind: input.kind, fileName: input.fileName, byteSize, contentHash },
+    data: {
+      kind: input.kind,
+      fileName: input.fileName,
+      byteSize,
+      contentHash,
+      createdByUserId: input.createdByUserId,
+    },
   });
 
   return {
@@ -103,6 +114,7 @@ export async function persistProfile(
     label: string;
     profiler: Pick<SourceProfiler, 'version'>;
     result: ProfileResult;
+    createdByUserId: string;
   }
 ): Promise<PersistedProfile> {
   const { rows, exceptions } = input.result;
@@ -112,7 +124,8 @@ export async function persistProfile(
       sourceId: input.sourceId,
       label: input.label,
       profilerVersion: input.profiler.version,
-      status: 'PROFILING',
+      createdByUserId: input.createdByUserId,
+      status: 'PARSING',
     },
   });
 
@@ -171,7 +184,7 @@ export async function persistProfile(
   await db.pharmacyMigrationBatch.update({
     where: { id: batch.id },
     data: {
-      status: 'PROFILED',
+      status: 'PREVIEW',
       rowCount: rows.length,
       exceptionCount: exceptions.length,
       profiledAt: new Date(),

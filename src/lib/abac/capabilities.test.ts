@@ -14,7 +14,7 @@ export const intendedPharmacyGrants = {
     'pharmacy:safety',
   ],
   pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
-  manager: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+  manager: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement', 'pharmacy:data-import'],
   cashier: ['pharmacy:counter', 'pharmacy:orders'],
   procurement: ['pharmacy:procurement'],
   inventory: ['pharmacy:inventory'],

@@ -741,6 +741,7 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'reports:operational',
   'reports:financial',
   'pharmacy:safety',
+  'pharmacy:data-import',
 ];
 
 /** Canonical actions checked by pharmacy workflows, including shared report gates. */
@@ -753,6 +754,7 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:safety',
   'pharmacy:catalogue-review',
   'pharmacy:orders',
+  'pharmacy:data-import',
   'reports:operational',
   'reports:financial',
 ] as const;
@@ -791,7 +793,12 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'manager',
     name: 'Manager',
     isSystem: true,
-    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+    capabilities: [
+      'pharmacy:manage',
+      'pharmacy:orders',
+      'pharmacy:procurement',
+      'pharmacy:data-import',
+    ],
   },
   {
     key: 'cashier',

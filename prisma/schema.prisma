@@ -11509,9 +11509,18 @@ enum PharmacyMigrationSourceKind {
 }
 
 enum PharmacyMigrationBatchStatus {
-  PROFILING
-  PROFILED
+  UPLOADED
+  PARSING
+  PREVIEW
+  COMMITTING
+  COMMITTED
+  ROLLED_BACK
   FAILED
+}
+
+enum PharmacyMigrationEntityOperation {
+  CREATED
+  STOCK_MOVEMENT
 }
 
 enum PharmacyMigrationExceptionBucket {
@@ -11544,6 +11553,7 @@ model PharmacyMigrationSource {
   fileName       String
   byteSize       BigInt
   contentHash    String
+  createdByUserId String
   capturedAt     DateTime                    @default(now())
   createdAt      DateTime                    @default(now())
 
@@ -11563,10 +11573,14 @@ model PharmacyMigrationBatch {
   organizationId  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   sourceId        String
   label           String
-  status          PharmacyMigrationBatchStatus @default(PROFILING)
+  status          PharmacyMigrationBatchStatus @default(UPLOADED)
   rowCount        Int                          @default(0)
   exceptionCount  Int                          @default(0)
   profilerVersion String
+  createdByUserId String
+  committedAt     DateTime?
+  rolledBackAt    DateTime?
+  failureReason   String?
   profiledAt      DateTime?
   createdAt       DateTime                     @default(now())
   updatedAt       DateTime                     @updatedAt
@@ -11574,10 +11588,31 @@ model PharmacyMigrationBatch {
   source     PharmacyMigrationSource      @relation(fields: [organizationId, sourceId], references: [organizationId, id], onDelete: Restrict)
   rows       PharmacyMigrationRow[]
   exceptions PharmacyMigrationException[]
+  entities   PharmacyMigrationBatchEntity[]
 
   @@unique([organizationId, id])
   @@index([organizationId, sourceId, status])
   @@map("pharmacy_migration_batches")
+}
+
+/// Immutable commit manifest. It is the rollback allow-list: entities absent
+/// from this table are pre-existing and can never be deleted by an import.
+model PharmacyMigrationBatchEntity {
+  id              String                           @id @default(cuid())
+  organizationId  String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  batchId         String
+  rowSourceKey    String
+  entityType      String
+  entityId        String
+  operation       PharmacyMigrationEntityOperation
+  reversedById    String?
+  createdAt       DateTime                         @default(now())
+  batch           PharmacyMigrationBatch           @relation(fields: [organizationId, batchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, batchId, rowSourceKey, entityType, operation])
+  @@index([organizationId, batchId, operation])
+  @@map("pharmacy_migration_batch_entities")
 }
 
 /// MIG-01 — every imported row keeps its incumbent source key and its import

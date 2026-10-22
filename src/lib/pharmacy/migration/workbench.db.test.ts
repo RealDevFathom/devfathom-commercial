@@ -69,6 +69,7 @@ async function profileMissingFieldsFixture(db: ScopedDb, label: string) {
     kind: 'EXCEL_CSV',
     fileName: 'excel-missing-fields.csv',
     bytes,
+    createdByUserId: signerA,
   });
   const result = profileTable(excelCsvProfiler, parseDelimitedText(bytes.toString('utf8')));
   const persisted = await deps.workbench.persistProfile(db, {
@@ -76,6 +77,7 @@ async function profileMissingFieldsFixture(db: ScopedDb, label: string) {
     label,
     profiler: excelCsvProfiler,
     result,
+    createdByUserId: signerA,
   });
   return { source, result, persisted };
 }
@@ -181,11 +183,13 @@ describeIfDatabase('PH-MIG workbench — MIG-01 read-only source evidence', () =
         kind: 'EXCEL_CSV',
         fileName: 'excel-clean.csv',
         bytes,
+        createdByUserId: signerA,
       }),
       second: await deps.workbench.recordSource(db, {
         kind: 'EXCEL_CSV',
         fileName: 'excel-clean-resent.csv',
         bytes,
+        createdByUserId: signerA,
       }),
     }));
 
@@ -199,6 +203,7 @@ describeIfDatabase('PH-MIG workbench — MIG-01 read-only source evidence', () =
         kind: 'ABUZAR',
         fileName: 'abuzar-stock-export.csv',
         bytes: readFileSync(join(FIXTURE_DIR, 'abuzar-stock-export.csv')),
+        createdByUserId: signerA,
       });
       return {
         source: created,
@@ -333,7 +338,7 @@ describeIfDatabase('PH-MIG workbench — MIG-02 exception workbench', () => {
       return db.pharmacyMigrationBatch.findUniqueOrThrow({ where: { id: persisted.batchId } });
     });
 
-    expect(batch.status).toBe('PROFILED');
+    expect(batch.status).toBe('PREVIEW');
     expect(batch.rowCount).toBe(5);
     expect(batch.exceptionCount).toBe(5);
     expect(batch.profiledAt).not.toBeNull();
