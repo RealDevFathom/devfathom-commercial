@@ -1,7 +1,7 @@
 import type { PlatformRole } from '@/generated/prisma/client';
 
 export const PLATFORM_ROLE_CAPABILITIES: Record<PlatformRole, readonly string[]> = {
-  SUPER_ADMIN: ['*', 'organizations:security:write'],
+  SUPER_ADMIN: ['*', 'organizations:security:write', 'pharmacy:catalog-backfill'],
   OPERATIONS: [
     'organizations:read',
     'organizations:write',

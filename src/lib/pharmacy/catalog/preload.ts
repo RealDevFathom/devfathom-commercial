@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { can, type Subject } from '@/lib/abac';
 
 export const PHARMACY_CATALOG_VERSION = 'pharmacy-catalog-v1';
 export const PHARMACY_CATALOG_JOB = 'PHARMACY_CATALOG_SEED_V1' as const;
@@ -63,12 +64,12 @@ export async function seedPharmacyCatalog(db: ScopedDb, organizationId: string, 
   await runDb.upsert({ where: key, create: { organizationId, catalogVersion: catalog.version, expectedCount: catalog.count, requestedById }, update: {} });
   await delegate(db, 'pharmacyCatalogSetting').upsert({ where: { organizationId }, create: { organizationId, useCatalogDefaultPrices: false }, update: {} });
 
-  const medicines = catalog.items.map((item, i) => ({ id: id('med', organizationId, i), organizationId, productName: item.name, productFamily: 'PHARMACEUTICAL', saleable: item.active }));
+  const medicines = catalog.items.map((item, i) => ({ id: id('med', organizationId, i), organizationId, productName: item.name, productFamily: 'PHARMACEUTICAL', saleable: false }));
   const presentations = catalog.items.map((item, i) => ({ id: id('pres', organizationId, i), organizationId, medicineId: id('med', organizationId, i), presentation: `${item.packQty} ${item.packUnits}` }));
   const packs = catalog.items.map((item, i) => ({ id: id('pack', organizationId, i), organizationId, presentationId: id('pres', organizationId, i), versionGroupId: id('packgroup', organizationId, i), version: 1, level: item.packUnits, unitsPerParent: item.packQty, effectiveFrom: new Date(0), catalogDefaultSalePriceMinor: item.defaultSalePriceMinor, catalogDefaultPurchasePriceMinor: item.defaultPurchasePriceMinor, sellingPriceMinor: null, purchasePriceMinor: null }));
   const aliases = catalog.items.map((item, i) => ({ id: id('alias', organizationId, i), organizationId, medicineId: id('med', organizationId, i), type: 'LEGACY_CODE', value: item.alias, normalizedValue: normalized(item.alias) }));
   const provenance = catalog.items.flatMap((item, i) => [
-    { id: id('prov', organizationId, i), organizationId, medicineId: id('med', organizationId, i), field: 'catalog', source: catalog.version, sourceType: 'IMPORT', retrievedAt: new Date(), status: 'ACCEPTED', assertedValue: { category: item.category } },
+    { id: id('prov', organizationId, i), organizationId, medicineId: id('med', organizationId, i), field: 'catalog', source: catalog.version, sourceType: 'IMPORT', retrievedAt: new Date(), status: 'UNREVIEWED', assertedValue: { category: item.category, active: item.active } },
     ...(['NARCOTICS', 'FRIDGE'].includes(item.class.toUpperCase()) ? [{ id: id('hint', organizationId, i), organizationId, medicineId: id('med', organizationId, i), field: 'classHint', source: catalog.version, sourceType: 'IMPORT', retrievedAt: new Date(), status: 'UNREVIEWED', assertedValue: item.class }] : []),
   ]);
   let created = 0;
@@ -81,17 +82,23 @@ export async function seedPharmacyCatalog(db: ScopedDb, organizationId: string, 
   return { status: 'completed' as const, created: medicineCount, existing: catalog.count - medicineCount };
 }
 
-export async function setCatalogDefaultPrices(db: ScopedDb, organizationId: string, actorId: string, enabled: boolean) {
+export async function setCatalogDefaultPrices(db: ScopedDb, organizationId: string, subject: Subject, enabled: boolean) {
+  if (!(await can(subject, 'pharmacy:catalog-settings', { type: 'PharmacyCatalogSetting', organizationId }, { db }))) {
+    throw new Error('Forbidden: pharmacy catalogue settings capability is required.');
+  }
+  const actorId = subject.id;
   const setting = delegate(db, 'pharmacyCatalogSetting');
   await setting.upsert({ where: { organizationId }, create: { organizationId, useCatalogDefaultPrices: enabled, enabledById: enabled ? actorId : null, enabledAt: enabled ? new Date() : null }, update: { useCatalogDefaultPrices: enabled, enabledById: enabled ? actorId : null, enabledAt: enabled ? new Date() : null } });
   let saleApplied = 0, purchaseApplied = 0;
   if (enabled) {
     const packs = await delegate(db, 'packLevel').findMany({ where: { organizationId, OR: [{ sellingPriceMinor: null, catalogDefaultSalePriceMinor: { not: null } }, { purchasePriceMinor: null, catalogDefaultPurchasePriceMinor: { not: null } }] }, select: { id: true, sellingPriceMinor: true, purchasePriceMinor: true, catalogDefaultSalePriceMinor: true, catalogDefaultPurchasePriceMinor: true } });
     for (const pack of packs) {
-      const data: Record<string, number> = {};
-      if (pack.sellingPriceMinor == null && pack.catalogDefaultSalePriceMinor != null) { data.sellingPriceMinor = pack.catalogDefaultSalePriceMinor; saleApplied++; }
-      if (pack.purchasePriceMinor == null && pack.catalogDefaultPurchasePriceMinor != null) { data.purchasePriceMinor = pack.catalogDefaultPurchasePriceMinor; purchaseApplied++; }
-      await delegate(db, 'packLevel').updateMany({ where: { organizationId, id: pack.id }, data });
+      if (pack.catalogDefaultSalePriceMinor != null) {
+        saleApplied += (await delegate(db, 'packLevel').updateMany({ where: { organizationId, id: pack.id, sellingPriceMinor: null }, data: { sellingPriceMinor: pack.catalogDefaultSalePriceMinor } })).count;
+      }
+      if (pack.catalogDefaultPurchasePriceMinor != null) {
+        purchaseApplied += (await delegate(db, 'packLevel').updateMany({ where: { organizationId, id: pack.id, purchasePriceMinor: null }, data: { purchasePriceMinor: pack.catalogDefaultPurchasePriceMinor } })).count;
+      }
     }
   }
   await delegate(db, 'auditLog').create({ data: { organizationId, actorId, source: 'TRPC', category: 'PHARMACY', operation: 'UPDATE', action: 'pharmacyCatalog.setDefaultPrices', targetType: 'PharmacyCatalogSetting', targetId: organizationId, result: { enabled, saleApplied, purchaseApplied } } });

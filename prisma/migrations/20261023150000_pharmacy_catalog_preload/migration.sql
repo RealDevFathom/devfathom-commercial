@@ -7,6 +7,17 @@ ALTER TABLE "pharmacy_pack_levels"
   ADD COLUMN "sellingPriceMinor" INTEGER,
   ADD COLUMN "purchasePriceMinor" INTEGER;
 
+-- This high-impact setting is intentionally outside pharmacy:* and belongs only
+-- to the system Owner template. Preserve an existing explicit DENY.
+SELECT set_config('app.is_platform_admin', 'true', true);
+INSERT INTO organization_role_permissions
+  (id, "organizationId", "organizationRoleId", capability, effect, "createdAt")
+SELECT 'cat_settings_' || md5(r.id), r."organizationId", r.id,
+       'pharmacy:catalog-settings', 'ALLOW'::"PermissionEffect", now()
+FROM organization_roles r
+WHERE r.key = 'owner' AND r."isSystem" = true
+ON CONFLICT ("organizationRoleId", capability) DO NOTHING;
+
 CREATE TABLE "pharmacy_catalog_seed_runs" (
   "id" TEXT NOT NULL,
   "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true),
@@ -47,4 +58,4 @@ ALTER TABLE "pharmacy_pack_levels" ADD CONSTRAINT "pharmacy_pack_levels_catalog_
   ("catalogDefaultPurchasePriceMinor" IS NULL OR "catalogDefaultPurchasePriceMinor" >= 0) AND
   ("sellingPriceMinor" IS NULL OR "sellingPriceMinor" >= 0) AND
   ("purchasePriceMinor" IS NULL OR "purchasePriceMinor" >= 0)
-);
+) NOT VALID;

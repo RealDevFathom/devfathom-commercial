@@ -4,11 +4,12 @@ import type { PlatformIdentity } from '@/lib/platform/auth';
 import { PlatformSecurityError } from '@/lib/platform/security';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import { catalogSeedPreview, loadBundledPharmacyCatalog, seedPharmacyCatalog } from './preload';
+import { canPlatformRole } from '@/lib/platform/capabilities';
 
 export type CatalogBackfillTarget = { organizationId: string } | { allPharmacy: true };
 
 export async function backfillPharmacyCatalog(actor: Pick<PlatformIdentity, 'id' | 'role'>, target: CatalogBackfillTarget, apply: boolean) {
-  if (actor.role !== 'SUPER_ADMIN') throw new PlatformSecurityError('SuperAdmin access is required.', 403);
+  if (!canPlatformRole(actor.role, 'pharmacy:catalog-backfill')) throw new PlatformSecurityError('SuperAdmin access is required.', 403);
   const organizations = await withPlatformDb((db) => db.organization.findMany({
     where: 'organizationId' in target ? { id: target.organizationId, vertical: 'PHARMACY' } : { vertical: 'PHARMACY' },
     select: { id: true }, orderBy: { id: 'asc' },

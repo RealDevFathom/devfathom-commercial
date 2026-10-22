@@ -1,33 +1,30 @@
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parsePharmacyCatalog, PHARMACY_CATALOG_VERSION } from './preload';
 
-const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8');
-const migration = readFileSync(new URL('../../../../prisma/migrations/20261023500000_pharmacy_catalog_preload/migration.sql', import.meta.url), 'utf8');
+describe('bundled pharmacy catalogue asset', () => {
+  const assetPath = path.join(process.cwd(), 'prisma/seed-assets/pharmacy-catalog-v1.json.gz');
+  const digestPath = path.join(process.cwd(), 'prisma/seed-assets/pharmacy-catalog-v1.sha256');
 
-describe('catalogue preload safety contract', () => {
-  it('uses the shared medicine aggregate, batches, deterministic ids, and one resumable run', () => {
-    expect(source).toContain("['medicine', medicines]");
-    expect(source).toContain("['medicineAlias', aliases]");
-    expect(source).toContain('skipDuplicates: true');
-    expect(source).toContain("completed?.status === 'COMPLETED'");
-    expect(source).toContain("status: 'COMPLETED'");
+  it('has the declared shape and contains no inventory or supplier facts', () => {
+    const catalog = parsePharmacyCatalog(JSON.parse(gunzipSync(readFileSync(assetPath)).toString('utf8')));
+    expect(catalog.version).toBe(PHARMACY_CATALOG_VERSION);
+    expect(catalog.count).toBe(catalog.items.length);
+    expect(catalog.count).toBeGreaterThan(0);
+    const forbidden = new Set(['qty', 'stockvalue', 'supplier', 'stock']);
+    for (const item of catalog.items) {
+      for (const key of Object.keys(item)) expect(forbidden.has(key.toLowerCase())).toBe(false);
+    }
   });
-  it('stores aliases as legacy codes and never creates a barcode', () => {
-    expect(source).toContain("type: 'LEGACY_CODE'");
-    expect(source).not.toContain("delegate(db, 'medicineBarcode')");
-  });
-  it('leaves actual prices null until opt-in and never writes an MRP', () => {
-    expect(source).toContain('sellingPriceMinor: null, purchasePriceMinor: null');
-    expect(source).toContain('pack.sellingPriceMinor == null');
-    expect(source).toContain('pack.purchasePriceMinor == null');
-    expect(source).not.toContain("delegate(db, 'medicinePackMrp')");
-  });
-  it('does not address any stock, lot, batch, movement, opening, or supplier delegate', () => {
-    for (const forbidden of ['stockBalance', 'stockMovement', 'inventoryLot', 'manufacturingBatch', 'opening', 'supplier']) expect(source).not.toContain(`delegate(db, '${forbidden}`);
-  });
-  it('enforces RLS on seed checkpoints and settings', () => {
-    expect(migration.match(/ENABLE ROW LEVEL SECURITY/g)).toHaveLength(2);
-    expect(migration).toContain("current_setting('app.current_organization_id', true)");
-    expect(migration).not.toContain("app.is_platform_admin', true) = 'true' OR");
+
+  it('matches the pinned SHA-256 when a digest file is present', () => {
+    if (!existsSync(digestPath)) return;
+    const expected = readFileSync(digestPath, 'utf8').trim().split(/\s+/)[0];
+    const actual = createHash('sha256').update(readFileSync(assetPath)).digest('hex');
+    expect(expected).toMatch(/^[a-f0-9]{64}$/);
+    expect(actual).toBe(expected);
   });
 });

@@ -4,7 +4,7 @@ import { EXACT_GRANT_ONLY_ACTIONS, capabilityMatches } from './capabilities';
 import { ALL_ACTIONS } from './policies';
 
 export const intendedPharmacyGrants = {
-  owner: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+  owner: ['pharmacy:*', 'pharmacy:catalog-settings', 'reports:operational', 'reports:financial'],
   'owner-operator': [
     'reports:operational',
     'reports:financial',

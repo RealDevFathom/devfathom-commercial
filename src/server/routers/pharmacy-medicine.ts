@@ -30,6 +30,7 @@ import {
   protectedProcedure,
   router,
 } from '../trpc';
+import { subjectFromSession } from '@/lib/abac';
 
 const family = z.enum(['PHARMACEUTICAL', 'BIOLOGICAL', 'DEVICE', 'ALTERNATIVE', 'FRONT_SHOP']);
 const provenance = z
@@ -175,13 +176,13 @@ function domainError(error: unknown): never {
 }
 
 export const pharmacyMedicineRouter = router({
-  setCatalogDefaultPrices: adminProcedure
+  setCatalogDefaultPrices: capabilityProcedure('pharmacy:catalog-settings')
     .input(z.object({ enabled: z.boolean() }).strict())
     .mutation(({ ctx, input }) =>
       setCatalogDefaultPrices(
         ctx.db,
         ctx.entitlements.organizationId,
-        ctx.session.user.id,
+        subjectFromSession(ctx.session.user),
         input.enabled
       )
     ),
@@ -487,7 +488,7 @@ export const pharmacyMedicineRouter = router({
       })
     ),
 
-  referenceCandidates: adminProcedure.query(({ ctx }) =>
+  referenceCandidates: capabilityProcedure('pharmacy:catalogue-review').query(({ ctx }) =>
     ctx.db.medicine.findMany({
       where: {
         saleable: false,
@@ -852,7 +853,7 @@ export const pharmacyMedicineRouter = router({
       .map(([duplicateKey, candidates]) => ({ duplicateKey, candidates }));
   }),
 
-  recordReviewDecision: adminProcedure.input(reviewDecisionInput).mutation(({ ctx, input }) =>
+  recordReviewDecision: capabilityProcedure('pharmacy:catalogue-review').input(reviewDecisionInput).mutation(({ ctx, input }) =>
     ctx.db.$transaction(async (tx) => {
       const medicineIds = [...new Set(input.medicineIds)];
       const assertionIds = [...new Set(input.payload.assertionIds)];
@@ -966,7 +967,7 @@ export const pharmacyMedicineRouter = router({
     })
   ),
 
-  publishAssertions: adminProcedure
+  publishAssertions: capabilityProcedure('pharmacy:catalogue-review')
     .input(z.object({ assertionIds: z.array(z.string().min(1)).min(1) }).strict())
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {
