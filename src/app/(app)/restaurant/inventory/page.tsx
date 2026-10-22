@@ -28,6 +28,7 @@ const description =
 const inputClass =
   'mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
 const nonNegativeDecimal = /^(?:0|\d+(?:\.\d+)?|\.\d+)$/;
+const positiveDecimal = /^(?=.*[1-9])(?:0|\d+(?:\.\d+)?|\.\d+)$/;
 const field = (form: FormData, name: string) => String(form.get(name) ?? '').trim();
 const optionalField = (form: FormData, name: string) => field(form, name) || undefined;
 
@@ -106,9 +107,11 @@ export default async function InventoryPage({
   if (!user) return <AccessState moduleEnabled={moduleEnabled} />;
 
   const subject = subjectFromSession(user);
-  const [readable, countable] = await Promise.all([
+  const [readable, countable, adjustable, wasteable] = await Promise.all([
     can(subject, 'inventory:read', undefined, { db: ctx.db, source: 'TRPC' }),
     can(subject, 'inventory:count', undefined, { db: ctx.db, source: 'TRPC' }),
+    can(subject, 'inventory:adjust', undefined, { db: ctx.db, source: 'TRPC' }),
+    can(subject, 'inventory:waste', undefined, { db: ctx.db, source: 'TRPC' }),
   ]);
 
   if (!moduleEnabled || !readable) return <AccessState moduleEnabled={moduleEnabled} />;
@@ -270,6 +273,96 @@ export default async function InventoryPage({
         'error',
         stockCountId
       );
+    }
+    redirect(next);
+  }
+
+  async function recordWastage(form: FormData) {
+    'use server';
+    let next: string;
+    try {
+      const actionCtx = await tenantContext();
+      if (!actionCtx?.session?.user) throw new Error('Your session is no longer active.');
+      await restaurantInventoryRouter.createCaller(actionCtx).postWastage({
+        stockItemId: field(form, 'stockItemId'),
+        locationId: field(form, 'locationId'),
+        reason: field(form, 'reason') as 'WASTAGE' | 'SPOILAGE' | 'STAFF_MEAL',
+        quantity: field(form, 'quantity'),
+      });
+      next = destination('Wastage movement recorded.', 'success');
+    } catch (error) {
+      next = destination(message(error, 'Could not record wastage.'), 'error');
+    }
+    redirect(next);
+  }
+
+  async function createTransfer(form: FormData) {
+    'use server';
+    let next: string;
+    try {
+      const actionCtx = await tenantContext();
+      if (!actionCtx?.session?.user) throw new Error('Your session is no longer active.');
+      await restaurantInventoryRouter.createCaller(actionCtx).createStockTransfer({
+        sourceLocationId: field(form, 'sourceLocationId'),
+        destinationLocationId: field(form, 'destinationLocationId'),
+        reference: optionalField(form, 'reference'),
+      });
+      next = destination('Stock transfer created.', 'success');
+    } catch (error) {
+      next = destination(message(error, 'Could not create the stock transfer.'), 'error');
+    }
+    redirect(next);
+  }
+
+  async function recordSaleReversal(form: FormData) {
+    'use server';
+    let next: string;
+    try {
+      const actionCtx = await tenantContext();
+      if (!actionCtx?.session?.user) throw new Error('Your session is no longer active.');
+      await restaurantInventoryRouter.createCaller(actionCtx).postSaleReversal({
+        stockItemId: field(form, 'stockItemId'),
+        locationId: field(form, 'locationId'),
+        quantity: field(form, 'quantity'),
+        orderId: optionalField(form, 'orderId'),
+      });
+      next = destination('Sale reversal recorded.', 'success');
+    } catch (error) {
+      next = destination(message(error, 'Could not record the sale reversal.'), 'error');
+    }
+    redirect(next);
+  }
+
+  async function addTransferLine(form: FormData) {
+    'use server';
+    let next: string;
+    try {
+      const actionCtx = await tenantContext();
+      if (!actionCtx?.session?.user) throw new Error('Your session is no longer active.');
+      await restaurantInventoryRouter.createCaller(actionCtx).addStockTransferLine({
+        stockTransferId: field(form, 'stockTransferId'),
+        stockItemId: field(form, 'stockItemId'),
+        quantity: field(form, 'quantity'),
+      });
+      next = destination('Transfer line added.', 'success');
+    } catch (error) {
+      next = destination(message(error, 'Could not add the transfer line.'), 'error');
+    }
+    redirect(next);
+  }
+
+  async function completeTransfer(form: FormData) {
+    'use server';
+    let next: string;
+    try {
+      const actionCtx = await tenantContext();
+      if (!actionCtx?.session?.user) throw new Error('Your session is no longer active.');
+      await restaurantInventoryRouter.createCaller(actionCtx).completeStockTransfer({
+        stockTransferId: field(form, 'stockTransferId'),
+      });
+      next = destination('Stock transfer completed.', 'success');
+    } catch (error) {
+      next = destination(message(error, 'Could not complete the stock transfer.'), 'error');
     }
     redirect(next);
   }
@@ -444,6 +537,124 @@ export default async function InventoryPage({
               )}
             </TableBody>
           </Table>
+        </div>
+      </SectionCard>
+
+      <SectionCard>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-text-strong">Record wastage</h2>
+            <p className="mt-1 text-sm text-text-muted">
+              Record wastage, spoilage, or staff meals as an auditable stock movement.
+            </p>
+          </div>
+          <StatusPill
+            status={wasteable ? 'Wastage access' : 'Read only'}
+            tone={wasteable ? 'success' : 'neutral'}
+          />
+        </div>
+        <form action={recordWastage} className="mt-5 grid gap-3 md:grid-cols-4">
+          <label className="text-sm text-text-body">
+            Stock item
+            <select name="stockItemId" required disabled={!wasteable} className={inputClass}>
+              <option value="">Select stock item</option>
+              {loaded.stockItems.map((item) => (
+                <option value={item.id} key={item.id}>
+                  {item.ingredient.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm text-text-body">
+            Location
+            <select name="locationId" required disabled={!wasteable} className={inputClass}>
+              <option value="">Select location</option>
+              {loaded.locations.map((location) => (
+                <option value={location.id} key={location.id}>
+                  {location.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm text-text-body">
+            Reason
+            <select name="reason" required disabled={!wasteable} className={inputClass}>
+              <option value="WASTAGE">Wastage</option>
+              <option value="SPOILAGE">Spoilage</option>
+              <option value="STAFF_MEAL">Staff meal</option>
+            </select>
+          </label>
+          <label className="text-sm text-text-body">
+            Quantity
+            <Input
+              name="quantity"
+              inputMode="decimal"
+              pattern={positiveDecimal.source}
+              required
+              disabled={!wasteable}
+              className="mt-1 min-h-11"
+            />
+          </label>
+          <Button
+            type="submit"
+            disabled={!wasteable || !loaded.stockItems.length || !loaded.locations.length}
+            className="min-h-11 md:col-span-4"
+          >
+            Record wastage movement
+          </Button>
+        </form>
+        <div className="mt-6 border-t border-border-subtle pt-5">
+          <h3 className="font-semibold text-text-strong">Record sale reversal</h3>
+          <p className="mt-1 text-sm text-text-muted">
+            Return sold stock to a location without editing ledger history.
+          </p>
+          <form action={recordSaleReversal} className="mt-4 grid gap-3 md:grid-cols-4">
+            <label className="text-sm text-text-body">
+              Stock item
+              <select name="stockItemId" required disabled={!adjustable} className={inputClass}>
+                <option value="">Select stock item</option>
+                {loaded.stockItems.map((item) => (
+                  <option value={item.id} key={item.id}>
+                    {item.ingredient.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm text-text-body">
+              Location
+              <select name="locationId" required disabled={!adjustable} className={inputClass}>
+                <option value="">Select location</option>
+                {loaded.locations.map((location) => (
+                  <option value={location.id} key={location.id}>
+                    {location.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm text-text-body">
+              Quantity
+              <Input
+                name="quantity"
+                inputMode="decimal"
+                pattern={positiveDecimal.source}
+                required
+                disabled={!adjustable}
+                className="mt-1 min-h-11"
+              />
+            </label>
+            <label className="text-sm text-text-body">
+              Order ID (optional)
+              <Input name="orderId" disabled={!adjustable} className="mt-1 min-h-11" />
+            </label>
+            <Button
+              type="submit"
+              disabled={!adjustable || !loaded.stockItems.length || !loaded.locations.length}
+              variant="secondary"
+              className="min-h-11 md:col-span-4"
+            >
+              Record sale reversal
+            </Button>
+          </form>
         </div>
       </SectionCard>
 
@@ -758,6 +969,115 @@ export default async function InventoryPage({
               </TableBody>
             </Table>
           </div>
+          <form
+            action={createTransfer}
+            className="mt-5 grid gap-3 border-t border-border-subtle pt-5 sm:grid-cols-2"
+          >
+            <label className="text-sm text-text-body">
+              From
+              <select
+                name="sourceLocationId"
+                required
+                disabled={!adjustable}
+                className={inputClass}
+              >
+                <option value="">Select source</option>
+                {loaded.locations.map((location) => (
+                  <option value={location.id} key={location.id}>
+                    {location.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm text-text-body">
+              To
+              <select
+                name="destinationLocationId"
+                required
+                disabled={!adjustable}
+                className={inputClass}
+              >
+                <option value="">Select destination</option>
+                {loaded.locations.map((location) => (
+                  <option value={location.id} key={location.id}>
+                    {location.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm text-text-body sm:col-span-2">
+              Reference (optional)
+              <Input name="reference" disabled={!adjustable} className="mt-1 min-h-11" />
+            </label>
+            <Button
+              type="submit"
+              disabled={!adjustable || loaded.locations.length < 2}
+              className="min-h-11 sm:col-span-2"
+            >
+              Create transfer
+            </Button>
+          </form>
+
+          {loaded.transfers.items
+            .filter((transfer) => transfer.status === 'DRAFT')
+            .map((transfer) => (
+              <div
+                key={`${transfer.id}:actions`}
+                className="mt-5 border-t border-border-subtle pt-5"
+              >
+                <p className="text-sm font-semibold text-text-strong">
+                  Add to {transfer.reference || transfer.id}
+                </p>
+                <form action={addTransferLine} className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <input type="hidden" name="stockTransferId" value={transfer.id} />
+                  <label className="text-sm text-text-body">
+                    Stock item
+                    <select
+                      name="stockItemId"
+                      required
+                      disabled={!adjustable}
+                      className={inputClass}
+                    >
+                      <option value="">Select stock item</option>
+                      {loaded.stockItems.map((item) => (
+                        <option value={item.id} key={item.id}>
+                          {item.ingredient.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-sm text-text-body">
+                    Quantity
+                    <Input
+                      name="quantity"
+                      inputMode="decimal"
+                      pattern={positiveDecimal.source}
+                      required
+                      disabled={!adjustable}
+                      className="mt-1 min-h-11"
+                    />
+                  </label>
+                  <Button
+                    type="submit"
+                    variant="secondary"
+                    disabled={!adjustable || !loaded.stockItems.length}
+                    className="min-h-11"
+                  >
+                    Add line
+                  </Button>
+                </form>
+                <form action={completeTransfer} className="mt-3">
+                  <input type="hidden" name="stockTransferId" value={transfer.id} />
+                  <Button
+                    type="submit"
+                    disabled={!adjustable || transfer._count.lines < 1}
+                    className="min-h-11"
+                  >
+                    Complete transfer
+                  </Button>
+                </form>
+              </div>
+            ))}
         </SectionCard>
       </div>
     </div>

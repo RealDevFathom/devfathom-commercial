@@ -46,7 +46,11 @@ import { INVENTORY_STOCK_LOCATIONS_LIMIT, resolveEntitlementLimit } from '@/lib/
  */
 
 const ID = z.string().min(1);
-const QTY = z.string().min(1); // Decimal string — caller must pass a valid number string
+const DECIMAL_QTY = /^(?:0|\d+(?:\.\d+)?|\.\d+)$/;
+const NON_NEGATIVE_QTY = z.string().regex(DECIMAL_QTY, 'Quantity must be a non-negative decimal.');
+const POSITIVE_QTY = NON_NEGATIVE_QTY.refine((value) => new Prisma.Decimal(value).greaterThan(0), {
+  message: 'Quantity must be greater than zero.',
+});
 const WASTAGE_REASON = z.enum(['WASTAGE', 'SPOILAGE', 'STAFF_MEAL']);
 const COUNT_STATUS = z.enum(['DRAFT', 'SUBMITTED', 'POSTED']);
 const TRANSFER_STATUS = z.enum(['DRAFT', 'DISPATCHED', 'RECEIVED', 'CANCELLED']);
@@ -315,7 +319,7 @@ export const restaurantInventoryRouter = router({
         .object({
           stockCountId: ID,
           stockItemId: ID,
-          countedQuantity: QTY,
+          countedQuantity: NON_NEGATIVE_QTY,
         })
         .strict()
     )
@@ -388,7 +392,7 @@ export const restaurantInventoryRouter = router({
         .object({
           stockTransferId: ID,
           stockItemId: ID,
-          quantity: QTY,
+          quantity: POSITIVE_QTY,
           unitId: ID.optional(),
         })
         .strict()
@@ -436,7 +440,7 @@ export const restaurantInventoryRouter = router({
           stockItemId: ID,
           locationId: ID,
           reason: WASTAGE_REASON,
-          quantity: QTY,
+          quantity: POSITIVE_QTY,
           unitId: ID.optional(),
           occurredAt: z.date().optional(),
         })
@@ -458,7 +462,7 @@ export const restaurantInventoryRouter = router({
         .object({
           stockItemId: ID,
           locationId: ID,
-          quantity: QTY,
+          quantity: POSITIVE_QTY,
           unitId: ID.optional(),
           orderId: ID.optional(),
           occurredAt: z.date().optional(),
@@ -481,7 +485,7 @@ export const restaurantInventoryRouter = router({
         .object({
           stockItemId: ID,
           locationId: ID,
-          threshold: QTY,
+          threshold: NON_NEGATIVE_QTY,
         })
         .strict()
     )
@@ -495,7 +499,7 @@ export const restaurantInventoryRouter = router({
       z
         .object({
           id: ID,
-          threshold: QTY,
+          threshold: NON_NEGATIVE_QTY,
         })
         .strict()
     )

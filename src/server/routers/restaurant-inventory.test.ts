@@ -312,6 +312,48 @@ describe('restaurantInventoryRouter', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
+  it.each(['-1', 'NaN', 'Infinity', '1e3', ' 1', ''])(
+    'rejects invalid counted quantity %j before calling the domain service',
+    async (countedQuantity) => {
+      await expect(
+        caller().addStockCountLine({
+          stockCountId: 'count_1',
+          stockItemId: 'item_1',
+          countedQuantity,
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mocks.addStockCountLine).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['0', '0.0', '-1', 'NaN', 'Infinity', '1e3'])(
+    'rejects non-positive or invalid movement quantity %j before calling a domain service',
+    async (quantity) => {
+      const api = caller();
+      await expect(
+        api.addStockTransferLine({
+          stockTransferId: 'transfer_1',
+          stockItemId: 'item_1',
+          quantity,
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(
+        api.postWastage({
+          stockItemId: 'item_1',
+          locationId: 'loc_1',
+          reason: 'WASTAGE',
+          quantity,
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(
+        api.postSaleReversal({ stockItemId: 'item_1', locationId: 'loc_1', quantity })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mocks.addStockTransferLine).not.toHaveBeenCalled();
+      expect(mocks.postWastage).not.toHaveBeenCalled();
+      expect(mocks.postSaleReversal).not.toHaveBeenCalled();
+    }
+  );
+
   // ── Stock on hand — Decimal-as-string serialization ──────────────────────────
 
   it('serializes onHand as string', async () => {
