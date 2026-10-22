@@ -1,0 +1,82 @@
+[
+  {
+    "name": "customer matching the pharmacy baseline",
+    "baseline": { "recencyDays": 20, "frequency": 10, "monetaryMinor": 10000 },
+    "customer": {
+      "customerId": "patient-baseline",
+      "recencyDays": 20,
+      "frequency": 10,
+      "monetaryMinor": 10000
+    },
+    "expected": {
+      "customerId": "patient-baseline",
+      "score": 50,
+      "band": "MEDIUM",
+      "components": { "recency": 50, "frequency": 50, "monetary": 50 }
+    }
+  },
+  {
+    "name": "lapsed low-frequency low-spend pharmacy customer",
+    "baseline": { "recencyDays": 20, "frequency": 10, "monetaryMinor": 10000 },
+    "customer": {
+      "customerId": "patient-lapsed",
+      "recencyDays": 40,
+      "frequency": 0,
+      "monetaryMinor": 0
+    },
+    "expected": {
+      "customerId": "patient-lapsed",
+      "score": 100,
+      "band": "HIGH",
+      "components": { "recency": 100, "frequency": 100, "monetary": 100 }
+    }
+  },
+  {
+    "name": "recent high-frequency high-spend pharmacy customer",
+    "baseline": { "recencyDays": 20, "frequency": 10, "monetaryMinor": 10000 },
+    "customer": {
+      "customerId": "patient-loyal",
+      "recencyDays": 0,
+      "frequency": 20,
+      "monetaryMinor": 20000
+    },
+    "expected": {
+      "customerId": "patient-loyal",
+      "score": 0,
+      "band": "LOW",
+      "components": { "recency": 0, "frequency": 0, "monetary": 0 }
+    }
+  },
+  {
+    "name": "customer at the high-risk boundary",
+    "baseline": { "recencyDays": 20, "frequency": 10, "monetaryMinor": 10000 },
+    "customer": {
+      "customerId": "patient-high-boundary",
+      "recencyDays": 26.8,
+      "frequency": 6.6,
+      "monetaryMinor": 6600
+    },
+    "expected": {
+      "customerId": "patient-high-boundary",
+      "score": 67,
+      "band": "HIGH",
+      "components": { "recency": 67, "frequency": 67, "monetary": 67 }
+    }
+  },
+  {
+    "name": "customer at the medium-risk boundary",
+    "baseline": { "recencyDays": 20, "frequency": 10, "monetaryMinor": 10000 },
+    "customer": {
+      "customerId": "patient-medium-boundary",
+      "recencyDays": 13.6,
+      "frequency": 13.2,
+      "monetaryMinor": 13200
+    },
+    "expected": {
+      "customerId": "patient-medium-boundary",
+      "score": 34,
+      "band": "MEDIUM",
+      "components": { "recency": 34, "frequency": 34, "monetary": 34 }
+    }
+  }
+]
