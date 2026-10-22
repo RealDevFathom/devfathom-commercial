@@ -4,7 +4,14 @@ import { capabilityMatches } from './capabilities';
 import { ALL_ACTIONS } from './policies';
 
 export const intendedPharmacyGrants = {
-  owner: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+  owner: [
+    'pharmacy:*',
+    'pharmacy:dispense',
+    'pharmacy:catalogue-review',
+    'pharmacy:safety',
+    'reports:operational',
+    'reports:financial',
+  ],
   'owner-operator': [
     'reports:operational',
     'reports:financial',
@@ -54,8 +61,9 @@ describe('canonical capability contract (#130)', () => {
       expect(capabilityMatches(grant, action)).toBe(false);
   });
   it('matches only exact actions, * and namespace:*', () => {
-    expect(capabilityMatches('*', 'pharmacy:dispense')).toBe(true);
-    expect(capabilityMatches('pharmacy:*', 'pharmacy:dispense')).toBe(true);
+    expect(capabilityMatches('*', 'pharmacy:dispense')).toBe(false);
+    expect(capabilityMatches('pharmacy:*', 'pharmacy:dispense')).toBe(false);
+    expect(capabilityMatches('pharmacy:*', 'pharmacy:dispense', 'DENY')).toBe(true);
     expect(capabilityMatches('pharmacy:*', 'reports:financial')).toBe(false);
     expect(capabilityMatches('pharmacy:dispense', 'pharmacy:safety')).toBe(false);
     expect(capabilityMatches('*', 'pharmacy.dispense')).toBe(false);

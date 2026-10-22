@@ -45,16 +45,14 @@ async function customDecision(
     },
   });
   if (!user) return false;
-  const overrides = user.permissionOverrides.filter((rule) =>
-    capabilityMatches(rule.capability, action)
-  );
-  if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
-  const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
-    capabilityMatches(rule.capability, action)
-  );
-  if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
-  if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
+  const rules = [
+    ...user.permissionOverrides,
+    ...(user.organizationRole?.permissions ?? []),
+  ].filter((rule) => capabilityMatches(rule.capability, action, rule.effect));
+  // A deny at either layer is authoritative. In particular, a user allow must not
+  // short-circuit a role deny (and a role allow must not override a user deny).
+  if (rules.some((rule) => rule.effect === 'DENY')) return false;
+  if (rules.some((rule) => rule.effect === 'ALLOW')) return true;
   return null;
 }
 
