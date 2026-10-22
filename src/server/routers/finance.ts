@@ -360,9 +360,21 @@ export const financeRouter = router({
         if (input.status === 'DRAFT') data.sentAt = null;
       }
 
-      const invoice = await ctx.db.invoice.update({
-        where: { id: input.id },
+      // Do not let an edit based on a stale DRAFT/SENT read overwrite a concurrent
+      // terminal transition (for example PAID or CANCELLED).
+      const changed = await ctx.db.invoice.updateMany({
+        where: { id: input.id, status: current.status },
         data,
+      });
+      if (changed.count !== 1) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'Invoice status changed while this request was being processed. Please try again.',
+        });
+      }
+
+      const invoice = await ctx.db.invoice.findUniqueOrThrow({
+        where: { id: input.id },
         include: {
           client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
           project: { select: { id: true, name: true } },
@@ -429,10 +441,17 @@ export const financeRouter = router({
       // Promote DRAFT → SENT only after a successful send.
       const wasDraft = invoice.status === 'DRAFT';
       if (wasDraft) {
-        await ctx.db.invoice.update({
-          where: { id: invoice.id },
+        const changed = await ctx.db.invoice.updateMany({
+          where: { id: invoice.id, status: 'DRAFT' },
           data: { status: 'SENT', sentAt: new Date() },
         });
+        if (changed.count !== 1) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message:
+              'The email was sent, but the invoice status changed concurrently and was not overwritten.',
+          });
+        }
       }
 
       logActivity(ctx.db, ctx.session.user.id, {
@@ -492,9 +511,22 @@ export const financeRouter = router({
         data.paidAt = null;
       }
 
-      const invoice = await ctx.db.invoice.update({
-        where: { id: input.id },
+      // Validate-and-write atomically. Without the prior status in the predicate,
+      // two concurrent requests could each validate against the same stale state
+      // and the later write could create a forbidden effective transition.
+      const changed = await ctx.db.invoice.updateMany({
+        where: { id: input.id, status: prior },
         data,
+      });
+      if (changed.count !== 1) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'Invoice status changed while this request was being processed. Please try again.',
+        });
+      }
+
+      const invoice = await ctx.db.invoice.findUniqueOrThrow({
+        where: { id: input.id },
         include: { client: { select: { name: true } } },
       });
 
