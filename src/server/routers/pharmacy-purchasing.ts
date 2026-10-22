@@ -977,13 +977,19 @@ const purchasingRouter = router({
             receivedByUserId: scope.actorId,
           });
         }
-        if (
-          input.purchaseOrderId &&
-          !(await ctx.db.pharmacyPurchaseOrder.findFirst({
+        if (input.purchaseOrderId) {
+          const order = await ctx.db.pharmacyPurchaseOrder.findFirst({
             where: { id: input.purchaseOrderId, supplierId: input.supplierId },
-          }))
-        ) {
-          throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+          });
+          if (!order) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+          if (order.branchId !== scope.branchId) {
+            throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
+          }
+          // Partial deliveries may be drafted while an order is already being
+          // received, but approval alone is not authority to accept stock.
+          if (order.status !== 'SENT' && order.status !== 'RECEIVING') {
+            throw new PharmacyReceivingError('INVALID_TRANSITION');
+          }
         }
 
         const ownOrderLines = input.purchaseOrderId

@@ -170,6 +170,24 @@ export async function postGoodsReceipt(
   assertGoodsReceiptTransition(receipt.status, 'POSTED');
   if (receipt.lines.length === 0) throw new PharmacyReceivingError('INVALID_QUANTITY');
 
+  // Re-check at posting, inside the stock transaction. This protects drafts
+  // created before the order gate existed and prevents an order changed after
+  // drafting from authorizing inventory in another branch or invalid state.
+  const purchaseOrder = receipt.purchaseOrderId
+    ? await db.pharmacyPurchaseOrder.findFirst({
+        where: { id: receipt.purchaseOrderId, organizationId: scope.organizationId },
+      })
+    : null;
+  if (receipt.purchaseOrderId) {
+    if (!purchaseOrder) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+    if (purchaseOrder.branchId !== scope.branchId) {
+      throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
+    }
+    if (purchaseOrder.status !== 'SENT' && purchaseOrder.status !== 'RECEIVING') {
+      throw new PharmacyReceivingError('INVALID_TRANSITION');
+    }
+  }
+
   const controlledMedicines = await db.medicine.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -340,16 +358,11 @@ export async function postGoodsReceipt(
   // PUR-02: the order is now being received against. SENT → RECEIVING is the
   // last transition of that status machine, so a second receipt against the
   // same order finds it already there and leaves it alone.
-  if (receipt.purchaseOrderId) {
-    const order = await db.pharmacyPurchaseOrder.findFirst({
-      where: { id: receipt.purchaseOrderId, organizationId: scope.organizationId },
+  if (purchaseOrder?.status === 'SENT') {
+    await db.pharmacyPurchaseOrder.update({
+      where: { id: purchaseOrder.id },
+      data: { status: 'RECEIVING' },
     });
-    if (order?.status === 'SENT') {
-      await db.pharmacyPurchaseOrder.update({
-        where: { id: order.id },
-        data: { status: 'RECEIVING' },
-      });
-    }
   }
 
   return { goodsReceiptId: receipt.id, postedAt: input.at, lines, exceptions };
