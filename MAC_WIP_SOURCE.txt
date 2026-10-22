@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/codex/pharmacy-demo-cash-review
+Branch: codex/pharmacy-demo-cash-review
+HEAD: 711b631420ca8344f5f42c821274faa3b283f1ff
+Mode: applied
+Excluded (secrets): 1
