@@ -634,11 +634,21 @@ export async function getOrderSettlementForBranch(
     select: {
       id: true,
       deliveryFulfillment: { select: { deliveryFeeSnapshot: true } },
+      items: {
+        select: {
+          id: true,
+          name: true,
+          quantity: true,
+          seatNumber: true,
+          modifiers: { select: { name: true } },
+        },
+      },
     },
   });
   if (!order) return null;
 
   const settlement = await evaluateOrderSettlement(db, orderId);
+  const unbilledIds = new Set(settlement.unbilledItemIds);
   const bills = await Promise.all(
     settlement.bills.map(async (b) => {
       // An OPEN bill's stored grandTotal is pre-tax and its taxTotal is 0 until a
@@ -669,6 +679,15 @@ export async function getOrderSettlementForBranch(
       ? money(order.deliveryFulfillment.deliveryFeeSnapshot)
       : null,
     unbilledItemIds: settlement.unbilledItemIds,
+    unbilledItems: (order.items ?? [])
+      .filter((item) => unbilledIds.has(item.id))
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        quantity: item.quantity,
+        seatNumber: item.seatNumber,
+        modifiers: item.modifiers.map((modifier) => modifier.name),
+      })),
     bills,
   };
 }
