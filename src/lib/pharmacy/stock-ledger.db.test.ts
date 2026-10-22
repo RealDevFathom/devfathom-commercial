@@ -457,6 +457,94 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     );
   });
 
+  it('returns the committed quarantine release on sequential replay without duplicate movements', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'release-replay');
+    const outcome = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 20,
+        label: 'release-replay',
+      });
+      await deps.operations.quarantinePart(db, scopeOf(fixture), {
+        inventoryLotId: lot.id,
+        stockLocationId: fixture.locationId,
+        units: 10,
+        reason: 'Recall investigation',
+        idempotencyKeyPrefix: tag('release-replay-hold'),
+      });
+      const idempotencyKeyPrefix = tag('release-replay');
+      const input = {
+        inventoryLotId: lot.id,
+        stockLocationId: fixture.locationId,
+        units: 10,
+        reason: 'Recall cleared',
+        idempotencyKeyPrefix,
+      };
+      const first = await deps.operations.releaseQuarantine(db, scopeOf(fixture), input);
+      const replay = await deps.operations.releaseQuarantine(db, scopeOf(fixture), input);
+      return {
+        first,
+        replay,
+        movements: await db.pharmacyStockMovement.findMany({
+          where: {
+            organizationId: ORG_A,
+            idempotencyKey: { in: [`${idempotencyKeyPrefix}:out`, `${idempotencyKeyPrefix}:in`] },
+          },
+        }),
+      };
+    });
+
+    expect(outcome.replay.removed.id).toBe(outcome.first.removed.id);
+    expect(outcome.replay.released.id).toBe(outcome.first.released.id);
+    expect(outcome.movements).toHaveLength(2);
+  });
+
+  it('serializes concurrent same-key quarantine calls and returns one committed pair', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'quarantine-concurrent-replay');
+    const lotId = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 20,
+        label: 'quarantine-concurrent-replay',
+      });
+      return lot.id;
+    });
+    const idempotencyKeyPrefix = tag('quarantine-concurrent-replay');
+    const apply = () =>
+      inOrg(ORG_A, (db) =>
+        deps.operations.quarantinePart(db, scopeOf(fixture), {
+          inventoryLotId: lotId,
+          stockLocationId: fixture.locationId,
+          units: 10,
+          reason: 'Concurrent recall reports',
+          idempotencyKeyPrefix,
+        })
+      );
+
+    const [first, replay] = await Promise.all([apply(), apply()]);
+    expect(replay.removed.id).toBe(first.removed.id);
+    expect(replay.held.id).toBe(first.held.id);
+
+    const outcome = await inOrg(ORG_A, async (db) => ({
+      movements: await db.pharmacyStockMovement.findMany({
+        where: {
+          organizationId: ORG_A,
+          idempotencyKey: { in: [`${idempotencyKeyPrefix}:out`, `${idempotencyKeyPrefix}:in`] },
+        },
+      }),
+      balances: await db.pharmacyStockBalance.findMany({
+        where: { organizationId: ORG_A, inventoryLotId: lotId },
+      }),
+    }));
+    expect(outcome.movements).toHaveLength(2);
+    expect(outcome.balances).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ disposition: 'AVAILABLE', onHandUnits: 10 }),
+        expect.objectContaining({ disposition: 'QUARANTINE', onHandUnits: 10 }),
+      ])
+    );
+  });
+
   it('dispatches into transit, records a batch receipt discrepancy, and enforces destination branch scope', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-workflow');
     const destinationBranch = 'branch_transfer_destination';
