@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
+import { invoiceStatusUpdate, type InvoiceStatus } from '@/lib/finance/invoice-status';
 
 export const GET = withApiAuth(
   'finance:read',
@@ -39,12 +40,15 @@ export const PATCH = withApiAuth(
       );
     }
 
-    const existing = await authCtx.db.invoice.findUnique({ where: { id }, select: { id: true } });
+    const existing = await authCtx.db.invoice.findUnique({
+      where: { id },
+      select: { id: true, status: true },
+    });
     if (!existing) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 });
 
-    const data: Record<string, unknown> = { ...parsed.data };
-    if (parsed.data.status === 'PAID') data.paidAt = new Date();
-    if (parsed.data.status === 'SENT') data.sentAt = new Date();
+    const data = parsed.data.status
+      ? invoiceStatusUpdate(existing.status as InvoiceStatus, parsed.data.status)
+      : parsed.data;
 
     const invoice = await authCtx.db.invoice.update({
       where: { id },

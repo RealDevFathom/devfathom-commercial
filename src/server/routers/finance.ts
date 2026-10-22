@@ -14,6 +14,11 @@ import {
   moneyLabel,
   type CurrencyAmount,
 } from '@/lib/finance/currency';
+import {
+  INVOICE_TRANSITIONS,
+  invoiceStatusUpdate,
+  type InvoiceStatus,
+} from '@/lib/finance/invoice-status';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -470,29 +475,14 @@ export const financeRouter = router({
         });
       }
 
-      const ALLOWED: Record<string, string[]> = {
-        DRAFT: ['SENT', 'CANCELLED'],
-        SENT: ['PAID', 'OVERDUE', 'CANCELLED', 'DRAFT'],
-        OVERDUE: ['PAID', 'CANCELLED', 'SENT'],
-        PAID: ['CANCELLED'],
-        CANCELLED: ['DRAFT'],
-      };
-      if (!ALLOWED[prior]?.includes(next)) {
+      if (!INVOICE_TRANSITIONS[prior as InvoiceStatus].includes(next)) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: `Cannot change an invoice from ${prior} to ${next}.`,
         });
       }
 
-      const data: Record<string, unknown> = { status: next };
-      if (next === 'PAID') data.paidAt = new Date();
-      if (next === 'SENT') data.sentAt = new Date();
-      // Clear stamps when the invoice leaves the corresponding state.
-      if (prior === 'PAID' && next !== 'PAID') data.paidAt = null;
-      if (next === 'DRAFT') {
-        data.sentAt = null;
-        data.paidAt = null;
-      }
+      const data = invoiceStatusUpdate(prior as InvoiceStatus, next);
 
       const invoice = await ctx.db.invoice.update({
         where: { id: input.id },
