@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   paymentCreate: vi.fn(),
   invoiceUpdate: vi.fn(),
   transaction: vi.fn(),
+  queryRaw: vi.fn(),
   emitEvent: vi.fn(),
   logActivity: vi.fn(),
 }));
@@ -144,8 +145,10 @@ describe('finance.addPayment', () => {
     mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: null } });
     mocks.paymentCreate.mockResolvedValue({ id: 'payment-584', amount: 100 });
     mocks.invoiceUpdate.mockResolvedValue({ id: 'invoice-584', status: 'PAID' });
+    mocks.queryRaw.mockResolvedValue([{ id: 'invoice-584' }]);
     mocks.transaction.mockImplementation((run: (tx: Record<string, unknown>) => unknown) =>
       run({
+        $queryRaw: mocks.queryRaw,
         invoice: { findUnique: mocks.findUnique, update: mocks.invoiceUpdate },
         payment: { aggregate: mocks.paymentAggregate, create: mocks.paymentCreate },
       })
@@ -169,5 +172,34 @@ describe('finance.addPayment', () => {
       data: { status: 'PAID', paidAt: expect.any(Date) },
     });
     expect(result).toMatchObject({ amountPaid: 100, balance: 0, status: 'PAID' });
+  });
+
+  it('locks the tenant-owned invoice before checking its status and balance', async () => {
+    await caller().addPayment({ invoiceId: 'invoice-584', amount: 100 });
+
+    const query = mocks.queryRaw.mock.calls[0]?.[0] as { sql?: string; values?: unknown[] };
+    expect(query.sql).toContain('"organizationId"');
+    expect(query.sql).toContain('FOR UPDATE');
+    expect(query.values).toEqual(['invoice-584', 'org-1']);
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.findUnique.mock.invocationCallOrder[0]!
+    );
+    expect(mocks.findUnique.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.paymentAggregate.mock.invocationCallOrder[0]!
+    );
+    expect(mocks.paymentAggregate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.paymentCreate.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it('does not read or write when the invoice cannot be locked in this tenant', async () => {
+    mocks.queryRaw.mockResolvedValue([]);
+
+    await expect(
+      caller().addPayment({ invoiceId: 'invoice-from-another-tenant', amount: 100 })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.paymentAggregate).not.toHaveBeenCalled();
+    expect(mocks.paymentCreate).not.toHaveBeenCalled();
   });
 });

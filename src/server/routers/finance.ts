@@ -15,6 +15,7 @@ import {
   type CurrencyAmount,
 } from '@/lib/finance/currency';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
+import { Prisma } from '@/generated/prisma/client';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -531,6 +532,15 @@ export const financeRouter = router({
       } | null = null;
 
       const result = await ctx.db.$transaction(async (tx) => {
+        // Serialize payment writers on the tenant-owned invoice before reading
+        // either its status or payment total. This makes the subsequent balance
+        // check durable against concurrent double-clicks and API requests.
+        const locked = await tx.$queryRaw<Array<{ id: string }>>(
+          Prisma.sql`SELECT id FROM invoices WHERE id=${input.invoiceId} AND "organizationId"=${ctx.entitlements.organizationId} FOR UPDATE`
+        );
+        if (locked.length !== 1) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
+        }
         const invoice = await tx.invoice.findUnique({
           where: { id: input.invoiceId },
           select: { id: true, status: true, total: true, currency: true, clientId: true },

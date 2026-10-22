@@ -145,6 +145,17 @@ describe('opt-in pharmacy Owner / Operator access', () => {
 });
 
 describe('custom ABAC decisions', () => {
+  it('applies a role deny before a user allow', async () => {
+    await expect(
+      can(employee, 'finance:write', undefined, {
+        db: authorizationDb({
+          overrides: [{ capability: 'finance:write', effect: 'ALLOW' }],
+          rolePermissions: [{ capability: 'finance:*', effect: 'DENY' }],
+        }),
+      })
+    ).resolves.toBe(false);
+  });
+
   it('preserves procurement access for managers and tenant admins without a role', async () => {
     const managerPermissions = roleTemplatesForVertical('PHARMACY')
       .find((role) => role.key === 'manager')!

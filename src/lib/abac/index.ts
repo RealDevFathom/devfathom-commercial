@@ -48,13 +48,14 @@ async function customDecision(
   const overrides = user.permissionOverrides.filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
-  if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
-  if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
-  if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
+  // A deny from either source must be evaluated before an allow from either
+  // source. Otherwise a user override ALLOW could bypass a role-level DENY.
+  const matchingRules = [...overrides, ...roleRules];
+  if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
+  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
   return null;
 }
 
