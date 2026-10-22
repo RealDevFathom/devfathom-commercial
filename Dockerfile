@@ -23,6 +23,8 @@ WORKDIR /app
 # container this size, which `tsc` exhausts outright (`Ineffective mark-compacts
 # near heap limit`, exit 134). `.github/workflows/deploy-staging.yml` already
 # raises this for `tsc` on the runner. Match that job's 8192 ceiling here.
+# This is a per-process limit, not a container-wide budget. It is safe only
+# while `experimental.cpus` remains 1 in next.config.ts; revisit both together.
 ENV NODE_OPTIONS=--max-old-space-size=8192
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
@@ -38,6 +40,8 @@ ENV NEXT_BUILD_SKIP_TYPECHECK=1 \
 # Invoked through `node` and a real path, not `next build` and not `bun run build`.
 # A `.bin` shim picks its interpreter back up from a shebang and `PATH`, and
 # `oven/bun` ships a `node` that is a symlink to `bun` — being explicit is the point.
+# tests/build-container-contract.test.ts prevents this direct sequence from
+# silently drifting from package.json's `build` script.
 RUN AUTH_SECRET=container-build-only node node_modules/next/dist/bin/next build
 
 FROM oven/bun:1.4.2-slim AS runner

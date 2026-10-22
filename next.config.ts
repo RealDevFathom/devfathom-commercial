@@ -89,6 +89,9 @@ const nextConfig: NextConfig = {
     formats: ['image/avif', 'image/webp'],
   },
   experimental: {
+    // Keep this at 1 while Dockerfile gives every build process an 8192 MiB
+    // NODE_OPTIONS heap. Increasing worker concurrency multiplies that
+    // per-process ceiling; revisit the container memory budget at the same time.
     cpus: 1,
     optimizePackageImports: ['@base-ui/react', 'cmdk'],
   },
