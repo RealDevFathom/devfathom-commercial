@@ -45,11 +45,18 @@ const line = {
   },
 };
 
-function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'DENY' }>) {
+function callerFor(
+  permissions: Array<{ capability: string; effect: 'ALLOW' | 'DENY' }>,
+  options: {
+    overrides?: Array<{ capability: string; effect: 'ALLOW' | 'DENY' }>;
+    sessionRole?: 'ADMIN' | 'EMPLOYEE';
+  } = {}
+) {
   const credential = vi.fn();
   const register = vi.fn();
+  const transaction = vi.fn(async (callback: (tx: unknown) => unknown) => callback(db));
   const db = {
-    $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
+    $transaction: transaction,
     pharmacyBranch: { findMany: async () => [{ id: 'branch-1' }] },
     medicine: {
       findFirst: async () => ({ id: 'medicine-1', controlled: true, manufacturer: 'Maker' }),
@@ -58,7 +65,7 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
       findUnique: async () => ({
         status: 'ACTIVE',
         organizationRole: { permissions },
-        permissionOverrides: [],
+        permissionOverrides: options.overrides ?? [],
       }),
     },
     restaurantOperatorCredential: { findFirst: credential },
@@ -69,18 +76,50 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
     entitlements: { organizationId: 'org-1', enabledModules: ['pharmacy-counter'], modules: [] },
     session: {
       expires: 'later',
-      user: { id: 'cashier-1', role: 'EMPLOYEE', status: 'ACTIVE', organizationId: 'org-1' },
+      user: {
+        id: 'cashier-1',
+        role: options.sessionRole ?? 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+      },
     },
     organization: { id: 'org-1' },
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
-  return { credential, register, caller: app.createCaller(context).pharmacySales };
+  return { credential, register, transaction, caller: app.createCaller(context).pharmacySales };
 }
 
 beforeEach(() => {
   vi.mocked(addSaleLine).mockReset();
+});
+
+describe('pharmacySales day close authorization', () => {
+  it.each([
+    [
+      'closeDay',
+      {
+        branchId: 'branch-1',
+        businessDate: new Date('2026-10-22T00:00:00.000Z'),
+        sourceHash: '0'.repeat(64),
+        counts: [],
+        varianceNote: '',
+      },
+    ],
+    [
+      'dailyClose',
+      { branchId: 'branch-1', businessDate: new Date('2026-10-22T00:00:00.000Z') },
+    ],
+  ] as const)('rejects an explicit safety deny before %s', async (procedure, input) => {
+    const { caller, transaction } = callerFor([{ capability: 'pharmacy:safety', effect: 'ALLOW' }], {
+      overrides: [{ capability: 'pharmacy:safety', effect: 'DENY' }],
+      sessionRole: 'ADMIN',
+    });
+
+    await expect(caller[procedure](input as never)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(transaction).not.toHaveBeenCalled();
+  });
 });
 
 describe('pharmacySales.addLine controlled actor', () => {

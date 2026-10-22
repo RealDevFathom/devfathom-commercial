@@ -99,10 +99,17 @@ import {
 } from '@/lib/pharmacy/settlement';
 
 import { assertInOrganization } from '../org-refs';
-import { adminProcedure, auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import {
+  adminProcedure,
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  protectedProcedure,
+  router,
+} from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
+const safetyProcedure = capabilityProcedure('pharmacy:safety');
 // Preserve field order and parsing: settlement hashes JSON.stringify(parsed input).
 const tenderInput = z
   .object({
@@ -534,7 +541,7 @@ export const pharmacySalesRouter = router({
         readPharmacyClose(txDb(tx), await scopeFor(ctx, input.branchId), input.businessDate)
       );
     }),
-  closeDay: protectedProcedure
+  closeDay: safetyProcedure
     .input(
       z
         .object({
@@ -556,7 +563,6 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      requireCloseAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
           closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
@@ -707,7 +713,7 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  dailyClose: protectedProcedure
+  dailyClose: safetyProcedure
     .input(
       z
         .object({
@@ -719,7 +725,6 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      requireCloseAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
           cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)

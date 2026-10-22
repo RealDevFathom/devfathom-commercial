@@ -26,6 +26,12 @@ export type CanOptions = {
   db?: AuthzDb;
 };
 
+const EXACT_GRANT_ACTIONS = new Set<Action>([
+  'pharmacy:dispense',
+  'pharmacy:safety',
+  'pharmacy:catalogue-review',
+]);
+
 async function customDecision(
   db: AuthzDb,
   userId: string,
@@ -45,16 +51,18 @@ async function customDecision(
     },
   });
   if (!user) return false;
-  const overrides = user.permissionOverrides.filter((rule) =>
-    capabilityMatches(rule.capability, action)
-  );
-  if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
-  const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
-    capabilityMatches(rule.capability, action)
-  );
-  if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
-  if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
+  const matches = (rule: { capability: string; effect: string }) =>
+    rule.effect === 'ALLOW' && EXACT_GRANT_ACTIONS.has(action)
+      ? rule.capability === action
+      : capabilityMatches(rule.capability, action);
+  const rules = [
+    ...user.permissionOverrides.filter(matches),
+    ...(user.organizationRole?.permissions ?? []).filter(matches),
+  ];
+  // A deny from either source wins over every allow. Do not return on a user
+  // allow before the assigned role's restrictions have also been inspected.
+  if (rules.some((rule) => rule.effect === 'DENY')) return false;
+  if (rules.some((rule) => rule.effect === 'ALLOW')) return true;
   return null;
 }
 
