@@ -130,12 +130,22 @@ describe('Khata router trust and recovery boundary', () => {
       }),
     });
   });
-  it('hands only the fresh server-session claim to the audited owner gate', async () => {
+  it('lets a pharmacy manager record a reason with fresh server-session evidence', async () => {
     const f = fixture();
-    await f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true });
+    f.user.role = 'EMPLOYEE';
+    await f
+      .caller()
+      .tender({ ...input, amountMinor: 101, ownerOverride: true, khataOverrideReason: 'Emergency' });
+    expect(can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'owner-a' }),
+      'pharmacy:manage',
+      undefined,
+      expect.objectContaining({ db: f.db })
+    );
     expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         reasons: expect.objectContaining({
+          overrideReason: 'Emergency',
           ownerAuthorizedByUserId: 'owner-a',
           ownerReauthenticatedAt: new Date(f.user.passwordAuthenticatedAt).toISOString(),
         }),
@@ -156,12 +166,23 @@ describe('Khata router trust and recovery boundary', () => {
     const f = fixture();
     f.user.passwordAuthenticatedAt -= 301000;
     await expect(
-      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
+      f.caller().tender({
+        ...input,
+        amountMinor: 101,
+        ownerOverride: true,
+        khataOverrideReason: 'Emergency',
+      })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
     f.user.passwordAuthenticatedAt = Date.now();
     f.user.role = 'EMPLOYEE';
+    vi.mocked(can).mockResolvedValue(false);
     await expect(
-      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
+      f.caller().tender({
+        ...input,
+        amountMinor: 101,
+        ownerOverride: true,
+        khataOverrideReason: 'Emergency',
+      })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });

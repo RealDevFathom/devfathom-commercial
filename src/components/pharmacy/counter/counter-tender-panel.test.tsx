@@ -241,15 +241,24 @@ describe('family Khata tender', () => {
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
     await screen.findByText(/Ledger balance/);
     expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
-    fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
+    fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
     fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
       target: { value: 'test-only-password' },
+    });
+    fireEvent.change(screen.getByLabelText('Owner or manager approval reason'), {
+      target: { value: 'Customer emergency' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await screen.findByText('Payment recorded.');
     expect(reauthenticateOwner).toHaveBeenCalledWith('test-only-password', '');
     expect(props.onTender).toHaveBeenCalledWith(
-      { type: 'KHATA', amountMinor: 25000, familyAccountId: 'family-a', ownerOverride: true },
+      {
+        type: 'KHATA',
+        amountMinor: 25000,
+        familyAccountId: 'family-a',
+        ownerOverride: true,
+        khataOverrideReason: 'Customer emergency',
+      },
       { amount: '', cashReceived: '' }
     );
   });
@@ -260,9 +269,12 @@ describe('family Khata tender', () => {
     });
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
     await screen.findByText(/Ledger balance/);
-    fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
+    fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
     fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
       target: { value: 'wrong' },
+    });
+    fireEvent.change(screen.getByLabelText('Owner or manager approval reason'), {
+      target: { value: 'Customer emergency' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await screen.findByText(/Owner re-authentication failed/);

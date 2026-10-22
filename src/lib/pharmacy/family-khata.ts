@@ -223,6 +223,7 @@ export async function applyKhataLimitDecision(
     ownerAuthorizedByUserId?: string;
     ownerReauthenticatedAt?: Date;
     overrideLimitMinor?: number;
+    overrideReason?: string;
   }
 ) {
   const authorizedAt = new Date();
@@ -263,6 +264,7 @@ export async function applyKhataLimitDecision(
       appliedLimitMinor,
       reasons: {
         reasons: input.suggestion.reasons,
+        ...(input.overrideReason ? { overrideReason: input.overrideReason } : {}),
         ownerAuthorizedByUserId: input.ownerAuthorizedByUserId,
         ownerReauthenticatedAt: input.ownerReauthenticatedAt!.toISOString(),
         ownerAuthorizedAt: authorizedAt.toISOString(),
@@ -355,7 +357,7 @@ export async function authorizeKhataCharge(
   db: ScopedDb,
   scope: FamilyKhataScope,
   input: { saleId: string; familyAccountId: string; amountMinor: number; ownerOverride?: boolean },
-  owner: { authorized: boolean; passwordAuthenticatedAt?: number }
+  owner: { authorized: boolean; passwordAuthenticatedAt?: number; overrideReason?: string }
 ) {
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
@@ -374,6 +376,9 @@ export async function authorizeKhataCharge(
     throw new FamilyKhataError('INVALID_AMOUNT');
   if (projected > account.creditLimitMinor) {
     if (!input.ownerOverride) throw new FamilyKhataError('CREDIT_LIMIT_EXCEEDED');
+    const overrideReason = owner.overrideReason?.trim();
+    if (!overrideReason || overrideReason.length > 500)
+      throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
     const now = new Date();
     await applyKhataLimitDecision(db, scope, {
       familyAccountId: account.id,
@@ -396,6 +401,7 @@ export async function authorizeKhataCharge(
           ? undefined
           : new Date(owner.passwordAuthenticatedAt),
       overrideLimitMinor: projected,
+      overrideReason,
     });
   }
   return account;

@@ -160,7 +160,11 @@ suite('family Khata restricted PostgreSQL', () => {
           db,
           a,
           { ...a, amountMinor: 401, ownerOverride: true },
-          { authorized: true, passwordAuthenticatedAt: Date.now() - 301000 }
+          {
+            authorized: true,
+            passwordAuthenticatedAt: Date.now() - 301000,
+            overrideReason: 'Temporary extension',
+          }
         )
       )
     ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
@@ -202,7 +206,11 @@ suite('family Khata restricted PostgreSQL', () => {
         db,
         a,
         { ...a, amountMinor: 200, ownerOverride: true },
-        { authorized: true, passwordAuthenticatedAt: Date.now() }
+        {
+          authorized: true,
+          passwordAuthenticatedAt: Date.now(),
+          overrideReason: 'Temporary extension',
+        }
       )
     );
     const decision = await inScope(a, (db) =>

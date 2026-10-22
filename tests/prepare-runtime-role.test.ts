@@ -54,7 +54,10 @@ describe('runtime role preparation', () => {
       'secret-value',
     ]);
     expect(queries.filter(({ sql }) => /^(GRANT|ALTER DEFAULT PRIVILEGES)/.test(sql))).toHaveLength(
-      6
+      7
+    );
+    expect(queries.map(({ sql }) => sql)).toContain(
+      'GRANT EXECUTE ON FUNCTION public.similarity_op(text, text) TO devfathom_app'
     );
     expect([...output.log.mock.calls, ...output.warn.mock.calls].flat().join('\n')).not.toContain(
       'secret-value'
@@ -79,7 +82,7 @@ describe('runtime role preparation', () => {
     await prepareRuntimeRole(client, secret, output);
 
     expect(queries.filter(({ sql }) => /^(GRANT|ALTER DEFAULT PRIVILEGES)/.test(sql))).toHaveLength(
-      6
+      7
     );
     expect(output.warn).toHaveBeenCalledWith(
       'password: skipped (permission denied; final posture verified)'

@@ -117,6 +117,7 @@ const tenderInput = z
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
+    khataOverrideReason: z.string().trim().min(1).max(500).optional(),
   })
   .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
@@ -712,7 +713,11 @@ export const pharmacySalesRouter = router({
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
-        if (input.familyAccountId !== undefined || input.ownerOverride !== undefined)
+        if (
+          input.familyAccountId !== undefined ||
+          input.ownerOverride !== undefined ||
+          input.khataOverrideReason !== undefined
+        )
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message: 'Khata fields require Khata tender.',
@@ -725,10 +730,9 @@ export const pharmacySalesRouter = router({
       const scope = await khataScope(ctx, input.branchId);
       if (!input.familyAccountId) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
       const normalized = ledgerTender(input);
-      const ownerAuthorized =
+      const ownerOrManagerAuthorized =
         input.ownerOverride === true &&
-        ctx.session!.user.role === 'ADMIN' &&
-        (await can(subjectFromSession(ctx.session!.user), 'admin:access', undefined, {
+        (await can(subjectFromSession(ctx.session!.user), 'pharmacy:manage', undefined, {
           db: ctx.db,
           source: 'TRPC',
         }));
@@ -745,8 +749,9 @@ export const pharmacySalesRouter = router({
           scope,
           { ...input, familyAccountId: input.familyAccountId! },
           {
-            authorized: ownerAuthorized,
+            authorized: ownerOrManagerAuthorized,
             passwordAuthenticatedAt: ctx.session!.user.passwordAuthenticatedAt,
+            overrideReason: input.khataOverrideReason,
           }
         );
         const result = await applyPharmacyTender(db, scope, normalized);

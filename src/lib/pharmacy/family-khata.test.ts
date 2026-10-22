@@ -284,7 +284,7 @@ describe('counter Khata ledger gate', () => {
         db as never,
         scope,
         { ...input, amountMinor: 600, ownerOverride: true },
-        owner
+        { ...owner, overrideReason: 'Customer has approved a short extension' }
       )
     ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
     expect(db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
@@ -295,18 +295,35 @@ describe('counter Khata ledger gate', () => {
       db as never,
       scope,
       { ...input, amountMinor: 600, ownerOverride: true },
-      { authorized: true, passwordAuthenticatedAt: Date.now() }
+      {
+        authorized: true,
+        passwordAuthenticatedAt: Date.now(),
+        overrideReason: 'Customer has approved a short extension',
+      }
     );
     expect(db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         appliedLimitMinor: 1100,
         ownerActorId: scope.actorId,
         reasons: expect.objectContaining({
+          overrideReason: 'Customer has approved a short extension',
           ownerAuthorizedByUserId: scope.actorId,
           ownerAuthorizedAt: expect.any(String),
         }),
       }),
     });
+  });
+  it('rejects an over-limit override without an approval reason', async () => {
+    const db = fixture();
+    await expect(
+      authorizeKhataCharge(
+        db as never,
+        scope,
+        { ...input, amountMinor: 600, ownerOverride: true },
+        { authorized: true, passwordAuthenticatedAt: Date.now() }
+      )
+    ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
+    expect(db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
   });
   it('denies an account outside the sale customer membership and does not expose its statement', async () => {
     const db = fixture();

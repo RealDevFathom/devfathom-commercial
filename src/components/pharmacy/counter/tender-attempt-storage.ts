@@ -35,6 +35,7 @@ const storedSchema = z
         idempotencyKey: z.string().trim().min(1).max(160),
         familyAccountId: id.optional(),
         ownerOverride: z.boolean().optional(),
+        khataOverrideReason: z.string().trim().min(1).max(500).optional(),
       })
       .strict(),
     draft: z.object({ amount: amountText, cashReceived: amountText }).strict(),
@@ -77,7 +78,9 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
   const date = new Date(input.businessDate);
   if (
     (input.type === 'KHATA' && !input.familyAccountId) ||
-    ((input.familyAccountId !== undefined || input.ownerOverride !== undefined) &&
+    ((input.familyAccountId !== undefined ||
+      input.ownerOverride !== undefined ||
+      input.khataOverrideReason !== undefined) &&
       !['KHATA', 'CREDIT'].includes(input.type)) ||
     !sameScope(stored.scope, scope) ||
     input.branchId !== scope.branchId ||
