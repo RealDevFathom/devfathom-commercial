@@ -45,6 +45,59 @@ const billed = {
 };
 
 describe('CheckoutPanel', () => {
+  it('shows a dismissible DevFathom AI suggestion and adds it through the normal cart path', async () => {
+    const calls: { path: string; options?: TerminalRequestOptions }[] = [];
+    const suggestion = {
+      menuItemId: 'item-dessert',
+      name: 'Chocolate cake',
+      reason: 'A small dessert pairs well with this order.',
+    };
+    const request: TerminalRequest = async <T,>(path: string, options?: TerminalRequestOptions) => {
+      calls.push({ path, options });
+      return { ...unbilled, aiUpsell: suggestion } as T;
+    };
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText('DevFathom AI')).toBeVisible();
+    expect(screen.getByText(suggestion.reason)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: `Add ${suggestion.name}` }));
+
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        path: '/api/restaurant/orders/add-item',
+        options: {
+          method: 'POST',
+          body: {
+            orderId: 'order-1',
+            menuItemId: suggestion.menuItemId,
+            quantity: 1,
+            modifierOptionIds: [],
+          },
+          intent:
+            'add-item:{"orderId":"order-1","menuItemId":"item-dessert","quantity":1,"modifierOptionIds":[]}',
+        },
+      })
+    );
+    expect(screen.queryByText('DevFathom AI')).not.toBeInTheDocument();
+  });
+
+  it('hides the AI panel when the server reports AI off and allows dismissal', async () => {
+    const off: TerminalRequest = async <T,>() => ({ ...unbilled, aiUpsell: null }) as T;
+    const view = render(<CheckoutPanel open orderId="order-1" request={off} onClose={vi.fn()} />);
+    await screen.findByText('Some order items are not billed.');
+    expect(screen.queryByText('DevFathom AI')).not.toBeInTheDocument();
+
+    const on: TerminalRequest = async <T,>() =>
+      ({
+        ...unbilled,
+        aiUpsell: { menuItemId: 'item-tea', name: 'Tea', reason: 'Suggested pairing.' },
+      }) as T;
+    view.rerender(<CheckoutPanel open orderId="order-2" request={on} onClose={vi.fn()} />);
+    expect(await screen.findByText('DevFathom AI')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss DevFathom AI suggestion' }));
+    expect(screen.queryByText('DevFathom AI')).not.toBeInTheDocument();
+  });
+
   it.each(['3860.00', '2860.25', '0.00'])(
     'prefills the authoritative initial balance %s, including partial and zero balances',
     async (remainingDue) => {

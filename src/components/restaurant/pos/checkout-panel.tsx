@@ -21,6 +21,7 @@ import { Label } from '@/components/ui/label';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
 import { Textarea } from '@/components/ui/textarea';
+import type { UpsellSuggestion } from '@/lib/ai/shared/upsell-engine.types';
 
 import { ReceiptView } from './receipt-view';
 import { SplitBillDialog, type BillSplit } from './split-bill-dialog';
@@ -42,6 +43,7 @@ type CheckoutSummary = {
   accountedTotal: string;
   deliveryFeeTotal: string | null;
   unbilledItemIds: string[];
+  aiUpsell?: UpsellSuggestion | null;
   bills: {
     id: string;
     status: string;
@@ -677,6 +679,7 @@ export function CheckoutPanel({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tenderPending, setTenderPending] = useState(false);
+  const [dismissedUpsell, setDismissedUpsell] = useState<string | null>(null);
 
   const fetchSummary = useCallback(
     () =>
@@ -750,6 +753,35 @@ export function CheckoutPanel({
       setPermissionDenied(details.status === 403);
       setError(details.message);
       return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addUpsell(suggestion: UpsellSuggestion) {
+    if (!orderId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const body = {
+        orderId,
+        menuItemId: suggestion.menuItemId,
+        quantity: 1,
+        modifierOptionIds: [],
+      };
+      // Use the normal cart command so availability, price, permissions and order state are
+      // rechecked by the server. The suggestion itself never bypasses a checkout invariant.
+      await request('/api/restaurant/orders/add-item', {
+        method: 'POST',
+        body,
+        intent: `add-item:${JSON.stringify(body)}`,
+      });
+      setDismissedUpsell(`${orderId}:${suggestion.menuItemId}`);
+      await loadSummary();
+    } catch (requestError) {
+      const details = errorDetails(requestError);
+      setPermissionDenied(details.status === 403);
+      setError(details.message);
     } finally {
       setBusy(false);
     }
@@ -883,6 +915,35 @@ export function CheckoutPanel({
               <p role="alert" className="text-sm text-destructive">
                 {error}
               </p>
+            ) : null}
+
+            {summary.aiUpsell && dismissedUpsell !== `${orderId}:${summary.aiUpsell.menuItemId}` ? (
+              <SectionCard
+                eyebrow="DevFathom AI"
+                title={summary.aiUpsell.name}
+                actions={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    aria-label="Dismiss DevFathom AI suggestion"
+                    onClick={() => setDismissedUpsell(`${orderId}:${summary.aiUpsell!.menuItemId}`)}
+                    disabled={busy}
+                  >
+                    Dismiss
+                  </Button>
+                }
+              >
+                <p className="mb-4 text-sm text-text-muted">{summary.aiUpsell.reason}</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11"
+                  disabled={busy}
+                  onClick={() => void addUpsell(summary.aiUpsell!)}
+                >
+                  {busy ? 'Adding…' : `Add ${summary.aiUpsell.name}`}
+                </Button>
+              </SectionCard>
             ) : null}
 
             {summary.bills.length === 0 && summary.unbilledItemIds.length > 0 ? (
