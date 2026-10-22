@@ -382,18 +382,21 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
       medicineName: 'Historical identity unavailable',
     });
     expect(receipt.lines[0]!.allocations?.map((a) => a.batchNumber)).toEqual([null, null]);
-    await transaction((db) =>
-      db.pharmacySale.update({
-        where: { id: f.sale.id },
-        data: {
-          receiptNumber: 42,
-          receiptDeviceId: f.input.deviceId,
-          businessDate,
-        },
-      })
-    );
+    // An issued receipt is immutable: renumbering it is refused by the database trigger.
+    await expect(
+      transaction((db) =>
+        db.pharmacySale.update({
+          where: { id: f.sale.id },
+          data: {
+            receiptNumber: 42,
+            receiptDeviceId: f.input.deviceId,
+            businessDate,
+          },
+        })
+      )
+    ).rejects.toThrow('ISSUED_RECEIPT_IMMUTABLE');
     const numberedLegacy = await read(f.sale.id);
-    expect(numberedLegacy.receiptNumber).toBe(42);
+    expect(numberedLegacy.receiptNumber).toBe(1);
     expect(numberedLegacy.lines[0]!.identityStatus).toBe('UNAVAILABLE');
     await transaction((db) =>
       db.pharmacySaleEvent.create({
