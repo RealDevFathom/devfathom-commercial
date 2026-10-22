@@ -1,0 +1,9 @@
+
+ RUN  v4.1.10 /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1222-gate-a07a5518-db-suites-fail-from-the-first-file-transaction-api-error-unable-to-start-a-transaction-in-the-giv
+
+
+ Test Files  1 passed (1)
+      Tests  11 passed (11)
+   Start at  05:45:14
+   Duration  4.60s (transform 1.41s, setup 152ms, import 46ms, tests 3.75s, environment 563ms)
+

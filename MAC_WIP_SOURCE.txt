@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1222-gate-a07a5518-db-suites-fail-from-the-first-file-transaction-api-error-unable-to-start-a-transaction-in-the-giv
+Branch: WHA-1222-gate-a07a5518-db-suites-fail-from-the-first-file-transaction-api-error-unable-to-start-a-transaction-in-the-giv
+HEAD: b20b577f9d397855458cbef15ea8d178870d85a3
+Mode: applied
+Excluded (secrets): 27

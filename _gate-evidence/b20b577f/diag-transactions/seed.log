@@ -1,0 +1,16 @@
+Loaded Prisma config from prisma.config.ts.
+
+Running seed command `bunx tsx prisma/seed.ts` ...
+Platform catalog sync: created 42 module(s), 6 package(s), 50 package-module link(s).
+🌱 Seeding DevFathom database...
+
+👥 Creating team members...
+❌ Seeding failed: Error: Refusing to seed hardcoded credentials. Set SEED_PASSWORD (or ADMIN_PASSWORD) to the password to assign to seeded users.
+    at seedTenantData (/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1222-gate-a07a5518-db-suites-fail-from-the-first-file-transaction-api-error-unable-to-start-a-transaction-in-the-giv/prisma/seed.ts:24:11)
+    at prisma.$transaction.maxWait (/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1222-gate-a07a5518-db-suites-fail-from-the-first-file-transaction-api-error-unable-to-start-a-transaction-in-the-giv/prisma/seed.ts:1625:13)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Proxy._transactionWithCallback (/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1222-gate-a07a5518-db-suites-fail-from-the-first-file-transaction-api-error-unable-to-start-a-transaction-in-the-giv/node_modules/@prisma/client/src/runtime/getPrismaClient.ts:861:18)
+    at async main (/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1222-gate-a07a5518-db-suites-fail-from-the-first-file-transaction-api-error-unable-to-start-a-transaction-in-the-giv/prisma/seed.ts:1490:3)
+
+An error occurred while running the seed command:
+Error: Command failed with exit code 1: bunx tsx prisma/seed.ts

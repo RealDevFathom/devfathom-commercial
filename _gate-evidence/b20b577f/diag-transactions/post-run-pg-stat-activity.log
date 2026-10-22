@@ -1,0 +1,10 @@
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        | Activity        |                               | 
+ 24666 |        | Activity        |                               | 
+ 24668 |        | Activity        |                               | 
+ 24669 |        | Activity        |                               | 
+ 24670 |        | Activity        |                               | 
+ 45650 | active |                 | 2026-09-03 05:48:40.008294+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(6 rows)
+

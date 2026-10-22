@@ -1,0 +1,9 @@
+
+ RUN  v4.1.10 /private/var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1222-ef4250db-e97-Xh9o0w/compare-76faf6a1
+
+
+ Test Files  1 passed (1)
+      Tests  11 passed (11)
+   Start at  05:46:05
+   Duration  4.88s (transform 1.48s, setup 124ms, import 45ms, tests 3.68s, environment 482ms)
+
