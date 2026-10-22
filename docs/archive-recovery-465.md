@@ -1,10 +1,11 @@
 # Issue 465 archive recovery audit
 
-## Decision
+## Decision: security hold
 
-Re-open `wip/WHA-66-dirty` from `archive/wip/WHA-66-dirty` before attempting a
-code port. Do not close the recovery issue as obsolete and do not cherry-pick
-the archived commit blindly.
+Keep this recovery on hold. Re-open `wip/WHA-66-dirty` from
+`archive/wip/WHA-66-dirty` before attempting a code port. Do not close the
+recovery issue as obsolete, cherry-pick the archived commit blindly, or treat
+this document as a security approval.
 
 ## Audit result
 
@@ -20,6 +21,13 @@ checkout has no `origin`. A second read-only fetch from the repository HTTPS
 URL was blocked by the environment's HTTP 403 network policy. No dependencies
 were installed and no tests were run.
 
+This means the archived mutation and its tests have **not** been inspected.
+In particular, this audit makes no claim about tenant isolation, central
+authorization (including DENY-over-ALLOW and the exact-grant-only pharmacy
+actions), the live WhatsApp send block, secret-safe logging, or migration
+safety. A security `PASS` requires reviewing those properties in the actual
+archive diff.
+
 ## Skipped archive work
 
 | Archive item | Disposition | Reason |
@@ -28,5 +36,7 @@ were installed and no tests were run.
 
 No code, migration, authorization rule, tenant boundary, WhatsApp behavior, or
 test was changed. After a maintainer restores the branch, compare it against
-the then-current `main`, port only non-duplicate fixes with focused tests, and
-record each rejected hunk and its reason in the recovery pull request.
+the then-current `main`, inspect every state-changing path and test in the
+archive diff, port only non-duplicate fixes with focused tests, and record each
+rejected hunk and its reason in the recovery pull request. This hold may be
+removed only after that review is complete.
