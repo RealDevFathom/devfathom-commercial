@@ -995,6 +995,16 @@ describeIfDatabase('bills command layer (real DB)', () => {
         actor: reversingActor,
       })
     ).toMatchObject({ replayed: true, billLineId: line.id });
+    await expect(
+      deps.bills.reverseComp(db, {
+        billId,
+        branchId: ids.branch,
+        billLineId: line.id,
+        reason: 'different reason',
+        approvingStaffProfileId: ids.manager,
+        actor: reversingActor,
+      })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
 
     const after = await read(async (tx) => ({
       bill: await tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } }),
@@ -1013,6 +1023,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
       actingStaffProfileId: ids.operator,
       approvingStaffProfileId: ids.manager,
       reason: 'comp entered on wrong line',
+      capability: 'orders:complimentary',
     });
     expect(after.tenders).toBe(1);
   });

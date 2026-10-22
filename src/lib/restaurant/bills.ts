@@ -132,9 +132,17 @@ async function beginMoneyIdempotent(
 ): Promise<MoneyIdempotencyOutcome> {
   const existing = await tx.restaurantMoneyIdempotencyKey.findUnique({
     where: { deviceId_key: { deviceId: actor.deviceId, key: actor.idempotencyKey } },
-    select: { resultRef: true },
+    select: { commandType: true, resultRef: true },
   });
-  if (existing) return { replay: true, resultRef: existing.resultRef };
+  if (existing) {
+    if (existing.commandType !== commandType) {
+      throw new BillCommandError(
+        'This idempotency key belongs to a different money command.',
+        'IDEMPOTENCY_CONFLICT'
+      );
+    }
+    return { replay: true, resultRef: existing.resultRef };
+  }
   await tx.restaurantMoneyIdempotencyKey.create({
     data: { deviceId: actor.deviceId, key: actor.idempotencyKey, commandType },
   });
@@ -1034,6 +1042,17 @@ export type ReverseCompResult = {
   replayed: boolean;
 };
 
+const REVERSE_COMP_RESULT_PREFIX = 'reverse-comp-v1:';
+
+function reverseCompReplayRef(input: ReverseCompInput, reason: string): string {
+  return `${REVERSE_COMP_RESULT_PREFIX}${JSON.stringify({
+    billId: input.billId,
+    billLineId: input.billLineId,
+    reason,
+    approvingStaffProfileId: input.approvingStaffProfileId,
+  })}`;
+}
+
 /**
  * Reverse a mistaken line comp. Unlike a re-cut, this correction remains valid after
  * a partial tender: the bill must still be OPEN, but its existing tenders are retained
@@ -1053,12 +1072,19 @@ export async function reverseComp(
     });
     if (!bill) throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
 
+    const reason = requireReason(input.reason);
+    const replayRef = reverseCompReplayRef(input, reason);
     const idem = await beginMoneyIdempotent(tx, input.actor, 'bill.comp.reverse');
     if (idem.replay) {
-      return { billLineId: idem.resultRef ?? input.billLineId, billId: bill.id, replayed: true };
+      if (idem.resultRef !== replayRef) {
+        throw new BillCommandError(
+          'This idempotency key belongs to a different comp reversal.',
+          'IDEMPOTENCY_CONFLICT'
+        );
+      }
+      return { billLineId: input.billLineId, billId: bill.id, replayed: true };
     }
 
-    const reason = requireReason(input.reason);
     if (bill.status !== 'OPEN') {
       throw new BillCommandError('Only an OPEN bill can have a comp reversed.', 'BILL_NOT_OPEN');
     }
@@ -1083,7 +1109,7 @@ export async function reverseComp(
     await persistCoAuth(tx, {
       actingStaffProfileId: input.actor.staffProfileId,
       approvingStaffProfileId: input.approvingStaffProfileId,
-      capability: 'orders:comp',
+      capability: 'orders:complimentary',
       reason,
       targetType: 'RestaurantBillLineCompReversal',
       targetId: line.id,
@@ -1107,7 +1133,7 @@ export async function reverseComp(
         grandTotal: add(bill.grandTotal, line.compAmount),
       },
     });
-    await recordMoneyIdempotentResult(tx, input.actor, line.id);
+    await recordMoneyIdempotentResult(tx, input.actor, replayRef);
     return { billLineId: line.id, billId: bill.id, replayed: false };
   });
 }
