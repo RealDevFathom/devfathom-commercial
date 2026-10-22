@@ -9,6 +9,7 @@ const store = vi.hoisted(() => ({
   placed: [] as unknown[],
   failConsent: false,
   failCommit: false,
+  failPlacement: false,
 }));
 
 vi.mock('@/lib/tenancy/scoped-db', () => {
@@ -47,7 +48,16 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         return { count: Number(eligible) };
       },
     },
-    pharmacyCustomerOrder: { findFirst: async () => null },
+    pharmacyCustomerOrder: {
+      findFirst: async ({ where }: { where: { id?: string } }) =>
+        where.id
+          ? {
+              id: where.id,
+              branch: { id: 'branch-1', name: 'Gulberg' },
+              lines: [{ medicine: { productName: 'Panadol' } }],
+            }
+          : null,
+    },
     pharmacyBranch: { findMany: async () => [{ id: 'branch-1', name: 'Gulberg' }] },
     pharmacyMessageLog: {
       createManyAndReturn: async ({ data }: { data: Array<Record<string, unknown>> }) => {
@@ -62,12 +72,15 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
           store.logs.find((log) => log.id === where.id)!,
           data
         ),
+      findFirst: async ({ where }: { where: { dedupeKey: string } }) =>
+        store.logs.find((log) => log.dedupeKey === where.dedupeKey) ?? null,
     },
   };
   return {
     withTenantDb: async (_organizationId: string, run: (tx: unknown) => unknown) => {
       const customers = store.customers.map((row) => ({ ...row }));
       const logs = store.logs.map((row) => ({ ...row }));
+      const placed = [...store.placed];
       try {
         const result = await run(db);
         if (store.failCommit) throw new Error('transaction commit failed');
@@ -75,6 +88,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       } catch (error) {
         store.customers = customers;
         store.logs = logs;
+        store.placed = placed;
         throw error;
       }
     },
@@ -86,6 +100,7 @@ vi.mock('@/lib/pharmacy/customer-ordering', () => ({
   listStorefrontCatalog: async () => store.catalog,
   placeCustomerOrder: async (_db: unknown, scope: unknown, input: unknown) => {
     store.placed.push({ scope, input });
+    if (store.failPlacement) throw new Error('placement failed');
     return { id: 'order_abc123' };
   },
 }));
@@ -141,6 +156,7 @@ beforeEach(() => {
   ];
   store.failConsent = false;
   store.failCommit = false;
+  store.failPlacement = false;
   provider = new MockWhatsAppProvider(readWhatsAppConfig({}));
 });
 afterEach(() => vi.useRealTimers());
@@ -252,6 +268,43 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
       'DUPLICATE'
     );
     expect(store.placed).toHaveLength(1);
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it('rolls back the inbound claim with a failed order so Meta can retry it', async () => {
+    knownCustomer(true);
+    const retried = message('Panadol 2 packs');
+    store.failPlacement = true;
+    await expect(handleInboundWhatsAppMessage('org_a', provider, retried)).rejects.toThrow(
+      'placement failed'
+    );
+    expect(store.logs).toEqual([]);
+    expect(store.placed).toEqual([]);
+
+    store.failPlacement = false;
+    await expect(handleInboundWhatsAppMessage('org_a', provider, retried)).resolves.toBe(
+      'ORDER_PLACED'
+    );
+    expect(store.placed).toHaveLength(1);
+  });
+
+  it('resumes confirmation without replacing an order committed before a failure', async () => {
+    knownCustomer(true);
+    const retried = message('Panadol 2 packs');
+    store.logs.push({
+      id: 'log-1',
+      organizationId: 'org_a',
+      dedupeKey: `in:${retried.providerMessageId}`,
+      kind: 'ORDER_REQUEST',
+      status: 'RECEIVED',
+      orderId: 'order_abc123',
+      branchId: 'branch-1',
+    });
+
+    await expect(handleInboundWhatsAppMessage('org_a', provider, retried)).resolves.toBe(
+      'ORDER_PLACED'
+    );
+    expect(store.placed).toEqual([]);
     expect(provider.calls).toHaveLength(1);
   });
 

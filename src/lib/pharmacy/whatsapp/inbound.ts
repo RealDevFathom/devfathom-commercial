@@ -100,46 +100,36 @@ async function orderBranch(db: ScopedDb, organizationId: string, customerId: str
  * unambiguous — the caller then falls back to a pharmacist call.
  */
 async function placeWhatsAppOrder(
+  db: ScopedDb,
   organizationId: string,
   customer: KnownCustomer,
   parsed: ParsedOrderMessage
 ) {
   const userId = customer.userId;
   if (!userId) return null;
-  try {
-    return await withTenantDb(
-      organizationId,
-      async (db) => {
-        const branch = await orderBranch(db, organizationId, customer.id);
-        if (!branch) return null;
-        const scope = { organizationId, branchId: branch.id, actorId: userId };
-        const rows = await listStorefrontCatalog(db, scope, parsed.medicine);
-        const exact = rows.filter((row) => row.productName.toLowerCase() === parsed.medicine);
-        const item = exact.length === 1 ? exact[0] : rows.length === 1 ? rows[0] : undefined;
-        if (!item || item.availablePacks < parsed.quantity) return null;
-        const order = await placeCustomerOrder(db, scope, {
-          staff: false,
-          fulfillment: 'COLLECT',
-          intendedPaymentMethod: 'CASH',
-          lines: [
-            {
-              medicineId: item.medicineId,
-              presentationId: item.presentationId,
-              packLevelId: item.packLevelId,
-              saleUnit: 'PACK',
-              quantity: parsed.quantity,
-            },
-          ],
-        });
-        if (!order) return null;
-        return { orderId: order.id, branch, medicine: item.productName };
+  const branch = await orderBranch(db, organizationId, customer.id);
+  if (!branch) return null;
+  const scope = { organizationId, branchId: branch.id, actorId: userId };
+  const rows = await listStorefrontCatalog(db, scope, parsed.medicine);
+  const exact = rows.filter((row) => row.productName.toLowerCase() === parsed.medicine);
+  const item = exact.length === 1 ? exact[0] : rows.length === 1 ? rows[0] : undefined;
+  if (!item || item.availablePacks < parsed.quantity) return null;
+  const order = await placeCustomerOrder(db, scope, {
+    staff: false,
+    fulfillment: 'COLLECT',
+    intendedPaymentMethod: 'CASH',
+    lines: [
+      {
+        medicineId: item.medicineId,
+        presentationId: item.presentationId,
+        packLevelId: item.packLevelId,
+        saleUnit: 'PACK',
+        quantity: parsed.quantity,
       },
-      { userId }
-    );
-  } catch (error) {
-    if (error instanceof PharmacyCustomerOrderError) return null;
-    throw error;
-  }
+    ],
+  });
+  if (!order) return null;
+  return { orderId: order.id, branch, medicine: item.productName };
 }
 
 export async function handleInboundWhatsAppMessage(
@@ -156,16 +146,21 @@ export async function handleInboundWhatsAppMessage(
   // leave the webhook retryable; no provider call occurs inside this transaction.
   const { customer, inboundId, staleConsent } = await withTenantDb(organizationId, async (db) => {
     const customer = await findCustomerByWhatsApp(db, organizationId, message.from);
-    const inboundId = await claimMessageLogInTransaction(db, {
-      organizationId,
-      direction: 'INBOUND',
-      status: 'RECEIVED',
-      kind,
-      dedupeKey: `in:${message.providerMessageId}`,
-      customerId: customer?.id ?? null,
-      phoneLast4: last4,
-      providerMessageId: message.providerMessageId,
-    });
+    // Order requests are claimed below in the same transaction as order
+    // placement. Committing that claim here would make a failed placement
+    // unretryable.
+    const inboundId = keyword
+      ? await claimMessageLogInTransaction(db, {
+          organizationId,
+          direction: 'INBOUND',
+          status: 'RECEIVED',
+          kind,
+          dedupeKey: `in:${message.providerMessageId}`,
+          customerId: customer?.id ?? null,
+          phoneLast4: last4,
+          providerMessageId: message.providerMessageId,
+        })
+      : null;
     let staleConsent = false;
     if (inboundId && customer && keyword) {
       if (!Number.isFinite(message.receivedAt.getTime()) || message.receivedAt > now)
@@ -194,10 +189,23 @@ export async function handleInboundWhatsAppMessage(
     }
     return { customer, inboundId, staleConsent };
   });
-  if (!inboundId) return 'DUPLICATE';
+  if (keyword && !inboundId) return 'DUPLICATE';
   if (staleConsent) return 'STALE_CONSENT';
   if (!customer) {
-    await updateMessageLog(organizationId, inboundId, { status: 'IGNORED' });
+    const unknownId = await withTenantDb(organizationId, (db) =>
+      claimMessageLogInTransaction(db, {
+        organizationId,
+        direction: 'INBOUND',
+        status: 'RECEIVED',
+        kind,
+        dedupeKey: `in:${message.providerMessageId}`,
+        customerId: null,
+        phoneLast4: last4,
+        providerMessageId: message.providerMessageId,
+      })
+    );
+    if (!unknownId) return 'DUPLICATE';
+    await updateMessageLog(organizationId, unknownId, { status: 'IGNORED' });
     return 'UNKNOWN_SENDER';
   }
   const age = now.getTime() - message.receivedAt.getTime();
@@ -229,8 +237,24 @@ export async function handleInboundWhatsAppMessage(
     return optIn ? 'OPTED_IN' : 'OPTED_OUT';
   }
 
+  const claimWithoutOrder = () =>
+    withTenantDb(organizationId, (db) =>
+      claimMessageLogInTransaction(db, {
+        organizationId,
+        direction: 'INBOUND',
+        status: 'RECEIVED',
+        kind,
+        dedupeKey: `in:${message.providerMessageId}`,
+        customerId: customer?.id ?? null,
+        phoneLast4: last4,
+        providerMessageId: message.providerMessageId,
+      })
+    );
+
   if (!inReplyWindow) {
-    await updateMessageLog(organizationId, inboundId, {
+    const ignoredId = await claimWithoutOrder();
+    if (!ignoredId) return 'DUPLICATE';
+    await updateMessageLog(organizationId, ignoredId, {
       status: 'IGNORED',
       error: 'EXPIRED_MESSAGE',
     });
@@ -238,20 +262,87 @@ export async function handleInboundWhatsAppMessage(
   }
 
   if (!canMessageCustomer(customer)) {
-    await updateMessageLog(organizationId, inboundId, { status: 'IGNORED' });
+    const ignoredId = await claimWithoutOrder();
+    if (!ignoredId) return 'DUPLICATE';
+    await updateMessageLog(organizationId, ignoredId, { status: 'IGNORED' });
     return 'NO_CONSENT';
   }
 
+  const claimOrderRequest = (db: ScopedDb) =>
+    claimMessageLogInTransaction(db, {
+      organizationId,
+      direction: 'INBOUND',
+      status: 'RECEIVED',
+      kind,
+      dedupeKey: `in:${message.providerMessageId}`,
+      customerId: customer.id,
+      phoneLast4: last4,
+      providerMessageId: message.providerMessageId,
+    });
+
   const parsed = parseOrderMessage(message.text);
-  const placed = parsed ? await placeWhatsAppOrder(organizationId, customer, parsed) : null;
+  let result: {
+    duplicate: boolean;
+    placed: Awaited<ReturnType<typeof placeWhatsAppOrder>>;
+  };
+  try {
+    result = await withTenantDb(
+      organizationId,
+      async (db) => {
+        const claimedId = await claimOrderRequest(db);
+        if (!claimedId) {
+          const prior = await db.pharmacyMessageLog.findFirst({
+            where: { organizationId, dedupeKey: `in:${message.providerMessageId}` },
+            select: { orderId: true },
+          });
+          if (!prior?.orderId) return { duplicate: true as const, placed: null };
+          const confirmation = await db.pharmacyMessageLog.findFirst({
+            where: { organizationId, dedupeKey: `out:${message.providerMessageId}` },
+            select: { id: true },
+          });
+          if (confirmation) return { duplicate: true as const, placed: null };
+          const order = await db.pharmacyCustomerOrder.findFirst({
+            where: { organizationId, id: prior.orderId, customerId: customer.id },
+            select: {
+              id: true,
+              branch: { select: { id: true, name: true } },
+              lines: { take: 1, select: { medicine: { select: { productName: true } } } },
+            },
+          });
+          if (!order) return { duplicate: true as const, placed: null };
+          return {
+            duplicate: false as const,
+            placed: {
+              orderId: order.id,
+              branch: order.branch,
+              medicine: order.lines[0]?.medicine.productName ?? parsed?.medicine ?? 'medicine',
+            },
+          };
+        }
+        const placed = parsed
+          ? await placeWhatsAppOrder(db, organizationId, customer, parsed)
+          : null;
+        if (placed)
+          await db.pharmacyMessageLog.update({
+            where: { id: claimedId },
+            data: { orderId: placed.orderId, branchId: placed.branch.id },
+          });
+        return { duplicate: false as const, placed };
+      },
+      { userId: customer.userId ?? undefined }
+    );
+  } catch (error) {
+    if (!(error instanceof PharmacyCustomerOrderError)) throw error;
+    const fallbackId = await claimWithoutOrder();
+    if (!fallbackId) return 'DUPLICATE';
+    result = { duplicate: false as const, placed: null };
+  }
+  if (result.duplicate) return 'DUPLICATE';
+  const placed = result.placed;
   if (!placed || !parsed) {
     await reply('ORDER_FALLBACK', WHATSAPP_REPLIES.fallback);
     return 'PHARMACIST_CALLBACK';
   }
-  await updateMessageLog(organizationId, inboundId, {
-    orderId: placed.orderId,
-    branchId: placed.branch.id,
-  });
   await reply(
     'ORDER_CONFIRMATION',
     WHATSAPP_REPLIES.confirmation({
