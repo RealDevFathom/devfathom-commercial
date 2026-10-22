@@ -1,6 +1,9 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const can = vi.hoisted(() => vi.fn());
+
+vi.mock('@/lib/abac', () => ({ can }));
 vi.mock('@/lib/api-auth', () => ({
   withApiAuth:
     (_scope: string, handler: (...args: never[]) => unknown) =>
@@ -16,7 +19,11 @@ const transaction = {
 };
 const project = { findUnique: vi.fn() };
 const client = { findUnique: vi.fn() };
-const authCtx = { db: { transaction, project, client } };
+const authCtx = {
+  userId: 'user-1',
+  userRole: 'ADMIN',
+  db: { transaction, project, client },
+};
 
 const patch = (body: unknown) =>
   PATCH(
@@ -32,10 +39,28 @@ const patch = (body: unknown) =>
 describe('PATCH /api/v1/transactions/[id] organization references', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    can.mockResolvedValue(true);
     transaction.findUnique.mockResolvedValue({ id: 'transaction-1' });
     transaction.update.mockResolvedValue({ id: 'transaction-1' });
     project.findUnique.mockResolvedValue({ id: 'project-1' });
     client.findUnique.mockResolvedValue({ id: 'client-1' });
+  });
+
+  it('denies the mutation when central authorization does not allow finance writes', async () => {
+    can.mockResolvedValue(false);
+
+    const response = await patch({ description: 'Must not be written' });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: 'Forbidden' });
+    expect(can).toHaveBeenCalledWith(
+      { id: 'user-1', role: 'ADMIN' },
+      'finance:write',
+      undefined,
+      { db: authCtx.db, source: 'REST' }
+    );
+    expect(transaction.findUnique).not.toHaveBeenCalled();
+    expect(transaction.update).not.toHaveBeenCalled();
   });
 
   it('rejects a project outside the authenticated organization without updating', async () => {

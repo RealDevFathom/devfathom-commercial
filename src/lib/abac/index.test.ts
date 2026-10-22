@@ -156,6 +156,15 @@ describe('custom ABAC decisions', () => {
     ).resolves.toBe(false);
   });
 
+  it('gives a role deny precedence over a user-level allow', async () => {
+    const db = authorizationDb({
+      overrides: [{ capability: 'finance:write', effect: 'ALLOW' }],
+      rolePermissions: [{ capability: 'finance:*', effect: 'DENY' }],
+    });
+
+    await expect(can(employee, 'finance:write', undefined, { db })).resolves.toBe(false);
+  });
+
   it('falls back to built-in policy only when no custom rule matches', async () => {
     const db = authorizationDb({});
 
@@ -206,7 +215,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toEqual([]);

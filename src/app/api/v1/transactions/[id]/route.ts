@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { can } from '@/lib/abac';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 
@@ -30,6 +31,14 @@ const updateSchema = z.object({
 export const PATCH = withApiAuth(
   'finance:write',
   async (authCtx, request, ctx: { params: Promise<{ id: string }> }) => {
+    const allowed = await can(
+      { id: authCtx.userId, role: authCtx.userRole },
+      'finance:write',
+      undefined,
+      { db: authCtx.db, source: 'REST' }
+    );
+    if (!allowed) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+
     const { id } = await ctx.params;
     const __j = await readJson(request); // REST-05
     if (!__j.ok) return __j.response;
