@@ -521,15 +521,15 @@ export const teamStatsRouter = router({
         ctx.db.task.findMany({
           where: {
             column: { name: 'Done' },
-            updatedAt: { gte: weekAgo },
+            completedAt: { gte: weekAgo },
             assignees: { some: { userId: input.userId } },
           },
-          select: { updatedAt: true },
+          select: { completedAt: true },
         }),
         ctx.db.task.count({
           where: {
             column: { name: 'Done' },
-            updatedAt: { gte: twoWeeksAgo, lt: weekAgo },
+            completedAt: { gte: twoWeeksAgo, lt: weekAgo },
             assignees: { some: { userId: input.userId } },
           },
         }),
@@ -543,10 +543,11 @@ export const teamStatsRouter = router({
         ctx.db.task.findMany({
           where: {
             column: { name: 'Done' },
+            completedAt: { not: null },
             assignees: { some: { userId: input.userId } },
           },
-          select: { createdAt: true, updatedAt: true },
-          orderBy: { updatedAt: 'desc' },
+          select: { createdAt: true, completedAt: true },
+          orderBy: { completedAt: 'desc' },
           take: 200,
         }),
         // All meetings this user is invited to — used to count past occurrences
@@ -581,7 +582,7 @@ export const teamStatsRouter = router({
       const today = startOfDay(now);
       const sparkline = [0, 0, 0, 0, 0, 0, 0];
       for (const t of completedThisWeek) {
-        const daysAgo = diffDays(today, startOfDay(t.updatedAt));
+        const daysAgo = diffDays(today, startOfDay(t.completedAt!));
         if (daysAgo >= 0 && daysAgo < 7) sparkline[6 - daysAgo]++;
       }
 
@@ -589,7 +590,7 @@ export const teamStatsRouter = router({
       let avgCycleTimeDays: number | null = null;
       if (cycleTasks.length > 0) {
         const total = cycleTasks.reduce(
-          (sum, t) => sum + (t.updatedAt.getTime() - t.createdAt.getTime()) / DAY_MS,
+          (sum, t) => sum + (t.completedAt!.getTime() - t.createdAt.getTime()) / DAY_MS,
           0
         );
         avgCycleTimeDays = Math.round((total / cycleTasks.length) * 10) / 10;
