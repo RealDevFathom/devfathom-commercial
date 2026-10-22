@@ -9,7 +9,8 @@ export type AIFeature =
   | 'whatsapp'
   | 'retention'
   | 'analytics'
-  | 'periodic-owner-reports';
+  | 'periodic-owner-reports'
+  | 'stock-reorder';
 
 const FEATURE_TIERS: Readonly<Partial<Record<AIFeature, AITier>>> = {
   growth: 'standard',
@@ -20,6 +21,7 @@ const FEATURE_TIERS: Readonly<Partial<Record<AIFeature, AITier>>> = {
   retention: 'standard',
   analytics: 'standard',
   'periodic-owner-reports': 'deep',
+  'stock-reorder': 'standard',
 };
 
 /** Unknown and newly introduced features deliberately start on the lowest-cost tier. */
