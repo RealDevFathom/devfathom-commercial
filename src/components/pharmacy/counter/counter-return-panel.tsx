@@ -25,6 +25,9 @@ const attemptSchema = z.discriminatedUnion('kind', [
       quarantineLocationId: z.string().optional(),
       reason: z.string(),
       integrityDecision: z.string(),
+      controlledWitness: z
+        .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
+        .optional(),
       idempotencyKey: z.string(),
     }),
   }),
@@ -124,6 +127,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const [disposition, setDisposition] = useState<'RESTOCK' | 'QUARANTINE'>('QUARANTINE');
   const [location, setLocation] = useState('');
   const [integrity, setIntegrity] = useState('');
+  const [witnessId, setWitnessId] = useState('');
+  const [witnessPin, setWitnessPin] = useState('');
   const [tenderId, setTenderId] = useState('');
   const [amount, setAmount] = useState('');
   const [manual, setManual] = useState(false);
@@ -153,6 +158,10 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const refund = trpc.pharmacySales.refundTender.useMutation();
   const data = history.data;
   const line = data?.lines.find((row) => row.id === lineId);
+  const witnesses = trpc.pharmacySales.controlledReturnWitnesses.useQuery(
+    { branchId },
+    { enabled: ready && online && !!line?.controlled, retry: false }
+  );
   const selectedLot = line?.lots.find((row) => row.lotId === lotId);
   const maximumUnits =
     selectedLot?.returnableUnits ?? (line ? line.canonicalUnits - line.returnedUnits : 0);
@@ -176,8 +185,15 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       // Write before sending; an ambiguous network outcome can only replay this exact request.
       localStorage.setItem(storageKey, JSON.stringify(next));
       setAttempt(next);
-      if (next.kind === 'return') await returnLine.mutateAsync(next.input);
-      else
+      if (next.kind === 'return') {
+        const outcome = await returnLine.mutateAsync(next.input);
+        if ('blocked' in outcome) {
+          localStorage.removeItem(storageKey);
+          setAttempt(null);
+          setError(outcome.blocked);
+          return;
+        }
+      } else
         await refund.mutateAsync({
           ...next.input,
           businessDate: new Date(next.input.businessDate),
@@ -187,6 +203,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       setAttempt(null);
       setConfirmed(false);
       setUnits('1');
+      setWitnessPin('');
       setAmount('');
       setMessage(
         next.kind === 'return'
@@ -360,6 +377,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 setLineId(event.target.value);
                 setLotId('');
                 setDisposition('QUARANTINE');
+                setWitnessId('');
+                setWitnessPin('');
                 setConfirmed(false);
               }}
             >
@@ -491,6 +510,47 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               Restock only inspected medicine with acceptable storage and intact packaging. Expired
               or recalled lots are refused by the server.
             </p>
+            {line?.controlled && (
+              <div className="space-y-3 rounded-md border border-border-subtle p-3">
+                <p className="text-sm text-text-muted">
+                  A different pharmacist must witness this controlled-medicine return with their
+                  fresh PIN.
+                </p>
+                <Label htmlFor="return-witness">Witness pharmacist</Label>
+                <select
+                  id="return-witness"
+                  className={selectClass}
+                  value={witnessId}
+                  onChange={(event) => {
+                    setWitnessId(event.target.value);
+                    setWitnessPin('');
+                    setConfirmed(false);
+                  }}
+                >
+                  <option value="">Choose a witness</option>
+                  {witnesses.data?.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {row.name}
+                    </option>
+                  ))}
+                </select>
+                {witnesses.isError && <p role="alert">Witnesses could not be loaded.</p>}
+                <Label htmlFor="return-witness-pin">Witness PIN</Label>
+                <Input
+                  id="return-witness-pin"
+                  className="h-11"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  pattern="[0-9]{4,8}"
+                  value={witnessPin}
+                  onChange={(event) => {
+                    setWitnessPin(event.target.value);
+                    setConfirmed(false);
+                  }}
+                />
+              </div>
+            )}
             <label className="flex min-h-11 items-center gap-2">
               <input
                 type="checkbox"
@@ -510,7 +570,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 Number(units) < 1 ||
                 Number(units) > maximumUnits ||
                 (disposition === 'RESTOCK' && !selectedLot?.restockAllowed) ||
-                (disposition === 'QUARANTINE' && !location)
+                (disposition === 'QUARANTINE' && !location) ||
+                (line?.controlled && (!witnessId || !/^\d{4,8}$/.test(witnessPin)))
               }
               onClick={() =>
                 void execute({
@@ -525,6 +586,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                     quarantineLocationId: disposition === 'QUARANTINE' ? location : undefined,
                     reason,
                     integrityDecision: integrity,
+                    controlledWitness: line.controlled
+                      ? { staffProfileId: witnessId, pin: witnessPin }
+                      : undefined,
                     idempotencyKey: browserUuid(),
                   },
                 })
