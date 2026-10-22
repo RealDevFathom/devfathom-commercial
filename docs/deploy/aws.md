@@ -200,3 +200,8 @@ without a database connection:
   now that DNS and the certificate are live; also confirm the `cron-secret` secret is set.
 - `AUTH_URL`, `NEXTAUTH_URL` and `NEXT_PUBLIC_APP_URL` are all `https://${TenantHost}`; keep
   `TenantHost=staging.devfathom.com` for staging.
+- Gap: `NEXT_PUBLIC_APP_URL` is inlined by `next build`, but `Dockerfile.aws` does not pass it at
+  build time, so client code (e.g. `api-docs-content.tsx`) sees it unset and falls back. The
+  runtime env var only reaches server code. If client links matter, add
+  `ARG NEXT_PUBLIC_APP_URL` + `ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL` before `next build`
+  and pass `--build-arg NEXT_PUBLIC_APP_URL=https://staging.devfathom.com` for staging images.
