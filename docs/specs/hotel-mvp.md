@@ -112,6 +112,45 @@ step; it never duplicates a charge or advances twice. Only one `RUNNING` run may
 and a closed business date is immutable. Operational corrections after close use the current
 business date and retain the original service date plus an explicit reason.
 
+## 2.5 Security design (mandatory Phase 0/1 contract)
+
+Security is enforced at the DTO, service, query, and database layers; a router capability check is
+never the only boundary. The following rules apply to every current and future hotel surface,
+including reservations, front desk, inventory, reports, exports, background jobs, and AI tools.
+
+1. **Folio confidentiality is deny-by-default.** Reading a folio identity, number, status, balance,
+   postings, payments, tender details, or even a folio summary requires a fresh `hotel:folio` check
+   for the selected property. A reservation-oriented capability never implies folio access. Shared
+   read services accept an explicit, server-derived folio grant and return a typed folio-free
+   projection when it is absent; callers cannot request financial fields in input. Reports and AI
+   tools use the same projection boundary rather than reading ORM relations directly.
+2. **The server authors every monetary amount.** Reservation inputs identify a rate plan, room
+   type, stay dates, occupancy, and optional meal plan only. Schemas are strict and reject
+   `nightlyRateMinor`, tax, total, balance, payment, and other client-sent money fields. Under a
+   property lock the service resolves the active property-scoped rate plan and room type, resolves
+   the property's explicit tax configuration, and computes/snapshots rate, net, tax, and total.
+3. **Recorded money is evidence, not editable state.** Rate snapshots, folio postings, and settled
+   payments are append-only. Corrections are new, linked reversing entries. Service APIs expose no
+   update/delete operation for these rows; database triggers reject UPDATE/DELETE regardless of ORM
+   or SQL access. Reversal amounts and
+   currency are validated while locking the original row.
+4. **Every write is doubly scoped.** UPDATE and DELETE predicates contain `organizationId`,
+   `branchId`, and the record identifier (plus an optimistic version where relevant); INSERT data
+   carries both scopes. Bare primary-key writes are forbidden in review and contract tests. Forced
+   PostgreSQL RLS independently checks both `app.current_organization_id` and
+   `app.current_hotel_property_id` on every operational table. Cross-property misses are reported as
+   non-disclosing not-found/conflict responses.
+5. **Least privilege and safe concurrency.** Each operation re-checks module entitlement,
+   organization capability, active property assignment, and the exact capability after acquiring
+   its property lock. Availability, confirmation sequences, idempotency rows, reservations, and
+   assignments are locked in a stable order. Raw SQL is parameterized, scoped, and covered by
+   isolation tests. Audit metadata never contains folio lines, payment references, guest notes, or
+   secrets.
+
+Security acceptance tests must exercise every named caller class, reject client-authored money,
+prove immutable database and service behavior, inspect write predicates for both scopes, and run
+restricted-role cross-tenant and cross-property RLS attempts.
+
 ## 3. Concrete Prisma design
 
 All new models use `String @id @default(cuid())`, `createdAt @default(now())`, and `updatedAt
