@@ -17,8 +17,16 @@ const mocks = vi.hoisted(() => ({
   settings: vi.fn(),
   assist: vi.fn(),
   capture: vi.fn(),
+  aiReserve: vi.fn(),
+  aiPersist: vi.fn(),
+  aiUsage: vi.fn(),
+  can: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
+vi.mock('@/lib/abac', () => ({
+  can: mocks.can,
+  subjectFromSession: (user: unknown) => user,
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.licensed,
@@ -30,6 +38,15 @@ vi.mock('@/server/audit', () => ({
   recordTrpcAudit: vi.fn(),
 }));
 vi.mock('@/lib/ai/ask-fathom-settings', () => ({ readAskFathomSettings: mocks.settings }));
+vi.mock('@/lib/pharmacy/marketing-ai-usage', () => ({
+  reserveMarketingGeneration: mocks.aiReserve,
+  persistMarketingGeneration: mocks.aiPersist,
+  recordMarketingUsage: mocks.aiUsage,
+  replayMarketingGeneration: (generation: { status: string; body: string | null }) =>
+    generation.status === 'COMPLETE' && generation.body
+      ? { available: true, body: generation.body, approved: false }
+      : null,
+}));
 vi.mock('@/lib/pharmacy/marketing-assistance', async () => ({
   ...(await vi.importActual<typeof import('@/lib/pharmacy/marketing-assistance')>(
     '@/lib/pharmacy/marketing-assistance'
@@ -84,6 +101,7 @@ function caller(role = 'ADMIN') {
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.licensed.mockReturnValue(true);
+  mocks.can.mockResolvedValue(true);
   mocks.entitlements.mockResolvedValue({
     organizationId: 'org-a',
     enabledModules: ['pharmacy-crm'],
@@ -100,6 +118,10 @@ beforeEach(() => {
   mocks.branch.mockResolvedValue({ id: 'branch-a' });
   mocks.history.mockResolvedValue({ campaigns: [] });
   mocks.capture.mockResolvedValue({ prepared: 1 });
+  mocks.aiReserve.mockResolvedValue({
+    claimed: true,
+    generation: { id: '00000000-0000-4000-8000-000000000010', status: 'PENDING', body: null },
+  });
 });
 const input = { branchId: 'branch-a' };
 describe('marketing workflow authorization', () => {
@@ -169,7 +191,14 @@ describe('marketing workflow authorization', () => {
   });
   it('honors current AI-off policy without calling the provider', async () => {
     mocks.settings.mockResolvedValue({ askFathomEnabled: false });
-    expect(await caller().assist({ ...input, occasion: 'WELCOME', tone: 'FRIENDLY' })).toEqual({
+    expect(
+      await caller().assist({
+        ...input,
+        occasion: 'WELCOME',
+        tone: 'FRIENDLY',
+        idempotencyKey: '00000000-0000-4000-8000-000000000001',
+      })
+    ).toEqual({
       available: false,
       body: null,
       approved: false,
@@ -178,7 +207,18 @@ describe('marketing workflow authorization', () => {
   });
   it('strips branch context from the allowed AI input', async () => {
     mocks.settings.mockResolvedValue({ askFathomEnabled: true });
-    await caller().assist({ ...input, occasion: 'WELCOME', tone: 'FRIENDLY' });
+    mocks.assist.mockResolvedValue({
+      available: true,
+      body: 'draft',
+      approved: false,
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    });
+    await caller().assist({
+      ...input,
+      occasion: 'WELCOME',
+      tone: 'FRIENDLY',
+      idempotencyKey: '00000000-0000-4000-8000-000000000001',
+    });
     expect(mocks.assist).toHaveBeenCalledWith({ occasion: 'WELCOME', tone: 'FRIENDLY' });
   });
 });

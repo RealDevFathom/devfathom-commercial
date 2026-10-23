@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState, useTransition, type ReactNode } from 'react';
+import { useId, useRef, useState, useTransition, type ReactNode } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { marketingAction } from './actions';
@@ -23,6 +23,8 @@ export function MarketingActionForm({
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<Awaited<ReturnType<typeof marketingAction>> | null>(null);
   const feedbackId = useId();
+  // Stable across a lost response/re-submit so the server can replay rather than charge twice.
+  const idempotencyKey = useRef(crypto.randomUUID());
   return (
     <form
       className="space-y-4"
@@ -48,6 +50,9 @@ export function MarketingActionForm({
     >
       <input type="hidden" name="branchId" value={branchId} />
       <input type="hidden" name="operation" value={operation} />
+      {operation === 'assist' && (
+        <input type="hidden" name="idempotencyKey" value={idempotencyKey.current} />
+      )}
       {campaignId && <input type="hidden" name="campaignId" value={campaignId} />}
       <fieldset disabled={pending || disabled} className="min-w-0 space-y-4">
         {children}

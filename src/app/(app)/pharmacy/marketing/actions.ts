@@ -150,7 +150,12 @@ export async function marketingAction(
         const occasion = text('occasion');
         if (occasion !== 'WELCOME' && occasion !== 'STORE_UPDATE' && occasion !== 'RETAIL_OFFER')
           return { error: true, message: 'Choose an available occasion.' };
-        const result = await caller.assist({ branchId, occasion, tone: 'FRIENDLY' });
+        const result = await caller.assist({
+          branchId,
+          occasion,
+          tone: 'FRIENDLY',
+          idempotencyKey: text('idempotencyKey'),
+        });
         return {
           error: !result.available,
           message: result.available

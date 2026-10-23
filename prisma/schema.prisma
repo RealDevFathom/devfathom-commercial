@@ -4893,6 +4893,8 @@ model Organization {
   modules                                   OrganizationModule[]
   limits                                    OrganizationLimit[]
   usageCounters                             OrganizationUsageCounter[]
+  pharmacyMarketingAiGenerations            PharmacyMarketingAiGeneration[]
+  pharmacyMarketingAiUsage                  PharmacyMarketingAiUsage[]
   brand                                     OrganizationBrand?
   emailSettings                             OrganizationEmailSettings?
   domains                                   OrganizationDomain[]
@@ -13753,6 +13755,48 @@ model PharmacyMarketingTemplate {
 
   @@unique([organizationId, id])
   @@map("pharmacy_marketing_templates")
+}
+
+/// Paid AI output is also the durable usage outbox. The tenant + branch key prevents
+/// a transport retry from invoking the provider twice.
+model PharmacyMarketingAiGeneration {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String
+  branchId       String
+  idempotencyKey String   @db.Uuid
+  status         String
+  body           String?
+  inputTokens    Int?
+  outputTokens   Int?
+  totalTokens    Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  usage        PharmacyMarketingAiUsage?
+
+  @@unique([organizationId, branchId, idempotencyKey], map: "pharmacy_marketing_ai_generations_idempotency_key")
+  @@unique([organizationId, id], map: "pharmacy_marketing_ai_generations_org_id_key")
+  @@index([organizationId, branchId, status], map: "pharmacy_marketing_ai_generations_pending_idx")
+  @@map("pharmacy_marketing_ai_generations")
+}
+
+model PharmacyMarketingAiUsage {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String
+  branchId       String
+  generationId   String   @db.Uuid
+  inputTokens    Int
+  outputTokens   Int
+  totalTokens    Int
+  recordedAt     DateTime @default(now())
+
+  organization Organization                  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  generation   PharmacyMarketingAiGeneration @relation(fields: [organizationId, generationId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, generationId], map: "pharmacy_marketing_ai_usage_generation_key")
+  @@index([organizationId, branchId, recordedAt], map: "pharmacy_marketing_ai_usage_history_idx")
+  @@map("pharmacy_marketing_ai_usage")
 }
 
 model PharmacyCampaign {

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   reviewGrowth: vi.fn(),
   approve: vi.fn(),
   sandbox: vi.fn(),
+  assist: vi.fn(),
 }));
 vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidate }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
@@ -118,4 +119,21 @@ it('preserves sandbox replay key and retry intent without any live provider choi
     outcome: 'REJECTED',
   });
   expect(result.message).toContain('No live messages sent');
+});
+
+it('forwards the stable AI idempotency key to the tenant-scoped mutation', async () => {
+  mocks.assist.mockResolvedValue({ available: true, body: 'Draft', approved: false });
+  await marketingAction(
+    form({
+      operation: 'assist',
+      occasion: 'WELCOME',
+      idempotencyKey: '00000000-0000-4000-8000-000000000001',
+    })
+  );
+  expect(mocks.assist).toHaveBeenCalledWith({
+    branchId: 'branch-a',
+    occasion: 'WELCOME',
+    tone: 'FRIENDLY',
+    idempotencyKey: '00000000-0000-4000-8000-000000000001',
+  });
 });

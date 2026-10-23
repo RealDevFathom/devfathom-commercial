@@ -40,14 +40,29 @@ import {
   type MarketingScope,
 } from '@/lib/pharmacy/marketing-service';
 import { draftMarketingCopy, marketingAssistanceInput } from '@/lib/pharmacy/marketing-assistance';
+import {
+  persistMarketingGeneration,
+  recordMarketingUsage,
+  replayMarketingGeneration,
+  reserveMarketingGeneration,
+} from '@/lib/pharmacy/marketing-ai-usage';
 import { protectedProcedure, router, type TRPCContext } from '../trpc';
+import { can, subjectFromSession } from '@/lib/abac';
 
 type MarketingAccessContext = Pick<TRPCContext, 'session' | 'entitlements' | 'audit'> & {
   db: Pick<ScopedDb, 'organization' | 'pharmacyBranch'>;
 };
 
 async function owner(ctx: MarketingAccessContext) {
-  if (ctx.session?.user.role !== 'ADMIN' || !hasModule(ctx.entitlements, 'pharmacy-crm'))
+  if (
+    !ctx.session?.user ||
+    ctx.session.user.role !== 'ADMIN' ||
+    !hasModule(ctx.entitlements, 'pharmacy-crm') ||
+    !(await can(subjectFromSession(ctx.session.user), 'admin:access', undefined, {
+      db: ctx.db as ScopedDb,
+      source: 'TRPC',
+    }))
+  )
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'Owner access and Pharmacy CRM are required.',
@@ -277,12 +292,47 @@ export const pharmacyMarketingRouter = router({
       })
     ),
   assist: protectedProcedure
-    .input(marketingScopeInput.extend(marketingAssistanceInput.shape).strict())
+    .input(
+      marketingScopeInput
+        .extend({ ...marketingAssistanceInput.shape, idempotencyKey: z.string().uuid() })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
-      const resolved = await scope(ctx, input.branchId);
-      const settings = await readAskFathomSettings(ctx.db, resolved.organizationId);
-      if (!settings?.askFathomEnabled)
+      const initial = await growthExecute(ctx, input.branchId, async (db, resolved) => {
+        const settings = await readAskFathomSettings(db, resolved.organizationId);
+        if (!settings?.askFathomEnabled) return { disabled: true as const };
+        const reservation = await reserveMarketingGeneration(db, resolved, input.idempotencyKey);
+        if (!reservation.claimed)
+          return {
+            replay: replayMarketingGeneration(reservation.generation),
+            resolved,
+            generation: reservation.generation,
+          };
+        return { generationId: reservation.generation.id, resolved };
+      });
+      if ('disabled' in initial)
         return { available: false as const, body: null, approved: false as const };
-      return draftMarketingCopy({ occasion: input.occasion, tone: input.tone });
+      if ('replay' in initial) {
+        // Outside the reservation transaction: a failed insert cannot roll back durable output.
+        await recordMarketingUsage(ctx.db, initial.resolved, initial.generation);
+        return (
+          initial.replay ?? { available: false as const, body: null, approved: false as const }
+        );
+      }
+      const result = await draftMarketingCopy({ occasion: input.occasion, tone: input.tone });
+      if (!result.available) return result;
+      // Re-authorize after provider latency, then save output before attempting usage accounting.
+      const current = await growthExecute(ctx, input.branchId, async (db, resolved) => {
+        await persistMarketingGeneration(db, resolved, initial.generationId, result);
+        return resolved;
+      });
+      // This is intentionally a separate transaction boundary. COMPLETE is the durable outbox.
+      await recordMarketingUsage(ctx.db, current, {
+        id: initial.generationId,
+        status: 'COMPLETE',
+        body: result.body,
+        ...result.usage,
+      });
+      return { available: true as const, body: result.body, approved: false as const };
     }),
 });

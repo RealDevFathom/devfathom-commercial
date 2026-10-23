@@ -14,7 +14,16 @@ export const marketingAssistanceInput = z
   })
   .strict();
 
-export async function draftMarketingCopy(input: z.infer<typeof marketingAssistanceInput>) {
+export type MarketingCopyGeneration = {
+  available: true;
+  body: string;
+  approved: false;
+  usage: { inputTokens: number; outputTokens: number; totalTokens: number };
+};
+
+export async function draftMarketingCopy(
+  input: z.infer<typeof marketingAssistanceInput>
+): Promise<MarketingCopyGeneration | { available: false; body: null; approved: false }> {
   const choice = marketingAssistanceInput.parse(input);
   try {
     const selection = createAIModel();
@@ -30,7 +39,16 @@ export async function draftMarketingCopy(input: z.infer<typeof marketingAssistan
     });
     const body = z.string().trim().min(1).max(1000).parse(result.text);
     validateMarketingBody(body);
-    return { available: true as const, body, approved: false as const };
+    return {
+      available: true as const,
+      body,
+      approved: false as const,
+      usage: {
+        inputTokens: result.usage?.inputTokens ?? 0,
+        outputTokens: result.usage?.outputTokens ?? 0,
+        totalTokens: result.usage?.totalTokens ?? 0,
+      },
+    };
   } catch {
     // Never expose provider errors, credentials, or fabricated fallback output.
     return { available: false as const, body: null, approved: false as const };
