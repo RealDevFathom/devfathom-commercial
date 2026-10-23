@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   assertBranchMayOperate,
+  assertStoredBranchMayOperate,
   BranchOperationDeniedError,
   type BranchRegulatoryState,
 } from './regulatory';
+
+vi.mock('@/server/audit', () => ({ recordAudit: vi.fn() }));
 
 const at = new Date('2026-09-02T12:00:00.000Z');
 
@@ -123,5 +126,45 @@ describe('assertBranchMayOperate', () => {
     const state = validState();
     state.ruleSet.licenceCategories = { provisional: true, values: ['PHARMACY'] };
     expectDenied(state, 'RULE_SET_UNCONFIRMED');
+  });
+});
+
+describe('assertStoredBranchMayOperate branch binding', () => {
+  function storedProfile(overrides: Record<string, unknown> = {}) {
+    return {
+      ...validState(),
+      provinceCode: 'PK-PB',
+      premises: { addressLine: '12 Mall Road', city: 'Lahore' },
+      branch: {
+        active: true,
+        provinceCode: 'PK-PB',
+        addressLine: '12 Mall Road',
+        city: 'Lahore',
+      },
+      jurisdictionRuleSet: validState().ruleSet,
+      ...overrides,
+    };
+  }
+
+  it.each([
+    [{ branch: { ...storedProfile().branch, active: false } }, 'BRANCH_INACTIVE'],
+    [{ provinceCode: 'PK-SD' }, 'PROFILE_BRANCH_MISMATCH'],
+    [
+      { premises: { addressLine: '99 Unrelated Road', city: 'Lahore' } },
+      'PROFILE_BRANCH_MISMATCH',
+    ],
+  ] as const)('rejects a profile not bound to its active premises', async (overrides, reason) => {
+    const db = {
+      branchRegulatoryProfile: { findFirst: vi.fn(async () => storedProfile(overrides)) },
+    };
+    await expect(
+      assertStoredBranchMayOperate(db as never, 'org-a', 'branch-a', { name: 'ACTIVATE', at })
+    ).rejects.toThrowError(new BranchOperationDeniedError(reason));
+    expect(db.branchRegulatoryProfile.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+        include: { jurisdictionRuleSet: true, branch: true },
+      })
+    );
   });
 });

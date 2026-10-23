@@ -58,6 +58,9 @@ describe('optional pharmacy Owner / Operator readiness', () => {
     expect(countRoles).toHaveBeenCalledExactlyOnceWith({
       where: { organizationId: 'standard', key: { in: standardRoleKeys } },
     });
+    expect(db.branchRegulatoryProfile.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ branch: { active: true } }) })
+    );
   });
 
   it('leaves every gate unchanged when the optional role is also present', async () => {

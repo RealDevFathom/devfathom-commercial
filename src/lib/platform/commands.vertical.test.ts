@@ -1110,9 +1110,18 @@ function pharmacyOrg() {
  */
 const VALID_PROFILE = {
   branchId: 'branch-p',
+  provinceCode: 'PK-PB',
+  premises: { addressLine: '12 Mall Road', city: 'Lahore' },
+  branch: {
+    active: true,
+    provinceCode: 'PK-PB',
+    addressLine: '12 Mall Road',
+    city: 'Lahore',
+  },
   licenceCategory: 'PHARMACY',
   licenceValidFrom: new Date('2026-01-01'),
   licenceValidTo: new Date('2027-01-01'),
+  licenceEvidenceFileRef: 'licence-1',
   permittedSchedules: ['RX'],
   qualifiedPersonRegistration: 'QP-1',
   qualifiedPersonValidFrom: new Date('2026-01-01'),

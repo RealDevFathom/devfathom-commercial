@@ -3,6 +3,8 @@ import { recordAudit } from '@/server/audit';
 
 export type BranchOperationDenialReason =
   | 'PROFILE_MISSING'
+  | 'BRANCH_INACTIVE'
+  | 'PROFILE_BRANCH_MISMATCH'
   | 'RULE_SET_UNCONFIRMED'
   | 'LICENCE_INVALID'
   | 'QUALIFIED_PERSON_COVERAGE_MISSING'
@@ -122,7 +124,7 @@ export async function assertStoredBranchMayOperate(
       effectiveFrom: { lte: at },
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
     },
-    include: { jurisdictionRuleSet: true },
+    include: { jurisdictionRuleSet: true, branch: true },
     orderBy: { effectiveFrom: 'desc' },
   });
   const auditDenied = (reason: BranchOperationDenialReason, deniedAction: BranchOperationAction) =>
@@ -144,6 +146,21 @@ export async function assertStoredBranchMayOperate(
   if (!profile) {
     auditDenied('PROFILE_MISSING', action);
     throw new BranchOperationDeniedError('PROFILE_MISSING');
+  }
+
+  if (!profile.branch.active) {
+    auditDenied('BRANCH_INACTIVE', action);
+    throw new BranchOperationDeniedError('BRANCH_INACTIVE');
+  }
+
+  const premises = profile.premises as { addressLine?: unknown; city?: unknown };
+  if (
+    profile.provinceCode !== profile.branch.provinceCode ||
+    premises.addressLine !== profile.branch.addressLine ||
+    premises.city !== profile.branch.city
+  ) {
+    auditDenied('PROFILE_BRANCH_MISMATCH', action);
+    throw new BranchOperationDeniedError('PROFILE_BRANCH_MISMATCH');
   }
 
   assertBranchMayOperate(
