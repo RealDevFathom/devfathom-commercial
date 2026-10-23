@@ -41,6 +41,10 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) {
     return new Response('Bad request', { status: 400 });
   }
+  // Camera stills require their evidence reader's grant and retention checks.
+  if (/^camera-snapshot-/iu.test(name)) {
+    return new Response('Not found', { status: 404 });
+  }
   const organization = actor.organization;
 
   const sopEvidence = await withTenantDb(organization.id, (db) =>

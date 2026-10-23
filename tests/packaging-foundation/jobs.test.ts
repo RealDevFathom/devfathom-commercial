@@ -13,6 +13,8 @@ import type { RestaurantJobContext } from '@/lib/restaurant/job-handlers';
 
 const mock = vi.hoisted(() => ({
   reset: vi.fn(),
+  coreMenu: vi.fn(),
+  legacyMenu: vi.fn(),
   raw: vi.fn(),
   recover: vi.fn(),
   drain: vi.fn(),
@@ -49,7 +51,11 @@ vi.mock('@/lib/restaurant/insight-rollups', () => ({
 }));
 vi.mock('@/lib/restaurant/menu-import', () => ({
   MENU_IMPORT_EXTRACT_JOB: 'menu',
-  menuImportExtractHandler: vi.fn(),
+  menuImportExtractHandler: mock.coreMenu,
+}));
+vi.mock('@/lib/restaurant/menu-import-legacy', () => ({
+  MENU_IMPORT_EXTRACT_JOB: 'menu',
+  menuImportExtractHandler: mock.legacyMenu,
 }));
 vi.mock('@/lib/restaurant/notification-webhook', () => ({
   NOTIFICATION_WEBHOOK_JOB_TYPE: 'notification',
@@ -119,4 +125,15 @@ it('retains reset exclusions in stale recovery and drain inside the selected ten
     expect.objectContaining({ excludeJobType: 'demo-reset' })
   );
   expect(runInOrg.mock.calls.every((call) => call[0] === 'organization')).toBe(true);
+});
+
+it('legacy overrides the core menu handler after the base spread while core stays inert', async () => {
+  const context = { job: { type: 'menu' }, db: {} } as RestaurantJobContext;
+  expect(coreRestaurantJobHandlers.menu).toBe(mock.coreMenu);
+  expect(restaurantJobHandlers.menu).toBe(mock.legacyMenu);
+  await runRestaurantJob(context);
+  expect(mock.legacyMenu).toHaveBeenCalledExactlyOnceWith(context);
+  expect(mock.coreMenu).not.toHaveBeenCalled();
+  await runComposedJob(context, coreRestaurantJobHandlers);
+  expect(mock.coreMenu).toHaveBeenCalledExactlyOnceWith(context);
 });

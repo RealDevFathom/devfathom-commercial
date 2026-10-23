@@ -2,7 +2,7 @@ import 'server-only';
 
 import { deriveTemperatureZoneStatus } from '@/lib/pharmacy/temperature-log';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { CAMERA_EVIDENCE_CAPTURE_WINDOW_MS } from './evidence';
+import { CAMERA_EVIDENCE_CAPTURE_WINDOW_MS, canReadCameraEvidence } from './evidence';
 
 /**
  * CAM-3 excursion evidence. When readings put a cold-chain zone into EXCURSION
@@ -147,7 +147,9 @@ export async function readExcursionEvidence(
     },
     orderBy: [{ requestedAt: 'desc' }, { id: 'desc' }],
     take,
+    include: { camera: { select: { gateway: { select: { retentionDays: true } } } } },
   });
+  const now = new Date();
   return Promise.all(
     rows.map(async (row) => ({
       id: row.id,
@@ -158,7 +160,9 @@ export async function readExcursionEvidence(
       requestedAt: row.requestedAt.toISOString(),
       capturedAt: row.capturedAt?.toISOString() ?? null,
       failureReason: row.failureReason,
-      image: row.status === 'CAPTURED' && row.storageKey ? await readStill(row.storageKey) : null,
+      image: canReadCameraEvidence(row, row.camera?.gateway?.retentionDays, now)
+        ? await readStill(row.storageKey)
+        : null,
     }))
   );
 }

@@ -1,0 +1,1078 @@
+[
+  {
+    "path": "bun.lock",
+    "sha256": "a879bb6bb776a37e36c1e28bb4b36fea79ce3aec700847c2073007069553d38b",
+    "bytes": 363694,
+    "mode": "000644"
+  },
+  {
+    "path": "package.json",
+    "sha256": "f8d45a6e31167d76ee47dbbacc0754fb4a29b47fb890e992f4f4ea2302b6d9e7",
+    "bytes": 5104,
+    "mode": "000644"
+  },
+  {
+    "path": "prisma/catalog-sync.ts",
+    "sha256": "c80173c3cbd9b73c475d8ab26e2bf2a0d5d113265dadc997f8d8be47c368a49c",
+    "bytes": 7330,
+    "mode": "000644"
+  },
+  {
+    "path": "prisma/fresh-database-bootstrap.ts",
+    "sha256": "2dc5905db7a18441eb65881f1542e6f50cb96290cdaae0c37340fa757cb9fb6d",
+    "bytes": 534,
+    "mode": "000644"
+  },
+  {
+    "path": "prisma/fresh-database-manifest.json",
+    "sha256": "4343385168f4b3c3c557266e48a13807589c5022edce2cf706a9047018add482",
+    "bytes": 19767,
+    "mode": "000644"
+  },
+  {
+    "path": "prisma/fresh-database-plan.mjs",
+    "sha256": "20a0d43c808d954e24888e312665bb7412a1142f767ca0c633270f1e3379faa3",
+    "bytes": 523,
+    "mode": "000644"
+  },
+  {
+    "path": "prisma/fresh-database.ts",
+    "sha256": "942f56063b7679d0881c598b9e2419331a97e26924663d18005d67572c623519",
+    "bytes": 18232,
+    "mode": "000644"
+  },
+  {
+    "path": "prisma/migrations/20260728000000_baseline/migration.sql",
+    "sha256": "b3be8a953c3172d0dcd8409586ec8582b768ed48d193d6c80698d48adaecce4e",
+    "bytes": 50908,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260728090000_admin_platform_tenancy/migration.sql",
+    "sha256": "9eb6447aa582f4bafb140fbb9eff3873acfa360ff458f93e365f08300004f9e0",
+    "bytes": 55896,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260728091000_tenant_composite_integrity/migration.sql",
+    "sha256": "69bf5a528809bd010044fba3e153c854a34588837743c3355dedafcdec32045d",
+    "bytes": 30536,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260728092000_row_level_security/migration.sql",
+    "sha256": "e8460eff7f0e02c950b7aaf9475b149a192dd28c2fd6345d12cb6ba1253dda75",
+    "bytes": 42014,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260728100000_platform_sessions/migration.sql",
+    "sha256": "4dd49cc1a927be7889aa5ee5a65882f1bbe2d549400463332885ef45a3b5968f",
+    "bytes": 1938,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260728101000_platform_settings/migration.sql",
+    "sha256": "44b49ad4dbcb74850a07de353842556760053c6580419074467cc3aff99f0cbf",
+    "bytes": 902,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260728102000_tenant_user_email/migration.sql",
+    "sha256": "163604c3a3bc3b38d817bad55197b378fed5403ab6234bf814885e373da329d4",
+    "bytes": 292,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260728103000_enterprise_sso/migration.sql",
+    "sha256": "e5569e5a98123fb2e5258062d527bc9735ddf1b927ea7ee4c5c4b8f8d1bf871e",
+    "bytes": 3220,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260728104000_platform_mfa/migration.sql",
+    "sha256": "a9631bfeeff0876ad6958b0b3f4b79d4d9dbca1ad391cc33df58564910881e7b",
+    "bytes": 1320,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260728105000_sso_composite_integrity/migration.sql",
+    "sha256": "491a4e4bb116951e4b32fad134db9cabdeb4d38436f5e2343a17a869d78860dc",
+    "bytes": 745,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260728106000_support_launch_tickets/migration.sql",
+    "sha256": "8e1f1a1656eb115151c8e1f2599170b9c5a5399dd4c65cb4a0e4fa60542f7610",
+    "bytes": 481,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260802120000_user_email_lowercase/migration.sql",
+    "sha256": "85cae7dc2a68a4e0cd2ac394cd11b7514e48156cf49c858811f9c08ead84864e",
+    "bytes": 2380,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260802130000_pending_login_intents/migration.sql",
+    "sha256": "3839e0e33948c08393d7bca77db6677b6c153085b2777d6bf77933cbb358bce9",
+    "bytes": 1735,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260803120000_meeting_occurrences/migration.sql",
+    "sha256": "fa702245775e0fea19bba2a0ffceadb62e293710a54a0a4bd8567f50eacf6a51",
+    "bytes": 41028,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260818120000_package_module_inheritance_cleanup/migration.sql",
+    "sha256": "fb6c2cddf8ab23f96f7869b2672229b2c0054a41e9ca93f1d3b64801d8592aee",
+    "bytes": 3844,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260818130000_organization_vertical_foundation/migration.sql",
+    "sha256": "c81b6ce33af69f088a5aad73dcbf7653a355d5b395d89664647cd2c7496605d8",
+    "bytes": 6198,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260818140000_restaurant_staff_operators_devices/migration.sql",
+    "sha256": "0e8be08474f62bed24de9bc469f00af52ef9ceced684ca78cbdf03237737e105",
+    "bytes": 18235,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260818150000_audit_log_operator_actor/migration.sql",
+    "sha256": "8ad20d573c203969d237947e5c2f825f1506534b647b4e0eff8e9f309b60c6ce",
+    "bytes": 3080,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260818160000_restaurant_brands_catalog_menus/migration.sql",
+    "sha256": "f130c070b717ea93aab5a7a8703b90159292db137c015d50d2222ad453257d97",
+    "bytes": 65707,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260819000000_restaurant_orders_kitchen_floor/migration.sql",
+    "sha256": "588de32de42ba15ad0209d5c0c392b5a93792333bd199e6dd3175fb00478b8d9",
+    "bytes": 49492,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260819120000_restaurant_money/migration.sql",
+    "sha256": "ba5f8fe33e50e0b99912016ae3718f3e90bb530cebc0ab678f1020b982226bc1",
+    "bytes": 46153,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260819130000_restaurant_inventory_purchasing/migration.sql",
+    "sha256": "6f6f64c4aeb1d9ff62205198973c9bb0f0c2738ffde88f0bd9fe9f958278f491",
+    "bytes": 56595,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260820000000_restaurant_scheduler_sop_notifications/migration.sql",
+    "sha256": "390fa906589b7cc4f85ad135eed4ce35baa2551896b2782705eddbefaa4ec56c",
+    "bytes": 51148,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260821010000_restaurant_customers_loyalty_insights/migration.sql",
+    "sha256": "3b04f09130eb820df84560eeaf320c4b54b3eea221f84ed30926e920e63659d1",
+    "bytes": 35388,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260824120000_restaurant_m8_bill_grand_total_guard/migration.sql",
+    "sha256": "9bb9dbca2f7c41ed218ffa2ab09b81991f95e2c3fa7c32c8c9f0efe5cceee551",
+    "bytes": 3628,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260825120000_m8_historical_loyalty_liability_correction/migration.sql",
+    "sha256": "f062a937bc66be6435265244a5acb6ca3d01d139e096ae15cb0f8aeb0b3cf285",
+    "bytes": 2747,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260825150000_restaurant_tax_core/migration.sql",
+    "sha256": "461edf55a9130e99ae1878826dc48dddacb395e43d637f40dfbea1e3a2ef087e",
+    "bytes": 9194,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260825170000_restaurant_tax_core_invariants/migration.sql",
+    "sha256": "d79d88dff8a17914dcc20cfa16281a84082265ffb91b913f5f135116db2a75e4",
+    "bytes": 4659,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260827070000_restaurant_cameras/migration.sql",
+    "sha256": "3749c46457f80e2ea7c85f87d0dcadbd71b1edc9588ab0b7e05d91fa75b9b7f2",
+    "bytes": 4586,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260827070000_restaurant_terminal_payments/migration.sql",
+    "sha256": "b1058163aebb109703c3a512a990d633e15e1db3f6e32b4797fa5cfff35345ab",
+    "bytes": 5390,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260827120000_restaurant_menu_ocr_import/migration.sql",
+    "sha256": "70d50f62e99b2224e5f4a43dd7e7dfc5488c48ca240c20a38b858d639ff0d890",
+    "bytes": 12372,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260827120000_restaurant_staff_shifts/migration.sql",
+    "sha256": "e2b446282ae5decee14e75ccf6b9392289c88f70504c551c8d93a342cd074285",
+    "bytes": 6972,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260828100000_vertical_configurable_departments/migration.sql",
+    "sha256": "0f013bd4cb9b41af0c54030b63e6d2d59029f6c5500c8519a5c375567fe78652",
+    "bytes": 3538,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260828120000_restaurant_sop_job_roles_assignment/migration.sql",
+    "sha256": "caa273eb725ad13d85194d0b4b29745515f4a57bbb7f31d3fdbc38a39386d355",
+    "bytes": 22530,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260828140000_restaurant_promotions_core/migration.sql",
+    "sha256": "4618d630ff95460a70da0b0a4ba08a2180e2129321d86347f6f7e437723e59a1",
+    "bytes": 46815,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260828160000_restaurant_staff_capability_deny_override/migration.sql",
+    "sha256": "dabe329641a9ed759d84336c1d293bc8428928a6a1257c118a023db1e0ec8e9f",
+    "bytes": 6840,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260829090000_restaurant_print_bridge/migration.sql",
+    "sha256": "91c50f53aed637d1bb7c54e2e204fa6dd78c5d62001c18e6761c59bfab6f6dd3",
+    "bytes": 3481,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260829090000_restaurant_tax_promotion_evidence/migration.sql",
+    "sha256": "0f5505d6705c25363025e7ea5f24c8a625e0b8b46c9f4e218e8c51f3916441a5",
+    "bytes": 793,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260829120000_restaurant_sop_evidence_retry_identity/migration.sql",
+    "sha256": "726674b1e84f89cc717603e271db7cf347207651671e640b82b15b9954b14a7c",
+    "bytes": 400,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260829120000_restaurant_tax_settlement_evidence/migration.sql",
+    "sha256": "3aa181bdc0fca860459b08e02c64ddb9403a8cdeb23af387ca1f7f12e06d6989",
+    "bytes": 4101,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260829150000_restaurant_tax_tender_allocations/migration.sql",
+    "sha256": "88ac66e5ab68813c15ee7fe000fe1a3383a797846ec516422522102e9412edac",
+    "bytes": 3503,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260829180000_restaurant_order_events_append_only_rls/migration.sql",
+    "sha256": "bbd2d5396c03ebe4a803385741140680c5a50fef225e76c00191840e74448db5",
+    "bytes": 694,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260829180000_restaurant_tax_refund_allocations/migration.sql",
+    "sha256": "572a474d1b21e742d36393fe358b1010d33b224ce84cbe4560cb34b27aab1040",
+    "bytes": 8371,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260829183000_restaurant_tax_activation_replay/migration.sql",
+    "sha256": "1c56aaea5d6c53f80164303f62215ae5817cc702eca8475a457046982514f2a1",
+    "bytes": 1094,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260830070000_restaurant_notification_webhook/migration.sql",
+    "sha256": "67cde24a4ea59e107616efde93b760d09f837b05b046d828c4e3e81e0334fdaf",
+    "bytes": 2154,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260830120000_btree_gist_public_execute_acl/migration.sql",
+    "sha256": "8435cc3fd8bfffb23b411659672f335189396917d8f133015d81944991571bf5",
+    "bytes": 3649,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260830120000_restaurant_service_charge_v1/migration.sql",
+    "sha256": "b85bb3bb26d2f1419de6e3ca97eee9a51f9ea6c168cfff004a75f9fbd8f3ec55",
+    "bytes": 5608,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260830160000_restaurant_custom_tax_profiles/migration.sql",
+    "sha256": "316ffe5c833687bc9e044c8bac61b1f7354992044caa4a8151785d2fedfd6ff0",
+    "bytes": 2070,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260830170000_restaurant_branch_codes/migration.sql",
+    "sha256": "bd4763601dc3c75654161202ea998cb94b082957067d21b0794f8837d3ab8a11",
+    "bytes": 2870,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260830180000_restaurant_workforce_v1/migration.sql",
+    "sha256": "275b878bfb3bc0bacf644b2ef6d956b239671067868325b512365b62dfd6070e",
+    "bytes": 16119,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260830230000_restaurant_shift_overlap_cas/migration.sql",
+    "sha256": "d9e3a0e79e66fa73432c99a5234b480916202c1fbab92e0cdd05f33b448b64ca",
+    "bytes": 684,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260830235000_restaurant_activation_acknowledgements/migration.sql",
+    "sha256": "22258bb4c176541420c41540a1d213fa0830524d8e9b4c75c9c63fb0eda46828",
+    "bytes": 1983,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260830235900_restaurant_recipe_ingredient_substitutes/migration.sql",
+    "sha256": "88ccb1e71b0b372bcfc3c0406da31b45cbe62daf6e9bf6c2679e27ae1ab5c769",
+    "bytes": 3106,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260831090000_restaurant_direct_delivery_foundation/migration.sql",
+    "sha256": "a580dd63adc49185b578618bdbbe35d85e1138c53019c70214091752068ebb16",
+    "bytes": 12507,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260831180000_restaurant_delivery_money_contract/migration.sql",
+    "sha256": "77349db20e6683d5f9bb93906b4a62d083b7ebce1f938093f7b1c913b4c49d8b",
+    "bytes": 3733,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260831210000_restaurant_delivery_fee_finance_visibility/migration.sql",
+    "sha256": "93f5643a16a9620718adaa0276ce8f280116f277b5027dbc0fd2e2ec482d0103",
+    "bytes": 859,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902090000_platform_module_bands/migration.sql",
+    "sha256": "6469207a72c6665ccbaefee910b8e743b6bb11f6962ef06591124278de7459ce",
+    "bytes": 1280,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902120000_pharmacy_medicine_identity/migration.sql",
+    "sha256": "079ca9c561c922fdb03d239ac33f0830d7dd7d4ce0c02a475e283ab13145e785",
+    "bytes": 8965,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902120000_pharmacy_migration_profiling/migration.sql",
+    "sha256": "e8a56d4e934a4fe4897a42a08d28e68bb7ec8e3dd09d02d69162079ebee94c9c",
+    "bytes": 14687,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902120000_pharmacy_vertical/migration.sql",
+    "sha256": "8400d7c5c884fa7cf5559775b46a5628b96b93f9ace79466fe934ad3a5e9b485",
+    "bytes": 70,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902130000_pharmacy_batch_stock_ledger/migration.sql",
+    "sha256": "316d655a3cfa55edadb399426c65c820ccbfd98c12077950c78e637fe51ab226",
+    "bytes": 22301,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902130000_pharmacy_medicine_catalog_review/migration.sql",
+    "sha256": "6af4f76bfcd59c4e8db8137efe4623ffd91ad30410ce457ce570b0fcf3649722",
+    "bytes": 12424,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902130000_pharmacy_regulatory_profiles/migration.sql",
+    "sha256": "ce3eb7592645cea072ffebff5c2697321f593a911e9f94ea8040869291342111",
+    "bytes": 6657,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902131500_pharmacy_purchasing/migration.sql",
+    "sha256": "ba6316fc8454df55114164ac3ffbe42b783b6c4f694113b22d9cea0b726ddde2",
+    "bytes": 17546,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902140000_pharmacy_patient_prescriptions/migration.sql",
+    "sha256": "4cb6c57627ec16644b0376e96a6c2fd86c850198335dd5965f606e3f9b301c4c",
+    "bytes": 8101,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902150000_pharmacy_goods_receiving/migration.sql",
+    "sha256": "d35b7f026ecc64cd556ce8d13c78f51806e5c1b246082e81c1e32cc8075aa325",
+    "bytes": 28703,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902150000_pharmacy_inventory_operations/migration.sql",
+    "sha256": "5de4fc439712e85802f1f2a116e036a5a6c183e016af4ee2c369b18abd91ab34",
+    "bytes": 13087,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902160000_pharmacy_onboarding_and_branch/migration.sql",
+    "sha256": "bac6759a9fbf2b782e5abff9b3f3f835e0c9c32fc574542df35d72fc26e7588d",
+    "bytes": 10159,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902170000_pharmacy_rx_review_substitution_controlled_register/migration.sql",
+    "sha256": "a015b175d704083ea74ab5bab527dde194bd635172c86c29a1a1b00ecc6bc3ae",
+    "bytes": 10295,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902170000_pharmacy_sales_demand/migration.sql",
+    "sha256": "1f1dfd911f264d602be885c16a2de043ce1938eccfc265f037a071ed515acee4",
+    "bytes": 16757,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902170500_pharmacy_supplier_returns_stock_signals/migration.sql",
+    "sha256": "67f44f65d1618d51c12e3428be59c94f6c8cec9fc288caad66b0d4e43ce95b33",
+    "bytes": 24124,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902180000_finance_journal_postings/migration.sql",
+    "sha256": "c538f312504f848ba2e618fec992cad30b4c3ffd2a98a02eae66e35b1e2c1312",
+    "bytes": 10869,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902180000_pharmacy_money_settlement/migration.sql",
+    "sha256": "0da1c56b8cb4dfbea018a40cd3436f238387addedd95d289fba068dc6561956c",
+    "bytes": 10411,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902180000_restaurant_sop_interval_recurrence/migration.sql",
+    "sha256": "87cc5dfc32df0db40c9bae780e2453564071e1fe55e639cccf94043ed0e3d6d5",
+    "bytes": 1735,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902190000_pharmacy_stock_movement_opening_kind/migration.sql",
+    "sha256": "b3b5950cfd6d40a38c236388dfbcb2940914e969c2bb175f1c7dc7c2a68da7c1",
+    "bytes": 745,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902190500_pharmacy_opening_stock_parallel_run_cutover/migration.sql",
+    "sha256": "5d0d21db857e974fac2a16462450ecd567c01fd346f897c0856ce2e0dd681391",
+    "bytes": 32909,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902200000_pharmacy_offline_counter_runtime/migration.sql",
+    "sha256": "ae361033086bebabc160bb5e05fb12cf6db110470f9ac9a912e8faa247b0763f",
+    "bytes": 24703,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902200500_pharmacy_counter_keymap_preferences/migration.sql",
+    "sha256": "1b7bad29c96346a6033cb3b329c2af81d541958cff12313dfd4f64aeabf98003",
+    "bytes": 3043,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902201000_pharmacy_safety_inspection_retention/migration.sql",
+    "sha256": "d67ec5647caa5ecdb994ca2fc574a587466e97cb2dd6146423b0cdc2bf584683",
+    "bytes": 4640,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260902210000_pharmacy_bookkeeping_tax_profiles/migration.sql",
+    "sha256": "82a2a41c525004ce5eda276103b90eb37fe5dc5d8ed646dd64e7dae08533c2dd",
+    "bytes": 16607,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260903120000_pharmacy_onboarding_tenant_deletion/migration.sql",
+    "sha256": "9d0e387fd9be6c099526061c9d6293e17bbae3028750d9fee6941f293650dc79",
+    "bytes": 3180,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904100000_pharmacy_cold_chain_locations/migration.sql",
+    "sha256": "bebe04a36f9bc4ea477d661ccf7624cc7552764eb73f57dcd995051ad8aad72d",
+    "bytes": 5295,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904110000_pharmacy_customer_loyalty_p0_lite/migration.sql",
+    "sha256": "8f79f79fcbe8b4a5766d138995bc14b9831ff2625d7a4805360c464bd131fc0c",
+    "bytes": 5582,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904110500_pharmacy_fiscal_documents/migration.sql",
+    "sha256": "3494aaaecb11c1bc9f519e01498f00cf67cdb5912f7ab9807827cad51b1ff281",
+    "bytes": 9529,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904120000_pharmacy_owner_digest/migration.sql",
+    "sha256": "e030dda65a29949c74a86c6d8162624eb8a4ace5bb0cf28f4585514b73a90d98",
+    "bytes": 3357,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904123700_restaurant_stock_report_indexes/migration.sql",
+    "sha256": "ba8d77dba91d030483f037a32861bcefa7fc8bb2542d4030516f5911b8b9746b",
+    "bytes": 445,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904133000_restaurant_catering_orders/migration.sql",
+    "sha256": "3e539317fa661329a20eaaf9f683caf35062710d49b4120cfa5cc93bb5cf75ea",
+    "bytes": 13011,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904133000_restaurant_sales_demo/migration.sql",
+    "sha256": "5e0f552e4db90eb9291d8c11242d91822fbbb043a750ccd669fff38853ac2a42",
+    "bytes": 11278,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904190000_pharmacy_anomaly_signals/migration.sql",
+    "sha256": "40ed02be10068623acd4973f3aa5d1ba6f27c01bb8f52e751fc8d2fc5099b3ae",
+    "bytes": 6617,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904192000_pharmacy_supplier_action_links/migration.sql",
+    "sha256": "b2bb2dfbcb638fdd6bb60f15b011f8df751141ad8c84dcaa4a70b95d85a9e77e",
+    "bytes": 9485,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904193000_pharmacy_family_khata/migration.sql",
+    "sha256": "c1df50b502553d1d196a4f74ebafe4b59efa23206db1c485c053d531f0562286",
+    "bytes": 7379,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904194000_pharmacy_invoice_ocr/migration.sql",
+    "sha256": "1e13dadf2cbcd6588c3d30ef73180a41be09ede90fcba1ba693c009c984593de",
+    "bytes": 870,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904195000_pharmacy_central_purchasing/migration.sql",
+    "sha256": "1d5806d1599c34ae402539b56e06df8c9fc291cbbe104dc457f42f40d4146c63",
+    "bytes": 5123,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904196000_pharmacy_permissioned_marketing/migration.sql",
+    "sha256": "9e2082b1523e6eafa75b620d50ff1f1da9954b1776ae0385f94157f9c83f69d4",
+    "bytes": 6192,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904197000_pharmacy_restock_interest/migration.sql",
+    "sha256": "6b76e129ae940715b36fee4e3c1002479cb512bbbf344c9a45ab73a82e7b55f7",
+    "bytes": 12663,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904198000_pharmacy_refill_support/migration.sql",
+    "sha256": "d345d597ee7c32f0a6f936694cd507ed0f825eaae5635801959339505868535b",
+    "bytes": 4371,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260904200000_pharmacy_pharmacovigilance/migration.sql",
+    "sha256": "8f16b678971e52e4c43df11f445ea3548e4b8cbc2ad88ef7f40cbe0bcf4e9e21",
+    "bytes": 3374,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260905010000_pharmacy_substitute_decline_status/migration.sql",
+    "sha256": "e80e61503c2a8a3d237dff6a8887b7a131b0db98016f9175ea6df7c031d737f7",
+    "bytes": 232,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260905020000_pharmacy_expiry_return_advisor/migration.sql",
+    "sha256": "6332e27b12ef559c2396ba35425626e40810fe59445fd67cc9e24ba7821f9d24",
+    "bytes": 373,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260905030000_pharmacy_drap_monitoring/migration.sql",
+    "sha256": "820c63e11f14688cfd8fbb4ba604c0f2134cdadb23c15879a006f56730f80515",
+    "bytes": 5864,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260905040000_pharmacy_pack_authentication/migration.sql",
+    "sha256": "3cbdf13171ae966c373b8e74cb55b1dfc34b9222ea149a882e78a3e8924bd849",
+    "bytes": 4986,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260905050000_pharmacy_cold_chain_sensor_seam/migration.sql",
+    "sha256": "ebc454298dcad12479b79c3177ce3fdedac519c2b6b7e5434bfba0ae75aa0e92",
+    "bytes": 2578,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260905060000_pharmacy_customer_ordering/migration.sql",
+    "sha256": "c05a3140feeabce754c18bd9095a227208de060c0cc054a94473821ddac193e2",
+    "bytes": 22482,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260905070000_pharmacy_reference_connector_automation/migration.sql",
+    "sha256": "08a816f399c67c13663141e6649dc5c5956622f00f986f242dd64718faa955da",
+    "bytes": 9053,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260905080000_pharmacy_regulatory_profile_tenant_purge/migration.sql",
+    "sha256": "727d3bacdc77eb4dca2c96518f60235b3885decb460553aa35391f6ab6d4158c",
+    "bytes": 1074,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260905090000_restaurant_demo_reset_append_only_rls/migration.sql",
+    "sha256": "932b31c8c3d030ab79caf0ce72821dc7133aad6130d18490a65b548c359c2b42",
+    "bytes": 628,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260905100000_restaurant_demo_reset_delete_rls/migration.sql",
+    "sha256": "f85b4350569a186d04115fc1db38578730acc65740054c30b9240f1eefb667fe",
+    "bytes": 2471,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260905180000_receipt_layout/migration.sql",
+    "sha256": "5bb7c51354c6c7f11e63b3533737fbc81dbd978a5d2f9f0fda7ceaba9f1b7b2b",
+    "bytes": 527,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260905190000_pharmacy_receipt_layout/migration.sql",
+    "sha256": "a0b1653e8b2c98a9e3e0019b1db7021b2158499e38952c9d2ec68059e8d44123",
+    "bytes": 461,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260912053000_organization_ask_fathom_control/migration.sql",
+    "sha256": "dffa2bd5dcf8d8b5ca812a14424981c0867c92df2e0d78ef9e03add6288f032a",
+    "bytes": 177,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260914123000_pharmacy_draft_intent_identity/migration.sql",
+    "sha256": "7362d2d93bf23b963a925b9b70e990af845b1f532fa132745a15b230fba95e65",
+    "bytes": 611,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260929000000_support_session_history/migration.sql",
+    "sha256": "c13868be1f1eaa839f6f43e2fcbf2afa2fdeb0cec70320b2a077fbd51b70d037",
+    "bytes": 456,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260929000100_controlled_register_serial/migration.sql",
+    "sha256": "03f9511447d740b2157ce27ed6cdaaa86caa69be12ffed26f412b8f0f5ce5a36",
+    "bytes": 2490,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260929120000_pharmacy_whatsapp_channel/migration.sql",
+    "sha256": "f3d17498d9b0bbac458d6df15fb3598c0ccf4296d7d2f9010cf562b3ffba7b68",
+    "bytes": 3116,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20260929120000_vertical_neutral_camera_evidence/migration.sql",
+    "sha256": "6e2b5995716104d21412ff720dcab847fb8bfba288c481acd658ac903dfe80f7",
+    "bytes": 10171,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20261002120000_camera_preset_coldchain_evidence/migration.sql",
+    "sha256": "244f50a6fc3ae6d99138c17ea194a2f387bec7f40f53b77d3523d026dbc9d42a",
+    "bytes": 4307,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20261006140000_pharmacy_campaign_dispatch/migration.sql",
+    "sha256": "fa88b96f831ef6c3f932a5fe957d9eefd0f581b87a7dec9f143773218af66a0c",
+    "bytes": 6771,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20261006160000_growth_insights/migration.sql",
+    "sha256": "b7b45d2be5825245ffbaba6502ac3edb3c1c673172842ee859bee12fd0ed477f",
+    "bytes": 4669,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20261007101500_catering_booking_quotes_disposition/migration.sql",
+    "sha256": "47f422776d333b9079e5053fe11cb41cf8019d910a683789e669374ba0492b6b",
+    "bytes": 9123,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20261007103000_catering_money_evidence/migration.sql",
+    "sha256": "a64d93518fa22d4e4990b674b3c27eb6f9b991d4774d0d3fe3642668f4e6c330",
+    "bytes": 4402,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20261008100000_restaurant_growth_review/migration.sql",
+    "sha256": "9dc64c36c1c3b0a1ff0c6b0cdbc9bb30b132097eb13b22855d5726557c375c16",
+    "bytes": 7339,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20261008101500_restaurant_growth_sandbox/migration.sql",
+    "sha256": "2c8028890e79ad673ef2c56f4a1affd34c9d8ec7b222f6e2e4dc28f9cfe4e26c",
+    "bytes": 3591,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20261008170000_pharmacy_delivery_custody/migration.sql",
+    "sha256": "d055356e61e62364d49f7b0c025b9d537173419be3d97fc3536510513db3812e",
+    "bytes": 5272,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20261008183000_pharmacy_earned_refund_reversal/migration.sql",
+    "sha256": "2990cfbf2540083f58a7c6b7088b2b4c5cd096d15bfdcbb78dcaab885bd68cfa",
+    "bytes": 1000,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/20261008190000_pharmacy_closed_demand_constraint/migration.sql",
+    "sha256": "e27c2da7f5f910febfed8e700046d1b231569ea6d97dcb672294426ba1f43684",
+    "bytes": 643,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/migrations/migration_lock.toml",
+    "sha256": "1db17a8d051aa136110736752c5e1f8b7ed92b6ea8e803112fbbe2497047c210",
+    "bytes": 24,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "prisma/production-bootstrap.ts",
+    "sha256": "18f9e4ff6cf1e2faeeb1e53989136ba647b4e4d85df649fd49d14b10b57ec923",
+    "bytes": 15906,
+    "mode": "000644"
+  },
+  {
+    "path": "prisma/schema.prisma",
+    "sha256": "a89e29ead28f7efcdefc9135758ddcfaf888dc2860bcd98b2e38ac5e232d05bd",
+    "bytes": 611871,
+    "mode": "000644",
+    "kind": "source",
+    "origin": "frozen baseline"
+  },
+  {
+    "path": "src/lib/module-catalog.ts",
+    "sha256": "3fe9c7fd21ad19af9d538ba620efb985a7c8f647d68ec33040ccf58b0000054f",
+    "bytes": 24183,
+    "mode": "000644"
+  },
+  {
+    "path": "src/lib/vertical-catalog.ts",
+    "sha256": "0a371f384a0da386a4cf54c4273b1599a233883791640d1722bfe0d77d1dabaa",
+    "bytes": 42007,
+    "mode": "000644"
+  }
+]

@@ -146,6 +146,29 @@ export type ExpiredCameraEvidence = {
   capturedAt: Date;
 };
 
+/** Read expiry matches purge expiry; a legal hold preserves bytes, not read access. */
+export function canReadCameraEvidence(
+  evidence: { status: string; storageKey: string | null; capturedAt: Date | null },
+  retentionDays: number | null | undefined,
+  now: Date
+): evidence is { status: 'CAPTURED'; storageKey: string; capturedAt: Date } {
+  const capturedAt = evidence.capturedAt instanceof Date ? evidence.capturedAt.getTime() : NaN;
+  const serverNow = now instanceof Date ? now.getTime() : NaN;
+  return (
+    evidence.status === 'CAPTURED' &&
+    typeof evidence.storageKey === 'string' &&
+    evidence.storageKey.length > 0 &&
+    typeof retentionDays === 'number' &&
+    Number.isInteger(retentionDays) &&
+    retentionDays >= 1 &&
+    retentionDays <= 3650 &&
+    Number.isFinite(capturedAt) &&
+    Number.isFinite(serverNow) &&
+    capturedAt <= serverNow &&
+    capturedAt > serverNow - retentionDays * 86_400_000
+  );
+}
+
 /** SQL predicate: a captured still past its own gateway's retention period. */
 export function cameraEvidenceDueSql(now: Date) {
   return Prisma.sql`e."status" = 'CAPTURED'

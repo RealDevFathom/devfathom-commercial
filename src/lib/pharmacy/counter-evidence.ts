@@ -6,6 +6,7 @@ import {
   type CameraGatewayRuntime,
 } from '@/lib/cameras/camera-gateway-runtime';
 import {
+  canReadCameraEvidence,
   captureCameraEvidence,
   enterCameraTenantScope,
   evidenceSnapshotAdapter,
@@ -146,14 +147,21 @@ export async function readCounterEvidence(
   scope: CounterScope,
   saleId: string
 ): Promise<CounterEvidenceView[]> {
-  return readBoundEvidence(db, scope, { saleId, subjectKind: { in: ['PHARMACY_TENDER', 'PHARMACY_REFUND'] } });
+  return readBoundEvidence(db, scope, {
+    saleId,
+    subjectKind: { in: ['PHARMACY_TENDER', 'PHARMACY_REFUND'] },
+  });
 }
 
 export async function readDailyCloseEvidence(db: ScopedDb, scope: CounterScope, closeId: string) {
   return readBoundEvidence(db, scope, { subjectId: closeId, subjectKind: 'PHARMACY_DAILY_CLOSE' });
 }
 
-async function readBoundEvidence(db: ScopedDb, scope: CounterScope, binding: import('@/generated/prisma/client').Prisma.CameraEvidenceWhereInput): Promise<CounterEvidenceView[]> {
+async function readBoundEvidence(
+  db: ScopedDb,
+  scope: CounterScope,
+  binding: import('@/generated/prisma/client').Prisma.CameraEvidenceWhereInput
+): Promise<CounterEvidenceView[]> {
   const rows = await db.cameraEvidence.findMany({
     where: { ...binding, organizationId: scope.organizationId, branchId: scope.branchId },
     orderBy: [{ requestedAt: 'asc' }, { id: 'asc' }],
@@ -164,8 +172,10 @@ async function readBoundEvidence(db: ScopedDb, scope: CounterScope, binding: imp
       storageKey: true,
       requestedAt: true,
       capturedAt: true,
+      camera: { select: { gateway: { select: { retentionDays: true } } } },
     },
   });
+  const now = new Date();
   return Promise.all(
     rows.map(async (row) => ({
       id: row.id,
@@ -173,10 +183,9 @@ async function readBoundEvidence(db: ScopedDb, scope: CounterScope, binding: imp
       status: row.status,
       requestedAt: row.requestedAt.toISOString(),
       capturedAt: row.capturedAt?.toISOString() ?? null,
-      image:
-        row.status === 'CAPTURED' && row.storageKey
-          ? await stillDataUrl(scope.organizationId, row.storageKey)
-          : null,
+      image: canReadCameraEvidence(row, row.camera?.gateway?.retentionDays, now)
+        ? await stillDataUrl(scope.organizationId, row.storageKey)
+        : null,
     }))
   );
 }

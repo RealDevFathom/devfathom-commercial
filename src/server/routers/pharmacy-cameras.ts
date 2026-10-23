@@ -9,7 +9,11 @@ import {
   cameraGatewayPublicState,
 } from '@/lib/cameras/camera-gateway-runtime';
 import { setCameraPreset, CameraPresetError } from '@/lib/cameras/camera-preset';
-import { captureCameraEvidence, evidenceSnapshotAdapter } from '@/lib/cameras/evidence';
+import {
+  canReadCameraEvidence,
+  captureCameraEvidence,
+  evidenceSnapshotAdapter,
+} from '@/lib/cameras/evidence';
 import { stillDataUrl } from '@/lib/pharmacy/counter-evidence';
 import { sealCameraCredential } from '@/lib/restaurant/camera-credentials';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -355,6 +359,7 @@ export const pharmacyCamerasRouter = router({
         orderBy: [{ requestedAt: 'desc' }, { id: 'desc' }],
         take: 10,
       });
+      const serverNow = new Date();
       return Promise.all(
         evidence.map(async (e) => ({
           id: e.id,
@@ -364,10 +369,9 @@ export const pharmacyCamerasRouter = router({
           requestedAt: e.requestedAt,
           capturedAt: e.capturedAt,
           failureReason: e.failureReason,
-          image:
-            e.status === 'CAPTURED' && e.storageKey
-              ? await stillDataUrl(organizationId, e.storageKey)
-              : null,
+          image: canReadCameraEvidence(e, row.gateway.retentionDays, serverNow)
+            ? await stillDataUrl(organizationId, e.storageKey)
+            : null,
         }))
       );
     }),

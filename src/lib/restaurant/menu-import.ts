@@ -19,7 +19,6 @@ import {
   type MenuExtractionResult,
   type MenuLineFlag,
 } from '@/lib/restaurant/menu-extraction';
-import { createFixtureMenuExtractionAdapter } from '@/lib/restaurant/menu-extraction-fixtures';
 import { createVisionMenuExtractionAdapter } from '@/lib/restaurant/menu-extraction-vision';
 import {
   menuImportObjectName,
@@ -38,7 +37,7 @@ import {
 } from '@/lib/storage';
 import { readAIAvailability } from '@/lib/ai/provider';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { isDemoTenant } from '@/lib/demo/isolation';
+import { isDemoTenant } from '@/lib/tenancy/demo-isolation';
 
 /**
  * R-lane / WHA-194 — the menu-import domain: upload -> asynchronous extraction
@@ -120,8 +119,10 @@ export type MenuImportRuntime = {
 };
 
 export const defaultMenuImportRuntime: MenuImportRuntime = {
-  resolveAdapter: (name) =>
-    name === 'VISION' ? createVisionMenuExtractionAdapter() : createFixtureMenuExtractionAdapter(),
+  resolveAdapter: (name) => {
+    if (name === 'VISION') return createVisionMenuExtractionAdapter();
+    throw new MenuExtractionError('Menu extraction is unavailable.', 'ADAPTER_UNAVAILABLE');
+  },
   putSource: putUpload,
   readSource: getUpload,
   deleteSource: deleteUpload,
@@ -492,8 +493,8 @@ export async function runMenuImportExtraction(
     if (!getStorageAvailability().available) {
       throw new MenuExtractionError('Menu upload storage is unavailable.', 'ADAPTER_UNAVAILABLE');
     }
-    const content = await runtime.readSource(record.organizationId, record.storageObjectName);
     const adapter = runtime.resolveAdapter(record.adapter);
+    const content = await runtime.readSource(record.organizationId, record.storageObjectName);
     result = await adapter.extract({
       content,
       mimeType: record.mimeType as MenuUploadMimeType,
