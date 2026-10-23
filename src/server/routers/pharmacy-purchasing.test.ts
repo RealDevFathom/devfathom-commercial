@@ -600,7 +600,9 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   /** A resolvable purchase order whose one line the receipt may name. */
   function resolvableOrder() {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'po_a', supplierId: 'supplier_a' });
-    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([{ id: 'poline_a' }]);
+    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
+      { id: 'poline_a', medicineId: 'medicine_a', packLevelId: 'pack_a' },
+    ]);
   }
 
   beforeEach(() => {
@@ -719,6 +721,26 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     // Matching the goods against a line they were never ordered on would make
     // the PUR-04 three-way match compare two unrelated things.
     db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([{ id: 'poline_other' }]);
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a receipt medicine that differs from its purchase order line', async () => {
+    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
+      { id: 'poline_a', medicineId: 'medicine_ordered', packLevelId: 'pack_a' },
+    ]);
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a receipt pack that differs from its purchase order line', async () => {
+    db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([
+      { id: 'poline_a', medicineId: 'medicine_a', packLevelId: 'pack_ordered' },
+    ]);
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
