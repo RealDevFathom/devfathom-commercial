@@ -124,8 +124,8 @@ describe('previewSaleLine (exact quantity and price preview)', () => {
   it('charges a complete pack at its printed MRP when loose-unit division has a remainder', () => {
     const threeUnitPack = saleUnitOptions({
       packLevels: [
-        { id: 'pack', parentId: null, level: 'PACK', unitsPerParent: 1 },
-        { id: 'unit', parentId: 'pack', level: 'UNIT', unitsPerParent: 3 },
+        { id: 'pack', parentPackLevelId: null, level: 'PACK', unitsPerParent: 1 },
+        { id: 'unit', parentPackLevelId: 'pack', level: 'UNIT', unitsPerParent: 3 },
       ],
       rootPackLevelId: 'pack',
       unitsPerPack: 3,
