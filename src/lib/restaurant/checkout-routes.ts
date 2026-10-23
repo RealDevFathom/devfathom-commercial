@@ -201,10 +201,15 @@ export const dayCorrectBody = z
 
 // ── Capability gate (C11) ────────────────────────────────────────────────────
 
-/** The five money capabilities a terminal route may gate on, plus the approver's
+/** The six checkout and money capabilities a terminal route may gate on, plus the approver's
  * `coauth:approve` — all pre-existing entries in `vertical-catalog.ts` (C11). */
 export type MoneyCapability =
-  'payments:collect' | 'payments:refund' | 'cash:open' | 'cash:adjust' | 'cash:close';
+  | 'orders:complimentary'
+  | 'payments:collect'
+  | 'payments:refund'
+  | 'cash:open'
+  | 'cash:adjust'
+  | 'cash:close';
 
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 
@@ -639,6 +644,26 @@ export async function getOrderSettlementForBranch(
   if (!order) return null;
 
   const settlement = await evaluateOrderSettlement(db, orderId);
+  const billLines = settlement.bills.length
+    ? await db.restaurantBillLine.findMany({
+        where: { billId: { in: settlement.bills.map((bill) => bill.id) } },
+        orderBy: [{ billId: 'asc' }, { createdAt: 'asc' }],
+        select: {
+          id: true,
+          billId: true,
+          name: true,
+          quantity: true,
+          lineSubtotal: true,
+          compAmount: true,
+        },
+      })
+    : [];
+  const linesByBill = new Map<string, typeof billLines>();
+  for (const line of billLines) {
+    const current = linesByBill.get(line.billId) ?? [];
+    current.push(line);
+    linesByBill.set(line.billId, current);
+  }
   const bills = await Promise.all(
     settlement.bills.map(async (b) => {
       // An OPEN bill's stored grandTotal is pre-tax and its taxTotal is 0 until a
@@ -656,6 +681,13 @@ export async function getOrderSettlementForBranch(
         deliveryFeeTotal: money(b.deliveryFeeTotal),
         compTotal: money(b.compTotal),
         receiptNumber: b.receiptNumber,
+        lines: (linesByBill.get(b.id) ?? []).map((line) => ({
+          id: line.id,
+          name: line.name,
+          quantity: line.quantity,
+          lineSubtotal: money(line.lineSubtotal),
+          compAmount: money(line.compAmount),
+        })),
       };
     })
   );
@@ -698,6 +730,7 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
       serviceChargeTotal: true,
       deliveryFeeTotal: true,
       compTotal: true,
+      discountTotal: true,
       roundingAdjustment: true,
       grandTotal: true,
       receiptNumber: true,
@@ -766,6 +799,7 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
       serviceChargeTotal: money(bill.serviceChargeTotal),
       deliveryFeeTotal: money(bill.deliveryFeeTotal),
       compTotal: money(bill.compTotal),
+      discountTotal: money(bill.discountTotal),
       roundingAdjustment: money(bill.roundingAdjustment),
       grandTotal: money(bill.grandTotal),
     },

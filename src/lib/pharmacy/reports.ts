@@ -201,10 +201,10 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'khataAgingMinor',
     'Khata aging',
-    'Unknown: customer open-item and due-date aging are not available. Recorded account balances in Finance are not aging.',
-    null,
-    'not asserted',
-    null,
+    'Outstanding amount on Khata charges whose due date has passed, net of payments allocated to each charge.',
+    'pharmacy_khata_events',
+    'selected branches at read time',
+    '/pharmacy/reports?section=finance',
     'reports:financial',
   ],
   [
@@ -272,6 +272,36 @@ type MoneyCounts = {
   cashVarianceMinor: number;
 };
 
+async function readKhataAgingMinor(db: ScopedDb, branchIds: readonly string[]): Promise<number> {
+  const context = await db.$queryRaw<Array<{ branchId: string | null }>>(
+    Prisma.sql`SELECT NULLIF(current_setting('app.current_branch_id', true), '') AS "branchId"`
+  );
+  const previousBranchId = context[0]?.branchId ?? '';
+  let total = BigInt(0);
+
+  try {
+    // Khata tables enforce organization + exactly one branch through FORCE RLS. Read each
+    // authorized report branch under its own branch context rather than bypassing that boundary.
+    for (const branchId of branchIds) {
+      await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_branch_id', ${branchId}, true)`);
+      const rows = await db.$queryRaw<Array<{ value: bigint }>>(
+        Prisma.sql`WITH payments AS (SELECT "organizationId", "branchId", "settlesChargeId", SUM("amountMinor") AS paid FROM "pharmacy_khata_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId"=${branchId} AND "kind"='PAYMENT' GROUP BY "organizationId", "branchId", "settlesChargeId") SELECT COALESCE(SUM(GREATEST(charge."amountMinor"::bigint-COALESCE(payments.paid,0),0)),0)::bigint AS value FROM "pharmacy_khata_events" charge LEFT JOIN payments ON payments."organizationId"=charge."organizationId" AND payments."branchId"=charge."branchId" AND payments."settlesChargeId"=charge."id" WHERE charge."organizationId"=current_setting('app.current_organization_id',true) AND charge."branchId"=${branchId} AND charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`
+      );
+      total += rows[0]?.value ?? BigInt(0);
+    }
+  } finally {
+    await db.$queryRaw(
+      Prisma.sql`SELECT set_config('app.current_branch_id', ${previousBranchId}, true)`
+    );
+  }
+
+  const value = Number(total);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error('Khata aging total exceeds the safe integer range.');
+  }
+  return value;
+}
+
 export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: PharmacyReportFilters) {
   const parsed = validatePharmacyReportFilters(filters);
   const branches = Prisma.join(filters.branchIds);
@@ -317,6 +347,7 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
         Prisma.sql`SELECT COUNT(*) FILTER (WHERE "status" IN ('QUEUED','SUBMITTING') AND "createdAt"<=CURRENT_TIMESTAMP-interval '15 minutes')::int AS aging, COUNT(*) FILTER (WHERE "status" IN ('REJECTED','DEAD'))::int AS rejected FROM "pharmacy_fiscal_documents" WHERE "branchId" IN (${branches})`
       ),
     ]);
+  const khataAgingMinor = await readKhataAgingMinor(db, filters.branchIds);
   const m = money[0] ?? {
     salesMinor: 0,
     marginMinor: null,
@@ -354,7 +385,7 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
       rejectedFiscalDocuments: fiscal[0]?.rejected ?? 0,
       accountsPayableMinor: null,
       accountsReceivableMinor: null,
-      khataAgingMinor: null,
+      khataAgingMinor,
       deviceFiscalOfflineExceptions: null,
     },
   };

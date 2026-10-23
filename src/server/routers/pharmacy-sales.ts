@@ -1,4 +1,10 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
+import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
+import {
+  PharmacyRxReferenceError,
+  attachPrescriptionReference,
+  resolvePrescriptionReference,
+} from '@/lib/pharmacy/rx-prescription-reference';
 import { hasModule } from '@/lib/entitlements';
 import {
   executeSandboxPayment,
@@ -8,6 +14,7 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
+import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
   appendControlledSaleEntries,
   earlierRegisterEntry,
@@ -53,6 +60,7 @@ import {
   redeemSalePoints,
 } from '@/lib/pharmacy/customer-loyalty';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
+import { PharmacySaleBatchError } from '@/lib/pharmacy/sale-batch-safety';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -100,7 +108,13 @@ import {
 } from '@/lib/pharmacy/settlement';
 
 import { assertInOrganization } from '../org-refs';
-import { adminProcedure, auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import {
+  adminProcedure,
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  protectedProcedure,
+  router,
+} from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
@@ -176,12 +190,22 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof PharmacyRxSaleDenied)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  if (error instanceof PharmacyRxReferenceError)
+    throw new TRPCError({
+      code: error.reason === 'PRESCRIPTION_NEEDS_PHARMACIST' ? 'FORBIDDEN' : 'BAD_REQUEST',
+      message: error.message,
+    });
   if (error instanceof ControlledRestorationDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyPaymentSandboxError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof FamilyKhataError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
+  // #633: the transaction rolled back, so the counter may treat this as a refused payment.
+  if (error instanceof PharmacySaleBatchError)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyInventoryError && error.reason === 'BLOCKED_STOCK') {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -201,7 +225,7 @@ function fail(error: unknown): never {
       code:
         error.reason === 'CUSTOMER_NOT_FOUND'
           ? 'NOT_FOUND'
-          : error.reason === 'CONSENT_REQUIRED' || error.reason === 'SALE_NOT_LINKED'
+          : error.reason === 'LOYALTY_CONSENT_REQUIRED' || error.reason === 'SALE_NOT_LINKED'
             ? 'FORBIDDEN'
             : 'BAD_REQUEST',
       message: error.reason,
@@ -272,8 +296,42 @@ async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: 
   });
 }
 
+// Canonical names (#163) beside the legacy dotted ones, which still cover un-migrated grants.
+const RECEIPT_READ_CAPABILITIES = [
+  'pharmacy:dispense',
+  'pharmacy.dispense',
+  'pharmacy:receipt',
+  'pharmacy.receipt',
+  'pharmacy:counter',
+  'pharmacy.counter',
+] as const;
+
+function capabilityCovers(rule: string, action: string): boolean {
+  // Dispensing is regulated: only its canonical, exact ALLOW can grant it. The
+  // central matcher still lets wildcard DENYs revoke that exact grant.
+  if (action === 'pharmacy:dispense') return capabilityMatches(rule, action, 'ALLOW');
+  if (rule === '*' || rule === action) return true;
+  if (rule.endsWith(':*') || rule.endsWith('.*')) return action.startsWith(rule.slice(0, -1));
+  return false;
+}
+
+function counterCapabilityDecision(
+  rules: { capability: string; effect: string }[]
+): 'ALLOW' | 'DENY' | null {
+  const matched = rules.filter((rule) =>
+    RECEIPT_READ_CAPABILITIES.some((action) =>
+      action === 'pharmacy:dispense' && rule.effect === 'DENY'
+        ? capabilityMatches(rule.capability, action, 'DENY')
+        : capabilityCovers(rule.capability, action)
+    )
+  );
+  if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
+  if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
+  return null;
+}
+
 /**
- * Counter capability, then an active pharmacy branch
+ * Dispense, receipt, or counter capability, then an active pharmacy branch
  * assignment in the session organization. Restaurant staff profiles are not
  * consulted. An empty assignment denies a non-admin. A session `ADMIN` of this
  * organization may use every active branch, including when they also have an
@@ -291,11 +349,33 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
   }
 }
 
-async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+async function requireCounterReceiptAccess(
+  ctx: TRPCContext,
+  branch: string,
+  requireMutationGrant = false
+): Promise<LedgerScope> {
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
   if (!user.organizationId || user.organizationId !== scope.organizationId) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+
+  // Counter mutations remain routed through the central authorization engine.
+  // Cashiers use the canonical counter grant, while pharmacists retain their
+  // established exact dispense grant. The family decision below subsequently
+  // applies DENY-over-ALLOW across every receipt/counter alias.
+  if (requireMutationGrant) {
+    const subject = subjectFromSession(user);
+    const [canCounter, canDispense] = await Promise.all([
+      can(subject, 'pharmacy:counter', undefined, { db: ctx.db }),
+      can(subject, 'pharmacy:dispense', undefined, { db: ctx.db }),
+    ]);
+    if (!canCounter && !canDispense) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+    }
   }
 
   const member = await ctx.db.user.findUnique({
@@ -303,6 +383,13 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     select: {
       status: true,
       organizationId: true,
+      organizationRole: {
+        select: { permissions: { select: { capability: true, effect: true } } },
+      },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        select: { capability: true, effect: true },
+      },
     },
   });
   if (
@@ -314,9 +401,13 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const capable = await can(subjectFromSession(user), 'pharmacy:counter', undefined, {
-    db: ctx.db,
-  });
+  const overrides = member.permissionOverrides;
+  const roleRules = member.organizationRole?.permissions ?? [];
+  // Treat the names as one capability family. Otherwise an ALLOW on one alias
+  // can accidentally outrun an explicit DENY on another alias.
+  // Combine user overrides and role rules into ONE family decision so any
+  // explicit DENY (user or role, on any alias) beats any ALLOW.
+  const capable = counterCapabilityDecision([...overrides, ...roleRules]) === 'ALLOW';
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -547,7 +638,7 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  redeemPoints: protectedProcedure
+  redeemPoints: capabilityProcedure('pharmacy:dispense')
     .input(
       z
         .object({
@@ -679,7 +770,7 @@ export const pharmacySalesRouter = router({
             code: 'BAD_REQUEST',
             message: 'Khata fields require Khata tender.',
           });
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction((tx) =>
           applyPharmacyTender(txDb(tx), scope, ledgerTender(input))
         );
@@ -841,6 +932,15 @@ export const pharmacySalesRouter = router({
               path: ['prescriberName'],
             })
             .optional(),
+          // #518: the prescription a pharmacist dispenses a non-controlled line against. It must
+          // resolve to a real, current prescription line for this patient and medicine.
+          prescription: z
+            .object({
+              prescriptionLineId: z.string().trim().min(1).max(128),
+              patientId: z.string().trim().min(1).max(128),
+            })
+            .strict()
+            .optional(),
           branchId,
           saleId: z.string().min(1),
           medicineId: z.string().min(1),
@@ -895,7 +995,46 @@ export const pharmacySalesRouter = router({
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
-          if (!medicine?.controlled) return addSaleLine(db, scope, input);
+          if (!medicine?.controlled) {
+            // #518: a controlled authorization, and the prescription reference inside it, means
+            // nothing on this line, so it is refused instead of being silently ignored.
+            if (input.controlledAuthorization)
+              throw new PharmacyRxReferenceError('CONTROLLED_AUTHORIZATION_NOT_APPLICABLE');
+            // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
+            if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
+            const { prescription, ...lineInput } = input;
+            if (!prescription) return addSaleLine(db, scope, lineInput);
+            // Recording a prescription fill is a pharmacist's act, whatever the medicine.
+            if (
+              !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+                db,
+              }))
+            )
+              throw new PharmacyRxReferenceError('PRESCRIPTION_NEEDS_PHARMACIST');
+            const units = input.quantity * input.canonicalUnitsPerSaleUnit;
+            const reference = await resolvePrescriptionReference(db, scope, {
+              ...prescription,
+              saleId: input.saleId,
+              medicineId: input.medicineId,
+              presentationId: input.presentationId,
+              units,
+            });
+            const result = await addSaleLine(db, scope, lineInput);
+            await attachPrescriptionReference(db, scope, {
+              ...reference,
+              saleLineId: result.line.id,
+            });
+            annotateAudit(ctx, {
+              metadata: {
+                prescriptionLineId: reference.prescriptionLineId,
+                prescriptionSaleLineId: result.line.id,
+              },
+            });
+            return result;
+          }
+          // #518: a controlled line takes its prescription only through controlledAuthorization.
+          if (input.prescription)
+            throw new PharmacyRxReferenceError('CONTROLLED_PRESCRIPTION_IN_AUTHORIZATION');
           if (
             !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
               db,
@@ -1159,13 +1298,12 @@ export const pharmacySalesRouter = router({
         .object({
           branchId,
           saleId: z.string().min(1),
-          action: z.enum(['hold', 'resume', 'convertQuotation', 'complete', 'void']),
+          action: z.enum(['hold', 'resume', 'convertQuotation', 'void']),
           reason: z.string().trim().min(1).optional(),
           controlledWitness: z
             .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
             .strict()
             .optional(),
-          deviceId: z.string().trim().min(1).max(200).optional(),
         })
         .strict()
     )
@@ -1179,7 +1317,6 @@ export const pharmacySalesRouter = router({
               input.saleId,
               input.action,
               input.reason,
-              input.deviceId,
               input.controlledWitness
             );
           } catch (error) {

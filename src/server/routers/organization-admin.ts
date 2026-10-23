@@ -111,6 +111,15 @@ export const organizationAdminRouter = router({
     });
   }),
 
+  roles: adminProcedure.query(async ({ ctx }) => {
+    const id = organizationId(ctx);
+    return ctx.db.organizationRole.findMany({
+      where: { organizationId: id },
+      orderBy: { name: 'asc' },
+      select: { id: true, key: true, name: true },
+    });
+  }),
+
   upsertDepartment: adminProcedure
     .input(
       z.object({
@@ -503,7 +512,28 @@ export const organizationAdminRouter = router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot deactivate yourself.' });
       }
       const saved = await ctx.db.$transaction(async (tx) => {
-        if (activating) await lockOrganizationSeat(tx, id, ctx.entitlements.seatLimit);
+        const removesActiveAdmin =
+          before.role === 'ADMIN' &&
+          before.status === 'ACTIVE' &&
+          (input.role !== 'ADMIN' || input.status !== 'ACTIVE');
+
+        // Serialize every transition that can remove an active admin. Reading the
+        // count before taking this lock would let two concurrent demotions both
+        // observe the other admin and leave the organization with none.
+        if (removesActiveAdmin) {
+          await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${id} FOR UPDATE`;
+          const activeAdmins = await tx.user.count({
+            where: { organizationId: id, role: 'ADMIN', status: 'ACTIVE' },
+          });
+          if (activeAdmins <= 1) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Cannot demote or deactivate the last active admin.',
+            });
+          }
+        } else if (activating) {
+          await lockOrganizationSeat(tx, id, ctx.entitlements.seatLimit);
+        }
         return tx.user.update({
           where: { id: input.id },
           data: {

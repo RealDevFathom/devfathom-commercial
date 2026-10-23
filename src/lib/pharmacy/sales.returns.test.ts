@@ -3,12 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 // through restricted PostgreSQL in operational-finance.db.test.ts.
 vi.mock('./finance-postings', () => ({
   postSaleReturnEntry: vi.fn().mockResolvedValue({}),
+  postUnidentifiedSaleReturnEntry: vi.fn().mockResolvedValue({}),
   postSaleLineEntry: vi.fn().mockResolvedValue({}),
   postTenderEntry: vi.fn().mockResolvedValue({}),
   postTenderRefundEntry: vi.fn().mockResolvedValue({}),
 }));
 
 import { returnedLineValue, returnSaleLine, readReturnHistory } from './sales';
+import { postUnidentifiedSaleReturnEntry } from './finance-postings';
 
 const scope = { organizationId: 'o', branchId: 'b', actorId: 'a' };
 const input = {
@@ -48,7 +50,7 @@ function fixture() {
         .mockResolvedValue({ batch: { state: 'ACTIVE', expiresAt: new Date('2099-01-01') } }),
     },
     pharmacySaleReturn: {
-      create: vi.fn().mockResolvedValue({ id: 'return' }),
+      create: vi.fn().mockResolvedValue({ id: 'return', createdAt: new Date('2026-10-21') }),
       findFirst: vi.fn().mockResolvedValue({
         id: 'return',
         lines: [{ stockMovementId: 'movement' }],
@@ -190,6 +192,10 @@ describe('verified physical lot boundaries', () => {
       });
       expect(db.pharmacyReturnVerificationTask.create).toHaveBeenCalledWith({
         data: { organizationId: 'o', branchId: 'b', holdingId: 'hold', requestedByUserId: 'a' },
+      });
+      expect(postUnidentifiedSaleReturnEntry).toHaveBeenCalledWith(db, scope, {
+        holdingId: 'hold',
+        at: new Date('2026-10-21'),
       });
     }
   );

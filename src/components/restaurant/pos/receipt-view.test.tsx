@@ -49,6 +49,7 @@ describe('ReceiptView', () => {
           serviceChargeTotal: '0.00',
           deliveryFeeTotal: '4.00',
           compTotal: '0.00',
+          discountTotal: '0.50',
           roundingAdjustment: '0.00',
           grandTotal: '24.00',
         },
@@ -62,6 +63,8 @@ describe('ReceiptView', () => {
     expect(screen.getByText('2.00')).toBeVisible();
     expect(screen.getByText('Change')).toBeVisible();
     expect(screen.getByText('Delivery fee')).toBeVisible();
+    expect(screen.getByText('Discount')).toBeVisible();
+    expect(screen.getByText('0.50')).toBeVisible();
     expect(screen.getAllByText('4.00')).toHaveLength(2);
     expect(screen.getAllByText('24.00').length).toBeGreaterThan(0);
   });

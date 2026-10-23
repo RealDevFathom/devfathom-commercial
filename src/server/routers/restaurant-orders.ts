@@ -110,6 +110,7 @@ function mapDomainError(err: unknown): never {
       err.reason === 'NOT_CLOSABLE' ||
       err.reason === 'NOTHING_TO_SEND' ||
       err.reason === 'NOTHING_TO_FIRE' ||
+      err.reason === 'BILL_ALREADY_CUT' ||
       err.reason === 'LIMIT_REACHED' ||
       err.reason === 'LIMIT_UNAVAILABLE';
     const notFound = err.reason.endsWith('_NOT_FOUND');

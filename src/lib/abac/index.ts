@@ -45,13 +45,12 @@ async function customDecision(
     },
   });
   if (!user) return false;
-  const overrides = user.permissionOverrides.filter((rule) =>
+  const matchingRules = [
+    ...user.permissionOverrides,
+    ...(user.organizationRole?.permissions ?? []),
+  ].filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
-  const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
-    capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
-  );
-  const matchingRules = [...overrides, ...roleRules];
   if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
   if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
   return null;
