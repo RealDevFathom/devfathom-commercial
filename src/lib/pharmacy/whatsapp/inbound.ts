@@ -1,7 +1,5 @@
 import 'server-only';
 
-import { can, subjectFromSession } from '@/lib/abac';
-
 import { lockCustomerConsent } from '../consent-writer';
 
 import {
@@ -14,6 +12,7 @@ import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   claimMessageLogInTransaction,
   sendAndLog,
+  sendClaimedMessage,
   updateMessageLog,
   type MessageLogKind,
 } from './message-log';
@@ -110,18 +109,6 @@ async function placeWhatsAppOrder(
 ) {
   const userId = customer.userId;
   if (!userId) return null;
-  const actor = await db.user.findFirst({
-    where: { id: userId, organizationId },
-    select: { id: true, role: true, department: true, status: true },
-  });
-  if (
-    !actor ||
-    !(await can(subjectFromSession(actor), 'pharmacy:orders', undefined, {
-      db,
-      source: 'REST',
-    }))
-  )
-    return null;
   const branch = await orderBranch(db, organizationId, customer.id);
   if (!branch) return null;
   const scope = { organizationId, branchId: branch.id, actorId: userId };
@@ -226,22 +213,29 @@ export async function handleInboundWhatsAppMessage(
   const age = now.getTime() - message.receivedAt.getTime();
   const inReplyWindow = Number.isFinite(age) && age >= 0 && age < 24 * 60 * 60 * 1000;
 
-  const reply = (
+  const reply = async (
     replyKind: MessageLogKind,
     body: string,
     extra: { orderId?: string; branchId?: string } = {}
-  ) =>
-    sendAndLog(
-      {
-        organizationId,
-        kind: replyKind,
-        dedupeKey: `out:${message.providerMessageId}`,
-        customerId: customer.id,
-        phoneLast4: last4,
-        ...extra,
-      },
-      () => provider.sendText({ to: message.from, body })
+  ) => {
+    const entry = {
+      organizationId,
+      kind: replyKind,
+      dedupeKey: `out:${message.providerMessageId}`,
+      customerId: customer.id,
+      phoneLast4: last4,
+      ...extra,
+    };
+    const previous = await withTenantDb(organizationId, (db) =>
+      db.pharmacyMessageLog.findFirst({
+        where: { organizationId, dedupeKey: entry.dedupeKey, direction: 'OUTBOUND' },
+        select: { id: true, status: true },
+      })
     );
+    if (previous?.status === 'SENT') return 'DUPLICATE';
+    const send = () => provider.sendText({ to: message.from, body });
+    return previous ? sendClaimedMessage(entry, previous.id, send) : sendAndLog(entry, send);
+  };
 
   if (keyword) {
     const optIn = keyword === 'START';
@@ -313,9 +307,9 @@ export async function handleInboundWhatsAppMessage(
           if (!prior?.orderId) return { duplicate: true as const, placed: null };
           const confirmation = await db.pharmacyMessageLog.findFirst({
             where: { organizationId, dedupeKey: `out:${message.providerMessageId}` },
-            select: { id: true },
+            select: { status: true },
           });
-          if (confirmation) return { duplicate: true as const, placed: null };
+          if (confirmation?.status === 'SENT') return { duplicate: true as const, placed: null };
           const order = await db.pharmacyCustomerOrder.findFirst({
             where: { organizationId, id: prior.orderId, customerId: customer.id },
             select: {

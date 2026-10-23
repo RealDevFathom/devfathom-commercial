@@ -92,12 +92,12 @@ function fixture(raw: unknown = input) {
       ),
       findFirst: vi.fn(async () => ({ id: 'branch-1' })),
     }),
-    // Tender requires counter receipt access: dispense capability plus a branch assignment.
+    // Tender requires canonical counter access plus a branch assignment.
     user: only({
       findUnique: vi.fn(async () => ({
         status: 'ACTIVE',
         organizationId: 'org-1',
-        organizationRole: { permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }] },
+        organizationRole: { permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }] },
         permissionOverrides: [],
       })),
     }),

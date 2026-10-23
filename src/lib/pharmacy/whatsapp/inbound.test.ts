@@ -10,32 +10,11 @@ const store = vi.hoisted(() => ({
   failConsent: false,
   failCommit: false,
   failPlacement: false,
-  authorized: true,
-  authorizationCalls: [] as unknown[][],
-}));
-
-vi.mock('@/lib/abac', () => ({
-  subjectFromSession: (user: unknown) => user,
-  can: async (...args: unknown[]) => {
-    store.authorizationCalls.push(args);
-    return store.authorized;
-  },
 }));
 
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
     $queryRaw: async () => [{ id: 'patient-a', patientId: 'patient-a' }],
-    user: {
-      findFirst: async ({ where }: { where: { id: string; organizationId: string } }) =>
-        where.id === 'user-1' && where.organizationId === 'org_a'
-          ? {
-              id: 'user-1',
-              role: 'EMPLOYEE',
-              department: null,
-              status: 'ACTIVE',
-            }
-          : null,
-    },
     pharmacyCustomer: {
       findFirst: async () => ({ patientId: 'patient-a' }),
       findMany: async () =>
@@ -178,8 +157,6 @@ beforeEach(() => {
   store.failConsent = false;
   store.failCommit = false;
   store.failPlacement = false;
-  store.authorized = true;
-  store.authorizationCalls = [];
   provider = new MockWhatsAppProvider(readWhatsAppConfig({}));
 });
 afterEach(() => vi.useRealTimers());
@@ -233,26 +210,18 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     ]);
   });
 
-  it('does not mutate stock when central authorization denies the linked user', async () => {
+  it('lets a normal customer order without requiring a staff capability', async () => {
     knownCustomer(true);
-    store.authorized = false;
 
     await expect(
       handleInboundWhatsAppMessage('org_a', provider, message('Panadol 2 packs'))
-    ).resolves.toBe('PHARMACIST_CALLBACK');
+    ).resolves.toBe('ORDER_PLACED');
 
-    expect(store.placed).toEqual([]);
-    expect(store.authorizationCalls).toEqual([
-      [
-        expect.objectContaining({ id: 'user-1' }),
-        'pharmacy:orders',
-        undefined,
-        expect.objectContaining({ source: 'REST' }),
-      ],
-    ]);
-    expect(provider.calls).toEqual([
-      expect.objectContaining({ body: expect.stringContaining('A pharmacist will call you') }),
-    ]);
+    expect(store.placed).toHaveLength(1);
+    expect(store.placed[0]).toMatchObject({
+      scope: { organizationId: 'org_a', branchId: 'branch-1', actorId: 'user-1' },
+      input: { staff: false },
+    });
   });
 
   it('falls back to a pharmacist call when the message cannot be matched', async () => {
@@ -309,6 +278,10 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     knownCustomer(true);
     const retried = message('Panadol 2 packs');
     await handleInboundWhatsAppMessage('org_a', provider, retried);
+    const confirmation = store.logs.find(
+      (log) => log.dedupeKey === `out:${retried.providerMessageId}`
+    )!;
+    confirmation.status = 'SENT';
     await expect(handleInboundWhatsAppMessage('org_a', provider, retried)).resolves.toBe(
       'DUPLICATE'
     );
@@ -333,25 +306,38 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     expect(store.placed).toHaveLength(1);
   });
 
-  it('resumes confirmation without replacing an order committed before a failure', async () => {
-    knownCustomer(true);
-    const retried = message('Panadol 2 packs');
-    store.logs.push({
-      id: 'log-1',
-      organizationId: 'org_a',
-      dedupeKey: `in:${retried.providerMessageId}`,
-      kind: 'ORDER_REQUEST',
-      status: 'RECEIVED',
-      orderId: 'order_abc123',
-      branchId: 'branch-1',
-    });
+  it.each(['PENDING', 'FAILED'])(
+    'resends a %s confirmation without replacing the committed order',
+    async (status) => {
+      knownCustomer(true);
+      const retried = message('Panadol 2 packs');
+      store.logs.push(
+        {
+          id: 'log-1',
+          organizationId: 'org_a',
+          dedupeKey: `in:${retried.providerMessageId}`,
+          kind: 'ORDER_REQUEST',
+          status: 'RECEIVED',
+          orderId: 'order_abc123',
+          branchId: 'branch-1',
+        },
+        {
+          id: 'log-2',
+          organizationId: 'org_a',
+          dedupeKey: `out:${retried.providerMessageId}`,
+          kind: 'ORDER_CONFIRMATION',
+          direction: 'OUTBOUND',
+          status,
+        }
+      );
 
-    await expect(handleInboundWhatsAppMessage('org_a', provider, retried)).resolves.toBe(
-      'ORDER_PLACED'
-    );
-    expect(store.placed).toEqual([]);
-    expect(provider.calls).toHaveLength(1);
-  });
+      await expect(handleInboundWhatsAppMessage('org_a', provider, retried)).resolves.toBe(
+        'ORDER_PLACED'
+      );
+      expect(store.placed).toEqual([]);
+      expect(provider.calls).toHaveLength(1);
+    }
+  );
 
   it.each(['failConsent', 'failCommit'] as const)(
     'rolls back the claim on %s, allowing STOP retry',
