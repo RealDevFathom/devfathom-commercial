@@ -1043,7 +1043,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  quarantinePart: inventoryControl
+  quarantinePart: regulatory
     .input(
       z
         .object({
