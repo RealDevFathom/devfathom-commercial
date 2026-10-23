@@ -238,6 +238,23 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     await expect(caller()[procedure](input as never)).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
+  it('requires pharmacy:safety rather than pharmacy:inventory to quarantine stock', async () => {
+    grant([allow('pharmacy:inventory')]);
+
+    await expect(
+      caller().quarantinePart({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        reason: 'Suspected contamination',
+        idempotencyKeyPrefix: 'quarantine-1',
+      })
+    ).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
   it('allows an exact pharmacy:safety grant to acknowledge a recall', async () => {
     db.user.findUnique.mockResolvedValue({
       organizationRole: {
