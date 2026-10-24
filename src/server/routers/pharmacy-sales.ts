@@ -352,7 +352,7 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
 async function requireCounterReceiptAccess(
   ctx: TRPCContext,
   branch: string,
-  requireMutationGrant = false
+  requireCanonicalCounter = false
 ): Promise<LedgerScope> {
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
@@ -360,22 +360,14 @@ async function requireCounterReceiptAccess(
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  // Counter mutations remain routed through the central authorization engine.
-  // Cashiers use the canonical counter grant, while pharmacists retain their
-  // established exact dispense grant. The family decision below subsequently
-  // applies DENY-over-ALLOW across every receipt/counter alias.
-  if (requireMutationGrant) {
-    const subject = subjectFromSession(user);
-    const [canCounter, canDispense] = await Promise.all([
-      can(subject, 'pharmacy:counter', undefined, { db: ctx.db }),
-      can(subject, 'pharmacy:dispense', undefined, { db: ctx.db }),
-    ]);
-    if (!canCounter && !canDispense) {
-      throw new TRPCError({
-        code: 'FORBIDDEN',
-        message: 'You do not have permission for this action.',
-      });
-    }
+  if (
+    requireCanonicalCounter &&
+    !(await can(subjectFromSession(user), 'pharmacy:counter', undefined, { db: ctx.db }))
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
   }
 
   const member = await ctx.db.user.findUnique({

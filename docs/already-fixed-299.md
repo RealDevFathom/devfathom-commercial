@@ -1,3 +1,5 @@
+> **25 October 2026 reconciliation:** Historical branch notes below are not current acceptance evidence. PR #641 now preserves current-main authorization: canonical `pharmacy:counter` is required for non-Khata tender; dispense-only access is not a counter-mutation grant. The Cashier template regression now imports the actual template. On 25 October 2026 the manager approved parking the new exact-head workflow separately because CLI workflow authorization is unavailable; the runner and regressions remain, existing gates are unchanged, and no application/DB CI PASS or independent acceptance is claimed. No prior static/other-head PASS is inherited.
+
 # GitHub issue #299: already fixed
 
 Issue #299 reported that the Pharmacy Cashier template grants `pharmacy:counter`, while the
