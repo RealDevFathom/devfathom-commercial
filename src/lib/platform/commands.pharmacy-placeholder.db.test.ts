@@ -1,7 +1,7 @@
 // Real platform command -> fresh MFA -> committed profile -> actual stored guard.
 // No command, crypto, tenancy, guard, or database mocks. Synthetic fixtures only.
 import { createHmac, randomBytes } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { PlatformIdentity } from './auth';
 
 const runtimeUrl = process.env.TEST_DATABASE_URL;
@@ -124,6 +124,11 @@ suite('pharmacy platform placeholder writer and stored guard against PostgreSQL'
     ({ verifyTotp: verify } = await import('@/lib/totp'));
     const { db } = await import('@/lib/db');
     disconnect = () => db.$disconnect();
+  });
+  afterEach(async () => {
+    // The real denial audit is fire-and-forget: await its persistence before disconnect.
+    const { flushAuditWritesForTest } = await import('@/server/audit');
+    await flushAuditWritesForTest();
   });
   afterAll(async () => {
     await disconnect?.();
