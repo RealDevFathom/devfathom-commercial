@@ -847,6 +847,32 @@ describe('#357 partial transfer receipts', () => {
     expect(Math.abs(s.movements.find((m) => m.kind === 'WRITE_OFF')!.sealedPackDelta)).toBe(0);
   });
 
+  it('gives receipt and variance pack openings distinct keys in a pooled transit balance', async () => {
+    const s = scenario(18);
+    // Same-lot transfers share this bucket. Other receipts can consume all loose
+    // stock while this transfer still owns 18 of the 20 sealed units in transit.
+    Object.assign(s.transit, { onHandUnits: 20, sealedPacks: 2, looseUnits: 0 });
+    db.user.findFirst.mockResolvedValue({ id: 'witness' });
+    const result = await caller().receiveTransferWithVariance({
+      branchId: 'branch_a',
+      transferId: s.transfer.id,
+      lines: [{ lineId: 'line_1', receivedUnits: 4 }],
+      idempotencyKeyPrefix: 'pooled-variance',
+      variance: {
+        reason: 'Confirmed permanent shortfall',
+        witnessId: 'witness',
+        evidenceRef: 'courier:pooled',
+      },
+    });
+    expect(result.transfer.status).toBe('RECEIVED');
+    const openings = s.movements.filter((m) => m.kind === 'BREAK_PACK');
+    expect(openings).toHaveLength(2);
+    expect(new Set(openings.map((m) => m.idempotencyKey)).size).toBe(2);
+    expect(s.transit).toEqual({ onHandUnits: 2, sealedPacks: 0, looseUnits: 2 });
+    expect(s.destination.onHandUnits).toBe(4);
+    expect(s.movements.find((m) => m.kind === 'WRITE_OFF')?.quantityUnits).toBe(-14);
+  });
+
   it('requires a distinct active witness before closing a permanent shortfall', async () => {
     const s = scenario();
     await expect(

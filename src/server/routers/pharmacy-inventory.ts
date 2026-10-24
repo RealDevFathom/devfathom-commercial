@@ -550,7 +550,7 @@ async function receiveTransferWithVariance(
         unitsPerPack: step.unitsPerPack,
         transferId: transfer.id,
         lineId: step.line.id,
-        idempotencyKeyPrefix: `${input.idempotencyKeyPrefix}:${step.line.id}`,
+        idempotencyKeyPrefix: `${input.idempotencyKeyPrefix}:${step.line.id}:variance`,
       }
     );
     const evidence = input.variance!;
