@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import { CalendarClock, Plus, Upload } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
@@ -253,6 +254,11 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
         eyebrow="Pharmacy · RX-02"
         heading="Prescriptions"
         description="Capture the original evidence, authority and every authorized unit before dispensing."
+        actions={
+          <Button variant="secondary" render={<Link href="/pharmacy/refill-reminders" />}>
+            Refill review queue
+          </Button>
+        }
       />
       {workspace.isLoading ? (
         <WorkspaceState title="Loading prescriptions">

@@ -16,8 +16,23 @@ const mocks = vi.hoisted(() => ({
   context: vi.fn(),
   medicines: vi.fn(),
   objects: new Map<string, Buffer>(),
+  reviewCapture: vi.fn(),
+  reviewQueue: vi.fn(),
+  reviewDecision: vi.fn(),
+  tenantTransaction: vi.fn(),
 }));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(() => ({})),
+  withTenantDb: (...args: unknown[]) => mocks.tenantTransaction(...args),
+}));
+vi.mock('@/lib/pharmacy/refill-reminder-review', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/pharmacy/refill-reminder-review')>(
+    '@/lib/pharmacy/refill-reminder-review'
+  )),
+  captureRefillReminderForReview: (...args: unknown[]) => mocks.reviewCapture(...args),
+  listRefillReminderReviews: (...args: unknown[]) => mocks.reviewQueue(...args),
+  reviewRefillReminder: (...args: unknown[]) => mocks.reviewDecision(...args),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/lib/abac', async () => ({
   ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
@@ -460,5 +475,89 @@ describe('PH-A3 prescription OCR prefill', () => {
       message: 'The prescription could not be read. Enter the details by hand.',
     });
     expect(mocks.medicines).not.toHaveBeenCalled();
+  });
+});
+
+describe('G9 refill review procedures', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.hasModule.mockReturnValue(true);
+    mocks.tenantTransaction.mockImplementation(async (_organizationId, run) =>
+      run({ transaction: 'review-tx' })
+    );
+    mocks.reviewCapture.mockResolvedValue({ id: 'capture-g9' });
+    mocks.reviewQueue.mockResolvedValue([]);
+    mocks.reviewDecision.mockResolvedValue({ status: 'APPROVED' });
+  });
+
+  it('binds capture, listing and review to the session tenant/actor in a transaction', async () => {
+    const api = caller();
+    await api.captureRefillReminderForReview({
+      branchId: 'branch-a',
+      fillId: 'fill-a',
+      directionsUrdu: 'روزانہ',
+      idempotencyKey: 'g9-capture-retry-key',
+    });
+    await api.refillReminderReviews({ branchId: 'branch-a' });
+    await api.reviewRefillReminder({
+      branchId: 'branch-a',
+      captureId: 'capture-g9',
+      decision: 'APPROVED',
+    });
+    expect(mocks.tenantTransaction).toHaveBeenCalledTimes(3);
+    expect(mocks.tenantTransaction).toHaveBeenCalledWith('org-a', expect.any(Function), {
+      userId: 'user-a',
+    });
+    const tx = { transaction: 'review-tx' };
+    const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
+    expect(mocks.reviewCapture).toHaveBeenCalledWith(
+      tx,
+      scope,
+      expect.objectContaining({ fillId: 'fill-a' })
+    );
+    expect(mocks.reviewQueue).toHaveBeenCalledWith(tx, {
+      organizationId: 'org-a',
+      branchId: 'branch-a',
+    });
+    expect(mocks.reviewDecision).toHaveBeenCalledWith(
+      tx,
+      scope,
+      expect.objectContaining({ decision: 'APPROVED' })
+    );
+  });
+
+  it('rejects client tenant injection, omitted branch and unsupported decisions', async () => {
+    const api = caller();
+    await expect(
+      api.refillReminderReviews({ branchId: 'branch-a', organizationId: 'org-b' } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(api.refillReminderReviews({} as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await expect(
+      api.reviewRefillReminder({
+        branchId: 'branch-a',
+        captureId: 'capture-g9',
+        decision: 'SENT',
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.tenantTransaction).not.toHaveBeenCalled();
+  });
+
+  it('requires the existing pharmacy dispense capability before opening a transaction', async () => {
+    mocks.can.mockResolvedValue(false);
+    const api = caller();
+    await expect(api.refillReminderReviews({ branchId: 'branch-a' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      api.reviewRefillReminder({
+        branchId: 'branch-a',
+        captureId: 'capture-g9',
+        decision: 'APPROVED',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.tenantTransaction).not.toHaveBeenCalled();
   });
 });

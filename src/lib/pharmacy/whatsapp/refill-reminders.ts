@@ -71,6 +71,7 @@ export type RefillReminderRunResult = {
   duplicate: number;
   skippedNoConsent: number;
   notDue: number;
+  heldForReview: number;
 };
 
 /**
@@ -100,8 +101,10 @@ export async function processDueWhatsAppRefillReminders(
     duplicate: 0,
     skippedNoConsent: 0,
     notDue: 0,
+    heldForReview: 0,
   };
-  if (!result.configured || config.provider === 'meta') return { ...result, configured: false };
+  if (!result.configured || config.provider !== 'mock' || provider.name !== 'mock')
+    return { ...result, configured: false };
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   const windowEnd = new Date(now.getTime() + config.reminderLeadDays * DAY_MS);
@@ -118,6 +121,12 @@ export async function processDueWhatsAppRefillReminders(
       WHERE capture."channel" = 'WHATSAPP'
         AND capture."expectedExhaustionAt" > ${now}
         AND capture."expectedExhaustionAt" <= ${windowEnd}
+        AND NOT EXISTS (
+          SELECT 1 FROM "pharmacy_refill_reminder_reviews" review
+          WHERE review."organizationId" = capture."organizationId"
+            AND review."branchId" = capture."branchId"
+            AND review."captureId" = capture."id" AND review."status" <> 'APPROVED'
+        )
         AND NOT EXISTS (
           SELECT 1 FROM "pharmacy_message_logs" log
           WHERE log."organizationId" = capture."organizationId"
@@ -154,6 +163,9 @@ export async function processDueWhatsAppRefillReminders(
     }
 
     const recipient = await withTenantDb(capture.organizationId, async (db) => {
+      await db.$queryRaw(
+        Prisma.sql`SELECT set_config('app.current_branch_id', ${capture.branchId}, true)`
+      );
       if (config.organizationId !== capture.organizationId || !config.phoneNumberId) return null;
       const organization = await db.organization.findUnique({
         where: { id: capture.organizationId },
@@ -185,6 +197,14 @@ export async function processDueWhatsAppRefillReminders(
       );
       if (hour >= 22 || hour < 8) return null;
       await lockPatientConsent(db, capture.organizationId, capture.patientId);
+      // Selection is only a hint. Re-read the gate in the tenant transaction
+      // immediately before the existing outbox claim. No new send authority.
+      const [review] = await db.$queryRaw<Array<{ status: string }>>(Prisma.sql`
+        SELECT "status" FROM "pharmacy_refill_reminder_reviews"
+        WHERE "organizationId" = ${capture.organizationId} AND "branchId" = ${capture.branchId}
+          AND "captureId" = ${capture.id}
+      `);
+      if (review && review.status !== 'APPROVED') return { heldForReview: true } as const;
       const [customer, consent] = await Promise.all([
         db.pharmacyCustomer.findFirst({
           where: { organizationId: capture.organizationId, patientId: capture.patientId },
@@ -247,6 +267,10 @@ export async function processDueWhatsAppRefillReminders(
       continue;
     }
 
+    if ('heldForReview' in recipient) {
+      result.heldForReview += 1;
+      continue;
+    }
     if (!recipient.logId) {
       result.duplicate += 1;
       continue;

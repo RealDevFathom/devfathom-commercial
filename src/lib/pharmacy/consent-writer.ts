@@ -8,7 +8,11 @@ import {
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /** Transaction-only protocol: patient first, then customer; never acquire in reverse. */
-export async function lockPatientConsent(db: ScopedDb, organizationId: string, patientId: string) {
+export async function lockPatientConsent(
+  db: Pick<ScopedDb, '$queryRaw'>,
+  organizationId: string,
+  patientId: string
+) {
   const rows = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT id FROM pharmacy_patients
     WHERE "organizationId" = ${organizationId} AND id = ${patientId} FOR UPDATE
