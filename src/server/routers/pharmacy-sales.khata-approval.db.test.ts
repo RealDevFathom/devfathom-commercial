@@ -9,10 +9,15 @@ const describeIfDatabase = databaseUrl ? describe : describe.skip;
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
 const ids = {
   org: `org_k313_${suffix}`,
+  foreignOrg: `org_k313_foreign_${suffix}`,
+  foreignBranch: `br_k313_foreign_${suffix}`,
   branch: `br_k313_${suffix}`,
   branchB: `br_k313_other_${suffix}`,
   owner: `user_k313_owner_${suffix}`,
   manager: `user_k313_manager_${suffix}`,
+  dispensingManager: `user_k313_dmanager_${suffix}`,
+  dispensingOwner: `user_k313_downer_${suffix}`,
+  nonDispensingAdmin: `user_k313_nadmin_${suffix}`,
   deniedManager: `user_k313_denied_${suffix}`,
   cashier: `user_k313_cashier_${suffix}`,
   admin: `user_k313_admin_${suffix}`,
@@ -23,6 +28,9 @@ type Person = { id: string; role: 'ADMIN' | 'EMPLOYEE' };
 const people = {
   owner: { id: ids.owner, role: 'EMPLOYEE' },
   manager: { id: ids.manager, role: 'EMPLOYEE' },
+  dispensingManager: { id: ids.dispensingManager, role: 'EMPLOYEE' },
+  dispensingOwner: { id: ids.dispensingOwner, role: 'EMPLOYEE' },
+  nonDispensingAdmin: { id: ids.nonDispensingAdmin, role: 'ADMIN' },
   deniedManager: { id: ids.deniedManager, role: 'EMPLOYEE' },
   cashier: { id: ids.cashier, role: 'EMPLOYEE' },
   admin: { id: ids.admin, role: 'ADMIN' },
@@ -243,6 +251,9 @@ beforeAll(async () => {
     const members: Array<{ id: string; role: 'ADMIN' | 'EMPLOYEE'; roleKey: string | null }> = [
       { id: ids.owner, role: 'EMPLOYEE', roleKey: 'owner' },
       { id: ids.manager, role: 'EMPLOYEE', roleKey: 'manager' },
+      { id: ids.dispensingManager, role: 'EMPLOYEE', roleKey: 'manager' },
+      { id: ids.dispensingOwner, role: 'EMPLOYEE', roleKey: 'owner' },
+      { id: ids.nonDispensingAdmin, role: 'ADMIN', roleKey: null },
       { id: ids.deniedManager, role: 'EMPLOYEE', roleKey: 'manager' },
       { id: ids.cashier, role: 'EMPLOYEE', roleKey: 'cashier' },
       { id: ids.admin, role: 'ADMIN', roleKey: null },
@@ -265,6 +276,25 @@ beforeAll(async () => {
     for (const person of Object.values(people))
       await tx.pharmacyBranchAssignment.create({
         data: { organizationId: ids.org, branchId: ids.branch, userId: person.id, active: true },
+      });
+    for (const [userId, capability, effect] of [
+      // Dispense is exact-grant-only in main; neither ADMIN nor owner wildcard supplies it.
+      [ids.dispensingManager, 'pharmacy:dispense', 'ALLOW'],
+      [ids.dispensingOwner, 'pharmacy:dispense', 'ALLOW'],
+      [ids.admin, 'pharmacy:dispense', 'ALLOW'],
+      [ids.deniedAdmin, 'pharmacy:dispense', 'ALLOW'],
+      [ids.wildcardDeniedAdmin, 'pharmacy:dispense', 'ALLOW'],
+      [ids.nonDispensingAdmin, 'pharmacy:dispense', 'DENY'],
+    ] as const)
+      await tx.userPermissionOverride.create({
+        data: {
+          organizationId: ids.org,
+          userId,
+          capability,
+          effect,
+          reason: 'Synthetic #646 admission fixture',
+          createdById: ids.admin,
+        },
       });
     for (const [userId, capability] of [
       [ids.deniedAdmin, 'pharmacy:manage'],
@@ -291,6 +321,25 @@ beforeAll(async () => {
       },
     });
   });
+  await withPlatformDb((tx) =>
+    tx.$executeRawUnsafe(
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
+     VALUES ($1, $1, 'Foreign synthetic Khata', 'Foreign synthetic Khata', 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
+      ids.foreignOrg
+    )
+  );
+  await withTenantDb(ids.foreignOrg, (tx) =>
+    tx.pharmacyBranch.create({
+      data: {
+        id: ids.foreignBranch,
+        code: 'FOREIGN646',
+        name: 'Foreign synthetic branch',
+        addressLine: '3 Test Road',
+        city: 'Lahore',
+        provinceCode: 'PB',
+      },
+    })
+  );
 }, 60_000);
 
 afterEach(async () => {
@@ -346,9 +395,12 @@ describeIfDatabase(
         expect.objectContaining({ amountMinor: 1500, actorId: ids.manager }),
       ]);
     });
-    it('lets the persisted Owner role and tenant ADMIN approve', async () => {
+    it('preserves assigned Owner/dual-grant Manager and main-compatible ADMIN approval', async () => {
       for (const [person, basis] of [
         [people.owner, 'pharmacy:manage'],
+        [people.dispensingManager, 'pharmacy:manage'],
+        [people.dispensingOwner, 'pharmacy:manage'],
+        [people.deniedAdmin, 'tenant-admin'],
         [people.admin, 'tenant-admin'],
       ] as const) {
         const bill = await khataBill(person.id);
@@ -401,21 +453,31 @@ describeIfDatabase(
       }
       expect(await khataState(bill)).toEqual({ limit: 1000, decisions: [], charges: [] });
     });
-    it('refuses manager access at another active branch and ADMIN exact/wildcard DENYs before any write', async () => {
+    it('refuses every non-ADMIN grant combination at unassigned branches and ADMIN without dispense', async () => {
       const cross = await khataBill('unassigned', ids.branchB);
-      await expect(
-        withTenantDb(ids.org, (tx) =>
-          caller(tx, people.manager).khataAccounts({ branchId: ids.branchB, saleId: cross.saleId })
-        )
-      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-      await expect(
-        withTenantDb(ids.org, (tx) =>
-          caller(tx, people.manager).tender(tender(cross, 1500, 'Not assigned here'))
-        )
-      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      for (const person of [
+        people.manager,
+        people.dispensingManager,
+        people.owner,
+        people.dispensingOwner,
+      ]) {
+        await expect(
+          withTenantDb(ids.org, (tx) =>
+            caller(tx, person).khataAccounts({
+              branchId: ids.branchB,
+              saleId: cross.saleId,
+            })
+          )
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(
+          withTenantDb(ids.org, (tx) =>
+            caller(tx, person).tender(tender(cross, 1500, 'Not assigned here'))
+          )
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
       expect(await khataState(cross)).toEqual({ limit: 1000, decisions: [], charges: [] });
       const bill = await khataBill('admin-denied');
-      for (const person of [people.deniedAdmin, people.wildcardDeniedAdmin]) {
+      for (const person of [people.nonDispensingAdmin, people.wildcardDeniedAdmin]) {
         await expect(
           withTenantDb(ids.org, (tx) =>
             caller(tx, person).khataAccounts({ branchId: ids.branch, saleId: bill.saleId })
@@ -426,6 +488,34 @@ describeIfDatabase(
             caller(tx, person).tender(tender(bill, 1500, 'Explicitly denied'))
           )
         ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+      expect(await khataState(bill)).toEqual({ limit: 1000, decisions: [], charges: [] });
+    });
+    it('denies a foreign-tenant branch to manage, dual-grant Owner/Manager and ADMIN without money writes', async () => {
+      const bill = await khataBill('tenant-isolation');
+      for (const person of [
+        people.manager,
+        people.dispensingManager,
+        people.owner,
+        people.dispensingOwner,
+        people.admin,
+      ]) {
+        await expect(
+          withTenantDb(ids.org, (tx) =>
+            caller(tx, person).khataAccounts({
+              branchId: ids.foreignBranch,
+              saleId: bill.saleId,
+            })
+          )
+        ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(
+          withTenantDb(ids.org, (tx) =>
+            caller(tx, person).tender({
+              ...tender(bill, 1500, 'Foreign tenant rejected'),
+              branchId: ids.foreignBranch,
+            })
+          )
+        ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
       }
       expect(await khataState(bill)).toEqual({ limit: 1000, decisions: [], charges: [] });
     });
@@ -481,6 +571,6 @@ describeIfDatabase(
           }),
         });
       });
-    });
+    }, 30_000);
   }
 );

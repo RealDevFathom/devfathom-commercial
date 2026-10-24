@@ -310,9 +310,9 @@ describe('Khata over-limit approval by Owner, Manager or tenant ADMIN (#313)', (
     });
   });
 
-  it('lets the tenant ADMIN approve without a pharmacy:manage grant', async () => {
+  it('preserves main ADMIN dispense plus admin:access approval without manage', async () => {
     const f = fixture();
-    grant('admin:access');
+    grant('pharmacy:dispense', 'admin:access');
     await f.caller().tender(overLimit);
     expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -415,5 +415,139 @@ describe('Khata over-limit approval by Owner, Manager or tenant ADMIN (#313)', (
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Khata fields require Khata tender.' });
     expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+});
+
+// #646 / SEC-646-01: permission combinations must not bypass branch assignment.
+describe('Khata assigned-branch admission (#646)', () => {
+  const actors = [
+    { name: 'Manager (manage only)', grants: ['pharmacy:manage'] },
+    { name: 'Manager (manage and dispense)', grants: ['pharmacy:manage', 'pharmacy:dispense'] },
+    {
+      name: 'Owner (wildcard resolves manage, not sensitive dispense)',
+      grants: ['pharmacy:manage'],
+    },
+    {
+      name: 'Owner (manage plus exact dispense)',
+      grants: ['pharmacy:manage', 'pharmacy:dispense'],
+    },
+    { name: 'Cashier (dispense only)', grants: ['pharmacy:dispense'] },
+  ];
+  const routes = ['accounts', 'statement', 'outcome', 'CREDIT outcome', 'KHATA', 'CREDIT'] as const;
+  function invoke(f: ReturnType<typeof fixture>, route: (typeof routes)[number]) {
+    if (route === 'accounts')
+      return f.caller().khataAccounts({ branchId: input.branchId, saleId: input.saleId });
+    if (route === 'statement')
+      return f.caller().khataStatement({
+        branchId: input.branchId,
+        saleId: input.saleId,
+        familyAccountId: input.familyAccountId,
+      });
+    if (route === 'outcome') return f.caller().tenderOutcome(input);
+    if (route === 'CREDIT outcome')
+      return f.caller().tenderOutcome({ ...input, type: 'CREDIT', familyAccountId: undefined });
+    return f.caller().tender({ ...input, type: route });
+  }
+  function expectNoEffects(f: ReturnType<typeof fixture>) {
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(f.db.$queryRaw).not.toHaveBeenCalled();
+    expect(f.db.pharmacySale.findFirst).not.toHaveBeenCalled();
+    expect(f.db.pharmacyFamilyAccount.findMany).not.toHaveBeenCalled();
+    expect(f.db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+    expect(readPharmacyTenderOutcome).not.toHaveBeenCalled();
+  }
+  for (const actor of actors) {
+    it.each(routes)(`${actor.name} may use %s at an assigned branch`, async (route) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      grant(...actor.grants);
+      await expect(invoke(f, route)).resolves.toBeDefined();
+      expect(f.db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith({
+        where: { organizationId: 'org-a', branchId: 'branch-a', userId: 'owner-a', active: true },
+        select: { branchId: true },
+      });
+      if (route === 'KHATA' || route === 'CREDIT')
+        expect(f.db.pharmacyKhataEvent.create).toHaveBeenCalledOnce();
+    });
+    it.each(routes)(`${actor.name} may not use %s at an unassigned branch`, async (route) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      grant(...actor.grants);
+      f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null as never);
+      await expect(invoke(f, route)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expectNoEffects(f);
+    });
+  }
+  it.each(routes)('assignment without manage or dispense cannot admit %s', async (route) => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    grant('admin:access');
+    await expect(invoke(f, route)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expectNoEffects(f);
+  });
+  it.each(routes)(
+    'ADMIN admin:access plus manage without dispense cannot admit %s',
+    async (route) => {
+      const f = fixture();
+      grant('admin:access', 'pharmacy:manage');
+      await expect(invoke(f, route)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expectNoEffects(f);
+    }
+  );
+  it.each(routes)(
+    'main ADMIN dispense gate retains active same-tenant branch access for %s',
+    async (route) => {
+      const f = fixture();
+      grant('pharmacy:dispense', 'admin:access');
+      f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null as never);
+      await expect(invoke(f, route)).resolves.toBeDefined();
+      expect(f.db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+    }
+  );
+  for (const mismatch of ['session', 'organization', 'entitlement'] as const) {
+    it.each(routes)(`${mismatch} tenant mismatch cannot admit %s`, async (route) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      grant('pharmacy:manage', 'pharmacy:dispense');
+      if (mismatch === 'session') f.user.organizationId = 'org-other';
+      if (mismatch === 'organization') f.context.organization.id = 'org-other';
+      if (mismatch === 'entitlement') f.context.entitlements.organizationId = 'org-other';
+      await expect(invoke(f, route)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expectNoEffects(f);
+    });
+  }
+  it.each(routes)('a foreign or inactive branch cannot admit %s', async (route) => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    grant('pharmacy:manage', 'pharmacy:dispense');
+    f.db.pharmacyBranch.findMany.mockResolvedValue([]);
+    await expect(invoke(f, route)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expectNoEffects(f);
+  });
+  it('preserves main ADMIN approval with exact manage DENY but dispense ALLOW', async () => {
+    const f = fixture();
+    grant('pharmacy:dispense', 'admin:access');
+    f.db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-a',
+      organizationRole: null,
+      permissionOverrides: [{ capability: 'pharmacy:manage', effect: 'DENY' }],
+    } as never);
+    await f.caller().tender({
+      ...input,
+      amountMinor: 101,
+      ownerOverride: true,
+      overrideReason: 'Main ADMIN approval',
+    });
+    expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        reasons: expect.objectContaining({
+          overLimitCharge: expect.objectContaining({ approverBasis: 'tenant-admin' }),
+        }),
+      }),
+    });
   });
 });

@@ -14,7 +14,6 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
-import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
   appendControlledSaleEntries,
   earlierRegisterEntry,
@@ -161,49 +160,36 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 }
 
 /**
- * #313 (product decision #254, reconfirmed 2026-10-21): an Owner or a Manager, and the
- * tenant ADMIN, may approve a Khata charge past the family credit limit. ABAC reads the
- * persisted organization role: the Manager system role holds `pharmacy:manage` and the
- * Owner holds `pharmacy:*`, which covers it, while a matching DENY still wins. The tenant
- * ADMIN keeps the `admin:access` gate it had before. Null means not an approver.
+ * #313: non-ADMIN Owners and Managers approve with pharmacy:manage. ADMIN keeps
+ * main's dispense + admin:access approval contract, not an alternate admission
+ * path into Khata. An exact manage DENY with dispense ALLOW is not a new bypass;
+ * a dispense or pharmacy:* DENY still blocks ADMIN at khataScope and here.
  */
 async function khataLimitApproverBasis(ctx: TRPCContext): Promise<KhataApproverBasis | null> {
   const user = ctx.session!.user;
   const subject = subjectFromSession(user);
   const options = { db: ctx.db, source: 'TRPC' as const };
-  if (await can(subject, 'pharmacy:manage', undefined, options)) return 'pharmacy:manage';
-  if (user.role !== 'ADMIN' || !(await can(subject, 'admin:access', undefined, options)))
+  if (user.role !== 'ADMIN')
+    return (await can(subject, 'pharmacy:manage', undefined, options)) ? 'pharmacy:manage' : null;
+  if (
+    !(await can(subject, 'pharmacy:dispense', undefined, options)) ||
+    !(await can(subject, 'admin:access', undefined, options))
+  )
     return null;
-  // ADMIN is a fallback, not a way around an explicit pharmacy permission revocation.
   const member = await ctx.db.user.findUnique({
     where: { id: user.id },
-    select: {
-      status: true,
-      organizationId: true,
-      organizationRole: { select: { permissions: true } },
-      permissionOverrides: {
-        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
-        select: { capability: true, effect: true },
-      },
-    },
+    select: { status: true, organizationId: true },
   });
   if (!member || member.status !== 'ACTIVE' || member.organizationId !== user.organizationId)
-    return null;
-  const rules = [...member.permissionOverrides, ...(member.organizationRole?.permissions ?? [])];
-  if (
-    rules.some(
-      (rule) =>
-        rule.effect === 'DENY' && capabilityMatches(rule.capability, 'pharmacy:manage', 'DENY')
-    )
-  )
     return null;
   return 'tenant-admin';
 }
 
 /**
- * Khata access for the counter capability. `approver` also admits an over-limit approver
- * (see `khataLimitApproverBasis`) to the account reads and the Khata tender, since the
- * standard Manager template holds neither the counter nor the dispense capability.
+ * Khata account reads and tenders also admit non-ADMIN pharmacy:manage approvers.
+ * Every non-ADMIN actor needs an active same-tenant assignment, even when they
+ * also hold an exact dispense grant. ADMIN still needs dispense;
+ * admin:access alone is never Khata admission.
  */
 async function khataScope(ctx: TRPCContext, branch: string, options: { approver?: boolean } = {}) {
   const scope = await scopeFor(ctx, branch);
@@ -223,12 +209,15 @@ async function khataScope(ctx: TRPCContext, branch: string, options: { approver?
       source: 'TRPC',
     }
   );
-  const approverBasis = options.approver === true ? await khataLimitApproverBasis(ctx) : null;
+  const approverBasis =
+    options.approver === true && ctx.session!.user.role !== 'ADMIN'
+      ? await khataLimitApproverBasis(ctx)
+      : null;
   if (!mayDispense && approverBasis === null)
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
-  // The new manager-only route does not grant access to another branch. Preserve
-  // the existing dispensing route and the tenant ADMIN's active-branch exception.
-  if (!mayDispense && ctx.session!.user.role !== 'ADMIN') {
+  // Saad's 2026-10-24 decision: all non-ADMIN Khata access is assigned-branch only.
+  // Do not let a second grant or a wildcard turn manage into every-branch access.
+  if (ctx.session!.user.role !== 'ADMIN') {
     const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
       where: {
         organizationId: scope.organizationId,
@@ -820,7 +809,7 @@ export const pharmacySalesRouter = router({
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
     const scope =
-      input.type === 'KHATA' || input.familyAccountId
+      input.type === 'KHATA' || input.type === 'CREDIT' || input.familyAccountId
         ? await khataScope(ctx, input.branchId, { approver: true })
         : await scopeFor(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
