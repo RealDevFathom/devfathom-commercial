@@ -15277,6 +15277,7 @@ model CustomerMetrics {
   nextRefillDueAt DateTime?
   computedAt DateTime
   customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  @@unique([organizationId, customerId])
   @@index([organizationId, churnBand])
   @@index([organizationId, nextRefillDueAt])
   @@map("customer_metrics")
