@@ -52,7 +52,7 @@ type SalesCaller = {
     saleId: string;
     deviceId: string;
     businessDate: Date;
-    type: 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT';
+    type: 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT' | 'KHATA';
     amountMinor: number;
     idempotencyKey: string;
   }) => Promise<unknown>;
@@ -301,7 +301,7 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     );
   });
 
-  it.each(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT'] as const)(
+  it.each(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET'] as const)(
     'does not turn persisted dispense access into %s tender authority',
     async (type) => {
       await act(ids.orgA, dispenser, async (api) => {
@@ -319,6 +319,56 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
       });
       await withTenantDb(ids.orgA, async (tx) => {
         expect(await tx.pharmacyTender.count({ where: { saleId: ids.saleA } })).toBe(0);
+      });
+    }
+  );
+
+  it.each(['CREDIT', 'KHATA'] as const)(
+    'keeps persisted canonical-Cashier %s in the dispense/family-account lane',
+    async (type) => {
+      await act(
+        ids.orgA,
+        { id: ids.canonicalCashier, role: 'EMPLOYEE', organizationId: ids.orgA },
+        async (api) => {
+          await expect(
+            api.tender({
+              branchId: ids.branchA,
+              saleId: ids.saleA,
+              deviceId: 'device-a',
+              businessDate: new Date('2026-10-01T00:00:00.000Z'),
+              type,
+              amountMinor: 100,
+              idempotencyKey: `cashier-account-denied-${suffix}-${type}`,
+            })
+          ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        }
+      );
+      await withTenantDb(ids.orgA, async (tx) => {
+        expect(await tx.pharmacyTender.count({ where: { saleId: ids.saleA } })).toBe(0);
+        expect(await tx.pharmacyKhataEvent.count({ where: { organizationId: ids.orgA } })).toBe(0);
+      });
+    }
+  );
+
+  it.each(['CREDIT', 'KHATA'] as const)(
+    'requires an account for persisted dispense-authorized %s, without settlement effects',
+    async (type) => {
+      await act(ids.orgA, dispenser, async (api) => {
+        await expect(
+          api.tender({
+            branchId: ids.branchA,
+            saleId: ids.saleA,
+            deviceId: 'device-a',
+            businessDate: new Date('2026-10-01T00:00:00.000Z'),
+            type,
+            amountMinor: 100,
+            idempotencyKey: `dispense-account-required-${suffix}-${type}`,
+          })
+        ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'ACCOUNT_NOT_FOUND' });
+      });
+      await withTenantDb(ids.orgA, async (tx) => {
+        expect(await tx.pharmacyTender.count({ where: { saleId: ids.saleA } })).toBe(0);
+        expect(await tx.pharmacyKhataEvent.count({ where: { organizationId: ids.orgA } })).toBe(0);
       });
     }
   );

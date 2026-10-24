@@ -81,6 +81,10 @@ type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 
 const dispense: Permission[] = [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }];
 
+// Main routes CREDIT and KHATA through dispense + family-account authorization.
+const nonKhataTenders = ['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET'] as const;
+const accountTenders = ['CREDIT', 'KHATA'] as const;
+
 function fixture(
   permissions: Permission[],
   role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE',
@@ -337,7 +341,20 @@ describe('counter receipt authorization', () => {
     await expect(
       f.caller().returnHistory({ branchId: 'branch-a', saleId: 'sale-a' })
     ).resolves.toEqual([{ id: 'return-1' }]);
-    for (const type of ['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT'] as const) {
+
+    expect(readCounterCart).toHaveBeenCalled();
+    expect(readReturnHistory).toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it.each(nonKhataTenders)(
+    'lets the actual Cashier template tender %s, not credit-account tender',
+    async (type) => {
+      const template = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'cashier')!;
+      const f = fixture(
+        template.capabilities.map((capability) => ({ capability, effect: 'ALLOW' }))
+      );
+      assign(f, ['branch-a']);
       await expect(
         f.caller().tender({
           branchId: 'branch-a',
@@ -349,34 +366,80 @@ describe('counter receipt authorization', () => {
           idempotencyKey: `canonical-${type}`,
         })
       ).resolves.toEqual({ tenderId: 'tender-1' });
+      expect(applyPharmacyTender).toHaveBeenCalledTimes(1);
     }
-    expect(readCounterCart).toHaveBeenCalled();
-    expect(readReturnHistory).toHaveBeenCalled();
-    expect(applyPharmacyTender).toHaveBeenCalledTimes(5);
+  );
+
+  it.each(
+    ['pharmacist', 'receipt-only'].flatMap((key) => nonKhataTenders.map((type) => ({ key, type })))
+  )('does not expand $key grants into $type non-Khata tender authority', async ({ key, type }) => {
+    const capabilities =
+      key === 'pharmacist'
+        ? PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!.capabilities
+        : ['pharmacy:receipt'];
+    const f = fixture(capabilities.map((capability) => ({ capability, effect: 'ALLOW' })));
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().tender({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        type,
+        amountMinor: 100,
+        idempotencyKey: `no-scope-expansion-${key}-${type}`,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 
-  it.each(['pharmacist', 'receipt-only'])(
-    'does not expand %s grants into non-Khata tender authority',
-    async (key) => {
+  it.each(
+    ['cashier', 'receipt-only'].flatMap((key) => accountTenders.map((type) => ({ key, type })))
+  )(
+    'keeps $type in the dispense/family-account lane: $key alone is forbidden',
+    async ({ key, type }) => {
       const capabilities =
-        key === 'pharmacist'
+        key === 'cashier'
           ? PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!.capabilities
           : ['pharmacy:receipt'];
       const f = fixture(capabilities.map((capability) => ({ capability, effect: 'ALLOW' })));
       assign(f, ['branch-a']);
-      for (const type of ['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT'] as const) {
-        await expect(
-          f.caller().tender({
-            branchId: 'branch-a',
-            saleId: 'sale-a',
-            deviceId: 'device-a',
-            businessDate: new Date('2026-10-01T00:00:00.000Z'),
-            type,
-            amountMinor: 100,
-            idempotencyKey: `no-scope-expansion-${key}-${type}`,
-          })
-        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-      }
+      await expect(
+        f.caller().tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type,
+          amountMinor: 100,
+          idempotencyKey: `account-denied-${key}-${type}`,
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(accountTenders)(
+    'requires a family account for dispense-authorized %s before settlement',
+    async (type) => {
+      const template = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'pharmacist')!;
+      const f = fixture(
+        template.capabilities.map((capability) => ({ capability, effect: 'ALLOW' }))
+      );
+      assign(f, ['branch-a']);
+      await expect(
+        f.caller().tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type,
+          amountMinor: 100,
+          idempotencyKey: `account-required-${type}`,
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'ACCOUNT_NOT_FOUND' });
       expect(f.db.$transaction).not.toHaveBeenCalled();
       expect(applyPharmacyTender).not.toHaveBeenCalled();
     }

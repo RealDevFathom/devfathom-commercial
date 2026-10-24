@@ -1,3 +1,5 @@
+> **25 October 2026 regression-contract correction:** Independent QA of prior head `46ec8fec5286060c53439334a3663a821ff358b8` found **135 PASS / 3 FAIL / 0 SKIP** (unit129/131, PostgreSQL6/7). Those failures incorrectly treated CREDIT as non-Khata. Main intentionally routes CREDIT and KHATA through dispense plus family-account authorization. The new regression matrix separately covers CASH/CARD/BANK_TRANSFER/WALLET, denies counter-only account tenders, and requires the account for a dispense-authorized caller, with no tender/Khata writes on refusal. Production authorization is unchanged. This is a new-head correction, **not a PASS**; independent verification must use a fresh throwaway DB. The prior head is consumed and must not be replayed. The new workflow remains fully preserved/parked; existing gates are unchanged and dedicated app/DB CI is still absent.
+
 # Already fixed: pharmacy counter Cashier capability
 
 ## Disposition
