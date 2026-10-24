@@ -169,7 +169,7 @@ async function receiptScopeFor(ctx: TRPCContext, branch: string): Promise<Ledger
   }
   const member = await ctx.db.user.findUnique({
     where: { id: scope.actorId },
-    select: { organizationId: true, status: true, organizationRole: { select: { name: true } } },
+    select: { organizationId: true, status: true },
   });
   if (
     !member ||
@@ -178,12 +178,9 @@ async function receiptScopeFor(ctx: TRPCContext, branch: string): Promise<Ledger
   ) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
-  if (
-    user.role === 'ADMIN' ||
-    user.role === 'HR' ||
-    ['org:superadmin', 'org:admin'].includes(member.organizationRole?.name ?? '')
-  )
-    return scope;
+  // Canonical pharmacy branch exception: trusted session ADMIN only.
+  // HR and editable organization-role keys/names do not grant branch authority.
+  if (user.role === 'ADMIN') return scope;
   const assignments = await ctx.db.pharmacyBranchAssignment.findMany({
     where: {
       organizationId: scope.organizationId,

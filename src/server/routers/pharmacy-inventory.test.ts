@@ -109,7 +109,7 @@ function caller(
   overrides: {
     enabledModules?: string[];
     userId?: string | null;
-    role?: 'ADMIN' | 'EMPLOYEE';
+    role?: 'ADMIN' | 'EMPLOYEE' | 'HR';
     userOrganizationId?: string;
   } = {}
 ) {
@@ -943,6 +943,146 @@ describe('#357 partial transfer receipts', () => {
       ? { ...common, lineId: 'line_1', receivedUnits: 4 }
       : { ...common, lines: [{ lineId: 'line_1', receivedUnits: 4 }] };
   }
+  function expectNoReceiptEffects(s: ReturnType<typeof scenario>) {
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+    for (const model of [
+      db.pharmacyInventoryLot,
+      db.pharmacyStockMovement,
+      db.pharmacyStockBalance,
+      db.pharmacyStockDiscrepancy,
+      db.pharmacyInterbranchTransferLine,
+      db.pharmacyInterbranchTransfer,
+    ]) {
+      expect(model.create).not.toHaveBeenCalled();
+      expect(model.update).not.toHaveBeenCalled();
+    }
+    expect(s.movements).toEqual([]);
+    expect(s.transit).toEqual({ onHandUnits: 10, sealedPacks: 1, looseUnits: 0 });
+    expect(s.destination).toEqual({ onHandUnits: 0, sealedPacks: 0, looseUnits: 0 });
+    expect(s.transfer).toMatchObject({
+      status: 'DISPATCHED',
+      receivedAt: null,
+      lines: [{ id: 'line_1', quantityUnits: 10, receivedUnits: 0 }],
+    });
+  }
+
+  describe.each(receiptProcedures)(
+    '%s SEC-384-01 canonical receipt branch authority',
+    (procedure) => {
+      const nonAdminRoles = [
+        { role: 'EMPLOYEE' as const, name: 'org:admin' },
+        { role: 'EMPLOYEE' as const, name: 'org:superadmin' },
+        { role: 'HR' as const, name: 'stock-clerk' },
+      ];
+      const unassignedActors = nonAdminRoles.flatMap((actor) => [
+        { ...actor, assignment: 'none', branches: [] as { branchId: string }[] },
+        { ...actor, assignment: 'sibling only', branches: [{ branchId: 'branch_a' }] },
+      ]);
+
+      it.each(unassignedActors)(
+        'refuses $role / display name $name / $assignment with no stock effects',
+        async ({ role, name, branches }) => {
+          const s = scenario();
+          s.transfer.toBranchId = 'branch_b';
+          // The role KEY is nonprivileged. Display names are editable, not admin grants.
+          db.user.findUnique.mockResolvedValue({
+            organizationId: 'org_a',
+            status: 'ACTIVE',
+            organizationRole: {
+              key: 'stock-clerk',
+              name,
+              permissions: [allow('pharmacy:inventory')],
+            },
+            permissionOverrides: [],
+          });
+          db.pharmacyBranchAssignment.findMany.mockResolvedValue(branches);
+          await expect(
+            caller({ role })[procedure](branchReceiptInput(procedure, s.transfer.id) as never)
+          ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+          expectNoReceiptEffects(s);
+        }
+      );
+
+      it.each(nonAdminRoles)(
+        'allows $role / display name $name only with the active destination assignment',
+        async ({ role, name }) => {
+          const s = scenario();
+          s.transfer.toBranchId = 'branch_b';
+          db.user.findUnique.mockResolvedValue({
+            organizationId: 'org_a',
+            status: 'ACTIVE',
+            organizationRole: {
+              key: 'stock-clerk',
+              name,
+              permissions: [allow('pharmacy:inventory')],
+            },
+            permissionOverrides: [],
+          });
+          db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_b' }]);
+          await caller({ role })[procedure](branchReceiptInput(procedure, s.transfer.id) as never);
+          expect(s.transit.onHandUnits).toBe(6);
+          expect(s.destination.onHandUnits).toBe(4);
+          expect(db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
+            where: {
+              organizationId: 'org_a',
+              userId: 'user_a',
+              active: true,
+              branch: { organizationId: 'org_a', active: true },
+            },
+            select: { branchId: true },
+          });
+        }
+      );
+
+      it.each([
+        { member: 'missing', value: null },
+        { member: 'foreign', value: { organizationId: 'org_b', status: 'ACTIVE' } },
+        { member: 'inactive', value: { organizationId: 'org_a', status: 'SUSPENDED' } },
+      ])(
+        'refuses even session ADMIN with $member persisted membership before stock effects',
+        async ({ value }) => {
+          const s = scenario();
+          s.transfer.toBranchId = 'branch_b';
+          // Capability lookup remains granted; the second lookup is persisted membership.
+          db.user.findUnique
+            .mockResolvedValueOnce({
+              organizationId: 'org_a',
+              status: 'ACTIVE',
+              organizationRole: { permissions: [allow('pharmacy:inventory')] },
+              permissionOverrides: [],
+            })
+            .mockResolvedValue(value);
+          await expect(
+            caller({ role: 'ADMIN' })[procedure](
+              branchReceiptInput(procedure, s.transfer.id) as never
+            )
+          ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+          expectNoReceiptEffects(s);
+        }
+      );
+
+      it('refuses an inactive or foreign destination even for session ADMIN before stock effects', async () => {
+        const s = scenario();
+        s.transfer.toBranchId = 'branch_b';
+        db.pharmacyBranch.findMany.mockResolvedValue([]);
+        await expect(
+          caller({ role: 'ADMIN' })[procedure](
+            branchReceiptInput(procedure, s.transfer.id) as never
+          )
+        ).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: 'That record is not in this workspace.',
+        });
+        expectNoReceiptEffects(s);
+        expect(db.pharmacyBranch.findMany).toHaveBeenCalledWith({
+          where: { organizationId: 'org_a', id: { in: ['branch_b'] }, active: true },
+          select: { id: true },
+        });
+      });
+    }
+  );
+
   it.each(receiptProcedures)(
     '%s refuses a valid transfer TO an unassigned same-tenant branch',
     async (procedure) => {
