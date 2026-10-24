@@ -310,8 +310,13 @@ async function serveInTenantScope(
             organization,
             support: actor.support,
           }),
-        onError: () => {
+        onError: ({ error, path }) => {
           procedureFailed = true;
+          // In production the errorFormatter tells the client only that an
+          // unexpected failure happened; its message, cause and stack are kept here.
+          if (error.code === 'INTERNAL_SERVER_ERROR') {
+            console.error(`[trpc] ${path ?? 'request'} failed:`, error);
+          }
         },
       });
       if (procedureFailed) throw new TransactionAborted(response);

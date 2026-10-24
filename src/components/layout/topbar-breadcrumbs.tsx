@@ -24,6 +24,13 @@ export const routeLabels: Record<string, string> = {
   '/audit-logs': 'Audit Log',
   '/api-docs': 'API Access',
   '/settings': 'Settings',
+  // The hospitality settings pages, named as the hospitality menu names them.
+  '/hotel/settings/property': 'Property',
+  '/hotel/settings/rooms': 'Rooms',
+  '/hotel/settings/meal-plans': 'Meal plans',
+  '/hotel/settings/spaces': 'Function spaces',
+  '/hotel/settings/extras': 'Extras',
+  '/hotel/settings/journey': 'Guest messages',
 };
 
 const linkableDetailRoute = /^\/(projects|clients|notes|team|meetings)\/[^/]+$/;

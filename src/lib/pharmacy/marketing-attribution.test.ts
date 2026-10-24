@@ -53,6 +53,9 @@ it('bounds eligibility by tenant, branch, matching customer, Meta delivery, seve
   expect(sql.sql).toContain(`c."customerId" = s."customerId"`);
   expect(sql.sql).toContain(`interval '7 days'`);
   expect(sql.sql).toContain('pharmacy_sale_return_lines');
+  expect(sql.sql).toContain('pharmacy_unidentified_return_holds');
+  expect(sql.sql).toContain(`entry."sourceKind" = 'PHARMACY_UNIDENTIFIED_RETURN_HOLD'`);
+  expect(sql.sql).toContain(`e."sourceKind"='PHARMACY_UNIDENTIFIED_RETURN_HOLD'`);
   expect(sql.sql).toContain('finance_journal_lines');
   expect(sql.sql).not.toContain('l."unitCostMinor" * l."canonicalUnits"');
   expect(sql.sql).toContain('money.margin::integer AS "marginMinor"');

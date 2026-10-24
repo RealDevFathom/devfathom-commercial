@@ -29,11 +29,13 @@
  * read. Most races run twice — with `updatedAt` advancing on every write, and
  * with it frozen so two writes share a timestamp and only the words, the
  * status or the approval named can decide. The rest run with `updatedAt`
- * advancing only: the retirements, which name nothing but the time, and the
- * first-approver race and the HTTP 409, whose repeated approval of the same
- * words is refused by the transition rule, not as a conflict, when timestamps
- * collide (pinned on its own). With shared timestamps, retiring a draft saved
- * since goes through: its words stay as a record and nothing is approved. The
+ * advancing only: the retirements of an approval, which name nothing but the
+ * time (approved words never change), and the first-approver race and the
+ * HTTP 409, whose repeated approval of the same words is refused by the
+ * transition rule, not as a conflict, when timestamps collide (pinned on its
+ * own). Retiring a draft names its wording too, so a stale retirement of a
+ * draft saved since is refused even when the timestamps collide, and a draft
+ * retirement that names no wording is refused before any write. The
  * `beforeWrite` hook is kept only for what the lock does not serialize: a
  * writer outside it (a raw row, a raw update) and a serialization failure,
  * which the conditional writes and the unique indexes must still refuse. This
@@ -307,6 +309,8 @@ const retirement = (seen: Seen) => ({
   id: seen.id,
   expectedUpdatedAt: seen.updatedAt,
 });
+/** A retirement of the draft `seen`, which names its wording as the editor does. */
+const draftRetirement = (seen: Seen) => ({ ...retirement(seen), ...reading(seen) });
 /** One version as `actor`'s board shows it, read in a request of its own. */
 async function opens(id: string, actor = 'current_approver'): Promise<Seen> {
   const board = await caller(actor).list({ branchId: BRANCH });
@@ -652,7 +656,8 @@ describe('hotelProperty.journeyTemplates writes against the version the caller r
   it.each(TIMESTAMPS)('refuses a stale save after retirement (timestamps %s)', async (mode) => {
     timestamps(mode);
     const seen = await opens(draft.id, 'editor');
-    await caller().retire(retirement(await opens(draft.id)));
+    // The colleague retires the draft as the editor does: by its time and words.
+    await caller().retire(draftRetirement(await opens(draft.id)));
     const before = writes().length;
     await expect(caller('editor').save(edit(seen, { body: 'Replacement' }))).rejects.toMatchObject({
       code: 'CONFLICT',
@@ -913,6 +918,54 @@ describe('hotelProperty.journeyTemplates writes against the version the caller r
     });
     expect(writes()).toHaveLength(before);
     expect(row()).toMatchObject({ body: 'Colleague copy', status: 'DRAFT' });
+  });
+
+  it.each(TIMESTAMPS)(
+    'refuses a stale retirement of a draft by its words when a colleague saved since (timestamps %s)',
+    async (mode) => {
+      const seen = await opens(draft.id);
+      timestamps(mode);
+      held = new Set(['hotel:marketing']);
+      await caller('marketer').save(edit(seen, { body: 'Colleague copy' }));
+      held = new Set(['hotel:property-admin']);
+      if (mode === 'shared') expect(row().updatedAt).toEqual(seen.updatedAt);
+      const before = writes().length;
+      await expect(caller().retire(draftRetirement(seen))).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message: CHANGED,
+      });
+      expect(writes()).toHaveLength(before);
+      expect(row()).toMatchObject({ body: 'Colleague copy', status: 'DRAFT' });
+    }
+  );
+
+  it('retires a draft only at the wording its retirer read', async () => {
+    const seen = await opens(draft.id);
+    const retired = await caller().retire(draftRetirement(seen));
+    expect(retired).toMatchObject({ id: draft.id, status: 'RETIRED', approvedByUserId: null });
+    expect(templates.updateMany).toHaveBeenLastCalledWith({
+      where: expect.objectContaining({
+        id: draft.id,
+        status: 'DRAFT',
+        updatedAt: seen.updatedAt,
+        subject: seen.subject,
+        body: seen.body,
+      }),
+      data: { status: 'RETIRED', approvedByUserId: null, approvedAt: null },
+    });
+  });
+
+  it('refuses a draft retirement that names no wording, before any write, even at the right time', async () => {
+    freezeTimestamps();
+    const error = await caller()
+      .retire(retirement(await opens(draft.id)))
+      .catch((caught: TRPCError) => caught);
+    expect(error).toMatchObject({ code: 'BAD_REQUEST' });
+    expect((error as TRPCError).cause).toMatchObject({
+      issues: [expect.objectContaining({ path: ['expectedUpdatedAt'] })],
+    });
+    expect(writes()).toEqual([]);
+    expect(row()).toMatchObject({ status: 'DRAFT', body: draft.body });
   });
 
   it('refuses a stale retirement of an approval a colleague already replaced, as a conflict', async () => {

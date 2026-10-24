@@ -31,11 +31,7 @@ describe('inventory write-off witness', () => {
     const db = database(null);
 
     await expect(
-      writeOff(
-        db as never,
-        { organizationId: 'org', branchId: 'branch', actorId: 'actor' },
-        input
-      )
+      writeOff(db as never, { organizationId: 'org', branchId: 'branch', actorId: 'actor' }, input)
     ).rejects.toMatchObject({ reason: 'COAUTH_REQUIRED' });
     expect(db.user.findFirst).toHaveBeenCalledWith({
       where: { id: 'witness', organizationId: 'org', status: 'ACTIVE' },
@@ -50,11 +46,7 @@ describe('inventory write-off witness', () => {
     const db = database({ id: 'witness' });
 
     await expect(
-      writeOff(
-        db as never,
-        { organizationId: 'org', branchId: 'branch', actorId: 'actor' },
-        input
-      )
+      writeOff(db as never, { organizationId: 'org', branchId: 'branch', actorId: 'actor' }, input)
     ).resolves.toEqual({ movement: { id: 'movement' }, custody: { id: 'custody' } });
     expect(db.pharmacyStockMovement.create).toHaveBeenCalledOnce();
     expect(db.pharmacyCustodyRecord.create).toHaveBeenCalledWith({

@@ -1,0 +1,25 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  DevFathom DNS zone for one environment's base domain (for example
+  staging.devfathom.com). The parent zone (devfathom.com, on Cloudflare)
+  delegates this name to the NameServers output with four NS records.
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: The environment's base domain, delegated from the parent zone.
+    AllowedPattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
+
+Resources:
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref DomainName
+      HostedZoneConfig:
+        Comment: !Sub 'DevFathom ${DomainName}, delegated from the parent zone'
+
+Outputs:
+  HostedZoneId:
+    Value: !Ref HostedZone
+  NameServers:
+    Value: !Join [',', !GetAtt HostedZone.NameServers]

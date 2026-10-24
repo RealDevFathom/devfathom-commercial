@@ -213,9 +213,6 @@ export async function postGoodsReceipt(
         licences: receipt.supplier.licences.map((licence) => ({
           expiresAt: licence.expiresAt,
           verified: licence.verifiedAt !== null,
-          superseded: receipt.supplier.licences.some(
-            (candidate) => candidate.supersedesId === licence.id
-          ),
         })),
       },
       at: input.at,

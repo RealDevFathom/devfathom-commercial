@@ -13,6 +13,8 @@ const io = vi.hoisted(() => ({
   download: vi.fn(),
   remove: vi.fn(),
   fetch: vi.fn(),
+  s3client: vi.fn(),
+  s3send: vi.fn(),
 }));
 vi.mock('node:fs/promises', () => io);
 vi.mock('@azure/identity', () => ({
@@ -30,6 +32,24 @@ vi.mock('@azure/storage-blob', () => ({
     getContainerClient = io.container;
   },
 }));
+vi.mock('@aws-sdk/client-s3', () => {
+  const command = (name: string) =>
+    class {
+      readonly command = name;
+      constructor(readonly input: Record<string, unknown>) {}
+    };
+  return {
+    S3Client: class {
+      constructor(...args: unknown[]) {
+        io.s3client(...args);
+      }
+      send = io.s3send;
+    },
+    PutObjectCommand: command('PutObject'),
+    GetObjectCommand: command('GetObject'),
+    DeleteObjectCommand: command('DeleteObject'),
+  };
+});
 import {
   assertStorageAvailable,
   getStorageAvailability,
@@ -37,6 +57,7 @@ import {
   getUpload,
   deleteUpload,
   StorageUnavailableError,
+  StoredObjectMissingError,
 } from './storage';
 
 beforeEach(() => {
@@ -69,6 +90,10 @@ const unavailable = [
   { STORAGE_ADAPTER: 'local', NODE_ENV: 'staging' },
   { STORAGE_ADAPTER: 'azure', AZURE_STORAGE_ACCOUNT_NAME: '' },
   { STORAGE_ADAPTER: 'azure', AZURE_STORAGE_CONTAINER: ' ' },
+  { STORAGE_ADAPTER: 's3', S3_UPLOADS_BUCKET: undefined, AWS_REGION: 'me-central-1' },
+  { STORAGE_ADAPTER: 's3', S3_UPLOADS_BUCKET: ' ', AWS_REGION: 'me-central-1' },
+  { STORAGE_ADAPTER: 's3', S3_UPLOADS_BUCKET: 'inert-bucket', AWS_REGION: undefined },
+  { STORAGE_ADAPTER: 's3', S3_UPLOADS_BUCKET: 'inert-bucket', AWS_REGION: ' ' },
 ];
 test.each(unavailable)('unavailable %j performs zero I/O for all operations', async (env) => {
   for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
@@ -151,5 +176,106 @@ test('local delete failure rejects rather than claiming retention cleanup', asyn
   vi.stubEnv('NODE_ENV', 'test');
   const failure = new Error('fake filesystem denied');
   io.rm.mockRejectedValue(failure);
+  await expect(deleteUpload('org-a', 'file.png')).rejects.toBe(failure);
+});
+test('preflight names the S3 bucket and region', () => {
+  expect(
+    getStorageAvailability({
+      STORAGE_ADAPTER: 's3',
+      S3_UPLOADS_BUCKET: ' uploads-bucket ',
+      AWS_REGION: 'me-central-1',
+    })
+  ).toEqual({ available: true, adapter: 's3', bucket: 'uploads-bucket', region: 'me-central-1' });
+  for (const operation of Object.values(io)) expect(operation).not.toHaveBeenCalled();
+});
+test('configured S3 uses fake SDK, keys by organization, and disabling afterward blocks it', async () => {
+  vi.stubEnv('STORAGE_ADAPTER', 's3');
+  vi.stubEnv('S3_UPLOADS_BUCKET', 'uploads-bucket');
+  vi.stubEnv('AWS_REGION', 'me-central-1');
+  const bytes = Buffer.from('data');
+  io.s3send.mockImplementation(async (command: { command: string }) =>
+    command.command === 'GetObject'
+      ? { Body: { transformToByteArray: async () => new Uint8Array(bytes) } }
+      : {}
+  );
+  await putUpload('org-a', 'file.png', bytes, 'image/png');
+  const read = await getUpload('org-a', 'file.png');
+  await deleteUpload('org-a', 'file.png');
+  expect(Buffer.isBuffer(read)).toBe(true);
+  expect(read.equals(bytes)).toBe(true);
+  expect(io.s3client).toHaveBeenCalledOnce();
+  expect(io.s3client).toHaveBeenCalledWith({ region: 'me-central-1' });
+  expect(io.s3send.mock.calls.map(([command]) => command)).toEqual([
+    {
+      command: 'PutObject',
+      input: {
+        Bucket: 'uploads-bucket',
+        Key: 'org-a/file.png',
+        Body: bytes,
+        ContentType: 'image/png',
+      },
+    },
+    { command: 'GetObject', input: { Bucket: 'uploads-bucket', Key: 'org-a/file.png' } },
+    { command: 'DeleteObject', input: { Bucket: 'uploads-bucket', Key: 'org-a/file.png' } },
+  ]);
+  for (const fn of [
+    io.mkdir,
+    io.readFile,
+    io.rm,
+    io.writeFile,
+    io.fetch,
+    io.service,
+    io.credential,
+  ])
+    expect(fn).not.toHaveBeenCalled();
+  vi.clearAllMocks();
+  vi.stubEnv('STORAGE_ADAPTER', 'disabled');
+  await expect(getUpload('org-a', 'file.png')).rejects.toBeInstanceOf(StorageUnavailableError);
+  for (const fn of Object.values(io)) expect(fn).not.toHaveBeenCalled();
+});
+test('an S3 object without a body is an error, not an empty file', async () => {
+  vi.stubEnv('STORAGE_ADAPTER', 's3');
+  vi.stubEnv('S3_UPLOADS_BUCKET', 'uploads-bucket');
+  vi.stubEnv('AWS_REGION', 'me-central-1');
+  io.s3send.mockResolvedValue({});
+  await expect(getUpload('org-a', 'file.png')).rejects.toThrow('Stored object has no body.');
+});
+test('a missing S3 object reads as missing, in the shape the readers test for', async () => {
+  vi.stubEnv('STORAGE_ADAPTER', 's3');
+  vi.stubEnv('S3_UPLOADS_BUCKET', 'uploads-bucket');
+  vi.stubEnv('AWS_REGION', 'me-central-1');
+  // The SDK's errors carry only a name and $metadata.httpStatusCode: no code, no statusCode.
+  const noSuchKey = Object.assign(new Error('The specified key does not exist.'), {
+    name: 'NoSuchKey',
+    $metadata: { httpStatusCode: 404 },
+  });
+  const bare404 = Object.assign(new Error('UnknownError'), {
+    name: 'Unknown',
+    $metadata: { httpStatusCode: 404 },
+  });
+  for (const failure of [noSuchKey, bare404]) {
+    io.s3send.mockRejectedValueOnce(failure);
+    const error = await getUpload('org-a', 'gone.json').catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(StoredObjectMissingError);
+    expect(error).toMatchObject({ statusCode: 404, code: 'NoSuchKey', cause: failure });
+  }
+});
+test('an S3 refusal stays a failure rather than reading as a missing object', async () => {
+  vi.stubEnv('STORAGE_ADAPTER', 's3');
+  vi.stubEnv('S3_UPLOADS_BUCKET', 'uploads-bucket');
+  vi.stubEnv('AWS_REGION', 'me-central-1');
+  const denied = Object.assign(new Error('Access Denied'), {
+    name: 'AccessDenied',
+    $metadata: { httpStatusCode: 403 },
+  });
+  io.s3send.mockRejectedValue(denied);
+  await expect(getUpload('org-a', 'file.png')).rejects.toBe(denied);
+});
+test('an S3 delete failure rejects rather than claiming retention cleanup', async () => {
+  vi.stubEnv('STORAGE_ADAPTER', 's3');
+  vi.stubEnv('S3_UPLOADS_BUCKET', 'uploads-bucket');
+  vi.stubEnv('AWS_REGION', 'me-central-1');
+  const failure = new Error('fake S3 denied');
+  io.s3send.mockRejectedValue(failure);
   await expect(deleteUpload('org-a', 'file.png')).rejects.toBe(failure);
 });

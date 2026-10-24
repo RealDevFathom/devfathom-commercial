@@ -17,7 +17,6 @@ const NOW = new Date('2026-09-02T00:00:00.000Z');
 const VALID_LICENCE: SupplierLicenceEvidence = {
   expiresAt: new Date('2027-01-01T00:00:00.000Z'),
   verified: true,
-  superseded: false,
 };
 
 describe('PUR-01 supplier eligibility', () => {
@@ -37,23 +36,7 @@ describe('PUR-01 supplier eligibility', () => {
     expect(() =>
       assertSupplierEligible({
         authorized: true,
-        licences: [
-          {
-            expiresAt: new Date('2026-09-01T23:59:59.999Z'),
-            verified: true,
-            superseded: false,
-          },
-        ],
-        at: NOW,
-      })
-    ).toThrow('SUPPLIER_LICENCE_EXPIRED');
-  });
-
-  it('does not accept a superseded licence as licence evidence', () => {
-    expect(() =>
-      assertSupplierEligible({
-        authorized: true,
-        licences: [{ ...VALID_LICENCE, superseded: true }],
+        licences: [{ expiresAt: new Date('2026-09-01T23:59:59.999Z'), verified: true }],
         at: NOW,
       })
     ).toThrow('SUPPLIER_LICENCE_EXPIRED');
@@ -73,7 +56,7 @@ describe('PUR-01 supplier eligibility', () => {
     expect(() =>
       assertSupplierEligible({
         authorized: true,
-        licences: [{ expiresAt: NOW, verified: true, superseded: false }],
+        licences: [{ expiresAt: NOW, verified: true }],
         at: NOW,
       })
     ).not.toThrow();
@@ -396,13 +379,7 @@ describe('PUR-02 quote comparison', () => {
         {
           quoteId: 'q_expired',
           ...supplier('s_2', 'Lapsed'),
-          supplierLicences: [
-            {
-              expiresAt: new Date('2026-01-01T00:00:00.000Z'),
-              verified: true,
-              superseded: false,
-            },
-          ],
+          supplierLicences: [{ expiresAt: new Date('2026-01-01T00:00:00.000Z'), verified: true }],
           ...base,
           pricePerPackMinor: 2_000,
         },

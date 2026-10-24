@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createHash } from 'node:crypto';
 
+import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
@@ -166,7 +167,12 @@ export async function runManualReferenceConnector(
     },
     update: {},
   });
-  if (!connector.enabled) throw new Error('Manual reference connector is disabled.');
+  // Told to the operator who started the import, so a deliberate TRPCError.
+  if (!connector.enabled)
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: 'Manual reference connector is disabled.',
+    });
 
   const completed = await db.pharmacyReferenceConnectorRun.findFirst({
     where: { connectorId: connector.id, inputDigest, status: 'COMPLETED' },

@@ -57,7 +57,23 @@ export async function eligibleMarketingReceipts(
           OR entry."sourceKind" = 'PHARMACY_SALE_RETURN_LINE' AND EXISTS (
             SELECT 1 FROM pharmacy_sale_return_lines r WHERE r."organizationId" = l."organizationId"
               AND r."branchId" = l."branchId" AND r."saleLineId" = l.id AND r.id = entry."sourceId"
-              AND r."createdAt" < ${cutoff}))
+              AND r."createdAt" < ${cutoff})
+          OR entry."sourceKind" = 'PHARMACY_UNIDENTIFIED_RETURN_HOLD' AND EXISTS (
+            SELECT 1 FROM pharmacy_unidentified_return_holds h WHERE h."organizationId" = l."organizationId"
+              AND h."branchId" = l."branchId" AND h."saleLineId" = l.id AND h.id = entry."sourceId"
+              AND h."createdAt" < ${cutoff}))
+        AND NOT EXISTS (
+          SELECT 1 FROM pharmacy_sale_return_lines r
+          WHERE r."organizationId"=l."organizationId" AND r."branchId"=l."branchId" AND r."saleLineId"=l.id
+            AND r."createdAt" < ${cutoff} AND NOT EXISTS (
+              SELECT 1 FROM finance_journal_entries e WHERE e."organizationId"=r."organizationId"
+                AND e."sourceKind"='PHARMACY_SALE_RETURN_LINE' AND e."sourceId"=r.id AND e."occurredAt" < ${cutoff}))
+        AND NOT EXISTS (
+          SELECT 1 FROM pharmacy_unidentified_return_holds h
+          WHERE h."organizationId"=l."organizationId" AND h."branchId"=l."branchId" AND h."saleLineId"=l.id
+            AND h."createdAt" < ${cutoff} AND NOT EXISTS (
+              SELECT 1 FROM finance_journal_entries e WHERE e."organizationId"=h."organizationId"
+                AND e."sourceKind"='PHARMACY_UNIDENTIFIED_RETURN_HOLD' AND e."sourceId"=h.id AND e."occurredAt" < ${cutoff}))
       HAVING COUNT(*) FILTER (WHERE entry."sourceKind" = 'PHARMACY_SALE_LINE') > 0
     ) money ON true
     WHERE s."organizationId" = ${organizationId} AND s."branchId" IN (${Prisma.join(branchIds)})

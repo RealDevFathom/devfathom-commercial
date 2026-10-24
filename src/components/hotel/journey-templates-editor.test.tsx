@@ -432,6 +432,18 @@ describe('guest message draft editing', () => {
     });
   });
 
+  it('retires a draft naming the words on screen as well as the version', () => {
+    mount(view([row({ channel: 'WHATSAPP', subject: null })]));
+    click('Retire');
+    expect(mocks.retire).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch',
+      id: 'original',
+      expectedUpdatedAt: at,
+      expectedSubject: null,
+      expectedBody: 'Hello {{guest_name}}, room {{room_number}}.',
+    });
+  });
+
   it('sends the operator back to the chooser when a write is refused for access', () => {
     mount();
     click('Approve');

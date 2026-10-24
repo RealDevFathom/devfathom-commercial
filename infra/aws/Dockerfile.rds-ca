@@ -1,0 +1,24 @@
+# The AWS layer on top of the repository's own image.
+#
+# 1. Debian security updates. The pinned oven/bun base image lags its distribution's security
+#    releases. ECR's scan of the unpatched image reported critical findings in openssl, glibc
+#    and perl, and high ones in those and in pcre2, util-linux, sqlite3, zlib and libcap2.
+#    Upgrading within the same Debian release applies only security and point fixes.
+# 2. Amazon's RDS CA bundle, so database URLs can verify the server:
+#    sslmode=verify-full&sslrootcert=/opt/devfathom/rds-global-bundle.pem
+#    The bundle is Amazon's public CA bundle from
+#    https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem, pinned by
+#    rds-global-bundle.pem.sha256 and checked by buildspec.yml before this build.
+#    The directory is created first, with 0755: when COPY creates a missing parent directory,
+#    BuildKit gives it the --chmod mode too, and a 0444 directory cannot be entered by the
+#    app user. The last step fails the build if the app user cannot read the bundle.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+USER root
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get -y --no-install-recommends upgrade \
+ && rm -rf /var/lib/apt/lists/* \
+ && install -d -o root -g root -m 0755 /opt/devfathom
+COPY --chown=root:root --chmod=0444 rds-global-bundle.pem /opt/devfathom/rds-global-bundle.pem
+USER bun
+RUN test -r /opt/devfathom/rds-global-bundle.pem

@@ -1182,6 +1182,7 @@ describe('OrderPad transport', () => {
       lines: [{ id: 'coffee', unitPrice: '4.00', quantity: 1, modifierDeltas: ['0.50'] }],
     });
     expect(priced).toBe('5.18');
+    expect(screen.getByText('Cash total')).toBeVisible();
     expect(await screen.findByText(priced)).toBeVisible();
   });
 

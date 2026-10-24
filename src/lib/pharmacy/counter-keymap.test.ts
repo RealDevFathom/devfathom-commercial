@@ -4,6 +4,7 @@ import {
   bindingSignature,
   COUNTER_ACTIONS,
   COUNTER_KEYMAP_PRESETS,
+  COUNTER_SCAN_FIELD_ATTRIBUTE,
   formatBinding,
   matchCounterAction,
   PharmacyCounterKeymapError,
@@ -186,6 +187,42 @@ describe('shouldHandleCounterKey', () => {
     input.remove();
     textarea.remove();
     select.remove();
+  });
+
+  it('keeps F-keys live in the marked scan field (POS-01), but never while a dialog is open', () => {
+    const scan = document.createElement('input');
+    scan.setAttribute(COUNTER_SCAN_FIELD_ATTRIBUTE, '');
+    const other = document.createElement('input');
+    document.body.append(scan, other);
+    const tender = { key: 'F9' };
+    const voidBill = { key: 'F4', shiftKey: true };
+
+    // The scan field as the event target, then also as the focused element.
+    expect(shouldHandleCounterKey({ ...tender, target: scan })).toBe(true);
+    expect(shouldHandleCounterKey({ ...voidBill, target: scan })).toBe(true);
+    scan.focus();
+    expect(shouldHandleCounterKey({ ...tender, target: scan })).toBe(true);
+    expect(shouldHandleCounterKey({ ...voidBill, target: scan })).toBe(true);
+
+    // A dialog silences them even there, so a void or tender step cannot be skipped.
+    expect(shouldHandleCounterKey({ ...tender, target: scan }, true)).toBe(false);
+    expect(shouldHandleCounterKey({ ...voidBill, target: scan }, true)).toBe(false);
+
+    // Only F-keys leave the field: typing, Enter and the editing keys stay with it.
+    expect(shouldHandleCounterKey({ key: 'a', target: scan })).toBe(false);
+    expect(shouldHandleCounterKey({ key: '5', target: scan })).toBe(false);
+    expect(shouldHandleCounterKey({ key: 'Enter', ctrlKey: true, target: scan })).toBe(false);
+    expect(shouldHandleCounterKey({ key: 'Backspace', target: scan })).toBe(false);
+
+    // An unmarked input still keeps them, as the target or as the focused element.
+    expect(shouldHandleCounterKey({ ...tender, target: other })).toBe(false);
+    expect(shouldHandleCounterKey({ ...voidBill, target: other })).toBe(false);
+    other.focus();
+    expect(shouldHandleCounterKey({ ...tender, target: document.body })).toBe(false);
+    expect(shouldHandleCounterKey({ ...voidBill, target: document.body })).toBe(false);
+    other.blur();
+    scan.remove();
+    other.remove();
   });
 });
 

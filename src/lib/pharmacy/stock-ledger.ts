@@ -148,7 +148,23 @@ async function loadCandidates(
   // The lock covers the projection rows only. The joined lot and batch rows are
   // read-only here, and locking a batch would serialize every other branch
   // holding the same batch.
-  return db.$queryRaw<CandidateRow[]>(lock ? Prisma.sql`${query} FOR UPDATE OF balance` : query);
+  if (!lock) return db.$queryRaw<CandidateRow[]>(query);
+  // Lock first, then read availability in a SEPARATE statement. Under READ
+  // COMMITTED a locking SELECT that waits keeps its original statement
+  // snapshot for the claim/reservation subqueries, so a supplier claim that
+  // committed while we waited would be invisible and its units sellable.
+  // The second statement takes a fresh snapshot after every lock is held.
+  await db.$queryRaw`
+    SELECT balance."inventoryLotId"
+    ${CANDIDATE_JOINS}
+    WHERE balance."organizationId" = ${scope.organizationId}
+      AND balance."branchId" = ${scope.branchId}
+      AND batch."medicineId" = ${medicineId}
+      AND balance."onHandUnits" > 0
+    ORDER BY batch."expiresAt" ASC, lot."receivedAt" ASC NULLS FIRST,
+             balance."inventoryLotId" ASC, balance."stockLocationId" ASC
+    FOR UPDATE OF balance`;
+  return db.$queryRaw<CandidateRow[]>(query);
 }
 
 function toCandidate(row: CandidateRow): AllocationCandidate {

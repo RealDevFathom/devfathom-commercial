@@ -116,6 +116,19 @@ describe('marketing workflow authorization', () => {
       timezone: 'Asia/Karachi',
     });
   });
+  it('binds UTC for a stored zone Intl refuses, so quiet hours and the page agree', async () => {
+    mocks.organization.mockResolvedValue({
+      id: 'org-a',
+      status: 'ACTIVE',
+      vertical: 'PHARMACY',
+      timezone: 'PKT',
+    });
+    await caller().history(input);
+    expect(mocks.history).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ timezone: 'UTC' })
+    );
+  });
   it.each(['STAFF', 'MANAGER', 'PHARMACIST'])(
     'denies nonowner %s before reading data',
     async (role) => {

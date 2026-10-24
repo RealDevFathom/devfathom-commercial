@@ -88,6 +88,11 @@ const LIVE_PROFILE_ID = `wha1220_live_profile_${suffix}`;
 const HOTEL_PURGED_ORG = `hotel_purge_${suffix}`;
 const HOTEL_LIVE_ORG = `hotel_live_${suffix}`;
 const HOTEL_JOB_ID = `hotel_purge_job_${suffix}`;
+// Tenants whose own runtime tries the purge name without the control plane.
+const TENANT_ORG = `purge_name_tenant_${suffix}`;
+const TENANT_BRANCH_ID = `purge_name_branch_${suffix}`;
+const TENANT_PROFILE_ID = `purge_name_profile_${suffix}`;
+const HOTEL_TENANT_ORG = `hotel_purge_name_${suffix}`;
 
 type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
 
@@ -141,6 +146,48 @@ async function seedRegulatoryProfile(
   );
 }
 
+/**
+ * CAM-2 evidence: a counter camera on the branch and one still bound to a daily
+ * close, whose capture failed. FAILED is terminal and kept as a record, and it is
+ * neither pending nor due for retention, so `processPlatformJobs` queues no
+ * snapshot or retention job for it — a job that would outlive the purged row and
+ * fail in whichever suite next drains the queue.
+ */
+async function seedCameraEvidence(db: ScopedDb, organizationId: string, branchId: string) {
+  const id = (label: string) => `${label}_${organizationId}`;
+  await db.$executeRawUnsafe(
+    `INSERT INTO camera_gateways (id, "organizationId", "branchId", name, "gatewaySecretHash", "baseUrl", "updatedAt")
+     VALUES ($1, $2, $3, 'Counter gateway', $1, 'https://gateway.example.test/', now())`,
+    id('gateway'),
+    organizationId,
+    branchId
+  );
+  await db.$executeRawUnsafe(
+    `INSERT INTO camera_credentials (id, "organizationId", "sealedValue", "updatedAt")
+     VALUES ($1, $2, 'sealed-fixture', now())`,
+    id('credential'),
+    organizationId
+  );
+  await db.$executeRawUnsafe(
+    `INSERT INTO cameras (id, "organizationId", "gatewayId", "branchId", "credentialId", name, "sourceRef", "counterEvidence", "updatedAt")
+     VALUES ($1, $2, $3, $4, $5, 'Counter camera', 'sim-counter-1', true, now())`,
+    id('camera'),
+    organizationId,
+    id('gateway'),
+    branchId,
+    id('credential')
+  );
+  await db.$executeRawUnsafe(
+    `INSERT INTO camera_evidence (id, "organizationId", "branchId", "subjectKind", "subjectId", "cameraId", status, "failureReason", "updatedAt")
+     VALUES ($1, $2, $3, 'PHARMACY_DAILY_CLOSE', $4, $5, 'FAILED', 'GATEWAY_UNREACHABLE', now())`,
+    id('evidence'),
+    organizationId,
+    branchId,
+    id('close'),
+    id('camera')
+  );
+}
+
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 
 describeIfDatabase('tenant purge, against PostgreSQL', () => {
@@ -168,6 +215,8 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       );
       await seedRegulatoryProfile(db, PURGED_PROFILE_ID, PURGED_ORG, BRANCH_ID);
       await seedRegulatoryProfile(db, LIVE_PROFILE_ID, LIVE_ORG, LIVE_BRANCH_ID);
+      // Camera evidence is retained the same way: deleted only with its tenant.
+      await seedCameraEvidence(db, PURGED_ORG, BRANCH_ID);
       await db.$executeRawUnsafe(
         `INSERT INTO pharmacy_stock_locations (id, "organizationId", "branchId", code, name, kind, "updatedAt")
          VALUES ($1, $2, $3, $1, 'Main store', 'STORE', now())`,
@@ -231,7 +280,9 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
                 (SELECT count(*) FROM pharmacy_branches WHERE "organizationId" = $1) AS branches,
                 (SELECT count(*) FROM pharmacy_stock_locations WHERE "organizationId" = $1) AS locations,
                 (SELECT count(*) FROM pharmacy_onboarding_events WHERE "organizationId" = $1) AS events,
-                (SELECT count(*) FROM pharmacy_onboarding_states WHERE "organizationId" = $1) AS states`,
+                (SELECT count(*) FROM pharmacy_onboarding_states WHERE "organizationId" = $1) AS states,
+                (SELECT count(*) FROM camera_evidence WHERE "organizationId" = $1) AS evidence,
+                (SELECT count(*) FROM cameras WHERE "organizationId" = $1) AS cameras`,
         PURGED_ORG
       )
     );
@@ -245,6 +296,8 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       locations: none,
       events: none,
       states: none,
+      evidence: none,
+      cameras: none,
     });
 
     const [live] = await withPlatformDb((db) =>
@@ -660,5 +713,114 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       )
     );
     expect(after.count).toBe(BigInt(0));
+  });
+
+  /**
+   * The purge name is honoured only inside the control plane's transaction.
+   * A tenant's own runtime (`withTenantDb`: `app.is_platform_admin` = 'false')
+   * reaches every one of its guarded rows through row-level security, so if it
+   * names its own organization as the one being purged, the guards are all that
+   * stands between it and its own append-only history.
+   */
+  it('refuses the purge name alone in a tenant-runtime transaction: guarded rows are neither deleted nor rewritten', async () => {
+    await withPlatformDb(async (db) => {
+      await seedTenant(db, TENANT_ORG, 'ACTIVE');
+      await db.$executeRawUnsafe(
+        `INSERT INTO pharmacy_branches (id, "organizationId", code, name, "addressLine", city, "provinceCode", "updatedAt")
+         VALUES ($1, $2, $1, 'Tenant branch', '16 Mall Road', 'Lahore', 'PB', now())`,
+        TENANT_BRANCH_ID,
+        TENANT_ORG
+      );
+      await seedRegulatoryProfile(db, TENANT_PROFILE_ID, TENANT_ORG, TENANT_BRANCH_ID);
+      await seedCameraEvidence(db, TENANT_ORG, TENANT_BRANCH_ID);
+    });
+    const hotel = await seedHotelInventory(HOTEL_TENANT_ORG, 'ACTIVE');
+
+    const guarded = [
+      {
+        organizationId: TENANT_ORG,
+        userId: undefined,
+        table: 'pharmacy_onboarding_events',
+        refusedDelete: /append-only/,
+        rewrite: `UPDATE pharmacy_onboarding_events SET note = 'rewritten' WHERE "organizationId" = $1`,
+        refusedRewrite: /append-only/,
+      },
+      {
+        organizationId: TENANT_ORG,
+        userId: undefined,
+        table: 'pharmacy_branch_regulatory_profiles',
+        refusedDelete: /append-only/,
+        rewrite: `UPDATE pharmacy_branch_regulatory_profiles SET "licenceNumber" = 'rewritten' WHERE "organizationId" = $1`,
+        refusedRewrite: /append-only/,
+      },
+      {
+        organizationId: TENANT_ORG,
+        userId: undefined,
+        table: 'camera_evidence',
+        refusedDelete: /camera evidence is retained/,
+        rewrite: `UPDATE camera_evidence SET "subjectId" = 'rewritten' WHERE "organizationId" = $1`,
+        refusedRewrite: /binding is immutable/,
+      },
+      {
+        organizationId: HOTEL_TENANT_ORG,
+        userId: hotel.userId,
+        table: 'hotel_room_status_events',
+        refusedDelete: /append-only/,
+        rewrite: `UPDATE hotel_room_status_events SET reason = 'rewritten' WHERE "organizationId" = $1`,
+        refusedRewrite: /append-only/,
+      },
+      {
+        organizationId: HOTEL_TENANT_ORG,
+        userId: hotel.userId,
+        table: 'hotel_room_blocks',
+        refusedDelete: /Release inventory blocks/,
+        rewrite: `UPDATE hotel_room_blocks SET reason = 'rewritten' WHERE "organizationId" = $1`,
+        refusedRewrite: /only one attributed release/,
+      },
+    ];
+    /** One tenant transaction that names its own organization as the one being purged. */
+    const asPurgingTenant = (organizationId: string, userId: string | undefined, sql: string) =>
+      withTenantDb(
+        organizationId,
+        async (db) => {
+          await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${organizationId}, true)`;
+          const [context] = await db.$queryRawUnsafe<Array<{ platform: string; purging: string }>>(
+            `SELECT current_setting('app.is_platform_admin', true) AS platform,
+                    current_setting('app.purging_organization_id', true) AS purging`
+          );
+          expect(context).toEqual({ platform: 'false', purging: organizationId });
+          return db.$executeRawUnsafe(sql, organizationId);
+        },
+        { userId }
+      );
+    const visibleToTenant = async (organizationId: string, table: string) => {
+      const [row] = await withTenantDb(organizationId, (db) =>
+        db.$queryRawUnsafe<Array<{ count: bigint }>>(
+          `SELECT count(*) AS count FROM "${table}" WHERE "organizationId" = $1`,
+          organizationId
+        )
+      );
+      return Number(row!.count);
+    };
+
+    for (const row of guarded) {
+      const before = await visibleToTenant(row.organizationId, row.table);
+      // The rows are the tenant's own and visible to it, so a refusal below is
+      // the guard's decision, not row-level security hiding them.
+      expect(before, row.table).toBeGreaterThan(0);
+      await expect(
+        asPurgingTenant(
+          row.organizationId,
+          row.userId,
+          `DELETE FROM "${row.table}" WHERE "organizationId" = $1`
+        ),
+        `${row.table} DELETE`
+      ).rejects.toThrow(row.refusedDelete);
+      await expect(
+        asPurgingTenant(row.organizationId, row.userId, row.rewrite),
+        `${row.table} UPDATE`
+      ).rejects.toThrow(row.refusedRewrite);
+      expect(await visibleToTenant(row.organizationId, row.table), row.table).toBe(before);
+    }
   });
 });

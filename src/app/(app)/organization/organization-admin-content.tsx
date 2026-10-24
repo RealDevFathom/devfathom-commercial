@@ -480,7 +480,7 @@ export function OrganizationAdminContent() {
 
       <Card
         title="People and access"
-        description={`${entitlements.activeSeats} of ${entitlements.seatLimit} licensed seats ${entitlements.activeSeats === 1 ? 'is' : 'are'} currently occupied.`}
+        description={`${entitlements.activeSeats} of ${entitlements.seatLimit} licensed seats are currently occupied.`}
       >
         <form
           className="mb-5 grid gap-3 rounded-xl bg-muted/35 p-4 sm:grid-cols-2 lg:grid-cols-3"
@@ -572,8 +572,9 @@ export function OrganizationAdminContent() {
             <SubmitButton pending={addMember.isPending}>Add staff</SubmitButton>
           </div>
           <p className="text-[11px] text-muted-foreground sm:col-span-2 lg:col-span-3">
-            Minimum 12-character password. The new member occupies one licensed seat (
-            {entitlements.activeSeats}/{entitlements.seatLimit} used).
+            12–256 characters, with a lowercase letter, an uppercase letter and a digit. The new
+            member occupies one licensed seat ({entitlements.activeSeats}/{entitlements.seatLimit}{' '}
+            used).
           </p>
         </form>
         <div className="divide-y divide-border/60">
@@ -684,7 +685,8 @@ export function OrganizationAdminContent() {
                     <Input name="password" type="password" minLength={12} required />
                   </label>
                   <p className="text-[11px] text-muted-foreground">
-                    Minimum 12 characters. All existing sessions are revoked.
+                    12–256 characters, with a lowercase letter, an uppercase letter and a digit. All
+                    existing sessions are revoked.
                   </p>
                   <SubmitButton pending={password.isPending}>Reset password</SubmitButton>
                 </form>

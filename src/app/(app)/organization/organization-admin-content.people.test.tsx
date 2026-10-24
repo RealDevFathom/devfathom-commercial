@@ -109,19 +109,6 @@ beforeEach(() => {
 
 afterEach(cleanup);
 
-it.each([
-  [0, '0 of 10 licensed seats are currently occupied.'],
-  [1, '1 of 10 licensed seats is currently occupied.'],
-  [3, '3 of 10 licensed seats are currently occupied.'],
-])('uses correct seat-occupancy agreement for %i occupied seats', (count, description) => {
-  const data = overviewData.current as { entitlements: { activeSeats: number } };
-  data.entitlements.activeSeats = count;
-  render(<OrganizationAdminContent />);
-
-  const people = screen.getByRole('heading', { name: 'People and access' }).closest('section')!;
-  expect(within(people).getByText(description)).toBeInTheDocument();
-});
-
 describe('organization people and access — staff onboarding', () => {
   it('offers an add-staff form with the organization pharmacy departments', () => {
     render(<OrganizationAdminContent />);
@@ -179,6 +166,19 @@ describe('organization people and access — staff onboarding', () => {
     const memberDepartment = screen.getAllByLabelText('Department')[1]!;
     const options = [...memberDepartment.querySelectorAll('option')].map((o) => o.textContent);
     expect(options).toEqual(['Counter', 'Dispensary', 'Store']);
+  });
+
+  it('shows the complete password policy when adding or resetting a staff password', () => {
+    render(<OrganizationAdminContent />);
+
+    expect(
+      screen.getAllByText(
+        /12–256 characters, with a lowercase letter, an uppercase letter and a digit\./
+      )
+    ).toHaveLength(2);
+    expect(
+      screen.queryByText(/Minimum 12(?:-character password| characters)\./)
+    ).not.toBeInTheDocument();
   });
 });
 

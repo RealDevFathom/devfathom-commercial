@@ -189,7 +189,8 @@ export type HotelJourneyTemplateErrorCode =
   | 'BODY_REQUIRED'
   | 'INVALID_TRANSITION'
   | 'CONCURRENT_MODIFICATION'
-  | 'APPROVER_REQUIRED';
+  | 'APPROVER_REQUIRED'
+  | 'READING_INCOMPLETE';
 
 /**
  * A refusal an operator surface can show as-is. `message` is written for the
@@ -364,7 +365,8 @@ export type HotelJourneyApproval = {
 /**
  * What a caller last read of one version, as its client sends it back with a
  * write: the version's `updatedAt` and, where the write stands behind the words
- * (an approval) or rewrites them (a draft edit), the exact wording it showed.
+ * (an approval), rewrites them (a draft edit) or retires a draft, the exact
+ * wording it showed.
  *
  * A read on the server is no substitute. Every write runs under the property
  * lock, so a row read there is always the current one and can never tell that
@@ -397,6 +399,27 @@ export function assertJourneyTemplateAsRead(
     (reading.body === undefined || template.body === reading.body);
   if (!asRead)
     throw new HotelJourneyTemplateError('CONCURRENT_MODIFICATION', CHANGED_WHILE_WORKING);
+}
+
+/**
+ * A draft is rewritten in place under one version number, and two writes can
+ * share a millisecond, so the time alone never shows which of a draft's words a
+ * caller read. A write bound to a draft (an edit, a retirement) must name the
+ * wording too; an approved or retired version's words never change, so its time
+ * and the transition rules suffice. Checked here at run time, after
+ * {@link assertJourneyTemplateAsRead}, rather than left to the input contract:
+ * `journeyTemplateDraftInput`'s refinement only holds while every `.extend()`
+ * that joins the property selection onto it keeps it.
+ */
+export function assertJourneyDraftWordingNamed(
+  template: { status: HotelJourneyTemplateStatusValue },
+  reading: HotelJourneyTemplateReading
+): void {
+  if (template.status === 'DRAFT' && (reading.subject === undefined || reading.body === undefined))
+    throw new HotelJourneyTemplateError(
+      'READING_INCOMPLETE',
+      'Name the draft you read by its time and its wording together.'
+    );
 }
 
 /**
@@ -802,8 +825,17 @@ export const journeyTemplateDraftInput = journeyTemplateKeyInput
 
 export const journeyTemplateIdInput = z.object({ id: z.string().trim().min(1).max(191) });
 
-/** Retiring names the version the caller read; a version changed since is a conflict. */
-export const journeyTemplateRetireInput = journeyTemplateIdInput.extend({ expectedUpdatedAt });
+/**
+ * Retiring names the version the caller read; a version changed since is a
+ * conflict. Retiring a draft names its wording as well, because a colleague's
+ * save can share the time the draft was read at; an approved version's words
+ * never change, so its time is enough.
+ */
+export const journeyTemplateRetireInput = journeyTemplateIdInput.extend({
+  expectedUpdatedAt,
+  expectedSubject: expectedSubject.optional(),
+  expectedBody: expectedBody.optional(),
+});
 
 /**
  * Approving names the version and the exact wording the approver read, so

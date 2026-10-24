@@ -11,6 +11,11 @@ const state = vi.hoisted(() => ({
     isError: false,
     refetch: vi.fn(),
   },
+  roles: {
+    data: [] as Array<{ id: string; key: string; name: string }>,
+    isFetching: false,
+    isError: false,
+  },
   invite: { mutate: vi.fn(), isPending: false },
 }));
 vi.mock('next-auth/react', () => ({
@@ -22,7 +27,10 @@ vi.mock('@/components/entitlements-provider', () => ({
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({ team: { getAll: { invalidate: vi.fn() } } }),
-    organizationAdmin: { departments: { useQuery: () => state.departments } },
+    organizationAdmin: {
+      departments: { useQuery: () => state.departments },
+      roles: { useQuery: () => state.roles },
+    },
     team: {
       getAll: { useQuery: state.directory },
       inviteMember: { useMutation: () => state.invite },
@@ -37,7 +45,14 @@ beforeEach(() => {
     { key: 'COUNTER', name: 'Counter', active: true },
     { key: 'OLD', name: 'Old department', active: false },
   ];
+  state.roles.data = [
+    { id: 'role_gm', key: 'general-manager', name: 'General Manager' },
+    { id: 'role_branch', key: 'branch-manager', name: 'Branch Manager' },
+    { id: 'role_bar', key: 'bar-barista', name: 'Bar / Barista' },
+    { id: 'role_accountant', key: 'accountant', name: 'Accountant' },
+  ];
   state.departments.isFetching = state.departments.isError = state.invite.isPending = false;
+  state.roles.isFetching = state.roles.isError = false;
 });
 afterEach(cleanup);
 function fill() {
@@ -53,6 +68,24 @@ function fill() {
 }
 
 describe('tenant department invitation', () => {
+  it.each([
+    ['General Manager', 'role_gm'],
+    ['Branch Manager', 'role_branch'],
+    ['Bar / Barista', 'role_bar'],
+    ['Accountant', 'role_accountant'],
+  ])('submits the %s restaurant role template', (name, id) => {
+    render(<AddMemberModal onClose={vi.fn()} />);
+    fill();
+    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+    expect(screen.getByRole('option', { name })).toHaveValue(id);
+    fireEvent.change(screen.getByLabelText('Restaurant staff role'), { target: { value: id } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+    expect(state.invite.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationRoleId: id }),
+      expect.any(Object)
+    );
+  });
+
   it.each([
     ['COUNTER', 'Counter'],
     ['KITCHEN', 'Kitchen'],

@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import { pointsForNetPaid } from '@/lib/commerce/loyalty-arithmetic';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -54,8 +55,12 @@ export async function reverseRefundedEarnedPoints(
     where: { ...binding, kind: 'EARN' },
   });
   if (!earn) return null;
+  // Stops the operator's refund and names who must look, so a deliberate TRPCError.
   if (earn.netPaidMinor === null || earn.points !== pointsForNetPaid(earn.netPaidMinor))
-    throw new Error('Earn basis requires accounting review.');
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: 'Earn basis requires accounting review.',
+    });
   const [refunded, reversed] = await Promise.all([
     db.pharmacyRefund.aggregate({
       where: {

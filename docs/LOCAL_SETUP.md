@@ -4,7 +4,8 @@ Last reviewed: 2026-10-21
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) `1.3.14` or compatible
+- [Bun](https://bun.sh) `1.4.2`, the version `packageManager` pins (`bun.lock` is lockfile
+  version 3, which Bun 1.3 cannot read)
 - PostgreSQL
 - Git
 

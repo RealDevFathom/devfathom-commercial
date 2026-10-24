@@ -175,12 +175,35 @@ export const PATCH = withApiAuth(
         },
       });
 
+      // A task moved to another project must not remain assigned to users who
+      // cannot access that project. Do this after all requested assignee edits
+      // so a PATCH cannot reintroduce a source-project-only assignee.
+      if (isColumnMove && targetColumn && targetColumn.board.project.id !== projectId) {
+        await tx.taskAssignee.deleteMany({
+          where: {
+            taskId: id,
+            user: {
+              projectMembers: { none: { projectId: targetColumn.board.project.id } },
+            },
+          },
+        });
+      }
+
       // Additive column default assignees on move (skipDuplicates keeps existing intact)
       if (isColumnMove && targetColumn && targetColumn.defaultAssignees.length > 0) {
-        await tx.taskAssignee.createMany({
-          data: targetColumn.defaultAssignees.map((d) => ({ taskId: id, userId: d.userId })),
-          skipDuplicates: true,
+        const destinationMembers = await tx.projectMember.findMany({
+          where: {
+            projectId: targetColumn.board.project.id,
+            userId: { in: targetColumn.defaultAssignees.map((assignee) => assignee.userId) },
+          },
+          select: { userId: true },
         });
+        if (destinationMembers.length > 0) {
+          await tx.taskAssignee.createMany({
+            data: destinationMembers.map((member) => ({ taskId: id, userId: member.userId })),
+            skipDuplicates: true,
+          });
+        }
       }
 
       return task;

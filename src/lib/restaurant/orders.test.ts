@@ -752,6 +752,46 @@ describeIfDatabase('orders command layer (real DB)', () => {
     expect(events.length).toBeGreaterThanOrEqual(5);
   });
 
+  it('blocks an item void after bill cut so the payable snapshot cannot retain a voided line', async () => {
+    const { orderId, itemId, db } = await openWithItem();
+    await deps.orders.addItem(db, {
+      orderId,
+      menuItemId: ids.menuItem,
+      actor: actor(),
+    });
+    const cut = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: actor(),
+    });
+
+    await expect(
+      deps.orders.voidItem(db, {
+        orderId,
+        itemId,
+        reason: 'guest changed their mind',
+        actor: actor(),
+      })
+    ).rejects.toMatchObject({ reason: 'BILL_ALREADY_CUT' });
+
+    const snapshot = await read(async (tx) => ({
+      item: await tx.restaurantOrderItem.findUniqueOrThrow({
+        where: { id: itemId },
+        select: { status: true },
+      }),
+      bill: await tx.restaurantBill.findUniqueOrThrow({
+        where: { id: cut.billIds[0]! },
+        select: { status: true, subtotal: true, grandTotal: true, lines: true },
+      }),
+    }));
+    expect(snapshot.item.status).not.toBe('VOIDED');
+    expect(snapshot.bill).toMatchObject({ status: 'OPEN' });
+    expect(snapshot.bill.lines).toHaveLength(2);
+    expect(snapshot.bill.subtotal.toString()).toBe('25');
+    expect(snapshot.bill.grandTotal.toString()).toBe('25');
+  });
+
   it('cancels an order with a compensating void of every in-flight item (cancel-compensation)', async () => {
     const { orderId, db } = await openWithItem({ tableIds: [ids.tableA] });
     await deps.orders.sendOrder(db, { orderId, actor: actor() }); // item QUEUED (pre-prep)

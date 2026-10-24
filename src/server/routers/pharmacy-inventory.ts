@@ -80,6 +80,9 @@ import type { TRPCContext } from '../trpc';
 const branchId = z.string().trim().min(1).max(128);
 const expiryPrecision = z.enum(['DAY', 'MONTH']);
 const regulatory = capabilityProcedure('pharmacy:safety');
+// Storage zones and their cold-chain readings belong to whoever runs the stock
+// (the Inventory role, or `pharmacy:*`). Checked through `can()` before any read.
+const inventoryControl = capabilityProcedure('pharmacy:inventory');
 const drapNotice = z.discriminatedUnion('kind', [
   z
     .object({
@@ -152,6 +155,29 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
     active: true,
   });
   return { ...actor, branchId: branch };
+}
+
+/** SEC-374-01: capability is not branch assignment. Validate the payload's
+ * actual active tenant branch, never a selected-branch cookie or editable role
+ * name, before reading the witness or touching stock/custody. A privileged
+ * system role or a valid witness is not a substitute for that assignment;
+ * inventoryControl separately evaluates canonical grants and DENY via can(). */
+async function writeOffScopeFor(ctx: TRPCContext, requestedBranchId: string): Promise<LedgerScope> {
+  const scope = await scopeFor(ctx, requestedBranchId);
+  const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      userId: scope.actorId,
+      branchId: requestedBranchId,
+      active: true,
+      branch: { active: true },
+    },
+    select: { id: true },
+  });
+  if (!assignment) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  return scope;
 }
 
 // ── PH-A5 — expiry board actions ────────────────────────────────────────────
@@ -601,7 +627,7 @@ export const pharmacyInventoryRouter = router({
       )
     ),
 
-  createLocation: protectedProcedure
+  createLocation: inventoryControl
     .input(
       z
         .object({
@@ -644,7 +670,7 @@ export const pharmacyInventoryRouter = router({
       });
     }),
 
-  recordTemperature: protectedProcedure
+  recordTemperature: inventoryControl
     .input(
       z
         .object({
@@ -669,7 +695,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  importTemperatureCsv: protectedProcedure
+  importTemperatureCsv: inventoryControl
     .input(
       z
         .object({
@@ -700,7 +726,7 @@ export const pharmacyInventoryRouter = router({
       return loadTemperatureZoneStatuses(ctx.db, scope, new Date());
     }),
 
-  configureTemperatureMonitoring: auditedProtectedProcedure
+  configureTemperatureMonitoring: inventoryControl
     .input(
       z
         .object({
@@ -735,7 +761,7 @@ export const pharmacyInventoryRouter = router({
       });
     }),
 
-  registerBatch: protectedProcedure
+  registerBatch: inventoryControl
     .input(
       z
         .object({
@@ -774,9 +800,7 @@ export const pharmacyInventoryRouter = router({
       z
         .object({
           manufacturingBatchId: z.string().min(1),
-          // Reactivation belongs to the recall close/reversal workflows, which
-          // verify the recall evidence before restoring affected stock.
-          state: z.enum(['RECALLED', 'QUARANTINED']),
+          state: z.enum(['ACTIVE', 'RECALLED', 'QUARANTINED']),
           reason: z.string().trim().max(500).optional(),
         })
         .strict()
@@ -786,7 +810,7 @@ export const pharmacyInventoryRouter = router({
         where: { id: input.manufacturingBatchId },
       });
       if (!batch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Batch not found.' });
-      if (!input.reason) {
+      if (input.state !== 'ACTIVE' && !input.reason) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'Blocking a batch requires a reason.',
@@ -796,13 +820,13 @@ export const pharmacyInventoryRouter = router({
         where: { id: batch.id },
         data: {
           state: input.state,
-          stateReason: input.reason,
-          stateChangedAt: new Date(),
+          stateReason: input.state === 'ACTIVE' ? null : (input.reason ?? null),
+          stateChangedAt: input.state === 'ACTIVE' ? null : new Date(),
         },
       });
     }),
 
-  receiveLot: protectedProcedure
+  receiveLot: inventoryControl
     .input(
       z
         .object({
@@ -856,7 +880,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  allocateForSale: protectedProcedure
+  allocateForSale: inventoryControl
     .input(
       z
         .object({
@@ -900,7 +924,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  breakPack: protectedProcedure
+  breakPack: inventoryControl
     .input(
       z
         .object({
@@ -926,7 +950,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  transfer: protectedProcedure
+  transfer: inventoryControl
     .input(
       z
         .object({
@@ -961,7 +985,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  createCount: protectedProcedure
+  createCount: inventoryControl
     .input(
       z
         .object({
@@ -992,7 +1016,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  approveCount: protectedProcedure
+  approveCount: inventoryControl
     .input(
       z
         .object({
@@ -1017,7 +1041,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  writeOff: protectedProcedure
+  writeOff: inventoryControl
     .input(
       z
         .object({
@@ -1033,16 +1057,15 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const writeScope = await writeOffScopeFor(ctx, input.branchId);
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          writeOff(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        return await ctx.db.$transaction(async (tx) => writeOff(txDb(tx), writeScope, input));
       } catch (error) {
         domainError(error);
       }
     }),
 
-  quarantinePart: protectedProcedure
+  quarantinePart: inventoryControl
     .input(
       z
         .object({
@@ -1066,7 +1089,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  allocateTransfer: protectedProcedure
+  allocateTransfer: inventoryControl
     .input(
       z
         .object({
@@ -1095,7 +1118,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  approveTransfer: protectedProcedure
+  approveTransfer: inventoryControl
     .input(z.object({ branchId, transferId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -1105,7 +1128,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  dispatchTransfer: protectedProcedure
+  dispatchTransfer: inventoryControl
     .input(
       z
         .object({
@@ -1130,7 +1153,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  receiveTransferLine: protectedProcedure
+  receiveTransferLine: inventoryControl
     .input(
       z
         .object({
@@ -1152,7 +1175,9 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  createRecall: protectedProcedure
+  // Raising a recall moves every matching batch to RECALLED, the same regulated
+  // state change as setBatchState, so it needs the same exact pharmacy:safety grant.
+  createRecall: regulatory
     .input(
       z
         .object({
@@ -1183,7 +1208,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  acknowledgeRecall: protectedProcedure
+  acknowledgeRecall: regulatory
     .input(z.object({ branchId, recallNoticeId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -1197,7 +1222,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  closeRecall: protectedProcedure
+  closeRecall: regulatory
     .input(z.object({ recallNoticeId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -1209,7 +1234,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  reserveSupplierClaim: protectedProcedure
+  reserveSupplierClaim: inventoryControl
     .input(
       z
         .object({
@@ -1222,7 +1247,10 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await reserveSupplierClaim(ctx.db, await scopeFor(ctx, input.branchId), input);
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) =>
+          reserveSupplierClaim(txDb(tx), scope, input)
+        );
       } catch (error) {
         domainError(error);
       }
@@ -1249,7 +1277,7 @@ export const pharmacyInventoryRouter = router({
   // ── PUR-07 — the deterministic stock action centre ────────────────────────
 
   /** The approved threshold a stock-level signal is measured against. */
-  approveSafetyStock: auditedProtectedProcedure
+  approveSafetyStock: inventoryControl
     .input(
       z
         .object({
@@ -1292,7 +1320,7 @@ export const pharmacyInventoryRouter = router({
     }),
 
   /** Recompute the branch's signals from current ledger facts. */
-  refreshStockSignals: auditedProtectedProcedure
+  refreshStockSignals: inventoryControl
     .input(z.object({ branchId }).strict())
     .mutation(async ({ ctx, input }) => {
       const scope = await scopeFor(ctx, input.branchId);
@@ -1305,13 +1333,13 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  markStaleSignals: auditedProtectedProcedure
+  markStaleSignals: inventoryControl
     .input(z.object({ branchId }).strict())
     .mutation(async ({ ctx, input }) =>
       markStaleSignals(ctx.db, await scopeFor(ctx, input.branchId), new Date())
     ),
 
-  acknowledgeSignal: auditedProtectedProcedure
+  acknowledgeSignal: inventoryControl
     .input(z.object({ branchId, signalId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -1325,7 +1353,7 @@ export const pharmacyInventoryRouter = router({
     }),
 
   /** §8A invariant 29: a snooze is only auditable with its reason attached. */
-  snoozeSignal: auditedProtectedProcedure
+  snoozeSignal: inventoryControl
     .input(
       z
         .object({
@@ -1349,7 +1377,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  dismissSignal: auditedProtectedProcedure
+  dismissSignal: inventoryControl
     .input(
       z
         .object({
@@ -1375,7 +1403,7 @@ export const pharmacyInventoryRouter = router({
    * §8A invariant 29: the one-click action. Creates a DRAFT requisition,
    * transfer or claim — never an order, never a stock movement.
    */
-  createDraftAction: auditedProtectedProcedure
+  createDraftAction: inventoryControl
     .input(
       z.discriminatedUnion('kind', [
         z
@@ -1665,7 +1693,7 @@ export const pharmacyInventoryRouter = router({
    * NEAR_EXPIRY signal. It changes no price — the counter keeps selling at the
    * printed MRP until a person applies the mark-down through pricing.
    */
-  draftExpiryMarkdown: auditedProtectedProcedure
+  draftExpiryMarkdown: inventoryControl
     .input(
       z
         .object({
@@ -1800,7 +1828,7 @@ export const pharmacyInventoryRouter = router({
    * A supplier return DRAFT (EXPIRY_CLAIM) for one near-expiry lot position. It
    * reserves nothing; submitting it in Purchasing → Returns is what holds stock.
    */
-  draftExpiryReturn: auditedProtectedProcedure
+  draftExpiryReturn: inventoryControl
     .input(
       z
         .object({
@@ -1893,7 +1921,7 @@ export const pharmacyInventoryRouter = router({
    * (AVAILABLE out, QUARANTINE in). `requestKey` is minted when the board is
    * rendered, so a double-submitted form replays instead of moving stock twice.
    */
-  quarantineExpiring: auditedProtectedProcedure
+  quarantineExpiring: inventoryControl
     .input(
       z
         .object({
@@ -1952,7 +1980,7 @@ export const pharmacyInventoryRouter = router({
     .query(async ({ ctx, input }) => transferBoard(ctx.db, await scopeFor(ctx, input.branchId))),
 
   /** WHA-1603 INV-07: close a transfer, posting any shortfall as a custody write-off. */
-  receiveTransferWithVariance: protectedProcedure
+  receiveTransferWithVariance: inventoryControl
     .input(
       z
         .object({
