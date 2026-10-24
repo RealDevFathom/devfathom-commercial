@@ -28,7 +28,7 @@ import {
   type SaleUnitOption,
 } from './counter-pricing';
 import { counterReceiptTotals, type CounterReceipt } from './counter-receipt';
-import { normalizeMedicineText } from './medicine';
+import { normalizeMedicineText, roundingIncrementForLot } from './medicine';
 import { readReceiptIdentity } from './receipt-identity';
 import type { LedgerScope } from './stock-ledger';
 
@@ -358,9 +358,6 @@ export async function searchCounterCatalog(
   const presentationByPackLevel = new Map(
     packLevels.map((level) => [level.id, level.presentationId])
   );
-  const roundingByPackLevel = new Map(
-    mrps.map((mrp) => [mrp.packLevelId, mrp.roundingIncrementMinor])
-  );
 
   const rows: CounterSearchRow[] = [];
   for (const medicine of medicines) {
@@ -415,7 +412,7 @@ export async function searchCounterCatalog(
       }
     }
 
-    const roundingIncrementMinor = best ? (roundingByPackLevel.get(best.lot.packLevelId) ?? 1) : 1;
+    const roundingIncrementMinor = best ? roundingIncrementForLot(best.lot, mrps) : 1;
 
     const saleableUnits = best
       ? saleUnits.map((option) => {

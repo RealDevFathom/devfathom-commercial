@@ -1,0 +1,253 @@
+/**
+ * @vitest-environment node
+ *
+ * SEC-643-01: real counter search -> preview -> persisted line -> tender,
+ * using application transactions and real stock allocation. Requires
+ * SEC643_TEST_DATABASE_URL (or TEST_DATABASE_URL): a throwaway, migrated LOCAL
+ * database as a NOSUPERUSER/NOBYPASSRLS runtime role. No owner URL, migration,
+ * service process or external integration. Fixtures remain. No URL means SKIP.
+ */
+import { randomUUID } from 'node:crypto';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { previewSaleLine } from './counter-pricing';
+
+const testUrl = process.env.SEC643_TEST_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
+if (testUrl) process.env.DATABASE_URL = testUrl;
+const describeDatabase = testUrl ? describe : describe.skip;
+type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
+let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
+let withPlatformDb: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
+let sales: typeof import('./sales');
+let counter: typeof import('./counter');
+let ledger: typeof import('./stock-ledger');
+let settlement: typeof import('./settlement');
+
+const run = randomUUID().replaceAll('-', '');
+const scope = {
+  organizationId: 'sec643_' + run,
+  branchId: 'sec643_branch_' + run,
+  actorId: 'sec643_cashier_' + run,
+};
+const at = new Date('2026-10-24T12:00:00.000Z');
+const expiry = new Date('2100-01-01T00:00:00.000Z');
+let stockLocationId: string;
+const tenant = <T>(work: (db: ScopedDb) => Promise<T>) =>
+  withTenantDb(scope.organizationId, work, { userId: scope.actorId, skipDrain: true });
+
+/** Each case owns a medicine, preventing cross-case FEFO allocations. */
+async function catalog(label: string, increment: number | null, policyFirst: boolean) {
+  return tenant(async (db) => {
+    const medicine = await db.medicine.create({
+      data: {
+        organizationId: scope.organizationId,
+        productName: 'SEC643 ' + label + run,
+        productFamily: 'PHARMACEUTICAL',
+        saleable: true,
+        presentations: { create: { organizationId: scope.organizationId, presentation: 'Tablet' } },
+      },
+      include: { presentations: true },
+    });
+    const presentation = medicine.presentations[0]!;
+    const makeLevel = (level: string, unitsPerParent: number, parentPackLevelId?: string) =>
+      db.packLevel.create({
+        data: {
+          organizationId: scope.organizationId,
+          presentationId: presentation.id,
+          versionGroupId: randomUUID(),
+          version: 1,
+          level,
+          unitsPerParent,
+          parentPackLevelId,
+          effectiveFrom: new Date('2026-01-01'),
+        },
+      });
+    const box = await makeLevel('BOX', 1);
+    const strip = await makeLevel('STRIP', 2, box.id);
+    await makeLevel('UNIT', 10, strip.id);
+    const batch = await db.pharmacyManufacturingBatch.create({
+      data: {
+        organizationId: scope.organizationId,
+        medicineId: medicine.id,
+        batchNumber: 'SEC643-BATCH',
+        expiresAt: expiry,
+        expiryPrecision: 'DAY',
+      },
+    });
+    const policies = [
+      { packLevelId: box.id, batchReference: 'ANOTHER-BATCH', roundingIncrementMinor: 7 },
+    ];
+    if (increment !== null) {
+      const matching = {
+        packLevelId: box.id,
+        batchReference: batch.batchNumber,
+        roundingIncrementMinor: increment,
+      };
+      if (policyFirst) policies.unshift(matching);
+      else policies.push(matching);
+    }
+    for (const policy of policies) {
+      await db.medicinePackMrp.create({
+        data: { organizationId: scope.organizationId, printedMrpMinor: 1_003, ...policy },
+      });
+    }
+    const { lot } = await ledger.receiveLot(db, scope, {
+      manufacturingBatchId: batch.id,
+      packLevelId: box.id,
+      stockLocationId,
+      unitsPerPack: 20,
+      supplierName: 'SEC643 local fixture',
+      supplierInvoiceRef: randomUUID(),
+      unitCostMinor: 1,
+      printedMrpMinor: 1_003,
+      receivedExpiresAt: expiry,
+      receivedExpiryPrecision: 'DAY',
+      quantityUnits: 200,
+      idempotencyKey: randomUUID(),
+      receivedAt: new Date('2026-01-01'),
+    });
+    await ledger.breakPack(db, scope, {
+      inventoryLotId: lot.id,
+      stockLocationId,
+      requiredLooseUnits: 40,
+      idempotencyKey: randomUUID(),
+      at,
+    });
+    return { medicine, lot };
+  });
+}
+
+describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () => {
+  beforeAll(async () => {
+    const url = new URL(testUrl!);
+    if (!['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname)) {
+      throw new Error('SEC643 regression requires a local throwaway database');
+    }
+    ({ withTenantDb, withPlatformDb } = await import('@/lib/tenancy/scoped-db'));
+    sales = await import('./sales');
+    counter = await import('./counter');
+    ledger = await import('./stock-ledger');
+    settlement = await import('./settlement');
+    const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
+    await assertRlsEnforcingRole(withPlatformDb);
+    await withPlatformDb((db) =>
+      db.$executeRawUnsafe(
+        `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
+         VALUES ($1, $1, $1, $1, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
+        scope.organizationId
+      )
+    );
+    stockLocationId = await tenant(async (db) => {
+      await db.pharmacyBranch.create({
+        data: {
+          id: scope.branchId,
+          organizationId: scope.organizationId,
+          code: scope.branchId,
+          name: 'SEC643 counter rounding',
+          addressLine: 'Test',
+          city: 'Test',
+          provinceCode: 'PB',
+        },
+      });
+      return (
+        await db.pharmacyStockLocation.create({
+          data: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            code: 'SEC643-STOCK',
+            name: 'Stock',
+            kind: 'STORE',
+          },
+        })
+      ).id;
+    });
+  }, 60_000);
+
+  it.each([
+    { kind: 'STRIP', quantity: 3, increment: 5, expected: 500, ceiling: 501, policyFirst: true },
+    { kind: 'STRIP', quantity: 3, increment: 5, expected: 500, ceiling: 501, policyFirst: false },
+    { kind: 'PACK', quantity: 2, increment: 5, expected: 1_003, ceiling: 1_003, policyFirst: true },
+    { kind: 'UNIT', quantity: 4, increment: 5, expected: 50, ceiling: 50, policyFirst: true },
+    { kind: 'STRIP', quantity: 2, increment: null, expected: 501, ceiling: 501, policyFirst: true },
+    { kind: 'STRIP', quantity: 2, increment: 6, expected: 498, ceiling: 501, policyFirst: true },
+  ] as const)(
+    '$kind quantity=$quantity increment=$increment policyFirst=$policyFirst',
+    async ({ kind, quantity, increment, expected, ceiling, policyFirst }) => {
+      const { medicine, lot } = await catalog(
+        [kind, quantity, increment, policyFirst].join('-'),
+        increment,
+        policyFirst
+      );
+      const { rows } = await tenant((db) =>
+        counter.searchCounterCatalog(db, scope, { query: medicine.productName, at })
+      );
+      expect(rows).toHaveLength(1);
+      const row = rows[0]!;
+      const option = row.saleUnits.find((unit) => unit.kind === kind)!;
+      const preview = previewSaleLine({
+        option,
+        quantity,
+        printedMrpMinor: row.printedMrpMinor!,
+        unitsPerPack: row.unitsPerPack!,
+        roundingIncrementMinor: row.roundingIncrementMinor,
+        availableUnits: row.onHandUnits,
+      });
+      expect(row.recommendedLotId).toBe(lot.id);
+      expect(row.roundingIncrementMinor).toBe(increment ?? 1);
+      expect(row.saleableUnits.find((unit) => unit.kind === kind)?.unitPriceMinor).toBe(expected);
+      expect(preview.unitPriceMinor).toBe(expected);
+      const { line } = await tenant(async (db) => {
+        const sale = await sales.createSale(db, scope);
+        return sales.addSaleLine(db, scope, {
+          saleId: sale.id,
+          medicineId: row.medicineId,
+          presentationId: row.presentationId,
+          packLevelId: option.packLevelId,
+          saleUnit: kind,
+          quantity,
+          canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+          idempotencyKey: randomUUID(),
+        });
+      });
+      // A fresh transaction proves the charged value was actually persisted.
+      const stored = await tenant((db) =>
+        db.pharmacySaleLine.findFirstOrThrow({
+          where: { id: line.id, organizationId: scope.organizationId, branchId: scope.branchId },
+          include: { allocations: true },
+        })
+      );
+      expect(stored.unitPriceMinor).toBe(preview.unitPriceMinor);
+      expect(stored.proRataCeilingMinor).toBe(ceiling);
+      expect(stored.unitPriceMinor).toBeLessThanOrEqual(stored.proRataCeilingMinor);
+      expect(stored.unitPriceMinor * stored.quantity).toBe(preview.grossMinor);
+      expect(stored.canonicalUnits).toBe(preview.canonicalUnits);
+      expect(stored.allocations).toHaveLength(1);
+      expect(stored.allocations[0]).toMatchObject({
+        inventoryLotId: lot.id,
+        canonicalUnits: preview.canonicalUnits,
+      });
+      // No payment adapter: BANK_TRANSFER is recorded entirely in the local DB.
+      const paid = await tenant((db) =>
+        settlement.applyPharmacyTender(db, scope, {
+          saleId: stored.saleId,
+          deviceId: randomUUID(),
+          businessDate: new Date('2026-10-24'),
+          type: 'BANK_TRANSFER',
+          amountMinor: preview.grossMinor,
+          idempotencyKey: randomUUID(),
+        })
+      );
+      expect(paid).toMatchObject({ settled: true, remainingMinor: 0 });
+      const tender = await tenant((db) =>
+        db.pharmacyTender.findFirstOrThrow({
+          where: {
+            saleId: stored.saleId,
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+          },
+        })
+      );
+      expect(tender.amountMinor).toBe(preview.grossMinor);
+    },
+    30_000
+  );
+});

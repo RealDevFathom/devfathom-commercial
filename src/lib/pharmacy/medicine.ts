@@ -83,6 +83,27 @@ export function deriveLooseUnitPrice(input: {
 }
 
 /**
+ * Printed-MRP rounding is approved for a particular pack AND manufacturing
+ * batch. Both the counter quote and the sale writer must resolve that same
+ * record; another batch's increment must never leak in through query order.
+ * Lots without a recorded policy retain the one-minor-unit default.
+ */
+export function roundingIncrementForLot(
+  lot: { packLevelId: string; batch: { batchNumber: string } },
+  mrps: readonly {
+    packLevelId: string;
+    batchReference: string;
+    roundingIncrementMinor: number;
+  }[]
+): number {
+  return (
+    mrps.find(
+      (mrp) => mrp.packLevelId === lot.packLevelId && mrp.batchReference === lot.batch.batchNumber
+    )?.roundingIncrementMinor ?? 1
+  );
+}
+
+/**
  * MED-08: the price of one sale unit drawn from a received lot.
  *
  * Lives here, beside `deriveLooseUnitPrice`, rather than next to the sale
