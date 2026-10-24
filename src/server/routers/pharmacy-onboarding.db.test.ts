@@ -118,9 +118,9 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     }
     await owner.query(
       `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode","updatedAt")
-       VALUES ($1,$2,$1,'Gulberg','12 Mall Road','Lahore','PB',now()),
-              ($3,$2,$3,'Model Town','9 Link Road','Lahore','PB',now()),
-              ($4,$5,$4,'Other tenant','1 Elsewhere','Karachi','SD',now())`,
+       VALUES ($1,$2,$1,'Gulberg','12 Mall Road','Lahore','PK-PB',now()),
+              ($3,$2,$3,'Model Town','9 Link Road','Lahore','PK-PB',now()),
+              ($4,$5,$4,'Other tenant','1 Elsewhere','Karachi','PK-SD',now())`,
       [branchId, organizationId, secondBranchId, otherBranchId, otherOrganizationId]
     );
   });
@@ -227,17 +227,34 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     expect(leaked.rowCount).toBe(0);
   });
 
-  it('refuses a province with no published rules, on the province field', async () => {
+  it('refuses a province that does not belong to the selected branch', async () => {
     await withTenantDb(organizationId, async (db) => {
       await expect(
-        // A province no rule set can name, so this stays true whatever else the
-        // shared jurisdiction table holds.
+        // The branch is authoritative even if a rule set for the submitted
+        // province is published later.
         caller(db).saveRegulatoryProfile({ ...profile, provinceCode: 'PK-ZZ' })
       ).rejects.toMatchObject({
         code: 'BAD_REQUEST',
-        message: expect.stringContaining('No jurisdiction rules are published'),
+        message: 'The regulatory province must match the selected branch.',
       });
     });
+  });
+
+  it.each([
+    [{ provinceCode: 'PK-SD' }, 'provinceCode'],
+    [{ premisesAddressLine: '99 Unrelated Road' }, 'premisesAddressLine'],
+    [{ premisesCity: 'Karachi' }, 'premisesCity'],
+  ])('refuses regulatory data that differs from the selected branch', async (change, field) => {
+    await withTenantDb(organizationId, async (db) => {
+      await expect(
+        caller(db).saveRegulatoryProfile({ ...profile, ...change })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', cause: expect.anything() });
+    });
+    const stored = await owner.query(
+      `SELECT 1 FROM pharmacy_branch_regulatory_profiles WHERE "branchId" = $1`,
+      [branchId]
+    );
+    expect(stored.rowCount, `${field} rejection must not write`).toBe(0);
   });
 
   it('refuses literal PLACEHOLDER licence text when the platform override is not active', async () => {
