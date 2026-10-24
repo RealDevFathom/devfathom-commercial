@@ -33,6 +33,11 @@ export class PharmacyRxReferenceError extends Error {
 
 export type PrescriptionReference = { prescriptionLineId: string; patientId: string };
 
+/** Shared key: a fill is recorded only at sale completion, never at line approval/add. */
+export function prescriptionReferenceFillKey(saleLineId: string): string {
+  return `rx-reference:${saleLineId}`;
+}
+
 /**
  * #518: a prescription reference must resolve to a real prescription line of this organization,
  * for this patient (and the sale's linked customer, if it has one), for this medicine and
@@ -147,7 +152,7 @@ export async function recordCompletedPrescriptionReference(
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_sales WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND id=${input.saleId} FOR UPDATE`
   );
-  const idempotencyKey = `rx-reference:${input.id}`;
+  const idempotencyKey = prescriptionReferenceFillKey(input.id);
   if (
     await db.prescriptionFill.findUnique({
       where: {

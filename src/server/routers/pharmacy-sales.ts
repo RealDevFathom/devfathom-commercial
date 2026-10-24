@@ -1,5 +1,10 @@
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
-import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
+import {
+  assertRxSaleAllowed,
+  hasRxSaleGrant,
+  PharmacyRxSaleDenied,
+} from '@/lib/pharmacy/rx-sale-gate';
+import { approveRxLine, PharmacyRxApprovalError } from '@/lib/pharmacy/rx-line-approval';
 import {
   PharmacyRxReferenceError,
   attachPrescriptionReference,
@@ -192,6 +197,16 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
 function fail(error: unknown): never {
   if (error instanceof PharmacyRxSaleDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  if (error instanceof PharmacyRxApprovalError)
+    throw new TRPCError({
+      code:
+        error.reason === 'LINE_NOT_FOUND'
+          ? 'NOT_FOUND'
+          : error.reason === 'SALE_NOT_OPEN'
+            ? 'CONFLICT'
+            : 'BAD_REQUEST',
+      message: error.message,
+    });
   if (error instanceof PharmacyRxReferenceError)
     throw new TRPCError({
       code: error.reason === 'PRESCRIPTION_NEEDS_PHARMACIST' ? 'FORBIDDEN' : 'BAD_REQUEST',
@@ -1672,6 +1687,48 @@ export const pharmacySalesRouter = router({
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         return await readCounterCart(ctx.db, scope, input.saleId);
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /** #341: whether this counter user may approve prescription-only lines (the #518 grant). */
+  rxApprovalAccess: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      return { canApprove: await hasRxSaleGrant(ctx.db, scope) };
+    }),
+
+  /**
+   * #341: a pharmacist approves one prescription-only or restricted, non-controlled line of an
+   * open bill, with a reason, which clears its POS-09 prescription block at the counter. Only a
+   * holder of the exact pharmacy:dispense grant may approve, and the #518 gate still decides who
+   * may add, pay for or complete the line.
+   */
+  approveRxLine: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          saleLineId: z.string().min(1),
+          reason: z.string().trim().min(3).max(300),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        category: 'PHARMACY_SAFETY',
+        action: 'rx_line_approval',
+        targetType: 'PharmacySaleLine',
+        targetId: input.saleLineId,
+        description: 'A pharmacist approved a prescription-only counter line.',
+        metadata: { branchId: input.branchId, saleId: input.saleId, reason: input.reason },
+      });
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await ctx.db.$transaction((tx) => approveRxLine(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
       }
