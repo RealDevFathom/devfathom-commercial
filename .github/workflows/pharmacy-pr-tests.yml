@@ -33,6 +33,7 @@ jobs:
     env:
       CI: 'true'
       NODE_ENV: test
+      TZ: UTC
       NEXT_TELEMETRY_DISABLED: '1'
       PHARMACY_PR_TARGET: ${{ github.event.pull_request.number }}
       DATABASE_URL: postgresql://pharmacy_runtime@127.0.0.1:55432/pharmacy_pr_test
