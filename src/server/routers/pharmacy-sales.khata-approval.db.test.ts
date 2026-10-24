@@ -171,56 +171,60 @@ async function khataState(bill: Bill) {
 beforeAll(async () => {
   if (!databaseUrl) return;
   const scoped = await import('@/lib/tenancy/scoped-db');
+  const sales = await import('./pharmacy-sales');
+  const { seedDepartments } = await import('@/lib/test-support/departments');
+  const { PHARMACY_ROLE_TEMPLATES } = await import('@/lib/vertical-catalog');
+  const { db } = await import('@/lib/db');
   withTenantDb = scoped.withTenantDb;
   withPlatformDb = scoped.withPlatformDb;
-  pharmacySalesRouter = (await import('./pharmacy-sales')).pharmacySalesRouter;
-  const { prisma } = await import('@/lib/db');
-  disconnect = () => prisma.$disconnect();
-  const { PHARMACY_ROLE_TEMPLATES } = await import('@/lib/pharmacy/staff');
-  await withPlatformDb(
-    {
-      purpose: 'TEST',
-      organizationId: ids.org,
-      reason: '#313 synthetic Khata role and money integration',
-      kind: 'SEED',
-    },
-    async (tx) => {
-      const roles = await tx.$queryRawUnsafe<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>(
-        'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user'
-      );
-      expect(roles[0]).toMatchObject({ rolsuper: false, rolbypassrls: false });
-      await tx.organization.create({
-        data: {
-          id: ids.org,
-          name: 'Khata synthetic pharmacy',
-          slug: `khata-${suffix}`,
-          seatLimit: 10,
-          vertical: 'PHARMACY',
-        },
-      });
-    }
+  pharmacySalesRouter = sales.pharmacySalesRouter;
+  disconnect = () => db.$disconnect();
+
+  const [role] = await withPlatformDb((tx) =>
+    tx.$queryRawUnsafe<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>(
+      'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
+    )
   );
+  expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
+
+  await withPlatformDb(async (tx) => {
+    await tx.$executeRawUnsafe(
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
+       VALUES ($1, $1, 'Khata 313', 'Khata 313', 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
+      ids.org
+    );
+  });
+
   await withTenantDb(ids.org, async (tx) => {
-    for (const [id, code] of [
-      [ids.branch, 'MAIN313'],
-      [ids.branchB, 'OTHER313'],
-    ]) {
-      await tx.pharmacyBranch.create({
-        data: {
-          id,
-          code,
-          name: code,
-          addressLine: '1 Test Road',
-          city: 'Lahore',
-          provinceCode: 'PB',
-        },
-      });
-    }
+    await seedDepartments(tx, [ids.org], ['LEADERSHIP']);
+    await tx.pharmacyBranch.create({
+      data: {
+        id: ids.branch,
+        code: 'K313',
+        name: 'Khata 313',
+        addressLine: '1 Road',
+        city: 'Lahore',
+        provinceCode: 'PB',
+      },
+    });
+    await tx.pharmacyBranch.create({
+      data: {
+        id: ids.branchB,
+        code: 'OTHER313',
+        name: 'Other synthetic',
+        addressLine: '2 Test Road',
+        city: 'Lahore',
+        provinceCode: 'PB',
+      },
+    });
     // Exactly what organization provisioning persists for each system role template.
     const roleIds = new Map<string, string>();
-    for (const template of PHARMACY_ROLE_TEMPLATES) {
-      const role = await tx.organizationRole.create({
+    for (const template of PHARMACY_ROLE_TEMPLATES.filter((row) =>
+      ['owner', 'manager', 'cashier'].includes(row.key)
+    )) {
+      const created = await tx.organizationRole.create({
         data: {
+          organizationId: ids.org,
           key: template.key,
           name: template.name,
           isSystem: template.isSystem,
@@ -233,16 +237,16 @@ beforeAll(async () => {
           },
         },
       });
-      roleIds.set(template.key, role.id);
+      roleIds.set(template.key, created.id);
     }
     const members: Array<{ id: string; role: 'ADMIN' | 'EMPLOYEE'; roleKey: string | null }> = [
-      { ...people.owner, roleKey: 'owner' },
-      { ...people.manager, roleKey: 'manager' },
-      { ...people.deniedManager, roleKey: 'manager' },
-      { ...people.cashier, roleKey: 'cashier' },
-      { ...people.admin, roleKey: null },
-      { ...people.deniedAdmin, roleKey: null },
-      { ...people.wildcardDeniedAdmin, roleKey: null },
+      { id: ids.owner, role: 'EMPLOYEE', roleKey: 'owner' },
+      { id: ids.manager, role: 'EMPLOYEE', roleKey: 'manager' },
+      { id: ids.deniedManager, role: 'EMPLOYEE', roleKey: 'manager' },
+      { id: ids.cashier, role: 'EMPLOYEE', roleKey: 'cashier' },
+      { id: ids.admin, role: 'ADMIN', roleKey: null },
+      { id: ids.deniedAdmin, role: 'ADMIN', roleKey: null },
+      { id: ids.wildcardDeniedAdmin, role: 'ADMIN', roleKey: null },
     ];
     for (const member of members) {
       await tx.user.create({
@@ -256,28 +260,38 @@ beforeAll(async () => {
           organizationRoleId: member.roleKey ? roleIds.get(member.roleKey)! : null,
         },
       });
-      await tx.pharmacyBranchAssignment.create({
-        data: { organizationId: ids.org, branchId: ids.branch, userId: member.id, active: true },
-      });
     }
+    for (const person of Object.values(people))
+      await tx.pharmacyBranchAssignment.create({
+        data: { organizationId: ids.org, branchId: ids.branch, userId: person.id, active: true },
+      });
     for (const [userId, capability] of [
-      [ids.deniedManager, 'pharmacy:manage'],
       [ids.deniedAdmin, 'pharmacy:manage'],
       [ids.wildcardDeniedAdmin, 'pharmacy:*'],
-    ]) {
+    ])
       await tx.userPermissionOverride.create({
         data: {
           organizationId: ids.org,
           userId,
           capability,
           effect: 'DENY',
-          reason: 'Suspended from approvals',
+          reason: 'Explicitly revoked',
           createdById: ids.admin,
         },
       });
-    }
+    await tx.userPermissionOverride.create({
+      data: {
+        organizationId: ids.org,
+        userId: ids.deniedManager,
+        capability: 'pharmacy:manage',
+        effect: 'DENY',
+        reason: 'Suspended from approvals',
+        createdById: ids.admin,
+      },
+    });
   });
 }, 60_000);
+
 afterEach(async () => {
   if (databaseUrl) await (await import('@/server/audit')).flushAuditWritesForTest();
 });
