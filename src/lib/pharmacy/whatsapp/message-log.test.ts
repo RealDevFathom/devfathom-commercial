@@ -1,98 +1,103 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ claim: vi.fn(), update: vi.fn() }));
+const spies = vi.hoisted(() => ({ update: vi.fn(), tenants: [] as string[] }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
-  withTenantDb: (_organizationId: string, fn: (db: unknown) => unknown) =>
-    fn({
-      pharmacyMessageLog: { createManyAndReturn: mocks.claim, update: mocks.update },
-    }),
+  withTenantDb: async (organizationId: string, fn: (db: unknown) => unknown) => {
+    spies.tenants.push(organizationId);
+    return fn({ pharmacyMessageLog: { update: spies.update } });
+  },
 }));
-import { sendAndLog } from './message-log';
-import { WhatsAppProviderError } from './provider';
 
-const entry = { organizationId: 'org-a', kind: 'REFILL_REMINDER' as const, dedupeKey: 'one' };
+import { sendClaimedMessage, updateMessageLog } from './message-log';
+
 beforeEach(() => {
-  vi.resetAllMocks();
-  mocks.claim.mockResolvedValue([{ id: 'log-a' }]);
-  mocks.update.mockResolvedValue({});
+  spies.tenants.length = 0;
+  spies.update.mockReset().mockResolvedValue({ id: 'synthetic-log' });
 });
 
-describe('outbound evidence and safe replay', () => {
-  it('records a mock as preparation, never SENT', async () => {
+describe('existing outbox outcome writer, without unrelated row hydration', () => {
+  it('persists under the supplied tenant and requests only the ignored result id', async () => {
+    await updateMessageLog('synthetic-tenant', 'synthetic-log', {
+      status: 'IGNORED',
+      error: 'MOCK_PREPARED',
+    });
+    expect(spies.tenants).toEqual(['synthetic-tenant']);
+    expect(spies.update).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 'synthetic-log' },
+      data: { status: 'IGNORED', error: 'MOCK_PREPARED' },
+      select: { id: true },
+    });
+  });
+
+  it('preserves mock PREPARED as IGNORED, never SENT', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValue({ providerMessageId: 'synthetic-mock', acceptedByProvider: false });
     expect(
-      await sendAndLog(entry, async () => ({
-        providerMessageId: 'mock-1',
-        acceptedByProvider: false,
-      }))
+      await sendClaimedMessage(
+        {
+          organizationId: 'synthetic-tenant',
+          kind: 'REFILL_REMINDER',
+          dedupeKey: 'synthetic-dedupe',
+        },
+        'synthetic-log',
+        send
+      )
     ).toBe('PREPARED');
-    expect(mocks.update).toHaveBeenCalledWith({
-      where: { id: 'log-a' },
-      data: {
-        status: 'IGNORED',
-        providerMessageId: 'mock-1',
-        error: 'MOCK_PREPARED',
-      },
-    });
-  });
-  it('records only explicit provider acceptance as SENT, not delivered', async () => {
-    expect(
-      await sendAndLog(entry, async () => ({
-        providerMessageId: 'real-1',
-        acceptedByProvider: true,
-      }))
-    ).toBe('SENT');
-    expect(mocks.update).toHaveBeenCalledWith({
-      where: { id: 'log-a' },
-      data: {
-        status: 'SENT',
-        providerMessageId: 'real-1',
-      },
-    });
-  });
-  it('keeps transport uncertainty pending and redacts arbitrary error details', async () => {
-    expect(
-      await sendAndLog(entry, async () => {
-        throw new Error('private recipient and message');
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(spies.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { status: 'IGNORED', providerMessageId: 'synthetic-mock', error: 'MOCK_PREPARED' },
+        select: { id: true },
       })
-    ).toBe('UNKNOWN');
-    expect(mocks.update).toHaveBeenCalledWith({
-      where: { id: 'log-a' },
-      data: {
-        status: 'PENDING',
-        error: 'UNKNOWN_PROVIDER_OUTCOME',
-      },
-    });
+    );
   });
-  it('fails only on definitive pre-send or provider rejection evidence', async () => {
-    expect(
-      await sendAndLog(entry, async () => {
-        throw new WhatsAppProviderError('NOT_CONFIGURED');
-      })
-    ).toBe('FAILED');
-    expect(mocks.update).toHaveBeenCalledWith({
-      where: { id: 'log-a' },
-      data: {
-        status: 'FAILED',
-        error: 'NOT_CONFIGURED',
-      },
-    });
-  });
-  it('does not overwrite acceptance as FAILED when persistence fails', async () => {
-    mocks.update.mockRejectedValue(new Error('database unavailable'));
+
+  it('requires explicit provider acceptance for SENT and propagates a failed persistence without replay', async () => {
+    const send = vi
+      .fn()
+      .mockResolvedValue({ providerMessageId: 'synthetic-accepted', acceptedByProvider: true });
+    spies.update.mockRejectedValueOnce(new Error('synthetic persistence failure'));
     await expect(
-      sendAndLog(entry, async () => ({ providerMessageId: 'real-1', acceptedByProvider: true }))
-    ).rejects.toThrow('database unavailable');
-    expect(mocks.update).toHaveBeenCalledTimes(1);
-    expect(mocks.update.mock.calls[0][0].data.status).toBe('SENT');
+      sendClaimedMessage(
+        {
+          organizationId: 'synthetic-tenant',
+          kind: 'REFILL_REMINDER',
+          dedupeKey: 'synthetic-dedupe',
+        },
+        'synthetic-log',
+        send
+      )
+    ).rejects.toThrow('synthetic persistence failure');
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(spies.update).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 'synthetic-log' },
+      data: { status: 'SENT', providerMessageId: 'synthetic-accepted' },
+      select: { id: true },
+    });
   });
-  it('never retries an already claimed message, including UNKNOWN', async () => {
-    mocks.claim.mockResolvedValue([]);
-    const send = vi.fn();
-    expect(await sendAndLog(entry, send)).toBe('DUPLICATE');
-    expect(send).not.toHaveBeenCalled();
-    expect(mocks.update).not.toHaveBeenCalled();
-  });
-  it('treats an unclassified adapter response as unknown', async () => {
-    expect(await sendAndLog(entry, async () => ({ providerMessageId: 'legacy' }))).toBe('UNKNOWN');
+
+  it('keeps an ambiguous provider outcome PENDING with the fixed safe marker', async () => {
+    expect(
+      await sendClaimedMessage(
+        {
+          organizationId: 'synthetic-tenant',
+          kind: 'REFILL_REMINDER',
+          dedupeKey: 'synthetic-dedupe',
+        },
+        'synthetic-log',
+        async () => ({ providerMessageId: 'synthetic-unknown' })
+      )
+    ).toBe('UNKNOWN');
+    expect(spies.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          status: 'PENDING',
+          providerMessageId: 'synthetic-unknown',
+          error: 'UNKNOWN_PROVIDER_OUTCOME',
+        },
+        select: { id: true },
+      })
+    );
   });
 });

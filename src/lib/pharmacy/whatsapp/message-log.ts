@@ -63,7 +63,11 @@ export async function updateMessageLog(
     branchId?: string;
   }
 ) {
-  await withTenantDb(organizationId, (db) => db.pharmacyMessageLog.update({ where: { id }, data }));
+  // The result is intentionally unused: do not hydrate unrelated inherited
+  // growth/campaign columns when persisting an existing outbox outcome.
+  await withTenantDb(organizationId, (db) =>
+    db.pharmacyMessageLog.update({ where: { id }, data, select: { id: true } })
+  );
 }
 
 /**
