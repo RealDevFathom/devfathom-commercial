@@ -52,10 +52,14 @@ export function HotelDashboardContent({
       : roomSellers.length === 1
         ? `/hotel/settings/rooms?branchId=${encodeURIComponent(roomSellers[0]!.branchId)}`
         : '/hotel/settings/rooms';
+  // Meal plans are board sold with a stay, so they are offered where rooms are:
+  // a venue sells no rooms and keeps its function-space step instead.
   const mealPlansHref =
-    properties.length === 1
-      ? `/hotel/settings/meal-plans?branchId=${encodeURIComponent(properties[0]!.branchId)}`
-      : '/hotel/settings/meal-plans';
+    roomSellers.length === 0
+      ? null
+      : roomSellers.length === 1
+        ? `/hotel/settings/meal-plans?branchId=${encodeURIComponent(roomSellers[0]!.branchId)}`
+        : '/hotel/settings/meal-plans';
   // Offered only when a property's own configuration sells function space; the
   // page re-checks the module and the configuration on every read.
   const venues = properties.filter((property) => property.sellsFunctionSpaces);

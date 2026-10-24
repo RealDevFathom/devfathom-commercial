@@ -4,12 +4,13 @@ import { Suspense } from 'react';
 import { MarginComparisonSection } from './margin-comparison';
 import { LedgerReportsSection, LedgerReportsLoading } from './ledger-reports';
 import type { Metadata } from 'next';
-import { redirect } from 'next/navigation';
+import { redirect, unstable_rethrow } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
 import {
   Table,
   TableBody,
@@ -250,16 +251,10 @@ export default async function PharmacyFinancePage({
       }
       throw new Error('Choose a supported action.');
     } catch (error) {
-      if (error && typeof error === 'object' && 'digest' in error) throw error;
-      const message =
-        error instanceof Error ? error.message.replaceAll('_', ' ').toLowerCase() : 'Action failed';
-      redirect(
-        destination(
-          branchId || branch.id,
-          `Could not save: ${message}. Review the named fields and try again.`,
-          'error'
-        )
-      );
+      // Preserve Next.js control-flow errors without trusting a user/provider-controlled
+      // `digest` property as proof that an arbitrary thrown value is a framework error.
+      unstable_rethrow(error);
+      redirect(destination(branchId || branch.id, pharmacyActionErrorMessage('finance'), 'error'));
     }
   }
 

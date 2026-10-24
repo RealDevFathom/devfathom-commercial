@@ -72,7 +72,7 @@ vi.mock('@/lib/db', () => {
 // A real router, with the production transformer, so the assertions below read
 // the serialization the client actually receives.
 vi.mock('@/server/routers/_app', async () => {
-  const { initTRPC } = await import('@trpc/server');
+  const { initTRPC, TRPCError } = await import('@trpc/server');
   const superjson = (await import('superjson')).default;
 
   const t = initTRPC
@@ -101,6 +101,10 @@ vi.mock('@/server/routers/_app', async () => {
         }),
       }),
       read: t.procedure.query(() => ({ read: true })),
+      // A deliberate refusal: the caller is told exactly this, and nothing failed.
+      refuse: t.procedure.mutation(() => {
+        throw new TRPCError({ code: 'CONFLICT', message: 'Already taken.' });
+      }),
       // A query that fails after an incidental write — the shape of one broken
       // widget on a page whose other queries share its GET batch.
       readThenFail: t.procedure.query(async ({ ctx }) => {
@@ -280,6 +284,37 @@ describe('a procedure that fails after writing', () => {
  * therefore never blank its siblings, which is what the whole-batch rewrite did
  * to the catering Create-order dialog's customer list.
  */
+describe('the server-side record of a failure', () => {
+  // The errorFormatter withholds an unexpected failure's own message from a
+  // production client; the route is where the original must still be recorded.
+  it('logs an internal failure with its original error, cause and procedure', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      expect((await mutate(['writeThenFail'])).status).toBe(500);
+      expect(logged).toHaveBeenCalledExactlyOnceWith(
+        '[trpc] writeThenFail failed:',
+        expect.objectContaining({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: 'event failed',
+          cause: expect.objectContaining({ message: 'event failed' }),
+        })
+      );
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it('records nothing for a deliberate refusal, which the caller is told in full', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      expect((await mutate(['refuse'])).status).toBe(409);
+      expect(logged).not.toHaveBeenCalled();
+    } finally {
+      logged.mockRestore();
+    }
+  });
+});
+
 describe('a query batch with one failing query', () => {
   const getBatch = (paths: string[]) => {
     const input = Object.fromEntries(paths.map((_path, index) => [String(index), { json: null }]));

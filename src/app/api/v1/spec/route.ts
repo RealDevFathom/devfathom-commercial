@@ -396,8 +396,9 @@ Create an invoice. \`finance:write\`. Logs \`invoice_created\`.
 
 ### \`GET /invoices/:id\` / \`PATCH /invoices/:id\`
 Get or update invoice status. \`finance:read\` / \`finance:write\`.
-PATCH body: \`{ "status": "DRAFT | SENT | PAID | OVERDUE | CANCELLED" }\`.
-SENT and PAID transitions log \`invoice_sent\` / \`invoice_paid\` activity.
+PATCH body: \`{ "status": "DRAFT | SENT | OVERDUE | CANCELLED" }\`.
+The PATCH endpoint enforces valid status transitions and logs \`invoice_sent\` activity. To mark an
+invoice PAID, record its payment through the mark-paid workflow instead.
 
 ### \`GET /finance/summary\`
 Get monthly + yearly income, expenses, profit, and outstanding invoice totals.
@@ -463,7 +464,6 @@ into the team stats page. The following operations are tracked:
 | \`POST /clients\` | \`client_created\` |
 | \`POST /invoices\` | \`invoice_created\` |
 | \`PATCH /invoices/:id\` (status → SENT) | \`invoice_sent\` |
-| \`PATCH /invoices/:id\` (status → PAID) | \`invoice_paid\` |
 
 Comments are tracked separately in stats (counted under "comments this week" on
 the team insights page) but don't generate dashboard activity rows.

@@ -6,9 +6,9 @@
  * `hotelProperty.extras.list`), so the landing can never disagree with the
  * property settings page about readiness or access: the same router answers
  * both, through the same `hotel:property-admin` gate. That includes what the
- * property sells: whether the landing offers the rooms page follows the walk
- * the router chose — a room-type step for a property that sells room
- * inventory, a function-space step for one that sells none (a venue).
+ * property sells: whether the landing offers the rooms page and the meal plans
+ * follows the walk the router chose — a room-type step for a property that
+ * sells room inventory, a function-space step for one that sells none (a venue).
  *
  * Reservations and folios are not shipped in this build; the landing says so
  * instead of rendering the agency widgets.
@@ -53,8 +53,9 @@ export type HotelLandingProperty = {
   /**
    * Whether the property sells rooms, beds or units — read off the walk the
    * router built for it (its step 6 asks for a room type), so the landing
-   * offers the rooms page exactly where readiness asks for a room type and
-   * never on a venue, whose step 6 asks for a function space instead.
+   * offers the rooms page and the meal plans sold with a stay exactly where
+   * readiness asks for a room type, and never on a venue, whose step 6 asks
+   * for a function space instead.
    */
   sellsRooms: boolean;
   /**

@@ -40,6 +40,7 @@ import {
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
+import { assertBranchMayOperate, BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
 /** The gates an operator may attest to; the rest are answered from data. */
@@ -104,15 +105,28 @@ function reconcilePackageGate(
 /** The checklist, activation summary and organization state, in one read. */
 async function readOverview(ctx: TRPCContext) {
   const organizationId = ctx.entitlements.organizationId;
-  const [organization, evaluated] = await Promise.all([
+  const now = new Date();
+  const [organization, evaluated, currentProfile] = await Promise.all([
     ctx.db.organization.findFirst({
       where: { id: organizationId },
       select: { displayName: true, status: true, vertical: true, packageId: true },
     }),
-    evaluatePharmacyReadiness(ctx.db, organizationId),
+    evaluatePharmacyReadiness(ctx.db, organizationId, now),
+    ctx.db.branchRegulatoryProfile.findFirst({
+      where: {
+        organizationId,
+        effectiveFrom: { lte: now },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+      },
+      select: { licenceValidTo: true },
+      orderBy: { effectiveFrom: 'desc' },
+    }),
   ]);
   const readiness = reconcilePackageGate(evaluated, organization);
-  const checklist = pharmacyOnboardingChecklist(readiness);
+  const checklist = pharmacyOnboardingChecklist(readiness, {
+    at: now,
+    licenceValidTo: currentProfile?.licenceValidTo,
+  });
   return {
     organization: {
       displayName: organization?.displayName ?? 'This workspace',
@@ -132,6 +146,7 @@ async function readOverview(ctx: TRPCContext) {
 async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
   const ruleSets = await ctx.db.jurisdictionRuleSet.findMany({
     where: {
+      isPlaceholder: false,
       effectiveFrom: { lte: at },
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
     },
@@ -286,6 +301,7 @@ export const pharmacyOnboardingRouter = router({
             orderBy: { version: 'desc' },
             select: {
               id: true,
+              branchId: true,
               version: true,
               effectiveFrom: true,
               effectiveTo: true,
@@ -306,6 +322,14 @@ export const pharmacyOnboardingRouter = router({
               retentionPolicy: true,
               premises: true,
               createdAt: true,
+              isPlaceholder: true,
+              jurisdictionRuleSet: {
+                select: {
+                  licenceCategories: true,
+                  permittedSchedules: true,
+                  pharmacistCoverageRule: true,
+                },
+              },
             },
           })
         : [];
@@ -314,15 +338,40 @@ export const pharmacyOnboardingRouter = router({
         branches,
         jurisdictions,
         selectedBranchId: selected?.id ?? null,
-        versions: versions.map((version) => ({
-          ...version,
-          provinceName: provinceName(version.provinceCode),
-          // "In force" is a date comparison, not a flag, so a future-dated
-          // version reads as scheduled rather than as the current one.
-          inForce:
+        versions: versions.map(({ jurisdictionRuleSet, ...version }) => {
+          const effective =
             version.effectiveFrom <= now &&
-            (version.effectiveTo === null || version.effectiveTo > now),
-        })),
+            (version.effectiveTo === null || version.effectiveTo > now);
+          let inForce = effective;
+          if (effective) {
+            try {
+              assertBranchMayOperate(
+                {
+                  ...version,
+                  permittedSchedules: Array.isArray(version.permittedSchedules)
+                    ? version.permittedSchedules.filter(
+                        (schedule): schedule is string => typeof schedule === 'string'
+                      )
+                    : [],
+                  ruleSet: jurisdictionRuleSet,
+                  auditDenied: () => undefined,
+                },
+                { name: 'REGULATORY_PROFILE_VIEW', at: now, requiresQualifiedPerson: true }
+              );
+            } catch (error) {
+              if (!(error instanceof BranchOperationDeniedError)) throw error;
+              inForce = false;
+            }
+          }
+          return {
+            ...version,
+            provinceName: provinceName(version.provinceCode),
+            effective,
+            inForce,
+            licenceExpired: effective && now >= version.licenceValidTo,
+            qualifiedPersonCoverageExpired: effective && now >= version.qualifiedPersonValidTo,
+          };
+        }),
       };
     }),
 
@@ -347,6 +396,37 @@ export const pharmacyOnboardingRouter = router({
       });
       if (!branch) {
         throw badRequest('branchId', 'Choose one of this workspace’s active branches.');
+      }
+
+      const activePlaceholder = await ctx.db.branchRegulatoryProfile.findFirst({
+        where: {
+          organizationId,
+          branchId: branch.id,
+          isPlaceholder: true,
+          effectiveTo: null,
+        },
+        select: { id: true },
+      });
+      if (!activePlaceholder) {
+        const placeholderField = [
+          'premisesAddressLine',
+          'premisesCity',
+          'premisesStorageDescription',
+          'licenceCategory',
+          'licenceNumber',
+          'licenceEvidenceFileRef',
+          'qualifiedPersonRegistration',
+          'qualifiedPersonCoverageRosterRef',
+          'ntn',
+          'strn',
+          'fiscalStatus',
+        ].find((field) => /\bPLACEHOLDER\b/i.test(String(input[field as keyof typeof input])));
+        if (placeholderField) {
+          throw badRequest(
+            placeholderField,
+            'PLACEHOLDER text is reserved for the active platform placeholder rule set.'
+          );
+        }
       }
 
       const jurisdictions = await jurisdictionsInForce(ctx, effectiveFrom);

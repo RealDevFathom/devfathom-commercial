@@ -7,6 +7,7 @@ import {
   marketingConsent,
   marketingDraftInput,
   previewMarketingCampaign,
+  requireCaptureWindow,
 } from './marketing-service';
 
 const scope = {
@@ -264,6 +265,16 @@ describe('persisted capture workflow', () => {
     row.promotesRegulatedItem = true;
     await expect(captureMarketingCampaign(db, scope, row.id, now)).rejects.toThrow('Regulated');
     expect(captures).toEqual([]);
+  });
+  it('reads quiet hours in UTC for a stored zone Intl refuses, instead of throwing', () => {
+    const refused = { ...scope, timezone: 'PKT' };
+    // 23:00 UTC is inside the 22:00-08:00 quiet hours; 12:00 UTC is not.
+    expect(() =>
+      requireCaptureWindow(campaign() as never, refused, new Date('2026-10-06T23:00:00Z'))
+    ).toThrow('quiet hours');
+    expect(() =>
+      requireCaptureWindow(campaign() as never, refused, new Date('2026-10-06T12:00:00Z'))
+    ).not.toThrow();
   });
   it('fails before mutation when the bounded audience is exceeded', async () => {
     mock.pharmacySale.groupBy.mockResolvedValue(

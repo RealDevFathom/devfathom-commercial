@@ -234,11 +234,7 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
                 <Button variant="outline" size="lg" onClick={() => setIsEditing(true)}>
                   <Pencil className="h-3.5 w-3.5" /> Edit
                 </Button>
-                <Button
-                  variant="outline"
-                  size="lg"
-                  onClick={() => setShowResetPw(!showResetPw)}
-                >
+                <Button variant="outline" size="lg" onClick={() => setShowResetPw(!showResetPw)}>
                   <Lock className="h-3.5 w-3.5" /> Reset Password
                 </Button>
                 <Button variant="destructive" size="lg" onClick={() => setShowLayOff(true)}>
@@ -306,12 +302,18 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
               <div className="flex h-6 w-6 items-center justify-center rounded-md bg-blue-500/10">
                 <FolderKanban className="h-3.5 w-3.5 text-blue-500" />
               </div>
-              Projects ({member.projectMembers.length})
+              {/* A colleague's list holds only what this viewer could see anyway. */}
+              {member.workScope.projects === 'SHARED' ? 'Shared projects' : 'Projects'} (
+              {member.projectMembers.length})
             </CardTitle>
           </CardHeader>
           <CardContent>
             {member.projectMembers.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">No projects assigned</p>
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                {member.workScope.projects === 'SHARED'
+                  ? 'No projects you share'
+                  : 'No projects assigned'}
+              </p>
             ) : (
               <div className="divide-y divide-border/60">
                 {member.projectMembers.map((pm) => {
@@ -404,12 +406,16 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
                 <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10">
                   <CheckSquare className="h-3.5 w-3.5 text-primary" />
                 </div>
-                Tasks
+                {member.workScope.tasks === 'VISIBLE' ? 'Tasks you can see' : 'Tasks'}
               </CardTitle>
             </CardHeader>
             <CardContent>
               {member.assignedTasks.length === 0 ? (
-                <p className="py-4 text-center text-sm text-muted-foreground">No tasks assigned</p>
+                <p className="py-4 text-center text-sm text-muted-foreground">
+                  {member.workScope.tasks === 'VISIBLE'
+                    ? 'No tasks you can see'
+                    : 'No tasks assigned'}
+                </p>
               ) : (
                 <div className="divide-y divide-border/60">
                   {member.assignedTasks.map((at) => (
@@ -572,9 +578,7 @@ function LayOffDialog({
             placeholder="Why is this person being laid off? (required)"
             disabled={layOff.isPending}
           />
-          {layOff.error && (
-            <p className="mt-2 text-xs text-destructive">{layOff.error.message}</p>
-          )}
+          {layOff.error && <p className="mt-2 text-xs text-destructive">{layOff.error.message}</p>}
         </div>
 
         <DialogFooter showCloseButton>
@@ -904,10 +908,7 @@ const LeaveBalancesBlock = memo(function LeaveBalancesBlock({
                 : 0;
             const over = t.remaining < 0;
             return (
-              <div
-                key={t.type}
-                className="rounded-xl border border-border/60 bg-background/50 p-4"
-              >
+              <div key={t.type} className="rounded-xl border border-border/60 bg-background/50 p-4">
                 <div className="flex items-center justify-between">
                   <span
                     className={cn('rounded-full px-2.5 py-1 text-[11px] font-medium', cfg.tint)}

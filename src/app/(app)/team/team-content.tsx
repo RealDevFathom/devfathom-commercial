@@ -254,11 +254,14 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
   const utils = trpc.useUtils();
   const inviteMember = trpc.team.inviteMember.useMutation();
   const departmentQuery = trpc.organizationAdmin.departments.useQuery(undefined, { retry: false });
+  const roleQuery = trpc.organizationAdmin.roles.useQuery(undefined, { retry: false });
   const departmentOptions = (departmentQuery.data ?? []).filter((item) => item.active);
+  const roleOptions = roleQuery.data ?? [];
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<'ADMIN' | 'HR' | 'EMPLOYEE'>('EMPLOYEE');
+  const [organizationRoleId, setOrganizationRoleId] = useState('');
   const [department, setDepartment] = useState('');
   const [title, setTitle] = useState('');
   const [phone, setPhone] = useState('');
@@ -289,6 +292,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
         name: name.trim(),
         email: submittedEmail,
         role,
+        organizationRoleId: organizationRoleId || null,
         department,
         title: title.trim(),
         phone: phone || undefined,
@@ -500,6 +504,36 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                       ))}
                     </div>
                   </div>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="invite-role-template"
+                    className="block text-sm font-medium text-foreground mb-1.5"
+                  >
+                    Restaurant staff role
+                  </label>
+                  <select
+                    id="invite-role-template"
+                    value={organizationRoleId}
+                    disabled={roleQuery.isFetching || roleQuery.isError || inviteMember.isPending}
+                    onChange={(event) => setOrganizationRoleId(event.target.value)}
+                    className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  >
+                    <option value="">No role template</option>
+                    {roleOptions.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-sm text-text-muted">
+                    {roleQuery.isFetching
+                      ? 'Loading staff roles…'
+                      : roleQuery.isError
+                        ? 'Staff roles could not be loaded.'
+                        : 'Choose the workspace role that controls restaurant access.'}
+                  </p>
                 </div>
 
                 <div>

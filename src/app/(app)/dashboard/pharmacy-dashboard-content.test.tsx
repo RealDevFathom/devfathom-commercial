@@ -14,19 +14,38 @@ const state = vi.hoisted(() => ({
   catalog: undefined as unknown,
   command: undefined as unknown,
   preferences: undefined as unknown,
+  enabledModules: [] as string[],
 }));
 
+/** Every Pharmacy Reports hook the dashboard mounts, so a test can prove none was. */
+const mounted = vi.hoisted(() => {
+  const hooks: string[] = [];
+  const record = <T,>(hook: string, value: T): T => {
+    hooks.push(hook);
+    return value;
+  };
+  return { hooks, record };
+});
+
+vi.mock('@/components/entitlements-provider', () => ({
+  useEntitlements: () => ({ organizationId: 'org', enabledModules: state.enabledModules }),
+}));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({ pharmacyReports: { getPreferences: { setData: vi.fn() } } }),
     pharmacyReports: {
-      branches: { useQuery: () => state.branches },
-      catalog: { useQuery: () => state.catalog },
-      getPreferences: { useQuery: () => state.preferences },
+      branches: { useQuery: () => mounted.record('branches', state.branches) },
+      catalog: { useQuery: () => mounted.record('catalog', state.catalog) },
+      getPreferences: { useQuery: () => mounted.record('getPreferences', state.preferences) },
       updatePreferences: {
-        useMutation: () => ({ mutateAsync: vi.fn(), isPending: false, error: null }),
+        useMutation: () =>
+          mounted.record('updatePreferences', {
+            mutateAsync: vi.fn(),
+            isPending: false,
+            error: null,
+          }),
       },
-      commandCentre: { useQuery: () => state.command },
+      commandCentre: { useQuery: () => mounted.record('commandCentre', state.command) },
     },
   },
 }));
@@ -34,11 +53,41 @@ vi.mock('@/lib/trpc', () => ({
 import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
 
 const CATALOG_METRICS = [
-  { key: 'openStockSignals', label: 'Open stock signals', source: 'ledger', permission: 'reports:operational', drillThrough: null },
-  { key: 'recommendedOrders', label: 'Recommended orders', source: 'ledger', permission: 'reports:operational', drillThrough: null },
+  {
+    key: 'openStockSignals',
+    label: 'Open stock signals',
+    source: 'ledger',
+    permission: 'reports:operational',
+    drillThrough: null,
+  },
+  {
+    key: 'recommendedOrders',
+    label: 'Recommended orders',
+    source: 'ledger',
+    permission: 'reports:operational',
+    drillThrough: null,
+  },
+];
+
+/** The pharmacy e2e package: every counter module, but not Pharmacy Reports. */
+const WITHOUT_REPORTS = [
+  'pharmacy-core',
+  'pharmacy-counter',
+  'pharmacy-inventory',
+  'pharmacy-dispensing',
+  'pharmacy-safety',
+];
+const REPORT_HOOKS = [
+  'branches',
+  'catalog',
+  'getPreferences',
+  'updatePreferences',
+  'commandCentre',
 ];
 
 beforeEach(() => {
+  state.enabledModules = [...WITHOUT_REPORTS, 'pharmacy-reports'];
+  mounted.hooks.length = 0;
   state.branches = query({ branches: [{ id: 'b1', name: 'Main' }] });
   state.catalog = query({
     metrics: CATALOG_METRICS,
@@ -95,5 +144,45 @@ describe('PharmacyDashboardContent states', () => {
     expect(screen.queryByText('openStockSignals')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Stock actions' })).toBeVisible();
     expect(screen.getAllByRole('status', { name: /^Loading /i }).length).toBeGreaterThan(0);
+  });
+
+  it('reads the command centre when Pharmacy Reports is licensed', () => {
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(mounted.hooks).toEqual(expect.arrayContaining(REPORT_HOOKS));
+    expect(screen.getByRole('button', { name: 'Edit dashboard' })).toBeVisible();
+    expect(screen.queryByText('Reports are not part of your package')).not.toBeInTheDocument();
+  });
+
+  it('asks Pharmacy Reports nothing without the module and says it is not in the package', () => {
+    state.enabledModules = WITHOUT_REPORTS;
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    // No report hook is even mounted, so nothing can be requested and refused with a 403.
+    expect(mounted.hooks).toEqual([]);
+    expect(screen.getByRole('heading', { level: 1, name: 'Owner command centre' })).toBeVisible();
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Reports are not part of your package' })
+    ).toBeVisible();
+    expect(screen.getByText('Not in package')).toBeVisible();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'The command centre is built from Pharmacy Reports, which your organization’s package does not include.'
+    );
+    expect(screen.getByRole('link', { name: 'Review license and modules' })).toHaveAttribute(
+      'href',
+      '/organization'
+    );
+    expect(screen.queryByRole('button', { name: 'Edit dashboard' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Restricted')).not.toBeInTheDocument();
+  });
+
+  it('points a member to an administrator rather than to organization settings', () => {
+    state.enabledModules = WITHOUT_REPORTS;
+    render(<PharmacyDashboardContent role="EMPLOYEE" />);
+    expect(mounted.hooks).toEqual([]);
+    expect(
+      screen.getByText('An organization administrator can add Pharmacy Reports to the package.')
+    ).toBeVisible();
+    expect(
+      screen.queryByRole('link', { name: 'Review license and modules' })
+    ).not.toBeInTheDocument();
   });
 });

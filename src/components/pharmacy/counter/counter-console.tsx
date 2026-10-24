@@ -75,6 +75,7 @@ import {
   type CounterBrowserPrintReservation,
   type CounterReceiptFormat,
 } from '@/lib/pharmacy/counter-browser-print';
+import { workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
 
 type Notice = {
@@ -130,10 +131,13 @@ function useCounterDeviceId(): string | null {
   return useSyncExternalStore(subscribeToNothing, readCounterDeviceId, () => null);
 }
 
-/** Today, as the date-only value the settlement tables store. */
-function businessDate(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+/**
+ * Today in the workspace's zone, as the date-only value the settlement tables
+ * store: the day the day close opens on, whatever zone this device is set to.
+ * `workspaceToday` reads a missing or refused zone as UTC, as the close does.
+ */
+function businessDate(timeZone: string | null | undefined): Date {
+  return new Date(`${workspaceToday(timeZone)}T00:00:00.000Z`);
 }
 
 /**
@@ -236,6 +240,7 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
       organizationId={user.organizationId}
       accountId={user.id}
       evidenceAuthorized={user.role === 'ADMIN'}
+      safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
       accountEmail={user.email}
     />
   );
@@ -256,11 +261,14 @@ function ScopedPharmacyCounterConsole({
   organizationId,
   accountId,
   evidenceAuthorized = false,
+  safetyLicensed,
   accountEmail,
 }: ConsoleProps & {
   organizationId: string;
   accountId: string;
   evidenceAuthorized?: boolean;
+  /** Pharmacy Safety owns the approving-pharmacist list; without it that read is refused. */
+  safetyLicensed: boolean;
   accountEmail: string;
 }) {
   const utils = trpc.useUtils();
@@ -288,7 +296,9 @@ function ScopedPharmacyCounterConsole({
     prescriberRegNo: '',
     refSerial: '',
   });
-  const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery();
+  const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
+    enabled: safetyLicensed,
+  });
   const [patientId, setPatientId] = useState<string | null>(null);
   const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
@@ -325,6 +335,9 @@ function ScopedPharmacyCounterConsole({
     staleTime: 60_000,
   });
   const branches = useMemo(() => branchesQuery.data?.branches ?? [], [branchesQuery.data]);
+  // Every drawer, tender and loyalty write is stamped with the workspace's day.
+  const workspaceZone = branchesQuery.data?.timezone;
+  const todayBusinessDate = useCallback(() => businessDate(workspaceZone), [workspaceZone]);
 
   // Derived, not mirrored into state: the default branch is simply "the first
   // one" until the operator picks another, so an effect would only add a render.
@@ -999,7 +1012,7 @@ function ScopedPharmacyCounterConsole({
   ]);
 
   const runTransition = useCallback(
-    async (action: 'hold' | 'resume' | 'complete' | 'void', reason?: string) => {
+    async (action: 'hold' | 'resume' | 'void', reason?: string) => {
       const target = action === 'resume' ? heldSaleId : saleId;
       if (!target || busy) return;
       setPending(action);
@@ -1010,7 +1023,6 @@ function ScopedPharmacyCounterConsole({
           saleId: target,
           action,
           reason,
-          deviceId: readCounterDeviceId() ?? undefined,
         });
         if (action === 'hold') {
           setHeldSaleId(target);
@@ -1152,7 +1164,7 @@ function ScopedPharmacyCounterConsole({
           branchId,
           saleId,
           deviceId: counterDeviceId(),
-          businessDate: businessDate(),
+          businessDate: todayBusinessDate(),
           type: input.type,
           amountMinor: input.amountMinor,
           ...(input.cashReceivedMinor !== undefined
@@ -1227,6 +1239,7 @@ function ScopedPharmacyCounterConsole({
       refreshTenderBill,
       saleId,
       tender,
+      todayBusinessDate,
     ]
   );
 
@@ -1311,7 +1324,7 @@ function ScopedPharmacyCounterConsole({
         saleId,
         points: redeemPoints,
         deviceId: counterDeviceId(),
-        businessDate: businessDate(),
+        businessDate: todayBusinessDate(),
         idempotencyKey: `counter-loyalty:${saleId}:${browserUuid()}`,
       });
       await Promise.all([refreshCart(), customerQuery.refetch()]);
@@ -1324,7 +1337,16 @@ function ScopedPharmacyCounterConsole({
     } finally {
       setPending(null);
     }
-  }, [branchId, busy, customerQuery, redeemLoyalty, redeemPoints, refreshCart, saleId]);
+  }, [
+    branchId,
+    busy,
+    customerQuery,
+    redeemLoyalty,
+    redeemPoints,
+    refreshCart,
+    saleId,
+    todayBusinessDate,
+  ]);
 
   const captureShortfall = useCallback(async () => {
     if (busy || !branchAuthorized) return;
@@ -1688,7 +1710,7 @@ function ScopedPharmacyCounterConsole({
             organizationId={organizationId}
             accountId={accountId}
             deviceId={counterDeviceId}
-            businessDate={businessDate}
+            businessDate={todayBusinessDate}
           />
           <Link
             className={buttonVariants({
@@ -1733,7 +1755,7 @@ function ScopedPharmacyCounterConsole({
                   .mutateAsync({
                     branchId,
                     deviceId: counterDeviceId(),
-                    businessDate: businessDate(),
+                    businessDate: todayBusinessDate(),
                     openingFloatMinor: 0,
                   })
                   .then(() =>
@@ -1805,6 +1827,8 @@ function ScopedPharmacyCounterConsole({
                   <Input
                     id="counter-search"
                     ref={searchRef}
+                    // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
+                    data-counter-scan=""
                     autoFocus
                     autoComplete="off"
                     value={query}
@@ -2092,7 +2116,7 @@ function ScopedPharmacyCounterConsole({
                 branchId={branchId}
                 saleId={saleId}
                 deviceId={counterDeviceId()}
-                businessDate={businessDate()}
+                businessDate={todayBusinessDate()}
                 disabled={busy || blocked}
                 onRecorded={refreshCart}
               />
@@ -2300,8 +2324,10 @@ function ScopedPharmacyCounterConsole({
                 // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A
                 // FORBIDDEN read means this actor cannot dispense, so the controlled
                 // authorization panel is not offered (the server refuses it anyway).
+                // Without Pharmacy Safety the read is not made at all, with the same outcome.
+                !safetyLicensed ||
                 (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code ===
-                'FORBIDDEN'
+                  'FORBIDDEN'
                   ? undefined
                   : {
                       ...controlledAuth,

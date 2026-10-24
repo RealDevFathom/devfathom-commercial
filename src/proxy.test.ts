@@ -95,6 +95,53 @@ describe('platform host routing', () => {
   });
 });
 
+describe('public paths', () => {
+  it('stays public for an entry and every path beneath it', async () => {
+    for (const path of [
+      '/login',
+      '/invite/token-1',
+      '/forgot-password',
+      '/reset-password/token-1',
+      '/sso/complete',
+      '/terminal',
+      '/pos',
+      '/pos/orders',
+      '/kds',
+      '/meet/occurrence-public-id',
+      '/brand',
+      '/brand/preview',
+      '/wallet',
+      '/wallet/join/token-1',
+    ]) {
+      const response = await proxy(tenantRequest(path));
+      expect(response.headers.get('location'), path).toBeNull();
+      expect(response.headers.get('x-middleware-next'), path).toBe('1');
+    }
+  });
+
+  it('sends a longer sibling of a public entry to sign-in, matching whole segments only', async () => {
+    for (const path of [
+      '/loginx',
+      '/invites',
+      '/forgot-passwords',
+      '/ssox',
+      '/terminals',
+      '/positions',
+      '/possible',
+      '/kdsx',
+      '/branding',
+      '/walletx',
+      '/wallets/join',
+    ]) {
+      const response = await proxy(tenantRequest(path));
+      expect(response.status, path).toBe(307);
+      expect(response.headers.get('location'), path).toBe(
+        `http://acme.localhost:3000/login?callbackUrl=${encodeURIComponent(path)}`
+      );
+    }
+  });
+});
+
 describe('actor-facing tenant URLs', () => {
   it('removes a forbidden cross-tenant organization id before rendering the dashboard', async () => {
     const response = await proxy(

@@ -180,6 +180,19 @@ describe('organization people and access — staff onboarding', () => {
     const options = [...memberDepartment.querySelectorAll('option')].map((o) => o.textContent);
     expect(options).toEqual(['Counter', 'Dispensary', 'Store']);
   });
+
+  it('shows the complete password policy when adding or resetting a staff password', () => {
+    render(<OrganizationAdminContent />);
+
+    expect(
+      screen.getAllByText(
+        /12–256 characters, with a lowercase letter, an uppercase letter and a digit\./
+      )
+    ).toHaveLength(2);
+    expect(
+      screen.queryByText(/Minimum 12(?:-character password| characters)\./)
+    ).not.toBeInTheDocument();
+  });
 });
 
 it('limits the license ledger to workspace modules and explicit grants', () => {

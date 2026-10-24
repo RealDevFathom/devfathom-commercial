@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   receiptInvalidate: vi.fn(),
   mutationOptions: vi.fn(),
   receiptProps: vi.fn(),
+  queryOptions: vi.fn(),
   outcomeQuery: vi.fn(),
   khataAccounts: vi.fn(),
   khataStatement: vi.fn(),
@@ -36,7 +37,10 @@ const mocks = vi.hoisted(() => ({
       user: { id: 'account-a', organizationId: 'org-a', status: 'ACTIVE', sessionRevoked: false },
     },
   },
-  entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-counter'] },
+  entitlements: {
+    organizationId: 'org-a',
+    enabledModules: ['pharmacy-counter', 'pharmacy-safety'],
+  },
 }));
 
 vi.mock('next-auth/react', () => ({ useSession: () => mocks.session, signIn: mocks.signIn }));
@@ -50,7 +54,10 @@ vi.mock('@/lib/trpc', () => {
       names.map((name) => [
         name,
         {
-          useQuery: () => mocks.queries[name],
+          useQuery: (_input: unknown, options?: unknown) => {
+            mocks.queryOptions(name, options);
+            return mocks.queries[name];
+          },
           useMutation: (options: unknown) => {
             mocks.mutationOptions(name, options);
             return {
@@ -211,7 +218,10 @@ beforeEach(() => {
       user: { id: 'account-a', organizationId: 'org-a', status: 'ACTIVE', sessionRevoked: false },
     },
   };
-  mocks.entitlements = { organizationId: 'org-a', enabledModules: ['pharmacy-counter'] };
+  mocks.entitlements = {
+    organizationId: 'org-a',
+    enabledModules: ['pharmacy-counter', 'pharmacy-safety'],
+  };
   mocks.outcomeQuery.mockReset().mockResolvedValue({ status: 'UNKNOWN', replayUnsafe: true });
   mocks.receiptRefetch
     .mockReset()
@@ -1058,6 +1068,40 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
   });
 
+  it.each([
+    // 16:30 UTC on the 21st is already the 22nd in Tokyo, still the 21st on the device.
+    ['the workspace zone', 'Asia/Tokyo', '2026-10-21T16:30:00.000Z', '2026-10-22'],
+    // A stored zone Intl refuses reads as UTC: 22:30 UTC is the 21st there, the 22nd on the device.
+    ['UTC for a stored zone Intl refuses', 'PKT', '2026-10-21T22:30:00.000Z', '2026-10-21'],
+  ])(
+    'stamps the drawer with today in %s, not the device’s day, as the day close reads it',
+    async (_label, timezone, now, day) => {
+      // The device is pinned to Karachi whatever zone the test host runs in, so
+      // the device's own day differs from the workspace's day on every host:
+      // a device-local stamp cannot pass. Node applies a runtime TZ change.
+      vi.stubEnv('TZ', 'Asia/Karachi');
+      const device = new Intl.DateTimeFormat('en-CA', { day: '2-digit' }).format(new Date(now));
+      expect(device).not.toBe(day.slice(8));
+      vi.useFakeTimers({ toFake: ['Date'], now: new Date(now) });
+      mocks.queries.counterBranches = query({
+        branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
+        timezone,
+      });
+      mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
+      try {
+        render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+        fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+        await screen.findByText('Cash drawer opened for this counter.');
+        expect(mocks.mutations.openDrawer).toHaveBeenCalledWith(
+          expect.objectContaining({ businessDate: new Date(`${day}T00:00:00.000Z`) })
+        );
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+      }
+    }
+  );
+
   it('words a conflicting open for the operator instead of leaking the server failure', async () => {
     mocks.mutations.openDrawer!.mockRejectedValue(refused('CONFLICT', 'OPEN_DRAWER'));
     render(<PharmacyCounterConsole initialBranchId="branch-a" />);
@@ -1159,6 +1203,26 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(document.activeElement).not.toBe(tender);
     dialog.remove();
   });
+
+  it('runs F9 and Shift+F4 from the scan field, where focus rests for the whole bill (POS-01)', async () => {
+    mocks.mutations.transition!.mockResolvedValue({});
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    const tender = screen.getByLabelText('Amount').closest('[tabindex="-1"]');
+
+    search.focus();
+    expect(document.activeElement).toBe(search);
+    fireEvent.keyDown(search, { key: 'F9' });
+    expect(document.activeElement).toBe(tender);
+
+    search.focus();
+    fireEvent.keyDown(search, { key: 'F4', shiftKey: true });
+    await waitFor(() =>
+      expect(mocks.mutations.transition).toHaveBeenCalledWith(
+        expect.objectContaining({ saleId: 'sale-a', action: 'void' })
+      )
+    );
+  });
 });
 
 describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', () => {
@@ -1174,6 +1238,25 @@ describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', 
 
   it('shows the controlled authorization panel to a dispenser', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
+  });
+});
+
+describe('PharmacyCounterConsole module boundaries', () => {
+  it('neither asks for approving pharmacists nor offers controlled authorization without Pharmacy Safety', () => {
+    // Pharmacy Essentials sells the counter without Pharmacy Safety: no read it would refuse.
+    mocks.entitlements.enabledModules = ['pharmacy-counter'];
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(mocks.queryOptions).toHaveBeenCalledWith('controlledPharmacists', { enabled: false });
+    expect(mocks.queryOptions).not.toHaveBeenCalledWith('controlledPharmacists', {
+      enabled: true,
+    });
+    expect(screen.queryByTestId('controlled-authorization')).toBeNull();
+  });
+
+  it('asks for approving pharmacists when Pharmacy Safety is licensed', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(mocks.queryOptions).toHaveBeenCalledWith('controlledPharmacists', { enabled: true });
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
   });
 });

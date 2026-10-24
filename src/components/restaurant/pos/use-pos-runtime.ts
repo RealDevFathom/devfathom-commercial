@@ -1057,6 +1057,14 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       orderId: checkoutOrderId,
       request: checkoutRequest,
       connected: online,
+      actingOperatorId: runtime.operator?.staffProfileId ?? '',
+      operators: operators
+        .filter((operator) => operator.canApprove)
+        .map((operator) => ({
+          id: operator.staffProfileId,
+          displayName: operator.displayName,
+          role: operator.role,
+        })),
       onClose: ({ settled }) => {
         setCheckoutOrderId(null);
         if (settled) startFreshDraft();

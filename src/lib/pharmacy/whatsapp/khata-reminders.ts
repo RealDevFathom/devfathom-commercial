@@ -4,6 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
+import { workspaceTimezone } from '@/lib/timezone';
 
 import { formatMinor } from '../counter-receipt';
 import { lockPatientConsent } from '../consent-writer';
@@ -158,9 +159,11 @@ export async function processDueWhatsAppKhataReminders(
         )
       )
         return null;
+      // UTC for a stored zone Intl refuses ("PKT", "UTC+5"), as the other readers do.
+      const timeZone = workspaceTimezone(organization.timezone);
       const hour = Number(
         new Intl.DateTimeFormat('en-GB', {
-          timeZone: organization.timezone,
+          timeZone,
           hour: '2-digit',
           hourCycle: 'h23',
         }).format(now)
@@ -198,7 +201,7 @@ export async function processDueWhatsAppKhataReminders(
       )
         return null;
       const day = new Intl.DateTimeFormat('en-CA', {
-        timeZone: organization.timezone,
+        timeZone,
         year: 'numeric',
         month: '2-digit',
         day: '2-digit',

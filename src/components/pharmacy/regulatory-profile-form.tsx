@@ -149,6 +149,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   );
   const categories = jurisdiction?.licenceCategories ?? [];
   const schedules = jurisdiction?.permittedSchedules ?? [];
+  const current = data.versions.find((version) => version.effective);
   const inForce = data.versions.find((version) => version.inForce);
 
   async function uploadEvidence(file: File) {
@@ -235,6 +236,8 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
         actions={
           inForce ? (
             <StatusPill status="In force" tone="success" />
+          ) : current ? (
+            <StatusPill status="Not in force" tone="warning" />
           ) : (
             <StatusPill status="No profile" tone="warning" />
           )
@@ -264,6 +267,17 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
             {inForce.licenceNumber} ({inForce.licenceCategory}) valid to{' '}
             {day(inForce.licenceValidTo)}, qualified person {inForce.qualifiedPersonRegistration}{' '}
             covered to {day(inForce.qualifiedPersonValidTo)}.
+          </p>
+        ) : current ? (
+          <p className="mt-4 text-sm text-text-muted">
+            Version {current.version} is not in force.
+            {current.licenceExpired
+              ? ` Licence ${current.licenceNumber} expired on ${day(current.licenceValidTo)}.`
+              : null}
+            {current.qualifiedPersonCoverageExpired
+              ? ` Qualified-person cover expired on ${day(current.qualifiedPersonValidTo)}.`
+              : null}{' '}
+            Dispensing and activation are refused until a valid version is recorded.
           </p>
         ) : (
           <p className="mt-4 text-sm text-text-muted">

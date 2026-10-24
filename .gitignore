@@ -23,8 +23,11 @@
 # misc
 .DS_Store
 *.pem
+# Amazon RDS public CA bundle (certificates only), pinned in infra/aws.
+!infra/aws/rds-global-bundle.pem
 
 # debug
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -64,3 +67,6 @@ docker/livekit/livekit.dev.keys.yaml
 /test-results/
 /playwright-artifacts/
 /playwright-report/
+
+# codex cloud CLI log (may contain account metadata)
+/error.log
