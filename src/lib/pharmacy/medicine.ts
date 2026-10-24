@@ -97,14 +97,34 @@ export function priceFromLot(input: {
   canonicalUnitsPerSaleUnit: number;
   roundingIncrementMinor?: number;
 }): { unitPriceMinor: number; proRataCeilingMinor: number } {
-  const loose = deriveLooseUnitPrice({
+  const roundingIncrementMinor = input.roundingIncrementMinor ?? 1;
+  // Keep the shared validation here, but do not multiply its already-rounded
+  // loose-unit result: rounding before scaling makes a complete pack cheaper
+  // than its printed MRP whenever the MRP is not divisible by the pack size.
+  deriveLooseUnitPrice({
     printedMrpMinor: input.printedMrpMinor,
     canonicalUnitsInPack: input.canonicalUnitsInPack,
-    roundingIncrementMinor: input.roundingIncrementMinor ?? 1,
+    roundingIncrementMinor,
   });
+  if (
+    !Number.isSafeInteger(input.canonicalUnitsPerSaleUnit) ||
+    input.canonicalUnitsPerSaleUnit <= 0 ||
+    input.canonicalUnitsPerSaleUnit > input.canonicalUnitsInPack
+  ) {
+    throw new PharmacyMedicineError('INVALID_PRICE');
+  }
+
+  const proRataCeilingMinor = Number(
+    (BigInt(input.printedMrpMinor) * BigInt(input.canonicalUnitsPerSaleUnit)) /
+      BigInt(input.canonicalUnitsInPack)
+  );
+  const unitPriceMinor =
+    input.canonicalUnitsPerSaleUnit === input.canonicalUnitsInPack
+      ? input.printedMrpMinor
+      : Math.floor(proRataCeilingMinor / roundingIncrementMinor) * roundingIncrementMinor;
   return {
-    unitPriceMinor: loose.unitPriceMinor * input.canonicalUnitsPerSaleUnit,
-    proRataCeilingMinor: loose.proRataCeilingMinor * input.canonicalUnitsPerSaleUnit,
+    unitPriceMinor,
+    proRataCeilingMinor,
   };
 }
 

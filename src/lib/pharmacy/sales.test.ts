@@ -156,7 +156,27 @@ describe('POS sale voiding', () => {
 });
 
 describe('POS-03 lot-derived pack/strip/unit pricing', () => {
-  it('derives a strip price from the allocated lot printed MRP', () => {
+  it('rounds once at the sale-unit level and preserves the complete-pack MRP', () => {
+    expect(
+      priceFromLot({
+        printedMrpMinor: 1_000,
+        canonicalUnitsInPack: 3,
+        canonicalUnitsPerSaleUnit: 2,
+        roundingIncrementMinor: 5,
+      })
+    ).toEqual({ unitPriceMinor: 665, proRataCeilingMinor: 666 });
+
+    expect(
+      priceFromLot({
+        printedMrpMinor: 1_000,
+        canonicalUnitsInPack: 3,
+        canonicalUnitsPerSaleUnit: 3,
+        roundingIncrementMinor: 5,
+      })
+    ).toEqual({ unitPriceMinor: 1_000, proRataCeilingMinor: 1_000 });
+  });
+
+  it('floors the strip pro-rata once, not each constituent loose unit (#607)', () => {
     expect(
       priceFromLot({
         printedMrpMinor: 1_003,
@@ -164,7 +184,7 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
         canonicalUnitsPerSaleUnit: 10,
         roundingIncrementMinor: 1,
       })
-    ).toEqual({ unitPriceMinor: 500, proRataCeilingMinor: 500 });
+    ).toEqual({ unitPriceMinor: 501, proRataCeilingMinor: 501 });
   });
 
   it('rounds down and never exceeds the pro-rata ceiling', () => {

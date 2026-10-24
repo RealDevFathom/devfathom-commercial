@@ -6,6 +6,7 @@ import {
   medicineDuplicateKey,
   normalizeMedicineText,
   parseSimpleMedicineStrength,
+  priceFromLot,
 } from './medicine';
 
 describe('pharmacy medicine invariants', () => {
@@ -99,4 +100,66 @@ describe('pharmacy medicine invariants', () => {
       })
     ).not.toBe(exact);
   });
+});
+
+describe('#607 sale-unit MRP contract', () => {
+  it.each([
+    {
+      printedMrpMinor: 1_003,
+      canonicalUnitsInPack: 20,
+      canonicalUnitsPerSaleUnit: 10,
+      roundingIncrementMinor: 5,
+      expectedPrice: 500,
+      expectedCeiling: 501,
+    },
+    {
+      printedMrpMinor: 1_003,
+      canonicalUnitsInPack: 20,
+      canonicalUnitsPerSaleUnit: 20,
+      roundingIncrementMinor: 5,
+      expectedPrice: 1_003,
+      expectedCeiling: 1_003,
+    },
+    {
+      printedMrpMinor: 1_003,
+      canonicalUnitsInPack: 20,
+      canonicalUnitsPerSaleUnit: 1,
+      roundingIncrementMinor: 1,
+      expectedPrice: 50,
+      expectedCeiling: 50,
+    },
+    {
+      printedMrpMinor: Number.MAX_SAFE_INTEGER,
+      canonicalUnitsInPack: 3,
+      canonicalUnitsPerSaleUnit: 2,
+      roundingIncrementMinor: 1,
+      expectedPrice: 6_004_799_503_160_660,
+      expectedCeiling: 6_004_799_503_160_660,
+    },
+  ])(
+    'preserves sale-unit pricing for remainder and large-integer cases: %j',
+    ({ expectedPrice, expectedCeiling, ...input }) => {
+      const price = priceFromLot(input);
+      expect(price).toEqual({
+        unitPriceMinor: expectedPrice,
+        proRataCeilingMinor: expectedCeiling,
+      });
+      expect(BigInt(price.unitPriceMinor) * BigInt(input.canonicalUnitsInPack)).toBeLessThanOrEqual(
+        BigInt(input.printedMrpMinor) * BigInt(input.canonicalUnitsPerSaleUnit)
+      );
+    }
+  );
+
+  it.each([0, -1, 1.5, 21, Number.MAX_SAFE_INTEGER + 1])(
+    'rejects invalid sale-unit conversion %s',
+    (canonicalUnitsPerSaleUnit) => {
+      expect(() =>
+        priceFromLot({
+          printedMrpMinor: 1_003,
+          canonicalUnitsInPack: 20,
+          canonicalUnitsPerSaleUnit,
+        })
+      ).toThrow('INVALID_PRICE');
+    }
+  );
 });
