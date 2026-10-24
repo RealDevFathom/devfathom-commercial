@@ -35,7 +35,11 @@ beforeAll(async () => {
   await assertRlsEnforcingRole(tenant.withPlatformDb);
 }, 120_000);
 
-async function fixture(disposition: 'AVAILABLE' | 'QUARANTINE' = 'AVAILABLE') {
+async function receiptFixture(
+  disposition: 'AVAILABLE' | 'QUARANTINE' = 'AVAILABLE',
+  options: { controlled?: boolean; originals?: readonly boolean[] } = {}
+) {
+  const originals = options.originals ?? [true];
   const id = randomUUID();
   const scope = {
     organizationId: `org305-${id}`,
@@ -60,7 +64,7 @@ async function fixture(disposition: 'AVAILABLE' | 'QUARANTINE' = 'AVAILABLE') {
         organizationId,
         productName: `Controlled synthetic ${id}`,
         productFamily: 'PHARMACEUTICAL',
-        controlled: true,
+        controlled: options.controlled ?? true,
         presentations: { create: { organizationId, presentation: '10 per strip' } },
       },
       include: { presentations: true },
@@ -137,8 +141,8 @@ async function fixture(disposition: 'AVAILABLE' | 'QUARANTINE' = 'AVAILABLE') {
         bypassApprovedByUserId: 'approver',
         bypassApprovedAt: AT,
         lines: {
-          create: {
-            lineNumber: 1,
+          create: originals.map((_, index) => ({
+            lineNumber: index + 1,
             medicineId: medicine.id,
             packLevelId: pack.id,
             batchNumber: batch.batchNumber,
@@ -157,72 +161,84 @@ async function fixture(disposition: 'AVAILABLE' | 'QUARANTINE' = 'AVAILABLE') {
             unitCostMinor: 1000,
             stockLocationId: store.id,
             quarantineLocationId: isQuarantine ? quarantine.id : null,
-          },
+          })),
         },
       },
       include: { lines: true },
     });
-    const line = receipt.lines[0]!;
-    const posted = await ledger.receiveLot(db, scope, {
-      manufacturingBatchId: batch.id,
-      packLevelId: pack.id,
-      stockLocationId: store.id,
-      unitsPerPack: 10,
-      supplierName: supplier.name,
-      supplierInvoiceRef: `${receipt.supplierInvoiceRef}#1`,
-      unitCostMinor: 1000,
-      printedMrpMinor: 25000,
-      receivedExpiresAt: EXPIRY,
-      receivedExpiryPrecision: 'DAY',
-      quantityUnits: isQuarantine ? 0 : 10,
-      idempotencyKey: `pharmacy-receipt:${line.id}:accepted`,
-      receivedAt: AT,
-      quarantine: isQuarantine
-        ? {
-            units: 10,
-            stockLocationId: quarantine.id,
-            idempotencyKey: `pharmacy-receipt:${line.id}:quarantine`,
-            reason: 'Damaged at receipt',
-          }
-        : undefined,
-    });
-    const movement = (isQuarantine ? posted.quarantineMovement : posted.movement)!;
-    const original = await db.pharmacyControlledRegisterEntry.create({
-      data: {
-        organizationId,
-        branchId,
-        serial: 1,
-        entryKind: 'PURCHASE',
-        medicineId: medicine.id,
-        inventoryLotId: posted.lot.id,
-        stockMovementId: movement.id,
-        batchNumber: batch.batchNumber,
-        quantityCanonicalUnits: 10,
-        balanceDelta: isQuarantine ? 0 : 10,
-        runningBalance: isQuarantine ? 0 : 10,
-        recordedByUserId: 'receiver',
-        witnessedByUserId: 'witness',
-        signatureRef: 'pin:source-witness',
-        manufacturer: 'Synthetic maker',
-        prescriberName: 'Original snapshot',
-        prescriberRegNo: 'REG305',
-        patientAddress: 'Original address snapshot',
-        rxSerialWritten: true,
-        counterpartyName: supplier.name,
-      },
-    });
+    const postings = [];
+    let serial = 0;
+    for (const line of receipt.lines) {
+      const posted = await ledger.receiveLot(db, scope, {
+        manufacturingBatchId: batch.id,
+        packLevelId: pack.id,
+        stockLocationId: store.id,
+        unitsPerPack: 10,
+        supplierName: supplier.name,
+        supplierInvoiceRef: `${receipt.supplierInvoiceRef}#${line.lineNumber}`,
+        unitCostMinor: 1000,
+        printedMrpMinor: 25000,
+        receivedExpiresAt: EXPIRY,
+        receivedExpiryPrecision: 'DAY',
+        quantityUnits: isQuarantine ? 0 : 10,
+        idempotencyKey: `pharmacy-receipt:${line.id}:accepted`,
+        receivedAt: AT,
+        quarantine: isQuarantine
+          ? {
+              units: 10,
+              stockLocationId: quarantine.id,
+              idempotencyKey: `pharmacy-receipt:${line.id}:quarantine`,
+              reason: 'Damaged at receipt',
+            }
+          : undefined,
+      });
+      const movement = (isQuarantine ? posted.quarantineMovement : posted.movement)!;
+      const original = originals[line.lineNumber - 1]
+        ? await db.pharmacyControlledRegisterEntry.create({
+            data: {
+              organizationId,
+              branchId,
+              serial: ++serial,
+              entryKind: 'PURCHASE',
+              medicineId: medicine.id,
+              inventoryLotId: posted.lot.id,
+              stockMovementId: movement.id,
+              batchNumber: batch.batchNumber,
+              quantityCanonicalUnits: 10,
+              balanceDelta: isQuarantine ? 0 : 10,
+              runningBalance: isQuarantine ? 0 : 10,
+              recordedByUserId: 'receiver',
+              witnessedByUserId: 'witness',
+              signatureRef: 'pin:source-witness',
+              manufacturer: 'Synthetic maker',
+              prescriberName: 'Original snapshot',
+              prescriberRegNo: 'REG305',
+              patientAddress: 'Original address snapshot',
+              rxSerialWritten: true,
+              counterpartyName: supplier.name,
+            },
+          })
+        : null;
+      postings.push({ line, lot: posted.lot, movement, original });
+    }
     await db.pharmacyGoodsReceipt.update({
       where: { id: receipt.id },
       data: { status: 'POSTED', postedAt: AT },
     });
-    return { scope, receipt, line, lot: posted.lot, movement, original };
+    return { scope, receipt, postings, ...postings[0]! };
   });
 }
+type ReceiptFixture = Awaited<ReturnType<typeof receiptFixture>>;
+async function fixture(disposition: 'AVAILABLE' | 'QUARANTINE' = 'AVAILABLE') {
+  const f = await receiptFixture(disposition);
+  if (!f.original) throw new Error('Expected registered fixture');
+  return { ...f, original: f.original };
+}
 type Fixture = Awaited<ReturnType<typeof fixture>>;
-function inFixture<T>(f: Fixture, run: (db: ScopedDb) => Promise<T>) {
+function inFixture<T>(f: ReceiptFixture, run: (db: ScopedDb) => Promise<T>) {
   return tenant.withTenantDb(f.scope.organizationId, run);
 }
-function reverse(f: Fixture) {
+function reverse(f: ReceiptFixture) {
   return inFixture(f, (db) =>
     receipts.reverseGoodsReceipt(db, f.scope, {
       goodsReceiptId: f.receipt.id,
@@ -231,7 +247,7 @@ function reverse(f: Fixture) {
     })
   );
 }
-function snapshot(f: Fixture) {
+function snapshot(f: ReceiptFixture) {
   return inFixture(f, async (db) => ({
     receipt: await db.pharmacyGoodsReceipt.findFirstOrThrow({ where: { id: f.receipt.id } }),
     lines: await db.pharmacyGoodsReceiptLine.findMany({
@@ -271,6 +287,91 @@ function correction(
 }
 
 describeDb('native controlled goods-in reversal (#305)', () => {
+  it.each(
+    [[false], [false, false], [true, false], [false, true]].map((originals) => ({ originals }))
+  )(
+    'atomically refuses missing required originals %j through reverseGoodsReceipt',
+    async ({ originals }) => {
+      // Build legacy/incomplete state directly; never delete immutable originals,
+      // disable triggers, mock the producer, or substitute a hand-authored schema.
+      const f = await receiptFixture('AVAILABLE', { originals });
+      const before = await snapshot(f);
+      expect(before.movements).toHaveLength(originals.length);
+      expect(before.entries).toHaveLength(originals.filter(Boolean).length);
+      await expect(reverse(f)).rejects.toThrow('MISSING_PURCHASE_ORIGINAL');
+      const after = await snapshot(f);
+      expect(after).toEqual(before);
+      expect(after.receipt.status).toBe('POSTED');
+      expect(after.movements.every((m) => m.kind === 'RECEIPT')).toBe(true);
+      expect(after.entries.every((e) => e.entryKind === 'PURCHASE')).toBe(true);
+      expect(after.balances.every((b) => b.onHandUnits === 10)).toBe(true);
+      expect(after.incidents).toEqual([]);
+    }
+  );
+
+  it.each([
+    ['AVAILABLE', false],
+    ['QUARANTINE', true],
+    ['QUARANTINE', false],
+  ] as const)(
+    'preserves legitimate unregistered reversal: %s controlled=%s',
+    async (disposition, controlled) => {
+      const f = await receiptFixture(disposition, { controlled, originals: [false] });
+      const before = await snapshot(f);
+      const result = await reverse(f);
+      const after = await snapshot(f);
+      expect(result.reversalMovementIds).toHaveLength(1);
+      expect(after.movements).toHaveLength(2);
+      expect(after.movements.find((m) => m.id === f.movement.id)).toEqual(f.movement);
+      expect(after.movements.find((m) => m.id !== f.movement.id)).toMatchObject({
+        reversesMovementId: f.movement.id,
+        kind: 'ADJUSTMENT',
+        disposition,
+        quantityUnits: -10,
+      });
+      expect(after.entries).toEqual([]);
+      expect(after.lines).toEqual(before.lines);
+      expect(after.balances.every((b) => b.onHandUnits === 0)).toBe(true);
+      expect(after.receipt.status).toBe('REVERSED');
+      expect(after.incidents).toEqual([]);
+      await expect(reverse(f)).rejects.toThrow('INVALID_TRANSITION');
+      expect(await snapshot(f)).toEqual(after);
+    }
+  );
+
+  it('retains complete multi-line correction and immutable original history', async () => {
+    const f = await receiptFixture('AVAILABLE', { originals: [true, true] });
+    const before = await snapshot(f);
+    const result = await reverse(f);
+    const after = await snapshot(f);
+    expect(result.reversalMovementIds).toHaveLength(2);
+    expect(after.movements).toHaveLength(4);
+    expect(after.entries.slice(0, 2)).toEqual(before.entries);
+    expect(
+      after.entries.slice(2).map((entry) => ({
+        kind: entry.entryKind,
+        serial: entry.serial,
+        original: entry.correctsEntryId,
+        quantity: entry.quantityCanonicalUnits,
+        delta: entry.balanceDelta,
+        balance: entry.runningBalance,
+      }))
+    ).toEqual(
+      before.entries.map((entry, index) => ({
+        kind: 'CORRECTION',
+        serial: index + 3,
+        original: entry.id,
+        quantity: 10,
+        delta: -10,
+        balance: 0,
+      }))
+    );
+    expect(after.lines).toEqual(before.lines);
+    expect(after.balances.every((balance) => balance.onHandUnits === 0)).toBe(true);
+    expect(after.receipt.status).toBe('REVERSED');
+    expect(after.incidents).toEqual([]);
+  });
+
   it.each(['AVAILABLE', 'QUARANTINE'] as const)(
     'appends one linked correction, preserves history, and refuses replay without effects: %s',
     async (disposition) => {

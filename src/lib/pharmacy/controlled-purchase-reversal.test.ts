@@ -56,6 +56,7 @@ const reversal = {
 function fixture(
   options: {
     quarantine?: boolean;
+    controlled?: boolean;
     movements?: Record<string, unknown>[];
     original?: Record<string, unknown>;
     existing?: boolean;
@@ -99,9 +100,19 @@ function fixture(
       delete: vi.fn(),
     },
     pharmacyInventoryLot: {
-      findFirst: vi.fn().mockResolvedValue({
-        branchId: 'branch',
-        batch: { medicineId: 'med', batchNumber: 'B1' },
+      findMany: vi.fn(async () => {
+        calls.push('lots');
+        return [
+          {
+            id: 'lot',
+            branchId: 'branch',
+            batch: {
+              medicineId: 'med',
+              batchNumber: 'B1',
+              medicine: { controlled: options.controlled ?? true },
+            },
+          },
+        ];
       }),
     },
     pharmacyStockBalance: {
@@ -117,7 +128,7 @@ describe('controlled goods-in reversal helper (GitHub pharmacy #305)', () => {
     async (quarantine) => {
       const { db, raw, create, calls } = fixture({ quarantine });
       await appendControlledPurchaseReversals(db, input);
-      expect(calls).toEqual(['lock', 'movements', 'purchases']);
+      expect(calls).toEqual(['lock', 'movements', 'purchases', 'lots']);
       expect(raw.pharmacyControlledRegisterEntry.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           orderBy: { serial: 'asc' },
@@ -225,8 +236,42 @@ describe('controlled goods-in reversal helper (GitHub pharmacy #305)', () => {
     }
   });
 
-  it('does not invent register rows for unregistered purchases', async () => {
+  it('refuses a missing required controlled AVAILABLE original before any append', async () => {
     const { db, raw, create } = fixture();
+    raw.pharmacyControlledRegisterEntry.findMany.mockResolvedValueOnce([]);
+    await expect(appendControlledPurchaseReversals(db, input)).rejects.toThrow(
+      'MISSING_PURCHASE_ORIGINAL'
+    );
+    expect(create).not.toHaveBeenCalled();
+    expect(raw.pharmacyControlledRegisterEntry.aggregate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a mixed complete/incomplete required set before any correction', async () => {
+    const { db, raw, create } = fixture();
+    raw.pharmacyStockMovement.findMany.mockResolvedValueOnce([
+      source,
+      reversal,
+      { ...source, id: 'receipt2' },
+      { ...reversal, id: 'reverse2', reversesMovementId: 'receipt2' },
+    ]);
+    await expect(
+      appendControlledPurchaseReversals(db, {
+        ...input,
+        movements: [
+          ...input.movements,
+          { sourceMovementId: 'receipt2', reversalMovementId: 'reverse2' },
+        ],
+      })
+    ).rejects.toThrow('MISSING_PURCHASE_ORIGINAL');
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { controlled: false, quarantine: false },
+    { controlled: true, quarantine: true },
+    { controlled: false, quarantine: true },
+  ])('does not invent an optional original for %j', async (options) => {
+    const { db, raw, create } = fixture(options);
     raw.pharmacyControlledRegisterEntry.findMany.mockResolvedValueOnce([]);
     await appendControlledPurchaseReversals(db, input);
     expect(create).not.toHaveBeenCalled();

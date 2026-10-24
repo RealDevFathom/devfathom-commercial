@@ -340,6 +340,31 @@ export async function appendControlledPurchaseReversals(
     },
     orderBy: { serial: 'asc' },
   });
+  // Returned register rows alone cannot establish completeness: legacy receipts
+  // may have no PURCHASE row for one or every controlled AVAILABLE movement.
+  // Derive that requirement from every actual source lot before appending ANY
+  // correction. Quarantine-only and ordinary non-controlled receipts need none.
+  const lots = await db.pharmacyInventoryLot.findMany({
+    where: {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      id: { in: [...sourceIds].map((id) => byId.get(id)!.inventoryLotId) },
+    },
+    include: { batch: { include: { medicine: { select: { controlled: true } } } } },
+  });
+  const lotsById = new Map(lots.map((lot) => [lot.id, lot]));
+  const registeredSources = new Set(purchases.map((entry) => entry.stockMovementId));
+  for (const sourceId of sourceIds) {
+    const source = byId.get(sourceId)!;
+    const lot = lotsById.get(source.inventoryLotId);
+    if (!lot || lot.branchId !== input.branchId) throw new Error('MOVEMENT');
+    if (
+      source.disposition === 'AVAILABLE' &&
+      lot.batch.medicine.controlled &&
+      !registeredSources.has(sourceId)
+    )
+      throw new Error('MISSING_PURCHASE_ORIGINAL');
+  }
   let serial = (await nextSerial(db, input.organizationId, input.branchId)) - 1;
   for (const original of purchases) {
     if (!original.medicineId) {
@@ -356,10 +381,7 @@ export async function appendControlledPurchaseReversals(
     if (existing) throw new Error('ALREADY_CORRECTED');
     const source = byId.get(original.stockMovementId ?? '');
     const reversal = byId.get(reversalMovementId);
-    const lot = await db.pharmacyInventoryLot.findFirst({
-      where: { organizationId: input.organizationId, id: original.inventoryLotId },
-      include: { batch: true },
-    });
+    const lot = lotsById.get(original.inventoryLotId);
     if (
       !source ||
       !reversal ||
