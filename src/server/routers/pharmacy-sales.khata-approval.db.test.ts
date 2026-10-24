@@ -73,6 +73,7 @@ function tender(bill: Bill, amountMinor: number, overrideReason?: string) {
     amountMinor,
     idempotencyKey: `khata_${randomUUID()}`,
     familyAccountId: bill.familyAccountId,
+    ownerOverride: true,
     ...(overrideReason === undefined ? {} : { overrideReason }),
   };
 }
