@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import {
+  applySendAuthorityUpdate,
+  deferred,
+  rendezvous,
+} from '../../../../tests/support/whatsapp-message-log-store';
+
 type Row = Record<string, unknown> & { id: string };
 
 const store = vi.hoisted(() => ({
@@ -10,6 +16,7 @@ const store = vi.hoisted(() => ({
   failConsent: false,
   failCommit: false,
   failPlacement: false,
+  beforeSendAuthority: undefined as undefined | (() => Promise<void>),
 }));
 
 vi.mock('@/lib/tenancy/scoped-db', () => {
@@ -62,18 +69,29 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     pharmacyMessageLog: {
       createManyAndReturn: async ({ data }: { data: Array<Record<string, unknown>> }) => {
         const row = data[0]!;
-        if (store.logs.some((log) => log.dedupeKey === row.dedupeKey)) return [];
+        if (
+          store.logs.some(
+            (log) => log.organizationId === row.organizationId && log.dedupeKey === row.dedupeKey
+          )
+        )
+          return [];
         const created = { ...row, id: `log-${store.logs.length + 1}` };
         store.logs.push(created);
         return [{ id: created.id }];
+      },
+      updateMany: async (args: Parameters<typeof applySendAuthorityUpdate>[1]) => {
+        await store.beforeSendAuthority?.();
+        return applySendAuthorityUpdate(store.logs, args);
       },
       update: async ({ where, data }: { where: { id: string }; data: object }) =>
         Object.assign(
           store.logs.find((log) => log.id === where.id)!,
           data
         ),
-      findFirst: async ({ where }: { where: { dedupeKey: string } }) =>
-        store.logs.find((log) => log.dedupeKey === where.dedupeKey) ?? null,
+      findFirst: async ({ where }: { where: { organizationId: string; dedupeKey: string } }) =>
+        store.logs.find(
+          (log) => log.organizationId === where.organizationId && log.dedupeKey === where.dedupeKey
+        ) ?? null,
     },
   };
   return {
@@ -106,7 +124,7 @@ vi.mock('@/lib/pharmacy/customer-ordering', () => ({
 }));
 
 import { handleInboundWhatsAppMessage } from './inbound';
-import { MockWhatsAppProvider, readWhatsAppConfig } from './provider';
+import { MockWhatsAppProvider, readWhatsAppConfig, WhatsAppProviderError } from './provider';
 
 const FROM = '923001234567';
 let sequence = 0;
@@ -157,6 +175,7 @@ beforeEach(() => {
   store.failConsent = false;
   store.failCommit = false;
   store.failPlacement = false;
+  store.beforeSendAuthority = undefined;
   provider = new MockWhatsAppProvider(readWhatsAppConfig({}));
 });
 afterEach(() => vi.useRealTimers());
@@ -306,9 +325,15 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     expect(store.placed).toHaveLength(1);
   });
 
-  it.each(['PENDING', 'FAILED'])(
-    'resends a %s confirmation without replacing the committed order',
-    async (status) => {
+  it.each([
+    { status: 'PENDING', error: 'SEND_RESERVED', expectedSends: 1 },
+    { status: 'FAILED', error: 'SEND_FAILED', expectedSends: 1 },
+    { status: 'PENDING', error: null, expectedSends: 0 },
+    { status: 'PENDING', error: 'UNKNOWN_PROVIDER_OUTCOME', expectedSends: 0 },
+    { status: 'FAILED', error: null, expectedSends: 0 },
+  ])(
+    'recovers the committed order but sends only with authority ($status / $error)',
+    async ({ status, error, expectedSends }) => {
       knownCustomer(true);
       const retried = message('Panadol 2 packs');
       store.logs.push(
@@ -328,6 +353,7 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
           kind: 'ORDER_CONFIRMATION',
           direction: 'OUTBOUND',
           status,
+          error,
         }
       );
 
@@ -335,9 +361,82 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
         'ORDER_PLACED'
       );
       expect(store.placed).toEqual([]);
-      expect(provider.calls).toHaveLength(1);
+      expect(provider.calls).toHaveLength(expectedSends);
     }
   );
+
+  it('shares exclusive authority between two concurrent retries of one committed order', async () => {
+    knownCustomer(true);
+    const retried = message('Panadol 2 packs');
+    const send = vi
+      .spyOn(provider, 'sendText')
+      .mockRejectedValueOnce(new WhatsAppProviderError('SEND_FAILED', 'HTTP 429', true));
+    await handleInboundWhatsAppMessage('org_a', provider, retried);
+    expect(store.placed).toHaveLength(1);
+    expect(store.logs.find((log) => log.direction === 'OUTBOUND')).toMatchObject({
+      status: 'FAILED',
+      error: 'SEND_FAILED',
+    });
+    store.beforeSendAuthority = rendezvous(2);
+    const entered = deferred();
+    const release = deferred();
+    send.mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+      return { providerMessageId: 'accepted-retry', acceptedByProvider: true };
+    });
+    const retries = [
+      handleInboundWhatsAppMessage('org_a', provider, retried),
+      handleInboundWhatsAppMessage('org_a', provider, retried),
+    ];
+    await entered.promise;
+    try {
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(store.placed).toHaveLength(1);
+    } finally {
+      release.resolve();
+    }
+    await Promise.all(retries);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(store.placed).toHaveLength(1);
+    expect(store.logs).toHaveLength(2);
+    expect(store.logs.find((log) => log.direction === 'OUTBOUND')).toMatchObject({
+      status: 'SENT',
+    });
+  });
+
+  it('does not redeliver or replace an order when retries overlap the original sender', async () => {
+    knownCustomer(true);
+    const retried = message('Panadol 2 packs');
+    const entered = deferred();
+    const release = deferred();
+    const send = vi.spyOn(provider, 'sendText').mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+      return { providerMessageId: 'accepted-original', acceptedByProvider: true };
+    });
+    const original = handleInboundWhatsAppMessage('org_a', provider, retried);
+    await entered.promise; // The inbound claim and order have committed; provider is blocked.
+    try {
+      await Promise.all([
+        handleInboundWhatsAppMessage('org_a', provider, retried),
+        handleInboundWhatsAppMessage('org_a', provider, retried),
+      ]);
+      expect(store.placed).toHaveLength(1);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(store.logs).toHaveLength(2);
+      expect(store.logs.find((log) => log.direction === 'OUTBOUND')).toMatchObject({
+        status: 'PENDING',
+        error: 'UNKNOWN_PROVIDER_OUTCOME',
+      });
+    } finally {
+      release.resolve();
+    }
+    await original;
+    expect(await handleInboundWhatsAppMessage('org_a', provider, retried)).toBe('DUPLICATE');
+    expect(store.placed).toHaveLength(1);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
 
   it.each(['failConsent', 'failCommit'] as const)(
     'rolls back the claim on %s, allowing STOP retry',
