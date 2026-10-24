@@ -163,6 +163,8 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
   }, 60_000);
 
   it.each([
+    { kind: 'STRIP', quantity: 1, increment: 5, expected: 500, ceiling: 501, policyFirst: true },
+    { kind: 'STRIP', quantity: 1, increment: 5, expected: 500, ceiling: 501, policyFirst: false },
     { kind: 'STRIP', quantity: 3, increment: 5, expected: 500, ceiling: 501, policyFirst: true },
     { kind: 'STRIP', quantity: 3, increment: 5, expected: 500, ceiling: 501, policyFirst: false },
     { kind: 'PACK', quantity: 2, increment: 5, expected: 1_003, ceiling: 1_003, policyFirst: true },
@@ -195,6 +197,8 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
       expect(row.roundingIncrementMinor).toBe(increment ?? 1);
       expect(row.saleableUnits.find((unit) => unit.kind === kind)?.unitPriceMinor).toBe(expected);
       expect(preview.unitPriceMinor).toBe(expected);
+      const expectedTotal = expected * quantity;
+      expect(preview.grossMinor).toBe(expectedTotal);
       const { line } = await tenant(async (db) => {
         const sale = await sales.createSale(db, scope);
         return sales.addSaleLine(db, scope, {
@@ -215,7 +219,10 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
           include: { allocations: true },
         })
       );
+      expect(stored.quantity).toBe(quantity);
+      expect(stored.unitPriceMinor).toBe(expected);
       expect(stored.unitPriceMinor).toBe(preview.unitPriceMinor);
+      expect(stored.unitPriceMinor * stored.quantity).toBe(expectedTotal);
       expect(stored.proRataCeilingMinor).toBe(ceiling);
       expect(stored.unitPriceMinor).toBeLessThanOrEqual(stored.proRataCeilingMinor);
       expect(stored.unitPriceMinor * stored.quantity).toBe(preview.grossMinor);
@@ -246,6 +253,7 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
           },
         })
       );
+      expect(tender.amountMinor).toBe(expectedTotal);
       expect(tender.amountMinor).toBe(preview.grossMinor);
     },
     30_000
