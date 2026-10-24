@@ -302,7 +302,7 @@ beforeAll(async () => {
 
   await withPlatformDb((db) =>
     db.$executeRawUnsafe(
-      `INSERT INTO organizations (id, name, slug, "seatLimit", vertical) VALUES ($1, 'Foreign Rx synthetic', $2, 5, 'PHARMACY')`,
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt") VALUES ($1, $2, 'Foreign Rx synthetic', 'Foreign Rx synthetic', 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
       ids.foreignOrg,
       `rx-foreign-${suffix}`
     )
