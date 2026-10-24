@@ -13,14 +13,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
-  const can = vi.fn().mockResolvedValue(true);
-  return { can, hasModule };
+  return { hasModule };
 });
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/abac', () => ({
-  can: mocks.can,
-  subjectFromSession: (user: unknown) => user,
-}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
@@ -41,6 +36,7 @@ import type { TRPCContext } from '../trpc';
 function model() {
   return {
     findFirst: vi.fn().mockResolvedValue(null),
+    findMany: vi.fn().mockResolvedValue([]),
     findFirstOrThrow: vi.fn().mockRejectedValue(new Error('Test record not configured')),
     create: vi
       .fn()
@@ -53,6 +49,7 @@ function model() {
 function makeDb() {
   const db = {
     user: {
+      findFirst: vi.fn().mockResolvedValue(null),
       findUnique: vi.fn().mockResolvedValue({
         organizationRole: { permissions: [] },
         permissionOverrides: [],
@@ -71,6 +68,7 @@ function makeDb() {
     pharmacyRecallNotice: model(),
     pharmacyInventoryLot: model(),
     pharmacyStockMovement: model(),
+    pharmacyCustodyRecord: model(),
     pharmacyStockBalance: model(),
     pharmacyAllocationOverride: model(),
     pharmacyStockDiscrepancy: model(),
@@ -98,7 +96,7 @@ function makeDb() {
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
-    $queryRaw: vi.fn(async () => []),
+    $queryRaw: vi.fn().mockResolvedValue([]),
   });
 }
 
@@ -148,7 +146,6 @@ const CAPABILITY_REFUSAL = {
 
 beforeEach(() => {
   db = makeDb();
-  mocks.can.mockReset().mockResolvedValue(true);
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 
@@ -308,66 +305,6 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       })
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(db.pharmacyStockLocation.create).not.toHaveBeenCalled();
-  });
-
-  it('keeps the unreceived balance in transit so a transfer can be finished later', async () => {
-    const transfer = {
-      id: 'transfer_1',
-      organizationId: 'org_a',
-      fromBranchId: 'branch_source',
-      toBranchId: 'branch_a',
-      status: 'DISPATCHED',
-      lines: [
-        {
-          id: 'line_1',
-          sourceLotId: 'lot_1',
-          sourceStockLocationId: 'source_location',
-          destinationStockLocationId: 'destination_location',
-          quantityUnits: 10,
-          receivedUnits: 0,
-        },
-      ],
-    };
-    db.$queryRaw
-      .mockResolvedValueOnce([{ id: transfer.id }])
-      .mockResolvedValueOnce([
-        { onHandUnits: 10, sealedPacks: 1, looseUnits: 0, unitsPerPack: 10 },
-      ]);
-    db.pharmacyInterbranchTransfer.findFirst.mockResolvedValue(transfer);
-    db.pharmacyInventoryLot.findFirstOrThrow.mockResolvedValue({
-      id: 'lot_1',
-      manufacturingBatchId: 'batch_1',
-      packLevelId: 'pack_1',
-      unitsPerPack: 10,
-      supplierName: 'Supplier',
-      supplierInvoiceRef: 'invoice_1',
-      unitCostMinor: 100,
-      printedMrpMinor: 150,
-      receivedExpiresAt: new Date('2027-01-01T00:00:00.000Z'),
-      receivedExpiryPrecision: 'DAY',
-      batch: {},
-    });
-    db.pharmacyInterbranchTransfer.update.mockImplementation(async ({ data }) => ({
-      ...transfer,
-      ...data,
-    }));
-
-    const result = await caller().receiveTransferWithVariance({
-      branchId: 'branch_a',
-      transferId: transfer.id,
-      lines: [{ lineId: 'line_1', receivedUnits: 4 }],
-      idempotencyKeyPrefix: 'partial-receipt-1',
-    });
-
-    expect(result.transfer).toMatchObject({ status: 'PARTIALLY_RECEIVED', receivedAt: null });
-    expect(result.variances).toEqual([]);
-    expect(db.pharmacyInterbranchTransferLine.update).toHaveBeenCalledWith({
-      where: { id: 'line_1' },
-      data: { receivedUnits: { increment: 4 } },
-    });
-    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ kind: 'WRITE_OFF' }) })
-    );
   });
 });
 
@@ -622,6 +559,7 @@ describe('PUR-07 — the stock action centre transport', () => {
   });
 
   it('refuses a snooze or a dismissal with no reason (§8A invariant 29)', async () => {
+    grant([allow('pharmacy:inventory')]);
     for (const call of [
       () =>
         caller().snoozeSignal({
@@ -666,5 +604,284 @@ describe('PUR-07 — the stock action centre transport', () => {
       })
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
+  });
+});
+
+/** #357 regression: real router + service + projection-checking in-memory ledger.
+ * PostgreSQL trigger/RLS acceptance is separately exercised by the DB suite.
+ */
+describe('#357 partial transfer receipts', () => {
+  function scenario(units = 10) {
+    grant([allow('pharmacy:inventory')]);
+    const transfer = {
+      id: 'transfer_357',
+      organizationId: 'org_a',
+      fromBranchId: 'branch_source',
+      toBranchId: 'branch_a',
+      status: 'DISPATCHED',
+      receivedAt: null as Date | null,
+      lines: [
+        {
+          id: 'line_1',
+          sourceLotId: 'lot_source',
+          sourceStockLocationId: 'source_location',
+          destinationStockLocationId: 'destination_location',
+          quantityUnits: units,
+          receivedUnits: 0,
+        },
+      ],
+    };
+    const transit = {
+      onHandUnits: units,
+      sealedPacks: Math.floor(units / 10),
+      looseUnits: units % 10,
+    };
+    const destination = { onHandUnits: 0, sealedPacks: 0, looseUnits: 0 };
+    type Movement = {
+      id?: string;
+      organizationId: string;
+      branchId: string;
+      kind: string;
+      disposition: string;
+      quantityUnits: number;
+      sealedPackDelta: number;
+      looseUnitDelta: number;
+      idempotencyKey: string;
+      transferId?: string;
+      stockLocationId: string;
+      note?: string;
+    };
+    const movements: Movement[] = [];
+    db.pharmacyStockBalance.findFirst.mockImplementation(async () => structuredClone(transit));
+    db.$queryRaw.mockImplementation(async (query: { strings: readonly string[] }) =>
+      query.strings.join('').includes('pharmacy_stock_balances')
+        ? [{ ...structuredClone(transit), unitsPerPack: 10 }]
+        : [{ id: transfer.id }]
+    );
+    db.pharmacyInterbranchTransfer.findFirst.mockImplementation(async () =>
+      structuredClone(transfer)
+    );
+    db.pharmacyInterbranchTransfer.update.mockImplementation(async ({ data }) => {
+      Object.assign(transfer, data);
+      return structuredClone(transfer);
+    });
+    db.pharmacyInterbranchTransferLine.update.mockImplementation(async ({ data }) => {
+      transfer.lines[0].receivedUnits += (
+        data as { receivedUnits: { increment: number } }
+      ).receivedUnits.increment;
+      return structuredClone(transfer.lines[0]);
+    });
+    db.pharmacyInventoryLot.findFirstOrThrow.mockResolvedValue({
+      id: 'lot_source',
+      manufacturingBatchId: 'batch_1',
+      packLevelId: 'pack_1',
+      unitsPerPack: 10,
+      supplierName: 'Supplier',
+      supplierInvoiceRef: 'invoice',
+      unitCostMinor: 100,
+      printedMrpMinor: 150,
+      receivedExpiresAt: new Date('2027-01-01'),
+      receivedExpiryPrecision: 'DAY',
+      batch: {},
+    });
+    db.pharmacyStockMovement.findFirst.mockImplementation(
+      async ({ where }) =>
+        movements.find(
+          (m) =>
+            m.organizationId === where.organizationId &&
+            m.branchId === where.branchId &&
+            m.idempotencyKey === where.idempotencyKey &&
+            m.kind === where.kind
+        ) ?? null
+    );
+    db.pharmacyStockMovement.findMany.mockImplementation(async ({ where }) =>
+      movements.filter(
+        (m) =>
+          m.organizationId === where.organizationId &&
+          m.branchId === where.branchId &&
+          m.transferId === where.transferId &&
+          m.kind === where.kind &&
+          m.idempotencyKey.startsWith(where.idempotencyKey.startsWith)
+      )
+    );
+    db.pharmacyStockMovement.create.mockImplementation(async ({ data }: { data: object }) => {
+      const m = data as Movement;
+      if (
+        movements.some(
+          (old) => old.branchId === m.branchId && old.idempotencyKey === m.idempotencyKey
+        )
+      )
+        throw new Error('duplicate movement key');
+      const bucket = m.disposition === 'IN_TRANSIT' ? transit : destination;
+      const next = {
+        onHandUnits: bucket.onHandUnits + m.quantityUnits,
+        sealedPacks: bucket.sealedPacks + m.sealedPackDelta,
+        looseUnits: bucket.looseUnits + m.looseUnitDelta,
+      };
+      if (
+        Object.values(next).some((n) => n < 0) ||
+        next.onHandUnits !== next.sealedPacks * 10 + next.looseUnits
+      )
+        throw new Error('INVALID_ARRANGEMENT');
+      Object.assign(bucket, next);
+      movements.push(m);
+      return { id: `m_${movements.length}`, ...m };
+    });
+    const receive = (receivedUnits: number, key = 'receipt-1') =>
+      caller().receiveTransferWithVariance({
+        branchId: 'branch_a',
+        transferId: transfer.id,
+        lines: [{ lineId: 'line_1', receivedUnits }],
+        idempotencyKeyPrefix: key,
+      });
+    return { transfer, transit, destination, movements, receive };
+  }
+
+  it('opens sealed10, receives4, leaves6 in transit, then finishes6 with a new receipt key', async () => {
+    const s = scenario();
+    const first = await s.receive(4);
+    expect(first.transfer).toMatchObject({ status: 'PARTIALLY_RECEIVED', receivedAt: null });
+    expect(first.variances).toEqual([]);
+    expect(s.transit).toEqual({ onHandUnits: 6, sealedPacks: 0, looseUnits: 6 });
+    expect(s.destination.onHandUnits).toBe(4);
+    expect(s.movements.map((m) => m.kind)).toEqual(['BREAK_PACK', 'TRANSFER_OUT', 'TRANSFER_IN']);
+    const second = await s.receive(6, 'receipt-2');
+    expect(second.transfer).toMatchObject({ status: 'RECEIVED', receivedAt: expect.any(Date) });
+    expect(s.transfer.lines[0].receivedUnits).toBe(10);
+    expect(s.transit.onHandUnits).toBe(0);
+    expect(s.destination.onHandUnits).toBe(10);
+    expect(s.movements).toHaveLength(5);
+    expect(s.movements.some((m) => m.kind === 'WRITE_OFF')).toBe(false);
+  });
+
+  it('is exactly-once on first receipt retry and retry after final completion', async () => {
+    const s = scenario();
+    await s.receive(4);
+    await s.receive(4);
+    expect(s.movements).toHaveLength(3);
+    await s.receive(6, 'receipt-2');
+    await s.receive(6, 'receipt-2');
+    await s.receive(4);
+    expect(s.movements).toHaveLength(5);
+    expect(s.destination.onHandUnits).toBe(10);
+    expect(s.transfer.lines[0].receivedUnits).toBe(10);
+  });
+
+  it('rejects changed quantity on a consumed receipt key without writes', async () => {
+    const s = scenario();
+    await s.receive(4);
+    await expect(s.receive(3)).rejects.toMatchObject({ message: 'INVALID_STATE' });
+    expect(s.movements).toHaveLength(3);
+  });
+
+  it('rejects cumulative over-receipt before any additional movement', async () => {
+    const s = scenario();
+    await s.receive(4);
+    await expect(s.receive(7, 'receipt-2')).rejects.toMatchObject({ message: 'INVALID_UNITS' });
+    expect(s.movements).toHaveLength(3);
+    expect(s.transit.onHandUnits).toBe(6);
+  });
+
+  it('receives an intact whole pack without an unnecessary break', async () => {
+    const s = scenario();
+    await s.receive(10);
+    expect(s.movements.map((m) => m.kind)).toEqual(['TRANSFER_OUT', 'TRANSFER_IN']);
+    expect(s.destination).toEqual({ onHandUnits: 10, sealedPacks: 1, looseUnits: 0 });
+  });
+
+  it('conserves a mixed whole/fractional receipt14 out of sealed20', async () => {
+    const s = scenario(20);
+    await s.receive(14);
+    expect(s.transit).toEqual({ onHandUnits: 6, sealedPacks: 0, looseUnits: 6 });
+    expect(s.destination).toEqual({ onHandUnits: 14, sealedPacks: 1, looseUnits: 4 });
+  });
+
+  it('keeps the legacy single-line endpoint partial rather than EXCEPTION', async () => {
+    const s = scenario();
+    await caller().receiveTransferLine({
+      branchId: 'branch_a',
+      transferId: s.transfer.id,
+      lineId: 'line_1',
+      receivedUnits: 4,
+      idempotencyKeyPrefix: 'legacy-1',
+    });
+    expect(s.transfer.status).toBe('PARTIALLY_RECEIVED');
+    await caller().receiveTransferLine({
+      branchId: 'branch_a',
+      transferId: s.transfer.id,
+      lineId: 'line_1',
+      receivedUnits: 6,
+      idempotencyKeyPrefix: 'legacy-2',
+    });
+    expect(s.transfer.status).toBe('RECEIVED');
+  });
+
+  it('preserves witnessed permanent-shortfall write-off with a valid arrangement', async () => {
+    const s = scenario();
+    db.user.findFirst.mockResolvedValue({ id: 'witness' });
+    const result = await caller().receiveTransferWithVariance({
+      branchId: 'branch_a',
+      transferId: s.transfer.id,
+      lines: [{ lineId: 'line_1', receivedUnits: 4 }],
+      idempotencyKeyPrefix: 'variance-1',
+      variance: {
+        reason: 'Missing carton confirmed by courier',
+        witnessId: 'witness',
+        evidenceRef: 'courier:1',
+      },
+    });
+    expect(result.transfer.status).toBe('RECEIVED');
+    expect(s.movements.map((m) => m.kind)).toEqual([
+      'BREAK_PACK',
+      'TRANSFER_OUT',
+      'TRANSFER_IN',
+      'WRITE_OFF',
+    ]);
+    expect(s.transit.onHandUnits).toBe(0);
+    expect(s.destination.onHandUnits).toBe(4);
+    expect(s.movements.find((m) => m.kind === 'WRITE_OFF')).toMatchObject({
+      quantityUnits: -6,
+      disposition: 'IN_TRANSIT',
+      looseUnitDelta: -6,
+    });
+    expect(Math.abs(s.movements.find((m) => m.kind === 'WRITE_OFF')!.sealedPackDelta)).toBe(0);
+  });
+
+  it('requires a distinct active witness before closing a permanent shortfall', async () => {
+    const s = scenario();
+    await expect(
+      caller().receiveTransferWithVariance({
+        branchId: 'branch_a',
+        transferId: s.transfer.id,
+        lines: [{ lineId: 'line_1', receivedUnits: 4 }],
+        idempotencyKeyPrefix: 'bad-witness',
+        variance: {
+          reason: 'Missing carton confirmed',
+          witnessId: 'user_a',
+          evidenceRef: 'courier:2',
+        },
+      })
+    ).rejects.toMatchObject({ message: 'COAUTH_REQUIRED' });
+    expect(s.movements).toHaveLength(0);
+  });
+
+  it('refuses a foreign destination branch before touching its stock', async () => {
+    const s = scenario();
+    s.transfer.toBranchId = 'foreign_branch';
+    await expect(s.receive(4)).rejects.toMatchObject({ message: 'CROSS_BRANCH_REFERENCE' });
+    expect(s.movements).toHaveLength(0);
+  });
+
+  it('refuses an unknown line rather than implicitly closing the transfer', async () => {
+    const s = scenario();
+    await expect(
+      caller().receiveTransferWithVariance({
+        branchId: 'branch_a',
+        transferId: s.transfer.id,
+        lines: [{ lineId: 'foreign_line', receivedUnits: 4 }],
+        idempotencyKeyPrefix: 'bad-line',
+      })
+    ).rejects.toMatchObject({ message: 'CROSS_BRANCH_REFERENCE' });
+    expect(s.movements).toHaveLength(0);
   });
 });

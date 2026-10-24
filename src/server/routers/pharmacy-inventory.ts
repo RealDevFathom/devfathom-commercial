@@ -31,6 +31,7 @@ import {
   createRecall,
   dispatchTransfer,
   nearExpiryBoard,
+  prepareTransferTransitRemoval,
   quarantinePart,
   recallTrace,
   receiveTransferLine,
@@ -416,10 +417,9 @@ type VarianceReceiptInput = {
 };
 
 /**
- * Receive some or all of a transfer. A short count without variance evidence is
- * a partial receipt and leaves the remainder in transit for a later receipt.
- * Supplying variance evidence explicitly closes the transfer and writes off any
- * remainder. Runs inside the caller's transaction.
+ * Receive all or part of a delivery. Without explicit variance evidence, the
+ * remainder stays in transit. Evidence closes a witnessed permanent shortfall.
+ * Every open line is accounted for, inside the caller's transaction.
  */
 async function receiveTransferWithVariance(
   db: ScopedDb,
@@ -441,7 +441,39 @@ async function receiveTransferWithVariance(
         include: { lines: true },
       })
     : null;
-  if (!transfer) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  if (
+    !transfer ||
+    transfer.organizationId !== scope.organizationId ||
+    transfer.toBranchId !== scope.branchId
+  )
+    throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  const prior = await db.pharmacyStockMovement.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      transferId: transfer.id,
+      kind: 'TRANSFER_IN',
+      idempotencyKey: { startsWith: `${input.idempotencyKeyPrefix}:` },
+    },
+  });
+  if (prior.length) {
+    const positive = input.lines.filter((line) => line.receivedUnits > 0);
+    if (
+      input.variance ||
+      prior.length !== positive.length ||
+      positive.some(
+        (line) =>
+          !prior.some(
+            (movement) =>
+              movement.note === line.lineId &&
+              movement.idempotencyKey === `${input.idempotencyKeyPrefix}:${line.lineId}:in` &&
+              movement.quantityUnits === line.receivedUnits
+          )
+      )
+    )
+      throw new PharmacyInventoryError('INVALID_STATE');
+    return { transfer, variances: [] };
+  }
   if (!RECEIVABLE_TRANSFER_STATUSES.includes(transfer.status))
     throw new PharmacyInventoryError('INVALID_STATE');
 
@@ -474,34 +506,17 @@ async function receiveTransferWithVariance(
     const transit = balances[0];
     if (!transit || Number(transit.onHandUnits) < outstanding)
       throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
-    const unitsPerPack = Number(transit.unitsPerPack);
-    // The receipt leg removes a normalised arrangement; the variance takes loose
-    // units first. Both have to fit what transit physically holds, or the
-    // projection would go negative mid-transaction.
-    const receipt =
-      receivedUnits > 0
-        ? arrangementFor(receivedUnits, unitsPerPack)
-        : { sealedPacks: 0, looseUnits: 0 };
-    let sealedLeft = Number(transit.sealedPacks) - receipt.sealedPacks;
-    let looseLeft = Number(transit.looseUnits) - receipt.looseUnits;
-    const varianceUnits = outstanding - receivedUnits;
-    const varianceLoose = Math.min(Math.max(looseLeft, 0), varianceUnits);
-    const varianceSealedUnits = varianceUnits - varianceLoose;
-    sealedLeft -= varianceSealedUnits / unitsPerPack;
-    looseLeft -= varianceLoose;
-    if (varianceSealedUnits % unitsPerPack !== 0 || sealedLeft < 0 || looseLeft < 0)
-      throw new PharmacyInventoryError('INVALID_ARRANGEMENT');
     plan.push({
       line,
       receivedUnits,
-      varianceUnits,
-      variance: { sealedPacks: varianceSealedUnits / unitsPerPack, looseUnits: varianceLoose },
+      varianceUnits: outstanding - receivedUnits,
+      unitsPerPack: Number(transit.unitsPerPack),
     });
   }
 
   const short = plan.some((step) => step.varianceUnits > 0);
   const closingWithVariance = short && input.variance !== undefined;
-  if (short && !closingWithVariance && !plan.some((step) => step.receivedUnits > 0))
+  if (!closingWithVariance && !plan.some((step) => step.receivedUnits > 0))
     throw new PharmacyInventoryError('INVALID_UNITS');
   if (closingWithVariance) {
     const evidence = input.variance;
@@ -525,6 +540,19 @@ async function receiveTransferWithVariance(
       });
     }
     if (step.varianceUnits === 0 || !closingWithVariance) continue;
+    const variance = await prepareTransferTransitRemoval(
+      db,
+      { ...scope, branchId: transfer.fromBranchId },
+      {
+        inventoryLotId: step.line.sourceLotId,
+        stockLocationId: step.line.sourceStockLocationId,
+        units: step.varianceUnits,
+        unitsPerPack: step.unitsPerPack,
+        transferId: transfer.id,
+        lineId: step.line.id,
+        idempotencyKeyPrefix: `${input.idempotencyKeyPrefix}:${step.line.id}`,
+      }
+    );
     const evidence = input.variance!;
     const movement = await db.pharmacyStockMovement.create({
       data: {
@@ -535,8 +563,8 @@ async function receiveTransferWithVariance(
         kind: 'WRITE_OFF',
         disposition: 'IN_TRANSIT',
         quantityUnits: -step.varianceUnits,
-        sealedPackDelta: -step.variance.sealedPacks,
-        looseUnitDelta: -step.variance.looseUnits,
+        sealedPackDelta: -variance.sealedPacks,
+        looseUnitDelta: -variance.looseUnits,
         actorId: scope.actorId,
         reason: `Transfer ${transfer.id} receipt variance: ${evidence.reason}`,
         idempotencyKey: transferVarianceKey(transfer.id, step.line.id),
@@ -556,13 +584,14 @@ async function receiveTransferWithVariance(
     postedVariances.push({ lineId: step.line.id, units: step.varianceUnits, movement, custody });
   }
 
-  const received = await db.pharmacyInterbranchTransfer.update({
+  const closed = await db.pharmacyInterbranchTransfer.update({
     where: { id: transfer.id },
-    data: short && !closingWithVariance
-      ? { status: 'PARTIALLY_RECEIVED', receivedAt: null }
-      : { status: 'RECEIVED', receivedAt: new Date() },
+    data:
+      short && !closingWithVariance
+        ? { status: 'PARTIALLY_RECEIVED', receivedAt: null }
+        : { status: 'RECEIVED', receivedAt: new Date() },
   });
-  return { transfer: received, variances: postedVariances };
+  return { transfer: closed, variances: postedVariances };
 }
 
 export const pharmacyInventoryRouter = router({
@@ -781,9 +810,7 @@ export const pharmacyInventoryRouter = router({
       z
         .object({
           manufacturingBatchId: z.string().min(1),
-          // Reactivation belongs to the recall close/reversal workflows, which
-          // verify the recall evidence before restoring affected stock.
-          state: z.enum(['RECALLED', 'QUARANTINED']),
+          state: z.enum(['ACTIVE', 'RECALLED', 'QUARANTINED']),
           reason: z.string().trim().max(500).optional(),
         })
         .strict()
@@ -793,7 +820,7 @@ export const pharmacyInventoryRouter = router({
         where: { id: input.manufacturingBatchId },
       });
       if (!batch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Batch not found.' });
-      if (!input.reason) {
+      if (input.state !== 'ACTIVE' && !input.reason) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'Blocking a batch requires a reason.',
@@ -803,8 +830,8 @@ export const pharmacyInventoryRouter = router({
         where: { id: batch.id },
         data: {
           state: input.state,
-          stateReason: input.reason,
-          stateChangedAt: new Date(),
+          stateReason: input.state === 'ACTIVE' ? null : (input.reason ?? null),
+          stateChangedAt: input.state === 'ACTIVE' ? null : new Date(),
         },
       });
     }),
@@ -1963,7 +1990,7 @@ export const pharmacyInventoryRouter = router({
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) => transferBoard(ctx.db, await scopeFor(ctx, input.branchId))),
 
-  /** WHA-1603 INV-07: close a transfer, posting any shortfall as a custody write-off. */
+  /** WHA-1603 INV-07: receive a delivery; explicit evidence closes a shortfall. */
   receiveTransferWithVariance: inventoryControl
     .input(
       z
