@@ -291,12 +291,22 @@ describe('counter Khata ledger gate', () => {
   });
   it('records the freshly reauthenticated owner and raised limit', async () => {
     const db = fixture();
-    await authorizeKhataCharge(
+    const account = await authorizeKhataCharge(
       db as never,
       scope,
-      { ...input, amountMinor: 600, ownerOverride: true },
-      { authorized: true, passwordAuthenticatedAt: Date.now() }
+      { ...input, amountMinor: 600, ownerOverride: true, overrideReason: ' Pays on Friday ' },
+      { authorized: true, passwordAuthenticatedAt: Date.now(), basis: 'pharmacy:manage' }
     );
+    const overLimitCharge = {
+      saleId: 'sale-a',
+      reason: 'Pays on Friday',
+      approverBasis: 'pharmacy:manage',
+      chargeAmountMinor: 600,
+      balanceBeforeMinor: 500,
+      previousLimitMinor: 1000,
+      approvedLimitMinor: 1100,
+      amountOverLimitMinor: 100,
+    };
     expect(db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         appliedLimitMinor: 1100,
@@ -304,9 +314,32 @@ describe('counter Khata ledger gate', () => {
         reasons: expect.objectContaining({
           ownerAuthorizedByUserId: scope.actorId,
           ownerAuthorizedAt: expect.any(String),
+          overLimitCharge,
         }),
       }),
     });
+    expect(account.overLimitApproval).toMatchObject(overLimitCharge);
+  });
+  it.each([undefined, '', '   '])(
+    'refuses an authorized over-limit approval whose reason is %j, before any write',
+    async (overrideReason) => {
+      const db = fixture();
+      await expect(
+        authorizeKhataCharge(
+          db as never,
+          scope,
+          { ...input, amountMinor: 600, ownerOverride: true, overrideReason },
+          { authorized: true, passwordAuthenticatedAt: Date.now(), basis: 'pharmacy:manage' }
+        )
+      ).rejects.toMatchObject({ reason: 'OVERRIDE_REASON_REQUIRED' });
+      expect(db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+      expect(db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    }
+  );
+  it('returns no approval for a charge within the limit', async () => {
+    const db = fixture();
+    const account = await authorizeKhataCharge(db as never, scope, input, { authorized: false });
+    expect(account.overLimitApproval).toBeUndefined();
   });
   it('denies an account outside the sale customer membership and does not expose its statement', async () => {
     const db = fixture();

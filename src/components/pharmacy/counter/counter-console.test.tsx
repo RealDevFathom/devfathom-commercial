@@ -1010,12 +1010,21 @@ it.each([404, 200])(
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
     await screen.findByText(/Ledger balance/);
-    fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
-    fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
+    fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+    fireEvent.change(screen.getByLabelText('Reason for exceeding the limit'), {
+      target: { value: 'Regular family' },
+    });
+    fireEvent.change(screen.getByLabelText('Owner or manager password (current account)'), {
       target: { value: 'test-only-password' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
     await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledOnce());
+    // The reason reaches the server with the override, and the password never does.
+    expect(mocks.mutations.tender!.mock.calls[0]![0]).toMatchObject({
+      ownerOverride: true,
+      overrideReason: 'Regular family',
+    });
+    expect(mocks.mutations.tender!.mock.calls[0]![0]).not.toHaveProperty('password');
     expect(fetch).toHaveBeenCalledWith(
       '/api/login',
       expect.objectContaining({ method: 'POST', credentials: 'include' })

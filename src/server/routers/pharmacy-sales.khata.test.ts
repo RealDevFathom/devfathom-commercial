@@ -7,6 +7,10 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(),
 }));
 vi.mock('@/server/audit', () => ({
+  // The same merge into the request audit row as the real helper.
+  annotateAudit: (ctx: { audit?: { detail: Record<string, unknown> } }, detail: object) => {
+    if (ctx?.audit) Object.assign(ctx.audit.detail, detail);
+  },
   ipFromHeaders: vi.fn(),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
@@ -95,6 +99,10 @@ function fixture() {
     caller: () => app.createCaller(context as unknown as TRPCContext).pharmacySales,
   };
 }
+/** ABAC answers only these actions, as a persisted role grants them. */
+function grant(...actions: string[]) {
+  vi.mocked(can).mockImplementation(async (_subject, action) => actions.includes(action));
+}
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(can).mockResolvedValue(true);
@@ -132,7 +140,12 @@ describe('Khata router trust and recovery boundary', () => {
   });
   it('hands only the fresh server-session claim to the audited owner gate', async () => {
     const f = fixture();
-    await f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true });
+    await f.caller().tender({
+      ...input,
+      amountMinor: 101,
+      ownerOverride: true,
+      overrideReason: 'Regular family',
+    });
     expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         reasons: expect.objectContaining({
@@ -154,16 +167,19 @@ describe('Khata router trust and recovery boundary', () => {
   );
   it('rejects stale owner evidence and non-owner override', async () => {
     const f = fixture();
+    const overLimit = { ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Known' };
     f.user.passwordAuthenticatedAt -= 301000;
-    await expect(
-      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
-    ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+    await expect(f.caller().tender(overLimit)).rejects.toMatchObject({
+      message: 'OWNER_ACTION_REQUIRED',
+    });
     f.user.passwordAuthenticatedAt = Date.now();
     f.user.role = 'EMPLOYEE';
-    await expect(
-      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
-    ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+    grant('pharmacy:dispense');
+    await expect(f.caller().tender(overLimit)).rejects.toMatchObject({
+      message: 'OWNER_ACTION_REQUIRED',
+    });
     expect(applyPharmacyTender).not.toHaveBeenCalled();
+    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
   });
   it('replays exact accepted evidence without reauthorizing or duplicating a charge', async () => {
     const f = fixture();
@@ -232,5 +248,132 @@ describe('Khata router trust and recovery boundary', () => {
         amountMinor: 50,
       }),
     });
+  });
+});
+
+describe('Khata over-limit approval by Owner, Manager or tenant ADMIN (#313)', () => {
+  const overLimit = {
+    ...input,
+    amountMinor: 101,
+    ownerOverride: true,
+    overrideReason: '  Known family, pays at month end  ',
+  };
+
+  it('lets a standard Manager, with no counter or dispense grant, read accounts and approve with a reason', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    grant('pharmacy:manage');
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toEqual([expect.objectContaining({ id: 'family-a', creditLimitMinor: 100 })]);
+    await f.caller().tender(overLimit);
+    const approval = {
+      saleId: 'sale-a',
+      reason: 'Known family, pays at month end',
+      approverBasis: 'pharmacy:manage',
+      chargeAmountMinor: 101,
+      balanceBeforeMinor: 0,
+      previousLimitMinor: 100,
+      approvedLimitMinor: 101,
+      amountOverLimitMinor: 1,
+    };
+    expect(f.db.pharmacyFamilyAccount.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { creditLimitMinor: 101 } })
+    );
+    expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        kind: 'OVERRIDDEN',
+        appliedLimitMinor: 101,
+        ownerActorId: 'owner-a',
+        reasons: expect.objectContaining({
+          ownerAuthorizedByUserId: 'owner-a',
+          overLimitCharge: approval,
+        }),
+      }),
+    });
+    expect(applyPharmacyTender).toHaveBeenCalledOnce();
+    expect(f.context.audit.detail).toMatchObject({
+      category: 'PHARMACY',
+      action: 'khata_credit_limit_override',
+      targetType: 'PharmacyFamilyAccount',
+      targetId: 'family-a',
+      metadata: { branchId: 'branch-a', approverId: 'owner-a', ...approval },
+    });
+  });
+
+  it('lets the tenant ADMIN approve without a pharmacy:manage grant', async () => {
+    const f = fixture();
+    grant('admin:access');
+    await f.caller().tender(overLimit);
+    expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        reasons: expect.objectContaining({
+          overLimitCharge: expect.objectContaining({ approverBasis: 'tenant-admin' }),
+        }),
+      }),
+    });
+  });
+
+  it('refuses an approval without a non-blank reason before any write', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    grant('pharmacy:manage');
+    const withoutReason = { ...input, amountMinor: 101, ownerOverride: true };
+    await expect(f.caller().tender(withoutReason)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'OVERRIDE_REASON_REQUIRED',
+    });
+    await expect(f.caller().tender({ ...overLimit, overrideReason: '   ' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(f.db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+    expect(f.context.audit.detail).not.toHaveProperty('action');
+  });
+
+  it('keeps a Cashier capped at the credit limit even with a reason', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    grant('pharmacy:dispense');
+    await expect(f.caller().tender(overLimit)).rejects.toMatchObject({
+      message: 'OWNER_ACTION_REQUIRED',
+    });
+    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+    await f.caller().tender({ ...input, amountMinor: 100 });
+    expect(applyPharmacyTender).toHaveBeenCalledOnce();
+    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+  });
+
+  it('admits an approver to Khata reads and tenders only, not to Khata refunds', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    grant('pharmacy:manage');
+    await expect(
+      f.caller().refundTender({
+        branchId: 'branch-a',
+        originalTenderId: 'tender-a',
+        deviceId: 'device-a',
+        businessDate: input.businessDate,
+        amountMinor: 50,
+        reason: 'Return',
+        idempotencyKey: 'refund-a',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('rejects an override reason on a tender that is not Khata', async () => {
+    const f = fixture();
+    await expect(
+      f.caller().tender({
+        ...input,
+        type: 'CASH',
+        familyAccountId: undefined,
+        overrideReason: 'Not Khata',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Khata fields require Khata tender.' });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 });

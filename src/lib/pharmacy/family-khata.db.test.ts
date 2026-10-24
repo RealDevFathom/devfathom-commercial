@@ -196,13 +196,34 @@ suite('family Khata restricted PostgreSQL', () => {
     expect(results.filter((row) => row.status === 'rejected')).toHaveLength(1);
     expect(await inScope(a, (db) => khata.readKhataBalance(db, a, a.familyAccountId))).toBe(900);
   });
+  it('refuses an authorized override without a reason and writes nothing', async () => {
+    await expect(
+      inScope(a, (db) =>
+        khata.authorizeKhataCharge(
+          db,
+          a,
+          { ...a, amountMinor: 200, ownerOverride: true, overrideReason: '  ' },
+          { authorized: true, passwordAuthenticatedAt: Date.now(), basis: 'pharmacy:manage' }
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'OVERRIDE_REASON_REQUIRED' });
+    await inScope(a, async (db) => {
+      expect(
+        (await db.pharmacyFamilyAccount.findFirst({ where: { id: a.familyAccountId } }))!
+          .creditLimitMinor
+      ).toBe(1000);
+      expect(
+        await db.pharmacyKhataLimitDecision.count({ where: { familyAccountId: a.familyAccountId } })
+      ).toBe(0);
+    });
+  });
   it('audits a fresh owner override and preserves append-only history', async () => {
     await inScope(a, (db) =>
       khata.authorizeKhataCharge(
         db,
         a,
-        { ...a, amountMinor: 200, ownerOverride: true },
-        { authorized: true, passwordAuthenticatedAt: Date.now() }
+        { ...a, amountMinor: 200, ownerOverride: true, overrideReason: 'Pays at month end' },
+        { authorized: true, passwordAuthenticatedAt: Date.now(), basis: 'pharmacy:manage' }
       )
     );
     const decision = await inScope(a, (db) =>
@@ -211,8 +232,28 @@ suite('family Khata restricted PostgreSQL', () => {
     expect(decision).toMatchObject({
       appliedLimitMinor: 1100,
       ownerActorId: 'owner',
-      reasons: expect.objectContaining({ ownerAuthorizedByUserId: 'owner' }),
+      reasons: expect.objectContaining({
+        ownerAuthorizedByUserId: 'owner',
+        overLimitCharge: {
+          saleId: a.saleId,
+          reason: 'Pays at month end',
+          approverBasis: 'pharmacy:manage',
+          chargeAmountMinor: 200,
+          balanceBeforeMinor: 900,
+          previousLimitMinor: 1000,
+          approvedLimitMinor: 1100,
+          amountOverLimitMinor: 100,
+        },
+      }),
     });
+    await expect(
+      inScope(a, (db) =>
+        db.pharmacyKhataLimitDecision.updateMany({
+          where: { familyAccountId: a.familyAccountId },
+          data: { ownerActorId: 'someone-else' },
+        })
+      )
+    ).rejects.toThrow();
     await expect(
       inScope(a, (db) =>
         db.pharmacyKhataEvent.updateMany({
