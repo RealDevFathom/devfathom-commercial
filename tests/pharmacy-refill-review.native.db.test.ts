@@ -75,6 +75,9 @@ async function fixture() {
     })
   );
   return tenancy.withTenantDb(organizationId, async (db) => {
+    await db.organizationDepartment.create({
+      data: { organizationId, key: 'Pharmacy', name: 'Synthetic pharmacy' },
+    });
     await db.user.createMany({
       data: [
         {
