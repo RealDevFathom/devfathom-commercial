@@ -54,6 +54,15 @@ function fixture() {
         where.id.in.map((id) => ({ id }))
       ),
     },
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        status: 'ACTIVE',
+        organizationId: 'org-a',
+        permissionOverrides: [],
+        organizationRole: null,
+      }),
+    },
+    pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue({ branchId: 'branch-a' }) },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue({ type: 'CREDIT' }) },
     pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
     pharmacyFamilyAccount: {
@@ -313,6 +322,37 @@ describe('Khata over-limit approval by Owner, Manager or tenant ADMIN (#313)', (
       }),
     });
   });
+
+  it('does not let a manager-only approval grant cross an assignment boundary', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    grant('pharmacy:manage');
+    f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null as never);
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller().tender(overLimit)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it.each(['pharmacy:manage', 'pharmacy:*'])(
+    'does not let ADMIN outrun a %s DENY',
+    async (capability) => {
+      const f = fixture();
+      grant('admin:access');
+      f.db.user.findUnique.mockResolvedValue({
+        status: 'ACTIVE',
+        organizationId: 'org-a',
+        organizationRole: null,
+        permissionOverrides: [{ capability, effect: 'DENY' }],
+      } as never);
+      await expect(
+        f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(f.caller().tender(overLimit)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
 
   it('refuses an approval without a non-blank reason before any write', async () => {
     const f = fixture();

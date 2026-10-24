@@ -172,9 +172,32 @@ async function khataLimitApproverBasis(ctx: TRPCContext): Promise<KhataApproverB
   const subject = subjectFromSession(user);
   const options = { db: ctx.db, source: 'TRPC' as const };
   if (await can(subject, 'pharmacy:manage', undefined, options)) return 'pharmacy:manage';
-  if (user.role === 'ADMIN' && (await can(subject, 'admin:access', undefined, options)))
-    return 'tenant-admin';
-  return null;
+  if (user.role !== 'ADMIN' || !(await can(subject, 'admin:access', undefined, options)))
+    return null;
+  // ADMIN is a fallback, not a way around an explicit pharmacy permission revocation.
+  const member = await ctx.db.user.findUnique({
+    where: { id: user.id },
+    select: {
+      status: true,
+      organizationId: true,
+      organizationRole: { select: { permissions: true } },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        select: { capability: true, effect: true },
+      },
+    },
+  });
+  if (!member || member.status !== 'ACTIVE' || member.organizationId !== user.organizationId)
+    return null;
+  const rules = [...member.permissionOverrides, ...(member.organizationRole?.permissions ?? [])];
+  if (
+    rules.some(
+      (rule) =>
+        rule.effect === 'DENY' && capabilityMatches(rule.capability, 'pharmacy:manage', 'DENY')
+    )
+  )
+    return null;
+  return 'tenant-admin';
 }
 
 /**
@@ -188,16 +211,36 @@ async function khataScope(ctx: TRPCContext, branch: string, options: { approver?
     ctx.organization?.vertical !== 'PHARMACY' ||
     ctx.organization.id !== scope.organizationId ||
     ctx.session!.user.organizationId !== scope.organizationId ||
-    !hasModule(ctx.entitlements, 'pharmacy-counter') ||
-    !(
-      (await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
-        db: ctx.db,
-        source: 'TRPC',
-      })) ||
-      (options.approver === true && (await khataLimitApproverBasis(ctx)) !== null)
-    )
+    !hasModule(ctx.entitlements, 'pharmacy-counter')
   )
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
+  const mayDispense = await can(
+    subjectFromSession(ctx.session!.user),
+    'pharmacy:dispense',
+    undefined,
+    {
+      db: ctx.db,
+      source: 'TRPC',
+    }
+  );
+  const approverBasis = options.approver === true ? await khataLimitApproverBasis(ctx) : null;
+  if (!mayDispense && approverBasis === null)
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
+  // The new manager-only route does not grant access to another branch. Preserve
+  // the existing dispensing route and the tenant ADMIN's active-branch exception.
+  if (!mayDispense && ctx.session!.user.role !== 'ADMIN') {
+    const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: branch,
+        userId: ctx.session!.user.id,
+        active: true,
+      },
+      select: { branchId: true },
+    });
+    if (!assignment)
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
   const available = await ctx.db.pharmacyBranch.findFirst({
     where: { organizationId: scope.organizationId, id: branch, active: true },
     select: { id: true },
