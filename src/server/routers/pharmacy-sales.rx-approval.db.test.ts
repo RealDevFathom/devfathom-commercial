@@ -8,22 +8,22 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (databaseUrl) process.env.DATABASE_URL = databaseUrl;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 const describeIfDatabase = databaseUrl ? describe : describe.skip;
 
-vi.mock('@/server/audit', async () => {
-  const actual = await vi.importActual<typeof import('@/server/audit')>('@/server/audit');
-  return { ...actual, recordTrpcAudit: vi.fn() };
-});
+// Request audit, router, authorization, stock, settlement and database are real.
 
 const suffix = randomBytes(6).toString('hex');
 const ids = {
   org: `org_r341_${suffix}`,
   branch: `br_r341_${suffix}`,
+  otherBranch: `br_r341_other_${suffix}`,
+  foreignOrg: `org_r341_foreign_${suffix}`,
+  foreignBranch: `br_r341_foreign_${suffix}`,
   cashier: `user_r341_cashier_${suffix}`,
   pharmacist: `user_r341_pharm_${suffix}`,
   /** Role grants pharmacy:dispense; a user override DENYs it. */
@@ -167,6 +167,56 @@ const payInCash = (userId: string, saleId: string, amountMinor: number) =>
     })
   );
 
+/** A boundary-only synthetic bill; fulfillment tests continue to use the actual stock path. */
+async function boundaryBill(organizationId: string, branchId: string, controlled = false) {
+  return withTenantDb(organizationId, async (db) => {
+    await db.$queryRawUnsafe("SELECT set_config('app.current_branch_id', $1, true)", branchId);
+    const medicine = await db.medicine.create({
+      data: {
+        productName: `Boundary Rx ${key()}`,
+        productFamily: 'PHARMACEUTICAL',
+        rx: true,
+        controlled,
+        presentations: { create: { presentation: 'Tablet strip' } },
+      },
+      include: { presentations: true },
+    });
+    const presentationId = medicine.presentations[0]!.id;
+    const pack = await db.packLevel.create({
+      data: {
+        presentationId,
+        versionGroupId: `rx-boundary-${key()}`,
+        version: 1,
+        level: 'STRIP',
+        unitsPerParent: 10,
+        effectiveFrom: new Date('2026-01-01T00:00:00Z'),
+      },
+    });
+    const sale = await db.pharmacySale.create({
+      data: { organizationId, branchId, createdByUserId: `synthetic-${key()}` },
+    });
+    const saleLine = await db.pharmacySaleLine.create({
+      data: {
+        organizationId,
+        branchId,
+        saleId: sale.id,
+        medicineId: medicine.id,
+        presentationId,
+        packLevelId: pack.id,
+        saleUnit: 'STRIP',
+        quantity: 1,
+        canonicalUnitsPerSaleUnit: 10,
+        canonicalUnits: 10,
+        unitPriceMinor: 2000,
+        proRataCeilingMinor: 2000,
+        unitCostMinor: 100,
+        idempotencyKey: key(),
+      },
+    });
+    return { saleId: sale.id, saleLineId: saleLine.id };
+  });
+}
+
 beforeAll(async () => {
   if (!databaseUrl) return;
   const scoped = await import('@/lib/tenancy/scoped-db');
@@ -250,6 +300,37 @@ beforeAll(async () => {
     };
   }
 
+  await withPlatformDb((db) =>
+    db.$executeRawUnsafe(
+      `INSERT INTO organizations (id, name, slug, "seatLimit", vertical) VALUES ($1, 'Foreign Rx synthetic', $2, 5, 'PHARMACY')`,
+      ids.foreignOrg,
+      `rx-foreign-${suffix}`
+    )
+  );
+  await withTenantDb(ids.foreignOrg, (db) =>
+    db.pharmacyBranch.create({
+      data: {
+        id: ids.foreignBranch,
+        code: 'FOREIGN341',
+        name: 'Foreign synthetic',
+        addressLine: '1 Test Road',
+        city: 'Lahore',
+        provinceCode: 'PB',
+      },
+    })
+  );
+  await withTenantDb(ids.org, (db) =>
+    db.pharmacyBranch.create({
+      data: {
+        id: ids.otherBranch,
+        code: 'OTHER341',
+        name: 'Unassigned synthetic',
+        addressLine: '2 Test Road',
+        city: 'Lahore',
+        provinceCode: 'PB',
+      },
+    })
+  );
   await withTenantDb(ids.org, async (tx) => {
     await seedDepartments(tx, [ids.org], ['LEADERSHIP']);
     await tx.pharmacyBranch.create({
@@ -340,6 +421,9 @@ beforeAll(async () => {
     );
 }, 120_000);
 
+afterEach(async () => {
+  if (databaseUrl) await (await import('@/server/audit')).flushAuditWritesForTest();
+});
 afterAll(async () => {
   await disconnect?.();
 });
@@ -449,6 +533,76 @@ describeIfDatabase('pharmacist approval of prescription-only counter lines (#341
       expect.objectContaining({ saleLineId: bill.saleLineId, rxApproved: true }),
     ]);
     expect(await approvalsFor(bill.saleLineId)).toEqual([]);
+  });
+
+  it('refuses controlled drugs, blank reasons and foreign tenant/branch references without approval writes', async () => {
+    const controlled = await boundaryBill(ids.org, ids.branch, true);
+    await expect(approve(ids.pharmacist, controlled)).rejects.toMatchObject({
+      message:
+        'Only a prescription-only or restricted, non-controlled line takes a pharmacist approval.',
+    });
+    expect(await approvalsFor(controlled.saleLineId)).toEqual([]);
+    const bill = await pharmacistBill(rx);
+    await expect(approve(ids.pharmacist, bill, '  ')).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(await approvalsFor(bill.saleLineId)).toEqual([]);
+    for (const [organizationId, branchId] of [
+      [ids.org, ids.otherBranch],
+      [ids.foreignOrg, ids.foreignBranch],
+    ]) {
+      const foreign = await boundaryBill(organizationId, branchId);
+      await expect(
+        act(ids.pharmacist, (api) =>
+          api.approveRxLine({ branchId, ...foreign, reason: 'Must not cross this boundary' })
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(approve(ids.pharmacist, foreign)).rejects.toMatchObject({
+        message: 'That line is not on this bill at this branch.',
+      });
+      const rows = await withTenantDb(organizationId, (db) =>
+        db.$queryRawUnsafe<Array<{ saleLineId: string }>>(
+          'SELECT "saleLineId" FROM pharmacy_rx_line_approvals WHERE "saleLineId" = $1',
+          foreign.saleLineId
+        )
+      );
+      expect(rows).toEqual([]);
+    }
+  });
+
+  it('serializes concurrent approval, preserves one append-only row and persists actual request audits', async () => {
+    const bill = await pharmacistBill(rx);
+    const results = await Promise.all([
+      approve(ids.pharmacist, bill, 'Concurrent prescription check A'),
+      approve(ids.pharmacist, bill, 'Concurrent prescription check B'),
+    ]);
+    expect(results.map((result) => result.replayed).sort()).toEqual([false, true]);
+    expect(results[0]!.approvedAt).toEqual(results[1]!.approvedAt);
+    const approvals = await approvalsFor(bill.saleLineId);
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0]).toMatchObject({ pharmacistUserId: ids.pharmacist });
+    expect(['Concurrent prescription check A', 'Concurrent prescription check B']).toContain(
+      approvals[0]!.reason
+    );
+    await (await import('@/server/audit')).flushAuditWritesForTest();
+    const audits = await withTenantDb(ids.org, (db) =>
+      db.auditLog.findMany({
+        where: {
+          action: 'rx_line_approval',
+          targetId: bill.saleLineId,
+          outcome: 'SUCCESS',
+        },
+        orderBy: { createdAt: 'asc' },
+      })
+    );
+    expect(audits).toHaveLength(2);
+    for (const audit of audits)
+      expect(audit).toMatchObject({
+        organizationId: ids.org,
+        actorId: ids.pharmacist,
+        source: 'TRPC',
+        metadata: expect.objectContaining({ branchId: ids.branch, saleId: bill.saleId }),
+      });
   });
 
   it('keeps approvals append-only', async () => {
