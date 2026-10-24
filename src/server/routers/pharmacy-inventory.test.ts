@@ -52,6 +52,8 @@ function makeDb() {
     user: {
       findFirst: vi.fn().mockResolvedValue(null),
       findUnique: vi.fn().mockResolvedValue({
+        organizationId: 'org_a',
+        status: 'ACTIVE',
         organizationRole: { permissions: [] },
         permissionOverrides: [],
       }),
@@ -89,6 +91,7 @@ function makeDb() {
     pharmacyInterbranchTransferLine: model(),
     pharmacyPurchaseReturn: model(),
     pharmacyPurchaseReturnLine: model(),
+    pharmacyBranchAssignment: model(),
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
         (where.id?.in ?? []).map((id) => ({ id }))
@@ -102,7 +105,14 @@ function makeDb() {
 }
 
 let db = makeDb();
-function caller(overrides: { enabledModules?: string[]; userId?: string | null } = {}) {
+function caller(
+  overrides: {
+    enabledModules?: string[];
+    userId?: string | null;
+    role?: 'ADMIN' | 'EMPLOYEE';
+    userOrganizationId?: string;
+  } = {}
+) {
   return pharmacyInventoryRouter.createCaller({
     db,
     entitlements: {
@@ -118,7 +128,12 @@ function caller(overrides: { enabledModules?: string[]; userId?: string | null }
         ? null
         : {
             expires: 'later',
-            user: { id: overrides.userId ?? 'user_a', role: 'ADMIN', status: 'ACTIVE' },
+            user: {
+              id: overrides.userId ?? 'user_a',
+              role: overrides.role ?? 'ADMIN',
+              status: 'ACTIVE',
+              organizationId: overrides.userOrganizationId ?? 'org_a',
+            },
           },
     organization: null,
     support: null,
@@ -134,6 +149,8 @@ const deny = (capability: string): Rule => ({ capability, effect: 'DENY' });
 /** What `can()` reads: the member's role rules and their own overrides. */
 function grant(role: Rule[], overrides: Rule[] = []) {
   db.user.findUnique.mockResolvedValue({
+    organizationId: 'org_a',
+    status: 'ACTIVE',
     organizationRole: { permissions: role },
     permissionOverrides: overrides,
   });
@@ -848,15 +865,15 @@ describe('#357 partial transfer receipts', () => {
   });
 
   it('gives receipt and variance pack openings distinct keys in a pooled transit balance', async () => {
-    const s = scenario(18);
-    // Same-lot transfers share this bucket. Other receipts can consume all loose
-    // stock while this transfer still owns 18 of the 20 sealed units in transit.
-    Object.assign(s.transit, { onHandUnits: 20, sealedPacks: 2, looseUnits: 0 });
+    const s = scenario(20);
+    // Transfer T owns20, another same-lot dispatched transfer owns3 loose units.
+    // Receipt8 and writeoff12 each need their own physical pack opening.
+    Object.assign(s.transit, { onHandUnits: 23, sealedPacks: 2, looseUnits: 3 });
     db.user.findFirst.mockResolvedValue({ id: 'witness' });
     const result = await caller().receiveTransferWithVariance({
       branchId: 'branch_a',
       transferId: s.transfer.id,
-      lines: [{ lineId: 'line_1', receivedUnits: 4 }],
+      lines: [{ lineId: 'line_1', receivedUnits: 8 }],
       idempotencyKeyPrefix: 'pooled-variance',
       variance: {
         reason: 'Confirmed permanent shortfall',
@@ -868,9 +885,9 @@ describe('#357 partial transfer receipts', () => {
     const openings = s.movements.filter((m) => m.kind === 'BREAK_PACK');
     expect(openings).toHaveLength(2);
     expect(new Set(openings.map((m) => m.idempotencyKey)).size).toBe(2);
-    expect(s.transit).toEqual({ onHandUnits: 2, sealedPacks: 0, looseUnits: 2 });
-    expect(s.destination.onHandUnits).toBe(4);
-    expect(s.movements.find((m) => m.kind === 'WRITE_OFF')?.quantityUnits).toBe(-14);
+    expect(s.transit).toEqual({ onHandUnits: 3, sealedPacks: 0, looseUnits: 3 });
+    expect(s.destination.onHandUnits).toBe(8);
+    expect(s.movements.find((m) => m.kind === 'WRITE_OFF')?.quantityUnits).toBe(-12);
   });
 
   it('requires a distinct active witness before closing a permanent shortfall', async () => {
@@ -918,6 +935,97 @@ describe('#357 partial transfer receipts', () => {
     expect(db.pharmacyInventoryLot.create).not.toHaveBeenCalled();
     expect(s.movements).toHaveLength(0);
   });
+
+  const receiptProcedures = ['receiveTransferLine', 'receiveTransferWithVariance'] as const;
+  function branchReceiptInput(procedure: (typeof receiptProcedures)[number], transferId: string) {
+    const common = { branchId: 'branch_b', transferId, idempotencyKeyPrefix: 'branch-receipt-357' };
+    return procedure === 'receiveTransferLine'
+      ? { ...common, lineId: 'line_1', receivedUnits: 4 }
+      : { ...common, lines: [{ lineId: 'line_1', receivedUnits: 4 }] };
+  }
+  it.each(receiptProcedures)(
+    '%s refuses a valid transfer TO an unassigned same-tenant branch',
+    async (procedure) => {
+      const s = scenario();
+      s.transfer.toBranchId = 'branch_b';
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
+      await expect(
+        caller({ role: 'EMPLOYEE' })[procedure](
+          branchReceiptInput(procedure, s.transfer.id) as never
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.$transaction).not.toHaveBeenCalled();
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+      expect(s.movements).toHaveLength(0);
+      expect(s.transit.onHandUnits).toBe(10);
+      expect(s.destination.onHandUnits).toBe(0);
+    }
+  );
+  it.each(receiptProcedures)(
+    '%s refuses an actor with no active pharmacy assignment',
+    async (procedure) => {
+      const s = scenario();
+      s.transfer.toBranchId = 'branch_b';
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+      await expect(
+        caller({ role: 'EMPLOYEE' })[procedure](
+          branchReceiptInput(procedure, s.transfer.id) as never
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+      expect(s.movements).toHaveLength(0);
+      expect(s.transit.onHandUnits).toBe(10);
+    }
+  );
+  it.each(receiptProcedures)(
+    '%s allows an actively assigned employee at the actual destination',
+    async (procedure) => {
+      const s = scenario();
+      s.transfer.toBranchId = 'branch_b';
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_b' }]);
+      await caller({ role: 'EMPLOYEE' })[procedure](
+        branchReceiptInput(procedure, s.transfer.id) as never
+      );
+      expect(s.transit.onHandUnits).toBe(6);
+      expect(s.destination.onHandUnits).toBe(4);
+      expect(db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org_a',
+          userId: 'user_a',
+          active: true,
+          branch: { organizationId: 'org_a', active: true },
+        },
+        select: { branchId: true },
+      });
+    }
+  );
+  it.each(receiptProcedures)(
+    '%s preserves the same-tenant session ADMIN exception',
+    async (procedure) => {
+      const s = scenario();
+      s.transfer.toBranchId = 'branch_b';
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+      await caller({ role: 'ADMIN' })[procedure](
+        branchReceiptInput(procedure, s.transfer.id) as never
+      );
+      expect(s.transit.onHandUnits).toBe(6);
+      expect(s.destination.onHandUnits).toBe(4);
+    }
+  );
+  it.each(receiptProcedures)(
+    '%s refuses a session from a different tenant even when ADMIN',
+    async (procedure) => {
+      const s = scenario();
+      s.transfer.toBranchId = 'branch_b';
+      await expect(
+        caller({ role: 'ADMIN', userOrganizationId: 'org_b' })[procedure](
+          branchReceiptInput(procedure, s.transfer.id) as never
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+      expect(s.movements).toHaveLength(0);
+    }
+  );
 
   it('refuses a foreign destination branch before touching its stock', async () => {
     const s = scenario();

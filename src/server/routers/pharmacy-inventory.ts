@@ -8,6 +8,7 @@
  * payload, and maps the domain error onto a tRPC code.
  */
 import { TRPCError } from '@trpc/server';
+import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
@@ -157,6 +158,45 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
     active: true,
   });
   return { ...actor, branchId: branch };
+}
+
+/** Receipt destinations require active tenant membership and an authorized pharmacy branch. */
+async function receiptScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await scopeFor(ctx, branch);
+  const user = ctx.session!.user;
+  if (user.organizationId !== scope.organizationId) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  const member = await ctx.db.user.findUnique({
+    where: { id: scope.actorId },
+    select: { organizationId: true, status: true, organizationRole: { select: { name: true } } },
+  });
+  if (
+    !member ||
+    member.organizationId !== scope.organizationId ||
+    !ACTIVE_STATUSES.has(member.status)
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  if (
+    user.role === 'ADMIN' ||
+    user.role === 'HR' ||
+    ['org:superadmin', 'org:admin'].includes(member.organizationRole?.name ?? '')
+  )
+    return scope;
+  const assignments = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: scope.actorId,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  if (!assignments.some((assignment) => assignment.branchId === branch)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  return scope;
 }
 
 // ── PH-A5 — expiry board actions ────────────────────────────────────────────
@@ -1179,9 +1219,8 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          receiveTransferLine(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        const scope = await receiptScopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => receiveTransferLine(txDb(tx), scope, input));
       } catch (error) {
         domainError(error);
       }
@@ -2023,8 +2062,9 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await receiptScopeFor(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) =>
-          receiveTransferWithVariance(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          receiveTransferWithVariance(txDb(tx), scope, input)
         );
       } catch (error) {
         domainError(error);
