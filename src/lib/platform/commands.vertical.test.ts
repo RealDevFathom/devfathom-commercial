@@ -84,6 +84,7 @@ const mocks = vi.hoisted(() => ({
   auditCreate: vi.fn(),
   tenantAuditCreate: vi.fn(),
   regulatoryProfileFindFirst: vi.fn(),
+  jurisdictionRuleSetFindFirst: vi.fn(),
   organizationExists: vi.fn(),
   gateStateFindMany: vi.fn(),
   roleCount: vi.fn(),
@@ -146,6 +147,7 @@ const platformDb = {
   platformAuditLog: { create: mocks.auditCreate },
   auditLog: { create: mocks.tenantAuditCreate },
   branchRegulatoryProfile: { findFirst: mocks.regulatoryProfileFindFirst },
+  jurisdictionRuleSet: { findFirst: mocks.jurisdictionRuleSetFindFirst },
   restaurantBranch: {
     create: mocks.branchCreate,
     findMany: mocks.branchFindMany,

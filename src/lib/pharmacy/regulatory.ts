@@ -4,6 +4,7 @@ import { recordAudit } from '@/server/audit';
 export type BranchOperationDenialReason =
   | 'PROFILE_MISSING'
   | 'RULE_SET_UNCONFIRMED'
+  | 'RULE_SET_PENDING_LEGAL_REVIEW'
   | 'LICENCE_INVALID'
   | 'QUALIFIED_PERSON_COVERAGE_MISSING'
   | 'SCHEDULE_NOT_PERMITTED';
@@ -34,6 +35,7 @@ export type BranchRegulatoryState = {
   qualifiedPersonValidTo: Date;
   qualifiedPersonCoverageRosterRef: string;
   ruleSet: {
+    code?: string;
     licenceCategories: unknown;
     permittedSchedules: unknown;
     pharmacistCoverageRule: unknown;
@@ -41,7 +43,17 @@ export type BranchRegulatoryState = {
   auditDenied: (reason: BranchOperationDenialReason, action: BranchOperationAction) => void;
 };
 
-type RuleField = { provisional?: boolean; values?: unknown };
+type RuleField = { provisional?: boolean; pendingLegalReview?: boolean; values?: unknown };
+
+/**
+ * Existing #129 legal-review contract: development/tests and explicit staging or
+ * pilot builds may exercise these rules. Production fails closed, including an
+ * absent or unrecognised APP_ENV; publishing choices is not legal confirmation.
+ */
+export function pendingLegalReviewAllowed(env: Record<string, string | undefined> = process.env) {
+  if (env.NODE_ENV !== 'production') return true;
+  return env.APP_ENV === 'staging' || env.APP_ENV === 'pilot';
+}
 
 function ruleField(value: unknown): RuleField {
   return value && typeof value === 'object' ? (value as RuleField) : {};
@@ -77,6 +89,20 @@ export function assertBranchMayOperate(
   ];
   if (relevantRules.some((field) => ruleField(field).provisional !== false)) {
     deny('RULE_SET_UNCONFIRMED');
+  }
+  if (
+    relevantRules.some((field) => {
+      const rule = ruleField(field);
+      // Old Sindh v1 had no review flag. Only explicit false can confirm it;
+      // missing/malformed flags must not make a legacy profile production-ready.
+      return (
+        rule.pendingLegalReview === true ||
+        (branch.ruleSet.code === 'PK-SD' && rule.pendingLegalReview !== false)
+      );
+    }) &&
+    !pendingLegalReviewAllowed()
+  ) {
+    deny('RULE_SET_PENDING_LEGAL_REVIEW');
   }
 
   if (
@@ -146,10 +172,21 @@ export async function assertStoredBranchMayOperate(
     throw new BranchOperationDeniedError('PROFILE_MISSING');
   }
 
+  // Appended rules supersede old versions even when a profile still references
+  // the original rule set. Equal effective dates are resolved by version.
+  const latestRules = await db.jurisdictionRuleSet.findFirst({
+    where: {
+      code: profile.jurisdictionRuleSet.code,
+      effectiveFrom: { lte: at },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+    },
+    orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
+  });
+
   assertBranchMayOperate(
     {
       ...profile,
-      ruleSet: profile.jurisdictionRuleSet,
+      ruleSet: latestRules ?? profile.jurisdictionRuleSet,
       auditDenied,
     },
     { ...action, at }

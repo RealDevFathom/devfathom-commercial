@@ -150,7 +150,7 @@ async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
       effectiveFrom: { lte: at },
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
     },
-    orderBy: [{ code: 'asc' }, { effectiveFrom: 'desc' }],
+    orderBy: [{ code: 'asc' }, { effectiveFrom: 'desc' }, { version: 'desc' }],
   });
   // One rule set per province — the first, because the ordering puts the most
   // recently effective version of each code first.
@@ -325,6 +325,7 @@ export const pharmacyOnboardingRouter = router({
               isPlaceholder: true,
               jurisdictionRuleSet: {
                 select: {
+                  code: true,
                   licenceCategories: true,
                   permittedSchedules: true,
                   pharmacistCoverageRule: true,
