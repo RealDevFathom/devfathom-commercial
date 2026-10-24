@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const spies = vi.hoisted(() => ({ update: vi.fn(), tenants: [] as string[] }));
+const spies = vi.hoisted(() => ({ update: vi.fn(), authority: vi.fn(), tenants: [] as string[] }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: async (organizationId: string, fn: (db: unknown) => unknown) => {
     spies.tenants.push(organizationId);
-    return fn({ pharmacyMessageLog: { update: spies.update } });
+    return fn({ pharmacyMessageLog: { update: spies.update, updateMany: spies.authority } });
   },
 }));
 
@@ -12,6 +12,7 @@ import { sendClaimedMessage, updateMessageLog } from './message-log';
 
 beforeEach(() => {
   spies.tenants.length = 0;
+  spies.authority.mockReset().mockResolvedValue({ count: 1 });
   spies.update.mockReset().mockResolvedValue({ id: 'synthetic-log' });
 });
 
@@ -72,7 +73,7 @@ describe('existing outbox outcome writer, without unrelated row hydration', () =
     expect(send).toHaveBeenCalledTimes(1);
     expect(spies.update).toHaveBeenCalledExactlyOnceWith({
       where: { id: 'synthetic-log' },
-      data: { status: 'SENT', providerMessageId: 'synthetic-accepted' },
+      data: { status: 'SENT', providerMessageId: 'synthetic-accepted', error: null },
       select: { id: true },
     });
   });

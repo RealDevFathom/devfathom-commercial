@@ -1,3 +1,4 @@
+import { applySendAuthorityUpdate } from '../../../../tests/support/whatsapp-message-log-store';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type LogRow = { id: string; organizationId: string; dedupeKey: string; [key: string]: unknown };
@@ -43,6 +44,8 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         store.consents.find((consent) => consent.patientId === where.patientId) ?? null,
     },
     pharmacyMessageLog: {
+      updateMany: async (args: Parameters<typeof applySendAuthorityUpdate>[1]) =>
+        applySendAuthorityUpdate(store.logs, args),
       count: async () => store.logs.length,
       createManyAndReturn: async ({ data }: { data: Array<Omit<LogRow, 'id'>> }) => {
         const row = data[0]!;

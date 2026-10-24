@@ -434,3 +434,88 @@ describeDb('native G9 capture → review → existing mock outbox path', () => {
     );
   });
 });
+
+describeDb('G9 scheduler reuses the accepted shared original/retry authority', () => {
+  it('commits UNKNOWN before mock entry, blocks overlapping retry and preserves terminal mock evidence', async () => {
+    const f = await fixture();
+    const capture = await enroll(f);
+    await decide(f, capture.id, 'APPROVED');
+    const c = config(f);
+    const provider = new providers.MockWhatsAppProvider(c);
+    const messageLog = await import('@/lib/pharmacy/whatsapp/message-log');
+    const { deferred } = await import('./support/whatsapp-message-log-store');
+    const entered = deferred();
+    const release = deferred();
+    const prepare = provider.sendTemplate.bind(provider);
+    let providerEntries = 0;
+    provider.sendTemplate = async (input) => {
+      providerEntries += 1;
+      entered.resolve();
+      await release.promise;
+      return prepare(input);
+    };
+    const read = () =>
+      tenancy.withTenantDb(f.scope.organizationId, (db) =>
+        db.pharmacyMessageLog.findFirstOrThrow({
+          where: { organizationId: f.scope.organizationId, refillCaptureId: capture.id },
+          select: {
+            id: true,
+            organizationId: true,
+            dedupeKey: true,
+            direction: true,
+            status: true,
+            error: true,
+            providerMessageId: true,
+          },
+        })
+      );
+    const original = scheduler.processDueWhatsAppRefillReminders({ now: NOW, config: c, provider });
+    let pending!: Awaited<ReturnType<typeof read>>;
+    let retryEntry!: import('@/lib/pharmacy/whatsapp/message-log').MessageLogEntry;
+    try {
+      await entered.promise;
+      pending = await read();
+      expect(pending).toMatchObject({
+        organizationId: f.scope.organizationId,
+        direction: 'OUTBOUND',
+        status: 'PENDING',
+        error: 'UNKNOWN_PROVIDER_OUTCOME',
+        providerMessageId: null,
+      });
+      retryEntry = {
+        organizationId: f.scope.organizationId,
+        kind: 'REFILL_REMINDER',
+        dedupeKey: pending.dedupeKey,
+        branchId: f.scope.branchId,
+        refillCaptureId: capture.id,
+      };
+      const losingRetry = await messageLog.sendClaimedMessage(retryEntry, pending.id, () =>
+        provider.sendTemplate({ to: '923001234567', template: 'refillReminder', parameters: [] })
+      );
+      expect(losingRetry).toBe('DUPLICATE');
+      expect(providerEntries).toBe(1);
+      expect(provider.calls).toHaveLength(0);
+      expect(await read()).toEqual(pending);
+    } finally {
+      release.resolve();
+      await original;
+    }
+    expect(await original).toMatchObject({ prepared: 1, sent: 0, unknown: 0, failed: 0 });
+    const prepared = await read();
+    expect(prepared).toMatchObject({ status: 'IGNORED', error: 'MOCK_PREPARED' });
+    expect(prepared.providerMessageId).toBeTruthy();
+    const sendAgain = () =>
+      provider.sendTemplate({ to: '923001234567', template: 'refillReminder', parameters: [] });
+    expect(await messageLog.sendClaimedMessage(retryEntry!, pending!.id, sendAgain)).toBe(
+      'DUPLICATE'
+    );
+    expect(await messageLog.sendAndLog(retryEntry!, sendAgain)).toBe('DUPLICATE');
+    expect(
+      (await scheduler.processDueWhatsAppRefillReminders({ now: NOW, config: c, provider }))
+        .prepared
+    ).toBe(0);
+    expect(providerEntries).toBe(1);
+    expect(provider.calls).toHaveLength(1);
+    expect(await read()).toEqual(prepared);
+  });
+});

@@ -1,3 +1,4 @@
+import { applySendAuthorityUpdate } from '../../../tests/support/whatsapp-message-log-store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
@@ -92,6 +93,8 @@ function fixture() {
     pharmacyPharmacistReviewDecision: { findFirst: vi.fn(async () => null) },
     pharmacySaleLine: { findFirst: vi.fn(async () => null) },
     pharmacyMessageLog: {
+      updateMany: async (args: Parameters<typeof applySendAuthorityUpdate>[1]) =>
+        applySendAuthorityUpdate(state.logs, args),
       count: vi.fn(async () => state.logs.length),
       createManyAndReturn: vi.fn(async ({ data }: { data: Array<Omit<Log, 'id'>> }) => {
         if (state.logs.some((log) => log.dedupeKey === data[0].dedupeKey)) return [];
