@@ -1,3 +1,45 @@
+# 25 October 2026 — TEST-374-01 and independent-QA fixture corrections
+
+Follow-up to consumed head `2b37529e1a9804a27dab4b84e89fa53437983b89`.
+Its independent QA2 receipt is **144 passed / 2 failed / 11 skipped**, plus
+one failed database `beforeAll`; all 11 new authorization DB test bodies
+never ran. Those results do not transfer to this correction commit.
+
+## Narrow corrections; no production-guard changes
+
+- Both foreign/inactive organization-reference rejection assertions now expect
+  canonical `BAD_REQUEST` with `That record is not in this workspace.` Router
+  no-read/no-write checks and the complete setup-owner DB snapshot stay intact.
+- The synthetic organization fixture supplies schema-required `legalName` and
+  `displayName`; remove the nonexistent `name` field. All other directly created
+  fixture models were checked against required scalar fields in the exact schema.
+- The existing empty-reason snooze/dismiss test explicitly grants canonical
+  inventory permission so it reaches the intended input validation. A separate
+  regression retains the no-grant `FORBIDDEN` precedence for the same malformed
+  inputs and verifies no signal update.
+- Runtime guards, role policy, witness checks, actual-payload-branch assignment,
+  RLS requirements, fixtures-retained policy and CI workflows are unchanged from
+  the reviewed parent. Net-main scope adds only the existing router test file to
+  the prior six-file scope: **seven files**, with no additional runtime changes.
+
+## Validation and disposition
+
+No local application/unit/database execution, Prisma generation, dependency
+installation or consumed-head replay is authorized or claimed by this follow-up.
+Only source/fixture-shape inspection, formatting, parser and whitespace checks
+may be recorded separately. These are not typecheck, runtime or DB PASS.
+The 19 write-off router cases, 11 authorization DB cases and new malformed-input
+capability regression remain **authored, not verified new-head passes**.
+
+Security Lead found SEC-374-01 remediated in the parent source, but held acceptance
+for TEST-374-01. Independent QA2 owns any genuinely new exact-head execution on
+one fresh isolated database; no inherited result and no unchanged-head replay.
+Exact new-head CI, independent QA/Security and CTO final check remain required.
+**OPEN / DRAFT / HOLD. No merge or deployment authorization.**
+
+---
+## Previous remediation notes and historical evidence
+
 # 25 October 2026 — SEC-374-01 remediation; HOLD pending changed-head acceptance
 
 Canonical pharmacy issue #362, existing draft PR #374. Sole implementation writer: Engineer 2.

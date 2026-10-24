@@ -158,9 +158,12 @@ describe('SEC-374-01 write-off capability and actual-branch authority', () => {
   it('refuses another tenant or inactive branch before assignment and stock access', async () => {
     grant([allow('pharmacy:inventory')]);
     db.pharmacyBranch.findMany.mockResolvedValue([]);
+    // Preserve assertInOrganization's canonical fail-closed contract, not a
+    // resolver-local authorization error; no assignment/stock access may follow.
     await expect(caller().writeOff({ ...input, branchId: 'foreign_branch' })).rejects.toMatchObject(
       {
-        code: 'FORBIDDEN',
+        code: 'BAD_REQUEST',
+        message: 'That record is not in this workspace.',
       }
     );
     expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();

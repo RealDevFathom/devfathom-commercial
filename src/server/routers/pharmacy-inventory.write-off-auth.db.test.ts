@@ -212,7 +212,8 @@ beforeAll(async () => {
       await db.organization.create({
         data: {
           id: organizationId,
-          name: organizationId,
+          legalName: organizationId,
+          displayName: organizationId,
           slug: organizationId,
           vertical: 'PHARMACY',
         },
@@ -334,7 +335,12 @@ describeDatabase('SEC-374-01 Postgres no-effect authorization regressions', () =
   it('refuses another tenant branch without changing its state', async () => {
     const input = await fixture(foreignBranch, otherOrg);
     const before = await snapshot(otherOrg, input.inventoryLotId);
-    await expect(call(actors.allowed, input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    // The unchanged organization-reference guard rejects before assignment and
+    // stock access. Keep the full setup-owner snapshot to prove no hidden write.
+    await expect(call(actors.allowed, input)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That record is not in this workspace.',
+    });
     expect(await snapshot(otherOrg, input.inventoryLotId)).toEqual(before);
   });
 
