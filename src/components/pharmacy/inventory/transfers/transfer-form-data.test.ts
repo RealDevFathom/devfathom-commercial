@@ -38,7 +38,7 @@ describe('#357 UI receipt identity', () => {
           transfer,
           branchId: 'branch_dest',
           witnesses: [],
-          action: async () => {},
+          action: async () => '/pharmacy/inventory/transfers',
         })
       );
     const first = form().match(/name="receiptKey"[^>]*value="([^"]+)"/);

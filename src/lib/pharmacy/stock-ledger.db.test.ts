@@ -522,13 +522,17 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
           where: { inventoryLotId: setup.lotId, disposition: 'IN_TRANSIT' },
         }),
         received: await db.pharmacyStockMovement.aggregate({
-          where: { transferId: setup.transferId, branchId: destinationBranch, kind: 'TRANSFER_IN' },
+          where: {
+            reason: deps.operations.transferReceiptReference(setup.transferId, setup.lineId),
+            branchId: destinationBranch,
+            kind: 'TRANSFER_IN',
+          },
           _sum: { quantityUnits: true },
         }),
       }));
       expect(partial.transit?.onHandUnits).toBe(sent - first);
       expect(partial.transit!.sealedPacks * 10 + partial.transit!.looseUnits).toBe(sent - first);
-      expect(partial.received._sum.quantityUnits).toBe(first);
+      expect(partial.received._sum?.quantityUnits).toBe(first);
       // Concurrent duplicate transport retries must not append movements or lots.
       await Promise.all([receive(first, firstKey), receive(first, firstKey)]);
       await expect(receive(first + 1, firstKey)).rejects.toMatchObject({ reason: 'INVALID_STATE' });
@@ -549,7 +553,9 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
           where: { id: setup.lineId },
         }),
         movements: await db.pharmacyStockMovement.findMany({
-          where: { transferId: setup.transferId },
+          where: {
+            reason: deps.operations.transferReceiptReference(setup.transferId, setup.lineId),
+          },
         }),
         transit: await db.pharmacyStockBalance.findFirst({
           where: { inventoryLotId: setup.lotId, disposition: 'IN_TRANSIT' },

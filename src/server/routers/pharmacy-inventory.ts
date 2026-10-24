@@ -35,6 +35,7 @@ import {
   quarantinePart,
   recallTrace,
   receiveTransferLine,
+  transferReceiptReference,
   reserveSupplierClaim,
   writeOff,
 } from '@/lib/pharmacy/inventory-operations';
@@ -451,7 +452,7 @@ async function receiveTransferWithVariance(
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
-      transferId: transfer.id,
+      reason: { in: transfer.lines.map((line) => transferReceiptReference(transfer.id, line.id)) },
       kind: 'TRANSFER_IN',
       idempotencyKey: { startsWith: `${input.idempotencyKeyPrefix}:` },
     },
@@ -465,7 +466,7 @@ async function receiveTransferWithVariance(
         (line) =>
           !prior.some(
             (movement) =>
-              movement.note === line.lineId &&
+              movement.reason === transferReceiptReference(transfer.id, line.lineId) &&
               movement.idempotencyKey === `${input.idempotencyKeyPrefix}:${line.lineId}:in` &&
               movement.quantityUnits === line.receivedUnits
           )

@@ -402,6 +402,11 @@ export async function dispatchTransfer(
   });
 }
 
+/** Schema-backed receipt provenance; stock movements have no transfer/note columns. */
+export function transferReceiptReference(transferId: string, lineId: string): string {
+  return `Transfer receipt ${JSON.stringify([transferId, lineId])}`;
+}
+
 /** Keep the physical arrangement valid when debiting a fraction of a transit pack. */
 export async function prepareTransferTransitRemoval(
   db: ScopedDb,
@@ -448,8 +453,7 @@ export async function prepareTransferTransitRemoval(
         sealedPackDelta: -1,
         looseUnitDelta: input.unitsPerPack,
         actorId: scope.actorId,
-        transferId: input.transferId,
-        note: input.lineId,
+        reason: transferReceiptReference(input.transferId, input.lineId),
         idempotencyKey: `${input.idempotencyKeyPrefix}:transit-break`,
       },
     });
@@ -492,8 +496,7 @@ export async function receiveTransferLine(
   });
   if (existing) {
     if (
-      existing.transferId !== transfer.id ||
-      existing.note !== line.id ||
+      existing.reason !== transferReceiptReference(transfer.id, line.id) ||
       existing.quantityUnits !== input.receivedUnits ||
       existing.stockLocationId !== line.destinationStockLocationId
     )
@@ -537,8 +540,7 @@ export async function receiveTransferLine(
       sealedPackDelta: -removed.sealedPacks,
       looseUnitDelta: -removed.looseUnits,
       actorId: scope.actorId,
-      transferId: transfer.id,
-      note: line.id,
+      reason: transferReceiptReference(transfer.id, line.id),
       idempotencyKey: `${input.idempotencyKeyPrefix}:transit-out`,
     },
   });
@@ -571,9 +573,7 @@ export async function receiveTransferLine(
       sealedPackDelta: a.sealedPacks,
       looseUnitDelta: a.looseUnits,
       actorId: scope.actorId,
-      transferId: transfer.id,
-      note: line.id,
-      fromInventoryLotId: source.id,
+      reason: transferReceiptReference(transfer.id, line.id),
       idempotencyKey: `${input.idempotencyKeyPrefix}:in`,
     },
   });

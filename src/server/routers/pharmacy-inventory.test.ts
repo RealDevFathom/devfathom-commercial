@@ -29,6 +29,7 @@ vi.mock('@/server/audit', () => ({
 }));
 
 import { moduleForProcedure } from '@/lib/module-catalog';
+import type { PharmacyStockMovement } from '@/generated/prisma/client';
 
 import { pharmacyInventoryRouter } from './pharmacy-inventory';
 import type { TRPCContext } from '../trpc';
@@ -637,20 +638,19 @@ describe('#357 partial transfer receipts', () => {
       looseUnits: units % 10,
     };
     const destination = { onHandUnits: 0, sealedPacks: 0, looseUnits: 0 };
-    type Movement = {
-      id?: string;
-      organizationId: string;
-      branchId: string;
-      kind: string;
-      disposition: string;
-      quantityUnits: number;
-      sealedPackDelta: number;
-      looseUnitDelta: number;
-      idempotencyKey: string;
-      transferId?: string;
-      stockLocationId: string;
-      note?: string;
-    };
+    type Movement = Pick<
+      PharmacyStockMovement,
+      | 'organizationId'
+      | 'branchId'
+      | 'kind'
+      | 'disposition'
+      | 'quantityUnits'
+      | 'sealedPackDelta'
+      | 'looseUnitDelta'
+      | 'idempotencyKey'
+      | 'stockLocationId'
+      | 'reason'
+    > & { id?: string };
     const movements: Movement[] = [];
     db.pharmacyStockBalance.findFirst.mockImplementation(async () => structuredClone(transit));
     db.$queryRaw.mockImplementation(async (query: { strings: readonly string[] }) =>
@@ -699,7 +699,7 @@ describe('#357 partial transfer receipts', () => {
         (m) =>
           m.organizationId === where.organizationId &&
           m.branchId === where.branchId &&
-          m.transferId === where.transferId &&
+          where.reason.in.includes(m.reason) &&
           m.kind === where.kind &&
           m.idempotencyKey.startsWith(where.idempotencyKey.startsWith)
       )
