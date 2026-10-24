@@ -153,17 +153,38 @@ describeDatabase('SEC-624 exclusive send authority on PostgreSQL', () => {
     ];
     await entered.promise;
     try {
+      // The winner is still blocked inside the provider. The loser must finish
+      // DUPLICATE before release, not merely after the winner records SENT.
+      expect(await Promise.race(attempts)).toBe('DUPLICATE');
       expect(send).toHaveBeenCalledTimes(1);
       expect(await row(value)).toMatchObject({
+        id,
+        organizationId,
+        direction: 'OUTBOUND',
+        dedupeKey: value.dedupeKey,
         status: 'PENDING',
         error: 'UNKNOWN_PROVIDER_OUTCOME',
+        providerMessageId: null,
       });
     } finally {
       release.resolve();
     }
     expect((await Promise.all(attempts)).sort()).toEqual(['DUPLICATE', 'SENT']);
+    const delivered = {
+      id,
+      organizationId,
+      direction: 'OUTBOUND',
+      dedupeKey: value.dedupeKey,
+      status: 'SENT',
+      error: null,
+      providerMessageId: accepted.providerMessageId,
+    };
+    expect(await row(value)).toMatchObject(delivered);
+    // Replay the same committed reservation and the original entry point.
+    expect(await log.sendClaimedMessage(value, id, send)).toBe('DUPLICATE');
+    expect(await log.sendAndLog(value, send)).toBe('DUPLICATE');
     expect(send).toHaveBeenCalledTimes(1);
-    expect(await row(value)).toMatchObject({ status: 'SENT', error: null });
+    expect(await row(value)).toMatchObject(delivered);
   });
 
   it('uses the same DB gate for an original sender and retry racing before the provider call', async () => {
@@ -203,9 +224,21 @@ describeDatabase('SEC-624 exclusive send authority on PostgreSQL', () => {
       release.resolve();
     }
     expect(await original).toBe('SENT');
+    const delivered = {
+      id: pending!.id,
+      organizationId,
+      direction: 'OUTBOUND',
+      dedupeKey: value.dedupeKey,
+      status: 'SENT',
+      error: null,
+      providerMessageId: accepted.providerMessageId,
+    };
+    // Read in a fresh transaction after the original send has completed.
+    expect(await row(value)).toMatchObject(delivered);
     expect(await log.sendClaimedMessage(value, pending!.id, send)).toBe('DUPLICATE');
     expect(await log.sendAndLog(value, send)).toBe('DUPLICATE');
     expect(send).toHaveBeenCalledTimes(1);
+    expect(await row(value)).toMatchObject(delivered);
   });
 
   it('isolates identical keys across tenants and rejects a foreign log ID', async () => {
