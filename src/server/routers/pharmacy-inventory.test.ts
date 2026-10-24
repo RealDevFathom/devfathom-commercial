@@ -865,6 +865,34 @@ describe('#357 partial transfer receipts', () => {
     expect(s.movements).toHaveLength(0);
   });
 
+  it.each([
+    { name: 'no capability', role: [] as Rule[], overrides: [] as Rule[] },
+    { name: 'safety capability alone', role: [allow('pharmacy:safety')], overrides: [] as Rule[] },
+    {
+      name: 'explicit inventory denial',
+      role: [allow('pharmacy:inventory')],
+      overrides: [deny('pharmacy:inventory')],
+    },
+  ])(
+    'refuses a partial receipt with $name before locking or posting',
+    async ({ role, overrides }) => {
+      const s = scenario();
+      grant(role, overrides);
+      await expect(s.receive(4)).rejects.toMatchObject(CAPABILITY_REFUSAL);
+      expect(db.$queryRaw).not.toHaveBeenCalled();
+      expect(s.movements).toHaveLength(0);
+      expect(s.transit.onHandUnits).toBe(10);
+    }
+  );
+
+  it('refuses a transfer from another tenant without creating a destination lot', async () => {
+    const s = scenario();
+    s.transfer.organizationId = 'org_b';
+    await expect(s.receive(4)).rejects.toMatchObject({ message: 'CROSS_BRANCH_REFERENCE' });
+    expect(db.pharmacyInventoryLot.create).not.toHaveBeenCalled();
+    expect(s.movements).toHaveLength(0);
+  });
+
   it('refuses a foreign destination branch before touching its stock', async () => {
     const s = scenario();
     s.transfer.toBranchId = 'foreign_branch';
