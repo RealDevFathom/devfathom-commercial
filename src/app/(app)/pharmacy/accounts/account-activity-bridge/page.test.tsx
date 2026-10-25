@@ -71,12 +71,23 @@ describe('account activity bridge page', () => {
     expect(screen.queryByText('Download evidence CSV')).not.toBeInTheDocument();
   });
 
-  it('renders non-authorization errors without financial evidence', async () => {
-    await show(vi.fn().mockRejectedValue(new TRPCError({ code: 'BAD_REQUEST' })), {
+  it('renders non-authorization reader errors without financial evidence', async () => {
+    const read = vi.fn().mockRejectedValue(new TRPCError({ code: 'BAD_REQUEST' }));
+    await show(read, {
       branchId: 'branch',
-      from: '2026-01-01',
-      to: '2026-10-01',
+      accountCode: 'CASH',
+      currency: 'PKR',
+      from: '2026-10-01',
+      to: '2026-10-02',
     });
+    // A valid selection and exact reader call prevent a pre-validation false PASS.
+    expect(read).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch',
+      from: '2026-10-01T00:00:00Z',
+      to: '2026-10-02T00:00:00Z',
+      page: 1,
+    });
+    expect(screen.getByText('Report unavailable')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('No financial data was displayed');
     expect(screen.queryByText('Download evidence CSV')).not.toBeInTheDocument();
   });
