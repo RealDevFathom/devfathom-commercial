@@ -32,7 +32,12 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 }));
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
+  createSale: vi.fn(async () => ({ id: 'sale-new' })),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
+}));
+vi.mock('@/lib/pharmacy/regulatory', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/regulatory')>()),
+  assertStoredPharmacyMayOperate: vi.fn(async () => undefined),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
@@ -64,8 +69,12 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { readReturnHistory } from '@/lib/pharmacy/sales';
+import { createSale, readReturnHistory } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import {
+  assertStoredPharmacyMayOperate,
+  BranchOperationDeniedError,
+} from '@/lib/pharmacy/regulatory';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
@@ -167,6 +176,7 @@ const reads = () => [readCounterReceipt, readPharmacyReceiptFormat, readDispensi
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(hasModule).mockReturnValue(true);
+  vi.mocked(assertStoredPharmacyMayOperate).mockResolvedValue(undefined);
   vi.mocked(readCounterReceipt).mockResolvedValue({
     receiptNumber: 7,
     completedAt: '2026-10-01T00:00:00.000Z',
@@ -215,6 +225,35 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it.each<[string, (caller: Caller) => Promise<unknown>]>([
+    ['create', (caller: Caller) => caller.create({ branchId: 'branch-a', quotation: false })],
+    [
+      'settle',
+      (caller: Caller) =>
+        caller.tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type: 'CASH',
+          amountMinor: 100,
+          idempotencyKey: 'regulated-operation',
+        }),
+    ],
+  ])('refuses to %s a sale when the regulatory gate denies the branch', async (_name, run) => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }], 'ADMIN');
+    vi.mocked(assertStoredPharmacyMayOperate).mockRejectedValue(
+      new BranchOperationDeniedError('PROFILE_MISSING')
+    );
+
+    await expect(run(f.caller())).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'PROFILE_MISSING',
+    });
+    expect(createSale).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
   it('rejects status-only completion before opening a transaction', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);

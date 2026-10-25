@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/server/audit', () => ({ recordAudit: vi.fn() }));
+
 import {
   assertBranchMayOperate,
+  assertStoredPharmacyMayOperate,
   BranchOperationDeniedError,
   type BranchRegulatoryState,
 } from './regulatory';
@@ -123,5 +127,34 @@ describe('assertBranchMayOperate', () => {
     const state = validState();
     state.ruleSet.licenceCategories = { provisional: true, values: ['PHARMACY'] };
     expectDenied(state, 'RULE_SET_UNCONFIRMED');
+  });
+});
+
+describe('assertStoredPharmacyMayOperate', () => {
+  it('refuses an onboarding organization before inspecting its branch profile', async () => {
+    const db = {
+      organization: { findUnique: vi.fn(async () => ({ status: 'ONBOARDING' })) },
+      branchRegulatoryProfile: { findFirst: vi.fn() },
+    };
+
+    await expect(
+      assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', {
+        name: 'pharmacy.sale.create',
+      })
+    ).rejects.toEqual(new BranchOperationDeniedError('ORGANIZATION_NOT_ACTIVE'));
+    expect(db.branchRegulatoryProfile.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('refuses an active organization when the branch has no effective profile', async () => {
+    const db = {
+      organization: { findUnique: vi.fn(async () => ({ status: 'ACTIVE' })) },
+      branchRegulatoryProfile: { findFirst: vi.fn(async () => null) },
+    };
+
+    await expect(
+      assertStoredPharmacyMayOperate(db as never, 'org-a', 'branch-a', {
+        name: 'pharmacy.sale.tender',
+      })
+    ).rejects.toEqual(new BranchOperationDeniedError('PROFILE_MISSING'));
   });
 });

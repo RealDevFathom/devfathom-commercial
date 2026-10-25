@@ -61,6 +61,10 @@ import {
 } from '@/lib/pharmacy/customer-loyalty';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { PharmacySaleBatchError } from '@/lib/pharmacy/sale-batch-safety';
+import {
+  assertStoredPharmacyMayOperate,
+  BranchOperationDeniedError,
+} from '@/lib/pharmacy/regulatory';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -190,6 +194,8 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof BranchOperationDeniedError)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.reason });
   if (error instanceof PharmacyRxSaleDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyRxReferenceError)
@@ -763,9 +769,13 @@ export const pharmacySalesRouter = router({
             message: 'Khata fields require Khata tender.',
           });
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        return await ctx.db.$transaction((tx) =>
-          applyPharmacyTender(txDb(tx), scope, ledgerTender(input))
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
+            name: 'pharmacy.sale.tender',
+          });
+          return applyPharmacyTender(db, scope, ledgerTender(input));
+        });
       }
       const scope = await khataScope(ctx, input.branchId);
       if (!input.familyAccountId) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
@@ -779,6 +789,9 @@ export const pharmacySalesRouter = router({
         }));
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
+        await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
+          name: 'pharmacy.sale.tender',
+        });
         await bindKhataBranch(db, scope);
         await db.$queryRaw(
           Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
@@ -892,11 +905,20 @@ export const pharmacySalesRouter = router({
     }),
   create: protectedProcedure
     .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) =>
-        createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
-      )
-    ),
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = await scopeFor(ctx, input.branchId);
+          await assertStoredPharmacyMayOperate(db, scope.organizationId, scope.branchId, {
+            name: 'pharmacy.sale.create',
+          });
+          return createSale(db, scope, input.quotation);
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
   addLine: protectedProcedure
     .input(
       z

@@ -2,6 +2,7 @@ import type { PrismaClient } from '@/generated/prisma/client';
 import { recordAudit } from '@/server/audit';
 
 export type BranchOperationDenialReason =
+  | 'ORGANIZATION_NOT_ACTIVE'
   | 'PROFILE_MISSING'
   | 'RULE_SET_UNCONFIRMED'
   | 'LICENCE_INVALID'
@@ -154,4 +155,39 @@ export async function assertStoredBranchMayOperate(
     },
     { ...action, at }
   );
+}
+
+/**
+ * Runtime gate for regulated pharmacy operations. Tenant host access is also
+ * available while onboarding, so operations must independently require the
+ * persisted organization lifecycle state as well as the branch profile.
+ */
+export async function assertStoredPharmacyMayOperate(
+  db: PrismaClient,
+  organizationId: string,
+  branchId: string,
+  action: BranchOperationAction
+): Promise<void> {
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { status: true },
+  });
+  if (organization?.status !== 'ACTIVE') {
+    recordAudit({
+      organizationId,
+      actorType: 'SYSTEM',
+      source: 'SYSTEM',
+      category: 'PHARMACY_REGULATORY',
+      operation: 'OTHER',
+      action: 'pharmacy.branch_operation_denied',
+      targetType: 'PharmacyBranch',
+      targetId: branchId,
+      outcome: 'FAILURE',
+      errorCode: 'ORGANIZATION_NOT_ACTIVE',
+      errorMessage: 'Branch operation denied by regulatory guard.',
+      metadata: { operation: action.name, schedule: action.schedule ?? null },
+    });
+    throw new BranchOperationDeniedError('ORGANIZATION_NOT_ACTIVE');
+  }
+  await assertStoredBranchMayOperate(db, organizationId, branchId, action);
 }
