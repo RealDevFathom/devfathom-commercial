@@ -177,7 +177,7 @@ describe('pharmacySales.addLine controlled actor', () => {
       { branchExists: false }
     );
 
-    await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(findActiveBranch).not.toHaveBeenCalled();
     expect(findAssignments).not.toHaveBeenCalled();
     expect(credential).not.toHaveBeenCalled();
