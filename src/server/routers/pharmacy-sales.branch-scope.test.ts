@@ -114,7 +114,7 @@ const procedures: Array<[string, (caller: Caller) => Promise<unknown>, Refusal]>
         reason: 'Returned medicine',
         idempotencyKey: 'refund-1',
       }),
-    NOT_IN_WORKSPACE,
+    OUTSIDE,
   ],
 ];
 const closeProcedures = procedures.filter(([name]) =>
