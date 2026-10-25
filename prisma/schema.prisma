@@ -1044,10 +1044,16 @@ model StoredValueJournal {
   actorId          String
   tender           PharmacyTenderType?
   reason           String?
+  /// Null on legacy events; no guessed currency or original funding source.
+  currency         Currency?
+  originalJournalId String?
+  original         StoredValueJournal? @relation("StoredValueRefundSource", fields: [organizationId, originalJournalId], references: [organizationId, id], onDelete: Restrict, map: "stored_value_journals_original_tenant_fk")
+  refunds          StoredValueJournal[] @relation("StoredValueRefundSource")
   occurredAt       DateTime             @default(now())
 
   @@unique([organizationId, id])
   @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, originalJournalId], map: "stored_value_journals_org_original_idx")
   @@index([organizationId, branchId, occurredAt])
   @@map("stored_value_journals")
 }
@@ -2586,6 +2592,8 @@ enum FinanceAccountCode {
   BANK
   ACCOUNTS_RECEIVABLE
   LOYALTY_REDEMPTION
+  /// Liability. Funded customer wallet deposits, never earned loyalty.
+  CUSTOMER_WALLET_LIABILITY
   ACCOUNTS_PAYABLE
   CASH_OVER_SHORT
   OPENING_BALANCE_EQUITY
@@ -2608,6 +2616,7 @@ enum FinanceSourceKind {
   PHARMACY_OPENING_STOCK
   PHARMACY_OPENING_LEDGER
   PHARMACY_BOOKKEEPING_TRANSACTION
+  PHARMACY_STORED_VALUE_JOURNAL
 }
 
 enum PharmacyBookkeepingKind {
