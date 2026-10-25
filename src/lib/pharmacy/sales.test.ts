@@ -12,6 +12,12 @@ import {
   returnSaleLine,
   validateDiscount,
 } from './sales';
+import { allocateForSale } from './stock-ledger';
+
+vi.mock('./stock-ledger', async () => ({
+  ...(await vi.importActual<typeof import('./stock-ledger')>('./stock-ledger')),
+  allocateForSale: vi.fn(),
+}));
 
 // Finance posting is outside these physical return-disposition assertions.
 vi.mock('./finance-postings', async () => ({
@@ -156,6 +162,67 @@ describe('POS sale voiding', () => {
 });
 
 describe('POS-03 lot-derived pack/strip/unit pricing', () => {
+  it('bills mixed-lot units at their own lot prices', async () => {
+    vi.mocked(allocateForSale).mockResolvedValueOnce({
+      allocations: [
+        { inventoryLotId: 'lot-a', stockLocationId: 'shelf-a', units: 1 },
+        { inventoryLotId: 'lot-b', stockLocationId: 'shelf-b', units: 1 },
+      ],
+      recommendedLotId: 'lot-a',
+      blocked: [],
+      overrideId: null,
+      discrepancyId: null,
+      movementIds: ['movement-a', 'movement-b'],
+    });
+    const createLine = vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({
+      id: 'line-a',
+      ...data,
+    }));
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({ id: 'sale-a', status: 'OPEN' }),
+        updateMany: async () => ({ count: 1 }),
+      },
+      medicine: {
+        findFirst: async () => ({
+          id: 'medicine-a',
+          rx: false,
+          restricted: false,
+          controlled: false,
+        }),
+      },
+      pharmacyInventoryLot: {
+        findMany: async () => [
+          { id: 'lot-a', printedMrpMinor: 100, unitsPerPack: 1, unitCostMinor: 10 },
+          { id: 'lot-b', printedMrpMinor: 101, unitsPerPack: 1, unitCostMinor: 10 },
+        ],
+      },
+      pharmacySaleLine: { create: createLine },
+      pharmacySaleLineAllocation: { create: vi.fn(async () => undefined) },
+      pharmacySaleEvent: { create: vi.fn(async () => undefined) },
+    };
+
+    const { line } = await addSaleLine(db as never, scope, {
+      saleId: 'sale-a',
+      medicineId: 'medicine-a',
+      presentationId: 'presentation-a',
+      packLevelId: 'pack-level-a',
+      saleUnit: 'UNIT',
+      quantity: 2,
+      canonicalUnitsPerSaleUnit: 1,
+      idempotencyKey: 'mixed-lot-line',
+    });
+
+    expect(line.unitPriceMinor * line.quantity - line.discountMinor).toBe(201);
+    expect(createLine).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        unitPriceMinor: 101,
+        proRataCeilingMinor: 101,
+        discountMinor: 1,
+      }),
+    });
+  });
+
   it('derives a strip price from the allocated lot printed MRP', () => {
     expect(
       priceFromLot({

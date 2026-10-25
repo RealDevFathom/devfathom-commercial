@@ -300,8 +300,8 @@ async function addSaleLineWithAllocation(
     },
   });
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
-  let unitPriceMinor = 0,
-    ceiling = 0,
+  let grossNumerator = 0,
+    ceilingNumerator = 0,
     costMinor = 0;
   for (const part of allocation.allocations) {
     const lot = lotById.get(part.inventoryLotId);
@@ -311,15 +311,20 @@ async function addSaleLineWithAllocation(
       canonicalUnitsInPack: lot.unitsPerPack,
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
     });
-    unitPriceMinor = Math.max(unitPriceMinor, price.unitPriceMinor);
-    ceiling = Math.max(ceiling, price.proRataCeilingMinor);
+    grossNumerator += price.unitPriceMinor * part.units;
+    ceilingNumerator += price.proRataCeilingMinor * part.units;
     costMinor += lot.unitCostMinor * part.units;
   }
-  const grossMinor = unitPriceMinor * input.quantity;
-  const discountMinor = input.discountMinor ?? 0;
+  const grossMinor = Math.floor(grossNumerator / input.canonicalUnitsPerSaleUnit);
+  const ceiling = Math.ceil(
+    ceilingNumerator / input.canonicalUnitsPerSaleUnit / input.quantity
+  );
+  const unitPriceMinor = Math.ceil(grossMinor / input.quantity);
+  const priceAdjustmentMinor = unitPriceMinor * input.quantity - grossMinor;
+  const customerDiscountMinor = input.discountMinor ?? 0;
   validateDiscount({
     regulated: medicine.rx || medicine.restricted || medicine.controlled,
-    discountMinor,
+    discountMinor: customerDiscountMinor,
     grossMinor,
     costMinor,
     approvedByUserId: input.approvedByUserId,
@@ -341,7 +346,9 @@ async function addSaleLineWithAllocation(
       proRataCeilingMinor: ceiling,
       unitCostMinor: Math.ceil(costMinor / input.quantity),
       discountKind: input.discountKind,
-      discountMinor,
+      // The schema stores an integer unit price. Preserve an exact weighted lot
+      // total by recording the rounding remainder as part of the line discount.
+      discountMinor: customerDiscountMinor + priceAdjustmentMinor,
       approvalPolicy: input.approvalPolicy,
       approvedByUserId: input.approvedByUserId,
       idempotencyKey: input.idempotencyKey,
