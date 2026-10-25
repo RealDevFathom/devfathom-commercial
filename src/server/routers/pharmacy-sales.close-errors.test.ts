@@ -72,7 +72,15 @@ function fixture() {
     pharmacyDrawerMovement: { create: vi.fn() },
     pharmacySale: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyRefund: { findMany: vi.fn().mockResolvedValue([]) },
-    user: { findMany: vi.fn().mockResolvedValue([{ id: 'actor-1', name: 'Ayesha Karim' }]) },
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:manage', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+      findMany: vi.fn().mockResolvedValue([{ id: 'actor-1', name: 'Ayesha Karim' }]),
+    },
   };
   const caller = app.createCaller({
     db,
@@ -95,6 +103,28 @@ beforeEach(() => {
 });
 
 describe('pharmacy close family refusals', () => {
+  it('allows a non-admin pharmacist with the close capability to preview the day', async () => {
+    const pharmacist = app.createCaller({
+      db: f.db,
+      entitlements: { organizationId: 'org-1', enabledModules: ['pharmacy-counter'], modules: [] },
+      session: {
+        expires: 'later',
+        user: { id: 'pharmacist-1', role: 'EMPLOYEE', status: 'ACTIVE', organizationId: 'org-1' },
+      },
+      organization: { id: 'org-1', vertical: 'PHARMACY' },
+      support: null,
+      requestMeta: { ip: null, userAgent: null },
+      audit: { detail: {} },
+    } as unknown as TRPCContext).pharmacySales;
+
+    await expect(
+      pharmacist.closePreview({ branchId: BRANCH, businessDate })
+    ).resolves.toMatchObject({ sourceHash: previewHash });
+    expect(f.db.user.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'pharmacist-1' } })
+    );
+  });
+
   it('answers a daily close with a drawer still open as a CONFLICT, writing no close', async () => {
     f.db.pharmacyDrawerSession.count.mockResolvedValue(1);
     await expect(f.caller.dailyClose({ branchId: BRANCH, businessDate })).rejects.toMatchObject({

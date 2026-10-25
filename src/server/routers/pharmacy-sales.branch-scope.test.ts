@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // `branchScopeOrForbidden`, which words that refusal as a scope denial. Every one
 // of these nine procedures must refuse such a branch before the settlement
 // library takes a lock, reads a drawer or writes anything. The close procedures
-// keep their administrator gate in front of that check; no capability is added
+// keep their close-access gate in front of that check; no capability is added
 // for the counter.
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
@@ -185,11 +185,11 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
   );
 
   it.each(closeProcedures)(
-    '%s keeps the administrator gate in front of the branch check',
+    '%s keeps the close-access gate in front of the branch check',
     async (_name, run) => {
       await expect(run(caller('EMPLOYEE'))).rejects.toMatchObject({
         code: 'FORBIDDEN',
-        message: 'Administrator access is required to reconcile and close a day.',
+        message: 'You do not have permission to reconcile and close a day.',
       });
       expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
       expect(db.$transaction).not.toHaveBeenCalled();
