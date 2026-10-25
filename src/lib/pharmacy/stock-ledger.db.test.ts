@@ -588,7 +588,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     expect(balances.find((row) => row.disposition === 'AVAILABLE')?.onHandUnits).toBe(10);
   });
 
-  it('globally recalls a batch, traces branch holdings, acknowledges, and reconciles closure', async () => {
+  it('requires every affected branch to acknowledge a recall and blocks claims (#629)', async () => {
     const a = await scenario(ORG_A, BRANCH_A, 'recall-a');
     const otherBranch = 'branch_recall_b';
     const setup = await inOrg(ORG_A, async (db) => {
@@ -657,6 +657,27 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     ).rejects.toMatchObject({ reason: 'BLOCKED_STOCK' });
     await inOrg(ORG_A, async (db) => {
       await deps.operations.acknowledgeRecall(db, scopeOf(a), setup.notice.id);
+    });
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.operations.closeRecall(db, { organizationId: ORG_A, actorId: ACTOR }, setup.notice.id)
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.operations.reserveSupplierClaim(
+          db,
+          { ...scopeOf(a), branchId: otherBranch },
+          { inventoryLotId: setup.secondLotId, reservedUnits: 1, returnBy: LATER }
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'BLOCKED_STOCK' });
+    await inOrg(ORG_A, async (db) => {
+      await deps.operations.acknowledgeRecall(
+        db,
+        { ...scopeOf(a), branchId: otherBranch },
+        setup.notice.id
+      );
       await deps.operations.closeRecall(
         db,
         { organizationId: ORG_A, actorId: ACTOR },

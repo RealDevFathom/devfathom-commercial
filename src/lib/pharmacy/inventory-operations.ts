@@ -541,6 +541,20 @@ export async function recallTrace(db: ScopedDb, organizationId: string, recallNo
 }
 
 export async function acknowledgeRecall(db: ScopedDb, scope: LedgerScope, noticeId: string) {
+  const notice = await db.pharmacyRecallNotice.findFirst({
+    where: { id: noticeId, organizationId: scope.organizationId, status: 'OPEN' },
+  });
+  if (!notice) throw new PharmacyInventoryError('INVALID_STATE');
+  const affectedLot = await db.pharmacyInventoryLot.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      manufacturingBatchId: notice.batchId ?? undefined,
+      batch: { medicineId: notice.medicineId ?? undefined },
+      balances: { some: { onHandUnits: { gt: 0 } } },
+    },
+  });
+  if (!affectedLot) throw new PharmacyInventoryError('INVALID_STATE');
   return db.pharmacyRecallAcknowledgement.create({
     data: {
       organizationId: scope.organizationId,
@@ -557,10 +571,23 @@ export async function closeRecall(
   noticeId: string
 ) {
   const notice = await db.pharmacyRecallNotice.findFirst({
-    where: { id: noticeId, organizationId: scope.organizationId },
+    where: { id: noticeId, organizationId: scope.organizationId, status: 'OPEN' },
     include: { acknowledgements: true },
   });
-  if (!notice || !notice.acknowledgements.length) throw new PharmacyInventoryError('INVALID_STATE');
+  if (!notice) throw new PharmacyInventoryError('INVALID_STATE');
+  const affectedBranches = await db.pharmacyInventoryLot.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      manufacturingBatchId: notice.batchId ?? undefined,
+      batch: { medicineId: notice.medicineId ?? undefined },
+      balances: { some: { onHandUnits: { gt: 0 } } },
+    },
+    select: { branchId: true },
+    distinct: ['branchId'],
+  });
+  const acknowledgedBranches = new Set(notice.acknowledgements.map(({ branchId }) => branchId));
+  if (affectedBranches.some(({ branchId }) => !acknowledgedBranches.has(branchId)))
+    throw new PharmacyInventoryError('INVALID_STATE');
   const where = notice.batchId ? { id: notice.batchId } : { medicineId: notice.medicineId! };
   const remaining = await db.pharmacyRecallNotice.count({
     where: {
@@ -594,15 +621,22 @@ export async function reserveSupplierClaim(
   // balance row of the lot (the same rows sale allocation and purchase returns
   // lock) FOR UPDATE in key (stockLocationId) order, exactly like purchase returns, then measure availability from the locked rows.
   // The caller must keep this lock and the check/create below in one transaction.
-  const locked = await db.$queryRaw<Array<{ onHandUnits: number }>>(Prisma.sql`
-    SELECT "onHandUnits" FROM "pharmacy_stock_balances"
-    WHERE "organizationId" = ${scope.organizationId}
-      AND "branchId" = ${scope.branchId}
-      AND "inventoryLotId" = ${input.inventoryLotId}
-      AND "disposition" = 'AVAILABLE'
-    ORDER BY "stockLocationId" ASC
-    FOR UPDATE
+  const locked = await db.$queryRaw<Array<{ onHandUnits: number; state: string }>>(Prisma.sql`
+    SELECT b."onHandUnits", mb.state::text
+    FROM "pharmacy_stock_balances" b
+    JOIN "pharmacy_inventory_lots" l
+      ON l.id = b."inventoryLotId" AND l."organizationId" = b."organizationId"
+    JOIN "pharmacy_manufacturing_batches" mb
+      ON mb.id = l."manufacturingBatchId" AND mb."organizationId" = l."organizationId"
+    WHERE b."organizationId" = ${scope.organizationId}
+      AND b."branchId" = ${scope.branchId}
+      AND b."inventoryLotId" = ${input.inventoryLotId}
+      AND b."disposition" = 'AVAILABLE'
+    ORDER BY b."stockLocationId" ASC
+    FOR UPDATE OF b
   `);
+  if (locked.some((row) => row.state !== 'ACTIVE'))
+    throw new PharmacyInventoryError('BLOCKED_STOCK');
   const onHand = locked.reduce((total, row) => total + Number(row.onHandUnits), 0);
   const already = await db.pharmacySupplierClaim.aggregate({
     where: {
