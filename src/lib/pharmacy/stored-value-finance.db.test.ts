@@ -5,11 +5,22 @@
  */
 import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { PharmacyStoredValueCommand, StoredValuePostingScope } from './stored-value-finance';
 
 const url = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
-const enabled = Boolean(url && process.env.PHARMACY_STORED_VALUE_BRIDGE_TEST_DB === '1');
+const enabled = process.env.PHARMACY_STORED_VALUE_BRIDGE_TEST_DB === '1';
+// Explicit opt-in must fail rather than silently skip a missing/unsafe URL.
+if (enabled) {
+  if (!url || process.env.PHARMACY_STORED_VALUE_BRIDGE_DISPOSABLE_DB !== '1')
+    throw new Error('BRIDGE_TEST_REQUIRES_DISPOSABLE_DB_ATTESTATION_AND_URL');
+  const parsed = new URL(url);
+  if (
+    !['postgresql:', 'postgres:'].includes(parsed.protocol) ||
+    parsed.hostname ||
+    !parsed.searchParams.get('host')?.startsWith('/')
+  )
+    throw new Error('BRIDGE_TEST_REQUIRES_LOCAL_UNIX_SOCKET');
+}
 if (enabled) process.env.DATABASE_URL = url;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 const describeDb = enabled ? describe : describe.skip;
@@ -20,10 +31,14 @@ type Fixture = {
   scope: StoredValuePostingScope;
   walletId: string;
   cashId: string;
+  salesId: string;
+  customerId: string;
   otherBranchId: string;
 };
 
-async function fixture(): Promise<Fixture> {
+async function fixture(
+  options: { grants?: string[]; currency?: 'PKR' | 'USD' } = {}
+): Promise<Fixture> {
   const org = unique('org');
   const branch = unique('branch');
   const otherBranchId = unique('unassigned');
@@ -31,11 +46,15 @@ async function fixture(): Promise<Fixture> {
   const customer = unique('customer');
   const walletId = unique('wallet');
   const cashId = unique('cash');
+  const salesId = unique('clearing');
+  const roleId = unique('role');
+  const currency = options.currency ?? 'PKR';
   await scoped.withPlatformDb((db) =>
     db.$executeRawUnsafe(
       `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",currency,"createdAt","updatedAt")
-     VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','PKR',now(),now())`,
-      org
+     VALUES ($1,$1,$1,$1,'ACTIVE','SHARED',$2::"Currency",now(),now())`,
+      org,
+      currency
     )
   );
   await scoped.withTenantDb(org, async (db) => {
@@ -43,13 +62,21 @@ async function fixture(): Promise<Fixture> {
     await db.organizationDepartment.create({
       data: { organizationId: org, key: 'LEADERSHIP', name: 'Leadership', active: true },
     });
+    await db.organizationRole.create({
+      data: { id: roleId, organizationId: org, key: roleId, name: 'Synthetic exact bridge grants' },
+    });
+    for (const capability of options.grants ?? ['pharmacy:wallet-topup', 'pharmacy:counter'])
+      await db.organizationRolePermission.create({
+        data: { organizationId: org, organizationRoleId: roleId, capability, effect: 'ALLOW' },
+      });
     await db.user.create({
       data: {
         id: actor,
         organizationId: org,
         name: actor,
         email: `${actor}@invalid.example`,
-        role: 'ADMIN',
+        role: 'ADMIN', // Label intentionally insufficient without canonical grants.
+        organizationRoleId: roleId,
         department: 'LEADERSHIP',
         title: 'Synthetic bridge tester',
         status: 'ACTIVE',
@@ -89,7 +116,7 @@ async function fixture(): Promise<Fixture> {
         organizationId: org,
         customerId: customer,
         kind: 'CUSTOMER_LIABILITY',
-        currency: 'PKR',
+        currency,
         balanceMinor: 0,
       },
     });
@@ -98,18 +125,23 @@ async function fixture(): Promise<Fixture> {
         id: cashId,
         organizationId: org,
         kind: 'CASH_CLEARING',
-        currency: 'PKR',
+        currency,
         balanceMinor: 0,
       },
+    });
+    await db.storedValueAccount.create({
+      data: { id: salesId, organizationId: org, kind: 'SALES_CLEARING', currency, balanceMinor: 0 },
     });
     await db.pharmacyWalletSettings.create({
       data: { organizationId: org, allowUnusedRefund: true },
     });
   });
   return {
-    scope: { organizationId: org, branchId: branch, actorId: actor, currency: 'PKR' },
+    scope: { organizationId: org, branchId: branch, actorId: actor, currency },
     walletId,
     cashId,
+    salesId,
+    customerId: customer,
     otherBranchId,
   };
 }
@@ -142,6 +174,118 @@ function refund(
     originalJournalId,
   };
 }
+async function sale(f: Fixture, totalMinor = 2000, tenderMinor = 0) {
+  return scoped.withTenantDb(
+    f.scope.organizationId,
+    async (db) => {
+      const medicine = await db.medicine.create({
+        data: {
+          organizationId: f.scope.organizationId,
+          productName: unique('synthetic'),
+          productFamily: 'PHARMACEUTICAL',
+          saleable: true,
+          presentations: {
+            create: { organizationId: f.scope.organizationId, presentation: 'Synthetic strip' },
+          },
+        },
+        include: { presentations: true },
+      });
+      const presentationId = medicine.presentations[0]!.id;
+      const pack = await db.packLevel.create({
+        data: {
+          organizationId: f.scope.organizationId,
+          presentationId,
+          versionGroupId: unique('version'),
+          version: 1,
+          level: 'STRIP',
+          unitsPerParent: 1,
+          effectiveFrom: new Date('2026-01-01T00:00:00Z'),
+        },
+      });
+      const row = await db.pharmacySale.create({
+        data: {
+          organizationId: f.scope.organizationId,
+          branchId: f.scope.branchId,
+          createdByUserId: f.scope.actorId,
+          customerId: f.customerId,
+        },
+      });
+      await db.pharmacySaleLine.create({
+        data: {
+          organizationId: f.scope.organizationId,
+          branchId: f.scope.branchId,
+          saleId: row.id,
+          medicineId: medicine.id,
+          presentationId,
+          packLevelId: pack.id,
+          saleUnit: 'PACK',
+          quantity: 1,
+          canonicalUnitsPerSaleUnit: 1,
+          canonicalUnits: 1,
+          unitPriceMinor: totalMinor,
+          proRataCeilingMinor: totalMinor,
+          unitCostMinor: 0,
+          discountMinor: 0,
+          idempotencyKey: unique('line'),
+        },
+      });
+      if (tenderMinor)
+        await db.pharmacyTender.create({
+          data: {
+            organizationId: f.scope.organizationId,
+            branchId: f.scope.branchId,
+            saleId: row.id,
+            type: 'CASH',
+            amountMinor: tenderMinor,
+            businessDate: new Date('2026-10-25T00:00:00Z'),
+            actorId: f.scope.actorId,
+            deviceId: unique('device'),
+          },
+        });
+      return row.id;
+    },
+    { userId: f.scope.actorId }
+  );
+}
+function spend(
+  f: Fixture,
+  saleId: string,
+  amountMinor = 400,
+  extra = {}
+): PharmacyStoredValueCommand {
+  const id = unique('spend');
+  return {
+    kind: 'SPEND',
+    journalId: id,
+    idempotencyKey: id,
+    accountId: f.walletId,
+    counterpartyAccountId: f.salesId,
+    saleId,
+    amountMinor,
+    ...extra,
+  };
+}
+/** Two real, simultaneously open pg transactions; not a serialized JS model. */
+async function compete(f: Fixture, commands: PharmacyStoredValueCommand[]) {
+  let arrived = 0;
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return Promise.allSettled(
+    commands.map((command) =>
+      scoped.withTenantDb(
+        f.scope.organizationId,
+        async (db) => {
+          if (++arrived === commands.length) release();
+          await ready;
+          return bridge.postPharmacyStoredValueInTransaction(db, f.scope, command);
+        },
+        { userId: f.scope.actorId }
+      )
+    )
+  );
+}
 async function snapshot(f: Fixture) {
   return scoped.withTenantDb(
     f.scope.organizationId,
@@ -155,6 +299,10 @@ async function snapshot(f: Fixture) {
         orderBy: { id: 'asc' },
       }),
       entries: await db.storedValueEntry.findMany({
+        where: { organizationId: f.scope.organizationId },
+        orderBy: { id: 'asc' },
+      }),
+      tenders: await db.pharmacyTender.findMany({
         where: { organizationId: f.scope.organizationId },
         orderBy: { id: 'asc' },
       }),
@@ -181,9 +329,10 @@ beforeAll(async () => {
         relrowsecurity: boolean;
         relforcerowsecurity: boolean;
         owns: boolean;
+        ownerMember: boolean;
       }>
     >(
-      `SELECT relname,relrowsecurity,relforcerowsecurity,pg_get_userbyid(relowner)=current_user AS owns
+      `SELECT relname,relrowsecurity,relforcerowsecurity,pg_get_userbyid(relowner)=current_user AS owns, pg_has_role(current_user,relowner,'MEMBER') AS "ownerMember"
      FROM pg_class WHERE oid IN (
        'stored_value_accounts'::regclass,'stored_value_journals'::regclass,'stored_value_entries'::regclass,
        'finance_journal_entries'::regclass,'finance_journal_lines'::regclass)`
@@ -191,7 +340,9 @@ beforeAll(async () => {
   );
   if (
     tables.length !== 5 ||
-    tables.some((row) => row.owns || !row.relrowsecurity || !row.relforcerowsecurity)
+    tables.some(
+      (row) => row.owns || row.ownerMember || !row.relrowsecurity || !row.relforcerowsecurity
+    )
   )
     throw new Error('BRIDGE_TEST_REQUIRES_NONOWNER_FORCE_RLS');
   bridge = await import('./stored-value-finance');
@@ -236,50 +387,60 @@ describeDb('funded wallet bridge — real PostgreSQL, explicit fresh DB only', (
     ).rejects.toThrow('IDEMPOTENCY_CONFLICT');
     expect(await snapshot(f)).toEqual(before);
   });
-  it('second canonical-line failure rolls back the first line, header, subledger and balance', async () => {
-    const f = await fixture();
-    const before = await snapshot(f);
-    await expect(
-      scoped.withTenantDb(
-        f.scope.organizationId,
-        async (db) => {
-          let lines = 0;
-          const failing = new Proxy(db, {
-            get(target, prop) {
-              if (prop !== 'financeJournalLine') return Reflect.get(target, prop);
-              return new Proxy(target.financeJournalLine, {
-                get(delegate, operation) {
-                  if (operation !== 'create') return Reflect.get(delegate, operation);
-                  return (...args: unknown[]) => {
-                    if (++lines === 2) throw new Error('INJECTED_SECOND_CANONICAL_LINE');
-                    return Reflect.apply(delegate.create, delegate, args);
-                  };
-                },
-              });
-            },
-          });
-          return bridge.postPharmacyStoredValueInTransaction(failing, f.scope, topup(f));
-        },
-        { userId: f.scope.actorId }
-      )
-    ).rejects.toThrow('INJECTED_SECOND_CANONICAL_LINE');
-    expect(await snapshot(f)).toEqual(before);
-  });
-  it('caller failure after both journals rolls back the entire owning transaction', async () => {
-    const f = await fixture();
-    const before = await snapshot(f);
-    await expect(
-      scoped.withTenantDb(
-        f.scope.organizationId,
-        async (db) => {
-          await bridge.postPharmacyStoredValueInTransaction(db, f.scope, topup(f));
-          throw new Error('INJECTED_OWNING_EVENT_FAILURE');
-        },
-        { userId: f.scope.actorId }
-      )
-    ).rejects.toThrow('INJECTED_OWNING_EVENT_FAILURE');
-    expect(await snapshot(f)).toEqual(before);
-  });
+  it.each(['TOP_UP', 'SPEND'] as const)(
+    '%s second canonical-line failure rolls back first line, header, subledger and balance',
+    async (kind) => {
+      const f = await fixture();
+      if (kind === 'SPEND') await bridge.postPharmacyStoredValue(f.scope, topup(f));
+      const cmd = kind === 'SPEND' ? spend(f, await sale(f)) : topup(f);
+      const before = await snapshot(f);
+      await expect(
+        scoped.withTenantDb(
+          f.scope.organizationId,
+          async (db) => {
+            let lines = 0;
+            const failing = new Proxy(db, {
+              get(target, prop) {
+                if (prop !== 'financeJournalLine') return Reflect.get(target, prop);
+                return new Proxy(target.financeJournalLine, {
+                  get(delegate, operation) {
+                    if (operation !== 'create') return Reflect.get(delegate, operation);
+                    return (...args: unknown[]) => {
+                      if (++lines === 2) throw new Error('INJECTED_SECOND_CANONICAL_LINE');
+                      return Reflect.apply(delegate.create, delegate, args);
+                    };
+                  },
+                });
+              },
+            });
+            return bridge.postPharmacyStoredValueInTransaction(failing, f.scope, cmd);
+          },
+          { userId: f.scope.actorId }
+        )
+      ).rejects.toThrow('INJECTED_SECOND_CANONICAL_LINE');
+      expect(await snapshot(f)).toEqual(before);
+    }
+  );
+  it.each(['TOP_UP', 'SPEND'] as const)(
+    '%s caller failure after both journals rolls back entire owning transaction',
+    async (kind) => {
+      const f = await fixture();
+      if (kind === 'SPEND') await bridge.postPharmacyStoredValue(f.scope, topup(f));
+      const cmd = kind === 'SPEND' ? spend(f, await sale(f)) : topup(f);
+      const before = await snapshot(f);
+      await expect(
+        scoped.withTenantDb(
+          f.scope.organizationId,
+          async (db) => {
+            await bridge.postPharmacyStoredValueInTransaction(db, f.scope, cmd);
+            throw new Error('INJECTED_OWNING_EVENT_FAILURE');
+          },
+          { userId: f.scope.actorId }
+        )
+      ).rejects.toThrow('INJECTED_OWNING_EVENT_FAILURE');
+      expect(await snapshot(f)).toEqual(before);
+    }
+  );
   it('concurrent retries commit exactly one deposit/source entry', async () => {
     const f = await fixture();
     const cmd = topup(f);
@@ -294,20 +455,21 @@ describeDb('funded wallet bridge — real PostgreSQL, explicit fresh DB only', (
     expect(rows.entries).toHaveLength(2);
     expect(rows.canonical).toHaveLength(1);
   });
-  it('competing refunds cannot overdraw or reuse an original deposit', async () => {
+  it('all competing unused TOP_UP refunds reject even with the stored setting enabled', async () => {
     const f = await fixture();
     const original = topup(f);
     await bridge.postPharmacyStoredValue(f.scope, original);
+    const before = await snapshot(f);
     const results = await Promise.allSettled([
       bridge.postPharmacyStoredValue(f.scope, refund(f, original.journalId, 700)),
       bridge.postPharmacyStoredValue(f.scope, refund(f, original.journalId, 700)),
     ]);
-    expect(results.filter((row) => row.status === 'fulfilled')).toHaveLength(1);
-    expect(results.filter((row) => row.status === 'rejected')).toHaveLength(1);
-    const rows = await snapshot(f);
-    expect(rows.accounts.find((row) => row.id === f.walletId)?.balanceMinor).toBe(300);
-    expect(rows.journals).toHaveLength(2);
-    expect(rows.canonical).toHaveLength(2);
+    expect(
+      results.every(
+        (r) => r.status === 'rejected' && r.reason.message === 'WALLET_REFUND_NOT_APPROVED'
+      )
+    ).toBe(true);
+    expect(await snapshot(f)).toEqual(before);
   });
   it('actual branch assignment is required even for ADMIN; denial has no financial effects', async () => {
     const f = await fixture();
@@ -366,5 +528,289 @@ describeDb('funded wallet bridge — real PostgreSQL, explicit fresh DB only', (
       },
       { userId: a.scope.actorId }
     );
+  });
+  it.each(['CASH', 'BANK_TRANSFER'] as const)(
+    'granted %s TOP_UP uses the original asset and exact PKR',
+    async (tender) => {
+      const f = await fixture();
+      await bridge.postPharmacyStoredValue(f.scope, topup(f, 1000, { tender }));
+      const rows = await snapshot(f);
+      expect(rows.canonical[0].currency).toBe('PKR');
+      expect(
+        rows.canonical[0].lines.map((l) => [l.accountCode, l.side, l.amountMinor]).sort()
+      ).toEqual(
+        [
+          [tender === 'CASH' ? 'CASH' : 'BANK', 'DEBIT', 1000],
+          ['CUSTOMER_WALLET_LIABILITY', 'CREDIT', 1000],
+        ].sort()
+      );
+    }
+  );
+  it('persists PKR SPEND against clearing exactly once, not revenue/AR/tender', async () => {
+    const f = await fixture();
+    await bridge.postPharmacyStoredValue(f.scope, topup(f));
+    const cmd = spend(f, await sale(f), 400);
+    await bridge.postPharmacyStoredValue(f.scope, cmd);
+    const rows = await snapshot(f);
+    expect(rows.accounts.find((a) => a.id === f.walletId)?.balanceMinor).toBe(600);
+    const event = rows.journals.find((j) => j.id === cmd.journalId)!;
+    expect(event).toMatchObject({
+      kind: 'SPEND',
+      saleId: cmd.kind === 'SPEND' ? cmd.saleId : '',
+      currency: 'PKR',
+    });
+    expect(
+      rows.entries
+        .filter((e) => e.journalId === cmd.journalId)
+        .map((e) => [e.accountId, e.amountMinor])
+        .sort()
+    ).toEqual(
+      [
+        [f.walletId, -400],
+        [f.salesId, 400],
+      ].sort()
+    );
+    const canonical = rows.canonical.find((j) => j.sourceId === cmd.journalId)!;
+    expect(canonical.currency).toBe('PKR');
+    expect(canonical.lines.map((l) => [l.accountCode, l.side, l.amountMinor]).sort()).toEqual([
+      ['CUSTOMER_WALLET_LIABILITY', 'DEBIT', 400],
+      ['SALES_CLEARING', 'CREDIT', 400],
+    ]);
+    expect(rows.tenders).toEqual([]);
+    expect(rows.canonical).toHaveLength(2);
+  });
+  it('SPEND exact retry after later debit is no-op; amount/sale/key conflicts cannot mutate evidence', async () => {
+    const f = await fixture();
+    await bridge.postPharmacyStoredValue(f.scope, topup(f));
+    const saleId = await sale(f);
+    const cmd = spend(f, saleId, 400);
+    await bridge.postPharmacyStoredValue(f.scope, cmd);
+    await bridge.postPharmacyStoredValue(f.scope, spend(f, saleId, 200));
+    const before = await snapshot(f);
+    expect(await bridge.postPharmacyStoredValue(f.scope, cmd)).toMatchObject({ replayed: true });
+    for (const changes of [
+      { amountMinor: 401 },
+      { saleId: await sale(f) },
+      { journalId: unique('conflict') },
+    ])
+      await expect(
+        bridge.postPharmacyStoredValue(f.scope, {
+          ...cmd,
+          ...changes,
+        } as PharmacyStoredValueCommand)
+      ).rejects.toThrow('IDEMPOTENCY_CONFLICT');
+    expect(await snapshot(f)).toEqual(before);
+  });
+  it('concurrent SPEND retries commit one event and one clearing credit', async () => {
+    const f = await fixture();
+    await bridge.postPharmacyStoredValue(f.scope, topup(f));
+    const cmd = spend(f, await sale(f));
+    const results = await compete(f, [cmd, cmd]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(2);
+    expect(results.filter((r) => r.status === 'fulfilled' && r.value.replayed)).toHaveLength(1);
+    const rows = await snapshot(f);
+    expect(rows.accounts.find((a) => a.id === f.walletId)?.balanceMinor).toBe(600);
+    expect(rows.journals).toHaveLength(2);
+    expect(rows.entries).toHaveLength(4);
+    expect(rows.canonical).toHaveLength(2);
+  });
+  it('competing SPEND across different sales cannot overdraw a shared wallet', async () => {
+    const f = await fixture();
+    await bridge.postPharmacyStoredValue(f.scope, topup(f));
+    const results = await compete(f, [spend(f, await sale(f), 700), spend(f, await sale(f), 700)]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(
+      results.filter((r) => r.status === 'rejected' && r.reason.message === 'INSUFFICIENT_BALANCE')
+    ).toHaveLength(1);
+    const rows = await snapshot(f);
+    expect(rows.accounts.find((a) => a.id === f.walletId)?.balanceMinor).toBe(300);
+    expect(rows.journals).toHaveLength(2);
+    expect(rows.canonical).toHaveLength(2);
+  });
+  it('sale cap includes existing tender and earlier persisted SPEND', async () => {
+    const f = await fixture();
+    await bridge.postPharmacyStoredValue(f.scope, topup(f, 2000));
+    const saleId = await sale(f, 1000, 300);
+    await bridge.postPharmacyStoredValue(f.scope, spend(f, saleId, 500));
+    const before = await snapshot(f);
+    await expect(bridge.postPharmacyStoredValue(f.scope, spend(f, saleId, 201))).rejects.toThrow(
+      'WALLET_SALE_ALREADY_FUNDED'
+    );
+    expect(await snapshot(f)).toEqual(before);
+    await bridge.postPharmacyStoredValue(f.scope, spend(f, saleId, 200));
+    expect((await snapshot(f)).accounts.find((a) => a.id === f.walletId)?.balanceMinor).toBe(1300);
+  });
+  it('competing events cannot overfund the same sale even with ample wallet balance', async () => {
+    const f = await fixture();
+    await bridge.postPharmacyStoredValue(f.scope, topup(f, 2000));
+    const saleId = await sale(f, 1000);
+    const results = await compete(f, [spend(f, saleId, 600), spend(f, saleId, 600)]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(
+      results.filter(
+        (r) => r.status === 'rejected' && r.reason.message === 'WALLET_SALE_ALREADY_FUNDED'
+      )
+    ).toHaveLength(1);
+    const rows = await snapshot(f);
+    expect(rows.accounts.find((a) => a.id === f.walletId)?.balanceMinor).toBe(1400);
+    expect(rows.journals).toHaveLength(2);
+    expect(rows.canonical).toHaveLength(2);
+  });
+  it('SPEND versus unapproved refund cannot create a payout or extra canonical source', async () => {
+    const f = await fixture();
+    const original = topup(f);
+    await bridge.postPharmacyStoredValue(f.scope, original);
+    const results = await compete(f, [
+      spend(f, await sale(f), 400),
+      refund(f, original.journalId, 700),
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(
+      results.filter(
+        (r) => r.status === 'rejected' && r.reason.message === 'WALLET_REFUND_NOT_APPROVED'
+      )
+    ).toHaveLength(1);
+    const rows = await snapshot(f);
+    expect(rows.accounts.find((a) => a.id === f.walletId)?.balanceMinor).toBe(600);
+    expect(rows.journals.map((j) => j.kind).sort()).toEqual(['SPEND', 'TOP_UP']);
+    expect(rows.canonical).toHaveLength(2);
+  });
+  it('ADMIN without canonical ALLOW cannot TOP_UP or SPEND', async () => {
+    const f = await fixture({ grants: [] });
+    const saleId = await sale(f);
+    const before = await snapshot(f);
+    for (const cmd of [topup(f), spend(f, saleId)])
+      await expect(bridge.postPharmacyStoredValue(f.scope, cmd)).rejects.toThrow(
+        'WALLET_PERMISSION_DENIED'
+      );
+    expect(await snapshot(f)).toEqual(before);
+  });
+  it('SPEND canonical DENY wins over role ALLOW', async () => {
+    const f = await fixture();
+    await bridge.postPharmacyStoredValue(f.scope, topup(f));
+    const saleId = await sale(f);
+    await scoped.withTenantDb(
+      f.scope.organizationId,
+      (db) =>
+        db.userPermissionOverride.create({
+          data: {
+            organizationId: f.scope.organizationId,
+            userId: f.scope.actorId,
+            capability: 'pharmacy:counter',
+            effect: 'DENY',
+            reason: 'Synthetic explicit deny',
+          },
+        }),
+      { userId: f.scope.actorId }
+    );
+    const before = await snapshot(f);
+    await expect(bridge.postPharmacyStoredValue(f.scope, spend(f, saleId))).rejects.toThrow(
+      'WALLET_PERMISSION_DENIED'
+    );
+    expect(await snapshot(f)).toEqual(before);
+  });
+  it('refuses USD SPEND even when tenant, wallet and clearing all agree on USD', async () => {
+    const f = await fixture({ currency: 'USD' });
+    const before = await snapshot(f);
+    await expect(bridge.postPharmacyStoredValue(f.scope, spend(f, await sale(f)))).rejects.toThrow(
+      'WALLET_CURRENCY_MISMATCH'
+    );
+    expect(await snapshot(f)).toEqual(before);
+  });
+  it('refuses account currency mismatch without partial financial effects', async () => {
+    const f = await fixture();
+    await scoped.withTenantDb(
+      f.scope.organizationId,
+      (db) =>
+        db.storedValueAccount.update({
+          where: { id: f.cashId },
+          data: { currency: 'USD' },
+        }),
+      { userId: f.scope.actorId }
+    );
+    const before = await snapshot(f);
+    await expect(bridge.postPharmacyStoredValue(f.scope, topup(f))).rejects.toThrow(
+      'WALLET_CURRENCY_MISMATCH'
+    );
+    expect(await snapshot(f)).toEqual(before);
+  });
+  it.each(['REFUND', 'EXPIRY', 'ADJUSTMENT'] as const)(
+    'unsupported %s has no effect at either callable boundary',
+    async (kind) => {
+      const f = await fixture();
+      const before = await snapshot(f);
+      const cmd = { ...refund(f, unique('original')), kind } as PharmacyStoredValueCommand;
+      const reason = kind === 'REFUND' ? 'WALLET_REFUND_NOT_APPROVED' : 'WALLET_UNSUPPORTED_KIND';
+      await expect(bridge.postPharmacyStoredValue(f.scope, cmd)).rejects.toThrow(reason);
+      await expect(
+        scoped.withTenantDb(
+          f.scope.organizationId,
+          (db) => bridge.postPharmacyStoredValueInTransaction(db, f.scope, cmd),
+          { userId: f.scope.actorId }
+        )
+      ).rejects.toThrow(reason);
+      expect(await snapshot(f)).toEqual(before);
+    }
+  );
+  it('SPEND cannot use a foreign tenant account, another branch sale or another customer sale', async () => {
+    const f = await fixture();
+    const foreign = await fixture();
+    await bridge.postPharmacyStoredValue(f.scope, topup(f));
+    const saleId = await sale(f);
+    const branchSale = await sale(f);
+    const customerSale = await sale(f);
+    await scoped.withTenantDb(
+      f.scope.organizationId,
+      async (db) => {
+        await db.pharmacySale.update({
+          where: { id: branchSale },
+          data: { branchId: f.otherBranchId },
+        });
+        const other = await db.pharmacyCustomer.create({
+          data: { organizationId: f.scope.organizationId, name: unique('other') },
+        });
+        await db.pharmacySale.update({
+          where: { id: customerSale },
+          data: { customerId: other.id },
+        });
+      },
+      { userId: f.scope.actorId }
+    );
+    const before = await snapshot(f);
+    for (const [cmd, error] of [
+      [spend(f, saleId, 100, { accountId: foreign.walletId }), 'WALLET_ACCOUNT_NOT_FOUND'],
+      [spend(f, branchSale), 'WALLET_SALE_SCOPE_MISMATCH'],
+      [spend(f, customerSale), 'WALLET_SALE_SCOPE_MISMATCH'],
+    ] as const)
+      await expect(bridge.postPharmacyStoredValue(f.scope, cmd)).rejects.toThrow(error);
+    expect(await snapshot(f)).toEqual(before);
+  });
+  it('same-transaction caller rolls back actual tender writes if bridge refuses sale cap', async () => {
+    const f = await fixture();
+    await bridge.postPharmacyStoredValue(f.scope, topup(f));
+    const saleId = await sale(f, 1000);
+    const before = await snapshot(f);
+    await expect(
+      scoped.withTenantDb(
+        f.scope.organizationId,
+        async (db) => {
+          await db.pharmacyTender.create({
+            data: {
+              organizationId: f.scope.organizationId,
+              branchId: f.scope.branchId,
+              saleId,
+              type: 'CASH',
+              amountMinor: 700,
+              businessDate: new Date('2026-10-25T00:00:00Z'),
+              actorId: f.scope.actorId,
+              deviceId: unique('device'),
+            },
+          });
+          await bridge.postPharmacyStoredValueInTransaction(db, f.scope, spend(f, saleId, 400));
+        },
+        { userId: f.scope.actorId }
+      )
+    ).rejects.toThrow('WALLET_SALE_ALREADY_FUNDED');
+    expect(await snapshot(f)).toEqual(before);
   });
 });

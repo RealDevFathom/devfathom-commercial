@@ -16,7 +16,10 @@ import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { PostingScope } from './finance-postings';
 
 export type StoredValuePostingScope = PostingScope & { currency: Currency };
-/** Internal funded event, not the provider-WALLET or earned LOYALTY tender. */
+/** Internal funded event, not the provider-WALLET or earned LOYALTY tender.
+ * REFUND remains representable for forensic provenance only; both callable
+ * boundaries reject it regardless of settings, grants, balances or original.
+ */
 export type PharmacyStoredValueCommand = {
   journalId: string;
   idempotencyKey: string;
@@ -95,7 +98,15 @@ async function authorize(
     refuse('WALLET_PERMISSION_DENIED');
 }
 
-function validateCommand(command: PharmacyStoredValueCommand) {
+function validateCommand(command: PharmacyStoredValueCommand, scope: StoredValuePostingScope) {
+  // Source provenance and allowUnusedRefund are NOT product authorization.
+  // Quarantine the candidate implementation below: no new payout or replay of
+  // an old refund may pass either exported boundary until policy is approved.
+  if (['REFUND'].includes(command.kind)) refuse('WALLET_REFUND_NOT_APPROVED');
+  // PharmacySale/Tender have no currency column; canonical sale/settlement
+  // adapters post PKR. Never settle their clearing with a USD wallet, even in
+  // an otherwise consistently USD tenant. No implicit conversion or FX.
+  if (command.kind === 'SPEND' && scope.currency !== 'PKR') refuse('WALLET_CURRENCY_MISMATCH');
   assertMinor(command.amountMinor);
   // The subledger stores PostgreSQL INTEGER minor units.
   if (command.amountMinor > 2_147_483_647) refuse('WALLET_AMOUNT_RANGE');
@@ -223,6 +234,9 @@ async function readCanonical(db: ScopedDb, scope: StoredValuePostingScope, sourc
   });
 }
 
+/** QUARANTINED unapproved provenance candidate. validateCommand blocks every
+ * REFUND (including retry) before any transaction, lookup or write. Do not
+ * expose this helper or treat these historical checks as product approval. */
 async function unusedTopUpRefund(
   db: ScopedDb,
   scope: StoredValuePostingScope,
@@ -311,7 +325,7 @@ export async function postPharmacyStoredValueInTransaction(
   command: PharmacyStoredValueCommand
 ) {
   validateScope(scope);
-  validateCommand(command);
+  validateCommand(command, scope);
   await authorize(db, scope, command);
   await lockStoredValueOperation(db, scope.organizationId, command.idempotencyKey);
   const accounts = await db.$queryRaw<StoredValueAccountRow[]>(Prisma.sql`
@@ -447,7 +461,7 @@ export async function postPharmacyStoredValue(
   command: PharmacyStoredValueCommand
 ) {
   validateScope(scope);
-  validateCommand(command);
+  validateCommand(command, scope);
   return withTenantDb(
     scope.organizationId,
     (db) => postPharmacyStoredValueInTransaction(db, scope, command),

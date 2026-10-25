@@ -551,7 +551,6 @@ describe('funded wallet canonical bridge — transactional model, not PostgreSQL
   it.each([
     ['pharmacy:wallet-topup', () => topup()],
     ['pharmacy:counter', () => spend()],
-    ['pharmacy:manage', () => refund()],
   ] as const)('respects canonical DENY for %s', async (capability, command) => {
     deny = capability;
     const snapshot = structuredClone(state);
@@ -630,27 +629,20 @@ describe('funded wallet canonical bridge — transactional model, not PostgreSQL
     ).rejects.toThrow('WALLET_SALE_ALREADY_FUNDED');
     expect(state).toEqual(snapshot);
   });
-  it('pays a provable unused TOP_UP back to its original asset, never an expense', async () => {
+  it('blocks unused TOP_UP payout even with original BANK funding, permission and enabled setting', async () => {
     await postPharmacyStoredValue(scope, topup({ tender: 'BANK_TRANSFER' }));
     refundAllowed = true;
-    await postPharmacyStoredValue({ ...scope, actorId: 'manager-a' }, refund());
-    expect(balance()).toBe(1100);
-    expect(state.journals[1]).toMatchObject({
-      kind: 'REFUND',
-      originalJournalId: 'topup-a',
-      tender: 'BANK_TRANSFER',
-      actorId: 'manager-a',
-    });
-    expect(state.canonical[1].lines.map((row) => [row.accountCode, row.side])).toEqual([
-      ['CUSTOMER_WALLET_LIABILITY', 'DEBIT'],
-      ['BANK', 'CREDIT'],
-    ]);
+    const snapshot = structuredClone(state);
+    await expect(
+      postPharmacyStoredValue({ ...scope, actorId: 'manager-a' }, refund())
+    ).rejects.toThrow('WALLET_REFUND_NOT_APPROVED');
+    expect(state).toEqual(snapshot);
   });
   it('disabled refunds roll back/no-op', async () => {
     await postPharmacyStoredValue(scope, topup());
     const snapshot = structuredClone(state);
     await expect(postPharmacyStoredValue(scope, refund())).rejects.toThrow(
-      'TOP_UP_REFUND_DISABLED'
+      'WALLET_REFUND_NOT_APPROVED'
     );
     expect(state).toEqual(snapshot);
   });
@@ -664,7 +656,7 @@ describe('funded wallet canonical bridge — transactional model, not PostgreSQL
     refundAllowed = true;
     const snapshot = structuredClone(state);
     await expect(postPharmacyStoredValue(scope, refund())).rejects.toThrow(
-      'WALLET_REFUND_EXCEEDS_UNUSED'
+      'WALLET_REFUND_NOT_APPROVED'
     );
     expect(state).toEqual(snapshot);
   });
@@ -679,27 +671,46 @@ describe('funded wallet canonical bridge — transactional model, not PostgreSQL
     refundAllowed = true;
     const snapshot = structuredClone(state);
     await expect(postPharmacyStoredValue(scope, refund())).rejects.toThrow(
-      'WALLET_REFUND_EXCEEDS_UNUSED'
+      'WALLET_REFUND_NOT_APPROVED'
     );
     expect(state).toEqual(snapshot);
   });
-  it('partial refunds cap total and exact retry survives subsequent debit', async () => {
+  it('blocks repeated refund attempts rather than accepting a key as policy approval', async () => {
     await postPharmacyStoredValue(scope, topup());
     refundAllowed = true;
-    await postPharmacyStoredValue(scope, refund());
-    await postPharmacyStoredValue(
-      scope,
-      refund({ journalId: 'refund-b', idempotencyKey: 'refund-b' })
-    );
     const snapshot = structuredClone(state);
-    expect(await postPharmacyStoredValue(scope, refund())).toMatchObject({ replayed: true });
-    await expect(
-      postPharmacyStoredValue(
-        scope,
-        refund({ journalId: 'refund-c', idempotencyKey: 'refund-c', amountMinor: 1 })
-      )
-    ).rejects.toThrow('WALLET_REFUND_EXCEEDS_UNUSED');
+    for (let i = 0; i < 2; i++)
+      await expect(postPharmacyStoredValue(scope, refund())).rejects.toThrow(
+        'WALLET_REFUND_NOT_APPROVED'
+      );
     expect(state).toEqual(snapshot);
+  });
+  it('rejects incompatible sale currency before opening a transaction', async () => {
+    const run = vi.fn(transaction.run);
+    transaction.run = run;
+    const snapshot = structuredClone(state);
+    await expect(postPharmacyStoredValue({ ...scope, currency: 'USD' }, spend())).rejects.toThrow(
+      'WALLET_CURRENCY_MISMATCH'
+    );
+    expect(run).not.toHaveBeenCalled();
+    expect(state).toEqual(snapshot);
+  });
+  it('rejects refunds at the same-transaction boundary without accessing its database', async () => {
+    const { postPharmacyStoredValueInTransaction } = await import('./stored-value-finance');
+    const forbiddenDb = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error('unexpected database access');
+        },
+      }
+    ) as ScopedDb;
+    await expect(
+      postPharmacyStoredValueInTransaction(forbiddenDb, scope, refund())
+    ).rejects.toThrow('WALLET_REFUND_NOT_APPROVED');
+    await expect(
+      postPharmacyStoredValueInTransaction(forbiddenDb, { ...scope, currency: 'USD' }, spend())
+    ).rejects.toThrow('WALLET_CURRENCY_MISMATCH');
   });
   it('unproven sale-funded refund fails closed, not credited as cash', async () => {
     await postPharmacyStoredValue(scope, spend());
@@ -707,7 +718,7 @@ describe('funded wallet canonical bridge — transactional model, not PostgreSQL
     const snapshot = structuredClone(state);
     await expect(
       postPharmacyStoredValue(scope, refund({ originalJournalId: 'spend-a' }))
-    ).rejects.toThrow('WALLET_UNPROVEN_REFUND');
+    ).rejects.toThrow('WALLET_REFUND_NOT_APPROVED');
     expect(state).toEqual(snapshot);
   });
   it.each([
