@@ -24,6 +24,7 @@ const database = `qa603_${runId}`;
 const socket = '/tmp/qa603-private';
 const role = 'qa603_runtime';
 const url = `postgresql://${role}@localhost/${database}?host=${socket}`;
+const pinnedUrl = url.replace('@localhost/', '@localhost:5432/');
 const env = (): NodeJS.ProcessEnv => ({
   TEST_DATABASE_URL: url,
   PHARMACY_ACCOUNTS_TEST_RUN_ID: runId,
@@ -44,8 +45,17 @@ beforeEach(() =>
 
 describe('Accounts DB preflight BEFORE importing any connection client', () => {
   it('admits only a pinned synthetic DB on an owned private real socket directory', () => {
-    expect(accountsTestDatabase(env())).toEqual({ url, database, role, socket, runId });
+    expect(accountsTestDatabase(env())).toEqual({ url: pinnedUrl, database, role, socket, runId });
   });
+  it.each([undefined, '6543', 'invalid'])(
+    'emits the verified port explicitly rather than inheriting PGPORT=%s',
+    (port) => {
+      const target = accountsTestDatabase({ ...env(), PGPORT: port });
+      expect(target.url).toBe(pinnedUrl);
+      expect(new URL(target.url).port).toBe('5432');
+      expect(new URL(target.url).searchParams.get('host')).toBe(socket);
+    }
+  );
   it.each([
     ['missing URL', undefined],
     ['remote authority', url.replace('@localhost/', '@production.invalid/')],
@@ -65,6 +75,7 @@ describe('Accounts DB preflight BEFORE importing any connection client', () => {
     ['unknown option', `${url}&sslmode=disable`],
     ['multiple port', `${url}&port=5433`],
     ['authority port', url.replace('@localhost/', '@localhost:5433/')],
+    ['authority fixed port supplied by caller', url.replace('@localhost/', '@localhost:5432/')],
     ['wrong role', url.replace(role, 'qa603_owner')],
     ['real database', url.replace(database, 'devfathom')],
     ['wrong scheme', url.replace('postgresql:', 'https:')],

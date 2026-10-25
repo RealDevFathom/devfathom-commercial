@@ -64,7 +64,11 @@ export function accountsTestDatabase(env: NodeJS.ProcessEnv): AccountsTestDataba
       !lstatSync(`${socket}/.s.PGSQL.5432`).isSocket()
     )
       refuse();
-    return Object.freeze({ url, database, role, socket, runId });
+    // pg falls back to ambient PGPORT when the URL omits its port. Pin the
+    // exact socket suffix verified above, including if PGPORT changes after
+    // this preflight. Callers pass this URL through the real runtime boundary.
+    parsed.port = '5432';
+    return Object.freeze({ url: parsed.href, database, role, socket, runId });
   } catch {
     return refuse();
   }
