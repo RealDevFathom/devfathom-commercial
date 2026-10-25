@@ -85,7 +85,12 @@ export function appUrl(): string {
   const isDevelopmentHost =
     hostname === 'localhost' || hostname === 'lvh.me' || hostname.endsWith('.localhost');
 
-  return isDevelopmentHost ? configuredUrl : configuredUrl.replace(/^http:/, 'https:');
+  if (isDevelopmentHost) return configuredUrl;
+
+  // URL.protocol is already case-normalized. Serialize the parsed URL so mixed
+  // case or ignored whitespace in the original scheme cannot bypass HTTPS.
+  parsed.protocol = 'https:';
+  return parsed.toString().replace(/\/$/, '');
 }
 
 // Hosted logo mark (the chevron on an Abyss tile). Overridable via env so it can
