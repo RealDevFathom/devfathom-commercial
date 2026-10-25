@@ -85,3 +85,48 @@ describe('posted cash-coverage KPI', () => {
     expect(() => projectLiquidityKpi([account('CASH', 'PKR', '1.5')])).toThrow(TypeError);
   });
 });
+
+describe('current-head residual: unknown cash components and CSV', () => {
+  const complete = () => [
+    account('CASH', 'PKR', '0'),
+    account('BANK', 'PKR', '9007199254740993'),
+    account('ACCOUNTS_PAYABLE', 'PKR', '-3'),
+    account('GOODS_RECEIVED_ACCRUAL', 'PKR', '0'),
+  ];
+  it.each([
+    ['CASH', 'cashMinor', 'availableFundsMinor'],
+    ['BANK', 'bankMinor', 'availableFundsMinor'],
+    ['ACCOUNTS_PAYABLE', 'accountsPayableMinor', 'recordedLiabilitiesMinor'],
+    ['GOODS_RECEIVED_ACCRUAL', 'goodsReceivedAccrualMinor', 'recordedLiabilitiesMinor'],
+  ] as const)('keeps missing %s and its subtotal null, never zero', (code, field, total) => {
+    const [row] = projectLiquidityKpi(complete().filter((item) => item.accountCode !== code)).rows;
+    expect(row![field]).toBeNull();
+    expect(row![total]).toBeNull();
+    expect(row!.ratio).toBeNull();
+  });
+  it('preserves explicit zero, exact complete ratio, empty and unknown-only controls', () => {
+    const report = projectLiquidityKpi(complete());
+    expect(report.rows[0]).toMatchObject({
+      cashMinor: '0',
+      bankMinor: '9007199254740993',
+      availableFundsMinor: '9007199254740993',
+      goodsReceivedAccrualMinor: '0',
+      ratio: { numerator: '3002399751580331', denominator: '1' },
+    });
+    expect(projectLiquidityKpi([]).rows).toEqual([]);
+    expect(projectLiquidityKpi([account('UNCLASSIFIED', 'PKR', '9')]).rows).toEqual([]);
+    const partial = liquidityKpiCsv(projectLiquidityKpi([account('BANK', 'PKR', '5')]));
+    expect(partial.split('\r\n')[1]).toContain('"PKR","","5","","","","","",""');
+    expect(partial).toContain('Missing: CASH|ACCOUNTS_PAYABLE|GOODS_RECEIVED_ACCRUAL');
+  });
+  it.each(['\u200b=cmd', '\u0600@cmd', '\u034f+cmd', '\u0085-cmd'])(
+    'protects all control/format/mark-prefixed CSV formula %s',
+    (currency) => {
+      const csv = liquidityKpiCsv(projectLiquidityKpi([account('CASH', currency, '0')]));
+      expect(csv.split('\r\n')[1]).toMatch(/"evidence","'[\s\p{M}]*[=+@-]cmd"/u);
+      expect(projectLiquidityKpi([account('CASH', currency, '0')]).rows[0]!.currency).toBe(
+        currency
+      );
+    }
+  );
+});

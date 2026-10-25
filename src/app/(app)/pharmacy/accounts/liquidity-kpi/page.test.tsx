@@ -83,3 +83,22 @@ describe('fail-closed explicit liquidity selection', () => {
     cleanup();
   });
 });
+
+describe('current-head residual: nullable evidence display', () => {
+  it('renders incomplete balances as Unknown and exports empty cells, not made-up zero', async () => {
+    financialStatements.mockResolvedValue({
+      accounts: [{ accountCode: 'BANK', currency: 'PKR', closingMinor: '5' }],
+      freshness: { retrievedAt: new Date('2026-10-20T01:00:00Z') },
+      coverage: { completeness: 'unknown' },
+    });
+    render(await LiquidityKpiPage({ searchParams: Promise.resolve(query) }));
+    expect(screen.getAllByText('Unknown').length).toBeGreaterThanOrEqual(4);
+    expect(screen.queryByText('0 minor')).not.toBeInTheDocument();
+    expect(screen.queryByText('null minor')).not.toBeInTheDocument();
+    const link = screen.getByRole('link', { name: 'Download evidence CSV' });
+    const href = link.getAttribute('href')!;
+    const csv = decodeURIComponent(href.slice(href.indexOf(',') + 1));
+    expect(csv.split('\r\n')[1]).toContain('"PKR","","5","","","","","",""');
+    cleanup();
+  });
+});

@@ -137,12 +137,20 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
                     <div className="mt-4 grid gap-5 sm:grid-cols-2">
                       <Stat
                         label="Cash + bank"
-                        value={`${row.availableFundsMinor} minor`}
+                        value={
+                          row.availableFundsMinor === null
+                            ? 'Unknown'
+                            : `${row.availableFundsMinor} minor`
+                        }
                         sub={`${row.currency} recorded balances`}
                       />
                       <Stat
                         label="AP + received accrual"
-                        value={`${row.recordedLiabilitiesMinor} minor`}
+                        value={
+                          row.recordedLiabilitiesMinor === null
+                            ? 'Unknown'
+                            : `${row.recordedLiabilitiesMinor} minor`
+                        }
                         sub="Credit-positive recorded liabilities"
                       />
                       <Stat
@@ -157,13 +165,17 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
                     </div>
                     <dl className="mt-5 grid grid-cols-2 gap-2 text-sm">
                       <dt className="text-text-muted">CASH</dt>
-                      <dd className="text-right font-mono">{row.cashMinor}</dd>
+                      <dd className="text-right font-mono">{row.cashMinor ?? 'Unknown'}</dd>
                       <dt className="text-text-muted">BANK</dt>
-                      <dd className="text-right font-mono">{row.bankMinor}</dd>
+                      <dd className="text-right font-mono">{row.bankMinor ?? 'Unknown'}</dd>
                       <dt className="text-text-muted">Accounts payable</dt>
-                      <dd className="text-right font-mono">{row.accountsPayableMinor}</dd>
+                      <dd className="text-right font-mono">
+                        {row.accountsPayableMinor ?? 'Unknown'}
+                      </dd>
                       <dt className="text-text-muted">Goods received accrual</dt>
-                      <dd className="text-right font-mono">{row.goodsReceivedAccrualMinor}</dd>
+                      <dd className="text-right font-mono">
+                        {row.goodsReceivedAccrualMinor ?? 'Unknown'}
+                      </dd>
                     </dl>
                     {row.missingComponents.length ? (
                       <p role="status" className="mt-4 text-sm text-warning">

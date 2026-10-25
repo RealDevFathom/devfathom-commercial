@@ -12,12 +12,12 @@ export type LiquidityAccountAggregate = Readonly<{
 
 export type LiquidityKpiRow = Readonly<{
   currency: string;
-  cashMinor: string;
-  bankMinor: string;
-  availableFundsMinor: string;
-  accountsPayableMinor: string;
-  goodsReceivedAccrualMinor: string;
-  recordedLiabilitiesMinor: string;
+  cashMinor: string | null;
+  bankMinor: string | null;
+  availableFundsMinor: string | null;
+  accountsPayableMinor: string | null;
+  goodsReceivedAccrualMinor: string | null;
+  recordedLiabilitiesMinor: string | null;
   ratio: Readonly<{ numerator: string; denominator: string }> | null;
   flags: readonly string[];
   missingComponents: readonly Component[];
@@ -64,21 +64,22 @@ export function projectLiquidityKpi(
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([currency, values]): LiquidityKpiRow => {
       const missingComponents = COMPONENTS.filter((code) => !values.has(code));
-      const cash = values.get('CASH') ?? 0n;
-      const bank = values.get('BANK') ?? 0n;
-      const payable = -(values.get('ACCOUNTS_PAYABLE') ?? 0n);
-      const accrual = -(values.get('GOODS_RECEIVED_ACCRUAL') ?? 0n);
-      const funds = cash + bank;
-      const liabilities = payable + accrual;
+      const cash = values.get('CASH') ?? null;
+      const bank = values.get('BANK') ?? null;
+      const payable = values.has('ACCOUNTS_PAYABLE') ? -values.get('ACCOUNTS_PAYABLE')! : null;
+      const accrual = values.has('GOODS_RECEIVED_ACCRUAL')
+        ? -values.get('GOODS_RECEIVED_ACCRUAL')!
+        : null;
+      const funds = cash !== null && bank !== null ? cash + bank : null;
+      const liabilities = payable !== null && accrual !== null ? payable + accrual : null;
       const flags: string[] = [];
-      if (funds < 0n) flags.push('Negative posted cash and bank balance');
-      if (payable < 0n) flags.push('Accounts payable has an unusual debit balance');
-      if (accrual < 0n) flags.push('Goods received accrual has an unusual debit balance');
-      const completeNumerator = values.has('CASH') && values.has('BANK');
-      const completeDenominator =
-        values.has('ACCOUNTS_PAYABLE') && values.has('GOODS_RECEIVED_ACCRUAL');
+      if (funds !== null && funds < 0n) flags.push('Negative posted cash and bank balance');
+      if (payable !== null && payable < 0n)
+        flags.push('Accounts payable has an unusual debit balance');
+      if (accrual !== null && accrual < 0n)
+        flags.push('Goods received accrual has an unusual debit balance');
       let ratio: LiquidityKpiRow['ratio'] = null;
-      if (completeNumerator && completeDenominator && liabilities > 0n) {
+      if (funds !== null && liabilities !== null && liabilities > 0n) {
         const divisor = gcd(funds, liabilities);
         ratio = Object.freeze({
           numerator: (funds / divisor).toString(),
@@ -87,12 +88,12 @@ export function projectLiquidityKpi(
       }
       return Object.freeze({
         currency,
-        cashMinor: cash.toString(),
-        bankMinor: bank.toString(),
-        availableFundsMinor: funds.toString(),
-        accountsPayableMinor: payable.toString(),
-        goodsReceivedAccrualMinor: accrual.toString(),
-        recordedLiabilitiesMinor: liabilities.toString(),
+        cashMinor: cash?.toString() ?? null,
+        bankMinor: bank?.toString() ?? null,
+        availableFundsMinor: funds?.toString() ?? null,
+        accountsPayableMinor: payable?.toString() ?? null,
+        goodsReceivedAccrualMinor: accrual?.toString() ?? null,
+        recordedLiabilitiesMinor: liabilities?.toString() ?? null,
         ratio,
         flags: Object.freeze(flags),
         missingComponents: Object.freeze(missingComponents),
@@ -112,8 +113,8 @@ export function projectLiquidityKpi(
 }
 
 function csvCell(value: string) {
-  let safe = value.replace(/[\u0000-\u001f\u007f]/g, ' ');
-  if (/^[\s]*[=+\-@]/.test(safe)) safe = `'${safe}`;
+  let safe = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ');
+  if (/^[\s\p{M}]*[=+\-@]/u.test(safe)) safe = `'${safe}`;
   return `"${safe.replaceAll('"', '""')}"`;
 }
 
@@ -137,12 +138,12 @@ export function liquidityKpiCsv(report: LiquidityKpiReport): string {
       [
         'evidence',
         row.currency,
-        row.cashMinor,
-        row.bankMinor,
-        row.availableFundsMinor,
-        row.accountsPayableMinor,
-        row.goodsReceivedAccrualMinor,
-        row.recordedLiabilitiesMinor,
+        row.cashMinor ?? '',
+        row.bankMinor ?? '',
+        row.availableFundsMinor ?? '',
+        row.accountsPayableMinor ?? '',
+        row.goodsReceivedAccrualMinor ?? '',
+        row.recordedLiabilitiesMinor ?? '',
         row.ratio?.numerator ?? '',
         row.ratio?.denominator ?? '',
         [
