@@ -61,13 +61,18 @@ type CandidateRow = {
  * Normalise a printed expiry to the instant the stock becomes expired. A
  * MONTH-precision expiry ("06/2027") is good through that whole month, so it
  * expires at the first instant of the next one; a DAY-precision expiry is good
- * through its day. Storing the exclusive instant is what lets INV-03 decide
- * expiry with one comparison and never sell into an expiry period.
+ * through its day. Printed pharmacy dates are Pakistan-local calendar dates,
+ * so their exclusive boundary is midnight in Asia/Karachi (UTC+05:00), not
+ * midnight UTC. Pakistan does not observe daylight saving time. Storing the
+ * exclusive instant is what lets INV-03 decide expiry with one comparison and
+ * never sell into an expiry period.
  */
 export function expiryInstant(printed: Date, precision: 'DAY' | 'MONTH'): Date {
   return precision === 'MONTH'
-    ? new Date(Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth() + 1, 1))
-    : new Date(Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth(), printed.getUTCDate() + 1));
+    ? new Date(Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth() + 1, 1, -5))
+    : new Date(
+        Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth(), printed.getUTCDate() + 1, -5)
+      );
 }
 
 const CANDIDATE_COLUMNS = Prisma.sql`
