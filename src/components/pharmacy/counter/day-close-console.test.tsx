@@ -122,6 +122,7 @@ describe('day-close console', () => {
     expect(workspaceToday(WORKSPACE_ZONE)).toBe('2026-10-22');
     render(<PharmacyDayCloseConsole />);
     expect(screen.getByLabelText('Business date')).toHaveValue('2026-10-22');
+    expect(screen.getByLabelText('Business date')).toHaveAttribute('max', '2026-10-22');
     expect(mocks.previewInput).toHaveBeenLastCalledWith({
       branchId: 'b',
       businessDate: new Date('2026-10-22T00:00:00.000Z'),
