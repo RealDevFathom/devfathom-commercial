@@ -4,24 +4,18 @@
  * This suite does NOT prove a counter endpoint, identity gates or payment-provider settlement.
  */
 import { randomBytes } from 'node:crypto';
+import {
+  accountsTestDatabase,
+  assertAccountsTestDatabase,
+} from '@/lib/testing/accounts-test-database';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { PharmacyStoredValueCommand, StoredValuePostingScope } from './stored-value-finance';
 
-const url = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 const enabled = process.env.PHARMACY_STORED_VALUE_BRIDGE_TEST_DB === '1';
-// Explicit opt-in must fail rather than silently skip a missing/unsafe URL.
-if (enabled) {
-  if (!url || process.env.PHARMACY_STORED_VALUE_BRIDGE_DISPOSABLE_DB !== '1')
-    throw new Error('BRIDGE_TEST_REQUIRES_DISPOSABLE_DB_ATTESTATION_AND_URL');
-  const parsed = new URL(url);
-  if (
-    !['postgresql:', 'postgres:'].includes(parsed.protocol) ||
-    parsed.hostname ||
-    !parsed.searchParams.get('host')?.startsWith('/')
-  )
-    throw new Error('BRIDGE_TEST_REQUIRES_LOCAL_UNIX_SOCKET');
-}
-if (enabled) process.env.DATABASE_URL = url;
+if (enabled && process.env.PHARMACY_STORED_VALUE_BRIDGE_DISPOSABLE_DB !== '1')
+  throw new Error('BRIDGE_TEST_REQUIRES_DISPOSABLE_DB_ATTESTATION_AND_URL');
+const target = enabled ? accountsTestDatabase(process.env) : undefined;
+if (target) process.env.DATABASE_URL = target.url;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 const describeDb = enabled ? describe : describe.skip;
 let scoped: typeof import('@/lib/tenancy/scoped-db');
@@ -319,6 +313,7 @@ async function snapshot(f: Fixture) {
 beforeAll(async () => {
   if (!enabled) return;
   scoped = await import('@/lib/tenancy/scoped-db');
+  await assertAccountsTestDatabase(scoped.withPlatformDb, target!);
   const role = await import('@/lib/testing/rls-role-guard');
   await role.assertRlsEnforcingRole(scoped.withPlatformDb);
   // Also refuse an owning role or absent/unforced RLS, before any fixture writes.
@@ -821,4 +816,76 @@ describeDb('funded wallet bridge — real PostgreSQL, explicit fresh DB only', (
     ).rejects.toThrow('WALLET_SALE_ALREADY_FUNDED');
     expect(await snapshot(f)).toEqual(before);
   });
+});
+
+describeDb('owned-clearing writer regression — real DB, no acceptance of invalid history', () => {
+  const cases = ['TOP_UP CASH', 'TOP_UP BANK_TRANSFER', 'SPEND SALES_CLEARING'] as const;
+  async function commandFor(f: Fixture, operation: (typeof cases)[number]) {
+    if (operation === 'SPEND SALES_CLEARING') {
+      await bridge.postPharmacyStoredValue(f.scope, topup(f));
+      return spend(f, await sale(f));
+    }
+    return topup(f, 1000, { tender: operation === 'TOP_UP CASH' ? 'CASH' : 'BANK_TRANSFER' });
+  }
+  async function primitive(f: Fixture, cmd: PharmacyStoredValueCommand) {
+    const { postStoredValueJournal } = await import('@/lib/stored-value/ledger');
+    return scoped.withTenantDb(
+      f.scope.organizationId,
+      (db) =>
+        postStoredValueJournal(db, {
+          ...f.scope,
+          ...cmd,
+          direction: cmd.kind === 'SPEND' ? 'DEBIT' : 'CREDIT',
+          tender: cmd.kind === 'TOP_UP' ? cmd.tender : undefined,
+        }),
+      { userId: f.scope.actorId }
+    );
+  }
+  for (const replay of [false, true]) {
+    for (const boundary of ['bridge', 'primitive'] as const) {
+      it.each(cases)(
+        `%s ${boundary} refuses owned clearing, replay=${replay}, no effects`,
+        async (operation) => {
+          const f = await fixture();
+          const cmd = await commandFor(f, operation);
+          const post = () =>
+            boundary === 'bridge'
+              ? bridge.postPharmacyStoredValue(f.scope, cmd)
+              : primitive(f, cmd);
+          if (replay) await post();
+          await scoped.withTenantDb(f.scope.organizationId, (db) =>
+            db.storedValueAccount.update({
+              where: { id: cmd.counterpartyAccountId },
+              data: { customerId: f.customerId },
+            })
+          );
+          const before = await snapshot(f);
+          await expect(post()).rejects.toThrow(
+            boundary === 'bridge' ? 'WALLET_ACCOUNT_SCOPE' : 'INVALID_ACCOUNT'
+          );
+          expect(await snapshot(f)).toEqual(before);
+        }
+      );
+    }
+  }
+  it.each(cases)(
+    '%s primitive accepts NULL clearing and retries without new effects',
+    async (operation) => {
+      const f = await fixture();
+      const cmd = await commandFor(f, operation);
+      const account = await scoped.withTenantDb(f.scope.organizationId, (db) =>
+        db.storedValueAccount.findUniqueOrThrow({
+          where: { id: cmd.counterpartyAccountId },
+        })
+      );
+      expect(account.customerId).toBeNull();
+      await expect(primitive(f, cmd)).resolves.toMatchObject({ replayed: false });
+      const before = await snapshot(f);
+      await expect(primitive(f, cmd)).resolves.toMatchObject({
+        replayed: true,
+        balanceDeltaMinor: 0,
+      });
+      expect(await snapshot(f)).toEqual(before);
+    }
+  );
 });

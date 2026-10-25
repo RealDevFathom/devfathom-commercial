@@ -12,6 +12,10 @@
  * retained; the independent QA owner stops its database outside this suite.
  */
 import { randomBytes } from 'node:crypto';
+import {
+  accountsTestDatabase,
+  assertAccountsTestDatabase,
+} from '@/lib/testing/accounts-test-database';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { StoredValueDb } from '@/lib/stored-value/ledger';
@@ -62,7 +66,10 @@ type CanonicalOptions = {
 };
 
 const optedIn = process.env.PHARMACY_WALLET_REPORTING_TEST_DB === '1';
-const selectedUrl = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
+if (optedIn && process.env.PHARMACY_WALLET_REPORTING_DISPOSABLE_DB !== '1')
+  throw new Error('WALLET_REPORT_TEST_REQUIRES_EXPLICIT_DISPOSABLE_DATABASE');
+const target = optedIn ? accountsTestDatabase(process.env) : undefined;
+if (target) process.env.DATABASE_URL = target.url;
 const describeDb = optedIn ? describe.sequential : describe.skip;
 const unique = (label: string) => `wrdb_${label}_${randomBytes(8).toString('hex')}`;
 const FROM = new Date('2026-10-24T00:00:00.000Z');
@@ -387,15 +394,9 @@ async function matchedBatch(db: ScopedDb, f: Fixture, count: number) {
 
 describeDb('wallet reports on persisted, tenant-isolated PostgreSQL evidence', () => {
   beforeAll(async () => {
-    if (!selectedUrl || process.env.PHARMACY_WALLET_REPORTING_DISPOSABLE_DB !== '1')
-      throw new Error('WALLET_REPORT_TEST_REQUIRES_EXPLICIT_DISPOSABLE_DATABASE');
-    const parsed = new URL(selectedUrl);
-    const socket = parsed.searchParams.get('host') ?? decodeURIComponent(parsed.hostname);
-    if (!['postgres:', 'postgresql:'].includes(parsed.protocol) || !socket.startsWith('/'))
-      throw new Error('WALLET_REPORT_TEST_REQUIRES_UNIX_SOCKET_DATABASE');
-    process.env.DATABASE_URL = selectedUrl;
     process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
     scoped = await import('@/lib/tenancy/scoped-db');
+    await assertAccountsTestDatabase(scoped.withPlatformDb, target!);
     reporting = await import('./wallet-reporting');
     const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
     await assertRlsEnforcingRole(scoped.withPlatformDb);

@@ -1,8 +1,10 @@
+import { postStoredValueJournal } from '@/lib/stored-value/ledger';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { ACCOUNT_NORMAL_SIDE, signedMinor } from '@/lib/finance/journal';
 import {
   postPharmacyStoredValue,
+  postPharmacyStoredValueInTransaction,
   type PharmacyStoredValueCommand,
   type StoredValuePostingScope,
 } from './stored-value-finance';
@@ -769,4 +771,78 @@ describe('funded wallet canonical bridge — transactional model, not PostgreSQL
     );
     expect(state.journals).toHaveLength(0);
   });
+});
+
+/** Owned clearing is corrupt even if its kind/currency and both balances agree. */
+describe('writer refuses customer-owned clearing before mutation or replay', () => {
+  const cases = [
+    ['TOP_UP CASH', () => topup()],
+    ['TOP_UP BANK_TRANSFER', () => topup({ tender: 'BANK_TRANSFER' })],
+    ['SPEND SALES_CLEARING', () => spend()],
+  ] as const;
+  function primitive(command: PharmacyStoredValueCommand) {
+    return {
+      ...scope,
+      ...command,
+      direction: command.kind === 'SPEND' ? ('DEBIT' as const) : ('CREDIT' as const),
+      tender: command.kind === 'TOP_UP' ? command.tender : undefined,
+    };
+  }
+  for (const replay of [false, true]) {
+    for (const boundary of ['facade', 'in-transaction', 'primitive'] as const) {
+      it.each(cases)(
+        `%s owned clearing: ${boundary}, replay=${replay}, no effects`,
+        async (_label, make) => {
+          const command = make();
+          const db = dbFor(scope.organizationId);
+          const post = () =>
+            boundary === 'facade'
+              ? postPharmacyStoredValue(scope, command)
+              : boundary === 'in-transaction'
+                ? postPharmacyStoredValueInTransaction(db, scope, command)
+                : postStoredValueJournal(db, primitive(command));
+          if (replay) await post();
+          state.accounts.find((row) => row.id === command.counterpartyAccountId)!.customerId =
+            'customer-a';
+          const before = structuredClone(state);
+          await expect(post()).rejects.toThrow(
+            boundary === 'primitive' ? 'INVALID_ACCOUNT' : 'WALLET_ACCOUNT_SCOPE'
+          );
+          expect(state).toEqual(before);
+        }
+      );
+    }
+  }
+  it.each(cases)(
+    '%s primitive accepts exactly NULL clearing and exact retry is inert',
+    async (_label, make) => {
+      const command = make();
+      const db = dbFor(scope.organizationId);
+      await expect(postStoredValueJournal(db, primitive(command))).resolves.toMatchObject({
+        replayed: false,
+      });
+      expect(state.journals).toHaveLength(1);
+      expect(state.entries).toHaveLength(2);
+      const before = structuredClone(state);
+      await expect(postStoredValueJournal(db, primitive(command))).resolves.toMatchObject({
+        replayed: true,
+        balanceDeltaMinor: 0,
+      });
+      expect(state).toEqual(before);
+    }
+  );
+  it.each(['', undefined])(
+    'does not confuse missing/empty ownership with SQL NULL: %s',
+    async (owner) => {
+      state.accounts.find((row) => row.id === 'cash-a')!.customerId = owner as string;
+      const before = structuredClone(state);
+      await expect(
+        postPharmacyStoredValueInTransaction(dbFor(scope.organizationId), scope, topup())
+      ).rejects.toThrow('WALLET_ACCOUNT_SCOPE');
+      await expect(
+        postStoredValueJournal(dbFor(scope.organizationId), primitive(topup()))
+      ).rejects.toThrow('INVALID_ACCOUNT');
+      expect(state).toEqual(before);
+    }
+  );
 });

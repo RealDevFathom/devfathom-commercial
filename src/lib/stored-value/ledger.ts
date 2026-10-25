@@ -142,6 +142,7 @@ export async function postStoredValueJournal(db: StoredValueDb, input: StoredVal
   if (
     wallet.kind !== 'CUSTOMER_LIABILITY' ||
     !wallet.customerId ||
+    counterparty.customerId !== null ||
     counterparty.kind === 'CUSTOMER_LIABILITY'
   )
     throw new StoredValueError('INVALID_ACCOUNT');

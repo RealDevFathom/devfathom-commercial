@@ -339,6 +339,7 @@ export async function postPharmacyStoredValueInTransaction(
     !counterparty ||
     wallet.kind !== 'CUSTOMER_LIABILITY' ||
     !wallet.customerId ||
+    counterparty.customerId !== null ||
     counterparty.kind !== (command.kind === 'SPEND' ? 'SALES_CLEARING' : 'CASH_CLEARING')
   )
     refuse('WALLET_ACCOUNT_SCOPE');
