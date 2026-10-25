@@ -3,7 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 // #633: the batch re-check has its own PostgreSQL suite (sale-batch-safety.db.test.ts).
-vi.mock('./sale-batch-safety', () => ({ assertSaleBatchesSellable: vi.fn(async () => new Map()) }));
+const batchSafety = vi.hoisted(() => ({
+  assertSaleBatchesSellable: vi.fn(async () => new Map()),
+}));
+vi.mock('./sale-batch-safety', () => ({
+  assertSaleBatchesSellable: batchSafety.assertSaleBatchesSellable,
+}));
 const postings = vi.hoisted(() => ({ postTenderEntry: vi.fn(), postSaleLineEntry: vi.fn() }));
 // Keep settlement, receipt identity, idempotency and evidence logic real.
 vi.mock('./finance-postings', async () => ({
@@ -90,6 +95,7 @@ describe('pharmacy settlement invariants', () => {
 
   it('replays one idempotency result without duplicating tender or receipt', async () => {
     let idempotency: Record<string, unknown> | null = null;
+    batchSafety.assertSaleBatchesSellable.mockResolvedValueOnce(new Map());
     postings.postTenderEntry.mockClear();
     postings.postSaleLineEntry.mockClear();
     const tenderCreatedAt = new Date('2026-09-02T10:00:00Z');
@@ -215,6 +221,11 @@ describe('pharmacy settlement invariants', () => {
     expect(saleUpdate).toHaveBeenCalledTimes(1);
     expect(db.pharmacySaleEvent.create).toHaveBeenCalledTimes(1);
     const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' };
+    expect(batchSafety.assertSaleBatchesSellable).toHaveBeenCalledExactlyOnceWith(
+      db,
+      scope,
+      'sale-1'
+    );
     expect(postings.postTenderEntry).toHaveBeenCalledExactlyOnceWith(db, scope, {
       tenderId: 'tender-1',
       at: tenderCreatedAt,
