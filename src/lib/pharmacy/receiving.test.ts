@@ -242,6 +242,23 @@ describe('PUR-02/PUR-03 — canonical units and landed unit cost', () => {
     expect(receiptLineUnitCostMinor({ ...terms, taxCreditable: false })).toBe(1_170);
   });
 
+  it('includes allocated PO charges and subtracts its rebate from receipt lot cost', () => {
+    expect(
+      receiptLineUnitCostMinor({
+        receivedPacks: 10,
+        bonusPacks: 0,
+        canonicalUnitsPerPack: 10,
+        invoicedPricePerPackMinor: 10_000,
+        discountBps: 1_000,
+        rebateBps: 500,
+        taxBps: 1_000,
+        taxCreditable: false,
+        allocatedChargeMinor: 5_950,
+      })
+    ).toBe(1_000);
+    // 100,000 - 10,000 discount - 4,500 rebate + 8,550 tax + 5,950 charges.
+  });
+
   it('costs an entirely free delivery at nothing per unit', () => {
     expect(
       receiptLineUnitCostMinor({
