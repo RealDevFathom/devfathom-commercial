@@ -218,6 +218,19 @@ beforeAll(async () => {
           vertical: 'PHARMACY',
         },
       });
+      // User.department is a tenant-owned composite FK, not a free-standing
+      // enum. Seed its parent for BOTH tenants before any actor or witness.
+      // The migration backfills existing tenants only; these are fresh ones.
+      const department = await db.organizationDepartment.create({
+        data: {
+          organizationId,
+          key: 'LEADERSHIP',
+          name: 'Synthetic leadership',
+          active: true,
+        },
+        select: { organizationId: true, key: true, active: true },
+      });
+      expect(department).toEqual({ organizationId, key: 'LEADERSHIP', active: true });
     }
     for (const [branchId, organizationId] of [
       [branchA, org],

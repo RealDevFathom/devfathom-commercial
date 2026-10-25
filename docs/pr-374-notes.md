@@ -1,3 +1,45 @@
+# 25 October 2026 — tenant department FK fixture follow-up
+
+Parent `e3e7f6076544bd7d768d40f7f07de5470f1c3fa7` is **consumed**:
+independent QA2 reported **147 passed / 0 case failures / 11 skipped**, plus
+one failed DB `beforeAll`. The 112 focused cases and 35 real-ledger cases passed,
+but all 11 authorization DB bodies remain **unexecuted**, not passing.
+`user.create` failed with Prisma P2003 / SQL 23503 on
+`users_organizationId_department_fkey` before any authorization DB body ran.
+Do not replay that head or transfer its test/image results to this follow-up.
+
+## Fixture-only correction and regression coverage
+
+- The exact schema and migration `20260828100000_vertical_configurable_departments`
+  require `User.(organizationId, department)` to reference
+  `OrganizationDepartment.(organizationId, key)`.
+- Create and assert an active synthetic `LEADERSHIP` department for **each** of
+  the two fresh organizations, before any actors or same/foreign-tenant witnesses.
+  Migration-time backfill does not populate subsequently created test tenants.
+  This fixture key supplies no permission; no grants or runtime guards change.
+- All 11 authorization DB cases remain intact: no-grant, DENY, unassigned/inactive
+  assignments, sibling/foreign branch refusal, witness refusal, full no-effect
+  snapshots and the authorized actual-branch 10-to-8 stock/custody control.
+  The new setup assertion checks the persisted tenant/key for each FK parent.
+- Source inspection also follows the existing nested role permission and medicine
+  presentation parents and composite branch/lot/location dependencies. This is a
+  source audit, **not** proof that the database fixtures or test bodies execute.
+
+## Strict evidence boundary
+
+Only this fixture and these notes change from the consumed parent. Production
+inventoryControl/can(), DENY precedence, actual payload-branch assignment, witness
+and stock/custody code, tenancy guards, Prisma schema/migrations, workflow gates,
+lockfile and manifests remain byte-identical. No inferred ADMIN bypass.
+No unit/app/DB execution, Prisma generation or consumed-head replay is performed
+by Engineer 2. Formatting/parser/fixture shape/whitespace evidence is static only,
+not a semantic typecheck or runtime/DB PASS. Independent QA2 must use one genuinely
+fresh isolated restricted-role/FORCE-RLS database on the genuinely new published
+SHA; Security and CI acceptance remain separate. **DRAFT / HOLD; no merge/deploy.**
+
+---
+## Historical correction notes (head-specific evidence; no PASS transfer)
+
 # 25 October 2026 — TEST-374-01 and independent-QA fixture corrections
 
 Follow-up to consumed head `2b37529e1a9804a27dab4b84e89fa53437983b89`.
