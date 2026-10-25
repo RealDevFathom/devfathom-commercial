@@ -614,6 +614,68 @@ describeIfDatabase('PUR-06 — expected vs received credit', () => {
     ).rejects.toMatchObject({ reason: 'OVER_ALLOCATION' });
   });
 
+  it('serializes concurrent credits competing for the same debit note', async () => {
+    const fixture = await scenario(ORG_A, 'concurrent-credit-allocation');
+    const note = await dispatchedReturn(fixture, 'concurrent-credit-allocation', 10_000);
+    const credits = await inOrg(ORG_A, async (db) =>
+      Promise.all(
+        ['A', 'B'].map((label) =>
+          deps.returns.recordSupplierCredit(db, scopeOf(fixture, CONTROLLER), {
+            supplierId: fixture.supplierId,
+            reference: `CN-${label}-${tag('concurrent-credit-allocation')}`,
+            amountMinor: 10_000,
+            receivedAt: NOW,
+          })
+        )
+      )
+    );
+
+    let releaseFirst: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstAllocated: () => void = () => {};
+    const firstAllocated = new Promise<void>((resolve) => {
+      markFirstAllocated = resolve;
+    });
+    const allocate = (db: ScopedDb, supplierCreditId: string) =>
+      deps.returns.allocateSupplierCredit(db, scopeOf(fixture, CONTROLLER), {
+        supplierCreditId,
+        debitNoteId: note.id,
+        amountMinor: 10_000,
+        at: NOW,
+      });
+
+    // Hold the first successful allocation open. Without the debit-note lock,
+    // the second transaction reads zero committed allocations during this
+    // window and also succeeds with its different credit/allocation pair.
+    const first = inOrg(ORG_A, async (db) => {
+      const result = await allocate(db, credits[0]!.id);
+      markFirstAllocated();
+      await held;
+      return result;
+    });
+    await firstAllocated;
+    const second = inOrg(ORG_A, (db) => allocate(db, credits[1]!.id));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    releaseFirst();
+
+    const outcomes = await Promise.allSettled([first, second]);
+    expect(outcomes.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
+    expect(outcomes.filter(({ status }) => status === 'rejected')).toHaveLength(1);
+    expect(
+      (outcomes.find(({ status }) => status === 'rejected') as PromiseRejectedResult).reason
+    ).toMatchObject({ reason: 'OVER_ALLOCATION' });
+
+    const allocated = await inOrg(ORG_A, (db) =>
+      db.pharmacySupplierCreditAllocation.aggregate({
+        where: { organizationId: ORG_A, debitNoteId: note.id },
+        _sum: { amountMinor: true },
+      })
+    );
+    expect(allocated._sum.amountMinor).toBe(10_000);
+  });
+
   it('keeps the actor who submitted the return off its own settlement', async () => {
     const fixture = await scenario(ORG_A, 'segregation');
     const note = await dispatchedReturn(fixture, 'segregation', 12_000);

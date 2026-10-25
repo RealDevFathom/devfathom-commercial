@@ -412,6 +412,24 @@ export async function allocateSupplierCredit(
   scope: LedgerScope,
   input: { supplierCreditId: string; debitNoteId: string; amountMinor: number; at: Date }
 ) {
+  // Both rows are ceilings for the allocation. Lock them before reading either
+  // balance so allocations sharing a credit or a note cannot validate against
+  // the same stale remainder. The fixed credit-then-note order also prevents
+  // competing allocations from acquiring these locks in opposite orders.
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_supplier_credits
+      WHERE id = ${input.supplierCreditId}
+        AND "organizationId" = ${scope.organizationId}
+      FOR UPDATE`
+  );
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_debit_notes
+      WHERE id = ${input.debitNoteId}
+        AND "organizationId" = ${scope.organizationId}
+        AND "branchId" = ${scope.branchId}
+      FOR UPDATE`
+  );
+
   const [credit, note] = await Promise.all([
     db.pharmacySupplierCredit.findFirst({
       where: { id: input.supplierCreditId, organizationId: scope.organizationId },
