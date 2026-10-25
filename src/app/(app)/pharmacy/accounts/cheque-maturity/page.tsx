@@ -1,3 +1,4 @@
+import { TRPCError } from '@trpc/server';
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
@@ -23,7 +24,7 @@ import {
 } from '@/lib/pharmacy/accounts/cheque-maturity';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
-import { createTRPCContext } from '@/server/trpc';
+import { adminProcedure, createTRPCContext, router } from '@/server/trpc';
 import { DownloadCsv } from './download-csv';
 
 export const metadata: Metadata = { title: 'Cheque maturity evidence · Pharmacy reports' };
@@ -42,33 +43,54 @@ async function tenantContext() {
   });
 }
 
+// Branch discovery is a sensitive read too. Reuse the same session, admin:access,
+// and audit envelope as the finance workspace; do not replace it with a role check.
+const reportAccessRouter = router({
+  chequeMaturityBranches: adminProcedure.query(async ({ ctx }) => {
+    // Standalone callers have no root module prefix, so keep both explicit module gates.
+    if (
+      !ctx.session.user.id ||
+      ctx.session.user.role !== 'ADMIN' ||
+      !ctx.entitlements.organizationId ||
+      ctx.entitlements.organizationId !== ctx.organization?.id ||
+      !hasModule(ctx.entitlements, 'pharmacy-reports') ||
+      !hasModule(ctx.entitlements, 'pharmacy-finance')
+    ) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Financial report access is required.' });
+    }
+    for (const capability of ['reports:operational', 'reports:financial'] as const) {
+      if (
+        !(await can(subjectFromSession(ctx.session.user), capability, undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        }))
+      ) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Financial report access is required.' });
+      }
+    }
+    return ctx.db.pharmacyBranch.findMany({
+      where: { organizationId: ctx.entitlements.organizationId, active: true },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    });
+  }),
+});
+
 async function reportAccess() {
   const ctx = await tenantContext();
-  if (
-    !ctx?.session?.user?.id ||
-    ctx.session.user.role !== 'ADMIN' ||
-    !ctx.entitlements.organizationId ||
-    ctx.entitlements.organizationId !== ctx.organization?.id ||
-    !hasModule(ctx.entitlements, 'pharmacy-reports') ||
-    !hasModule(ctx.entitlements, 'pharmacy-finance')
-  )
-    return { kind: 'denied' as const };
-  for (const capability of ['reports:operational', 'reports:financial'] as const) {
+  if (!ctx) return { kind: 'denied' as const };
+  try {
+    const branches = await reportAccessRouter.createCaller(ctx).chequeMaturityBranches();
+    return { kind: 'allowed' as const, ctx, branches };
+  } catch (error) {
     if (
-      !(await can(subjectFromSession(ctx.session.user), capability, undefined, {
-        db: ctx.db,
-        source: 'TRPC',
-        ip: ctx.requestMeta.ip,
-      }))
+      error instanceof TRPCError &&
+      (error.code === 'UNAUTHORIZED' || error.code === 'FORBIDDEN')
     )
       return { kind: 'denied' as const };
+    throw error;
   }
-  const branches = await ctx.db.pharmacyBranch.findMany({
-    where: { organizationId: ctx.entitlements.organizationId, active: true },
-    orderBy: { name: 'asc' },
-    select: { id: true, name: true },
-  });
-  return { kind: 'allowed' as const, ctx, branches };
 }
 
 function Notice({ title, children }: { title: string; children: ReactNode }) {
