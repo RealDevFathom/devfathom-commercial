@@ -705,19 +705,19 @@ describeIfDatabase('FIN-01 — return', () => {
 });
 
 describeIfDatabase('FIN-01 — expiry/damage write-off', () => {
-  it('posts a balanced write-off at the lot cost, traceable to the movement', async () => {
+  it('posts a balanced write-off with the stock movement, traceable at the lot cost', async () => {
     const f = await fixture(ORG_A, branch('writeoff'), 'writeoff');
     const { entry, movementId } = await inOrg(ORG_A, async (db) => {
       const { lot } = await stockLot(db, f, {
         label: 'writeoff',
         units: 20,
-        unitCostMinor: 1_250,
+        unitCostMinor: 1_000,
         expiresAt: EXPIRY_SOON,
       });
       const written = await deps.operations.writeOff(db, scopeOf(f), {
         inventoryLotId: lot.id,
         stockLocationId: f.storeId,
-        units: 10,
+        units: 5,
         witnessId: WITNESS,
         reason: 'Expired stock destroyed',
         evidenceRef: `DEST-${tag('writeoff')}`,
@@ -725,17 +725,21 @@ describeIfDatabase('FIN-01 — expiry/damage write-off', () => {
       });
       return {
         movementId: written.movement.id,
-        entry: await deps.postings.postWriteOffEntry(db, scopeOf(f), {
-          stockMovementId: written.movement.id,
-          at: LATER,
+        entry: await db.financeJournalEntry.findFirstOrThrow({
+          where: {
+            organizationId: ORG_A,
+            sourceKind: 'PHARMACY_STOCK_WRITE_OFF',
+            sourceId: written.movement.id,
+          },
+          include: { lines: true },
         }),
       };
     });
 
     expectBalanced(entry);
     expect(entry.sourceId).toBe(movementId);
-    expect(totalFor(entry, 'INVENTORY_WRITE_OFF', 'DEBIT')).toBe(12_500);
-    expect(totalFor(entry, 'INVENTORY', 'CREDIT')).toBe(12_500);
+    expect(totalFor(entry, 'INVENTORY_WRITE_OFF', 'DEBIT')).toBe(5_000);
+    expect(totalFor(entry, 'INVENTORY', 'CREDIT')).toBe(5_000);
   });
 });
 
