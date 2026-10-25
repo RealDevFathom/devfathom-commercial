@@ -45,6 +45,7 @@ import {
 import { nearExpiryWarning, packIsExpired } from './gs1-datamatrix';
 import { expiryInstant, receiveLot, reverseMovements } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
+import { postGoodsReceiptEntry, reversePostingForSource } from './finance-postings';
 
 export type ReceivingScope = LedgerScope;
 
@@ -352,6 +353,8 @@ export async function postGoodsReceipt(
     }
   }
 
+  await postGoodsReceiptEntry(db, scope, { goodsReceiptId: receipt.id, at: input.at });
+
   return { goodsReceiptId: receipt.id, postedAt: input.at, lines, exceptions };
 }
 
@@ -508,6 +511,13 @@ export async function reverseGoodsReceipt(
       reversedByUserId: scope.actorId,
       reversalReason: input.reason,
     },
+  });
+
+  await reversePostingForSource(db, scope, {
+    sourceKind: 'PHARMACY_GOODS_RECEIPT',
+    sourceId: receipt.id,
+    reason: input.reason,
+    at: input.at,
   });
 
   return {

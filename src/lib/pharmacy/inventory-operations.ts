@@ -4,6 +4,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { arrangementFor, PharmacyInventoryError } from './inventory';
 import type { LedgerScope } from './stock-ledger';
+import { postCountAdjustmentEntry, postInterbranchTransferEntry } from './finance-postings';
 
 function assertPositive(units: number) {
   if (!Number.isSafeInteger(units) || units <= 0) throw new PharmacyInventoryError('INVALID_UNITS');
@@ -144,10 +145,15 @@ export async function approveCount(
       },
     });
   }
-  return db.pharmacyInventoryCount.update({
+  const approvedAt = new Date();
+  const approved = await db.pharmacyInventoryCount.update({
     where: { id: count.id },
-    data: { status: 'APPROVED', approvedById: scope.actorId, approvedAt: new Date() },
+    data: { status: 'APPROVED', approvedById: scope.actorId, approvedAt },
   });
+  for (const line of count.lines) {
+    await postCountAdjustmentEntry(db, scope, { countLineId: line.id, at: approvedAt });
+  }
+  return approved;
 }
 
 export async function writeOff(
@@ -396,10 +402,15 @@ export async function dispatchTransfer(
       },
     });
   }
-  return db.pharmacyInterbranchTransfer.update({
+  const dispatchedAt = new Date();
+  const dispatched = await db.pharmacyInterbranchTransfer.update({
     where: { id: transfer.id },
-    data: { status: 'DISPATCHED', dispatchedById: scope.actorId, dispatchedAt: new Date() },
+    data: { status: 'DISPATCHED', dispatchedById: scope.actorId, dispatchedAt },
   });
+  for (const line of transfer.lines) {
+    await postInterbranchTransferEntry(db, scope, { transferLineId: line.id, at: dispatchedAt });
+  }
+  return dispatched;
 }
 
 export async function receiveTransferLine(
