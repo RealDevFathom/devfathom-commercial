@@ -766,8 +766,16 @@ describeDb('funded wallet bridge — real PostgreSQL, explicit fresh DB only', (
           where: { id: branchSale },
           data: { branchId: f.otherBranchId },
         });
+        const patient = await db.pharmacyPatient.create({
+          data: { organizationId: f.scope.organizationId, displayName: 'Synthetic other patient' },
+        });
         const other = await db.pharmacyCustomer.create({
-          data: { organizationId: f.scope.organizationId, name: unique('other') },
+          data: {
+            organizationId: f.scope.organizationId,
+            patientId: patient.id,
+            displayName: 'Synthetic other customer',
+            active: true,
+          },
         });
         await db.pharmacySale.update({
           where: { id: customerSale },
@@ -778,9 +786,9 @@ describeDb('funded wallet bridge — real PostgreSQL, explicit fresh DB only', (
     );
     const before = await snapshot(f);
     for (const [cmd, error] of [
-      [spend(f, saleId, 100, { accountId: foreign.walletId }), 'WALLET_ACCOUNT_NOT_FOUND'],
-      [spend(f, branchSale), 'WALLET_SALE_SCOPE_MISMATCH'],
-      [spend(f, customerSale), 'WALLET_SALE_SCOPE_MISMATCH'],
+      [spend(f, saleId, 100, { accountId: foreign.walletId }), 'WALLET_ACCOUNT_SCOPE'],
+      [spend(f, branchSale), 'WALLET_SALE_SCOPE'],
+      [spend(f, customerSale), 'WALLET_SALE_SCOPE'],
     ] as const)
       await expect(bridge.postPharmacyStoredValue(f.scope, cmd)).rejects.toThrow(error);
     expect(await snapshot(f)).toEqual(before);
