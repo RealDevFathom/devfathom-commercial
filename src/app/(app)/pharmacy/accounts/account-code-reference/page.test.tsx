@@ -90,6 +90,18 @@ describe('account code reference page authorization', () => {
 
   it.each([
     ['missing tenant actor', () => mocks.actor.mockResolvedValueOnce(null)],
+    [
+      'inactive session',
+      async () => {
+        const { createTRPCContext } = await import('@/server/trpc');
+        vi.mocked(createTRPCContext).mockResolvedValueOnce({
+          session: { user: { id: 'user-1', role: 'EMPLOYEE', status: 'INACTIVE' } },
+          entitlements: { organizationId: 'org-1' },
+          requestMeta: { ip: null },
+          db: { pharmacyBranch: { findMany: mocks.branchRead } },
+        } as never);
+      },
+    ],
     ['disabled module', () => mocks.hasModule.mockReturnValueOnce(false)],
     [
       'missing operational permission',
@@ -100,7 +112,7 @@ describe('account code reference page authorization', () => {
       () => mocks.can.mockImplementation((_subject, action) => action !== 'reports:financial'),
     ],
   ])('denies %s before branch or reference reads', async (_condition, arrange) => {
-    arrange();
+    await arrange();
     render(await Page({ searchParams: Promise.resolve({}) }));
 
     expect(screen.getByRole('heading', { name: /required|unavailable/i })).toBeInTheDocument();

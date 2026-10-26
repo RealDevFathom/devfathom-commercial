@@ -11,6 +11,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { can, subjectFromSession } from '@/lib/abac';
+import { isSessionUsable } from '@/lib/auth/session-state';
 import { hasModule } from '@/lib/entitlements';
 import { accountCodeReference } from '@/lib/pharmacy/accounts/account-code-reference';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
@@ -55,7 +56,7 @@ export default async function AccountCodeReferencePage({
     organization: actor.organization,
     support: actor.support,
   });
-  if (!ctx.session?.user || !hasModule(ctx.entitlements, 'pharmacy-reports')) {
+  if (!isSessionUsable(ctx.session?.user) || !hasModule(ctx.entitlements, 'pharmacy-reports')) {
     return unavailable(
       'Reference unavailable',
       'An active session and the Pharmacy reports module are required.'
