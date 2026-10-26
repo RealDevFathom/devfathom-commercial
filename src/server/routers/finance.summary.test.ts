@@ -112,7 +112,7 @@ describe('finance.getFinancialSummary', () => {
   it('does not accumulate rounding drift across a large invoice set', async () => {
     mocks.invoiceFindMany.mockResolvedValue(
       Array.from({ length: 10_000 }, () => ({
-        total: 9_999_999_999.99,
+        total: 0.01,
         currency: 'USD',
         payments: [],
       }))
@@ -120,9 +120,24 @@ describe('finance.getFinancialSummary', () => {
 
     const summary = await caller().getFinancialSummary();
 
-    expect(summary.totalOutstanding).toEqual([
-      { currency: 'USD', amount: 99_999_999_999_900 },
-    ]);
+    expect(summary.totalOutstanding).toEqual([{ currency: 'USD', amount: 100 }]);
     expect(summary.outstandingCount).toBe(10_000);
+  });
+
+  it('rejects an aggregate that cannot preserve every cent in the number DTO', async () => {
+    // 9,007 maximum-value invoices plus this remainder total exactly
+    // 9,007,199,254,740,993 cents: Number.MAX_SAFE_INTEGER + 2.
+    mocks.invoiceFindMany.mockResolvedValue([
+      ...Array.from({ length: 9_007 }, () => ({
+        total: 9_999_999_999.99,
+        currency: 'USD',
+        payments: [],
+      })),
+      { total: 1_992_547_500, currency: 'USD', payments: [] },
+    ]);
+
+    await expect(caller().getFinancialSummary()).rejects.toThrow(
+      'Outstanding balance exceeds the safely representable amount'
+    );
   });
 });

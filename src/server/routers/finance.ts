@@ -70,6 +70,13 @@ const decimalToCents = (amount: unknown): bigint => {
   return sign === '-' ? -cents : cents;
 };
 
+const centsToSafeNumber = (cents: bigint): number => {
+  if (cents > BigInt(Number.MAX_SAFE_INTEGER) || cents < BigInt(Number.MIN_SAFE_INTEGER)) {
+    throw new Error('Outstanding balance exceeds the safely representable amount');
+  }
+  return Number(cents) / 100;
+};
+
 // IMP-FIN-04: money is Decimal(12,2), so a partial payment can legitimately pay an
 // invoice off to the exact cent. Compare paid-vs-total with a half-cent tolerance
 // so a sub-cent float artifact never tips an exact payoff into "overpayment" — and
@@ -877,9 +884,9 @@ export const financeRouter = router({
     const totalOutstanding = sortCurrencies(
       Array.from(outstandingCents, ([currency, cents]) => ({
         currency,
-        // CurrencyAmount is the public number-based DTO. Keep the calculation
-        // exact through aggregation, converting only at this serialization edge.
-        amount: Number(cents) / 100,
+        // CurrencyAmount is the public number-based DTO. Fail rather than
+        // silently losing cents when the aggregate exceeds its safe range.
+        amount: centsToSafeNumber(cents),
       }))
     );
 
