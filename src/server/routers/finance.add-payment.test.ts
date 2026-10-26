@@ -171,4 +171,22 @@ describe('finance.addPayment', () => {
     expect(mocks.logActivity).not.toHaveBeenCalled();
     expect(mocks.emitEvent).not.toHaveBeenCalled();
   });
+
+  it('logs invoice_paid only after the payment transaction commits', async () => {
+    mocks.transaction.mockImplementation(
+      async (callback: (transaction: ReturnType<typeof transactionClient>) => unknown) => {
+        const result = await callback(transactionClient());
+
+        expect(mocks.logActivity).not.toHaveBeenCalled();
+        expect(mocks.emitEvent).not.toHaveBeenCalled();
+
+        return result;
+      }
+    );
+
+    await caller().addPayment({ invoiceId: 'invoice-1', amount: 60 });
+
+    expect(mocks.logActivity).toHaveBeenCalledOnce();
+    expect(mocks.emitEvent).toHaveBeenCalledOnce();
+  });
 });
