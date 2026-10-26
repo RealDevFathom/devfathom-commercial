@@ -66,9 +66,18 @@ BEGIN
 END;
 $$;
 
-CREATE TRIGGER project_member_assignment_cleanup
-AFTER DELETE OR UPDATE OF "projectId", "userId" ON project_members
+CREATE TRIGGER project_member_assignment_cleanup_on_delete
+AFTER DELETE ON project_members
 FOR EACH ROW
+EXECUTE FUNCTION remove_assignments_for_departing_project_member();
+
+CREATE TRIGGER project_member_assignment_cleanup_on_update
+AFTER UPDATE OF "projectId", "userId" ON project_members
+FOR EACH ROW
+WHEN (
+  OLD."projectId" IS DISTINCT FROM NEW."projectId"
+  OR OLD."userId" IS DISTINCT FROM NEW."userId"
+)
 EXECUTE FUNCTION remove_assignments_for_departing_project_member();
 
 CREATE OR REPLACE FUNCTION remove_invalid_assignments_after_task_move()

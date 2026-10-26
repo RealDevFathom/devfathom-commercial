@@ -71,6 +71,38 @@ describeIfDatabase('task-assignee project membership database invariant', () => 
     }
   });
 
+  it('keeps assignments when a membership update does not change its identity', async () => {
+    const schema = `task_membership_${randomUUID().replaceAll('-', '')}`;
+    const client = new pg.Client({ connectionString: databaseUrl });
+    await client.connect();
+    try {
+      await client.query(`CREATE SCHEMA "${schema}"; SET search_path TO "${schema}"`);
+      await client.query(`
+        CREATE TABLE projects (id text PRIMARY KEY);
+        CREATE TABLE boards (id text PRIMARY KEY, "projectId" text NOT NULL);
+        CREATE TABLE columns (id text PRIMARY KEY, "boardId" text NOT NULL);
+        CREATE TABLE tasks (id text PRIMARY KEY, "columnId" text NOT NULL);
+        CREATE TABLE project_members (id text PRIMARY KEY, "projectId" text NOT NULL, "userId" text NOT NULL);
+        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL);
+        ${migration}
+        INSERT INTO projects VALUES ('project');
+        INSERT INTO boards VALUES ('board', 'project');
+        INSERT INTO columns VALUES ('column', 'board');
+        INSERT INTO tasks VALUES ('task', 'column');
+        INSERT INTO project_members VALUES ('membership', 'project', 'user');
+        INSERT INTO task_assignees VALUES ('assignment', 'task', 'user');
+        UPDATE project_members
+           SET "projectId" = "projectId", "userId" = "userId"
+         WHERE id = 'membership';
+      `);
+      const remaining = await client.query(`SELECT id FROM task_assignees`);
+      expect(remaining.rows).toEqual([{ id: 'assignment' }]);
+    } finally {
+      await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).catch(() => undefined);
+      await client.end();
+    }
+  });
+
   it('serializes assignment against concurrent membership removal', async () => {
     const schema = `task_membership_${randomUUID().replaceAll('-', '')}`;
     const setup = new pg.Client({ connectionString: databaseUrl });
