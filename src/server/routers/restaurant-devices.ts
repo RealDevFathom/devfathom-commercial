@@ -317,7 +317,7 @@ export const restaurantDevicesRouter = router({
       const eligibility = await Promise.all(
         candidates.map(async (profile) => ({
           profile,
-          eligible: await staffHasCapability(ctx.db, profile.id, device.branchId, 'devices:manage'),
+          eligible: await staffHasCapability(ctx.db, profile.id, device.branchId, 'coauth:approve'),
         }))
       );
 
@@ -497,12 +497,12 @@ export const restaurantDevicesRouter = router({
           ctx.db,
           input.approvingStaffProfileId,
           device.branchId,
-          'devices:manage'
+          'coauth:approve'
         ))
       ) {
         throw new TRPCError({
           code: 'FORBIDDEN',
-          message: 'The approving manager lacks device-management permission.',
+          message: 'The approving manager lacks co-authorization approval permission.',
         });
       }
 
@@ -614,12 +614,12 @@ export const restaurantDevicesRouter = router({
           ctx.db,
           input.approvingStaffProfileId,
           device.branchId,
-          'devices:manage'
+          'coauth:approve'
         ))
       ) {
         throw new TRPCError({
           code: 'FORBIDDEN',
-          message: 'The approving manager lacks device-management permission.',
+          message: 'The approving manager lacks co-authorization approval permission.',
         });
       }
 

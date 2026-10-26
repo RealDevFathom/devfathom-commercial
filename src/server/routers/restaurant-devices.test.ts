@@ -253,8 +253,14 @@ beforeAll(async () => {
     const managerRole = await tx.restaurantJobRole.create({
       data: { key: `device-manager-${suffix}`, name: 'Device manager', active: true },
     });
+    const approverRole = await tx.restaurantJobRole.create({
+      data: { key: `device-approver-${suffix}`, name: 'Device approver', active: true },
+    });
     await tx.restaurantJobRoleCapability.create({
       data: { jobRoleId: managerRole.id, capability: 'devices:manage' },
+    });
+    await tx.restaurantJobRoleCapability.create({
+      data: { jobRoleId: approverRole.id, capability: 'coauth:approve' },
     });
     await tx.restaurantStaffJobRole.create({
       data: { staffProfileId: actingStaffId, jobRoleId: managerRole.id, branchId },
@@ -262,9 +268,12 @@ beforeAll(async () => {
     await tx.restaurantStaffJobRole.create({
       data: {
         staffProfileId: approvingStaffId,
-        jobRoleId: managerRole.id,
+        jobRoleId: approverRole.id,
         branchId,
       },
+    });
+    await tx.restaurantStaffJobRole.create({
+      data: { staffProfileId: unprivilegedStaffId, jobRoleId: managerRole.id, branchId },
     });
   });
   await deps.withTenantDb(otherOrgId, async (tx) => {
@@ -380,7 +389,7 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
     expect(row as Record<string, unknown>).not.toHaveProperty('deviceSecretHash');
   });
 
-  it('lists only distinct eligible approvers using devices:manage branch scope', async () => {
+  it('lists only distinct eligible approvers using coauth:approve branch scope', async () => {
     mocks.can.mockImplementation(async (...args: unknown[]) => args[1] === 'devices:manage');
     const api = caller();
     const enrolled = await api.initiateEnrollment({ branchId, name: 'POS-approvers' });
@@ -449,24 +458,31 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
     expect(failed!.failedAttempts).toBeGreaterThanOrEqual(1);
   });
 
-  it('rejects a valid approving credential without device-management capability', async () => {
-    const api = caller();
-    const { device } = await api.initiateEnrollment({ branchId, name: 'POS-no-capability' });
+  it.each(['revoke', 'rotate'] as const)(
+    'rejects %s with a valid credential that has devices:manage but not coauth:approve',
+    async (operation) => {
+      const api = caller();
+      const { device } = await api.initiateEnrollment({
+        branchId,
+        name: `POS-no-approval-${operation}`,
+      });
 
-    await expect(
-      api.revoke({
+      const input = {
         deviceId: device.id,
         actingStaffProfileId: actingStaffId,
         approvingStaffProfileId: unprivilegedStaffId,
-        approvingType: 'PIN',
+        approvingType: 'PIN' as const,
         approvingSecret: APPROVING_PIN,
         reason: 'capability check',
-      })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      };
+      const attempt = operation === 'revoke' ? api.revoke(input) : api.rotate(input);
 
-    const still = (await api.list()).find((d) => d.id === device.id);
-    expect(still!.status).toBe('ACTIVE');
-  });
+      await expect(attempt).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+      const still = (await api.list()).find((d) => d.id === device.id);
+      expect(still!.status).toBe('ACTIVE');
+    }
+  );
 
   it('revokes with manager co-authorization, writing the C7 evidence record atomically', async () => {
     const api = caller();
@@ -705,14 +721,14 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
   it('lets an organization-wide owner list approvers and revoke on a branch they are not linked to', async () => {
     // The acting owner's staff profile is linked only to Downtown; the device is at Airport.
     const device = await deps.withTenantDb(orgId, async (tx) => {
-      const managerRole = await tx.restaurantJobRole.findFirstOrThrow({
-        where: { key: `device-manager-${suffix}` },
+      const approverRole = await tx.restaurantJobRole.findFirstOrThrow({
+        where: { key: `device-approver-${suffix}` },
         select: { id: true },
       });
       await tx.restaurantStaffJobRole.create({
         data: {
           staffProfileId: approvingStaffId,
-          jobRoleId: managerRole.id,
+          jobRoleId: approverRole.id,
           branchId: otherBranchId,
         },
       });
