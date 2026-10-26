@@ -31,6 +31,14 @@ const UPCOMING_SERIES_LIMIT = 200;
 /** Occurrences one `getOccurrences` page may return. */
 const OCCURRENCE_PAGE_SIZE_MAX = 200;
 
+const INVALID_MEETING_TIME_MESSAGE = 'End time must be after start time.';
+
+export function assertValidMeetingTimeRange(startTime: Date, endTime: Date): void {
+  if (endTime.getTime() <= startTime.getTime()) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: INVALID_MEETING_TIME_MESSAGE });
+  }
+}
+
 /**
  * The `Meeting` columns the occurrence resolvers need. Selected explicitly so
  * that adding a column to the model does not silently widen these payloads.
@@ -334,6 +342,8 @@ export const meetingsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      assertValidMeetingTimeRange(input.startTime, input.endTime);
+
       // Guard against stale sessions: if the session JWT references a user that
       // no longer exists (e.g. after a DB reset), fail fast with a useful message
       // instead of a cryptic FK violation.
@@ -391,6 +401,20 @@ export const meetingsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertMeetingManage(ctx, input.id);
       const { id, attendeeIds, ...data } = input;
+
+      if (data.startTime !== undefined || data.endTime !== undefined) {
+        const currentTimes = await ctx.db.meeting.findUnique({
+          where: { id },
+          select: { startTime: true, endTime: true },
+        });
+        if (!currentTimes) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Meeting not found' });
+        }
+        assertValidMeetingTimeRange(
+          data.startTime ?? currentTimes.startTime,
+          data.endTime ?? currentTimes.endTime
+        );
+      }
 
       if (attendeeIds) {
         const allAttendees = [...new Set([ctx.session.user.id, ...attendeeIds])];

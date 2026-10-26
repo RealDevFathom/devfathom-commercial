@@ -56,6 +56,8 @@ interface TimePickerProps {
   placeholder?: string;
   id?: string;
   'aria-label'?: string;
+  'aria-describedby'?: string;
+  'aria-invalid'?: boolean;
   disabled?: boolean;
 }
 
@@ -67,6 +69,8 @@ export function TimePicker({
   id,
   disabled,
   'aria-label': ariaLabel,
+  'aria-describedby': ariaDescribedBy,
+  'aria-invalid': ariaInvalid,
 }: TimePickerProps) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -91,9 +95,7 @@ export function TimePicker({
     setCoords({
       left: r.left,
       width: r.width,
-      ...(placeAbove
-        ? { bottom: window.innerHeight - r.top + 4 }
-        : { top: r.bottom + 4 }),
+      ...(placeAbove ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
     });
   }, []);
 
@@ -179,6 +181,8 @@ export function TimePicker({
         type="button"
         disabled={disabled}
         aria-label={ariaLabel}
+        aria-describedby={ariaDescribedBy}
+        aria-invalid={ariaInvalid}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => !disabled && (open ? setOpen(false) : openMenu())}

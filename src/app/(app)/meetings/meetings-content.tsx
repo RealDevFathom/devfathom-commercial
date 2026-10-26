@@ -206,8 +206,13 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
   );
   const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
 
+  const hasCompleteTimeRange = Boolean(date && startTime && endTime);
+  const hasInvalidTimeRange =
+    hasCompleteTimeRange &&
+    new Date(`${date}T${endTime}`).getTime() <= new Date(`${date}T${startTime}`).getTime();
+
   const handleCreate = () => {
-    if (!title.trim() || !date || !startTime || !endTime) return;
+    if (!title.trim() || !hasCompleteTimeRange || hasInvalidTimeRange) return;
     onSubmit({
       title: title.trim(),
       description: description.trim() || undefined,
@@ -279,7 +284,12 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               value={startTime}
               onChange={setStartTime}
               aria-label="Start time"
-              className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              aria-describedby={hasInvalidTimeRange ? 'meeting-time-error' : undefined}
+              aria-invalid={hasInvalidTimeRange}
+              className={cn(
+                'rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
+                hasInvalidTimeRange && 'border-destructive'
+              )}
             />
           </div>
           <div>
@@ -288,10 +298,20 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               value={endTime}
               onChange={setEndTime}
               aria-label="End time"
-              className="rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              aria-describedby={hasInvalidTimeRange ? 'meeting-time-error' : undefined}
+              aria-invalid={hasInvalidTimeRange}
+              className={cn(
+                'rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
+                hasInvalidTimeRange && 'border-destructive'
+              )}
             />
           </div>
         </div>
+        {hasInvalidTimeRange && (
+          <p id="meeting-time-error" role="alert" className="text-xs text-destructive">
+            End time must be after start time.
+          </p>
+        )}
 
         {/* Recurrence */}
         <div>
@@ -362,7 +382,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
           </button>
           <button
             onClick={handleCreate}
-            disabled={!title.trim() || !date || !startTime || !endTime || isPending}
+            disabled={!title.trim() || !hasCompleteTimeRange || hasInvalidTimeRange || isPending}
             className="flex items-center gap-1.5 rounded-xl bg-primary px-5 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {isPending ? (

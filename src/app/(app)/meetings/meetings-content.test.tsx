@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => ({
   pages: [] as Array<{ items: unknown[]; nextCursor?: string }>,
   hasNextPage: false,
   fetchNextPage: vi.fn(),
+  createMeeting: vi.fn(),
 }));
 
 vi.mock('next-auth/react', () => ({
@@ -81,7 +82,9 @@ vi.mock('@/lib/trpc', () => {
             isFetchingNextPage: false,
           }),
         },
-        create: mutation(),
+        create: {
+          useMutation: () => ({ mutate: mocks.createMeeting, isPending: false }),
+        },
         update: mutation(),
         delete: mutation(),
       },
@@ -108,6 +111,7 @@ describe('MeetingsContent pagination', () => {
     mocks.pages = [];
     mocks.hasNextPage = false;
     mocks.fetchNextPage.mockClear();
+    mocks.createMeeting.mockClear();
   });
 
   // The defect issue #44 reports, at the surface that shows it. A tenant whose
@@ -178,5 +182,28 @@ describe('MeetingsContent pagination', () => {
 
     expect(screen.getByText('Past meeting 2')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
+  });
+
+  it('prevents scheduling when the end time is not after the start time', () => {
+    const { container } = render(<MeetingsContent />);
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule Meeting' }));
+
+    fireEvent.change(screen.getByPlaceholderText('e.g. Sprint Planning'), {
+      target: { value: 'Planning' },
+    });
+    fireEvent.change(container.querySelector('input[type="date"]')!, {
+      target: { value: '2026-10-26' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start time' }));
+    fireEvent.click(screen.getByRole('option', { name: '10:00 AM' }));
+    fireEvent.click(screen.getByRole('button', { name: 'End time' }));
+    fireEvent.click(screen.getByRole('option', { name: '10:00 AM' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('End time must be after start time.');
+    const schedule = screen.getByRole('button', { name: 'Schedule' });
+    expect(schedule).toBeDisabled();
+    fireEvent.click(schedule);
+    expect(mocks.createMeeting).not.toHaveBeenCalled();
   });
 });
