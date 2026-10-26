@@ -401,6 +401,13 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
 
     expect((await f.replay()).status).toBe(200);
     expect((await f.replay(second)).status).toBe(200);
+
+    const late = await f.replay({
+      ...f.command,
+      idempotencyKey: tag('late-command-1'),
+    });
+    expect(late.status).toBe(409);
+    expect(await late.json()).toEqual({ error: 'SEQUENCE_CONFLICT' });
     expect((await f.counts()).commands).toBe(2);
   });
 
