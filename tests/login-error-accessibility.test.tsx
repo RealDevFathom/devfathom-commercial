@@ -118,6 +118,8 @@ describe('login credential error accessibility', () => {
       expect(authenticationCode).toHaveFocus();
       expect(email).not.toHaveAttribute('aria-invalid');
       expect(password).not.toHaveAttribute('aria-invalid');
+      expect(email).not.toHaveAttribute('aria-describedby');
+      expect(password).not.toHaveAttribute('aria-describedby');
 
       fireEvent.change(authenticationCode, { target: { value: '123456' } });
       expect(authenticationCode).not.toHaveAttribute('aria-invalid');
@@ -179,5 +181,8 @@ describe('login credential error accessibility', () => {
     expect(email).not.toHaveAttribute('aria-invalid');
     expect(password).not.toHaveAttribute('aria-invalid');
     expect(authenticationCode).not.toHaveAttribute('aria-invalid');
+    expect(email).not.toHaveAttribute('aria-describedby');
+    expect(password).not.toHaveAttribute('aria-describedby');
+    expect(authenticationCode).not.toHaveAttribute('aria-describedby');
   });
 });
