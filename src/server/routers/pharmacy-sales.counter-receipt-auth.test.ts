@@ -176,6 +176,7 @@ beforeEach(() => {
     layout: { paperWidth: 32 },
     revision: 1,
   } as never);
+  vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({ ntn: null, strn: null });
 });
 
 type Caller = ReturnType<ReturnType<typeof fixture>['caller']>;
