@@ -56,7 +56,10 @@ export const RETRY_CAP_MS = 30 * 60_000;
 export const DEFAULT_LEASE_MS = 15 * 60_000;
 
 export type SchedulerErrorReason =
-  'INVALID' | 'JOB_NOT_FOUND' | 'INVALID_STATE' | 'DUPLICATE_ENQUEUE';
+  | 'INVALID'
+  | 'JOB_NOT_FOUND'
+  | 'INVALID_STATE'
+  | 'DUPLICATE_ENQUEUE';
 
 export class SchedulerError extends Error {
   constructor(
@@ -256,8 +259,10 @@ export async function claimNextDue(db: ScopedDb, opts: ClaimOptions): Promise<Cl
 }
 
 export type SettleOptions = {
-  /** The worker recorded on the execution row (defaults to the job's claimer). */
-  workerId?: string;
+  /** Must match the worker that owns the current RUNNING claim. */
+  workerId: string;
+  /** Claim generation returned as `ClaimedJob.attempts`. */
+  attempt: number;
   now?: Date;
 };
 
@@ -270,21 +275,18 @@ export type FailSettleOptions = SettleOptions & {
  * Mark a RUNNING job SUCCEEDED and append its immutable execution row. Throws if
  * the job is missing or is not RUNNING (guards against double-settle).
  */
-export async function complete(
-  db: ScopedDb,
-  jobId: string,
-  opts: SettleOptions = {}
-): Promise<void> {
+export async function complete(db: ScopedDb, jobId: string, opts: SettleOptions): Promise<void> {
   const now = opts.now ?? new Date();
   await runSchedulerTransaction(db, async (tx) => {
-    const job = await requireRunningJob(tx, jobId);
-    await tx.restaurantJob.update({
-      where: { id: jobId },
+    const job = await requireRunningClaim(tx, jobId, opts);
+    const settled = await tx.restaurantJob.updateMany({
+      where: runningClaimWhere(jobId, opts),
       data: { status: 'SUCCEEDED', lastError: null },
     });
+    requireClaimUpdate(settled.count, jobId);
     await appendExecution(tx, {
       jobId,
-      workerId: opts.workerId ?? job.claimedBy ?? 'unknown',
+      workerId: opts.workerId,
       attempt: job.attempts,
       startedAt: job.claimedAt ?? now,
       finishedAt: now,
@@ -304,42 +306,45 @@ export async function fail(
   db: ScopedDb,
   jobId: string,
   error: unknown,
-  opts: FailSettleOptions = {}
+  opts: FailSettleOptions
 ): Promise<FailOutcome> {
   const now = opts.now ?? new Date();
   const message = errorMessage(error);
   return runSchedulerTransaction(db, async (tx) => {
-    const job = await requireRunningJob(tx, jobId);
+    const job = await requireRunningClaim(tx, jobId, opts);
+
+    const permanent = opts.permanent === true;
+    let outcome: FailOutcome;
+    let data: Prisma.RestaurantJobUpdateManyMutationInput;
+    if (!permanent && job.attempts < job.maxAttempts) {
+      outcome = 'retried';
+      data = {
+        status: 'QUEUED',
+        nextAttemptAt: nextRetryAt(job.attempts, now),
+        claimedAt: null,
+        claimedBy: null,
+        lastError: message,
+      };
+    } else {
+      outcome = permanent ? 'failed' : 'dead';
+      data = { status: permanent ? 'FAILED' : 'DEAD', lastError: message };
+    }
+
+    const settled = await tx.restaurantJob.updateMany({
+      where: runningClaimWhere(jobId, opts),
+      data,
+    });
+    requireClaimUpdate(settled.count, jobId);
     await appendExecution(tx, {
       jobId,
-      workerId: opts.workerId ?? job.claimedBy ?? 'unknown',
+      workerId: opts.workerId,
       attempt: job.attempts,
       startedAt: job.claimedAt ?? now,
       finishedAt: now,
       outcome: 'FAILED',
       error: message,
     });
-
-    const permanent = opts.permanent === true;
-    if (!permanent && job.attempts < job.maxAttempts) {
-      await tx.restaurantJob.update({
-        where: { id: jobId },
-        data: {
-          status: 'QUEUED',
-          nextAttemptAt: nextRetryAt(job.attempts, now),
-          claimedAt: null,
-          claimedBy: null,
-          lastError: message,
-        },
-      });
-      return 'retried';
-    }
-
-    await tx.restaurantJob.update({
-      where: { id: jobId },
-      data: { status: permanent ? 'FAILED' : 'DEAD', lastError: message },
-    });
-    return permanent ? 'failed' : 'dead';
+    return outcome;
   });
 }
 
@@ -488,12 +493,20 @@ export async function drainDueJobs(options: DrainOptions): Promise<DrainResult> 
     try {
       await options.handler(job);
       await options.runScoped((db) =>
-        complete(db, job.id, { workerId: options.workerId, now: clock() })
+        complete(db, job.id, {
+          workerId: options.workerId,
+          attempt: job.attempts,
+          now: clock(),
+        })
       );
       result.succeeded += 1;
     } catch (error) {
       const outcome = await options.runScoped((db) =>
-        fail(db, job.id, error, { workerId: options.workerId, now: clock() })
+        fail(db, job.id, error, {
+          workerId: options.workerId,
+          attempt: job.attempts,
+          now: clock(),
+        })
       );
       result[outcome] += 1;
     }
@@ -525,7 +538,14 @@ type RunningJob = {
   claimedBy: string | null;
 };
 
-async function requireRunningJob(tx: ScopedDb, jobId: string): Promise<RunningJob> {
+async function requireRunningClaim(
+  tx: ScopedDb,
+  jobId: string,
+  claim: Pick<SettleOptions, 'workerId' | 'attempt'>
+): Promise<RunningJob> {
+  if (!claim.workerId.trim() || !Number.isInteger(claim.attempt) || claim.attempt < 1) {
+    throw new SchedulerError('Settlement requires a valid workerId and claim attempt.', 'INVALID');
+  }
   const job = await tx.restaurantJob.findUnique({
     where: { id: jobId },
     select: {
@@ -546,7 +566,34 @@ async function requireRunningJob(tx: ScopedDb, jobId: string): Promise<RunningJo
       'INVALID_STATE'
     );
   }
+  if (job.claimedBy !== claim.workerId || job.attempts !== claim.attempt) {
+    throw new SchedulerError(
+      `Job ${jobId} is owned by a different claim; refusing to settle it.`,
+      'INVALID_STATE'
+    );
+  }
   return job as RunningJob;
+}
+
+function runningClaimWhere(
+  jobId: string,
+  claim: Pick<SettleOptions, 'workerId' | 'attempt'>
+): Prisma.RestaurantJobWhereInput {
+  return {
+    id: jobId,
+    status: 'RUNNING',
+    attempts: claim.attempt,
+    claimedBy: claim.workerId,
+  };
+}
+
+function requireClaimUpdate(count: number, jobId: string): void {
+  if (count !== 1) {
+    throw new SchedulerError(
+      `Job ${jobId} claim changed while it was being settled; refusing to settle it.`,
+      'INVALID_STATE'
+    );
+  }
 }
 
 async function appendExecution(

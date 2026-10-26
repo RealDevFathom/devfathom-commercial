@@ -223,8 +223,12 @@ describe('enqueue', () => {
 describe('complete', () => {
   it('rejects a missing or non-running job', async () => {
     const { db } = createFakeDb([{ id: 'j1', status: 'QUEUED', attempts: 0, maxAttempts: 5 }]);
-    await expect(complete(db, 'missing')).rejects.toMatchObject({ reason: 'JOB_NOT_FOUND' });
-    await expect(complete(db, 'j1')).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    await expect(
+      complete(db, 'missing', { workerId: 'worker-a', attempt: 1 })
+    ).rejects.toMatchObject({ reason: 'JOB_NOT_FOUND' });
+    await expect(complete(db, 'j1', { workerId: 'worker-a', attempt: 1 })).rejects.toMatchObject({
+      reason: 'INVALID_STATE',
+    });
   });
 
   it('marks a running job SUCCEEDED and appends one execution', async () => {
@@ -238,7 +242,11 @@ describe('complete', () => {
         claimedBy: 'worker-a',
       },
     ]);
-    await complete(db, 'j1', { now: new Date(T0.getTime() + 5_000) });
+    await complete(db, 'j1', {
+      workerId: 'worker-a',
+      attempt: 1,
+      now: new Date(T0.getTime() + 5_000),
+    });
     expect(jobs.get('j1')!.status).toBe('SUCCEEDED');
     expect(executions).toHaveLength(1);
     expect(executions[0]).toMatchObject({
@@ -264,7 +272,11 @@ describe('fail', () => {
         claimedBy: 'worker-a',
       },
     ]);
-    const outcome = await fail(db, 'j1', new Error('boom'), { now: T0 });
+    const outcome = await fail(db, 'j1', new Error('boom'), {
+      workerId: 'worker-a',
+      attempt: 1,
+      now: T0,
+    });
     expect(outcome).toBe('retried');
     const job = jobs.get('j1')!;
     expect(job.status).toBe('QUEUED');
@@ -287,7 +299,11 @@ describe('fail', () => {
         claimedBy: 'worker-a',
       },
     ]);
-    const outcome = await fail(db, 'j1', new Error('boom'), { now: T0 });
+    const outcome = await fail(db, 'j1', new Error('boom'), {
+      workerId: 'worker-a',
+      attempt: 3,
+      now: T0,
+    });
     expect(outcome).toBe('dead');
     expect(jobs.get('j1')!.status).toBe('DEAD');
     expect(executions).toHaveLength(1);
@@ -304,15 +320,55 @@ describe('fail', () => {
         claimedBy: 'worker-a',
       },
     ]);
-    const outcome = await fail(db, 'j1', new Error('bad payload'), { now: T0, permanent: true });
+    const outcome = await fail(db, 'j1', new Error('bad payload'), {
+      workerId: 'worker-a',
+      attempt: 1,
+      now: T0,
+      permanent: true,
+    });
     expect(outcome).toBe('failed');
     expect(jobs.get('j1')!.status).toBe('FAILED');
   });
 
   it('refuses to settle a job that is not RUNNING', async () => {
     const { db } = createFakeDb([{ id: 'j1', status: 'QUEUED', attempts: 0, maxAttempts: 5 }]);
-    await expect(fail(db, 'j1', new Error('x'))).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    await expect(
+      fail(db, 'j1', new Error('x'), { workerId: 'worker-a', attempt: 1 })
+    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
   });
+
+  it.each(['complete', 'fail'] as const)(
+    'rejects a stale worker attempting to %s a newer claim',
+    async (operation) => {
+      const { db, jobs, executions } = createFakeDb([
+        {
+          id: 'j1',
+          status: 'RUNNING',
+          attempts: 2,
+          maxAttempts: 5,
+          claimedAt: new Date(T0.getTime() + DEFAULT_LEASE_MS),
+          claimedBy: 'worker-b',
+        },
+      ]);
+
+      const settlement =
+        operation === 'complete'
+          ? complete(db, 'j1', { workerId: 'worker-a', attempt: 1, now: T0 })
+          : fail(db, 'j1', new Error('late failure'), {
+              workerId: 'worker-a',
+              attempt: 1,
+              now: T0,
+            });
+
+      await expect(settlement).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+      expect(jobs.get('j1')).toMatchObject({
+        status: 'RUNNING',
+        attempts: 2,
+        claimedBy: 'worker-b',
+      });
+      expect(executions).toHaveLength(0);
+    }
+  );
 });
 
 describe('recoverStaleJobs', () => {
