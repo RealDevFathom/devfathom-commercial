@@ -11,6 +11,7 @@ describe('reportNetSales', () => {
       netSales: new Prisma.Decimal('50.00'),
     };
 
+    expect(reportNetSales(close)).toBe(close.netSales);
     expect(reportNetSales(close).toFixed(2)).toBe('50.00');
   });
 });

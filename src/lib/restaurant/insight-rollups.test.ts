@@ -100,6 +100,45 @@ describe('pure rollup calculations', () => {
     expect(total.refundTotal.toFixed(2)).toBe('60.00');
   });
 
+  it('uses exact decimal component arithmetic across full and partial refunds', () => {
+    const total = computeReconciledFinancials({
+      bills: [
+        {
+          status: 'SETTLED',
+          subtotal: D('200.1234'),
+          deliveryFeeTotal: D('4'),
+          taxTotal: D('20.2345'),
+          serviceChargeTotal: D('10.1111'),
+          compTotal: D('0.0034'),
+          discountTotal: D('0.02'),
+          grandTotal: D('234.468'),
+        },
+      ],
+      tenders: [],
+      refunds: [
+        {
+          amount: D('120'),
+          taxRefundAmount: D('10'),
+          serviceChargeRefundAmount: D('8'),
+          deliveryFeeRefundAmount: D('2'),
+        },
+        {
+          amount: D('12.3456'),
+          taxRefundAmount: D('1.2345'),
+          serviceChargeRefundAmount: D('0.1111'),
+          deliveryFeeRefundAmount: D('1'),
+        },
+      ],
+      drawers: [],
+    });
+
+    expect(total.netSales.toString()).toBe('90.1');
+    expect(total.taxTotal.toString()).toBe('9');
+    expect(total.serviceChargeTotal.toString()).toBe('2');
+    expect(total.deliveryFeeRefunds.toString()).toBe('3');
+    expect(total.refundTotal.toString()).toBe('129.3456');
+  });
+
   it('projects deterministic product item mix from snapshot prices and non-voided inputs', () => {
     const result = computeItemMix([
       {
