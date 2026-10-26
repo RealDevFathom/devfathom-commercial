@@ -208,22 +208,41 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const isAdmin = ctx.session.user.role === 'ADMIN';
-      const callerMembership = await ctx.db.projectMember.findUnique({
-        where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
-      });
-      if (!isAdmin && callerMembership?.role !== 'LEAD') {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Only the project lead or an admin can add members.',
-        });
-      }
       await assertInOrganization(ctx.db.user, workspaceId(ctx), [input.userId]);
 
-      // Idempotent — if already a member, just update the role
-      const membership = await ctx.db.projectMember.upsert({
-        where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        create: { projectId: input.projectId, userId: input.userId, role: input.role },
-        update: { role: input.role },
+      const membership = await ctx.db.$transaction(async (tx) => {
+        await lockProjectMembership(tx, input.projectId);
+
+        const [callerMembership, target, leadCount] = await Promise.all([
+          tx.projectMember.findUnique({
+            where: {
+              projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id },
+            },
+          }),
+          tx.projectMember.findUnique({
+            where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+          }),
+          tx.projectMember.count({ where: { projectId: input.projectId, role: 'LEAD' } }),
+        ]);
+        if (!isAdmin && callerMembership?.role !== 'LEAD') {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the project lead or an admin can add members.',
+          });
+        }
+        if (target?.role === 'LEAD' && input.role === 'MEMBER' && leadCount <= 1) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Cannot demote the last lead. Promote another member to lead first.',
+          });
+        }
+
+        // Idempotent — if already a member, update the role while holding the invariant lock.
+        return tx.projectMember.upsert({
+          where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+          create: { projectId: input.projectId, userId: input.userId, role: input.role },
+          update: { role: input.role },
+        });
       });
       const [project, targetUser] = await Promise.all([
         ctx.db.project.findUnique({ where: { id: input.projectId }, select: { name: true } }),

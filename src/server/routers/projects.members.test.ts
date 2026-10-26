@@ -27,8 +27,8 @@ import { projectsRouter } from './projects';
 
 type Member = { projectId: string; userId: string; role: string };
 
-function testHarness() {
-  const members: Member[] = [
+function testHarness(initialMembers?: Member[]) {
+  const members: Member[] = initialMembers ?? [
     { projectId: 'project-1', userId: 'lead-a', role: 'LEAD' },
     { projectId: 'project-1', userId: 'lead-b', role: 'LEAD' },
   ];
@@ -63,27 +63,67 @@ function testHarness() {
         return member;
       }
     ),
+    upsert: vi.fn(
+      async ({
+        where,
+        create,
+        update,
+      }: {
+        where: { projectId_userId: Member };
+        create: Member;
+        update: { role: string };
+      }) => {
+        const key = where.projectId_userId;
+        const member = members.find(
+          (candidate) => candidate.projectId === key.projectId && candidate.userId === key.userId
+        );
+        if (member) {
+          member.role = update.role;
+          return member;
+        }
+        members.push(create);
+        return create;
+      }
+    ),
   };
-  const tx = { projectMember, $queryRaw: queryRaw };
 
-  // Model independent database transactions contending for the same project lock.
-  let transactionTail = Promise.resolve();
-  const transaction = vi.fn(<T>(callback: (client: typeof tx) => Promise<T>) => {
-    const result = transactionTail.then(() => callback(tx));
-    transactionTail = result.then(
-      () => undefined,
-      () => undefined
-    );
-    return result;
+  // Model independent transactions; only the advisory lock serializes their callbacks.
+  let lockTail = Promise.resolve();
+  const transaction = vi.fn(async <T>(callback: (client: never) => Promise<T>) => {
+    let releaseLock: (() => void) | undefined;
+    const tx = {
+      projectMember,
+      $queryRaw: async (...args: unknown[]) => {
+        queryRaw(...args);
+        const previousLock = lockTail;
+        lockTail = new Promise<void>((resolve) => {
+          releaseLock = resolve;
+        });
+        await previousLock;
+        return [{ pg_advisory_xact_lock: null }];
+      },
+    };
+    try {
+      return await callback(tx as never);
+    } finally {
+      releaseLock?.();
+    }
   });
   const db = {
     $transaction: transaction,
     project: { findUnique: vi.fn(async () => ({ name: 'Project' })) },
-    user: { findUnique: vi.fn(async () => ({ name: 'User' })) },
+    user: {
+      findUnique: vi.fn(async () => ({ name: 'User' })),
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.map((id) => ({ id }))
+      ),
+    },
   };
   const caller = projectsRouter.createCaller({
     db,
-    session: { user: { id: 'admin', role: 'ADMIN', status: 'ACTIVE' } },
+    session: {
+      user: { id: 'admin', role: 'ADMIN', status: 'ACTIVE', organizationId: 'organization-1' },
+    },
     entitlements: { enabledModules: ['projects'] },
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
@@ -115,6 +155,33 @@ describe('project lead invariant', () => {
     const results = await Promise.allSettled([
       caller.setMemberRole({ projectId: 'project-1', userId: 'lead-a', role: 'MEMBER' }),
       caller.setMemberRole({ projectId: 'project-1', userId: 'lead-b', role: 'MEMBER' }),
+    ]);
+
+    expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(members.filter((member) => member.role === 'LEAD')).toHaveLength(1);
+    expect(transaction).toHaveBeenCalledTimes(2);
+    expect(queryRaw).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects demoting the last lead through addMember', async () => {
+    const { caller, members, queryRaw } = testHarness([
+      { projectId: 'project-1', userId: 'lead-a', role: 'LEAD' },
+    ]);
+
+    await expect(
+      caller.addMember({ projectId: 'project-1', userId: 'lead-a', role: 'MEMBER' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(members).toEqual([{ projectId: 'project-1', userId: 'lead-a', role: 'LEAD' }]);
+    expect(queryRaw).toHaveBeenCalledOnce();
+  });
+
+  it('serializes removal with addMember demotion and preserves the last lead', async () => {
+    const { caller, members, queryRaw, transaction } = testHarness();
+
+    const results = await Promise.allSettled([
+      caller.removeMember({ projectId: 'project-1', userId: 'lead-a' }),
+      caller.addMember({ projectId: 'project-1', userId: 'lead-b', role: 'MEMBER' }),
     ]);
 
     expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
