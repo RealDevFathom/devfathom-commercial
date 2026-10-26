@@ -551,7 +551,6 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               receivedExpiresAt: true,
               manufacturingBatch: { select: { state: true } },
             },
-            take: 1000,
             orderBy: { id: 'asc' },
           });
           const catalog = await db.medicine.findMany({

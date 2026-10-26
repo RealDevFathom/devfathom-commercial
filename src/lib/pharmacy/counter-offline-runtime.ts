@@ -264,13 +264,28 @@ export class PharmacyCounterRuntime {
   safetyLeaseState(): SafetyLeaseState {
     const leases = this.cache().snapshots.map((snapshot) => snapshot.envelope.safetyLease);
     const lease = leases.sort((a, b) => Date.parse(b.issuedAt) - Date.parse(a.issuedAt))[0] ?? null;
-    const recallEvents = this.queue().safetyLeaseEvents.filter(
-      (event) => event.type === 'RECALL_APPLIED' || event.recalledBatchIds.length > 0
+    // PRICES is a complete, signed view of every lot this counter may dispense.
+    // Consequently a newer snapshot replaces (rather than unions with) the
+    // previous snapshot's recall set.  Bulletins issued after that snapshot are
+    // incremental until the next PRICES snapshot supersedes them.
+    const prices = this.cache().snapshots.find((snapshot) => snapshot.envelope.kind === 'PRICES');
+    const snapshotRecallVersion = prices?.envelope.safetyLease.recallVersion ?? 0;
+    const bulletinEvents = this.queue().safetyLeaseEvents.filter(
+      (event) => event.type === 'RECALL_APPLIED' && event.recallVersion > snapshotRecallVersion
     );
+    const snapshotRecalledIds = prices ? recalledLotIdsFromSnapshot('PRICES', prices.payload) : [];
     return {
       lease,
-      appliedRecallVersion: Math.max(0, ...recallEvents.map((event) => event.recallVersion)),
-      recalledBatchIds: [...new Set(recallEvents.flatMap((event) => event.recalledBatchIds))],
+      appliedRecallVersion: Math.max(
+        snapshotRecallVersion,
+        ...bulletinEvents.map((event) => event.recallVersion)
+      ),
+      recalledBatchIds: [
+        ...new Set([
+          ...snapshotRecalledIds,
+          ...bulletinEvents.flatMap((event) => event.recalledBatchIds),
+        ]),
+      ],
     };
   }
 
@@ -355,11 +370,26 @@ export class PharmacyCounterRuntime {
       }
     }
     const batchId = input.bucket?.inventoryLotId ?? null;
+    const prices = this.payloadFor('PRICES');
+    const lotHasAuthoritativeState =
+      batchId === null ||
+      (Array.isArray(prices) &&
+        prices.some(
+          (lot) =>
+            typeof lot === 'object' &&
+            lot !== null &&
+            (lot as { id?: unknown }).id === batchId &&
+            typeof (lot as { manufacturingBatch?: { state?: unknown } }).manufacturingBatch
+              ?.state === 'string'
+        ));
     const result = enqueueCounterCommand(this.queue(), input, {
       ...matrix,
       snapshots: this.cachedSnapshotStates(),
       safetyLeaseOk: leaseCheck.ok,
-      batchRecalled: batchId !== null && leaseState.recalledBatchIds.includes(batchId),
+      // Missing recall information is unsafe: absence must never mean RELEASED.
+      batchRecalled:
+        !lotHasAuthoritativeState ||
+        (batchId !== null && leaseState.recalledBatchIds.includes(batchId)),
     });
     if (!result.ok) return result;
     await this.commit({ ...this.state, queue: result.snapshot });

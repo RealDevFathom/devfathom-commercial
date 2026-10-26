@@ -504,4 +504,49 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
       nextNumber: f.lease.blockStart,
     });
   });
+
+  it('includes a recalled quota-bearing lot beyond the first 1000 branch lots', async () => {
+    const f = await setup();
+    await inOrg(ORG_A, async (db) => {
+      const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+        where: { id: f.fixture.lotId },
+        select: { manufacturingBatchId: true, packLevelId: true },
+      });
+      await db.pharmacyInventoryLot.createMany({
+        data: Array.from({ length: 1000 }, (_, index) => ({
+          id: `a-${suffix}-${String(index).padStart(4, '0')}`,
+          organizationId: f.fixture.organizationId,
+          branchId: f.fixture.branchId,
+          manufacturingBatchId: lot.manufacturingBatchId,
+          packLevelId: lot.packLevelId,
+          unitsPerPack: 10,
+          supplierName: 'Snapshot completeness fixture',
+          supplierInvoiceRef: `INV-${index}`,
+          unitCostMinor: 50,
+          printedMrpMinor: 1_000,
+          receivedExpiresAt: LATER,
+          receivedExpiryPrecision: 'DAY',
+          receivedAt: NOW,
+        })),
+      });
+      await db.pharmacyManufacturingBatch.update({
+        where: { id: lot.manufacturingBatchId },
+        data: { state: 'RECALLED', stateReason: 'Test recall', stateChangedAt: new Date() },
+      });
+    });
+
+    const response = await f.call('snapshot');
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const prices = body.snapshots.find(
+      (snapshot: { envelope: { kind: string } }) => snapshot.envelope.kind === 'PRICES'
+    );
+    expect(prices.payload).toHaveLength(1001);
+    expect(prices.payload).toContainEqual(
+      expect.objectContaining({
+        id: f.fixture.lotId,
+        manufacturingBatch: { state: 'RECALLED' },
+      })
+    );
+  });
 });

@@ -107,7 +107,14 @@ async function install(
 async function readyCounter(driver: TerminalStorageDriver) {
   const counter = runtime(driver);
   await counter.hydrate();
-  for (const kind of CATALOG_KINDS) await install(counter, kind);
+  for (const kind of CATALOG_KINDS)
+    await install(
+      counter,
+      kind,
+      kind === 'PRICES'
+        ? [{ id: 'lot_1', manufacturingBatch: { state: 'RELEASED' } }]
+        : { kind }
+    );
   await counter.adoptLeases([
     { leaseId: 'lease_1', blockStart: 900, blockEnd: 902, nextNumber: 900 },
   ]);
@@ -333,6 +340,62 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
       commands: [],
       leases: [{ nextNumber: 900 }],
       quotas: [{ consumedUnits: 0 }],
+    });
+  });
+
+  it('uses a newer prices snapshot as an authoritative recall replacement', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await install(
+      counter,
+      'PRICES',
+      [{ id: 'lot_1', manufacturingBatch: { state: 'RECALLED' } }],
+      { version: 2, safetyLease: { ...SAFETY_LEASE, recallVersion: 1 } }
+    );
+    expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'BATCH_RECALLED',
+    });
+
+    await install(
+      counter,
+      'PRICES',
+      [{ id: 'lot_1', manufacturingBatch: { state: 'RELEASED' } }],
+      { version: 3, safetyLease: { ...SAFETY_LEASE, recallVersion: 2 } }
+    );
+    expect(counter.safetyLeaseState()).toMatchObject({
+      appliedRecallVersion: 2,
+      recalledBatchIds: [],
+    });
+    expect((await counter.enqueue(cashSale(), MATRIX)).ok).toBe(true);
+  });
+
+  it('applies a nonzero recall version when the authoritative set is empty', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await install(counter, 'PRICES', [], {
+      version: 2,
+      safetyLease: { ...SAFETY_LEASE, recallVersion: 4 },
+    });
+    expect(counter.safetyLeaseState()).toMatchObject({
+      appliedRecallVersion: 4,
+      recalledBatchIds: [],
+    });
+    expect(counter.counterStatus(NOW)).toMatchObject({
+      safetyLeaseStatus: 'ACTIVE',
+      appliedRecallVersion: 4,
+    });
+  });
+
+  it('fails closed when a quota-bearing lot is absent from authoritative prices', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await install(
+      counter,
+      'PRICES',
+      [{ id: 'another_lot', manufacturingBatch: { state: 'RELEASED' } }],
+      { version: 2 }
+    );
+    expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'BATCH_RECALLED',
     });
   });
 
