@@ -816,6 +816,9 @@ describe('OrderPad transport', () => {
         fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/close'))
       ).toHaveLength(1)
     );
+    expect(
+      fetch.mock.calls.filter(([input]) => String(input).includes('/checkout/'))
+    ).toHaveLength(0);
     expect(screen.queryByRole('heading', { name: 'Collect payment' })).not.toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'No active order' })).toBeVisible();
   });

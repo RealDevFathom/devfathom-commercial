@@ -61,6 +61,16 @@ const ineligibleDeliveryOrders: [string, Parameters<typeof canCloseDeliveredOrde
 ];
 
 describe('OrderTicketPanel', () => {
+  it('closes only a settled delivery order that has been delivered', () => {
+    expect(
+      canCloseDeliveredOrder({
+        channel: 'DELIVERY',
+        deliveryStatus: 'DELIVERED',
+        settled: true,
+      })
+    ).toBe(true);
+  });
+
   it.each(ineligibleDeliveryOrders)(
     'does not close a delivery order when it is %s',
     (_label, candidate) => {
