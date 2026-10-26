@@ -1426,6 +1426,74 @@ describeIfDatabase('idempotency (real DB)', () => {
   });
 });
 
+describeIfDatabase('frozen service-charge settlement (real DB)', () => {
+  it('settles with the charge frozen at bill cut after a new policy becomes effective', async () => {
+    const transition = new Date('2026-08-20T00:00:00.000Z');
+    const [openingPolicy] = await read(async (tx) => {
+      const first = await tx.restaurantServiceChargePolicyVersion.create({
+        data: {
+          branchId: ids.branch,
+          rate: '0.100000',
+          effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+          effectiveTo: transition,
+          acknowledgedAt: AT,
+          acknowledgementRef: 'ISSUE_535_RATE_A',
+          idempotencyKey: `issue_535_a_${suffix}`,
+          payloadHash: `issue-535-a-${suffix}`,
+        },
+      });
+      const second = await tx.restaurantServiceChargePolicyVersion.create({
+        data: {
+          branchId: ids.branch,
+          rate: '0.200000',
+          effectiveFrom: transition,
+          acknowledgedAt: transition,
+          acknowledgementRef: 'ISSUE_535_RATE_B',
+          idempotencyKey: `issue_535_b_${suffix}`,
+          payloadHash: `issue-535-b-${suffix}`,
+        },
+      });
+      return [first, second];
+    });
+
+    const { billId, grandTotal } = await openBill(1);
+    expect(grandTotal).toBe('13.75');
+    const frozen = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({
+        where: { id: billId },
+        select: {
+          serviceChargePolicyVersionId: true,
+          serviceChargeRate: true,
+          serviceChargeBasis: true,
+          serviceChargeTotal: true,
+        },
+      })
+    );
+    expect(frozen.serviceChargePolicyVersionId).toBe(openingPolicy.id);
+    expect(frozen.serviceChargeRate?.toFixed(6)).toBe('0.100000');
+    expect(frozen.serviceChargeBasis.toFixed(2)).toBe('12.50');
+    expect(frozen.serviceChargeTotal.toFixed(2)).toBe('1.25');
+
+    const result = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+      billId,
+      tender: { type: 'OTHER', amount: grandTotal },
+      actor: actor(),
+      now: new Date('2026-08-20T18:00:00.000Z'),
+    });
+
+    expect(result.settled).toBe(true);
+    expect(result.remainingDue.toFixed(2)).toBe('0.00');
+    const settled = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({
+        where: { id: billId },
+        select: { serviceChargeTotal: true, grandTotal: true },
+      })
+    );
+    expect(settled.serviceChargeTotal.toFixed(2)).toBe('1.25');
+    expect(settled.grandTotal.toFixed(2)).toBe('13.75');
+  });
+});
+
 const d = (value: string): Prisma.Decimal => new Prisma.Decimal(value);
 
 // A pure, DB-free classification of a tender's applied amount against the bill's
