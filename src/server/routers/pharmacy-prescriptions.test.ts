@@ -277,6 +277,44 @@ describe('prescription capture and private delivery', () => {
     expect(mocks.patients).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['counter-only', 'pharmacy:counter'],
+    ['dispense-only', 'pharmacy:dispense'],
+  ] as const)('allows a %s caller to search and read counter patients', async (_grant, action) => {
+    mocks.can.mockImplementation(async (_subject, requestedAction) => requestedAction === action);
+    mocks.patients.mockResolvedValue([]);
+    mocks.patient.mockResolvedValue({
+      id: 'patient-a',
+      displayName: 'Patient A',
+      cnic: null,
+      phone: null,
+      address: null,
+      dateOfBirth: null,
+      consents: [],
+      prescriptions: [],
+    });
+
+    await expect(caller().counterPatients({ query: 'patient' })).resolves.toEqual({
+      patients: [],
+    });
+    await expect(
+      caller().counterPatientPanel({ patientId: 'patient-a' })
+    ).resolves.toMatchObject({ patientId: 'patient-a', prescriptions: [] });
+
+    expect(mocks.patients).toHaveBeenCalledOnce();
+    expect(mocks.patient).toHaveBeenCalledOnce();
+    expect(mocks.can.mock.calls.map(([, requestedAction]) => requestedAction)).toEqual(
+      action === 'pharmacy:counter'
+        ? ['pharmacy:counter', 'pharmacy:counter']
+        : [
+            'pharmacy:counter',
+            'pharmacy:dispense',
+            'pharmacy:counter',
+            'pharmacy:dispense',
+          ]
+    );
+  });
+
   it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:orders');
     await expect(caller().workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
