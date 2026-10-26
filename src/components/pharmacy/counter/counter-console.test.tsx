@@ -383,7 +383,8 @@ describe('PharmacyCounterConsole customer linking', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     fireEvent.click(screen.getByRole('button', { name: 'Link selected patient' }));
 
-    const notice = await screen.findByText(
+    const notice = await screen.findByRole('alert');
+    expect(notice).toHaveTextContent(
       'Loyalty consent is required before linking this customer or redeeming loyalty points.'
     );
     expect(notice).not.toHaveTextContent(/dispensing/i);
