@@ -118,6 +118,7 @@ function transport({
   customerSearchGates = [],
   deliveryZoneGates = [],
   checkoutSettled = false,
+  closeError,
 }: {
   failedOpenAttempts?: number;
   openErrors?: { status: number; error: string }[];
@@ -138,6 +139,7 @@ function transport({
   customerSearchGates?: Promise<void>[];
   deliveryZoneGates?: Promise<void>[];
   checkoutSettled?: boolean;
+  closeError?: { status: number; error: string };
 } = {}) {
   let openAttempts = 0;
   let addAttempts = 0;
@@ -268,6 +270,7 @@ function transport({
       return json({ itemId: 'item-1' }, 201);
     }
     if (path.endsWith('/orders/close')) {
+      if (closeError) return json({ error: closeError.error }, closeError.status);
       closed = true;
       return json({ orderId: 'order-1', status: 'PAYMENT_PENDING' });
     }
@@ -823,6 +826,29 @@ describe('OrderPad transport', () => {
     ).toHaveLength(0);
     expect(screen.queryByRole('heading', { name: 'Collect payment' })).not.toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'No active order' })).toBeVisible();
+  });
+
+  it('keeps a delivered delivery order active when finalization fails', async () => {
+    const fetch = transport({
+      detailResponse: {
+        ...detail,
+        channel: 'DELIVERY',
+        status: 'PAYMENT_PENDING',
+        deliveryStatus: 'DELIVERED',
+        settled: true,
+      },
+      closeError: { status: 409, error: 'Order settlement changed.' },
+    });
+    await unlock(fetch);
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Order 42');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close order' }));
+
+    expect(await screen.findByText('Order settlement changed.')).toBeVisible();
+    expect(screen.getByText('Order 42')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Close order' })).toBeEnabled();
+    expect(screen.queryByRole('heading', { name: 'No active order' })).not.toBeInTheDocument();
   });
 
   it('keeps an unsettled check active when checkout closes', async () => {
