@@ -177,6 +177,24 @@ describe('provider-neutral terminal payments', () => {
     expect(created[0]).toMatchObject({ outcome: 'REJECTED', failureReason: 'AMOUNT_MISMATCH' });
   });
 
+  it('rejects an event without throwing when the live settlement cannot be quoted', async () => {
+    const { db, created } = makeDb();
+    quoteOpenBillSettlement.mockResolvedValueOnce(null);
+
+    await processTerminalEvent(db as never, {
+      source: 'provider-neutral',
+      externalEventId: 'event-unquoted',
+      event: baseEvent,
+      requiredMode: 'WEBHOOK',
+    });
+
+    expect(applyTenderInTransaction).not.toHaveBeenCalled();
+    expect(created[0]).toMatchObject({
+      outcome: 'REJECTED',
+      failureReason: 'SETTLEMENT_QUOTE_UNAVAILABLE',
+    });
+  });
+
   it('returns the reconciliation on replay without another tender', async () => {
     const { db } = makeDb();
     db.restaurantTerminalReconciliation.findFirst.mockResolvedValueOnce({

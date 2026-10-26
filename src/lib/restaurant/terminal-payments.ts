@@ -129,9 +129,11 @@ async function processTerminalEventInTransaction(db: ScopedDb, input: ProcessInp
     ? 'BILL_NOT_OPEN_OR_BRANCH_MISMATCH'
     : !operator
       ? 'OPERATOR_NOT_ACTIVE_IN_BRANCH'
-      : !equals(outstanding!, amount)
-        ? 'AMOUNT_MISMATCH'
-        : null;
+      : !settlement
+        ? 'SETTLEMENT_QUOTE_UNAVAILABLE'
+        : !equals(outstanding!, amount)
+          ? 'AMOUNT_MISMATCH'
+          : null;
 
   if (failureReason) {
     const reconciliation = await recordReconciliation(db, {
