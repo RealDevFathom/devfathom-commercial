@@ -323,6 +323,11 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
       ok: false,
       reason: 'BATCH_RECALLED',
     });
+    expect(counter.snapshot().queue).toMatchObject({
+      commands: [],
+      leases: [{ nextNumber: 900 }],
+      quotas: [{ consumedUnits: 0 }],
+    });
   });
 
   it('issues, renews and reports an expired lease in the append-only event log', async () => {
