@@ -159,6 +159,20 @@ async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
   return [...byCode.values()].map((ruleSet) => {
     const categories = ruleSetOptions(ruleSet.licenceCategories);
     const schedules = ruleSetOptions(ruleSet.permittedSchedules);
+    const reviewFields = [
+      ruleSet.licenceCategories,
+      ruleSet.permittedSchedules,
+      ruleSet.pharmacistCoverageRule,
+    ];
+    const pendingLegalReview = reviewFields.some((field) => {
+      const value = field && typeof field === 'object' ? (field as Record<string, unknown>) : {};
+      // Match the operational guard: legacy Sindh rules without an explicit
+      // review decision remain pending rather than appearing legally confirmed.
+      return (
+        value.pendingLegalReview === true ||
+        (ruleSet.code === 'PK-SD' && value.pendingLegalReview !== false)
+      );
+    });
     return {
       id: ruleSet.id,
       provinceCode: ruleSet.code,
@@ -174,6 +188,7 @@ async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
         categories.provisional ||
         schedules.provisional ||
         ruleSetOptions(ruleSet.pharmacistCoverageRule).provisional,
+      pendingLegalReview,
     };
   });
 }

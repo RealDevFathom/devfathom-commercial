@@ -341,7 +341,9 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               hint={
                 jurisdiction?.provisional
                   ? 'These rules are still provisional, so this branch cannot operate on them yet.'
-                  : 'Only provinces with published rules appear here.'
+                  : jurisdiction?.pendingLegalReview
+                    ? 'These rules are pending legal review. They are not legally confirmed, and this branch cannot operate on them in production.'
+                    : 'Only provinces with published rules appear here.'
               }
               label="Province"
             >
@@ -361,6 +363,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                   <option key={option.provinceCode} value={option.provinceCode}>
                     {option.provinceName}
                     {option.provisional ? ' (rules provisional)' : ''}
+                    {option.pendingLegalReview ? ' (pending legal review)' : ''}
                   </option>
                 ))}
               </select>

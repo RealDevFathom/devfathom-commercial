@@ -193,6 +193,11 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
         provinceName: 'Punjab',
         provisional: true,
       });
+      expect(result.jurisdictions.find((option) => option.provinceCode === 'PK-SD')).toMatchObject({
+        provinceName: 'Sindh',
+        provisional: false,
+        pendingLegalReview: true,
+      });
       for (const option of result.jurisdictions) {
         expect(option.provinceName).not.toBe(option.provinceCode);
       }
