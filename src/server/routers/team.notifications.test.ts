@@ -157,6 +157,18 @@ describe('team shell notifications without HR entitlement', () => {
     );
   });
 
+  it('rejects an unknown notification without attempting an update', async () => {
+    mocks.findUnique.mockResolvedValue(null);
+
+    await expect(
+      caller().team.markNotificationRead({ id: 'missing_notification' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'That notification does not belong to you',
+    });
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
   it('marks unread notifications only for the active tenant user', async () => {
     await expect(caller().team.markAllNotificationsRead()).resolves.toEqual({ success: true });
     expect(mocks.updateMany).toHaveBeenCalledWith({
