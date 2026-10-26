@@ -105,6 +105,7 @@ type Handler = (() => void) | null;
 function createFakeIndexedDb() {
   const data = new Map<string, Map<string, unknown>>();
   let openCount = 0;
+  let writeTail = Promise.resolve();
 
   function makeRequest() {
     return {
@@ -117,30 +118,52 @@ function createFakeIndexedDb() {
     };
   }
 
-  function makeTransaction(storeName: string) {
+  function makeTransaction(storeName: string, mode: IDBTransactionMode = 'readonly') {
     let pending = 0;
+    let aborted = false;
+    let releaseWrite: (() => void) | undefined;
+    const ready = mode === 'readwrite' ? writeTail : Promise.resolve();
+    if (mode === 'readwrite') {
+      writeTail = new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+    }
     const tx = {
       error: null as unknown,
       oncomplete: null as Handler,
       onabort: null as Handler,
       onerror: null as Handler,
       objectStore: () => store,
+      abort: () => {
+        aborted = true;
+        releaseWrite?.();
+        setTimeout(() => tx.onabort?.(), 0);
+      },
     };
 
     const run = <T>(work: () => T) => {
       const request = makeRequest();
       pending += 1;
-      setTimeout(() => {
-        try {
-          request.result = work();
-          request.onsuccess?.();
-        } catch (err) {
-          request.error = err;
-          request.onerror?.();
-        }
-        pending -= 1;
-        if (pending === 0) setTimeout(() => tx.oncomplete?.(), 0);
-      }, 0);
+      void ready.then(() =>
+        setTimeout(() => {
+          if (aborted) return;
+          try {
+            request.result = work();
+            request.onsuccess?.();
+          } catch (err) {
+            request.error = err;
+            request.onerror?.();
+          }
+          pending -= 1;
+          if (pending === 0) {
+            setTimeout(() => {
+              if (aborted) return;
+              releaseWrite?.();
+              tx.oncomplete?.();
+            }, 0);
+          }
+        }, 0)
+      );
       return request;
     };
 
@@ -176,7 +199,7 @@ function createFakeIndexedDb() {
           data.set(name, new Map());
           return {};
         },
-        transaction: (name: string) => makeTransaction(name),
+        transaction: (name: string, mode?: IDBTransactionMode) => makeTransaction(name, mode),
         close: () => undefined,
       };
       request.result = db;
@@ -505,6 +528,25 @@ describe('catalog refresh policy (criterion 5)', () => {
 // ── The native IndexedDB driver ──────────────────────────────────────────────
 
 describe('native IndexedDB driver', () => {
+  it('atomically allows only one concurrent compare-and-swap', async () => {
+    const fake = createFakeIndexedDb();
+    const first = createIndexedDbDriver(fake.factory);
+    const second = createIndexedDbDriver(fake.factory);
+    const key = posScopeKey(scope);
+    const initial = { version: 1 };
+    await first.write(key, initial);
+
+    const results = await Promise.all([
+      first.compareAndSwap(key, initial, { version: 2, writer: 'first' }),
+      second.compareAndSwap(key, initial, { version: 2, writer: 'second' }),
+    ]);
+
+    expect(results.sort()).toEqual([false, true]);
+    expect(await first.read(key)).toMatchObject({ version: 2 });
+    first.close();
+    second.close();
+  });
+
   it('round-trips, overwrites and removes a document through real IDB calls', async () => {
     const fake = createFakeIndexedDb();
     const driver = createIndexedDbDriver(fake.factory);
