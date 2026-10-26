@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ replace: vi.fn(), refresh: vi.fn() }));
@@ -25,9 +25,19 @@ describe('login password visibility controls', () => {
     ],
     ['shared-host login', <SharedLoginForm callbackUrl="/dashboard" />],
     ['platform login', <PlatformLoginForm />],
-  ])('keeps the show-password toggle in the tab order on %s', (_name, form) => {
+  ])('provides an accessible password toggle on %s', (_name, form) => {
     render(form);
 
-    expect(screen.getByRole('button', { name: 'Show password' })).toHaveProperty('tabIndex', 0);
+    const password = screen.getByLabelText('Password');
+    const toggle = screen.getByRole('button', { name: 'Show password' });
+
+    expect(toggle).toHaveProperty('tabIndex', 0);
+    expect(toggle).toHaveProperty('type', 'button');
+    expect(password).toHaveProperty('type', 'password');
+
+    fireEvent.click(toggle);
+
+    expect(screen.getByRole('button', { name: 'Hide password' })).toBe(toggle);
+    expect(password).toHaveProperty('type', 'text');
   });
 });
