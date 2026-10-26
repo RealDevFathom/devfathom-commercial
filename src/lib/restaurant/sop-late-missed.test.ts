@@ -319,6 +319,52 @@ describe('enqueueDueSopEscalations', () => {
     );
   });
 
+  it('does not let another policy event delay the first step', async () => {
+    const now = new Date('2026-08-20T12:06:00.000Z');
+    const db = {
+      restaurantSopEscalationPolicy: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'policy_1',
+            scope: 'ORGANIZATION',
+            branchId: null,
+            quietHoursStartMinutes: null,
+            quietHoursEndMinutes: null,
+            steps: [{ id: 'step_1', delayMinutes: 5 }],
+          },
+        ]),
+      },
+      restaurantSopOccurrence: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'occ_1',
+            branchId: 'branch_1',
+            windowEndsAt: WINDOW_ENDS,
+            branch: { timezone: 'UTC' },
+            escalationEvents: [
+              {
+                escalationStepId: 'another_policy_step',
+                createdAt: new Date('2026-08-20T12:05:00.000Z'),
+              },
+            ],
+          },
+        ]),
+      },
+    } as unknown as ScopedDb;
+    vi.mocked(enqueue).mockResolvedValue({
+      job: {} as Awaited<ReturnType<typeof enqueue>>['job'],
+      deduplicated: false,
+    });
+
+    await expect(enqueueDueSopEscalations(db, now)).resolves.toBe(1);
+    expect(enqueue).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        idempotencyKey: sopEscalationJobKey('occ_1', 'policy_1', 'step_1'),
+      })
+    );
+  });
+
   it('does not queue a branch policy for an occurrence in another branch', async () => {
     const db = {
       restaurantSopEscalationPolicy: {
