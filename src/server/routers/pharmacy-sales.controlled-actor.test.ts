@@ -125,7 +125,7 @@ describe('pharmacySales.addLine controlled actor', () => {
     expect(register).not.toHaveBeenCalled();
   });
 
-  it('lets a pharmacist past the actor check', async () => {
+  it('accepts the canonical exact dispense capability at the actor check', async () => {
     const { caller, credential, register } = callerFor([
       { capability: 'pharmacy:dispense', effect: 'ALLOW' },
     ]);
