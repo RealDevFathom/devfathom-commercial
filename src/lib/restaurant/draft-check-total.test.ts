@@ -119,4 +119,16 @@ describe('quoteDraftCheckTotal', () => {
       ).toThrow(RangeError);
     }
   );
+
+  it.each([
+    [1, '0.01'],
+    [MAX_ORDER_ITEM_QUANTITY, '1.00'],
+  ])('accepts boundary quantity %s', (quantity, expected) => {
+    expect(
+      quoteDraftCheckTotal({
+        at,
+        lines: [{ id: 'valid', unitPrice: '0.01', quantity }],
+      })
+    ).toBe(expected);
+  });
 });
