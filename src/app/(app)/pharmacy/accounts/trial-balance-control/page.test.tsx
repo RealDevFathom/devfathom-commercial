@@ -104,6 +104,7 @@ describe('TrialBalanceControlPage', () => {
       to: '2026-02-01T00:00:00.000Z',
       page: 1,
     });
+    expect(mocks.financialStatements).toHaveBeenCalledTimes(1);
     expect(output).toContain('UNKNOWN_RAW_CODE');
     expect(output).toContain('9007199254740993.01');
     expect(output).toContain('Retrieved 2026-02-02T03:04:05.000Z');
