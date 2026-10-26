@@ -140,19 +140,35 @@ const mutation = (path: string, input: unknown) =>
 describe('fallback and real routers serialize refusals identically', () => {
   it.each([
     ['invitations.get', 'query', { token: '' }],
+    ['invitations.get', 'query', { token: 42 }],
     [
       'invitations.accept',
       'mutation',
       { token: 'token', password: 'short', phone: '+15555550123' },
     ],
+    ['invitations.accept', 'mutation', { token: 'token' }],
     ['passwordReset.request', 'mutation', { email: '' }],
+    ['passwordReset.request', 'mutation', { email: 42 }],
     ['passwordReset.validate', 'query', { token: '' }],
+    ['passwordReset.validate', 'query', {}],
     ['passwordReset.reset', 'mutation', { token: 'token', newPassword: 'short' }],
+    ['passwordReset.reset', 'mutation', { token: [], newPassword: 'Valid-password-123' }],
     ['pharmacySupplierLinks.get', 'query', { token: '   ' }],
+    ['pharmacySupplierLinks.get', 'query', { token: 'token', unexpected: true }],
     [
       'pharmacySupplierLinks.submit',
       'mutation',
       { token: 'token', kind: 'UNKNOWN', idempotencyKey: 'key', payload: {} },
+    ],
+    [
+      'pharmacySupplierLinks.submit',
+      'mutation',
+      {
+        token: 'token',
+        kind: 'ACKNOWLEDGEMENT',
+        idempotencyKey: 'x'.repeat(201),
+        payload: {},
+      },
     ],
     [
       'pharmacySupplierLinks.uploadDocument',
@@ -163,6 +179,17 @@ describe('fallback and real routers serialize refusals identically', () => {
         fileName: 'evidence.txt',
         declaredMimeType: 'text/plain',
         contentBase64: 'dGVzdA==',
+      },
+    ],
+    [
+      'pharmacySupplierLinks.uploadDocument',
+      'mutation',
+      {
+        token: 'token',
+        idempotencyKey: 'key',
+        fileName: 'evidence.pdf',
+        declaredMimeType: 'application/pdf',
+        contentBase64: '',
       },
     ],
   ] as const)('matches production validation for malformed %s input', async (path, kind, input) => {
