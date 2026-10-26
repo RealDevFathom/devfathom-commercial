@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { randomUUID } from 'node:crypto';
+
 import { Prisma, type RestaurantJob } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -172,6 +174,8 @@ export type ClaimedJob = {
   attempts: number;
   maxAttempts: number;
   claimedBy: string;
+  /** Unique, non-reusable identity for this specific claim generation. */
+  claimToken: string;
   /** The claim instant; also the execution's `startedAt`. */
   startedAt: Date;
 };
@@ -206,6 +210,7 @@ export async function claimNextDue(db: ScopedDb, opts: ClaimOptions): Promise<Cl
     );
   }
   const now = opts.now ?? new Date();
+  const claimToken = randomUUID();
   const typeFilter = jobType
     ? Prisma.sql`AND "type" = ${jobType}`
     : excludeJobType
@@ -233,6 +238,7 @@ export async function claimNextDue(db: ScopedDb, opts: ClaimOptions): Promise<Cl
         attempts: { increment: 1 },
         claimedAt: now,
         claimedBy: workerId,
+        claimToken,
         lastError: null,
       },
       select: {
@@ -243,6 +249,7 @@ export async function claimNextDue(db: ScopedDb, opts: ClaimOptions): Promise<Cl
         attempts: true,
         maxAttempts: true,
         claimedBy: true,
+        claimToken: true,
       },
     });
     return {
@@ -253,6 +260,7 @@ export async function claimNextDue(db: ScopedDb, opts: ClaimOptions): Promise<Cl
       attempts: job.attempts,
       maxAttempts: job.maxAttempts,
       claimedBy: job.claimedBy ?? workerId,
+      claimToken: job.claimToken ?? claimToken,
       startedAt: now,
     };
   });
@@ -261,8 +269,10 @@ export async function claimNextDue(db: ScopedDb, opts: ClaimOptions): Promise<Cl
 export type SettleOptions = {
   /** Must match the worker that owns the current RUNNING claim. */
   workerId: string;
-  /** Claim generation returned as `ClaimedJob.attempts`. */
+  /** Attempt number returned as `ClaimedJob.attempts`. */
   attempt: number;
+  /** Non-reusable token returned by the exact `claimNextDue` call. */
+  claimToken: string;
   now?: Date;
 };
 
@@ -323,6 +333,7 @@ export async function fail(
         nextAttemptAt: nextRetryAt(job.attempts, now),
         claimedAt: null,
         claimedBy: null,
+        claimToken: null,
         lastError: message,
       };
     } else {
@@ -393,6 +404,7 @@ export async function recoverStaleJobs(
       nextAttemptAt: now,
       claimedAt: null,
       claimedBy: null,
+      claimToken: null,
       lastError: 'Recovered after the worker lease expired.',
     },
   });
@@ -417,6 +429,7 @@ export async function releaseClaim(
       nextAttemptAt: now,
       claimedAt: null,
       claimedBy: null,
+      claimToken: null,
       attempts: { decrement: 1 },
     },
   });
@@ -496,6 +509,7 @@ export async function drainDueJobs(options: DrainOptions): Promise<DrainResult> 
         complete(db, job.id, {
           workerId: options.workerId,
           attempt: job.attempts,
+          claimToken: job.claimToken,
           now: clock(),
         })
       );
@@ -505,6 +519,7 @@ export async function drainDueJobs(options: DrainOptions): Promise<DrainResult> 
         fail(db, job.id, error, {
           workerId: options.workerId,
           attempt: job.attempts,
+          claimToken: job.claimToken,
           now: clock(),
         })
       );
@@ -536,15 +551,24 @@ type RunningJob = {
   maxAttempts: number;
   claimedAt: Date | null;
   claimedBy: string | null;
+  claimToken: string | null;
 };
 
 async function requireRunningClaim(
   tx: ScopedDb,
   jobId: string,
-  claim: Pick<SettleOptions, 'workerId' | 'attempt'>
+  claim: Pick<SettleOptions, 'workerId' | 'attempt' | 'claimToken'>
 ): Promise<RunningJob> {
-  if (!claim.workerId.trim() || !Number.isInteger(claim.attempt) || claim.attempt < 1) {
-    throw new SchedulerError('Settlement requires a valid workerId and claim attempt.', 'INVALID');
+  if (
+    !claim.workerId.trim() ||
+    (typeof claim.claimToken !== 'string' || !claim.claimToken.trim()) ||
+    !Number.isInteger(claim.attempt) ||
+    claim.attempt < 1
+  ) {
+    throw new SchedulerError(
+      'Settlement requires a valid workerId, claim attempt, and claim token.',
+      'INVALID'
+    );
   }
   const job = await tx.restaurantJob.findUnique({
     where: { id: jobId },
@@ -555,6 +579,7 @@ async function requireRunningClaim(
       maxAttempts: true,
       claimedAt: true,
       claimedBy: true,
+      claimToken: true,
     },
   });
   if (!job) {
@@ -566,7 +591,11 @@ async function requireRunningClaim(
       'INVALID_STATE'
     );
   }
-  if (job.claimedBy !== claim.workerId || job.attempts !== claim.attempt) {
+  if (
+    job.claimedBy !== claim.workerId ||
+    job.attempts !== claim.attempt ||
+    job.claimToken !== claim.claimToken
+  ) {
     throw new SchedulerError(
       `Job ${jobId} is owned by a different claim; refusing to settle it.`,
       'INVALID_STATE'
@@ -577,13 +606,14 @@ async function requireRunningClaim(
 
 function runningClaimWhere(
   jobId: string,
-  claim: Pick<SettleOptions, 'workerId' | 'attempt'>
+  claim: Pick<SettleOptions, 'workerId' | 'attempt' | 'claimToken'>
 ): Prisma.RestaurantJobWhereInput {
   return {
     id: jobId,
     status: 'RUNNING',
     attempts: claim.attempt,
     claimedBy: claim.workerId,
+    claimToken: claim.claimToken,
   };
 }
 

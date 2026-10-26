@@ -18,6 +18,7 @@ const M7_COLUMNS = {
     'nextAttemptAt',
     'claimedAt',
     'claimedBy',
+    'claimToken',
     'lastError',
     'idempotencyKey',
     'createdAt',

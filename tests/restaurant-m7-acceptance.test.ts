@@ -343,7 +343,12 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
         );
         if (!job) return claimed;
         await deps.withTenantDb(orgId, (tx) =>
-          deps.scheduler.complete(tx, job.id, { workerId, attempt: job.attempts, now: T0 })
+          deps.scheduler.complete(tx, job.id, {
+            workerId,
+            attempt: job.attempts,
+            claimToken: job.claimToken,
+            now: T0,
+          })
         );
         claimed += 1;
       }
@@ -406,6 +411,7 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
           deps.scheduler.fail(tx, dead.job.id, new Error('induced failure'), {
             workerId,
             attempt: claimed!.attempts,
+            claimToken: claimed!.claimToken,
             now: attemptAt,
           })
         )
@@ -441,6 +447,7 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
       deps.scheduler.complete(tx, requeued.jobId, {
         workerId: `requeue_worker_${suffix}`,
         attempt: requeuedClaim!.attempts,
+        claimToken: requeuedClaim!.claimToken,
         now: new Date('2099-01-01T00:00:00.000Z'),
       })
     );
