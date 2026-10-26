@@ -301,6 +301,12 @@ describe('atomic HR decisions', () => {
     expect(tx.resignation.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: resignation.id, organizationId: 'org-1' } })
     );
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'resignation:review',
+      expect.objectContaining({ targetRole: 'ADMIN' }),
+      { source: 'TRPC', db: tx }
+    );
     expect(tx.resignation.updateMany).not.toHaveBeenCalled();
     expect(tx.user.update).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).not.toHaveBeenCalled();
