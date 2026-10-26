@@ -531,7 +531,10 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
         const before = await rotationState(deviceId);
         const attempt = operation === 'revoke' ? api.revoke(input) : api.rotate(input);
 
-        await expect(attempt).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(attempt).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'The approving staff member lacks co-authorization approval permission.',
+        });
         await expectUnchangedRotationState(deviceId, before);
         const still = (await api.list()).find((device) => device.id === deviceId);
         expect(still!.status).toBe('ACTIVE');
