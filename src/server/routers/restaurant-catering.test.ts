@@ -350,6 +350,34 @@ describe('restaurant catering lifecycle', () => {
     expect(data.unitPrice.toString()).toBe('1.99');
   });
 
+  it('preserves money values at the durable database scale', async () => {
+    await caller().create({
+      branchId: 'branch_1',
+      eventName: 'Precision test',
+      eventDate: new Date('2026-10-08'),
+      headcount: 1,
+      quotedTotal: '12.34',
+      depositAmount: '5.67',
+    });
+    await caller().addExtraCost({
+      orderId: 'order_1',
+      kind: 'OTHER',
+      label: 'Precision test',
+      amount: '1.23',
+    });
+
+    const order = db.restaurantCateringOrder.create.mock.calls[0]?.[0].data as {
+      quotedTotal: Prisma.Decimal;
+      depositAmount: Prisma.Decimal;
+    };
+    const extraCost = db.restaurantCateringExtraCost.create.mock.calls[0]?.[0].data as {
+      amount: Prisma.Decimal;
+    };
+    expect(order.quotedTotal.toString()).toBe('12.34');
+    expect(order.depositAmount.toString()).toBe('5.67');
+    expect(extraCost.amount.toString()).toBe('1.23');
+  });
+
   it('rejects excess money precision on every order write before persistence', async () => {
     await expect(
       caller().create({
