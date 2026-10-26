@@ -79,7 +79,7 @@ type EscalationEvent = {
 };
 
 /** Minutes-of-day in the branch's local timezone, derived from an Intl formatter. */
-function localMinutesOfDay(branchTimezone: string, now: Date): number {
+export function localMinutesOfDay(branchTimezone: string, now: Date): number {
   try {
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: branchTimezone,
@@ -97,7 +97,11 @@ function localMinutesOfDay(branchTimezone: string, now: Date): number {
 }
 
 /** Returns true if `minuteOfDay` falls within the quiet window (wraps midnight). */
-function isQuietHour(minuteOfDay: number, startMinutes: number, endMinutes: number): boolean {
+export function isQuietHour(
+  minuteOfDay: number,
+  startMinutes: number,
+  endMinutes: number
+): boolean {
   if (startMinutes <= endMinutes) {
     return minuteOfDay >= startMinutes && minuteOfDay < endMinutes;
   }
@@ -187,9 +191,6 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
         select: { id: true, escalationStepId: true, kind: true, createdAt: true },
       });
 
-      const hasStopped = events.some((e) => e.kind === 'STOPPED');
-      if (hasStopped) return; // chain already halted
-
       // STOP: policy.stopOnVerified re-checked against live state (occ.status)
       // already done above; also check acknowledged
       if (policy.stopOnAcknowledged) {
@@ -236,7 +237,15 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
       // predecessor, so it anchors to the occurrence's window close instead. The
       // comparison is strict-less-than, so a step whose delay has exactly elapsed
       // fires on this pass rather than waiting for the next one.
-      const lastFiredEvent = [...events].reverse().find((e) => e.kind === 'FIRED');
+      const policyStepIds = new Set(steps.map((step) => step.id));
+      const lastFiredEvent = [...events]
+        .reverse()
+        .find(
+          (e) =>
+            e.kind === 'FIRED' &&
+            e.escalationStepId !== null &&
+            policyStepIds.has(e.escalationStepId)
+        );
       const anchor = lastFiredEvent ? lastFiredEvent.createdAt : occ.windowEndsAt;
       if (now.getTime() - anchor.getTime() < nextStep.delayMinutes * 60_000) {
         // Delay not yet elapsed — defer silently

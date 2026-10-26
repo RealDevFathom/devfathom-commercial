@@ -3,6 +3,13 @@ import 'server-only';
 import { z } from 'zod';
 
 import type { RestaurantJobContext } from '@/lib/restaurant/job-handlers-core';
+import {
+  isQuietHour,
+  localMinutesOfDay,
+  SOP_ESCALATION_JOB,
+} from '@/lib/restaurant/sop-escalation';
+import { enqueue, SchedulerError } from '@/lib/restaurant/scheduler';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**
  * M7-L4 / §11.5 — SOP late/missed sweep: scheduler handler.
@@ -99,6 +106,108 @@ export function isMissedAt(now: Date, windowEndsAt: Date, graceMinutes: number):
   return now.getTime() > missedAt(windowEndsAt, graceMinutes).getTime();
 }
 
+/** Stable queue identity for one policy step acting on one occurrence. */
+export function sopEscalationJobKey(
+  occurrenceId: string,
+  policyId: string,
+  stepId: string
+): string {
+  return `sop-escalation:${occurrenceId}:${policyId}:${stepId}`;
+}
+
+/**
+ * Discover escalation work from live, tenant-scoped SOP state. The sweep is the
+ * production producer for `sop.runEscalation`: it queues only the next unfired
+ * step after its delay has elapsed. A step-specific idempotency key makes every
+ * later sweep and concurrent sweeper harmless while still allowing the next
+ * step in the chain to be scheduled.
+ */
+export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise<number> {
+  const [policies, occurrences] = await Promise.all([
+    db.restaurantSopEscalationPolicy.findMany({
+      where: { active: true },
+      select: {
+        id: true,
+        scope: true,
+        branchId: true,
+        quietHoursStartMinutes: true,
+        quietHoursEndMinutes: true,
+        steps: {
+          orderBy: { stepOrder: 'asc' },
+          select: { id: true, delayMinutes: true },
+        },
+      },
+    }),
+    db.restaurantSopOccurrence.findMany({
+      where: {
+        windowEndsAt: { lte: now },
+        status: { in: ['SCHEDULED', 'IN_PROGRESS', 'SUBMITTED', 'LATE', 'MISSED'] },
+      },
+      select: {
+        id: true,
+        branchId: true,
+        windowEndsAt: true,
+        branch: { select: { timezone: true } },
+        escalationEvents: {
+          where: { kind: 'FIRED' },
+          select: { escalationStepId: true, createdAt: true },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    }),
+  ]);
+
+  let enqueued = 0;
+  for (const occurrence of occurrences) {
+    for (const policy of policies) {
+      if (policy.scope === 'BRANCH' && policy.branchId !== occurrence.branchId) continue;
+      const fired = new Set(
+        occurrence.escalationEvents
+          .map((event) => event.escalationStepId)
+          .filter((id): id is string => id !== null)
+      );
+      const nextStep = policy.steps.find((step) => !fired.has(step.id));
+      if (!nextStep) continue;
+
+      const previous = [...occurrence.escalationEvents]
+        .reverse()
+        .find(
+          (event) =>
+            event.escalationStepId && policy.steps.some((s) => s.id === event.escalationStepId)
+        );
+      const anchor = previous?.createdAt ?? occurrence.windowEndsAt;
+      if (now.getTime() < anchor.getTime() + nextStep.delayMinutes * 60_000) continue;
+
+      if (
+        policy.quietHoursStartMinutes !== null &&
+        policy.quietHoursEndMinutes !== null &&
+        isQuietHour(
+          localMinutesOfDay(occurrence.branch?.timezone ?? 'UTC', now),
+          policy.quietHoursStartMinutes,
+          policy.quietHoursEndMinutes
+        )
+      ) {
+        continue;
+      }
+
+      try {
+        const result = await enqueue(db, {
+          type: SOP_ESCALATION_JOB,
+          payload: { occurrenceId: occurrence.id, policyId: policy.id },
+          idempotencyKey: sopEscalationJobKey(occurrence.id, policy.id, nextStep.id),
+          scheduledAt: now,
+        });
+        if (!result.deduplicated) enqueued += 1;
+      } catch (error) {
+        // Two tenant-scoped sweepers may race after the pre-insert lookup. The
+        // unique key is the winner; the loser has reached the desired state.
+        if (!(error instanceof SchedulerError) || error.reason !== 'DUPLICATE_ENQUEUE') throw error;
+      }
+    }
+  }
+  return enqueued;
+}
+
 export async function sopLateMissedHandler({ db, job }: RestaurantJobContext): Promise<void> {
   const payload = PayloadSchema.parse(job.payload);
   const now = payload.now ? new Date(payload.now) : new Date();
@@ -116,4 +225,6 @@ export async function sopLateMissedHandler({ db, job }: RestaurantJobContext): P
       AND  occ."submittedAt" IS NULL
       AND  (occ."windowEndsAt" + (INTERVAL '1 minute' * asgn."graceMinutes")) < ${now}
   `;
+
+  await enqueueDueSopEscalations(db, now);
 }

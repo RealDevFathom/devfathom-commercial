@@ -9,9 +9,20 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/restaurant/scheduler', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/restaurant/scheduler')>();
+  return { ...actual, enqueue: vi.fn() };
+});
 
-import { isMissedAt, missedAt, sopLateMissedHandler } from './sop-late-missed';
+import {
+  enqueueDueSopEscalations,
+  isMissedAt,
+  missedAt,
+  sopEscalationJobKey,
+  sopLateMissedHandler,
+} from './sop-late-missed';
 import type { RestaurantJobContext } from '@/lib/restaurant/job-handlers';
+import { enqueue } from '@/lib/restaurant/scheduler';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const WINDOW_ENDS = new Date('2026-08-20T12:00:00.000Z');
@@ -23,9 +34,12 @@ function makeContext(payloadOverride: Record<string, unknown> = {}): {
 } {
   const updateMany = vi.fn().mockResolvedValue({ count: 0 });
   const executeRaw = vi.fn().mockResolvedValue(0);
+  const findPolicies = vi.fn().mockResolvedValue([]);
+  const findOccurrences = vi.fn().mockResolvedValue([]);
 
   const db = {
-    restaurantSopOccurrence: { updateMany },
+    restaurantSopOccurrence: { updateMany, findMany: findOccurrences },
+    restaurantSopEscalationPolicy: { findMany: findPolicies },
     $executeRaw: executeRaw,
   } as unknown as ScopedDb;
 
@@ -137,5 +151,90 @@ describe('sopLateMissedHandler', () => {
   it('rejects an unknown payload key (strict zod)', async () => {
     const { ctx } = makeContext({ unknown: true });
     await expect(sopLateMissedHandler(ctx)).rejects.toThrow();
+  });
+});
+
+describe('enqueueDueSopEscalations', () => {
+  it('queues the next elapsed step with a deterministic occurrence/policy/step key', async () => {
+    const now = new Date('2026-08-20T12:30:00.000Z');
+    const db = {
+      restaurantSopEscalationPolicy: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'policy_1',
+            scope: 'BRANCH',
+            branchId: 'branch_1',
+            quietHoursStartMinutes: null,
+            quietHoursEndMinutes: null,
+            steps: [
+              { id: 'step_1', delayMinutes: 5 },
+              { id: 'step_2', delayMinutes: 10 },
+            ],
+          },
+        ]),
+      },
+      restaurantSopOccurrence: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'occ_1',
+            branchId: 'branch_1',
+            windowEndsAt: WINDOW_ENDS,
+            branch: { timezone: 'UTC' },
+            escalationEvents: [
+              {
+                escalationStepId: 'step_1',
+                createdAt: new Date('2026-08-20T12:10:00.000Z'),
+              },
+            ],
+          },
+        ]),
+      },
+    } as unknown as ScopedDb;
+    vi.mocked(enqueue).mockResolvedValue({
+      job: {} as Awaited<ReturnType<typeof enqueue>>['job'],
+      deduplicated: false,
+    });
+
+    await expect(enqueueDueSopEscalations(db, now)).resolves.toBe(1);
+    expect(enqueue).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        type: 'sop.runEscalation',
+        payload: { occurrenceId: 'occ_1', policyId: 'policy_1' },
+        idempotencyKey: sopEscalationJobKey('occ_1', 'policy_1', 'step_2'),
+      })
+    );
+  });
+
+  it('does not queue a branch policy for an occurrence in another branch', async () => {
+    const db = {
+      restaurantSopEscalationPolicy: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'policy_other',
+            scope: 'BRANCH',
+            branchId: 'branch_2',
+            quietHoursStartMinutes: null,
+            quietHoursEndMinutes: null,
+            steps: [{ id: 'step_1', delayMinutes: 0 }],
+          },
+        ]),
+      },
+      restaurantSopOccurrence: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'occ_1',
+            branchId: 'branch_1',
+            windowEndsAt: WINDOW_ENDS,
+            branch: { timezone: 'UTC' },
+            escalationEvents: [],
+          },
+        ]),
+      },
+    } as unknown as ScopedDb;
+    vi.mocked(enqueue).mockClear();
+
+    await expect(enqueueDueSopEscalations(db, WINDOW_ENDS)).resolves.toBe(0);
+    expect(enqueue).not.toHaveBeenCalled();
   });
 });
