@@ -168,6 +168,7 @@ export async function settleSupplierExpenseInvoice(
     idempotencyKey: `native-ap:${input.idempotencyKey}`,
     fundingAccount: input.fundingAccount,
     allocations: [{ sourceKind: 'EXPENSE', sourceId: invoice.id, sourceReference: invoice.supplierInvoiceRef, amountMinor: input.amountMinor }],
+    nativeInvoiceId: invoice.id,
   };
   const canonicalReplay = await db.pharmacyBookkeepingTransaction.findFirst({
     where: { organizationId: scope.organizationId, idempotencyKey: canonicalInput.idempotencyKey },

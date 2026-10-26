@@ -36,6 +36,8 @@ export type PostBookkeepingInput = {
   chequeStatus?: PharmacyChequeStatus;
   fundingAccount?: 'CASH' | 'BANK';
   allocations?: BookkeepingAllocationInput[];
+  /** Only the invoice-directed wrapper may post against this native AP invoice. */
+  nativeInvoiceId?: string;
 };
 
 export class PharmacyBookkeepingError extends Error {
@@ -127,6 +129,34 @@ export async function postBookkeepingTransaction(
     allocated += allocation.amountMinor;
   }
   if (allocated > input.amountMinor) throw new PharmacyBookkeepingError('INVALID_ALLOCATION');
+
+  // Native AP invoice balances are derived from their durable settlement rows,
+  // so a canonical allocation must not be allowed to bypass that identity.
+  // The invoice wrapper supplies the expected invoice id and creates the
+  // settlement in the same database transaction as this posting.
+  const expenseSourceIds = [
+    ...new Set(
+      allocations
+        .filter((allocation) => allocation.sourceKind === 'EXPENSE')
+        .map((allocation) => allocation.sourceId)
+    ),
+  ];
+  if (expenseSourceIds.length) {
+    const nativeInvoices = await db.pharmacySupplierExpenseInvoice.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        id: { in: expenseSourceIds },
+      },
+      select: { id: true },
+    });
+    if (
+      nativeInvoices.some(
+        (invoice) => input.kind !== 'SUPPLIER_PAYMENT' || invoice.id !== input.nativeInvoiceId
+      )
+    )
+      throw new PharmacyBookkeepingError('INVALID_STATE');
+  }
 
   const replay = await db.pharmacyBookkeepingTransaction.findFirst({
     where: { organizationId: scope.organizationId, idempotencyKey: input.idempotencyKey },
