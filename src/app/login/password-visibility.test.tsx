@@ -17,6 +17,7 @@ vi.mock('@/lib/trpc', () => ({
 }));
 
 import { LoginForm } from './login-form';
+import { SharedLoginForm } from './shared-login-form';
 import { PlatformLoginForm } from '../platform/(auth)/login/platform-login-form';
 import { ResetPasswordForm } from '../reset-password/[token]/reset-password-form';
 
@@ -50,6 +51,12 @@ describe('password visibility controls', () => {
 
   it('is keyboard reachable and toggles the tenant login password without changing it', () => {
     render(<LoginForm connections={[]} ssoEnforced={false} callbackUrl="/dashboard" />);
+
+    expectAccessiblePasswordToggle(screen.getByLabelText<HTMLInputElement>('Password'));
+  });
+
+  it('is keyboard reachable and toggles the shared-host login password without changing it', () => {
+    render(<SharedLoginForm callbackUrl="/dashboard" />);
 
     expectAccessiblePasswordToggle(screen.getByLabelText<HTMLInputElement>('Password'));
   });
