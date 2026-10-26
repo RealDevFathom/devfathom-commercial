@@ -19,6 +19,7 @@ const suffix = randomUUID();
 const org = `audit_${suffix}`;
 const actor = `actor_${suffix}`;
 const action = `test.${suffix}`;
+const tenantAuditId = `${org}_tenant_audit`;
 let scoped: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
 let page: typeof import('@/app/platform/(console)/audit/page').default;
 const timestamp = new Date('2026-09-20T12:00:00Z');
@@ -56,7 +57,7 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
       });
       await db.$executeRaw`
         INSERT INTO audit_logs (id, "organizationId", source, category, action)
-        VALUES (${`${org}_tenant_audit`}, ${org}, 'TRPC', 'SYSTEM', ${action})
+        VALUES (${tenantAuditId}, ${org}, 'TRPC', 'SYSTEM', ${action})
       `;
     });
   });
@@ -91,12 +92,26 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
             operation === 'UPDATE'
               ? `UPDATE audit_logs SET action = 'tampered' WHERE id = $1`
               : `DELETE FROM audit_logs WHERE id = $1`,
-            `${org}_tenant_audit`
+            tenantAuditId
           )
         )
       ).rejects.toThrow(/append-only/);
     });
   }
+
+  it('continues to allow tenant-scoped inserts', async () => {
+    const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
+    const insertedId = `${org}_tenant_audit_insert`;
+
+    await expect(
+      withTenantDb(org, (db) =>
+        db.$executeRaw`
+          INSERT INTO audit_logs (id, "organizationId", source, category, action)
+          VALUES (${insertedId}, ${org}, 'TRPC', 'SYSTEM', ${action})
+        `
+      )
+    ).resolves.toBe(1);
+  });
 
   const filters = { org, actor, action, from: '2026-09-20', through: '2026-09-20' };
   it('filters, exports escaped CSV, and pages tied timestamps without duplicates', async () => {
