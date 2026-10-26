@@ -118,6 +118,8 @@ import {
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
+const DISCOUNT_APPROVAL_POLICY = 'PHARMACY_MANAGER' as const;
+const FEFO_OVERRIDE_APPROVAL_POLICY = 'PHARMACY_SAFETY' as const;
 // Preserve field order and parsing: settlement hashes JSON.stringify(parsed input).
 const tenderInput = z
   .object({
@@ -155,6 +157,33 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branch], { active: true });
   return { organizationId, branchId: branch, actorId };
+}
+
+async function authorizedSaleLineApprover(
+  db: ScopedDb,
+  scope: LedgerScope,
+  approverId: string | undefined,
+  needsDiscountApproval: boolean
+) {
+  if (!needsDiscountApproval) return null;
+  if (!approverId || approverId === scope.actorId) return null;
+  const [approver, assignment] = await Promise.all([
+    db.user.findFirst({
+      where: { id: approverId, organizationId: scope.organizationId, status: 'ACTIVE' },
+    }),
+    db.pharmacyBranchAssignment.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        userId: approverId,
+        active: true,
+      },
+    }),
+  ]);
+  if (!approver || !assignment) return null;
+  if (!(await can(approver, 'pharmacy:manage', undefined, { db, source: 'TRPC' })))
+    return null;
+  return approver.id;
 }
 
 async function khataScope(ctx: TRPCContext, branch: string) {
@@ -944,12 +973,10 @@ export const pharmacySalesRouter = router({
           discountKind: z.enum(['DISCOUNT', 'PROMOTION', 'COMPLIMENTARY']).optional(),
           discountMinor: z.number().int().nonnegative().optional(),
           approvedByUserId: z.string().min(1).optional(),
-          approvalPolicy: z.string().trim().min(1).optional(),
           override: z
             .object({
               inventoryLotId: z.string().min(1),
               reason: z.string().trim().min(1).max(500),
-              approvalPolicy: z.string().trim().min(1).max(200),
             })
             .strict()
             .optional(),
@@ -976,7 +1003,7 @@ export const pharmacySalesRouter = router({
             medicineId: input.medicineId,
             selectedLotId: input.override.inventoryLotId,
             reason: input.override.reason,
-            approvalPolicy: input.override.approvalPolicy,
+            approvalPolicy: FEFO_OVERRIDE_APPROVAL_POLICY,
           },
         });
       }
@@ -984,6 +1011,39 @@ export const pharmacySalesRouter = router({
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           const scope = await scopeFor(ctx, input.branchId);
+          const needsDiscountApproval = (input.discountMinor ?? 0) > 0;
+          const approverId = await authorizedSaleLineApprover(
+            db,
+            scope,
+            input.approvedByUserId,
+            needsDiscountApproval
+          );
+          if (needsDiscountApproval && !approverId) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'An active, independently authorized branch approver is required.',
+            });
+          }
+          if (
+            input.override &&
+            !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:safety', undefined, {
+              db,
+              source: 'TRPC',
+            }))
+          ) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Pharmacy safety permission is required for a FEFO override.',
+            });
+          }
+          const approvedInput = {
+            ...input,
+            approvedByUserId: approverId ?? undefined,
+            approvalPolicy: needsDiscountApproval ? DISCOUNT_APPROVAL_POLICY : undefined,
+            override: input.override
+              ? { ...input.override, approvalPolicy: FEFO_OVERRIDE_APPROVAL_POLICY }
+              : undefined,
+          };
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
@@ -994,7 +1054,7 @@ export const pharmacySalesRouter = router({
               throw new PharmacyRxReferenceError('CONTROLLED_AUTHORIZATION_NOT_APPLICABLE');
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
-            const { prescription, ...lineInput } = input;
+            const { prescription, ...lineInput } = approvedInput;
             if (!prescription) return addSaleLine(db, scope, lineInput);
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (
@@ -1129,7 +1189,7 @@ export const pharmacySalesRouter = router({
               return { blocked: 'Patient dispensing consent is required.' };
             }
             await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
-            const result = await addSaleLine(db, scope, input);
+            const result = await addSaleLine(db, scope, approvedInput);
             await appendControlledSaleEntries(db, {
               organizationId: scope.organizationId,
               branchId: scope.branchId,
@@ -1220,7 +1280,7 @@ export const pharmacySalesRouter = router({
           });
           if (!consent?.granted || consent.revokedAt)
             return { blocked: 'Patient dispensing consent is required.' };
-          const result = await addSaleLine(db, scope, input);
+          const result = await addSaleLine(db, scope, approvedInput);
           await db.prescriptionFill.create({
             data: {
               organizationId: scope.organizationId,

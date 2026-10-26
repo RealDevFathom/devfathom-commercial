@@ -20,7 +20,6 @@ import {
 } from './tender-attempt-storage';
 
 import {
-  COUNTER_OVERRIDE_APPROVAL_POLICY,
   CounterCartPanel,
   CounterLotOverride,
   type CounterLotOverrideValue,
@@ -927,7 +926,6 @@ function ScopedPharmacyCounterConsole({
               override: {
                 inventoryLotId: overrideLotId,
                 reason: lotOverride.reason.trim(),
-                approvalPolicy: COUNTER_OVERRIDE_APPROVAL_POLICY,
               },
             }
           : {}),
