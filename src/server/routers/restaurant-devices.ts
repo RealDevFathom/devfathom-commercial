@@ -502,6 +502,11 @@ export const restaurantDevicesRouter = router({
         throw err;
       }
 
+      await assertApproverCanCoAuthorize(
+        ctx.db,
+        input.approvingStaffProfileId,
+        device.branchId
+      );
       const now = new Date();
       const auth = await authenticateOperator(ctx.db, {
         staffProfileId: input.approvingStaffProfileId,
@@ -518,11 +523,6 @@ export const restaurantDevicesRouter = router({
         }
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Invalid approving credential.' });
       }
-      await assertApproverCanCoAuthorize(
-        ctx.db,
-        input.approvingStaffProfileId,
-        device.branchId
-      );
 
       // The whole tRPC request runs inside one tenant transaction (the fetch
       // adapter wraps it in `withTenantDb`), so writing the evidence and then
@@ -612,6 +612,11 @@ export const restaurantDevicesRouter = router({
         throw err;
       }
 
+      await assertApproverCanCoAuthorize(
+        ctx.db,
+        input.approvingStaffProfileId,
+        device.branchId
+      );
       const auth = await authenticateOperator(ctx.db, {
         staffProfileId: input.approvingStaffProfileId,
         type: input.approvingType,
@@ -627,11 +632,6 @@ export const restaurantDevicesRouter = router({
         }
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Invalid approving credential.' });
       }
-      await assertApproverCanCoAuthorize(
-        ctx.db,
-        input.approvingStaffProfileId,
-        device.branchId
-      );
 
       try {
         const { result, coAuthorization } = await ctx.db.$transaction(async (tx) => {

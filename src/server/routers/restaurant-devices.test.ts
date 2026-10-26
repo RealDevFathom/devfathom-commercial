@@ -489,6 +489,43 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
     }
   );
 
+  it('rejects an ineligible approver before evaluating their credential', async () => {
+    const api = caller();
+    const { device } = await api.initiateEnrollment({
+      branchId,
+      name: 'POS-ineligible-credential',
+    });
+    const credentialBefore = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOperatorCredential.findFirstOrThrow({
+        where: { staffProfileId: unprivilegedStaffId },
+        select: { failedAttempts: true },
+      })
+    );
+
+    await expect(
+      api.revoke({
+        deviceId: device.id,
+        actingStaffProfileId: actingStaffId,
+        approvingStaffProfileId: unprivilegedStaffId,
+        approvingType: 'PIN',
+        approvingSecret: '000000',
+        reason: 'capability before credential',
+      })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'The approving staff member lacks co-authorization approval permission.',
+    });
+
+    await expect(
+      deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantOperatorCredential.findFirstOrThrow({
+          where: { staffProfileId: unprivilegedStaffId },
+          select: { failedAttempts: true },
+        })
+      )
+    ).resolves.toEqual(credentialBefore);
+  });
+
   it('excludes and rejects an approver whose inherited coauth:approve is explicitly denied', async () => {
     const api = caller();
     const revokeEnrollment = await api.initiateEnrollment({
