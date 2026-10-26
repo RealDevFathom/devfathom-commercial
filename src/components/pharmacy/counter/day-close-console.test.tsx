@@ -94,7 +94,19 @@ beforeEach(() => {
   mocks.printZReport.mockReset();
 });
 describe('day-close console', () => {
-  it('uses the organization currency throughout reconciliation and the printable Z-report', () => {
+  it('uses the organization currency throughout reconciliation', () => {
+    render(<PharmacyDayCloseConsole />);
+
+    expect(screen.getByText('Pharmacy · USD')).toBeInTheDocument();
+    expect(screen.getByText('Expected cash · USD')).toBeInTheDocument();
+    expect(screen.getByText('Counted cash · USD')).toBeInTheDocument();
+    expect(screen.getByText('Variance · USD')).toBeInTheDocument();
+    expect(screen.getByText('Expected: USD 125.00')).toBeInTheDocument();
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toBeInTheDocument();
+    expect(screen.queryByText(/PKR/)).not.toBeInTheDocument();
+  });
+
+  it('uses the organization currency in a recorded close and the printable Z-report', () => {
     const recorded = {
       id: 'c1',
       sequence: 1,
@@ -115,8 +127,6 @@ describe('day-close console', () => {
     expect(screen.getByText('Expected cash · USD')).toBeInTheDocument();
     expect(screen.getByText('Counted cash · USD')).toBeInTheDocument();
     expect(screen.getByText('Variance · USD')).toBeInTheDocument();
-    expect(screen.getByText('Expected: USD 125.00')).toBeInTheDocument();
-    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Print Z-report' }));
     expect(mocks.printZReport).toHaveBeenCalledWith(
       expect.objectContaining({ ...recorded, currency: 'USD' }),
