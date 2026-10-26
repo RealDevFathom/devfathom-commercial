@@ -58,7 +58,10 @@ describe('#357 UI receipt identity', () => {
     expect(receiveInput(next).lines).toEqual([{ lineId: 'line_1', receivedUnits: 6 }]);
     expect(receiveInput(next).variance).toBeUndefined();
   });
-  it.each(['', 'invalid'])('requires a valid server-rendered receipt identity (%s)', (key) => {
-    expect(() => receiveInput(receiptData(key))).toThrow('Reload the transfer form');
-  });
+  it.each(['', 'invalid', '0b16eeaf-5236-12cd-a4d6-111111111111'])(
+    'requires a valid server-rendered receipt identity (%s)',
+    (key) => {
+      expect(() => receiveInput(receiptData(key))).toThrow('Reload the transfer form');
+    }
+  );
 });

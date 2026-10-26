@@ -57,7 +57,7 @@ export function receiveInput(data: FormData) {
   if (lines.length === 0) throw new Error('INVALID_UNITS');
   const receiptKey = text(data, 'receiptKey');
   if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(receiptKey)
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(receiptKey)
   )
     throw new Error('Reload the transfer form before receiving stock.');
   const reason = text(data, 'varianceReason');
