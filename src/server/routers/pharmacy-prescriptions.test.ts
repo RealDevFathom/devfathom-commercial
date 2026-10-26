@@ -44,7 +44,12 @@ import { pharmacyPrescriptionsRouter } from './pharmacy-prescriptions';
 import { GET } from '@/app/api/pharmacy/prescription-files/route';
 import { GET as sharedFileGET } from '@/app/api/files/[name]/route';
 
-function context(userId = 'user-a', organizationId = 'org-a', status = 'ACTIVE') {
+function context(
+  userId = 'user-a',
+  organizationId = 'org-a',
+  status = 'ACTIVE',
+  enabledModules = ['pharmacy-dispensing']
+) {
   return {
     db: {
       pharmacyPatient: { findFirst: mocks.patient, findMany: mocks.patients },
@@ -52,7 +57,7 @@ function context(userId = 'user-a', organizationId = 'org-a', status = 'ACTIVE')
       prescription: { findFirst: mocks.find, create: mocks.create },
       medicine: { findMany: mocks.medicines },
     },
-    entitlements: { organizationId, modules: [], enabledModules: ['pharmacy-dispensing'] },
+    entitlements: { organizationId, modules: [], enabledModules },
     session: { expires: 'later', user: { id: userId, organizationId, role: 'EMPLOYEE', status } },
     organization: { id: organizationId },
     support: null,
@@ -281,6 +286,11 @@ describe('prescription capture and private delivery', () => {
     ['counter-only', 'pharmacy:counter'],
     ['dispense-only', 'pharmacy:dispense'],
   ] as const)('allows a %s caller to search and read counter patients', async (_grant, action) => {
+    const enabledModules =
+      action === 'pharmacy:counter' ? ['pharmacy-counter'] : ['pharmacy-dispensing'];
+    mocks.hasModule.mockImplementation((entitlements, moduleKey) =>
+      entitlements.enabledModules.includes(moduleKey)
+    );
     mocks.can.mockImplementation(async (_subject, requestedAction) => requestedAction === action);
     mocks.patients.mockResolvedValue([]);
     mocks.patient.mockResolvedValue({
@@ -294,11 +304,12 @@ describe('prescription capture and private delivery', () => {
       prescriptions: [],
     });
 
-    await expect(caller().counterPatients({ query: 'patient' })).resolves.toEqual({
+    const counterCaller = caller(context('user-a', 'org-a', 'ACTIVE', enabledModules));
+    await expect(counterCaller.counterPatients({ query: 'patient' })).resolves.toEqual({
       patients: [],
     });
     await expect(
-      caller().counterPatientPanel({ patientId: 'patient-a' })
+      counterCaller.counterPatientPanel({ patientId: 'patient-a' })
     ).resolves.toMatchObject({ patientId: 'patient-a', prescriptions: [] });
 
     expect(mocks.patients).toHaveBeenCalledOnce();

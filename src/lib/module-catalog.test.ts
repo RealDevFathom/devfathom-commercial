@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  alternativeModulesForProcedure,
   MODULE_CATALOG,
   PROCEDURE_MODULES,
   ROUTE_MODULES,
@@ -64,9 +65,20 @@ describe('module catalog routing', () => {
     ['restaurantDashboard.getPreferences', 'restaurant-core'],
     ['restaurantGrowth.read', 'restaurant-core'],
     ['restaurantGrowth.review', 'restaurant-core'],
+    ['pharmacyPrescriptions.counterPatients', 'pharmacy-counter'],
+    ['pharmacyPrescriptions.counterPatientPanel', 'pharmacy-counter'],
     ['unknown.list', null],
   ])('maps tRPC procedure %s to %s', (procedure, expected) => {
     expect(moduleForProcedure(procedure)).toBe(expected);
+  });
+
+  it('allows dispensing to license the counter patient prescription procedures', () => {
+    expect(alternativeModulesForProcedure('pharmacyPrescriptions.counterPatients')).toEqual([
+      'pharmacy-dispensing',
+    ]);
+    expect(alternativeModulesForProcedure('pharmacyPrescriptions.counterPatientPanel')).toEqual([
+      'pharmacy-dispensing',
+    ]);
   });
 
   it('pins every restaurant procedure namespace to its licensed module', () => {
