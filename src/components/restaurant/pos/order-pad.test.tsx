@@ -143,6 +143,7 @@ function transport({
 } = {}) {
   let openAttempts = 0;
   let addAttempts = 0;
+  let closeAttempts = 0;
   let openOrderReads = 0;
   let closed = false;
   let billCut = false;
@@ -270,7 +271,10 @@ function transport({
       return json({ itemId: 'item-1' }, 201);
     }
     if (path.endsWith('/orders/close')) {
-      if (closeError) return json({ error: closeError.error }, closeError.status);
+      closeAttempts += 1;
+      if (closeError && closeAttempts === 1) {
+        return json({ error: closeError.error }, closeError.status);
+      }
       closed = true;
       return json({ orderId: 'order-1', status: 'PAYMENT_PENDING' });
     }
@@ -860,6 +864,7 @@ describe('OrderPad transport', () => {
         fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/close'))
       ).toHaveLength(2)
     );
+    expect(await screen.findByRole('heading', { name: 'No active order' })).toBeVisible();
   });
 
   it('keeps an unsettled check active when checkout closes', async () => {
