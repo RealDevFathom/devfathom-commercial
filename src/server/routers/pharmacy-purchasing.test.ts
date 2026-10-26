@@ -442,6 +442,36 @@ describe('PUR-02 tenant boundaries', () => {
     expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
   });
 
+  it('rejects oversized requisition IDs before catalog lookups', async () => {
+    const oversizedId = 'x'.repeat(201);
+    const line = {
+      medicineId: 'medicine_a',
+      packLevelId: 'pack_a',
+      quantityPacks: 1,
+      canonicalUnitsPerPack: 1,
+    };
+
+    await expect(
+      caller().createRequisition({ reference: 'REQ-BRANCH', branchId: oversizedId, lines: [line] })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().createRequisition({
+        reference: 'REQ-MEDICINE',
+        lines: [{ ...line, medicineId: oversizedId }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().createRequisition({
+        reference: 'REQ-PACK',
+        lines: [{ ...line, packLevelId: oversizedId }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(db.medicine.findFirst).not.toHaveBeenCalled();
+    expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
+  });
+
   it('rejects a quote line pointing at another requisition’s line', async () => {
     db.pharmacySupplier.findFirst.mockResolvedValue({ id: 'supplier_a' });
     db.pharmacyRequisition.findFirst.mockResolvedValue({

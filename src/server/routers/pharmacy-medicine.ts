@@ -537,7 +537,7 @@ export const pharmacyMedicineRouter = router({
             .array(
               z
                 .object({
-                  ingredientId: z.string().min(1),
+                  ingredientId: z.string().min(1).max(200),
                   value: z.number().positive(),
                   unit: z.string().trim().min(1).max(50),
                 })

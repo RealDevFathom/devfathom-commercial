@@ -111,6 +111,19 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
     expect(db.medicine.create).not.toHaveBeenCalled();
   });
 
+  it('rejects an oversized ingredient ID before database work', async () => {
+    await expect(
+      caller().createMedicine({
+        productName: 'Medicine',
+        productFamily: 'PHARMACEUTICAL',
+        strengths: [{ ingredientId: 'x'.repeat(201), value: 500, unit: 'mg' }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(db.ingredient.findFirst).not.toHaveBeenCalled();
+    expect(db.medicine.create).not.toHaveBeenCalled();
+  });
+
   it('rejects oversized assertion publication before opening a transaction', async () => {
     await expect(
       caller().publishAssertions({

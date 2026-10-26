@@ -202,6 +202,35 @@ describe('prescription capture and private delivery', () => {
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
+  it('rejects oversized capture IDs before storage work', async () => {
+    const input = captureInput('/api/pharmacy/prescription-files/test.png');
+    const oversizedId = 'x'.repeat(201);
+
+    await expect(caller().capture({ ...input, patientId: oversizedId })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await expect(caller().capture({ ...input, prescriberId: oversizedId })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    await expect(
+      caller().capture({
+        ...input,
+        lines: [{ ...input.lines[0], medicineId: oversizedId }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().capture({
+        ...input,
+        lines: [{ ...input.lines[0], presentationId: oversizedId }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+    expect(mocks.patient).not.toHaveBeenCalled();
+    expect(mocks.prescriber).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
   it('allows pharmacists with dispensing capability', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:dispense');
     await expect(upload()).resolves.toHaveProperty('url');
