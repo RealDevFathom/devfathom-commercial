@@ -17,16 +17,25 @@ describe('signOutEverything', () => {
   });
 
   it('clears the login intent before ending the session', async () => {
-    await signOutEverything('/signed-out');
+    let finishCleanup!: (response: Response) => void;
+    vi.mocked(fetch).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishCleanup = resolve;
+      })
+    );
+
+    const signOutPromise = signOutEverything('/signed-out');
 
     expect(fetch).toHaveBeenCalledWith('/api/login', {
       method: 'DELETE',
       credentials: 'include',
     });
+    expect(mocks.signOut).not.toHaveBeenCalled();
+
+    finishCleanup(new Response(null, { status: 200 }));
+    await signOutPromise;
+
     expect(mocks.signOut).toHaveBeenCalledWith({ callbackUrl: '/signed-out' });
-    expect(vi.mocked(fetch).mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.signOut.mock.invocationCallOrder[0]
-    );
   });
 
   it('still ends the session when login-intent cleanup fails', async () => {
