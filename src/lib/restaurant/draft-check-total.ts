@@ -1,5 +1,12 @@
 import { add, formatMoney, multiply, roundMoney, sum } from '@/lib/restaurant/money-arithmetic';
+import {
+  isValidOrderItemQuantity,
+  MAX_ORDER_ITEM_QUANTITY,
+} from '@/lib/restaurant/order-quantity';
 import { quoteTaxSettlement, type TaxProfile, type TaxRule } from '@/lib/restaurant/tax-calculator';
+
+/** Upper bound for the eager per-unit representation used by draft tax quotes. */
+export const MAX_DRAFT_CHECK_UNITS = 10_000;
 
 export type DraftCheckLine = {
   id: string;
@@ -39,9 +46,16 @@ export type DraftCheckBreakdown = {
 export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftCheckBreakdown {
   const at = input.at ?? new Date();
   const fallback = input.profiles ? null : zeroTax(at);
+  let unitCount = 0;
   for (const line of input.lines) {
-    if (!Number.isSafeInteger(line.quantity) || line.quantity < 1) {
-      throw new RangeError('Draft check line quantity must be a positive safe integer.');
+    if (!isValidOrderItemQuantity(line.quantity)) {
+      throw new RangeError(
+        `Draft check line quantity must be an integer between 1 and ${MAX_ORDER_ITEM_QUANTITY}.`
+      );
+    }
+    unitCount += line.quantity;
+    if (unitCount > MAX_DRAFT_CHECK_UNITS) {
+      throw new RangeError(`Draft check cannot exceed ${MAX_DRAFT_CHECK_UNITS} physical units.`);
     }
   }
   // Settlement taxes each physical unit independently. Expand draft lines the

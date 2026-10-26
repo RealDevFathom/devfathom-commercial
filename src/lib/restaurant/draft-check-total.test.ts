@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { quoteDraftCheckBreakdown, quoteDraftCheckTotal } from './draft-check-total';
+import {
+  MAX_DRAFT_CHECK_UNITS,
+  quoteDraftCheckBreakdown,
+  quoteDraftCheckTotal,
+} from './draft-check-total';
+import { MAX_ORDER_ITEM_QUANTITY } from './order-quantity';
 import { quoteTaxSettlement, type TaxProfile, type TaxRule } from './tax-calculator';
 
 const at = new Date('2030-06-01T00:00:00Z');
@@ -131,6 +136,7 @@ describe('quoteDraftCheckTotal', () => {
     Number.NaN,
     Number.POSITIVE_INFINITY,
     Number.NEGATIVE_INFINITY,
+    MAX_ORDER_ITEM_QUANTITY + 1,
     Number.MAX_SAFE_INTEGER + 1,
   ])(
     'rejects invalid quantity %s before expanding units',
@@ -144,15 +150,25 @@ describe('quoteDraftCheckTotal', () => {
     }
   );
 
-  it.each([
-    [1, '0.01'],
-    [101, '1.01'],
-  ])('accepts positive safe-integer quantity %s', (quantity, expected) => {
+  it('accepts a quantity within the order-line limit', () => {
     expect(
       quoteDraftCheckTotal({
         at,
-        lines: [{ id: 'valid', unitPrice: '0.01', quantity }],
+        lines: [{ id: 'valid', unitPrice: '0.01', quantity: MAX_ORDER_ITEM_QUANTITY }],
       })
-    ).toBe(expected);
+    ).toBe('1.00');
+  });
+
+  it('rejects an excessive aggregate quantity before allocating units', () => {
+    const fullLines = MAX_DRAFT_CHECK_UNITS / MAX_ORDER_ITEM_QUANTITY;
+    const lines = Array.from({ length: fullLines + 1 }, (_, index) => ({
+      id: `item-${index}`,
+      unitPrice: '0.01',
+      quantity: MAX_ORDER_ITEM_QUANTITY,
+    }));
+
+    expect(() => quoteDraftCheckBreakdown({ at, lines })).toThrow(
+      `Draft check cannot exceed ${MAX_DRAFT_CHECK_UNITS} physical units.`
+    );
   });
 });
