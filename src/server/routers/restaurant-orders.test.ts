@@ -286,6 +286,7 @@ describe('capability gating + strict inputs', () => {
     await expect(
       caller().cancel({ orderId: 'o1', reason: 'Guest request', actor: ACTOR })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can.mock.calls.some((call) => call[1] === 'orders:void')).toBe(true);
     expect(mocks.cancelOrder).not.toHaveBeenCalled();
   });
 
