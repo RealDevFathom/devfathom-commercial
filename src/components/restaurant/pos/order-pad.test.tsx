@@ -809,7 +809,9 @@ describe('OrderPad transport', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
     await screen.findByText('Order 42');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close order' }));
+    const closeOrder = screen.getByRole('button', { name: 'Close order' });
+    fireEvent.click(closeOrder);
+    fireEvent.click(closeOrder);
 
     await waitFor(() =>
       expect(
