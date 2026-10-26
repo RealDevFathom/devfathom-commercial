@@ -73,30 +73,42 @@ describe('finance.addPayment', () => {
     );
   });
 
-  it('logs invoice_paid when a payment covers the outstanding balance', async () => {
-    await caller().addPayment({ invoiceId: 'invoice-1', amount: 60 });
-
-    expect(mocks.invoiceUpdate).toHaveBeenCalledOnce();
-    expect(mocks.logActivity).toHaveBeenCalledOnce();
-    expect(mocks.logActivity).toHaveBeenCalledWith(expect.anything(), 'admin-1', {
-      type: 'invoice_paid',
-      message: 'marked invoice INV-1 as paid ($100)',
-      entityType: 'Invoice',
-      entityId: 'invoice-1',
-    });
-    expect(mocks.emitEvent).toHaveBeenCalledOnce();
-    expect(mocks.emitEvent).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      'invoice.paid',
-      {
-        invoiceId: 'invoice-1',
+  it.each(['SENT', 'OVERDUE'] as const)(
+    'logs invoice_paid when a payment covers the outstanding balance of a %s invoice',
+    async (status) => {
+      mocks.invoiceFindUnique.mockResolvedValue({
+        id: 'invoice-1',
+        invoiceNumber: 'INV-1',
+        status,
         total: 100,
         currency: 'USD',
         clientId: 'client-1',
-      }
-    );
-  });
+      });
+
+      await caller().addPayment({ invoiceId: 'invoice-1', amount: 60 });
+
+      expect(mocks.invoiceUpdate).toHaveBeenCalledOnce();
+      expect(mocks.logActivity).toHaveBeenCalledOnce();
+      expect(mocks.logActivity).toHaveBeenCalledWith(expect.anything(), 'admin-1', {
+        type: 'invoice_paid',
+        message: 'marked invoice INV-1 as paid ($100)',
+        entityType: 'Invoice',
+        entityId: 'invoice-1',
+      });
+      expect(mocks.emitEvent).toHaveBeenCalledOnce();
+      expect(mocks.emitEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        'invoice.paid',
+        {
+          invoiceId: 'invoice-1',
+          total: 100,
+          currency: 'USD',
+          clientId: 'client-1',
+        }
+      );
+    }
+  );
 
   it('does not log invoice_paid for a partial payment', async () => {
     mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 50 });
