@@ -125,6 +125,24 @@ export const PATCH = withApiAuth(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
+    // New assignees must belong to the project that will own the task. Validate
+    // before any writes so a rejected full replacement cannot clear assignees.
+    const projectForAssignees = targetColumn?.board.project.id ?? projectId;
+    const requestedAssigneeIds = [
+      ...new Set([...(assigneeIds ?? []), ...(addAssigneeIds ?? [])]),
+    ];
+    if (requestedAssigneeIds.length > 0) {
+      const memberCount = await authCtx.db.projectMember.count({
+        where: { projectId: projectForAssignees, userId: { in: requestedAssigneeIds } },
+      });
+      if (memberCount !== requestedAssigneeIds.length) {
+        return NextResponse.json(
+          { error: 'All assignees must be members of the project.' },
+          { status: 400 }
+        );
+      }
+    }
+
     // Do the mutation in a transaction so reorder + update + defaults are atomic.
     const updated = await (async (tx) => {
       // Assignee operations — process in order: full replace, then partial add, then partial remove.

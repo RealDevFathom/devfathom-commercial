@@ -89,12 +89,19 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     return NextResponse.json({ error: 'You do not have access to that project.' }, { status: 403 });
   }
 
-  // REST-07: validate referenced FKs exist BEFORE the create, so a bad assignee/
-  // label id is a clean 400 instead of a raw Prisma FK violation (500).
+  // Assignees must be members of the task's project. This also validates their
+  // user ids before task creation, avoiding both cross-project assignment and a
+  // raw Prisma FK violation.
   if (input.assigneeIds.length > 0) {
-    const found = await ctx.db.user.count({ where: { id: { in: input.assigneeIds } } });
-    if (found !== new Set(input.assigneeIds).size) {
-      return NextResponse.json({ error: 'One or more assigneeIds do not exist.' }, { status: 400 });
+    const uniqueAssigneeIds = [...new Set(input.assigneeIds)];
+    const memberCount = await ctx.db.projectMember.count({
+      where: { projectId: column.board.project.id, userId: { in: uniqueAssigneeIds } },
+    });
+    if (memberCount !== uniqueAssigneeIds.length) {
+      return NextResponse.json(
+        { error: 'All assignees must be members of the project.' },
+        { status: 400 }
+      );
     }
   }
   if (input.labelIds.length > 0) {

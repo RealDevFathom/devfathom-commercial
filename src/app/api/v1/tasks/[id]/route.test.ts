@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => {
     taskAssignee,
     projectMember: {
       findMany: vi.fn(async () => [{ userId: 'destination-member' }]),
+      count: vi.fn(async () => 1),
     },
   };
   return { db, taskAssignee };
@@ -97,5 +98,31 @@ describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
       data: [{ taskId: 'task-1', userId: 'destination-member' }],
       skipDuplicates: true,
     });
+  });
+
+  it.each([
+    ['assigneeIds', ['non-member']],
+    ['addAssigneeIds', ['non-member']],
+  ])('rejects non-project members supplied through %s before writing', async (field, ids) => {
+    mocks.db.projectMember.count.mockResolvedValueOnce(0);
+
+    const response = await PATCH(
+      new Request('https://example.test/api/v1/tasks/task-1', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ [field]: ids }),
+      }),
+      { params: Promise.resolve({ id: 'task-1' }) }
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: 'All assignees must be members of the project.',
+    });
+    expect(mocks.db.projectMember.count).toHaveBeenCalledWith({
+      where: { projectId: 'source-project', userId: { in: ['non-member'] } },
+    });
+    expect(mocks.taskAssignee.deleteMany).not.toHaveBeenCalled();
+    expect(mocks.taskAssignee.createMany).not.toHaveBeenCalled();
   });
 });
