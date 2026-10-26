@@ -17,7 +17,7 @@ function close(id: string, businessDate: string, netSales: string, branchId = 'b
     businessDate: new Date(`${businessDate}T00:00:00Z`),
     createdAt: new Date('2024-03-02T12:00:00Z'),
     supersedesCloseId: null as string | null,
-    // Current fixture: comp 1.10 + discount 2.20 + refund 5.50.
+    // netSales is the authoritative close value, independent of these other totals.
     grossSales: value.plus('8.80'),
     netSales: value,
     compTotal: new Prisma.Decimal('1.10'),
@@ -130,14 +130,24 @@ describe('restaurant financial comparison from the existing payment reader', () 
       absoluteChange: '0.20',
       percentageChange: '200.00',
     });
-    expect(report.drivers.netSales.definition).toContain('minus refundTotal');
+    expect(report.drivers.netSales.definition).toContain('refunded pre-tax sales principal');
     expect(report.drivers.refundTotal.current).toBe('5.50');
     expect(report.drivers.deliveryFeeRefunds.current).toBe('0.50');
+    expect(report.drivers.deliveryFeeRefunds.definition).toContain(
+      'reported separately from refundTotal'
+    );
+    expect(report.drivers.refundTotal.definition).toContain(
+      'only its pre-tax sales principal is deducted from netSales'
+    );
     expect(report.drivers.grossSales.current).toBe('9.10');
     expect(report.drivers.discountTotal.current).toBe('2.20');
     expect(report.drivers.compTotal.current).toBe('1.10');
     expect(report.drivers.taxTotal.current).toBe('0.70');
+    expect(report.drivers.taxTotal.definition).toContain('minus refunded tax');
     expect(report.drivers.serviceChargeTotal.current).toBe('0.60');
+    expect(report.drivers.serviceChargeTotal.definition).toContain(
+      'minus refunded service charges'
+    );
     expect(report.drivers.tipTotal.current).toBe('0.90');
     expect(report.drivers.cashExpected.current).toBe('20.00');
     expect(report.drivers.cashCounted.current).toBe('19.99');
@@ -475,9 +485,9 @@ describe('restaurant financial comparison from the existing payment reader', () 
   });
 });
 
-describe('legacy close net-sales normalization', () => {
+describe('authoritative close net sales', () => {
   it.each([['7'], ['4'], ['7', '4']])(
-    'normalizes stored values %j without mutating closes',
+    'uses stored values %j without mutating closes',
     async (...stored) => {
       const rows = stored.map((net, i) => ({
         ...close(`legacy-${i}`, i === 0 ? range.from : '2024-03-02', net),
@@ -491,7 +501,8 @@ describe('legacy close net-sales normalization', () => {
       const { read } = fixture(rows);
       const paymentDb = fixture(rows).db;
       const payments = await readPaymentsReport(paymentDb as unknown as ScopedDb, period);
-      expect(payments.netSales).toBe(stored.length === 2 ? '8' : '4');
+      const expected = stored.reduce((total, value) => total.plus(value), new Prisma.Decimal(0));
+      expect(payments.netSales).toBe(expected.toString());
       const csv = await exportRestaurantReportCsv(
         fixture(rows).db as unknown as ScopedDb,
         'payments',
@@ -501,9 +512,11 @@ describe('legacy close net-sales normalization', () => {
       const [header, line] = csv.content.split('\n');
       expect(line!.split(',')[header!.split(',').indexOf('netSales')]).toBe(payments.netSales);
       const report = await read(period);
-      expect(report.drivers.netSales.current).toBe(stored.length === 2 ? '8.00' : '4.00');
-      expect(report.drivers.netSales.definition).toContain('minus refundTotal');
-      expect(report.drivers.refundTotal.definition).toContain('Already deducted');
+      expect(report.drivers.netSales.current).toBe(expected.toFixed(2));
+      expect(report.drivers.netSales.definition).toContain('Authoritative daily-close sales');
+      expect(report.drivers.refundTotal.definition).toContain(
+        'only its pre-tax sales principal is deducted from netSales'
+      );
       expect(rows.map((row) => row.netSales.toString())).toEqual(before);
     }
   );
