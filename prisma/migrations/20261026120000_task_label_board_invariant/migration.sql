@@ -16,6 +16,11 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+  -- Board moves use the same transaction-scoped locks. Taking the task lock
+  -- first gives every association writer one consistent lock order.
+  PERFORM pg_advisory_xact_lock(506, hashtext('task:' || NEW."taskId"));
+  PERFORM pg_advisory_xact_lock(506, hashtext('label:' || NEW."labelId"));
+
   IF NOT EXISTS (
     SELECT 1
     FROM "tasks" t
@@ -42,6 +47,14 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+  -- Serialize with an attachment before inspecting/deleting its labels. This
+  -- closes the window where a concurrent insert could validate the old board.
+  PERFORM pg_advisory_xact_lock(506, hashtext('task:' || NEW.id));
+  PERFORM pg_advisory_xact_lock(506, hashtext('label:' || tl."labelId"))
+  FROM "task_labels" tl
+  WHERE tl."taskId" = NEW.id
+  ORDER BY tl."labelId";
+
   -- Moving tasks between boards is supported. Drop labels that are local to
   -- the old board rather than either blocking that feature or retaining an
   -- invalid association.
@@ -64,6 +77,14 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+  -- Association writers acquire task then label. A label move locks the tasks
+  -- already using the label, followed by the label lock itself.
+  PERFORM pg_advisory_xact_lock(506, hashtext('task:' || tl."taskId"))
+  FROM "task_labels" tl
+  WHERE tl."labelId" = NEW.id
+  ORDER BY tl."taskId";
+  PERFORM pg_advisory_xact_lock(506, hashtext('label:' || NEW.id));
+
   DELETE FROM "task_labels" tl
   USING "tasks" t, "columns" c
   WHERE tl."labelId" = NEW.id
