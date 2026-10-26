@@ -17,6 +17,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { matchScore, type AssistantHelpers, type ToolSet } from '@/lib/ai/context';
 import { appUrl, templates, sendEmail } from '@/lib/email';
 import { normalizeEmail } from '@/lib/email-address';
+import { assertSeatAvailable, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { generateInviteToken } from '@/lib/invite-token';
 import { passwordMeetsPolicy } from '@/lib/password-policy';
 
@@ -782,6 +783,9 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         });
         if (existing && existing.status !== 'INVITED') {
           return { error: 'A user with this email already exists.' };
+        }
+        if (!existing) {
+          assertSeatAvailable(await resolveOrganizationEntitlements(ctx.organizationId, h.db));
         }
 
         const { token, tokenHash } = generateInviteToken();
