@@ -3,6 +3,11 @@ import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
+import {
+  buildCounterReplayRequest,
+  createCounterQueue,
+  enqueueCounterCommand,
+} from '@/lib/pharmacy/counter-command-queue';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
@@ -333,6 +338,68 @@ async function setup() {
       ...headers,
     });
   }
+  async function submitQueuedRequest() {
+    const { signPharmacyCommand } = await import('@/lib/pharmacy/sales');
+    const queue = createCounterQueue(fixture.deviceId);
+    queue.leases = [
+      {
+        leaseId: lease.id,
+        blockStart: lease.blockStart,
+        blockEnd: lease.blockEnd,
+        nextNumber: lease.blockStart,
+      },
+    ];
+    queue.quotas = [{ ...bucketOf(fixture), quotaUnits: 10, consumedUnits: 0 }];
+    const enqueued = enqueueCounterCommand(
+      queue,
+      {
+        commandId: command.idempotencyKey,
+        action: command.action,
+        payload: {
+          leasedReceipt: command.leasedReceipt,
+          snapshots: command.snapshots,
+          lines: command.lines,
+          amountMinor: command.amountMinor,
+          cashReceivedMinor: command.cashReceivedMinor,
+        },
+        authentication: {
+          commandSignature: signPharmacyCommand(
+            scopeOf(fixture),
+            fixture.deviceId,
+            command,
+            fixture.deviceSecret
+          ),
+          receiptSignature: signPharmacyCommand(
+            scopeOf(fixture),
+            fixture.deviceId,
+            command.leasedReceipt,
+            fixture.deviceSecret
+          ),
+        },
+        deviceId: fixture.deviceId,
+        clientOriginAt: command.leasedReceipt.originalSaleAt,
+      },
+      {
+        nowMs: Date.parse(command.leasedReceipt.originalSaleAt),
+        snapshots: command.snapshots.map((snapshot) => ({
+          kind: snapshot.envelope.kind,
+          verified: true,
+          expiresAtMs: Date.parse(snapshot.envelope.expiresAt),
+        })),
+        cachedCreditRemainingMinor: 0,
+        controlledMedicinesPermittedOffline: false,
+        originalSaleAvailable: false,
+        deviceUsable: true,
+        safetyLeaseOk: true,
+        batchRecalled: false,
+      }
+    );
+    expect(enqueued.ok).toBe(true);
+    if (!enqueued.ok) throw new Error(enqueued.reason);
+    const request = buildCounterReplayRequest(enqueued.snapshot, enqueued.command);
+    expect(request.path).toBe('/api/pharmacy/counter/replay');
+    return call('replay', request.body, request.headers);
+  }
   async function counts() {
     return inOrg(ORG_A, async (db) => ({
       commands: await db.pharmacyOfflineCommand.count({ where: { deviceId: fixture.deviceId } }),
@@ -347,26 +414,43 @@ async function setup() {
       ).nextNumber,
     }));
   }
-  return { fixture, command, call, replay, counts, lease };
+  return { fixture, command, call, replay, submitQueuedRequest, counts, lease };
 }
 
 describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
-  it('replays identical concurrent Idempotency-Key requests into exactly one sale', async () => {
+  it('accepts a genuinely signed queued request and idempotent retry with a balanced journal', async () => {
     const f = await setup();
-    const responses = await Promise.all([f.replay(), f.replay()]);
+    const responses = [await f.submitQueuedRequest(), await f.submitQueuedRequest()];
     const results = await Promise.all(responses.map((r) => r.json()));
     expect(
       responses.map((r) => r.status),
       JSON.stringify(results)
     ).toEqual([200, 200]);
     expect(results[0].saleId).toBe(results[1].saleId);
-    expect(results.map((r) => r.replayed).sort()).toEqual([false, true]);
+    expect(results.map((r) => r.replayed)).toEqual([false, true]);
     expect(await f.counts()).toEqual({
       commands: 1,
       sales: 1,
       consumed: 1,
       nextNumber: f.lease.blockStart + 1,
     });
+    const journal = await inOrg(ORG_A, (db) =>
+      db.financeJournalEntry.findMany({
+        where: { branchId: f.fixture.branchId },
+        include: { lines: true },
+      })
+    );
+    const lines = journal.flatMap((entry) => entry.lines);
+    const debits = lines
+      .filter((line) => line.side === 'DEBIT')
+      .reduce((total, line) => total + line.amountMinor, 0);
+    const credits = lines
+      .filter((line) => line.side === 'CREDIT')
+      .reduce((total, line) => total + line.amountMinor, 0);
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.every((line) => Number.isSafeInteger(line.amountMinor))).toBe(true);
+    expect(debits).toBe(credits);
+    expect(debits).toBe(150);
   });
   it.each(['signature', 'scope', 'payload'] as const)(
     'rejects bad snapshot %s with no effects',
