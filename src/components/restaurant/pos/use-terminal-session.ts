@@ -25,7 +25,7 @@ type OperatorOption = {
   staffProfileId: string;
   displayName: string;
   role: string;
-  canComp: boolean;
+  canComp?: boolean;
   canApprove: boolean;
 };
 export type PosNotice = { tone: 'success' | 'warning' | 'danger' | 'neutral'; message: string };

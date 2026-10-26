@@ -213,6 +213,23 @@ describe('CheckoutPanel', () => {
     expect(screen.queryByRole('button', { name: 'Comp item' })).not.toBeInTheDocument();
   });
 
+  it('fails closed when legacy operator data omits the comp capability', async () => {
+    const request: TerminalRequest = async <T,>() => billed as T;
+    render(
+      <CheckoutPanel
+        open
+        orderId="order-1"
+        request={request}
+        actingOperatorId="cashier-1"
+        operators={[{ id: 'manager-1', displayName: 'Mina Manager', role: 'Manager' }]}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByText('Bill total')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Comp item' })).not.toBeInTheDocument();
+  });
+
   it('does not offer comp when no distinct approving manager is available', async () => {
     const request: TerminalRequest = async <T,>() => billed as T;
     render(
