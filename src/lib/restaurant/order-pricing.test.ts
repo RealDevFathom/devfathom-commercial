@@ -57,7 +57,10 @@ type Config = {
     priceDelta: Prisma.Decimal;
     modifierGroupId: string;
   }>;
-  productGroups?: Record<string, string[]>; // productId -> [modifierGroupId]
+  productGroups?: Record<
+    string,
+    Array<{ id: string; name?: string; minSelect?: number; maxSelect?: number | null }>
+  >;
 };
 
 function makeDb(config: Config): ScopedDb {
@@ -131,8 +134,13 @@ function makeDb(config: Config): ScopedDb {
     },
     restaurantProductModifierGroup: {
       findMany: async ({ where }: { where: { productId: string } }) =>
-        (config.productGroups?.[where.productId] ?? []).map((modifierGroupId) => ({
-          modifierGroupId,
+        (config.productGroups?.[where.productId] ?? []).map((group) => ({
+          modifierGroupId: group.id,
+          modifierGroup: {
+            name: group.name ?? group.id,
+            minSelect: group.minSelect ?? 0,
+            maxSelect: group.maxSelect ?? null,
+          },
         })),
     },
   } as unknown as ScopedDb;
@@ -298,7 +306,7 @@ describe('resolveItemSnapshot', () => {
       modifierOptions: [
         { id: 'opt_cheese', name: 'Cheese', priceDelta: D('1.00'), modifierGroupId: 'grp_1' },
       ],
-      productGroups: { prod_1: ['grp_1'] },
+      productGroups: { prod_1: [{ id: 'grp_1' }] },
     });
     const snapshot = await resolveItemSnapshot(db, {
       publicationId: 'pub_1',
@@ -320,7 +328,7 @@ describe('resolveItemSnapshot', () => {
       modifierOptions: [
         { id: 'opt_x', name: 'Foreign', priceDelta: D('1.00'), modifierGroupId: 'grp_other' },
       ],
-      productGroups: { prod_1: ['grp_1'] },
+      productGroups: { prod_1: [{ id: 'grp_1' }] },
     });
     await expect(
       resolveItemSnapshot(db, {
@@ -336,10 +344,47 @@ describe('resolveItemSnapshot', () => {
 
 describe('resolveModifierSnapshots', () => {
   it('rejects an unknown modifier option', async () => {
-    const db = makeDb({ modifierOptions: [], productGroups: { prod_1: ['grp_1'] } });
+    const db = makeDb({ modifierOptions: [], productGroups: { prod_1: [{ id: 'grp_1' }] } });
     await expect(resolveModifierSnapshots(db, 'prod_1', ['missing'])).rejects.toMatchObject({
       reason: 'MODIFIER_NOT_FOUND',
     });
+  });
+
+  it('rejects selecting the same option more than once', async () => {
+    const db = makeDb({
+      modifierOptions: [
+        { id: 'opt_1', name: 'Cheese', priceDelta: D('-1.00'), modifierGroupId: 'grp_1' },
+      ],
+      productGroups: { prod_1: [{ id: 'grp_1', maxSelect: 2 }] },
+    });
+
+    await expect(resolveModifierSnapshots(db, 'prod_1', ['opt_1', 'opt_1'])).rejects.toMatchObject(
+      { reason: 'MODIFIER_DUPLICATE' }
+    );
+  });
+
+  it('rejects omitting selections from a required attached group', async () => {
+    const db = makeDb({
+      productGroups: { prod_1: [{ id: 'grp_required', name: 'Cooking', minSelect: 1 }] },
+    });
+
+    await expect(resolveModifierSnapshots(db, 'prod_1', [])).rejects.toMatchObject({
+      reason: 'MODIFIER_SELECTION_COUNT',
+    });
+  });
+
+  it('rejects selections above an attached group maximum', async () => {
+    const db = makeDb({
+      modifierOptions: [
+        { id: 'opt_1', name: 'Mild', priceDelta: D('0'), modifierGroupId: 'grp_1' },
+        { id: 'opt_2', name: 'Hot', priceDelta: D('0'), modifierGroupId: 'grp_1' },
+      ],
+      productGroups: { prod_1: [{ id: 'grp_1', name: 'Sauce', maxSelect: 1 }] },
+    });
+
+    await expect(resolveModifierSnapshots(db, 'prod_1', ['opt_1', 'opt_2'])).rejects.toMatchObject(
+      { reason: 'MODIFIER_SELECTION_COUNT' }
+    );
   });
 });
 
