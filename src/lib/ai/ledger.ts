@@ -39,14 +39,17 @@ export async function reserveAIUsage(
   const existing = await db.aiUsage.findUnique({
     where: { organizationId_requestId: { organizationId: input.organizationId, requestId: input.requestId } },
   });
-  if (existing) return { provider: existing.provider as RoutedAIProvider, model: existing.model };
+  if (existing)
+    return { provider: existing.provider as RoutedAIProvider, model: existing.model, isReplay: true };
 
   const aggregate = await db.aiUsage.aggregate({
     where: {
       organizationId: input.organizationId,
       provider: 'anthropic',
       occurredAt: { gte: monthStart(occurredAt), lte: occurredAt },
-      OR: [{ status: 'COMPLETED' }, { status: 'RESERVED', expiresAt: { gt: occurredAt } }],
+      // RESERVED work remains a conservative liability even after its lease
+      // expires. Only an explicit terminal transition may release that spend.
+      status: { in: ['COMPLETED', 'RESERVED'] },
     },
     _sum: { costUsd: true },
   });
@@ -77,7 +80,7 @@ export async function reserveAIUsage(
       occurredAt,
     },
   });
-  return { provider, model };
+  return { provider, model, isReplay: false };
 }
 
 /** Completes a reservation exactly once and prices it from the database catalog. */
@@ -117,5 +120,20 @@ export async function cancelAIUsage(db: ScopedDb, organizationId: string, reques
   await db.aiUsage.updateMany({
     where: { organizationId, requestId, status: 'RESERVED' },
     data: { costUsd: new Prisma.Decimal(0), status: 'CANCELLED', completedAt: new Date() },
+  });
+}
+
+/**
+ * Conservatively charges the full reservation when provider work started but
+ * its final token usage is unavailable (for example, a downstream abort).
+ */
+export async function commitAIUsageReservation(
+  db: ScopedDb,
+  organizationId: string,
+  requestId: string
+) {
+  await db.aiUsage.updateMany({
+    where: { organizationId, requestId, status: 'RESERVED' },
+    data: { status: 'COMPLETED', completedAt: new Date() },
   });
 }

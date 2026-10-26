@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import {
   streamText,
   validateUIMessages,
@@ -21,6 +23,7 @@ import { createRoutedAIModel } from '@/lib/ai/provider';
 import {
   AI_GENERATION_LIMITS,
   cancelAIUsage,
+  commitAIUsageReservation,
   recordAIUsage,
   reserveAIUsage,
 } from '@/lib/ai/ledger';
@@ -190,7 +193,12 @@ async function respond(req: Request) {
   try {
     if (budgetValue) {
       const monthlyBudgetUsd = new Prisma.Decimal(budgetValue);
-      routedRequestId = crypto.randomUUID();
+      // The authenticated actor and exact request payload form a stable retry
+      // identity. Identical HTTP retries therefore cannot reserve or execute
+      // the provider twice, while approval continuations have a new payload.
+      routedRequestId = createHash('sha256')
+        .update(`${session.user.id}\0${rawBody}`)
+        .digest('hex');
       const routed = await withTenantDb(organization.id, (tx) =>
         reserveAIUsage(tx, {
           organizationId: organization.id,
@@ -199,6 +207,9 @@ async function respond(req: Request) {
           monthlyBudgetUsd,
         })
       );
+      if (routed.isReplay) {
+        return Response.json({ error: 'Assistant request already submitted.' }, { status: 409 });
+      }
       ai = createRoutedAIModel(routed);
     } else {
       ai = createAIModel();
@@ -244,14 +255,14 @@ async function respond(req: Request) {
     onError: routedRequestId
       ? async () => {
           await withTenantDb(organization.id, (tx) =>
-            cancelAIUsage(tx, organization.id, routedRequestId!)
+            commitAIUsageReservation(tx, organization.id, routedRequestId!)
           );
         }
       : undefined,
     onAbort: routedRequestId
       ? async () => {
           await withTenantDb(organization.id, (tx) =>
-            cancelAIUsage(tx, organization.id, routedRequestId!)
+            commitAIUsageReservation(tx, organization.id, routedRequestId!)
           );
         }
       : undefined,

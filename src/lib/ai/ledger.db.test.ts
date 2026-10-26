@@ -48,7 +48,8 @@ describeIfDatabase('AI ledger database integration', () => {
         })
       );
     const [first, retry] = await Promise.all([reserve(), reserve()]);
-    expect(retry).toEqual(first);
+    expect(first).toEqual(expect.objectContaining({ isReplay: false }));
+    expect(retry).toEqual({ provider: first.provider, model: first.model, isReplay: true });
 
     const [completed, competingCompletion] = await Promise.all([
       withTenantDb(orgA, (db) =>
@@ -89,6 +90,44 @@ describeIfDatabase('AI ledger database integration', () => {
     });
     await withTenantDb(orgB, async (db) => {
       expect(await db.aiUsage.count({ where: { organizationId: orgB } })).toBe(0);
+    });
+  });
+
+  it('keeps an expired in-flight reservation in the budget and charges an abort', async () => {
+    const [{ withTenantDb }, { commitAIUsageReservation, reserveAIUsage }] = await Promise.all([
+      import('@/lib/tenancy/scoped-db'),
+      import('./ledger'),
+    ]);
+    const expiredId = `expired-${suffix}`;
+    const old = new Date(Date.now() - 10 * 60_000);
+    const first = await withTenantDb(orgA, (db) =>
+      reserveAIUsage(db, {
+        organizationId: orgA,
+        requestId: expiredId,
+        tier: 'standard',
+        monthlyBudgetUsd: new Prisma.Decimal(5),
+        occurredAt: old,
+      })
+    );
+    expect(first.provider).toBe('anthropic');
+
+    const second = await withTenantDb(orgA, (db) =>
+      reserveAIUsage(db, {
+        organizationId: orgA,
+        requestId: `after-expiry-${suffix}`,
+        tier: 'standard',
+        monthlyBudgetUsd: new Prisma.Decimal(5),
+      })
+    );
+    expect(second.provider).toBe('bedrock');
+
+    await withTenantDb(orgA, (db) => commitAIUsageReservation(db, orgA, expiredId));
+    await withTenantDb(orgA, async (db) => {
+      const charged = await db.aiUsage.findUniqueOrThrow({
+        where: { organizationId_requestId: { organizationId: orgA, requestId: expiredId } },
+      });
+      expect(charged.status).toBe('COMPLETED');
+      expect(charged.costUsd.toFixed(6)).toBe('3.968640');
     });
   });
 

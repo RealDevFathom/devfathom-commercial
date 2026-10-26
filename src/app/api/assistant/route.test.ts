@@ -8,13 +8,25 @@ const mocks = vi.hoisted(() => ({
   db: vi.fn(),
   findOrganization: vi.fn(),
   tools: vi.fn(),
+  reserve: vi.fn(),
+  commit: vi.fn(),
+  routedModel: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: mocks.db }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: mocks.db,
+  withTenantDb: (_organizationId: string, work: (db: object) => unknown) => work({}),
+}));
 vi.mock('@/lib/entitlements', () => ({ resolveOrganizationEntitlements: mocks.entitlements }));
 vi.mock('@/lib/ai/provider', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/ai/provider')>()),
   createAIModel: mocks.model,
+  createRoutedAIModel: mocks.routedModel,
+}));
+vi.mock('@/lib/ai/ledger', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ai/ledger')>()),
+  reserveAIUsage: mocks.reserve,
+  commitAIUsageReservation: mocks.commit,
 }));
 vi.mock('@/lib/ai/tools', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/ai/tools')>();
@@ -71,6 +83,8 @@ beforeEach(async () => {
   mocks.findOrganization.mockResolvedValue({ id: 'server-org', askFathomEnabled: true });
   mocks.db.mockReturnValue({ organization: { findUnique: mocks.findOrganization } });
   mocks.model.mockReturnValue({ model: {}, providerOptions: {} });
+  mocks.routedModel.mockReturnValue({ model: {}, providerOptions: {} });
+  mocks.reserve.mockResolvedValue({ provider: 'anthropic', model: 'model', isReplay: false });
   mocks.stream.mockReturnValue({
     toUIMessageStreamResponse: () => new Response('synthetic stream'),
   });
@@ -82,6 +96,35 @@ afterEach(() => {
 });
 
 describe('assistant API scope', () => {
+  it('does not execute sequential or concurrent retries and conservatively charges aborts', async () => {
+    vi.stubEnv('AI_ANTHROPIC_MONTHLY_BUDGET_USD', '5');
+    let release!: () => void;
+    const firstReserved = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.reserve
+      .mockImplementationOnce(async () => {
+        await firstReserved;
+        return { provider: 'anthropic', model: 'model', isReplay: false };
+      })
+      .mockResolvedValue({ provider: 'anthropic', model: 'model', isReplay: true });
+
+    const firstRequest = POST(request({ messages: [user] }));
+    const retry = await POST(request({ messages: [user] }));
+    expect(retry.status).toBe(409);
+    release();
+    expect((await firstRequest).status).toBe(200);
+    expect(mocks.stream).toHaveBeenCalledTimes(1);
+
+    await mocks.stream.mock.calls[0][0].onAbort();
+    expect(mocks.commit).toHaveBeenCalledTimes(1);
+    expect((await POST(request({ messages: [user] }))).status).toBe(409);
+    expect(mocks.stream).toHaveBeenCalledTimes(1);
+
+    const requestIds = mocks.reserve.mock.calls.map(([, input]) => input.requestId);
+    expect(new Set(requestIds).size).toBe(1);
+  });
+
   it('ignores forged client organization, role, vertical, modules and branch', async () => {
     const response = await POST(
       request({
