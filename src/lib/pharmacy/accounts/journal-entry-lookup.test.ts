@@ -59,6 +59,11 @@ beforeEach(() => {
 describe('exact posted-journal lookup', () => {
   it('uses one exact, tenant/window/line-scoped query with a stable 201-line bound', async () => {
     await expect(caller().lookup(input)).resolves.toEqual({ status: 'NOT_FOUND' });
+    expect(mocks.branch).toHaveBeenCalledOnce();
+    expect(mocks.branch).toHaveBeenCalledWith({
+      where: { id: '!', organizationId: 'org_1', active: true },
+      select: { id: true },
+    });
     expect(mocks.journal).toHaveBeenCalledOnce();
     expect(mocks.audit).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'SUCCESS' }));
     expect(mocks.journal).toHaveBeenCalledWith({
@@ -127,8 +132,32 @@ describe('exact posted-journal lookup', () => {
   it.each([
     ['admin deny', () => mocks.can.mockResolvedValueOnce(false), {}],
     ['module deny', () => vi.mocked(hasModule).mockReturnValue(false), {}],
+    [
+      'operational report deny',
+      () => mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false),
+      {},
+    ],
+    [
+      'financial report deny',
+      () =>
+        mocks.can
+          .mockResolvedValueOnce(true)
+          .mockResolvedValueOnce(true)
+          .mockResolvedValueOnce(false),
+      {},
+    ],
     ['organization mismatch', () => {}, { organization: { id: 'other' } }],
     ['missing session', () => {}, { session: null }],
+    [
+      'inactive session',
+      () => {},
+      {
+        session: {
+          expires: 'later',
+          user: { id: 'admin', role: 'ADMIN', status: 'INACTIVE', organizationId: 'org_1' },
+        },
+      },
+    ],
   ])('fails closed before branch and journal reads: %s', async (_name, arrange, overrides) => {
     arrange();
     await expect(caller(overrides as Partial<TRPCContext>).lookup(input)).rejects.toMatchObject({
