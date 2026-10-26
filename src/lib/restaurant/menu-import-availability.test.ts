@@ -256,6 +256,9 @@ describe('retention survives failed deletion', () => {
     });
 
     expect(db.$queryRaw).toHaveBeenCalledOnce();
+    expect(vi.mocked(db.$queryRaw).mock.invocationCallOrder[0]).toBeLessThan(
+      table.findUnique.mock.invocationCallOrder[0]!
+    );
     expect(runtime.deleteSource).not.toHaveBeenCalled();
     expect(table.delete).not.toHaveBeenCalled();
   });
