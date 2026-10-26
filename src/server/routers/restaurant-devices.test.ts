@@ -475,9 +475,11 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
         approvingSecret: APPROVING_PIN,
         reason: 'capability check',
       };
+      const before = await rotationState(device.id);
       const attempt = operation === 'revoke' ? api.revoke(input) : api.rotate(input);
 
       await expect(attempt).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expectUnchangedRotationState(device.id, before);
 
       const still = (await api.list()).find((d) => d.id === device.id);
       expect(still!.status).toBe('ACTIVE');
@@ -523,9 +525,11 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
           approvingSecret: APPROVING_PIN,
           reason: 'explicit deny check',
         };
+        const before = await rotationState(deviceId);
         const attempt = operation === 'revoke' ? api.revoke(input) : api.rotate(input);
 
         await expect(attempt).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expectUnchangedRotationState(deviceId, before);
         const still = (await api.list()).find((device) => device.id === deviceId);
         expect(still!.status).toBe('ACTIVE');
       }
