@@ -203,6 +203,25 @@ describe('listGoodsReceiptPinWitnesses', () => {
     );
   });
 
+  it('does not offer the named qualified person without an eligible branch profile', async () => {
+    vi.mocked(can).mockClear();
+    const db = {
+      pharmacyGoodsReceipt: {
+        findFirst: vi.fn().mockResolvedValue({ qualifiedPersonUserId: 'pharmacist' }),
+      },
+      restaurantStaffProfile: { findFirst: vi.fn().mockResolvedValue(null) },
+    } as unknown as ScopedDb;
+
+    await expect(
+      listGoodsReceiptPinWitnesses(
+        db,
+        { organizationId: 'org', branchId: 'branch', actorId: 'receiver' },
+        'receipt'
+      )
+    ).resolves.toEqual([]);
+    expect(can).not.toHaveBeenCalled();
+  });
+
   it('does not enumerate profiles when the receipt belongs to another branch', async () => {
     const findFirst = vi.fn();
     const receiptFindFirst = vi.fn().mockResolvedValue(null);
