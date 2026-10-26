@@ -233,7 +233,7 @@ export const financeRouter = router({
       const orgId = workspaceId(ctx);
       const [invoice, issuer] = await Promise.all([
         ctx.db.invoice.findUnique({
-          where: { id: input.id },
+          where: { organizationId_id: { organizationId: orgId, id: input.id } },
           include: {
             client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
             project: { select: { id: true, name: true } },

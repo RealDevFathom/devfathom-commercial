@@ -53,6 +53,14 @@ describe('finance.getInvoiceById issuer', () => {
   it('returns issuer identity only from the authenticated agency tenant', async () => {
     const invoice = await caller().getInvoiceById({ id: 'invoice-1' });
 
+    expect(mocks.findInvoice).toHaveBeenCalledExactlyOnceWith({
+      where: { organizationId_id: { organizationId: 'agency-a', id: 'invoice-1' } },
+      include: {
+        client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
+        project: { select: { id: true, name: true } },
+        payments: { orderBy: { paidAt: 'desc' } },
+      },
+    });
     expect(mocks.findOrganization).toHaveBeenCalledExactlyOnceWith({
       where: { id: 'agency-a' },
       select: { displayName: true, legalName: true, primaryContactEmail: true },
