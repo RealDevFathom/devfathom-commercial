@@ -84,14 +84,15 @@ async function requestThermalJob(input: {
   locale: CounterReceiptLocale;
   reprint: boolean;
 }): Promise<ThermalJob> {
-  const params = new URLSearchParams({
-    branchId: input.branchId,
-    saleId: input.saleId,
-    locale: input.locale,
-    reprint: input.reprint ? '1' : '0',
-  });
   try {
-    const response = await fetch(`/api/pharmacy/print?${params}`, {
+    const response = await fetch('/api/pharmacy/print', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        branchId: input.branchId,
+        saleId: input.saleId,
+        locale: input.locale,
+      }),
       cache: 'no-store',
       credentials: 'same-origin',
     });

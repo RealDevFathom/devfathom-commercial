@@ -40,6 +40,7 @@ const ids = {
   closedBranch: `br_rcpt_closed_${suffix}`,
   saleA: `sale_rcpt_a_${suffix}`,
   saleB: `sale_rcpt_b_${suffix}`,
+  printableSale: `sale_rcpt_print_${suffix}`,
 };
 
 type SalesCaller = {
@@ -48,8 +49,7 @@ type SalesCaller = {
     branchId: string;
     saleId: string;
     locale: 'en' | 'ur';
-    reprint: boolean;
-  }) => Promise<unknown>;
+  }) => Promise<{ status: 'READY'; copyNumber: number; reprint: boolean }>;
   lookupReceiptByNumber: (input: { branchId: string; receiptNumber: number }) => Promise<unknown>;
   counterReceiptFormat: (input: { branchId: string }) => Promise<unknown>;
   counterCart: (input: { branchId: string; saleId: string }) => Promise<unknown>;
@@ -209,6 +209,52 @@ beforeAll(async () => {
         },
       ],
     });
+    const medicine = await tx.medicine.create({
+      data: {
+        productName: `Receipt test medicine ${suffix}`,
+        productFamily: 'PHARMACEUTICAL',
+        saleable: true,
+        presentations: { create: { presentation: 'Tablet' } },
+      },
+      include: { presentations: true },
+    });
+    const packLevel = await tx.packLevel.create({
+      data: {
+        presentationId: medicine.presentations[0]!.id,
+        versionGroupId: `receipt-${suffix}`,
+        version: 1,
+        level: 'UNIT',
+        unitsPerParent: 1,
+        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+      },
+    });
+    await tx.pharmacySale.create({
+      data: {
+        id: ids.printableSale,
+        branchId: ids.branchA,
+        status: 'COMPLETED',
+        createdByUserId: ids.dispenser,
+        receiptNumber: 8,
+        receiptDeviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        completedAt: new Date('2026-10-01T08:00:00.000Z'),
+        lines: {
+          create: {
+            medicineId: medicine.id,
+            presentationId: medicine.presentations[0]!.id,
+            packLevelId: packLevel.id,
+            saleUnit: 'UNIT',
+            quantity: 1,
+            canonicalUnitsPerSaleUnit: 1,
+            canonicalUnits: 1,
+            unitPriceMinor: 100,
+            proRataCeilingMinor: 100,
+            unitCostMinor: 50,
+            idempotencyKey: `receipt-line-${suffix}`,
+          },
+        },
+      },
+    });
   });
 
   await withTenantDb(ids.orgB, async (tx) => {
@@ -248,6 +294,50 @@ const dispenser = { id: ids.dispenser, role: 'EMPLOYEE' as const, organizationId
 const receiptUser = { id: ids.receiptClerk, role: 'EMPLOYEE' as const, organizationId: ids.orgA };
 
 describeIfDatabase('counter receipt authorization against Postgres', () => {
+  it('durably allocates one original and sequential marked copies under concurrency', async () => {
+    const print = () =>
+      act(ids.orgA, dispenser, (api) =>
+        api.counterReceiptPrintJob({
+          branchId: ids.branchA,
+          saleId: ids.printableSale,
+          locale: 'en',
+        })
+      );
+
+    // Use a separate tenant transaction for the first request, then concurrent
+    // transactions, matching real request/reload boundaries.
+    const first = await print();
+    const concurrent = await Promise.all(Array.from({ length: 7 }, () => print()));
+    const results = [first, ...concurrent];
+
+    expect(results.map((result) => result.copyNumber).sort((a, b) => a - b)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8,
+    ]);
+    expect(results.filter((result) => !result.reprint)).toEqual([
+      expect.objectContaining({ copyNumber: 1, reprint: false }),
+    ]);
+    expect(results.filter((result) => result.reprint)).toHaveLength(7);
+
+    const persisted = await withTenantDb(ids.orgA, async (tx) => ({
+      state: await tx.pharmacyReceiptPrintState.findUnique({
+        where: {
+          organizationId_branchId_saleId: {
+            organizationId: ids.orgA,
+            branchId: ids.branchA,
+            saleId: ids.printableSale,
+          },
+        },
+      }),
+      dispatches: await tx.pharmacyReceiptPrintDispatch.findMany({
+        where: { branchId: ids.branchA, saleId: ids.printableSale },
+        orderBy: { copyNumber: 'asc' },
+      }),
+    }));
+    expect(persisted.state?.copyCount).toBe(8);
+    expect(persisted.dispatches.map((row) => row.copyNumber)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(persisted.dispatches).toHaveLength(results.length);
+  });
+
   it('allows the assigned branch and denies the sibling sale, an empty assignment, and another organization', async () => {
     await act(ids.orgA, dispenser, async (api) => {
       await expect(
@@ -260,7 +350,6 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
           branchId: ids.branchA,
           saleId: ids.saleA,
           locale: 'en',
-          reprint: false,
         })
       ).rejects.toMatchObject({ code: 'NOT_FOUND' });
       await expect(
@@ -268,7 +357,6 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
           branchId: ids.branchA,
           saleId: ids.saleA,
           locale: 'en',
-          reprint: true,
         })
       ).rejects.toMatchObject({ code: 'NOT_FOUND' });
       await expect(
@@ -292,7 +380,6 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
           branchId: ids.branchB,
           saleId: ids.saleB,
           locale: 'en',
-          reprint: true,
         })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       await expect(api.counterReceiptFormat({ branchId: ids.branchB })).rejects.toMatchObject({

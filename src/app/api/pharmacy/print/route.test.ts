@@ -14,27 +14,36 @@ vi.mock('@/server/routers/_app', () => ({
   },
 }));
 
-import { GET } from './route';
+import { GET, POST } from './route';
 
-function request(reprint: string) {
-  return new Request(
-    `http://lan.local/api/pharmacy/print?branchId=branch-a&saleId=sale-a&locale=en&reprint=${reprint}`
-  );
+function request(body: object = { branchId: 'branch-a', saleId: 'sale-a', locale: 'en' }) {
+  return new Request('http://lan.local/api/pharmacy/print', {
+    method: 'POST',
+    headers: { origin: 'http://lan.local', 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 
 beforeEach(() => {
   printJob.mockReset();
 });
 
-describe('GET /api/pharmacy/print', () => {
-  it('returns the guarded print job for a first print and a reprint', async () => {
+describe('/api/pharmacy/print', () => {
+  it('rejects GET without allocating a copy', async () => {
+    const response = GET();
+    expect(response.status).toBe(405);
+    expect(response.headers.get('allow')).toBe('POST');
+    expect(printJob).not.toHaveBeenCalled();
+  });
+
+  it('returns the guarded print job from an authenticated same-origin POST', async () => {
     printJob.mockImplementation(async () => ({
       status: 'READY',
       reprint: false,
       document: { kind: 'RECEIPT' },
     }));
-    const first = await GET(request('0'));
-    const again = await GET(request('1'));
+    const first = await POST(request());
+    const again = await POST(request());
     expect(first.status).toBe(200);
     expect(again.status).toBe(200);
     expect(printJob).toHaveBeenNthCalledWith(1, {
@@ -54,8 +63,18 @@ describe('GET /api/pharmacy/print', () => {
     printJob.mockRejectedValue(
       new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' })
     );
-    const response = await GET(request('1'));
+    const response = await POST(request());
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({ error: 'Branch is outside your scope.' });
+  });
+
+  it('rejects cross-site and non-JSON POSTs before allocating a copy', async () => {
+    const crossSite = request();
+    crossSite.headers.set('origin', 'https://attacker.example');
+    expect((await POST(crossSite)).status).toBe(403);
+    const nonJson = request();
+    nonJson.headers.set('content-type', 'text/plain');
+    expect((await POST(nonJson)).status).toBe(403);
+    expect(printJob).not.toHaveBeenCalled();
   });
 });
