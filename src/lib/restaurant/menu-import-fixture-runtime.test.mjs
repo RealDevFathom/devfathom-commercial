@@ -358,6 +358,41 @@ test('accepting a line requires an explicit review of an empty variant list', as
   assert.deepEqual(review[1].reviewedVariants, []);
 });
 
+test('commit rejects an accepted line without explicit empty variant review evidence', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  f.record.status = 'AWAITING_REVIEW';
+  f.lines.push({
+    id: 'line_1',
+    reviewStatus: 'ACCEPTED',
+    sortOrder: 1,
+    extractedCategoryName: null,
+    extractedProductName: 'Synthetic item',
+    extractedDescription: null,
+    extractedPriceAmount: '10.00',
+    extractedVariants: [],
+    reviewedVariants: null,
+    reviewedCategoryName: null,
+    reviewedProductName: null,
+    reviewedDescription: null,
+    reviewedPriceAmount: null,
+    mergeProductId: null,
+    mergeVariantId: null,
+  });
+
+  await assert.rejects(
+    menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' }),
+    { reason: 'REVIEW_INCOMPLETE' }
+  );
+  assert.ok(
+    !f.events.some(
+      (event) =>
+        Array.isArray(event) &&
+        ['createProduct', 'createMenu', 'addPriceListEntry'].includes(event[0])
+    )
+  );
+});
+
 test('accepting extracted variants requires and persists explicit human review', async () => {
   const f = setup('production', 'disabled');
   const menu = f.load('@/lib/restaurant/menu-import');

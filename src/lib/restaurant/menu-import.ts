@@ -1055,7 +1055,7 @@ export async function commitMenuImport(
         mergeVariantId: line.mergeVariantId,
         variants: line.reviewStatus === 'MERGED' ? [] : (() => {
           const extracted = resolveVariants(line.extractedVariants);
-          if (extracted.length > 0 && line.reviewedVariants === null) {
+          if (line.reviewedVariants === null) {
             throw new MenuImportError(
               'A confirmed line has variants that were not reviewed.',
               'REVIEW_INCOMPLETE'
