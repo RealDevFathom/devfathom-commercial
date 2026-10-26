@@ -46,19 +46,58 @@ describe('pure rollup calculations', () => {
         },
       ],
       tenders: [{ tipAmount: D('6.00') }],
-      refunds: [{ amount: D('2.50'), deliveryFeeRefundAmount: D('1.25') }],
+      refunds: [
+        {
+          amount: D('2.50'),
+          taxRefundAmount: D('0'),
+          serviceChargeRefundAmount: D('0'),
+          deliveryFeeRefundAmount: D('1.25'),
+        },
+      ],
       drawers: [],
     });
     expect(total.grossSales.toString()).toBe('100');
     expect(total.deliveryFeeSales.toString()).toBe('12');
     expect(total.deliveryFeeRefunds.toString()).toBe('1.25');
     expect(total.discountTotal.toString()).toBe('5');
-    expect(total.netSales.toString()).toBe('82.5');
+    expect(total.netSales.toString()).toBe('83.75');
     expect(total.taxTotal.toString()).toBe('7');
     expect(total.serviceChargeTotal.toString()).toBe('3');
     expect(total.tipTotal.toString()).toBe('6');
     expect(total.refundTotal.toString()).toBe('2.5');
     expect(total.voidTotal.toString()).toBe('9.99');
+  });
+
+  it('subtracts only refunded sales and reconciles refunded tax and service separately', () => {
+    const total = computeReconciledFinancials({
+      bills: [
+        {
+          status: 'SETTLED',
+          subtotal: D('100'),
+          deliveryFeeTotal: D('0'),
+          taxTotal: D('10'),
+          serviceChargeTotal: D('10'),
+          compTotal: D('0'),
+          discountTotal: D('0'),
+          grandTotal: D('120'),
+        },
+      ],
+      tenders: [],
+      refunds: [
+        {
+          amount: D('60'),
+          taxRefundAmount: D('5'),
+          serviceChargeRefundAmount: D('5'),
+          deliveryFeeRefundAmount: D('0'),
+        },
+      ],
+      drawers: [],
+    });
+
+    expect(total.netSales.toFixed(2)).toBe('50.00');
+    expect(total.taxTotal.toFixed(2)).toBe('5.00');
+    expect(total.serviceChargeTotal.toFixed(2)).toBe('5.00');
+    expect(total.refundTotal.toFixed(2)).toBe('60.00');
   });
 
   it('projects deterministic product item mix from snapshot prices and non-voided inputs', () => {
@@ -105,13 +144,13 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
     grossSales: D(input?.mismatch ? '11' : '10'),
     deliveryFeeSales: D('2'),
     deliveryFeeRefunds: D('1'),
-    netSales: D(input?.legacyNet ? '7' : '4'),
+    netSales: D(input?.legacyNet ? '7' : '5'),
     taxTotal: D('0'),
     serviceChargeTotal: D('0'),
     tipTotal: D('0'),
     compTotal: D('2'),
     discountTotal: D('1'),
-    refundTotal: D('3'),
+    refundTotal: D('2'),
     voidTotal: D('4'),
     cashExpected: D('0'),
     cashCounted: D('0'),
@@ -153,7 +192,14 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
     },
     restaurantTender: { findMany: vi.fn(async () => []) },
     restaurantRefund: {
-      findMany: vi.fn(async () => [{ amount: D('3'), deliveryFeeRefundAmount: D('1') }]),
+      findMany: vi.fn(async () => [
+        {
+          amount: D('3'),
+          taxRefundAmount: D('0'),
+          serviceChargeRefundAmount: D('0'),
+          deliveryFeeRefundAmount: D('1'),
+        },
+      ]),
     },
     restaurantDrawerSession: { findMany: vi.fn(async () => []) },
     insightDailyRollup: {
@@ -421,12 +467,12 @@ describe('rollupDay handler idempotency and correction', () => {
       });
       expect(db.insightDailyRollup.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
-          create: expect.objectContaining({ netSales: D('4') }),
-          update: expect.objectContaining({ netSales: D('4') }),
+          create: expect.objectContaining({ netSales: D('5') }),
+          update: expect.objectContaining({ netSales: D('5') }),
         })
       );
       expect((await db.restaurantDailyClose.findMany())[0].netSales.toString()).toBe(
-        legacyNet ? '7' : '4'
+        legacyNet ? '7' : '5'
       );
     }
   );
