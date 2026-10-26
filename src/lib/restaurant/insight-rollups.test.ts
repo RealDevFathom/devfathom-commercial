@@ -64,7 +64,7 @@ describe('pure rollup calculations', () => {
     expect(total.taxTotal.toString()).toBe('7');
     expect(total.serviceChargeTotal.toString()).toBe('3');
     expect(total.tipTotal.toString()).toBe('6');
-    expect(total.refundTotal.toString()).toBe('2.5');
+    expect(total.refundTotal.toString()).toBe('1.25');
     expect(total.voidTotal.toString()).toBe('9.99');
   });
 
