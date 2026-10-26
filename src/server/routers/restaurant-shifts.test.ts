@@ -1134,6 +1134,7 @@ describe('restaurantShifts.reviewSwap', () => {
         idempotencyKey: 'rv-approve-before-reject',
       })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(state.commands.filter((command) => command.kind === 'SWAP_APPROVE')).toHaveLength(0);
 
     const decision = await caller('MANAGER').reviewSwap({
       requestId: request!.id,
@@ -1156,6 +1157,7 @@ describe('restaurantShifts.reviewSwap', () => {
     );
     expect(eventsOf('SWAP_REJECTED')).toHaveLength(1);
     expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
+    expect(state.commands.filter((command) => command.kind === 'SWAP_REJECT')).toHaveLength(1);
   });
 
   it('denies employees, other-branch managers, and replacements with an overlapping shift', async () => {
