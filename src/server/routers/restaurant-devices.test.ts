@@ -484,6 +484,66 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
     }
   );
 
+  it('excludes and rejects an approver whose inherited coauth:approve is explicitly denied', async () => {
+    const api = caller();
+    const revokeEnrollment = await api.initiateEnrollment({
+      branchId,
+      name: 'POS-denied-approval-revoke',
+    });
+    const rotateEnrollment = await api.initiateEnrollment({
+      branchId,
+      name: 'POS-denied-approval-rotate',
+    });
+
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantStaffCapabilityGrant.create({
+        data: {
+          staffProfileId: approvingStaffId,
+          branchId,
+          capability: 'coauth:approve',
+          effect: 'DENY',
+        },
+      })
+    );
+
+    try {
+      await expect(
+        api.listApprovers({ deviceId: revokeEnrollment.device.id })
+      ).resolves.toMatchObject({ approvers: [] });
+
+      for (const [operation, deviceId] of [
+        ['revoke', revokeEnrollment.device.id],
+        ['rotate', rotateEnrollment.device.id],
+      ] as const) {
+        const input = {
+          deviceId,
+          actingStaffProfileId: actingStaffId,
+          approvingStaffProfileId: approvingStaffId,
+          approvingType: 'PIN' as const,
+          approvingSecret: APPROVING_PIN,
+          reason: 'explicit deny check',
+        };
+        const attempt = operation === 'revoke' ? api.revoke(input) : api.rotate(input);
+
+        await expect(attempt).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        const still = (await api.list()).find((device) => device.id === deviceId);
+        expect(still!.status).toBe('ACTIVE');
+      }
+    } finally {
+      await deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantStaffCapabilityGrant.delete({
+          where: {
+            staffProfileId_branchId_capability: {
+              staffProfileId: approvingStaffId,
+              branchId,
+              capability: 'coauth:approve',
+            },
+          },
+        })
+      );
+    }
+  });
+
   it('revokes with manager co-authorization, writing the C7 evidence record atomically', async () => {
     const api = caller();
     const { device } = await api.initiateEnrollment({ branchId, name: 'POS-revoke' });
