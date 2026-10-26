@@ -126,6 +126,18 @@ beforeEach(() => {
 });
 
 describe('procurement write authorization', () => {
+  it('fails closed when the session actor no longer exists', async () => {
+    db.user.findUnique.mockResolvedValue(null);
+
+    await expect(
+      caller('deleted_user').createSupplier({ name: 'Unapproved supplier' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       procedure: 'createSupplier',
