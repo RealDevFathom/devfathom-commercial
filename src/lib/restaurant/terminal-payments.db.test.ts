@@ -237,6 +237,12 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
     expect(state.reconciliations[0]!.amount.toFixed(2)).toBe('25.00');
     expect(state.reconciliations[0]!.tipAmount.toFixed(2)).toBe('4.00');
     expect(state.moneyKeys).toHaveLength(1);
+    expect(state.moneyKeys[0]).toMatchObject({
+      commandType: 'tender.card',
+      resultRef: state.tenders[0]!.id,
+      completedAt: expect.any(Date),
+    });
+    expect(state.moneyKeys[0]!.canonicalPayloadHash).toMatch(/^[0-9a-f]{64}$/);
     expect(state.bill).toMatchObject({ status: 'SETTLED' });
     expect(state.bill.receiptNumber).toEqual(expect.any(Number));
 
