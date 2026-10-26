@@ -199,6 +199,25 @@ describe('restaurant tax activation router', () => {
     expect(db.restaurantTaxProfileVersion.create).not.toHaveBeenCalled();
   });
 
+  it('does not close the open profile when another profile still overlaps the successor', async () => {
+    db.restaurantTaxProfileVersion.findFirst
+      .mockResolvedValueOnce({ id: 'profile_open', rules: [] })
+      .mockResolvedValueOnce({ id: 'profile_overlapping' });
+
+    await expect(
+      caller().activate({
+        ...base,
+        profileId: 'PK-ICT-RESTAURANT',
+        eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
+        replaceOpenProfile: true,
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+
+    expect(db.restaurantTaxRuleVersion.updateMany).not.toHaveBeenCalled();
+    expect(db.restaurantTaxProfileVersion.update).not.toHaveBeenCalled();
+    expect(db.restaurantTaxProfileVersion.create).not.toHaveBeenCalled();
+  });
+
   it('preserves legacy idempotency hashes when replacement is explicitly disabled', async () => {
     db.restaurantTaxProfileVersion.findUnique.mockResolvedValue({
       id: 'profile_1',
