@@ -70,6 +70,7 @@ type Deps = {
   createTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['createTenantDb'];
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
   drawer: typeof import('./drawer-sessions');
+  close: typeof import('./daily-close');
 };
 
 let deps: Deps;
@@ -94,10 +95,11 @@ async function newDevice(label: string): Promise<string> {
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, drawer] = await Promise.all([
+  const [scopedDb, devices, drawer, close] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('@/lib/restaurant/devices'),
     import('./drawer-sessions'),
+    import('./daily-close'),
   ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
@@ -105,6 +107,7 @@ beforeAll(async () => {
     createTenantDb: scopedDb.createTenantDb,
     enrollDevice: devices.enrollDevice,
     drawer,
+    close,
   };
 
   await deps.withPlatformDb((tx) =>
@@ -166,6 +169,39 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     expect(session?.staffProfileId).toBe(ids.operator);
     expect(session?.movements).toEqual([{ kind: 'OPENING_FLOAT', amount: expect.anything() }]);
     expect(session?.movements[0].amount.toString()).toBe('150');
+  });
+
+  it('rejects opening a drawer after its business day has been closed', async () => {
+    const date = '2026-08-20';
+    const closingDeviceId = await newDevice('POS-day-close');
+    const openingDeviceId = await newDevice('POS-after-day-close');
+    const db = deps.createTenantDb(orgId);
+
+    await deps.close.cutClose(db, {
+      branchId: ids.branch,
+      businessDate: date,
+      actor: actor(closingDeviceId),
+    });
+
+    await expect(
+      deps.drawer.openDrawerSession(db, {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
+        branchId: ids.branch,
+        openingFloat: '100.00',
+        actor: actor(openingDeviceId),
+        now: new Date(`${date}T12:00:00.000Z`),
+      })
+    ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
+
+    const [sessions, movements] = await read((tx) =>
+      Promise.all([
+        tx.restaurantDrawerSession.count({ where: { deviceId: openingDeviceId } }),
+        tx.restaurantDrawerMovement.count({ where: { deviceId: openingDeviceId } }),
+      ])
+    );
+    expect(sessions).toBe(0);
+    expect(movements).toBe(0);
   });
 
   it('rejects a second OPEN drawer on the same register', async () => {
