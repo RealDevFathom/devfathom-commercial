@@ -24,6 +24,11 @@ const mocks = vi.hoisted(() => ({
   deviceFindUnique: vi.fn(),
   userFindMany: vi.fn(),
   userFindFirst: vi.fn(),
+  userCreate: vi.fn(),
+  userUpdate: vi.fn(),
+  departmentFindFirst: vi.fn(),
+  invitationCreate: vi.fn(),
+  sendEmail: vi.fn(),
   credFindMany: vi.fn(),
   credFindFirst: vi.fn(),
   credFindUnique: vi.fn(),
@@ -49,6 +54,11 @@ vi.mock('@/lib/abac', async () => {
   const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
   return { ...actual, can: mocks.can };
 });
+vi.mock('@/lib/email', () => ({
+  appUrl: () => 'https://devfathom.test',
+  sendEmail: mocks.sendEmail,
+  templates: { inviteMember: () => ({ subject: 'Invite', html: '<p>Invite</p>', text: 'Invite' }) },
+}));
 vi.mock('@/lib/restaurant/job-roles', async () => ({
   ...(await vi.importActual<typeof import('@/lib/restaurant/job-roles')>(
     '@/lib/restaurant/job-roles'
@@ -73,7 +83,14 @@ const db = {
   },
   restaurantBranch: { findMany: mocks.branchFindMany, findUnique: mocks.branchFindUnique },
   restaurantRegisteredDevice: { findUnique: mocks.deviceFindUnique },
-  user: { findMany: mocks.userFindMany, findFirst: mocks.userFindFirst },
+  user: {
+    findMany: mocks.userFindMany,
+    findFirst: mocks.userFindFirst,
+    create: mocks.userCreate,
+    update: mocks.userUpdate,
+  },
+  organizationDepartment: { findFirst: mocks.departmentFindFirst },
+  invitation: { create: mocks.invitationCreate },
   restaurantOperatorCredential: {
     findMany: mocks.credFindMany,
     findFirst: mocks.credFindFirst,
@@ -122,6 +139,10 @@ beforeEach(() => {
   mocks.deviceFindUnique.mockResolvedValue({ branchId: 'branch_1' });
   mocks.userFindFirst.mockResolvedValue({ id: 'user_1' });
   mocks.userFindMany.mockResolvedValue([]);
+  mocks.userCreate.mockResolvedValue({ id: 'user_invited', name: 'Mina Shah' });
+  mocks.userUpdate.mockResolvedValue({});
+  mocks.departmentFindFirst.mockResolvedValue({ key: 'OPERATIONS' });
+  mocks.invitationCreate.mockResolvedValue({});
   mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', status: 'ACTIVE' });
   mocks.staffCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
     id: 'staff_new',
@@ -190,6 +211,59 @@ describe('staff CRUD', () => {
       expect.anything(),
       expect.objectContaining({ targetType: 'RestaurantStaffProfile', targetId: 'staff_new' })
     );
+  });
+
+  it('atomically creates an invited manager and linked staff profile', async () => {
+    mocks.userFindFirst.mockResolvedValue(null);
+
+    const result = await caller().invite({
+      name: 'Mina Shah',
+      email: 'MINA@EXAMPLE.COM',
+      staffRole: 'MANAGER',
+      primaryBranchId: 'branch_1',
+    });
+
+    expect(mocks.userCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        email: 'mina@example.com',
+        title: 'Restaurant Manager',
+        role: 'EMPLOYEE',
+      }),
+    });
+    expect(mocks.staffCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ userId: 'user_invited', primaryBranchId: 'branch_1' }),
+    });
+    expect(mocks.userUpdate).toHaveBeenCalledWith({
+      where: { id: 'user_invited' },
+      data: { status: 'INVITED' },
+    });
+    expect(mocks.invitationCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ userId: 'user_invited', email: 'mina@example.com' }),
+    });
+    expect(mocks.sendEmail).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ id: 'staff_new' });
+  });
+
+  it('does not invite into a branch outside the manager scope', async () => {
+    mocks.can.mockImplementation(async (...args) => args[1] === 'staff:manage');
+    mocks.staffFindMany.mockResolvedValue([
+      {
+        id: 'manager',
+        primaryBranchId: 'branch_1',
+        jobRoles: [],
+        directCapabilityGrants: [],
+      },
+    ]);
+
+    await expect(
+      caller().invite({
+        name: 'Blocked User',
+        email: 'blocked@example.com',
+        staffRole: 'WAITER',
+        primaryBranchId: 'branch_2',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
   });
 
   it('maps a duplicate email to CONFLICT', async () => {

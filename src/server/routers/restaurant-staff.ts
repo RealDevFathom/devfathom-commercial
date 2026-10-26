@@ -7,6 +7,10 @@ import { StaffProfileError } from '@/lib/restaurant/staff';
 import { demoDirectoryPolicy } from '@/lib/demo/directory-access';
 import { resolveDemoDirectoryScope } from '@/lib/restaurant/staff-branch-authorization';
 import { provisionRestaurantOrganization } from '@/lib/restaurant/organization-provisioning';
+import { appUrl, sendEmail, templates } from '@/lib/email';
+import { emailSchema } from '@/lib/email-address';
+import { generateInviteToken } from '@/lib/invite-token';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   CommercialLimitError,
   createStaffProfileWithinCommercialLimit,
@@ -66,6 +70,7 @@ import {
 
 const STAFF_STATUS = z.enum(['ACTIVE', 'SUSPENDED', 'ARCHIVED']);
 const CREDENTIAL_TYPE = z.enum(['PIN', 'BADGE']);
+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Translate a staff-domain error into the right tRPC status; rethrow anything else. */
 function mapStaffError(err: unknown): never {
@@ -268,6 +273,126 @@ export const restaurantStaffRouter = router({
       orderBy: [{ name: 'asc' }, { email: 'asc' }],
     });
   }),
+
+  invite: staffProcedure
+    .input(
+      z.object({
+        name: z.string().trim().min(1).max(200),
+        email: emailSchema,
+        staffRole: z.enum(['WAITER', 'MANAGER']),
+        primaryBranchId: z.string().nullable().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
+      if (!authorization.organizationWide) {
+        assertAuthorizedBranch(authorization, input.primaryBranchId);
+      } else if (input.primaryBranchId) {
+        assertAuthorizedBranch(authorization, input.primaryBranchId);
+      }
+
+      const existing = await ctx.db.user.findFirst({
+        where: { organizationId: workspaceOrganizationId(ctx), email: input.email },
+        select: { id: true },
+      });
+      if (existing) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'A user with this email already exists. Link them from the existing user list.',
+        });
+      }
+      if (ctx.entitlements.activeSeats >= ctx.entitlements.seatLimit) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: `Seat limit reached (${ctx.entitlements.activeSeats}/${ctx.entitlements.seatLimit}).`,
+        });
+      }
+      const department = await ctx.db.organizationDepartment.findFirst({
+        where: { organizationId: workspaceOrganizationId(ctx), active: true },
+        select: { key: true },
+        orderBy: { sortOrder: 'asc' },
+      });
+      if (!department) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'No active department is available.' });
+      }
+
+      const { token, tokenHash } = generateInviteToken();
+      const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
+      const title = input.staffRole === 'MANAGER' ? 'Restaurant Manager' : 'Waiter';
+      const result = await ctx.db
+        .$transaction(async (tx) => {
+          // The profile helper only links active users. Keep the temporary ACTIVE
+          // state inside this transaction, then publish the account as INVITED.
+          const user = await tx.user.create({
+            data: {
+              name: input.name,
+              email: input.email,
+              password: null,
+              status: 'ACTIVE',
+              role: 'EMPLOYEE',
+              department: department.key,
+              title,
+            },
+          });
+          const staff = await createStaffProfileWithinCommercialLimit(
+            tx as unknown as ScopedDb,
+            ctx.entitlements.limits,
+            {
+              displayName: input.name,
+              email: input.email,
+              userId: user.id,
+              primaryBranchId: input.primaryBranchId ?? null,
+            }
+          );
+          await tx.user.update({ where: { id: user.id }, data: { status: 'INVITED' } });
+          await tx.invitation.create({
+            data: {
+              userId: user.id,
+              email: input.email,
+              tokenHash,
+              invitedById: ctx.session!.user.id,
+              expiresAt,
+            },
+          });
+          return { user, staff };
+        })
+        .catch(mapStaffError);
+
+      annotateAudit(ctx, {
+        targetType: 'RestaurantStaffProfile',
+        targetId: result.staff.id,
+        targetLabel: result.staff.displayName,
+        description: `Invited restaurant ${input.staffRole.toLowerCase()} "${result.staff.displayName}"`,
+        metadata: { primaryBranchId: result.staff.primaryBranchId, userId: result.user.id },
+      });
+      const inviteUrl = `${appUrl()}/invite/${token}`;
+      const mail = templates.inviteMember({
+        name: result.user.name,
+        inviterName: ctx.session!.user.name ?? undefined,
+        role: title,
+        workspace: 'DevFathom',
+        acceptUrl: inviteUrl,
+        expiresLabel: 'in 7 days',
+      });
+      try {
+        await sendEmail({
+          to: { email: input.email, name: result.user.name },
+          subject: mail.subject,
+          html: mail.html,
+          text: mail.text,
+        });
+      } catch (error) {
+        console.error(
+          '[restaurantStaff.invite] invite email failed',
+          error instanceof Error ? error.name : 'unknown error'
+        );
+      }
+      return { id: result.staff.id, inviteUrl };
+    }),
 
   // ── Staff profiles ────────────────────────────────────────────────────────
   list: staffProcedure

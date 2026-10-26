@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => ({
   issueMutate: vi.fn(),
   issueReset: vi.fn(),
   noopMutate: vi.fn(),
+  inviteMutate: vi.fn(),
   noopReset: vi.fn(),
   invalidate: vi.fn(),
   roleSave: vi.fn(),
@@ -85,6 +86,7 @@ vi.mock('@/lib/trpc', () => ({
       restaurantStaff: {
         list: { invalidate: mocks.invalidate },
         listCredentials: { invalidate: mocks.invalidate },
+        listEligibleUsers: { invalidate: mocks.invalidate },
         // SOP-1: the job-roles dialog invalidates its own two queries on save.
         listStaffJobRoles: { invalidate: mocks.invalidate },
         listStaffJobRoleAudit: { invalidate: mocks.invalidate },
@@ -139,6 +141,14 @@ vi.mock('@/lib/trpc', () => ({
       create: {
         useMutation: () => ({
           mutate: mocks.noopMutate,
+          reset: mocks.noopReset,
+          isPending: false,
+          error: null,
+        }),
+      },
+      invite: {
+        useMutation: () => ({
+          mutate: mocks.inviteMutate,
           reset: mocks.noopReset,
           isPending: false,
           error: null,
@@ -250,6 +260,7 @@ describe('Restaurant staff credential UI', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
     const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Link existing user' }));
     const selector = within(dialog).getByLabelText('Organization user');
     expect(
       within(selector).getByRole('option', { name: 'Ayesha Khan — ayesha@example.com' })
@@ -260,6 +271,41 @@ describe('Restaurant staff credential UI', () => {
       })
     ).toBeDisabled();
     expect(within(dialog).queryByText(/linked user id/i)).not.toBeInTheDocument();
+  });
+
+  it('invites a new restaurant manager and creates their staff profile in one flow', () => {
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
+    const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+    expect(within(dialog).getByRole('button', { name: 'Invite new user' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    fireEvent.change(within(dialog).getByLabelText('Display name'), {
+      target: { value: 'Mina Shah' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Email'), {
+      target: { value: 'mina@example.com' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Staff role'), {
+      target: { value: 'MANAGER' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Primary branch'), {
+      target: { value: 'branch_1' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save staff member' }));
+
+    expect(mocks.inviteMutate).toHaveBeenCalledWith({
+      name: 'Mina Shah',
+      email: 'mina@example.com',
+      staffRole: 'MANAGER',
+      primaryBranchId: 'branch_1',
+    });
+    expect(mocks.noopMutate).not.toHaveBeenCalled();
   });
   beforeEach(() => {
     vi.clearAllMocks();

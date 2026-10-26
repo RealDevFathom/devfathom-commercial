@@ -83,6 +83,7 @@ export function RestaurantStaffConsole() {
   const [statusFilter, setStatusFilter] = useState<'ALL' | StaffStatus>('ALL');
   const [branchFilter, setBranchFilter] = useState('');
   const [staffFormOpen, setStaffFormOpen] = useState(false);
+  const [createMode, setCreateMode] = useState<'INVITE' | 'LINK'>('INVITE');
   const [editingStaff, setEditingStaff] = useState<StaffProfile | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<StaffProfile | null>(null);
   // SOP-1: the job-role multi-select target (separate from the credentials dialog).
@@ -116,6 +117,15 @@ export function RestaurantStaffConsole() {
       refreshStaff();
       setStaffFormOpen(false);
       toast.success('Staff profile created.');
+    },
+    onError: mutationFailure,
+  });
+  const inviteStaff = trpc.restaurantStaff.invite.useMutation({
+    onSuccess: () => {
+      refreshStaff();
+      void utils.restaurantStaff.listEligibleUsers.invalidate();
+      setStaffFormOpen(false);
+      toast.success('Staff invitation sent.');
     },
     onError: mutationFailure,
   });
@@ -185,11 +195,12 @@ export function RestaurantStaffConsole() {
   }, [branchFilter, search, staffQuery.data, statusFilter]);
 
   const permissionDenied = isPermissionError(staffQuery.error);
-  const staffFormPending = createStaff.isPending || updateStaff.isPending;
+  const staffFormPending = createStaff.isPending || inviteStaff.isPending || updateStaff.isPending;
   const credentialsPending = issueCredential.isPending || rotateCredential.isPending;
 
   const openCreate = () => {
     setEditingStaff(null);
+    setCreateMode('INVITE');
     createStaff.reset();
     updateStaff.reset();
     setStaffFormOpen(true);
@@ -213,7 +224,14 @@ export function RestaurantStaffConsole() {
       status: formText(data, 'status') as StaffStatus,
     };
     if (editingStaff) updateStaff.mutate({ id: editingStaff.id, ...payload });
-    else createStaff.mutate(payload);
+    else if (createMode === 'INVITE') {
+      inviteStaff.mutate({
+        name: payload.displayName,
+        email: formText(data, 'email'),
+        staffRole: formText(data, 'staffRole') as 'WAITER' | 'MANAGER',
+        primaryBranchId: payload.primaryBranchId,
+      });
+    } else createStaff.mutate(payload);
   };
 
   const submitCredential = (event: FormEvent<HTMLFormElement>) => {
@@ -459,11 +477,31 @@ export function RestaurantStaffConsole() {
             </DialogDescription>
           </DialogHeader>
           <form key={editingStaff?.id ?? 'new-staff'} className="space-y-4" onSubmit={submitStaff}>
-            {(createStaff.error || updateStaff.error) && (
+            {(createStaff.error || inviteStaff.error || updateStaff.error) && (
               <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                {(createStaff.error ?? updateStaff.error)?.message}
+                {(createStaff.error ?? inviteStaff.error ?? updateStaff.error)?.message}
               </p>
             )}
+            {!editingStaff ? (
+              <div className="grid grid-cols-2 gap-2" aria-label="How to add staff">
+                <Button
+                  type="button"
+                  variant={createMode === 'INVITE' ? 'secondary' : 'outline'}
+                  aria-pressed={createMode === 'INVITE'}
+                  onClick={() => setCreateMode('INVITE')}
+                >
+                  Invite new user
+                </Button>
+                <Button
+                  type="button"
+                  variant={createMode === 'LINK' ? 'secondary' : 'outline'}
+                  aria-pressed={createMode === 'LINK'}
+                  onClick={() => setCreateMode('LINK')}
+                >
+                  Link existing user
+                </Button>
+              </div>
+            ) : null}
             <label className="space-y-1.5">
               <span className={labelClass}>Display name</span>
               <Input
@@ -481,60 +519,72 @@ export function RestaurantStaffConsole() {
                   name="email"
                   type="email"
                   defaultValue={editingStaff?.email ?? ''}
+                  required={!editingStaff && createMode === 'INVITE'}
                   className="h-11"
                 />
               </label>
-              <div className="space-y-1.5">
-                <label htmlFor="staff-organization-user" className={labelClass}>
-                  Organization user
+              {!editingStaff && createMode === 'INVITE' ? (
+                <label className="space-y-1.5">
+                  <span className={labelClass}>Staff role</span>
+                  <select name="staffRole" defaultValue="WAITER" className={selectClass}>
+                    <option value="WAITER">Waiter</option>
+                    <option value="MANAGER">Manager</option>
+                  </select>
                 </label>
-                <select
-                  id="staff-organization-user"
-                  name="userId"
-                  defaultValue={editingStaff?.userId ?? ''}
-                  className={selectClass}
-                  disabled={eligibleUsersQuery.isLoading || Boolean(eligibleUsersQuery.error)}
-                  aria-describedby="staff-user-help"
-                >
-                  <option value="">
-                    {eligibleUsersQuery.isLoading
-                      ? 'Loading available users…'
-                      : eligibleUsersQuery.error
-                        ? isPermissionError(eligibleUsersQuery.error)
-                          ? 'User directory unavailable for your access'
-                          : 'User directory unavailable'
-                        : 'No linked organization user'}
-                  </option>
-                  {(eligibleUsersQuery.data ?? []).map((user) => {
-                    const linkedProfile = user.restaurantStaffProfiles[0];
-                    const isCurrent = user.id === editingStaff?.userId;
-                    const unavailable =
-                      user.status !== 'ACTIVE' || (Boolean(linkedProfile) && !isCurrent);
-                    const state = isCurrent
-                      ? ' — currently linked'
-                      : user.status !== 'ACTIVE'
-                        ? ' — inactive'
-                        : linkedProfile
-                          ? ` — linked to ${linkedProfile.displayName}`
-                          : '';
-                    return (
-                      <option key={user.id} value={user.id} disabled={unavailable}>
-                        {user.name} — {user.email}
-                        {state}
-                      </option>
-                    );
-                  })}
-                </select>
-                <span id="staff-user-help" className="block text-xs text-text-muted">
-                  {eligibleUsersQuery.data?.every(
-                    (user) =>
-                      user.status !== 'ACTIVE' ||
-                      (user.restaurantStaffProfiles.length > 0 && user.id !== editingStaff?.userId)
-                  )
-                    ? 'No active, unlinked organization users are available.'
-                    : 'Unavailable users remain visible for context but cannot be selected.'}
-                </span>
-              </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <label htmlFor="staff-organization-user" className={labelClass}>
+                    Organization user
+                  </label>
+                  <select
+                    id="staff-organization-user"
+                    name="userId"
+                    defaultValue={editingStaff?.userId ?? ''}
+                    className={selectClass}
+                    disabled={eligibleUsersQuery.isLoading || Boolean(eligibleUsersQuery.error)}
+                    aria-describedby="staff-user-help"
+                  >
+                    <option value="">
+                      {eligibleUsersQuery.isLoading
+                        ? 'Loading available users…'
+                        : eligibleUsersQuery.error
+                          ? isPermissionError(eligibleUsersQuery.error)
+                            ? 'User directory unavailable for your access'
+                            : 'User directory unavailable'
+                          : 'No linked organization user'}
+                    </option>
+                    {(eligibleUsersQuery.data ?? []).map((user) => {
+                      const linkedProfile = user.restaurantStaffProfiles[0];
+                      const isCurrent = user.id === editingStaff?.userId;
+                      const unavailable =
+                        user.status !== 'ACTIVE' || (Boolean(linkedProfile) && !isCurrent);
+                      const state = isCurrent
+                        ? ' — currently linked'
+                        : user.status !== 'ACTIVE'
+                          ? ' — inactive'
+                          : linkedProfile
+                            ? ` — linked to ${linkedProfile.displayName}`
+                            : '';
+                      return (
+                        <option key={user.id} value={user.id} disabled={unavailable}>
+                          {user.name} — {user.email}
+                          {state}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <span id="staff-user-help" className="block text-xs text-text-muted">
+                    {eligibleUsersQuery.data?.every(
+                      (user) =>
+                        user.status !== 'ACTIVE' ||
+                        (user.restaurantStaffProfiles.length > 0 &&
+                          user.id !== editingStaff?.userId)
+                    )
+                      ? 'No active, unlinked organization users are available.'
+                      : 'Unavailable users remain visible for context but cannot be selected.'}
+                  </span>
+                </div>
+              )}
               <div className="space-y-1.5">
                 <label htmlFor="staff-primary-branch" className={labelClass}>
                   Primary branch
