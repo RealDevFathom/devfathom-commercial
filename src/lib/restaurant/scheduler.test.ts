@@ -415,8 +415,16 @@ describe('recoverStaleJobs', () => {
     ]);
     const recovered = await recoverStaleJobs(db, { now: T0 });
     expect(recovered).toBe(1);
-    expect(jobs.get('stale')!.status).toBe('QUEUED');
-    expect(jobs.get('fresh')!.status).toBe('RUNNING');
+    expect(jobs.get('stale')).toMatchObject({
+      status: 'QUEUED',
+      claimedAt: null,
+      claimedBy: null,
+      claimToken: null,
+    });
+    expect(jobs.get('fresh')).toMatchObject({
+      status: 'RUNNING',
+      claimToken: 'claim-current',
+    });
   });
 
   it('recovers only the requested job type', async () => {
