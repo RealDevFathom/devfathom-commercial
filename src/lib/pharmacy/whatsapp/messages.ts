@@ -78,7 +78,7 @@ export function consentKeyword(text: string): 'STOP' | 'START' | null {
   return null;
 }
 
-export const GROWTH_OPT_OUT_CONFIRMATION =
+const PHARMACY_OPT_OUT_CONFIRMATION =
   'You will no longer receive WhatsApp messages from this pharmacy. Reply START to opt back in.\n' +
   'آپ کو اب اس فارمیسی سے واٹس ایپ پیغامات نہیں ملیں گے۔ دوبارہ شروع کرنے کے لیے START لکھیں۔';
 
@@ -250,7 +250,7 @@ export const WHATSAPP_REPLIES = {
   fallback:
     'Thank you for your message. A pharmacist will call you shortly to help with your order.\n' +
     'آپ کے پیغام کا شکریہ۔ فارماسسٹ جلد آپ کو کال کریں گے۔',
-  optedOut: GROWTH_OPT_OUT_CONFIRMATION,
+  optedOut: PHARMACY_OPT_OUT_CONFIRMATION,
   optedIn:
     'You are now subscribed to WhatsApp messages from this pharmacy. Reply STOP at any time to opt out.\n' +
     'آپ نے واٹس ایپ پیغامات کی اجازت دے دی ہے۔ بند کرنے کے لیے STOP لکھیں۔',
