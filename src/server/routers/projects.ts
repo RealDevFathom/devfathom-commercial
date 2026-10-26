@@ -5,7 +5,7 @@ import { logActivity } from '../activity';
 import { emitEvent } from '@/lib/webhooks';
 import { appUrl, templates } from '@/lib/email';
 import { notify } from '@/lib/notifications';
-import { Prisma } from '@prisma/client';
+import { Prisma } from '@/generated/prisma/client';
 import {
   assertProjectAccess,
   assertBoardAccess,
