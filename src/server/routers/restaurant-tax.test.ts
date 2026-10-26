@@ -134,41 +134,50 @@ describe('restaurant tax activation router', () => {
     expect(db.restaurantTaxProfileVersion.create).not.toHaveBeenCalled();
   });
 
-  it('publishes the selected preset at branch-local midnight', async () => {
-    await caller().activate({
-      ...base,
-      profileId: 'PK-ICT-RESTAURANT',
-      eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
-    });
-    expect(db.restaurantTaxProfileVersion.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          branchId: 'branch_1',
-          status: 'PUBLISHED',
-          effectiveFrom: new Date('2026-06-30T19:00:00.000Z'),
-          rules: {
-            create: expect.arrayContaining([
-              expect.objectContaining({ paymentCategory: 'CARD', rate: '0.05' }),
-            ]),
-          },
-        }),
-      })
-    );
-    expect(db.restaurantTaxProfileVersion.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          activationIdempotencyKey: 'activation-key-42',
-          activationPayloadHash: expect.stringMatching(/^[0-9a-f]{64}$/),
-          eligibilityEvidence: expect.objectContaining({
-            confirmations: expect.arrayContaining([
-              expect.objectContaining({ id: 'ictNoInputTaxCreditOrAdjustment' }),
-              expect.objectContaining({ id: 'ictNoRefund' }),
-            ]),
+  it.each([
+    ['Asia/Karachi', '2026-07-01', '2026-06-30T19:00:00.000Z'],
+    ['America/New_York', '2026-07-01', '2026-07-01T04:00:00.000Z'],
+    ['America/New_York', '2026-12-01', '2026-12-01T05:00:00.000Z'],
+  ])(
+    'publishes the selected preset at branch-local midnight in %s on %s',
+    async (timezone, effectiveDate, expectedInstant) => {
+      db.restaurantBranch.findUnique.mockResolvedValue({ id: 'branch_1', timezone });
+      await caller().activate({
+        ...base,
+        effectiveFrom: effectiveDate,
+        profileId: 'PK-ICT-RESTAURANT',
+        eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
+      });
+      expect(db.restaurantTaxProfileVersion.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            branchId: 'branch_1',
+            status: 'PUBLISHED',
+            effectiveFrom: new Date(expectedInstant),
+            rules: {
+              create: expect.arrayContaining([
+                expect.objectContaining({ paymentCategory: 'CARD', rate: '0.05' }),
+              ]),
+            },
           }),
-        }),
-      })
-    );
-  });
+        })
+      );
+      expect(db.restaurantTaxProfileVersion.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            activationIdempotencyKey: 'activation-key-42',
+            activationPayloadHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+            eligibilityEvidence: expect.objectContaining({
+              confirmations: expect.arrayContaining([
+                expect.objectContaining({ id: 'ictNoInputTaxCreditOrAdjustment' }),
+                expect.objectContaining({ id: 'ictNoRefund' }),
+              ]),
+            }),
+          }),
+        })
+      );
+    }
+  );
 
   it('returns the original profile for a matching idempotent replay', async () => {
     db.restaurantTaxProfileVersion.findUnique.mockResolvedValue({

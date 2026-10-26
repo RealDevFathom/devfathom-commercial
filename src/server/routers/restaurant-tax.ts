@@ -51,10 +51,11 @@ function serviceChargeError(error: unknown): never {
   throw error;
 }
 
+const localDateSchema = z.iso.date();
 const activationSchema = z.object({
   branchId: z.string().min(1),
   profileId: z.string().min(1),
-  effectiveFrom: z.iso.date(),
+  effectiveFrom: localDateSchema,
   accountantConfirmation: z.boolean(),
   approvalReference: z.string().trim().min(1).max(240),
   eligibilityConfirmations: z.array(z.string().min(1)).default([]),
@@ -66,7 +67,6 @@ const rateSchema = z
   .string()
   .trim()
   .regex(/^(?:0(?:\.\d{1,6})?|1(?:\.0{1,6})?)$/);
-const localDateSchema = z.iso.date();
 const customSchema = z.object({
   branchId: z.string().min(1),
   profileName: z.string().trim().min(1).max(120),
