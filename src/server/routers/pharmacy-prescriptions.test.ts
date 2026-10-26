@@ -106,7 +106,9 @@ describe('prescription capture and private delivery', () => {
     mocks.patient.mockResolvedValue({ id: 'patient-a' });
     mocks.prescriber.mockResolvedValue({ id: 'prescriber-a' });
     mocks.prescribers.mockResolvedValue([{ id: 'prescriber-a', name: 'Dr Test' }]);
-    mocks.medicines.mockResolvedValue([]);
+    mocks.medicines.mockImplementation(async (args: { select?: unknown } | undefined) =>
+      args?.select ? [{ id: 'medicine-a', presentations: [{ id: 'presentation-a' }] }] : []
+    );
     mocks.find.mockResolvedValue(null);
     mocks.create.mockImplementation(async ({ data }) => ({
       ...data,
@@ -268,15 +270,42 @@ describe('prescription capture and private delivery', () => {
     await expect(caller().capture(captureInput(receipt.url))).resolves.toHaveProperty('id');
   });
 
-  it('keeps historical records and retained images unavailable to capture-only users', async () => {
+  it('keeps historical records and other operators retained images unavailable to capture-only users', async () => {
     mocks.can.mockResolvedValue(false);
     mocks.canAny.mockResolvedValue(true);
 
     await expect(caller().workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const receipt = await upload();
     await expect(
-      caller().readSource({ sourceFileRef: '/api/pharmacy/prescription-files?id=another-user' })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(mocks.getUpload).not.toHaveBeenCalled();
+      caller(context('user-b')).readSource({ sourceFileRef: receipt.url })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('rejects unavailable, mismatched, and duplicate capture line selections', async () => {
+    const receipt = await upload();
+    const input = captureInput(receipt.url);
+    mocks.medicines.mockResolvedValueOnce([]);
+    await expect(caller().capture(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    mocks.medicines.mockResolvedValueOnce([
+      { id: 'medicine-a', presentations: [{ id: 'different-presentation' }] },
+    ]);
+    await expect(caller().capture(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    await expect(
+      caller().capture({ ...input, lines: [input.lines[0], { ...input.lines[0] }] })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.medicines).toHaveBeenCalledWith({
+      where: { organizationId: 'org-a', saleable: true, id: { in: ['medicine-a'] } },
+      select: {
+        id: true,
+        presentations: {
+          where: { organizationId: 'org-a', id: { in: ['presentation-a'] } },
+          select: { id: true },
+        },
+      },
+    });
   });
 
   it.each(['capture://rx.png', '/api/files/foreign.png', 'https://foreign.test/image.png'])(
@@ -319,7 +348,7 @@ describe('prescription capture and private delivery', () => {
 
   it('denies missing role/module without storage and suppresses raw input audit', async () => {
     const ctx = context();
-    mocks.can.mockResolvedValue(false);
+    mocks.canAny.mockResolvedValue(false);
     await expect(
       caller(ctx).uploadSource({
         patientId: 'patient-a',
@@ -329,7 +358,7 @@ describe('prescription capture and private delivery', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(ctx.audit.detail.skipInput).toBe(true);
     expect(mocks.audit).toHaveBeenCalledWith(expect.objectContaining({ ctx, outcome: 'FAILURE' }));
-    mocks.can.mockResolvedValue(true);
+    mocks.canAny.mockResolvedValue(true);
     mocks.hasModule.mockReturnValue(false);
     await expect(upload()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.putUpload).not.toHaveBeenCalled();
@@ -406,8 +435,9 @@ describe('prescription capture and private delivery', () => {
     expect(mocks.create).toHaveBeenCalledOnce();
   });
 
-  it('preview is uploader-only until patient-bound capture exists', async () => {
+  it('allows capture-only uploaders to retrieve the saved photo but not another uploader', async () => {
     const receipt = await upload();
+    mocks.can.mockResolvedValue(false);
     await expect(caller().readSource({ sourceFileRef: receipt.url })).resolves.toHaveProperty(
       'contentType',
       'image/png'
@@ -415,14 +445,6 @@ describe('prescription capture and private delivery', () => {
     await expect(
       caller(context('user-b')).readSource({ sourceFileRef: receipt.url })
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
-    mocks.find.mockResolvedValue({ id: 'saved-rx' });
-    await expect(
-      caller(context('user-b')).readSource({ sourceFileRef: receipt.url })
-    ).resolves.toHaveProperty('dataBase64');
-    expect(mocks.find).toHaveBeenLastCalledWith({
-      where: { organizationId: 'org-a', patientId: 'patient-a', sourceFileRef: receipt.url },
-      select: { id: true },
-    });
     mocks.patient.mockResolvedValue(null);
     await expect(caller().readSource({ sourceFileRef: receipt.url })).rejects.toMatchObject({
       code: 'NOT_FOUND',
@@ -431,6 +453,8 @@ describe('prescription capture and private delivery', () => {
 
   it('delivers private image bytes with no-store/nosniff headers', async () => {
     const receipt = await upload();
+    mocks.can.mockResolvedValue(false);
+    await caller().capture(captureInput(receipt.url));
     const response = await GET(new Request(`http://localhost${receipt.url}`));
     expect(response.status).toBe(200);
     expect((await response.arrayBuffer()).byteLength).toBe(receipt.size);
@@ -443,7 +467,7 @@ describe('prescription capture and private delivery', () => {
     const receipt = await upload();
     mocks.actor.mockResolvedValueOnce(null);
     expect((await GET(new Request(`http://localhost${receipt.url}`))).status).toBe(401);
-    mocks.can.mockResolvedValueOnce(false);
+    mocks.canAny.mockResolvedValueOnce(false);
     expect((await GET(new Request(`http://localhost${receipt.url}`))).status).toBe(403);
     expect(
       (await GET(new Request('http://localhost/api/pharmacy/prescription-files?id=../secret')))

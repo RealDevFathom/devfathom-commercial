@@ -83,35 +83,6 @@ const dispensingFileProcedure = publicProcedure
     return next();
   });
 
-/**
- * Load a stored Rx image the caller may see. Before capture only the uploader
- * may preview it; after capture the stored prescription must prove the same
- * patient/file binding.
- */
-async function readableSourceFile(
-  ctx: {
-    db: ScopedDb;
-    entitlements: { organizationId: string };
-    session: { user: { id: string } };
-  },
-  sourceFileRef: string
-) {
-  const organizationId = ctx.entitlements.organizationId;
-  const file = await loadPrescriptionFile(organizationId, sourceFileRef);
-  const patient = await ctx.db.pharmacyPatient.findFirst({
-    where: { id: file.patientId, organizationId },
-    select: { id: true },
-  });
-  const prescription = await ctx.db.prescription.findFirst({
-    where: { organizationId, patientId: file.patientId, sourceFileRef },
-    select: { id: true },
-  });
-  if (!patient || (!prescription && file.uploadedByUserId !== ctx.session.user.id)) {
-    throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription image unavailable.' });
-  }
-  return file;
-}
-
 /** Load an intake image without granting access to another operator's capture. */
 async function uploaderSourceFile(
   ctx: {
@@ -268,10 +239,20 @@ export const pharmacyPrescriptionsRouter = router({
       return persistPrescriptionFile(organizationId, ctx.session.user.id, input);
     }),
 
-  readSource: dispensingFileProcedure
+  readSource: prescriptionFileProcedure
     .input(z.object({ sourceFileRef: prescriptionFileRefSchema }).strict())
     .query(async ({ ctx, input }) => {
-      const file = await readableSourceFile(ctx, input.sourceFileRef);
+      const mayDispense = await can(
+        subjectFromSession(ctx.session.user),
+        'pharmacy:dispense',
+        undefined,
+        { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
+      );
+      // A cashier may retrieve only their own intake photo, including directly
+      // after capture. Dispensing staff can retrieve retained tenant evidence.
+      const file = mayDispense
+        ? await loadPrescriptionFile(ctx.entitlements.organizationId, input.sourceFileRef)
+        : await uploaderSourceFile(ctx, input.sourceFileRef);
       return { dataBase64: file.dataBase64, contentType: file.contentType };
     }),
 
@@ -371,6 +352,45 @@ export const pharmacyPrescriptionsRouter = router({
       ]);
       if (!patient || !prescriber)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Patient or prescriber not found.' });
+
+      const lineNumbers = new Set<number>();
+      const selections = new Set<string>();
+      for (const line of lines) {
+        const selection = `${line.medicineId}\0${line.presentationId}`;
+        if (lineNumbers.has(line.lineNumber) || selections.has(selection)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Duplicate prescription line.' });
+        }
+        lineNumbers.add(line.lineNumber);
+        selections.add(selection);
+      }
+      const medicines = await ctx.db.medicine.findMany({
+        where: {
+          organizationId,
+          saleable: true,
+          id: { in: [...new Set(lines.map((line) => line.medicineId))] },
+        },
+        select: {
+          id: true,
+          presentations: {
+            where: {
+              organizationId,
+              id: { in: [...new Set(lines.map((line) => line.presentationId))] },
+            },
+            select: { id: true },
+          },
+        },
+      });
+      const validSelections = new Set(
+        medicines.flatMap((medicine) =>
+          medicine.presentations.map((presentation) => `${medicine.id}\0${presentation.id}`)
+        )
+      );
+      if (lines.some((line) => !validSelections.has(`${line.medicineId}\0${line.presentationId}`))) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Prescription line medicine or presentation is unavailable.',
+        });
+      }
       // One durable file identifies one capture. A failed/uncertain create can
       // be retried without duplicate records; competing inserts fail on the PK.
       const id = `rx-${prescriptionFileId(input.sourceFileRef)}`;
