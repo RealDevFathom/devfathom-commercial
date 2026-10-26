@@ -176,27 +176,35 @@ describe('restaurant food-cost and dish-profitability reports', () => {
 });
 
 describe('restaurant catering report', () => {
-  it('aggregates every matching order while retaining only the bounded detail rows', async () => {
-    const orders = Array.from({ length: 201 }, (_, index) => ({
+  it('aggregates across cursor pages while retaining only the bounded detail rows', async () => {
+    const orders = Array.from({ length: 501 }, (_, index) => ({
       id: `o${String(index + 1).padStart(3, '0')}`,
       organizationId: 'org1',
       eventName: `Event ${index + 1}`,
       eventDate: new Date('2026-01-10T00:00:00Z'),
-      status: index === 200 ? 'DELIVERED' : 'DRAFT',
+      status: index === 500 ? 'DELIVERED' : 'DRAFT',
       quotedTotal: new Prisma.Decimal(100),
       branch: { id: 'b1', name: 'Main' },
       lines: [],
       extraCosts: [],
       delivery:
-        index === 200
+        index === 500
           ? {
               scheduledAt: new Date('2026-01-10T12:00:00Z'),
               deliveredAt: new Date('2026-01-10T12:05:00Z'),
             }
           : null,
     }));
+    const findMany = vi.fn(
+      async (query: { take: number; cursor?: { id: string }; skip?: number }) => {
+        const start = query.cursor
+          ? orders.findIndex((order) => order.id === query.cursor?.id) + (query.skip ?? 0)
+          : 0;
+        return orders.slice(start, start + query.take);
+      }
+    );
     const db = {
-      restaurantCateringOrder: { findMany: vi.fn(async () => orders) },
+      restaurantCateringOrder: { findMany },
     } as unknown as ScopedDb;
 
     const report = await readCateringReport(db, boundedRange);
@@ -204,18 +212,26 @@ describe('restaurant catering report', () => {
     expect(report.orders).toHaveLength(200);
     expect(report.truncated).toBe(true);
     expect(report.totals).toMatchObject({
-      orderCount: 201,
-      revenue: '20100',
+      orderCount: 501,
+      revenue: '50100',
       deliveredCount: 1,
       deliveredOnTimeCount: 0,
       deliveredOnTimeRate: '0',
     });
     expect(report.byStatus).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ status: 'DRAFT', orderCount: 200, revenue: '20000' }),
+        expect.objectContaining({ status: 'DRAFT', orderCount: 500, revenue: '50000' }),
         expect.objectContaining({ status: 'DELIVERED', orderCount: 1, revenue: '100' }),
       ])
     );
+    expect(findMany).toHaveBeenCalledTimes(2);
+    expect(findMany.mock.calls[0][0]).toMatchObject({ take: 500 });
+    expect(findMany.mock.calls[0][0]).not.toHaveProperty('cursor');
+    expect(findMany.mock.calls[1][0]).toMatchObject({
+      take: 500,
+      cursor: { id: 'o500' },
+      skip: 1,
+    });
   });
 
   it('combines quoted revenue, recipe snapshots, extras, margins, status and delivery timing', async () => {

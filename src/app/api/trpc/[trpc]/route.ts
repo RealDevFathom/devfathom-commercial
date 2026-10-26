@@ -322,7 +322,12 @@ async function serveInTenantScope(
       if (procedureFailed) throw new TransactionAborted(response);
       return response;
     },
-    { timeout: 60_000, userId: actor.session?.user?.id }
+    {
+      timeout: 60_000,
+      userId: actor.session?.user?.id,
+      // Cursor-paginated reports must read every page from one stable snapshot.
+      isolationLevel: 'RepeatableRead',
+    }
   ).catch((error: unknown) => {
     if (!(error instanceof TransactionAborted)) throw error;
     return req.method === 'POST' ? withoutDiscardedResults(req, error.response) : error.response;

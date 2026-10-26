@@ -118,6 +118,7 @@ describe('a revoked session presenting a valid anonymous token', () => {
     // The token's organization, never the revoked session's.
     expect(mocks.withTenantDb).toHaveBeenCalledWith(INVITE_ORGANIZATION.id, expect.any(Function), {
       timeout: 60_000,
+      isolationLevel: 'RepeatableRead',
     });
     expect(mocks.withTenantDb).not.toHaveBeenCalledWith(
       'org_someone_else',

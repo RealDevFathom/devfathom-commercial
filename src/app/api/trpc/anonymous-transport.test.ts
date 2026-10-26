@@ -110,6 +110,7 @@ describe('token-routed procedures', () => {
     expect(mocks.organizationForAnonymousToken).toHaveBeenCalledWith('a-real-token');
     expect(mocks.withTenantDb).toHaveBeenCalledWith('org_acme', expect.any(Function), {
       timeout: 60_000,
+      isolationLevel: 'RepeatableRead',
     });
     expect(servedBy()).toBe('real');
 
@@ -186,6 +187,7 @@ describe('passwordReset.request is routed by host, strictly', () => {
     expect(servedBy()).toBe('real');
     expect(mocks.withTenantDb).toHaveBeenCalledWith('org_acme', expect.any(Function), {
       timeout: 60_000,
+      isolationLevel: 'RepeatableRead',
     });
   });
 
