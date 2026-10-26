@@ -85,8 +85,9 @@ describe('finance.addPayment', () => {
         clientId: 'client-1',
       });
 
-      await caller().addPayment({ invoiceId: 'invoice-1', amount: 60 });
+      const result = await caller().addPayment({ invoiceId: 'invoice-1', amount: 60 });
 
+      expect(result.status).toBe('PAID');
       expect(mocks.invoiceFindUnique).toHaveBeenCalledWith(
         expect.objectContaining({
           select: expect.objectContaining({ invoiceNumber: true }),
