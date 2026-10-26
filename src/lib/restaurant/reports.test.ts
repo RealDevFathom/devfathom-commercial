@@ -264,6 +264,9 @@ describe('restaurant catering report', () => {
     const report = await readCateringReport(db, boundedRange);
 
     expect(report.orders).toHaveLength(200);
+    expect(report.orders[0]?.id).toBe('o0001');
+    expect(report.orders.at(-1)?.id).toBe('o0200');
+    expect(report.orders).not.toContainEqual(expect.objectContaining({ id: 'o1001' }));
     expect(report.truncated).toBe(true);
     expect(report.totals).toMatchObject({
       orderCount: 1001,
