@@ -87,7 +87,10 @@ function baseConfigurationErrors(config: WhatsAppConfig): string[] {
   if (!config.organizationId) errors.push('ORGANIZATION_NOT_CONFIGURED');
   if (!config.phoneNumberId) errors.push('PHONE_NUMBER_NOT_CONFIGURED');
   if (config.provider === 'meta' && !config.accessToken) errors.push('ACCESS_TOKEN_NOT_CONFIGURED');
-  if (!config.khataTemplates.en && !config.khataTemplates.ur)
+  const hasUsableKhataTemplate = (['en', 'ur'] as const).some(
+    (language) => config.khataTemplates[language] && config.khataParameterOrder[language]
+  );
+  if (!hasUsableKhataTemplate)
     errors.push('KHATA_TEMPLATES_NOT_CONFIGURED');
   return errors;
 }

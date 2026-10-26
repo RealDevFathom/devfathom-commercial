@@ -298,7 +298,7 @@ describe('processDueWhatsAppKhataReminders', () => {
     expect(store.logs).toEqual([]);
   });
 
-  it('fails closed when an explicit English parameter contract is invalid', async () => {
+  it('fails closed before scanning when no template has a valid parameter contract', async () => {
     const invalidConfig = readWhatsAppConfig({
       PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
       PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sandbox-owner',
@@ -316,8 +316,8 @@ describe('processDueWhatsAppKhataReminders', () => {
       provider,
     });
 
-    expect(result).toMatchObject({ configured: true, scanned: 1, skippedConfiguration: 1 });
-    expect(result.configurationErrors).toContain('KHATA_TEMPLATE_EN_NOT_CONFIGURED');
+    expect(result).toMatchObject({ configured: false, scanned: 0, skippedConfiguration: 0 });
+    expect(result.configurationErrors).toContain('KHATA_TEMPLATES_NOT_CONFIGURED');
     expect(provider.calls).toEqual([]);
     expect(store.logs).toEqual([]);
   });
