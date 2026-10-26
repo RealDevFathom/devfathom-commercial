@@ -313,6 +313,20 @@ describe('Restaurant receipt dispatch', () => {
     expect(await response.json()).toMatchObject({ code: 'INVALID_PRINT_DOCUMENT' });
     expect(jobs).toHaveLength(0);
   });
+  it('fails closed when an empty fractional bill has incomplete fraction metadata', async () => {
+    Object.assign(receipt!, {
+      splitKind: 'FRACTIONAL',
+      fractionNumerator: 1,
+      fractionDenominator: null,
+      lines: [],
+    });
+
+    const response = await post();
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ code: 'INVALID_PRINT_DOCUMENT' });
+    expect(jobs).toHaveLength(0);
+  });
   it('preserves saved tax currency, rate buckets and discount allocations', async () => {
     findBill.mockResolvedValue({
       ...receipt,

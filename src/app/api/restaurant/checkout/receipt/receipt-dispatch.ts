@@ -91,7 +91,10 @@ async function receiptFacts(
     orderNumber: String(receipt.orderNumber),
     channel: receipt.channel,
     lines:
-      receipt.splitKind === 'FRACTIONAL' && receipt.lines.length === 0
+      receipt.splitKind === 'FRACTIONAL' &&
+      receipt.fractionNumerator !== null &&
+      receipt.fractionDenominator !== null &&
+      receipt.lines.length === 0
         ? [
             `Fractional share ${receipt.fractionNumerator}/${receipt.fractionDenominator}: ${receipt.totals.grandTotal}`,
           ]
