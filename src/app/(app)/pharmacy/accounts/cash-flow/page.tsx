@@ -189,9 +189,19 @@ export default async function CashFlowPage({
           <SectionCard title="Source and reversal evidence" titleLevel={2}>
             <p className="text-sm text-text-muted">
               Source: finance journal entries and branch-scoped lines. Retrieved{' '}
-              {report.freshness.retrievedAt.toISOString()}. Unknown adapters, mixed or unsupported
-              counterpart policy remain unclassified; residuals are never discarded.
+              {report.freshness.retrievedAt.toISOString()}.
             </p>
+            {projection.map((row) => (
+              <div key={row.currency} className="mt-3 text-sm">
+                <strong>{row.currency} source status</strong>
+                <p className="text-text-muted">
+                  Latest posting:{' '}
+                  {row.metadata.latestPostingAt?.toISOString() ?? 'No in-period cash posting'} ·
+                  Classified completeness: {row.metadata.classifiedCompleteness}.{' '}
+                  {row.metadata.completenessReason}
+                </p>
+              </div>
+            ))}
             {projection.flatMap((row) =>
               row.evidence.map((item) => (
                 <article
