@@ -10,6 +10,11 @@ import { provisionRestaurantOrganization } from '@/lib/restaurant/organization-p
 import { appUrl, sendEmail, templates } from '@/lib/email';
 import { emailSchema } from '@/lib/email-address';
 import { generateInviteToken } from '@/lib/invite-token';
+import { Prisma } from '@/generated/prisma/client';
+import {
+  RESTAURANT_OPERATORS_LIMIT,
+  resolveEntitlementLimit,
+} from '@/lib/entitlement-limits';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   CommercialLimitError,
@@ -71,6 +76,7 @@ import {
 const STAFF_STATUS = z.enum(['ACTIVE', 'SUSPENDED', 'ARCHIVED']);
 const CREDENTIAL_TYPE = z.enum(['PIN', 'BADGE']);
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const OCCUPIED_SEAT_STATUSES = ['ACTIVE', 'ON_LEAVE', 'INVITED'] as const;
 
 /** Translate a staff-domain error into the right tRPC status; rethrow anything else. */
 function mapStaffError(err: unknown): never {
@@ -280,7 +286,7 @@ export const restaurantStaffRouter = router({
         name: z.string().trim().min(1).max(200),
         email: emailSchema,
         staffRole: z.enum(['WAITER', 'MANAGER']),
-        primaryBranchId: z.string().nullable().optional(),
+        primaryBranchId: z.string().min(1),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -295,22 +301,7 @@ export const restaurantStaffRouter = router({
         assertAuthorizedBranch(authorization, input.primaryBranchId);
       }
 
-      const existing = await ctx.db.user.findFirst({
-        where: { organizationId: workspaceOrganizationId(ctx), email: input.email },
-        select: { id: true },
-      });
-      if (existing) {
-        throw new TRPCError({
-          code: 'CONFLICT',
-          message: 'A user with this email already exists. Link them from the existing user list.',
-        });
-      }
-      if (ctx.entitlements.activeSeats >= ctx.entitlements.seatLimit) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: `Seat limit reached (${ctx.entitlements.activeSeats}/${ctx.entitlements.seatLimit}).`,
-        });
-      }
+      const organizationId = workspaceOrganizationId(ctx);
       const department = await ctx.db.organizationDepartment.findFirst({
         where: { organizationId: workspaceOrganizationId(ctx), active: true },
         select: { key: true },
@@ -325,8 +316,56 @@ export const restaurantStaffRouter = router({
       const title = input.staffRole === 'MANAGER' ? 'Restaurant Manager' : 'Waiter';
       const result = await ctx.db
         .$transaction(async (tx) => {
-          // The profile helper only links active users. Keep the temporary ACTIVE
-          // state inside this transaction, then publish the account as INVITED.
+          // Serialize all seat-occupying writes for this tenant, then re-count from
+          // the authoritative rows. The entitlement snapshot is deliberately not
+          // used for this decision because two requests can share the same snapshot.
+          await tx.$queryRaw(
+            Prisma.sql`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`
+          );
+          const activeSeats = await tx.user.count({
+            where: { organizationId, status: { in: [...OCCUPIED_SEAT_STATUSES] } },
+          });
+          if (activeSeats >= ctx.entitlements.seatLimit) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: `Seat limit reached (${activeSeats}/${ctx.entitlements.seatLimit}).`,
+            });
+          }
+          const existing = await tx.user.findFirst({
+            where: { organizationId, email: input.email },
+            select: { id: true },
+          });
+          if (existing) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message:
+                'A user with this email already exists. Link them from the existing user list.',
+            });
+          }
+          const operatorLimit = resolveEntitlementLimit(
+            ctx.entitlements.limits,
+            RESTAURANT_OPERATORS_LIMIT
+          );
+          if (operatorLimit.status === 'missing') {
+            throw new CommercialLimitError(
+              'Restaurant operator limit is not configured correctly.',
+              'UNCONFIGURED'
+            );
+          }
+          const activeOperators = await tx.restaurantStaffProfile.count({
+            where: { status: 'ACTIVE' },
+          });
+          if (activeOperators >= operatorLimit.value) {
+            throw new CommercialLimitError(
+              `Your plan supports ${operatorLimit.value} active restaurant operator${
+                operatorLimit.value === 1 ? '' : 's'
+              }.`,
+              'LIMIT_REACHED'
+            );
+          }
+
+          // Link the staff profile while the user is temporarily ACTIVE, then
+          // publish the account as INVITED before this transaction commits.
           const user = await tx.user.create({
             data: {
               name: input.name,
@@ -338,16 +377,43 @@ export const restaurantStaffRouter = router({
               title,
             },
           });
-          const staff = await createStaffProfileWithinCommercialLimit(
-            tx as unknown as ScopedDb,
-            ctx.entitlements.limits,
-            {
+          const staff = await tx.restaurantStaffProfile.create({
+            data: {
               displayName: input.name,
               email: input.email,
               userId: user.id,
-              primaryBranchId: input.primaryBranchId ?? null,
-            }
-          );
+              primaryBranchId: input.primaryBranchId,
+            },
+          });
+          const jobRoleKey = input.staffRole === 'MANAGER' ? 'manager' : 'server';
+          const jobRole = await tx.restaurantJobRole.findFirst({
+            where: { organizationId, key: jobRoleKey, active: true },
+            select: { id: true, key: true },
+          });
+          if (!jobRole) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: `The ${input.staffRole.toLowerCase()} job role is unavailable.`,
+            });
+          }
+          await tx.restaurantStaffJobRole.create({
+            data: {
+              staffProfileId: staff.id,
+              jobRoleId: jobRole.id,
+              branchId: input.primaryBranchId,
+              grantedByStaffId: authorization.actorStaffProfileId,
+            },
+          });
+          await tx.restaurantStaffJobRoleAudit.create({
+            data: {
+              staffProfileId: staff.id,
+              jobRoleId: jobRole.id,
+              jobRoleKey: jobRole.key,
+              branchId: input.primaryBranchId,
+              change: 'GRANTED',
+              actorStaffProfileId: authorization.actorStaffProfileId,
+            },
+          });
           await tx.user.update({ where: { id: user.id }, data: { status: 'INVITED' } });
           await tx.invitation.create({
             data: {

@@ -26,6 +26,10 @@ const mocks = vi.hoisted(() => ({
   userFindFirst: vi.fn(),
   userCreate: vi.fn(),
   userUpdate: vi.fn(),
+  userCount: vi.fn(),
+  jobRoleFindFirst: vi.fn(),
+  staffJobRoleCreate: vi.fn(),
+  staffJobRoleAuditCreate: vi.fn(),
   departmentFindFirst: vi.fn(),
   invitationCreate: vi.fn(),
   sendEmail: vi.fn(),
@@ -88,7 +92,11 @@ const db = {
     findFirst: mocks.userFindFirst,
     create: mocks.userCreate,
     update: mocks.userUpdate,
+    count: mocks.userCount,
   },
+  restaurantJobRole: { findFirst: mocks.jobRoleFindFirst },
+  restaurantStaffJobRole: { create: mocks.staffJobRoleCreate },
+  restaurantStaffJobRoleAudit: { create: mocks.staffJobRoleAuditCreate },
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
   invitation: { create: mocks.invitationCreate },
   restaurantOperatorCredential: {
@@ -141,6 +149,13 @@ beforeEach(() => {
   mocks.userFindMany.mockResolvedValue([]);
   mocks.userCreate.mockResolvedValue({ id: 'user_invited', name: 'Mina Shah' });
   mocks.userUpdate.mockResolvedValue({});
+  mocks.userCount.mockResolvedValue(1);
+  mocks.jobRoleFindFirst.mockImplementation(async ({ where }: { where: { key: string } }) => ({
+    id: `role_${where.key}`,
+    key: where.key,
+  }));
+  mocks.staffJobRoleCreate.mockResolvedValue({ id: 'holding_1' });
+  mocks.staffJobRoleAuditCreate.mockResolvedValue({});
   mocks.departmentFindFirst.mockResolvedValue({ key: 'OPERATIONS' });
   mocks.invitationCreate.mockResolvedValue({});
   mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', status: 'ACTIVE' });
@@ -233,6 +248,14 @@ describe('staff CRUD', () => {
     expect(mocks.staffCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({ userId: 'user_invited', primaryBranchId: 'branch_1' }),
     });
+    expect(mocks.staffJobRoleCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        staffProfileId: 'staff_new',
+        jobRoleId: 'role_manager',
+        branchId: 'branch_1',
+      }),
+    });
+    expect(mocks.staffJobRoleAuditCreate).toHaveBeenCalledOnce();
     expect(mocks.userUpdate).toHaveBeenCalledWith({
       where: { id: 'user_invited' },
       data: { status: 'INVITED' },
@@ -242,6 +265,44 @@ describe('staff CRUD', () => {
     });
     expect(mocks.sendEmail).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ id: 'staff_new' });
+  });
+
+  it('assigns a waiter only the server job role', async () => {
+    mocks.userFindFirst.mockResolvedValue(null);
+
+    await caller().invite({
+      name: 'Waleed Khan',
+      email: 'waleed@example.com',
+      staffRole: 'WAITER',
+      primaryBranchId: 'branch_1',
+    });
+
+    expect(mocks.jobRoleFindFirst).toHaveBeenCalledWith({
+      where: { organizationId: 'org_workspace', key: 'server', active: true },
+      select: { id: true, key: true },
+    });
+    expect(mocks.staffJobRoleCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ jobRoleId: 'role_server' }),
+    });
+  });
+
+  it('re-counts occupied seats after taking the organization lock', async () => {
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.userCount.mockResolvedValue(50);
+
+    await expect(
+      caller().invite({
+        name: 'No Seat',
+        email: 'noseat@example.com',
+        staffRole: 'WAITER',
+        primaryBranchId: 'branch_1',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.raw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.userCount.mock.invocationCallOrder[0]!
+    );
+    expect(mocks.userCreate).not.toHaveBeenCalled();
   });
 
   it('does not invite into a branch outside the manager scope', async () => {

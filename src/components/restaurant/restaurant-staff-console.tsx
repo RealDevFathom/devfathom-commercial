@@ -596,7 +596,8 @@ export function RestaurantStaffConsole() {
                   branches={branches}
                   loading={branchesQuery.isLoading}
                   error={Boolean(branchesQuery.error)}
-                  allowEmpty
+                  required={editingStaff === null && createMode === 'INVITE'}
+                  allowEmpty={editingStaff !== null || createMode !== 'INVITE'}
                   emptyLabel="No primary branch"
                 />
               </div>
