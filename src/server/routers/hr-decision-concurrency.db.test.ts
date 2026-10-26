@@ -119,6 +119,7 @@ describeIfDatabase('atomic HR decisions, against PostgreSQL', () => {
     effects.annotateAudit.mockClear();
     await client.query(`DELETE FROM resignations WHERE "organizationId" = $1`, [ORG]);
     await client.query(`DELETE FROM leave_requests WHERE "organizationId" = $1`, [ORG]);
+    await client.query(`UPDATE users SET status = 'ACTIVE' WHERE id = $1`, [EMPLOYEE]);
   });
 
   afterAll(async () => {
@@ -153,11 +154,11 @@ describeIfDatabase('atomic HR decisions, against PostgreSQL', () => {
     expect(effects.notify).toHaveBeenCalledOnce();
   });
 
-  it('serializes approval-vs-decline resignation review to one winner', async () => {
+  it('serializes an already-due approval-vs-decline resignation to one winner', async () => {
     await client.query(
       `INSERT INTO resignations
          (id, "organizationId", "userId", reason, "proposedLastDay", status, "updatedAt")
-       VALUES ($1, $2, $3, 'Moving to a new role', now() + interval '30 days', 'PENDING', now())`,
+       VALUES ($1, $2, $3, 'Moving to a new role', now() - interval '1 day', 'PENDING', now())`,
       [RESIGNATION, ORG, EMPLOYEE]
     );
 
@@ -174,6 +175,13 @@ describeIfDatabase('atomic HR decisions, against PostgreSQL', () => {
     expect(['APPROVED', 'DECLINED']).toContain(stored.rows[0]?.status);
     expect(stored.rows[0]?.reviewedById).toBe(
       stored.rows[0]?.status === 'APPROVED' ? APPROVER : DECLINER
+    );
+    const employee = await client.query<{ status: string }>(
+      `SELECT status FROM users WHERE id = $1`,
+      [EMPLOYEE]
+    );
+    expect(employee.rows[0]?.status).toBe(
+      stored.rows[0]?.status === 'APPROVED' ? 'INACTIVE' : 'ACTIVE'
     );
     expect(effects.annotateAudit).toHaveBeenCalledOnce();
     expect(effects.notify).toHaveBeenCalledOnce();
