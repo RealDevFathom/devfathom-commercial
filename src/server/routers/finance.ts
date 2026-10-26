@@ -349,18 +349,6 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const current = await ctx.db.invoice.findUnique({
-        where: { id: input.id },
-        select: { status: true },
-      });
-      if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
-      if (current.status !== 'DRAFT' && current.status !== 'SENT') {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `A ${current.status.toLowerCase()} invoice can't be edited — only draft or sent invoices.`,
-        });
-      }
-
       // Recompute money server-side, identical to createInvoice.
       const lineItems = input.items.map((it) => ({
         description: it.description,
@@ -373,24 +361,41 @@ export const financeRouter = router({
       const total = sumMoney([subtotal, tax]);
       assertDerivedInvoiceMoney(lineItems, subtotal, total);
 
-      const data: Record<string, unknown> = { items: lineItems, subtotal, tax, total };
-      if (input.dueDate) data.dueDate = input.dueDate;
-      if (input.notes !== undefined) data.notes = input.notes.trim() || null;
-      if (input.status && input.status !== current.status) {
-        data.status = input.status;
-        // Keep sentAt consistent with the status the same way updateInvoiceStatus does.
-        if (input.status === 'SENT') data.sentAt = new Date();
-        if (input.status === 'DRAFT') data.sentAt = null;
-      }
+      const invoice = await ctx.db.$transaction(async (tx) => {
+        // Serialize edits with payment settlement. Without this lock, a payment can
+        // mark the invoice PAID after the status check but before figures are saved.
+        await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.id} FOR UPDATE`;
+        const current = await tx.invoice.findUnique({
+          where: { id: input.id },
+          select: { status: true },
+        });
+        if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
+        if (current.status !== 'DRAFT' && current.status !== 'SENT') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `A ${current.status.toLowerCase()} invoice can't be edited — only draft or sent invoices.`,
+          });
+        }
 
-      const invoice = await ctx.db.invoice.update({
-        where: { id: input.id },
-        data,
-        include: {
-          client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
-          project: { select: { id: true, name: true } },
-          payments: { orderBy: { paidAt: 'desc' } },
-        },
+        const data: Record<string, unknown> = { items: lineItems, subtotal, tax, total };
+        if (input.dueDate) data.dueDate = input.dueDate;
+        if (input.notes !== undefined) data.notes = input.notes.trim() || null;
+        if (input.status && input.status !== current.status) {
+          data.status = input.status;
+          // Keep sentAt consistent with the status the same way updateInvoiceStatus does.
+          if (input.status === 'SENT') data.sentAt = new Date();
+          if (input.status === 'DRAFT') data.sentAt = null;
+        }
+
+        return tx.invoice.update({
+          where: { id: input.id },
+          data,
+          include: {
+            client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
+            project: { select: { id: true, name: true } },
+            payments: { orderBy: { paidAt: 'desc' } },
+          },
+        });
       });
 
       const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
@@ -558,6 +563,9 @@ export const financeRouter = router({
       } | null = null;
 
       const result = await ctx.db.$transaction(async (tx) => {
+        // Use the same invoice-row lock as updateInvoice so settlement and edits
+        // cannot both proceed from stale status/total snapshots.
+        await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.invoiceId} FOR UPDATE`;
         const invoice = await tx.invoice.findUnique({
           where: { id: input.invoiceId },
           select: { id: true, status: true, total: true, currency: true, clientId: true },
