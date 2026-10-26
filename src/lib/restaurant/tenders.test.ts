@@ -722,7 +722,11 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
     const frozenAccounting = await read(async (tx) => ({
       bills: await tx.restaurantBill.findMany({
         where: { id: { in: cut.billIds } },
-        select: { grandTotal: true, roundingAdjustment: true },
+        select: { id: true, grandTotal: true, roundingAdjustment: true },
+      }),
+      tenders: await tx.restaurantTender.findMany({
+        where: { billId: { in: cut.billIds } },
+        select: { billId: true, amount: true },
       }),
       snapshots: await tx.restaurantTaxTransactionSnapshot.findMany({
         where: { billId: { in: cut.billIds } },
@@ -742,6 +746,7 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
     expect(sum(frozenAccounting.bills.map((bill) => bill.roundingAdjustment)).toFixed(2)).toBe(
       '0.00'
     );
+    expect(sum(frozenAccounting.tenders.map((tender) => tender.amount)).toFixed(2)).toBe('12.50');
     expect(sum(frozenAccounting.snapshots.map((snapshot) => snapshot.subtotal)).toFixed(2)).toBe(
       '12.50'
     );
@@ -751,7 +756,10 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
     expect(sum(frozenAccounting.snapshots.map((snapshot) => snapshot.grandTotal)).toFixed(2)).toBe(
       '12.50'
     );
-    expect(frozenAccounting.bills).toHaveLength(cut.billIds.length);
+    expect(frozenAccounting.bills.map((bill) => bill.id).sort()).toEqual([...cut.billIds].sort());
+    expect(frozenAccounting.tenders.map((tender) => tender.billId).sort()).toEqual(
+      [...cut.billIds].sort()
+    );
     expect(frozenAccounting.snapshots.map((snapshot) => snapshot.billId).sort()).toEqual(
       [...cut.billIds].sort()
     );
