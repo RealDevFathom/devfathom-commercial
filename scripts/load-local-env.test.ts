@@ -37,6 +37,17 @@ describe('loadLocalEnvironment', () => {
     expect(environment.DATABASE_URL).toBe('from-dot-env');
   });
 
+  it('loads .env.local when .env is absent', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'devfathom-env-'));
+    directories.push(directory);
+    writeFileSync(join(directory, '.env.local'), 'DATABASE_URL=from-dot-env-local\n');
+
+    const environment: NodeJS.ProcessEnv = {};
+    loadLocalEnvironment(environment, directory);
+
+    expect(environment.DATABASE_URL).toBe('from-dot-env-local');
+  });
+
   it('never shadows variables supplied by the process environment', () => {
     const directory = mkdtempSync(join(tmpdir(), 'devfathom-env-'));
     directories.push(directory);
@@ -51,6 +62,12 @@ describe('loadLocalEnvironment', () => {
   it('names the missing variable and both searched files', () => {
     expect(() => requireEnvironment('DATABASE_URL', {})).toThrow(
       'Missing required environment variable: DATABASE_URL. Searched .env.local and .env'
+    );
+  });
+
+  it('rejects a whitespace-only required variable', () => {
+    expect(() => requireEnvironment('DATABASE_URL', { DATABASE_URL: '   ' })).toThrow(
+      'Missing required environment variable: DATABASE_URL'
     );
   });
 });
