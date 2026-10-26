@@ -26,6 +26,7 @@ function expectAccessiblePasswordToggle(password: HTMLInputElement) {
 
   expect(toggle).not.toHaveAttribute('tabindex');
   expect(toggle).toHaveProperty('tabIndex', 0);
+  expect(toggle).toHaveAttribute('aria-pressed', 'false');
   toggle.focus();
   expect(toggle).toHaveFocus();
 
