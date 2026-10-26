@@ -1,13 +1,25 @@
--- Remove links that predate enforcement and cross a board boundary. Keeping them
--- would continue to expose another board's taxonomy through task responses.
+BEGIN;
+
+-- Prevent an old application instance from writing a link after the cleanup's
+-- snapshot but before the guards are installed. The lock is held through the
+-- whole migration and conflicts with normal inserts, updates, and deletes.
+LOCK TABLE "task_labels", "tasks", "columns", "labels", "boards"
+IN SHARE ROW EXCLUSIVE MODE;
+
+-- Remove links that predate enforcement and fail the same board and
+-- organization predicate as the insert/update guard below. Keeping them would
+-- continue to expose another board's taxonomy through task responses.
 DELETE FROM "task_labels" tl
-USING "tasks" t, "columns" c, "labels" l
+USING "tasks" t, "columns" c, "boards" b, "labels" l
 WHERE tl."taskId" = t.id
   AND t."columnId" = c.id
+  AND c."boardId" = b.id
   AND tl."labelId" = l.id
   AND (
     c."boardId" <> l."boardId"
     OR t."organizationId" <> l."organizationId"
+    OR t."organizationId" <> c."organizationId"
+    OR t."organizationId" <> b."organizationId"
     OR tl."organizationId" <> t."organizationId"
   );
 
@@ -111,3 +123,5 @@ $$;
 CREATE TRIGGER columns_task_label_board_guard
 BEFORE UPDATE OF "boardId", "organizationId" ON "columns"
 FOR EACH ROW EXECUTE FUNCTION enforce_task_labels_after_column_move();
+
+COMMIT;
