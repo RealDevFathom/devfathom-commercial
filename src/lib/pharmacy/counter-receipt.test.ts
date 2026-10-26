@@ -67,7 +67,7 @@ describe('formatMinor', () => {
 });
 
 describe('counterReceiptTotals', () => {
-  it('reconciles the total to the lines and tenders themselves', () => {
+  it('prints cash received as tendered while keeping change separate', () => {
     const lines = [
       receiptLine({ unitPriceMinor: 2_500, quantity: 2, discountMinor: 0 }),
       receiptLine({ saleLineId: 'line-2', unitPriceMinor: 1_000, quantity: 3, discountMinor: 200 }),
@@ -81,6 +81,32 @@ describe('counterReceiptTotals', () => {
     expect(totals.grossMinor).toBe(8_000);
     expect(totals.discountMinor).toBe(200);
     expect(totals.netMinor).toBe(7_800);
+    expect(totals.tenderedMinor).toBe(8_000);
+    expect(totals.changeMinor).toBe(200);
+  });
+
+  it('uses applied amounts for non-cash and legacy cash tenders', () => {
+    const totals = counterReceiptTotals({
+      lines: [],
+      tenders: [
+        { type: 'CARD', amountMinor: 3_000, cashReceivedMinor: 9_000, changeGivenMinor: null },
+        { type: 'CASH', amountMinor: 4_800, cashReceivedMinor: null, changeGivenMinor: null },
+      ],
+    });
+
+    expect(totals.tenderedMinor).toBe(7_800);
+    expect(totals.changeMinor).toBe(0);
+  });
+
+  it('adds cash received and non-cash applied amounts for split tenders', () => {
+    const totals = counterReceiptTotals({
+      lines: [],
+      tenders: [
+        { type: 'CASH', amountMinor: 2_800, cashReceivedMinor: 3_000, changeGivenMinor: 200 },
+        { type: 'CARD', amountMinor: 5_000, cashReceivedMinor: null, changeGivenMinor: null },
+      ],
+    });
+
     expect(totals.tenderedMinor).toBe(8_000);
     expect(totals.changeMinor).toBe(200);
   });
