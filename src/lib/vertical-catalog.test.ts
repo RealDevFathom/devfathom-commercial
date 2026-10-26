@@ -293,6 +293,14 @@ describe('role templates and capabilities (§8)', () => {
     expect(grants).toEqual(['general-manager', 'branch-manager']);
   });
 
+  it('grants floor management explicitly only to General Manager and Branch Manager', () => {
+    const grants = RESTAURANT_ROLE_TEMPLATES.filter((role) =>
+      role.capabilities.includes('floor:manage')
+    ).map((role) => role.key);
+
+    expect(grants).toEqual(['general-manager', 'branch-manager']);
+  });
+
   it('roleTemplatesForVertical returns each vertical template catalog', () => {
     expect(roleTemplatesForVertical('RESTAURANT')).toEqual(RESTAURANT_ROLE_TEMPLATES);
     expect(roleTemplatesForVertical('AGENCY')).toEqual(AGENCY_ROLE_TEMPLATES);
