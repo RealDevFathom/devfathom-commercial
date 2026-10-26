@@ -204,6 +204,51 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     expect(movements).toBe(0);
   });
 
+  it('serializes a concurrent drawer open against closing the same business day', async () => {
+    const date = '2026-08-21';
+    const closingDeviceId = await newDevice('POS-concurrent-close');
+    const openingDeviceId = await newDevice('POS-concurrent-open');
+
+    const [closeResult, openResult] = await Promise.allSettled([
+      deps.close.cutClose(deps.createTenantDb(orgId), {
+        branchId: ids.branch,
+        businessDate: date,
+        actor: actor(closingDeviceId),
+      }),
+      deps.drawer.openDrawerSession(deps.createTenantDb(orgId), {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
+        branchId: ids.branch,
+        openingFloat: '100.00',
+        actor: actor(openingDeviceId),
+        now: new Date(`${date}T12:00:00.000Z`),
+      }),
+    ]);
+
+    expect([closeResult.status, openResult.status].sort()).toEqual(['fulfilled', 'rejected']);
+    if (closeResult.status === 'rejected') {
+      expect(closeResult.reason).toMatchObject({ reason: 'OPEN_DRAWER' });
+    } else {
+      expect(openResult).toMatchObject({
+        status: 'rejected',
+        reason: expect.objectContaining({ reason: 'CLOSE_EXISTS' }),
+      });
+    }
+
+    const [closes, sessions, movements] = await read((tx) =>
+      Promise.all([
+        tx.restaurantDailyClose.count({
+          where: { branchId: ids.branch, businessDate: new Date(`${date}T00:00:00.000Z`) },
+        }),
+        tx.restaurantDrawerSession.count({ where: { deviceId: openingDeviceId } }),
+        tx.restaurantDrawerMovement.count({ where: { deviceId: openingDeviceId } }),
+      ])
+    );
+    expect([closes, sessions, movements]).toEqual(
+      closeResult.status === 'fulfilled' ? [1, 0, 0] : [0, 1, 1]
+    );
+  });
+
   it('rejects a second OPEN drawer on the same register', async () => {
     const deviceId = await newDevice('POS-dupe');
     const db = deps.createTenantDb(orgId);
