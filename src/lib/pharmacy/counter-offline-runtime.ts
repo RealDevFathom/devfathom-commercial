@@ -371,7 +371,7 @@ export class PharmacyCounterRuntime {
     }
     const batchId = input.bucket?.inventoryLotId ?? null;
     const prices = this.payloadFor('PRICES');
-    const lotHasAuthoritativeState =
+    const lotIsAuthoritativelyActive =
       batchId === null ||
       (Array.isArray(prices) &&
         prices.some(
@@ -379,16 +379,17 @@ export class PharmacyCounterRuntime {
             typeof lot === 'object' &&
             lot !== null &&
             (lot as { id?: unknown }).id === batchId &&
-            typeof (lot as { manufacturingBatch?: { state?: unknown } }).manufacturingBatch
-              ?.state === 'string'
+            (lot as { manufacturingBatch?: { state?: unknown } }).manufacturingBatch?.state ===
+              'ACTIVE'
         ));
     const result = enqueueCounterCommand(this.queue(), input, {
       ...matrix,
       snapshots: this.cachedSnapshotStates(),
       safetyLeaseOk: leaseCheck.ok,
-      // Missing recall information is unsafe: absence must never mean RELEASED.
+      // Missing or unrecognized state is unsafe: only an explicit ACTIVE state
+      // in the signed snapshot permits dispensing.
       batchRecalled:
-        !lotHasAuthoritativeState ||
+        !lotIsAuthoritativelyActive ||
         (batchId !== null && leaseState.recalledBatchIds.includes(batchId)),
     });
     if (!result.ok) return result;
