@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(async () => true),
   transactionGroupBy: vi.fn(),
   invoiceGroupBy: vi.fn(),
-  invoiceFindMany: vi.fn(),
+  paymentGroupBy: vi.fn(),
   recurringFindMany: vi.fn(),
 }));
 
@@ -27,7 +27,8 @@ function caller() {
   return financeRouter.createCaller({
     db: {
       transaction: { groupBy: mocks.transactionGroupBy },
-      invoice: { groupBy: mocks.invoiceGroupBy, findMany: mocks.invoiceFindMany },
+      invoice: { groupBy: mocks.invoiceGroupBy },
+      payment: { groupBy: mocks.paymentGroupBy },
       recurringExpense: { findMany: mocks.recurringFindMany },
     },
     entitlements: { organizationId: 'org-1', enabledModules: [], modules: [] },
@@ -48,15 +49,17 @@ describe('finance.getFinancialSummary', () => {
     mocks.can.mockResolvedValue(true);
     mocks.transactionGroupBy.mockResolvedValue([]);
     mocks.invoiceGroupBy.mockResolvedValue([]);
-    mocks.invoiceFindMany.mockResolvedValue([]);
+    mocks.paymentGroupBy.mockResolvedValue([]);
     mocks.recurringFindMany.mockResolvedValue([]);
   });
 
   it('subtracts partial payments from outstanding invoice totals by currency', async () => {
-    mocks.invoiceFindMany.mockResolvedValue([
-      { total: 1_000, currency: 'USD', payments: [{ amount: 600 }] },
-      { total: 250, currency: 'USD', payments: [{ amount: 50 }] },
-      { total: 500, currency: 'PKR', payments: [] },
+    mocks.invoiceGroupBy.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { currency: 'USD', _sum: { total: 1_250 }, _count: 2 },
+      { currency: 'PKR', _sum: { total: 500 }, _count: 1 },
+    ]);
+    mocks.paymentGroupBy.mockResolvedValue([
+      { currency: 'USD', _sum: { amount: 650 } },
     ]);
 
     const summary = await caller().getFinancialSummary();
@@ -66,20 +69,25 @@ describe('finance.getFinancialSummary', () => {
       { currency: 'PKR', amount: 500 },
     ]);
     expect(summary.outstandingCount).toBe(3);
-    expect(mocks.invoiceFindMany).toHaveBeenCalledWith({
+    expect(mocks.invoiceGroupBy).toHaveBeenLastCalledWith({
+      by: ['currency'],
+      _sum: { total: true },
+      _count: true,
       where: { status: { in: ['SENT', 'OVERDUE'] } },
-      select: {
-        total: true,
-        currency: true,
-        payments: { select: { amount: true } },
-      },
+    });
+    expect(mocks.paymentGroupBy).toHaveBeenCalledWith({
+      by: ['currency'],
+      _sum: { amount: true },
+      where: { invoice: { status: { in: ['SENT', 'OVERDUE'] } } },
     });
   });
 
   it('reports only the unpaid balance of a partially paid invoice', async () => {
-    mocks.invoiceFindMany.mockResolvedValue([
-      // Prisma Decimal values stringify this way at the router boundary.
-      { total: '1000.00', currency: 'USD', payments: [{ amount: '600.00' }] },
+    mocks.invoiceGroupBy.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { currency: 'USD', _sum: { total: '1000.00' }, _count: 1 },
+    ]);
+    mocks.paymentGroupBy.mockResolvedValue([
+      { currency: 'USD', _sum: { amount: '600.00' } },
     ]);
 
     const summary = await caller().getFinancialSummary();
@@ -89,9 +97,11 @@ describe('finance.getFinancialSummary', () => {
   });
 
   it('subtracts multiple payments using exact cent arithmetic', async () => {
-    mocks.invoiceFindMany.mockResolvedValue([
-      { total: 1_000, currency: 'USD', payments: [{ amount: 333.33 }, { amount: 266.67 }] },
-      { total: 0.3, currency: 'USD', payments: [{ amount: 0.1 }, { amount: 0.1 }] },
+    mocks.invoiceGroupBy.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { currency: 'USD', _sum: { total: '1000.30' }, _count: 2 },
+    ]);
+    mocks.paymentGroupBy.mockResolvedValue([
+      { currency: 'USD', _sum: { amount: '600.20' } },
     ]);
 
     const summary = await caller().getFinancialSummary();
@@ -101,8 +111,11 @@ describe('finance.getFinancialSummary', () => {
   });
 
   it('keeps cent arithmetic exact at the Decimal(12,2) upper bound', async () => {
-    mocks.invoiceFindMany.mockResolvedValue([
-      { total: 9_999_999_999.99, currency: 'USD', payments: [{ amount: 0.01 }] },
+    mocks.invoiceGroupBy.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { currency: 'USD', _sum: { total: '9999999999.99' }, _count: 1 },
+    ]);
+    mocks.paymentGroupBy.mockResolvedValue([
+      { currency: 'USD', _sum: { amount: '0.01' } },
     ]);
 
     const summary = await caller().getFinancialSummary();
@@ -111,13 +124,9 @@ describe('finance.getFinancialSummary', () => {
   });
 
   it('does not accumulate rounding drift across a large invoice set', async () => {
-    mocks.invoiceFindMany.mockResolvedValue(
-      Array.from({ length: 10_000 }, () => ({
-        total: 0.01,
-        currency: 'USD',
-        payments: [],
-      }))
-    );
+    mocks.invoiceGroupBy.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { currency: 'USD', _sum: { total: '100.00' }, _count: 10_000 },
+    ]);
 
     const summary = await caller().getFinancialSummary();
 
@@ -128,13 +137,8 @@ describe('finance.getFinancialSummary', () => {
   it('rejects an aggregate that cannot preserve every cent in the number DTO', async () => {
     // 9,007 maximum-value invoices plus this remainder total exactly
     // 9,007,199,254,740,993 cents: Number.MAX_SAFE_INTEGER + 2.
-    mocks.invoiceFindMany.mockResolvedValue([
-      ...Array.from({ length: 9_007 }, () => ({
-        total: 9_999_999_999.99,
-        currency: 'USD',
-        payments: [],
-      })),
-      { total: 1_992_547_500, currency: 'USD', payments: [] },
+    mocks.invoiceGroupBy.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { currency: 'USD', _sum: { total: '90071992547409.93' }, _count: 9_008 },
     ]);
 
     await expect(caller().getFinancialSummary()).rejects.toThrow(
@@ -146,13 +150,8 @@ describe('finance.getFinancialSummary', () => {
     // 9,007 maximum-value invoices plus this remainder total exactly
     // 9,007,199,254,740,990 cents. The integer is safe, but converting it to
     // dollars and back rounds it to 9,007,199,254,740,991 cents.
-    mocks.invoiceFindMany.mockResolvedValue([
-      ...Array.from({ length: 9_007 }, () => ({
-        total: 9_999_999_999.99,
-        currency: 'USD',
-        payments: [],
-      })),
-      { total: 1_992_547_499.97, currency: 'USD', payments: [] },
+    mocks.invoiceGroupBy.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { currency: 'USD', _sum: { total: '90071992547409.90' }, _count: 9_008 },
     ]);
 
     await expect(caller().getFinancialSummary()).rejects.toThrow(
