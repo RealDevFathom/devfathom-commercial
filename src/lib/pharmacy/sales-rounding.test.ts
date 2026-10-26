@@ -105,6 +105,10 @@ describe('sale posting MRP rounding', () => {
       movementIds: ['movement-a', 'movement-b'],
     });
     const createLine = vi.fn();
+    const findMrps = vi.fn(async () => [
+      { packLevelId: 'pack-a', batchReference: 'batch-a', roundingIncrementMinor: 5 },
+      { packLevelId: 'pack-a', batchReference: 'batch-b', roundingIncrementMinor: 1 },
+    ]);
     const db = {
       pharmacySale: {
         findFirst: async () => ({ id: 'sale-a', status: 'OPEN' }),
@@ -134,10 +138,7 @@ describe('sale posting MRP rounding', () => {
         ],
       },
       medicinePackMrp: {
-        findMany: async () => [
-          { packLevelId: 'pack-a', batchReference: 'batch-a', roundingIncrementMinor: 5 },
-          { packLevelId: 'pack-a', batchReference: 'batch-b', roundingIncrementMinor: 1 },
-        ],
+        findMany: findMrps,
       },
       pharmacySaleLine: { create: createLine },
     };
@@ -163,6 +164,17 @@ describe('sale posting MRP rounding', () => {
         }
       )
     ).rejects.toMatchObject({ reason: 'PRICE_CHANGED' });
+    expect(findMrps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org-a',
+          OR: [
+            { packLevelId: 'pack-a', batchReference: 'batch-a' },
+            { packLevelId: 'pack-a', batchReference: 'batch-b' },
+          ],
+        },
+      })
+    );
     expect(createLine).not.toHaveBeenCalled();
   });
 });
