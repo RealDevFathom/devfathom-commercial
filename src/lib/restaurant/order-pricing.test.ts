@@ -357,10 +357,14 @@ describe('resolveModifierSnapshots', () => {
       ],
       productGroups: { prod_1: [{ id: 'grp_1', maxSelect: 2 }] },
     });
+    const optionLookup = vi.spyOn(db.restaurantModifierOption, 'findMany');
+    const attachmentLookup = vi.spyOn(db.restaurantProductModifierGroup, 'findMany');
 
     await expect(resolveModifierSnapshots(db, 'prod_1', ['opt_1', 'opt_1'])).rejects.toMatchObject(
       { reason: 'MODIFIER_DUPLICATE' }
     );
+    expect(optionLookup).not.toHaveBeenCalled();
+    expect(attachmentLookup).not.toHaveBeenCalled();
   });
 
   it('rejects omitting selections from a required attached group', async () => {
