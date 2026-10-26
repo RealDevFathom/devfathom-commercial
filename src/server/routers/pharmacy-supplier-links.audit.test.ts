@@ -84,6 +84,58 @@ describe('pharmacy supplier signed-link auditing', () => {
     );
   });
 
+  it('audits submit input validation failures attributable to a signed link', async () => {
+    await expect(
+      pharmacySupplierLinksRouter.createCaller(context as never).submit({
+        token: 'link.secret.signature',
+        kind: 'UNSUPPORTED',
+        idempotencyKey: '',
+        payload: {},
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(submitSupplierEvidence).not.toHaveBeenCalled();
+    expect(getSupplierLinkAuditTarget).toHaveBeenCalledWith(
+      context.db,
+      'link.secret.signature',
+      'org_a'
+    );
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: 'org_a',
+        action: 'pharmacySupplierLinks.submit',
+        targetId: 'link_a',
+        outcome: 'FAILURE',
+        errorCode: 'BAD_REQUEST',
+        metadata: { branchId: 'branch_a', linkId: 'link_a', kind: 'UNSUPPORTED' },
+      })
+    );
+  });
+
+  it('audits document input validation failures attributable to a signed link', async () => {
+    await expect(
+      pharmacySupplierLinksRouter.createCaller(context as never).uploadDocument({
+        token: 'link.secret.signature',
+        idempotencyKey: 'idem_document',
+        fileName: '',
+        declaredMimeType: 'text/plain',
+        contentBase64: '',
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(uploadSupplierDocument).not.toHaveBeenCalled();
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: 'org_a',
+        action: 'pharmacySupplierLinks.uploadDocument',
+        targetId: 'link_a',
+        outcome: 'FAILURE',
+        errorCode: 'BAD_REQUEST',
+        metadata: { branchId: 'branch_a', linkId: 'link_a', kind: 'DOCUMENT' },
+      })
+    );
+  });
+
   it('does not attribute an unresolvable or cross-tenant link to the current tenant', async () => {
     vi.mocked(getSupplierLinkAuditTarget).mockResolvedValue(null);
     vi.mocked(submitSupplierEvidence).mockRejectedValue(new SupplierLinkError('INVALID_LINK'));

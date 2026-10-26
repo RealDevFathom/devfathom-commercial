@@ -53,7 +53,13 @@ function auditSupplierLinkAction(
 ) {
   if (!target) return;
   const reason =
-    error instanceof SupplierLinkError ? error.reason : error ? 'INTERNAL_ERROR' : null;
+    error instanceof SupplierLinkError
+      ? error.reason
+      : error instanceof TRPCError
+        ? error.code
+        : error
+          ? 'INTERNAL_ERROR'
+          : null;
   recordAudit({
     organizationId: target.organizationId,
     actorType: 'ANONYMOUS',
@@ -72,6 +78,42 @@ function auditSupplierLinkAction(
   });
 }
 
+function auditedSupplierLinkProcedure(action: 'submit' | 'uploadDocument') {
+  return publicProcedure.use(async ({ ctx, getRawInput, next }) => {
+    const rawInput = await getRawInput();
+    const result = await next();
+
+    // Input parsers run before the resolver, so audit attributable validation
+    // failures here. Resolver and service failures are recorded in the mutation
+    // itself, where the parsed kind and domain error are available.
+    if (!result.ok && result.error.cause instanceof z.ZodError) {
+      const raw =
+        rawInput && typeof rawInput === 'object'
+          ? (rawInput as Record<string, unknown>)
+          : undefined;
+      const token = typeof raw?.token === 'string' ? raw.token : null;
+      if (token) {
+        const target = await getSupplierLinkAuditTarget(
+          ctx.db,
+          token,
+          ctx.entitlements.organizationId
+        );
+        const rawKind = typeof raw?.kind === 'string' ? raw.kind : null;
+        auditSupplierLinkAction(
+          ctx,
+          target,
+          action,
+          'FAILURE',
+          action === 'uploadDocument' ? 'DOCUMENT' : (rawKind ?? 'UNKNOWN'),
+          result.error
+        );
+      }
+    }
+
+    return result;
+  });
+}
+
 export const pharmacySupplierLinksRouter = router({
   get: publicProcedure.input(z.object({ token: id }).strict()).query(async ({ ctx, input }) => {
     try {
@@ -80,7 +122,7 @@ export const pharmacySupplierLinksRouter = router({
       mapError(error);
     }
   }),
-  submit: publicProcedure
+  submit: auditedSupplierLinkProcedure('submit')
     .input(
       z
         .object({
@@ -107,7 +149,7 @@ export const pharmacySupplierLinksRouter = router({
         mapError(error);
       }
     }),
-  uploadDocument: publicProcedure
+  uploadDocument: auditedSupplierLinkProcedure('uploadDocument')
     .input(
       z
         .object({
