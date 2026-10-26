@@ -895,6 +895,29 @@ function resolveVariants(raw: Prisma.JsonValue): Array<{ name: string; amount: s
   }));
 }
 
+function resolveReviewedVariants(
+  raw: Prisma.JsonValue
+): Array<{ name: string; amount: string | null }> | null {
+  const parsed = VARIANT_SHAPE.safeParse(raw);
+  if (!parsed.success) return null;
+
+  const variants = parsed.data.map((variant) => ({
+    name: variant.name.trim(),
+    amount: variant.price?.amount ?? null,
+  }));
+  if (
+    variants.some(
+      (variant) =>
+        !variant.name ||
+        variant.name.length > 200 ||
+        (variant.amount !== null && !/^\d{1,10}(\.\d{1,2})?$/.test(variant.amount))
+    )
+  ) {
+    return null;
+  }
+  return variants;
+}
+
 export type CommitMenuImportInput = {
   importId: string;
   committedById: string;
@@ -1061,7 +1084,13 @@ export async function commitMenuImport(
               'REVIEW_INCOMPLETE'
             );
           }
-          const reviewed = resolveVariants(line.reviewedVariants ?? []);
+          const reviewed = resolveReviewedVariants(line.reviewedVariants);
+          if (reviewed === null) {
+            throw new MenuImportError(
+              'A confirmed line has invalid variant review evidence.',
+              'REVIEW_INCOMPLETE'
+            );
+          }
           if (reviewed.length !== extracted.length) {
             throw new MenuImportError(
               'A confirmed line does not include a review of every extracted variant.',

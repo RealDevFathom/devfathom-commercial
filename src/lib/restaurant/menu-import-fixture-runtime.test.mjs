@@ -396,6 +396,44 @@ test('commit rejects an accepted line without explicit empty variant review evid
   );
 });
 
+test('commit rejects malformed variant review evidence even for an empty extracted list', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  f.record.status = 'AWAITING_REVIEW';
+  f.lines.push({
+    id: 'line_1',
+    reviewStatus: 'ACCEPTED',
+    sortOrder: 1,
+    extractedCategoryName: null,
+    extractedProductName: 'Synthetic item',
+    extractedDescription: null,
+    extractedPriceAmount: '10.00',
+    extractedVariants: [],
+    reviewedVariants: { forged: true },
+    reviewedCategoryName: null,
+    reviewedProductName: null,
+    reviewedDescription: null,
+    reviewedPriceAmount: null,
+    mergeProductId: null,
+    mergeVariantId: null,
+  });
+
+  await assert.rejects(
+    menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' }),
+    {
+      message: 'A confirmed line has invalid variant review evidence.',
+      reason: 'REVIEW_INCOMPLETE',
+    }
+  );
+  assert.ok(
+    !f.events.some(
+      (event) =>
+        Array.isArray(event) &&
+        ['createProduct', 'createMenu', 'addPriceListEntry'].includes(event[0])
+    )
+  );
+});
+
 test('accepting extracted variants requires and persists explicit human review', async () => {
   const f = setup('production', 'disabled');
   const menu = f.load('@/lib/restaurant/menu-import');
