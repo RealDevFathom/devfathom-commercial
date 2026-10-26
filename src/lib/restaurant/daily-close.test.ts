@@ -507,19 +507,27 @@ describeIfDatabase('daily close (real DB)', () => {
     ).rejects.toMatchObject({ reason: 'UNSETTLED_BILL' });
   });
 
-  it('blocks a cut while an active order has not had a bill cut', async () => {
+  it('blocks a cut while orders in any active state have not had bills cut', async () => {
     const date = '2026-09-14';
+    const activeStatuses = [
+      'OPEN',
+      'SENT',
+      'IN_PREPARATION',
+      'READY',
+      'SERVED',
+      'PAYMENT_PENDING',
+    ] as const;
     await deps.withTenantDb(orgId, (tx) =>
-      tx.restaurantOrder.create({
-        data: {
+      tx.restaurantOrder.createMany({
+        data: activeStatuses.map((status) => ({
           branchId: ids.branch,
           orderNumber: ++orderCounter,
           businessDate: utcDate(date),
-          status: 'OPEN',
+          status,
           channel: 'DINE_IN',
           staffProfileId: ids.operator,
           deviceId: ids.seedDevice,
-        },
+        })),
       })
     );
 
@@ -531,7 +539,7 @@ describeIfDatabase('daily close (real DB)', () => {
     expect(preview.readiness).toMatchObject({
       allBillsResolved: false,
       openBillCount: 0,
-      unresolvedOrderCount: 1,
+      unresolvedOrderCount: activeStatuses.length,
     });
     await expect(
       deps.close.cutClose(db, {
