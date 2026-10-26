@@ -136,6 +136,7 @@ describe('order totals ignore stored tax and service', () => {
     expect(detail?.items[0]?.taxAmount).toBe(D('99.00').toString());
     expect(detail?.totals.tax).toBe('0.23');
     expect(detail?.totals.serviceCharge).toBe('0.45');
+    expect(detail).toMatchObject({ deliveryStatus: null, settled: false });
     const due = D(detail!.totals.subtotal)
       .plus(detail!.totals.tax)
       .plus(detail!.totals.serviceCharge)
