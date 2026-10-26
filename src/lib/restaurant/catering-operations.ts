@@ -236,16 +236,17 @@ export async function publishQuote(
       })
     );
     if (!version) fail('Recipe has no active version.');
-    const cost = version
-      ? await computeRecipeCostInDb(tx, { organizationId: org, recipeVersionId: version.id })
-      : null;
-    if (cost && (!cost.portionCount || cost.portionCount <= 0))
+    const cost = await computeRecipeCostInDb(tx, {
+      organizationId: org,
+      recipeVersionId: version.id,
+    });
+    if (!cost.portionCount || cost.portionCount <= 0)
       fail('Portion scaling requires a positive portion count.');
-    const scale = cost ? line.portions.dividedBy(cost.portionCount!) : new Prisma.Decimal(0);
+    const scale = line.portions.dividedBy(cost.portionCount);
     const requirements: FrozenRequirement[] = [];
-    if (!cost || !cost.lines.length || !line.portions.isPositive())
+    if (!cost.lines.length || !line.portions.isPositive())
       snapshot.missing.push(`line:${line.id}`);
-    for (const leaf of cost?.lines ?? []) {
+    for (const leaf of cost.lines) {
       const unitCost = leaf.source === 'MISSING' ? null : leaf.unitCost.toString();
       const row: FrozenRequirement = {
         ingredientId: leaf.ingredientId,

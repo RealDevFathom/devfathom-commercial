@@ -298,24 +298,31 @@ describe('restaurant catering lifecycle', () => {
   });
 
   it('requires a recipe when adding or updating a line', async () => {
-    await expect(
-      caller().addLine({
-        orderId: 'order_1',
-        productId: 'product_1',
-        recipeId: null,
-        description: 'Unlinked item',
-        portions: '1',
-        unitPrice: '1.00',
-      } as Parameters<ReturnType<typeof caller>['addLine']>[0])
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    await expect(
-      caller().updateLine({
-        orderId: 'order_1',
-        lineId: 'line_1',
-        recipeId: null,
-        description: 'Still unlinked',
-      } as Parameters<ReturnType<typeof caller>['updateLine']>[0])
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    const addInput = {
+      orderId: 'order_1',
+      productId: 'product_1',
+      description: 'Unlinked item',
+      portions: '1',
+      unitPrice: '1.00',
+    } as Parameters<ReturnType<typeof caller>['addLine']>[0];
+    const updateInput = {
+      orderId: 'order_1',
+      lineId: 'line_1',
+      description: 'Still unlinked',
+    } as Parameters<ReturnType<typeof caller>['updateLine']>[0];
+
+    for (const recipeId of [undefined, null]) {
+      await expect(
+        caller().addLine({ ...addInput, recipeId } as Parameters<
+          ReturnType<typeof caller>['addLine']
+        >[0])
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(
+        caller().updateLine({ ...updateInput, recipeId } as Parameters<
+          ReturnType<typeof caller>['updateLine']
+        >[0])
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    }
     expect(db.restaurantCateringOrderLine.create).not.toHaveBeenCalled();
     expect(db.restaurantCateringOrderLine.updateMany).not.toHaveBeenCalled();
   });
