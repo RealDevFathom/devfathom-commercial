@@ -54,6 +54,7 @@ describe('RestaurantBranchesConsole', () => {
     expect(screen.getByText('DHA Phase 6')).toBeInTheDocument();
     expect(screen.getByText('DHA-PH6')).toBeInTheDocument();
     expect(screen.getByText('Primary')).toHaveAttribute('data-tone', 'info');
+    expect(screen.getByText('Primary')).toHaveClass('bg-info/10', 'text-info');
     expect(screen.queryByText('cmtxopaque123')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Deactivate' })).toBeDisabled();
     expect(screen.getByTitle('Choose another primary branch first.')).toBeInTheDocument();
