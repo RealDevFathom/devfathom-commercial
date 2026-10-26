@@ -66,6 +66,31 @@ describe('journal lookup page', () => {
     expect(output).toContain('10 / 0 / 10');
   });
 
+  it('renders the canonical IDs used by the lookup rather than padded query values', async () => {
+    mocks.lookup.mockResolvedValue({
+      status: 'FOUND',
+      entry: {
+        id: 'entry-1',
+        sourceKind: 'SALE',
+        sourceId: 'sale-1',
+        currency: 'PKR',
+        occurredAt: valid.from,
+        reversesEntryId: null,
+        lines: [{ id: 'line-1', accountCode: 'CASH', side: 'DEBIT', amountMinor: '10' }],
+        debitMinor: '10',
+        creditMinor: '0',
+        differenceMinor: '10',
+      },
+    });
+
+    const output = await html({ ...valid, branchId: '  branch-1  ', entryId: '  entry-1  ' });
+
+    expect(mocks.lookup).toHaveBeenCalledWith(valid);
+    expect(output).toContain('value="branch-1"');
+    expect(output).toContain('branch-1 · [');
+    expect(output).not.toContain('  branch-1  ');
+  });
+
   it.each([
     ['TRUNCATED', 'exceeds 200 lines'],
     ['INVALID_SOURCE', 'failed validation'],

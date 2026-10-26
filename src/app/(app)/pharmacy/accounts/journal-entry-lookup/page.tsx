@@ -42,6 +42,7 @@ export default async function JournalEntryLookupPage({
   };
   const supplied = Object.values(query).some((value) => value !== undefined);
   const parsed = pageInput.safeParse(query);
+  const displayValues = parsed.success ? parsed.data : values;
   const duration = parsed.success ? Date.parse(parsed.data.to) - Date.parse(parsed.data.from) : NaN;
   const valid = parsed.success && duration > 0 && duration <= 92 * 86_400_000;
   let state: ViewState = supplied ? { status: 'INVALID' } : { status: 'INITIAL' };
@@ -101,7 +102,7 @@ export default async function JournalEntryLookupPage({
             <Input
               name="branchId"
               className="mt-1 min-h-11"
-              defaultValue={values.branchId ?? ''}
+              defaultValue={displayValues.branchId ?? ''}
               required
             />
           </label>
@@ -110,7 +111,7 @@ export default async function JournalEntryLookupPage({
             <Input
               name="entryId"
               className="mt-1 min-h-11"
-              defaultValue={values.entryId ?? ''}
+              defaultValue={displayValues.entryId ?? ''}
               required
             />
           </label>
@@ -119,13 +120,18 @@ export default async function JournalEntryLookupPage({
             <Input
               name="from"
               className="mt-1 min-h-11"
-              defaultValue={values.from ?? ''}
+              defaultValue={displayValues.from ?? ''}
               required
             />
           </label>
           <label className="text-sm text-text-body">
             To, exclusive (RFC3339 UTC)
-            <Input name="to" className="mt-1 min-h-11" defaultValue={values.to ?? ''} required />
+            <Input
+              name="to"
+              className="mt-1 min-h-11"
+              defaultValue={displayValues.to ?? ''}
+              required
+            />
           </label>
           <Button type="submit" className="min-h-11">
             Look up exact entry
@@ -144,9 +150,9 @@ export default async function JournalEntryLookupPage({
       ) : (
         <EntryDetail
           result={state}
-          branchId={values.branchId!}
-          from={values.from!}
-          to={values.to!}
+          branchId={displayValues.branchId!}
+          from={displayValues.from!}
+          to={displayValues.to!}
         />
       )}
     </main>
