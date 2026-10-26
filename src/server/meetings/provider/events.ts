@@ -93,7 +93,9 @@ async function applyEvent(db: ScopedDb, occurrence: OccurrenceRef, event: Normal
     ON CONFLICT ("organizationId", "providerParticipantSid") DO UPDATE SET
       "leftAt" = GREATEST(COALESCE("meeting_participant_sessions"."leftAt", EXCLUDED."leftAt"), EXCLUDED."leftAt"),
       "leaveEventId" = EXCLUDED."leaveEventId",
-      "disconnectReason" = EXCLUDED."disconnectReason"
+      "disconnectReason" = EXCLUDED."disconnectReason",
+      "occurrenceParticipantId" = COALESCE("meeting_participant_sessions"."occurrenceParticipantId", EXCLUDED."occurrenceParticipantId"),
+      "userId" = COALESCE("meeting_participant_sessions"."userId", EXCLUDED."userId")
   `);
 }
 
