@@ -240,7 +240,10 @@ export function OrganizationAdminContent() {
     onError: failure,
   });
   const goodsInAccess = trpc.organizationAdmin.setMemberGoodsInAccess.useMutation({
-    onSuccess: () => success('Goods-in access updated.'),
+    onSuccess: async () => {
+      toast.success('Goods-in access updated.');
+      await refresh();
+    },
     onError: failure,
   });
   const addMember = trpc.organizationAdmin.createMember.useMutation({

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const overviewData = vi.hoisted(() => ({ current: null as unknown }));
@@ -11,7 +11,7 @@ const mutations = vi.hoisted(() => ({
       mutate: ReturnType<typeof vi.fn>;
       isPending: boolean;
       reset: () => void;
-      onSuccess?: () => void;
+      onSuccess?: () => void | Promise<void>;
       onError?: (error: { message: string }) => void;
     }
   >(),
@@ -44,7 +44,7 @@ vi.mock('@/lib/trpc', () => ({
           }
           return {
             useMutation: (options?: {
-              onSuccess?: () => void;
+              onSuccess?: () => void | Promise<void>;
               onError?: (error: { message: string }) => void;
             }) => {
               const mutation = mutationFor(key);
@@ -219,8 +219,8 @@ describe('organization people and access — staff onboarding', () => {
     expect(invalidateOverview).not.toHaveBeenCalled();
     expect(control).not.toBeChecked();
 
-    mutationFor('setMemberGoodsInAccess').onSuccess?.();
-    await waitFor(() => expect(invalidateOverview).toHaveBeenCalledOnce());
+    await mutationFor('setMemberGoodsInAccess').onSuccess?.();
+    expect(invalidateOverview).toHaveBeenCalledOnce();
 
     const data = overviewData.current as {
       organization: { users: Array<{ permissionOverrides: Array<{ id: string }> }> };
