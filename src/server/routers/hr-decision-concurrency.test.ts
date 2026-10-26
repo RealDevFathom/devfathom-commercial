@@ -106,6 +106,42 @@ describe('atomic HR decisions', () => {
     expect(mocks.notify).not.toHaveBeenCalled();
   });
 
+  it('notifies only after the winning leave transaction commits', async () => {
+    const leave = {
+      id: 'leave-1',
+      userId: 'employee-1',
+      status: 'APPROVED',
+      type: 'VACATION',
+      startDate: new Date('2026-11-02'),
+      endDate: new Date('2026-11-03'),
+    };
+    const findFirst = vi.fn().mockResolvedValue({
+      userId: leave.userId,
+      status: 'PENDING',
+    });
+    const tx = {
+      leaveRequest: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        findFirstOrThrow: vi.fn().mockResolvedValue(leave),
+      },
+    };
+    const transaction = vi.fn(async (work: (transaction: typeof tx) => unknown) => {
+      const result = await work(tx);
+      expect(mocks.notify).not.toHaveBeenCalled();
+      return result;
+    });
+    const caller = teamRouter.createCaller(
+      context({ leaveRequest: { findFirst }, $transaction: transaction })
+    );
+
+    await expect(
+      caller.updateLeaveStatus({ id: leave.id, status: 'APPROVED' })
+    ).resolves.toBe(leave);
+
+    expect(transaction).toHaveBeenCalledOnce();
+    expect(mocks.notify).toHaveBeenCalledOnce();
+  });
+
   it('uses a pending compare-and-swap for resignation and emits no effect when it loses', async () => {
     const resignation = {
       id: 'resignation-1',
