@@ -872,6 +872,43 @@ describeIfDatabase('orders command layer (real DB)', () => {
     expect(count).toBe(1); // the replay created nothing
   });
 
+  it('rejects an idempotency key reused for another command type or payload', async () => {
+    const first = await openWithItem();
+    const second = await deps.orders.openOrder(first.db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.orders.monthly': 1000000 },
+      branchId: ids.branch,
+      channel: 'DINE_IN',
+      publicationId: ids.publication,
+      actor: actor(),
+      now: AT,
+    });
+    const reusedKey = key();
+    await deps.orders.addItem(first.db, {
+      orderId: first.orderId,
+      menuItemId: ids.menuItem,
+      actor: actor(reusedKey),
+    });
+
+    await expect(
+      deps.orders.addItem(first.db, {
+        orderId: second.orderId,
+        menuItemId: ids.menuItem,
+        actor: actor(reusedKey),
+      })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    await expect(
+      deps.orders.sendOrder(first.db, {
+        orderId: first.orderId,
+        actor: actor(reusedKey),
+      })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+
+    await expect(
+      read((tx) => tx.restaurantOrderItem.count({ where: { orderId: second.orderId } }))
+    ).resolves.toBe(0);
+  });
+
   it('keeps the ledger + outbox in lock-step, one monotonic sequence per order (C2)', async () => {
     const { orderId, itemId, db } = await openWithItem();
     await deps.orders.sendOrder(db, { orderId, actor: actor() });
