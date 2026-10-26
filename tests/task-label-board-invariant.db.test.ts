@@ -66,7 +66,10 @@ describeIfDatabase('task-label board invariant concurrency', () => {
       await client.query(`SET search_path TO "${schema}"`);
     }
     await setup!.query(`
-      CREATE TABLE "columns" (id text PRIMARY KEY, "boardId" text NOT NULL);
+      CREATE TABLE "boards" (id text PRIMARY KEY, "organizationId" text NOT NULL);
+      CREATE TABLE "columns" (
+        id text PRIMARY KEY, "boardId" text NOT NULL, "organizationId" text NOT NULL
+      );
       CREATE TABLE "tasks" (id text PRIMARY KEY, "columnId" text NOT NULL, "organizationId" text NOT NULL);
       CREATE TABLE "labels" (id text PRIMARY KEY, "boardId" text NOT NULL, "organizationId" text NOT NULL);
       CREATE TABLE "task_labels" (
@@ -74,7 +77,10 @@ describeIfDatabase('task-label board invariant concurrency', () => {
         "organizationId" text NOT NULL, UNIQUE ("taskId", "labelId")
       );
       ${migration}
-      INSERT INTO "columns" VALUES ('column_a', 'board_a'), ('column_b', 'board_b');
+      INSERT INTO "boards" VALUES
+        ('board_a', 'org'), ('board_b', 'org'), ('board_other_org', 'other_org');
+      INSERT INTO "columns" VALUES
+        ('column_a', 'board_a', 'org'), ('column_b', 'board_b', 'org');
       INSERT INTO "tasks" VALUES ('task', 'column_a', 'org');
       INSERT INTO "labels" VALUES ('label', 'board_a', 'org');
     `);
@@ -95,6 +101,22 @@ describeIfDatabase('task-label board invariant concurrency', () => {
 
     const remaining = await setup!.query(
       `SELECT 1 FROM "task_labels" WHERE id = 'existing_tl'`
+    );
+    expect(remaining.rowCount).toBe(0);
+    await setup!.query(`UPDATE "columns" SET "boardId" = 'board_a' WHERE id = 'column_a'`);
+  });
+
+  it('removes existing attachments when their column moves to another organization board', async () => {
+    await setup!.query(
+      `INSERT INTO "task_labels" ("id", "organizationId", "taskId", "labelId")
+       VALUES ('existing_org_tl', 'org', 'task', 'label')`
+    );
+    await setup!.query(
+      `UPDATE "columns" SET "boardId" = 'board_other_org' WHERE id = 'column_a'`
+    );
+
+    const remaining = await setup!.query(
+      `SELECT 1 FROM "task_labels" WHERE id = 'existing_org_tl'`
     );
     expect(remaining.rowCount).toBe(0);
     await setup!.query(`UPDATE "columns" SET "boardId" = 'board_a' WHERE id = 'column_a'`);
