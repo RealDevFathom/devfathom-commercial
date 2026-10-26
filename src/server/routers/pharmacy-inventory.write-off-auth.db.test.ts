@@ -510,4 +510,30 @@ describeDatabase('SEC-374-01 Postgres no-effect authorization regressions', () =
       });
     });
   });
+
+  it('refuses the write when concurrent actor deactivation commits first', async () => {
+    const input = await fixture();
+    const before = await snapshot(org, input.inventoryLotId);
+    let release!: () => void;
+    let locked!: () => void;
+    const releaseGate = new Promise<void>((resolve) => (release = resolve));
+    const lockedGate = new Promise<void>((resolve) => (locked = resolve));
+
+    const deactivation = admin(org, async (db) => {
+      await db.user.update({ where: { id: actors.allowed }, data: { status: 'INACTIVE' } });
+      locked();
+      await releaseGate;
+    });
+    await lockedGate;
+    const attemptedWrite = call(actors.allowed, input);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    release();
+    await deactivation;
+
+    await expect(attemptedWrite).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(await snapshot(org, input.inventoryLotId)).toEqual(before);
+    await admin(org, async (db) => {
+      await db.user.update({ where: { id: actors.allowed }, data: { status: 'ACTIVE' } });
+    });
+  });
 });

@@ -11,7 +11,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
-import { can, subjectFromSession } from '@/lib/abac';
+import { ACTIVE_STATUSES, can, subjectFromSession } from '@/lib/abac';
 import { arrangementFor, PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   confirmPriceChange,
@@ -195,10 +195,20 @@ async function writeOffScopeFor(
   // again on this transaction handle. Locking both parents also serializes new
   // role grants/denies and user overrides through their foreign keys; updates
   // to existing rules serialize on the rule rows themselves.
-  await db.$queryRaw(Prisma.sql`
-    SELECT u.id FROM users u
+  const currentActors = await db.$queryRaw<
+    Array<{ id: string; role: string; department: string | null; status: string }>
+  >(Prisma.sql`
+    SELECT u.id, u.role, u.department, u.status FROM users u
     WHERE u.id = ${actor.actorId} AND u."organizationId" = ${actor.organizationId}
+      AND u.status IN (${Prisma.join([...ACTIVE_STATUSES])})
     FOR UPDATE`);
+  const currentActor = currentActors[0];
+  if (!currentActor) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
   await db.$queryRaw(Prisma.sql`
     SELECT r.id FROM organization_roles r
     JOIN users u ON u."organizationRoleId" = r.id
@@ -216,14 +226,16 @@ async function writeOffScopeFor(
     WHERE up."userId" = ${actor.actorId} AND up."organizationId" = ${actor.organizationId}
     FOR UPDATE OF up`);
 
-  const sessionUser = ctx.session?.user;
-  const capabilityAllowed =
-    sessionUser &&
-    (await can(subjectFromSession(sessionUser), 'pharmacy:inventory', undefined, {
+  const capabilityAllowed = await can(
+    subjectFromSession(currentActor),
+    'pharmacy:inventory',
+    undefined,
+    {
       db: db as Prisma.TransactionClient,
       source: 'TRPC',
       ip: ctx.requestMeta.ip,
-    }));
+    }
+  );
   if (!capabilityAllowed) {
     throw new TRPCError({
       code: 'FORBIDDEN',

@@ -5,7 +5,7 @@ import { writeOff } from './inventory-operations';
 describe('inventory write-off witness', () => {
   function database(witness: { id: string } | null) {
     return {
-      user: { findFirst: vi.fn().mockResolvedValue(witness) },
+      $queryRaw: vi.fn().mockResolvedValue(witness ? [witness] : []),
       pharmacyInventoryLot: {
         findFirst: vi.fn().mockResolvedValue({ id: 'lot', unitsPerPack: 10 }),
       },
@@ -33,10 +33,11 @@ describe('inventory write-off witness', () => {
     await expect(
       writeOff(db as never, { organizationId: 'org', branchId: 'branch', actorId: 'actor' }, input)
     ).rejects.toMatchObject({ reason: 'COAUTH_REQUIRED' });
-    expect(db.user.findFirst).toHaveBeenCalledWith({
-      where: { id: 'witness', organizationId: 'org', status: 'ACTIVE' },
-      select: { id: true },
-    });
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    const query = db.$queryRaw.mock.calls[0]![0];
+    expect(query.strings.join('?')).toContain("status = 'ACTIVE'");
+    expect(query.strings.join('?')).toContain('FOR UPDATE');
+    expect(query.values).toEqual(['witness', 'org']);
     expect(db.pharmacyInventoryLot.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
     expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();

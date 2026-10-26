@@ -84,6 +84,16 @@ function makeDb() {
         });
         return assignment ? [assignment] : [];
       }
+      if (sql.includes('u.id, u.role, u.department, u.status')) {
+        return [{ id: 'actor_a', role: 'EMPLOYEE', department: null, status: 'ACTIVE' }];
+      }
+      if (
+        sql.includes('organization_roles') ||
+        sql.includes('organization_role_permissions') ||
+        sql.includes('user_permission_overrides')
+      ) {
+        return [];
+      }
       const witness = await db.user.findFirst();
       return witness ? [witness] : [];
     }
