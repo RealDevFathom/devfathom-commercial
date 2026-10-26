@@ -56,6 +56,43 @@ describe('PlatformAuditPage', () => {
     );
   });
 
+  it('shows a readable tenant actor while retaining the immutable actor ID', async () => {
+    const actorId = 'tenant-user-1';
+    const db = {
+      platformAuditLog: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'audit-tenant-actor',
+            createdAt: new Date('2026-08-08T05:00:00Z'),
+            action: 'organization.update',
+            organization: { displayName: 'DevFathom' },
+            actorPlatformUserId: null,
+            actorTenantUserId: actorId,
+            actorPlatformUser: null,
+            actorTenantUser: {
+              name: 'Tenant Administrator',
+              email: 'tenant.admin@devfathom.com',
+            },
+            targetType: 'Organization',
+            targetId: 'organization-1',
+            success: true,
+            error: null,
+            reason: null,
+          },
+        ]),
+      },
+    };
+    mocks.withPlatformDb.mockImplementation((run: (database: typeof db) => Promise<unknown>) =>
+      run(db)
+    );
+
+    render(await PlatformAuditPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText('Tenant Administrator')).toBeInTheDocument();
+    expect(screen.getByText('tenant.admin@devfathom.com')).toBeInTheDocument();
+    expect(screen.getByTitle(`Actor ID: ${actorId}`)).toHaveTextContent(actorId);
+  });
+
   it('combines filters and stable pagination while escaping exported formulas', async () => {
     const createdAt = new Date('2026-09-20T12:00:00Z');
     const findMany = vi.fn().mockResolvedValue(
