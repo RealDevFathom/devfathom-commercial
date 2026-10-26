@@ -617,8 +617,12 @@ describe('claimNextDue', () => {
     const claimed = await claimNextDue(db, { workerId: 'w1', now: T0 });
     expect(claimed?.id).toBe('early');
     expect(claimed?.attempts).toBe(1);
+    expect(claimed?.claimToken).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    );
     expect(jobs.get('early')!.status).toBe('RUNNING');
     expect(jobs.get('early')!.claimedBy).toBe('w1');
+    expect(jobs.get('early')!.claimToken).toBe(claimed?.claimToken);
   });
 
   it('returns null when nothing is due and rejects a blank workerId', async () => {
