@@ -1,4 +1,5 @@
 import { workspaceToday, workspaceTimezone } from '@/lib/timezone';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const CALENDAR_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
@@ -41,4 +42,19 @@ export function prescriptionIsValidOn(
 ): boolean {
   const today = workspaceToday(workspaceTimezone(pharmacyTimeZone), now);
   return prescriptionDateValue(validFrom) <= today && today <= prescriptionDateValue(validUntil);
+}
+
+/** Applies the organization's calendar to a production dispensing gate. */
+export async function prescriptionIsValidForOrganization(
+  db: ScopedDb,
+  organizationId: string,
+  validFrom: Date,
+  validUntil: Date,
+  now: Date
+): Promise<boolean> {
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { timezone: true },
+  });
+  return prescriptionIsValidOn(validFrom, validUntil, now, organization?.timezone);
 }
