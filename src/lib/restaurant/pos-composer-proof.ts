@@ -39,7 +39,9 @@ export function verifyPosComposerProof(
   expected: Omit<PosComposerClaims, 'expiresAt'>,
   now = new Date()
 ): boolean {
-  const [version, payload, supplied] = proof.split('.');
+  const parts = proof.split('.');
+  if (parts.length !== 3) return false;
+  const [version, payload, supplied] = parts;
   if (version !== VERSION || !payload || !supplied) return false;
   let actual: Buffer;
   let claims: PosComposerClaims;
