@@ -77,7 +77,7 @@ describe('finance.getInvoiceById issuer', () => {
 
     await expect(caller().getInvoiceById({ id: 'another-tenant-invoice' })).resolves.toBeNull();
 
-    expect(mocks.findInvoice).toHaveBeenCalledWith({
+    expect(mocks.findInvoice).toHaveBeenCalledExactlyOnceWith({
       where: { organizationId: 'agency-a', id: 'another-tenant-invoice' },
       include: expect.any(Object),
     });
