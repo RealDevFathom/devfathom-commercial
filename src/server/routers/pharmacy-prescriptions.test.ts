@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   hasModule: vi.fn(),
   patient: vi.fn(),
+  patients: vi.fn(),
   prescriber: vi.fn(),
   find: vi.fn(),
   create: vi.fn(),
@@ -46,7 +47,7 @@ import { GET as sharedFileGET } from '@/app/api/files/[name]/route';
 function context(userId = 'user-a', organizationId = 'org-a', status = 'ACTIVE') {
   return {
     db: {
-      pharmacyPatient: { findFirst: mocks.patient },
+      pharmacyPatient: { findFirst: mocks.patient, findMany: mocks.patients },
       pharmacyPrescriber: { findFirst: mocks.prescriber },
       prescription: { findFirst: mocks.find, create: mocks.create },
       medicine: { findMany: mocks.medicines },
@@ -248,6 +249,32 @@ describe('prescription capture and private delivery', () => {
       undefined,
       expect.objectContaining({ source: 'TRPC' })
     );
+  });
+
+  it.each([
+    ['counterPatients', () => caller().counterPatients({ query: 'patient' })],
+    ['counterPatientPanel', () => caller().counterPatientPanel({ patientId: 'patient-a' })],
+  ])('refuses %s without counter or dispense capability', async (_procedure, invoke) => {
+    mocks.can.mockResolvedValue(false);
+
+    await expect(invoke()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.can).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      'pharmacy:counter',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+    expect(mocks.can).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      'pharmacy:dispense',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+    expect(mocks.patient).not.toHaveBeenCalled();
+    expect(mocks.patients).not.toHaveBeenCalled();
   });
 
   it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
