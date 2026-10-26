@@ -484,6 +484,7 @@ test('commit validates reviewed prices against the current organization currency
     menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' }),
     { reason: 'CURRENCY_MISMATCH' }
   );
+  assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'createProduct'));
 });
 
 test('commit rejects an extracted price when the organization currency changed after upload', async () => {
