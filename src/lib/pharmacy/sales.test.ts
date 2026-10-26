@@ -167,10 +167,10 @@ describe('POS sale voiding', () => {
 });
 
 describe('POS-03 lot-derived pack/strip/unit pricing', () => {
-  it('persists a two-lot FEFO line at the allocation-weighted price', async () => {
+  it('persists a two-lot FEFO line at the allocation-weighted price without rounding up', async () => {
     allocateForSaleMock.mockResolvedValueOnce({
       allocations: [
-        { inventoryLotId: 'lot-a', stockLocationId: 'shelf-a', units: 1 },
+        { inventoryLotId: 'lot-a', stockLocationId: 'shelf-a', units: 2 },
         { inventoryLotId: 'lot-b', stockLocationId: 'shelf-b', units: 1 },
       ],
       movementIds: ['movement-a', 'movement-b'],
@@ -228,18 +228,19 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
       presentationId: 'presentation-a',
       packLevelId: 'unit',
       saleUnit: 'PACK',
-      quantity: 2,
+      quantity: 3,
       canonicalUnitsPerSaleUnit: 1,
       idempotencyKey: 'line-a',
     });
 
     expect(persistedLine).toMatchObject({
-      canonicalUnits: 2,
-      quantity: 2,
-      unitPriceMinor: 150,
-      proRataCeilingMinor: 150,
+      canonicalUnits: 3,
+      quantity: 3,
+      unitPriceMinor: 133,
+      proRataCeilingMinor: 133,
     });
-    expect(line.unitPriceMinor * line.quantity).toBe(300);
+    expect(line.unitPriceMinor * line.quantity).toBe(399);
+    expect(line.unitPriceMinor * line.quantity).toBeLessThanOrEqual(100 * 2 + 200);
   });
 
   it('weights a split line by each allocated lot instead of charging the highest MRP', () => {
