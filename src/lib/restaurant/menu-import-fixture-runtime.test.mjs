@@ -172,6 +172,7 @@ function setup(node = 'test', selected = 'FIXTURE') {
       findMany: async () => lines,
       findUnique: async () => ({
         id: 'line_1',
+        importId: 'imp_1',
         extractedProductName: 'Synthetic item',
         extractedPriceAmount: null,
         extractedVariants: [],
@@ -336,6 +337,7 @@ test('accepting extracted variants requires and persists explicit human review',
   f.record.status = 'AWAITING_REVIEW';
   f.db.restaurantMenuImportLine.findUnique = async () => ({
     id: 'line_1',
+    importId: 'imp_1',
     extractedProductName: 'Synthetic item',
     extractedPriceAmount: new (class {
       toString() { return '10.00'; }
@@ -364,6 +366,30 @@ test('accepting extracted variants requires and persists explicit human review',
     JSON.stringify(review[1].reviewedVariants),
     JSON.stringify([{ name: 'Large', price: { amount: '15.00' } }])
   );
+});
+
+test('review rechecks import state after acquiring the commit lock', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  f.record.status = 'AWAITING_REVIEW';
+  f.db.$queryRaw = async () => {
+    // Model a commit that held the parent lock first and completed while this
+    // review was waiting. The post-lock read must observe its final state.
+    f.record.status = 'COMMITTED';
+    return [];
+  };
+
+  await assert.rejects(
+    menu.reviewMenuImportLine(f.db, {
+      lineId: 'line_1',
+      decision: 'ACCEPTED',
+      reviewedById: 'user_1',
+      priceAmount: '12.50',
+    }),
+    { reason: 'INVALID_STATE' }
+  );
+  assert.ok(f.events.includes('transaction'));
+  assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'review'));
 });
 
 for (const node of ['test', 'development', 'production']) {

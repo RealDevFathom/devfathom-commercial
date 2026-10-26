@@ -596,171 +596,185 @@ export async function reviewMenuImportLine(
     throw new MenuImportError('A review decision needs a reviewer.', 'INVALID');
   }
 
-  const line = await db.restaurantMenuImportLine.findUnique({
-    where: { id: input.lineId },
-    select: {
-      id: true,
-      importId: true,
-      extractedProductName: true,
-      extractedPriceAmount: true,
-      extractedVariants: true,
-      import: { select: { status: true } },
-    },
-  });
-  if (!line) {
-    throw new MenuImportError('The import line does not exist.', 'NOT_FOUND');
-  }
-  if (line.import.status !== 'AWAITING_REVIEW') {
-    throw new MenuImportError(
-      `An import in ${line.import.status} is not open for review.`,
-      'INVALID_STATE'
-    );
-  }
-
-  const productName = trimmedOrNull(input.productName, 200);
-  const categoryName = trimmedOrNull(input.categoryName, 200);
-  const description = trimmedOrNull(input.description, 2_000);
-  const note = trimmedOrNull(input.note, 1_000);
-  const currency = trimmedOrNull(input.currency, 3)?.toUpperCase();
-
-  let priceAmount: Prisma.Decimal | null | undefined;
-  if (input.priceAmount !== undefined) {
-    if (input.priceAmount === null || input.priceAmount.trim() === '') {
-      priceAmount = null;
-    } else {
-      if (!/^\d{1,10}(\.\d{1,2})?$/.test(input.priceAmount.trim())) {
-        throw new MenuImportError('The price must be a positive decimal amount.', 'INVALID');
-      }
-      priceAmount = new Prisma.Decimal(input.priceAmount.trim());
+  return runImportTransaction(db, async (tx) => {
+    // Review and commit serialize on the same parent row. Looking up the parent
+    // inside this transaction is safe: after the lock wait we re-read the line
+    // and import status before writing any approval evidence.
+    const located = await tx.restaurantMenuImportLine.findUnique({
+      where: { id: input.lineId },
+      select: { importId: true },
+    });
+    if (!located) {
+      throw new MenuImportError('The import line does not exist.', 'NOT_FOUND');
     }
-  }
+    await tx.$queryRaw`SELECT "id" FROM "restaurant_menu_imports" WHERE "id" = ${located.importId} FOR UPDATE`;
 
-  let reviewedVariants: Prisma.InputJsonValue | undefined;
-  if (input.variants !== undefined) {
-    const variants = input.variants.map((variant) => {
-      const name = variant.name.trim().slice(0, 200);
-      if (!name) {
-        throw new MenuImportError('Every variant needs a name.', 'INVALID');
+    const line = await tx.restaurantMenuImportLine.findUnique({
+      where: { id: input.lineId },
+      select: {
+        id: true,
+        importId: true,
+        extractedProductName: true,
+        extractedPriceAmount: true,
+        extractedVariants: true,
+        import: { select: { status: true } },
+      },
+    });
+    if (!line) {
+      throw new MenuImportError('The import line does not exist.', 'NOT_FOUND');
+    }
+    if (line.import.status !== 'AWAITING_REVIEW') {
+      throw new MenuImportError(
+        `An import in ${line.import.status} is not open for review.`,
+        'INVALID_STATE'
+      );
+    }
+
+    const productName = trimmedOrNull(input.productName, 200);
+    const categoryName = trimmedOrNull(input.categoryName, 200);
+    const description = trimmedOrNull(input.description, 2_000);
+    const note = trimmedOrNull(input.note, 1_000);
+    const currency = trimmedOrNull(input.currency, 3)?.toUpperCase();
+
+    let priceAmount: Prisma.Decimal | null | undefined;
+    if (input.priceAmount !== undefined) {
+      if (input.priceAmount === null || input.priceAmount.trim() === '') {
+        priceAmount = null;
+      } else {
+        if (!/^\d{1,10}(\.\d{1,2})?$/.test(input.priceAmount.trim())) {
+          throw new MenuImportError('The price must be a positive decimal amount.', 'INVALID');
+        }
+        priceAmount = new Prisma.Decimal(input.priceAmount.trim());
       }
-      const amount = variant.priceAmount?.trim() || null;
-      if (amount !== null && !/^\d{1,10}(\.\d{1,2})?$/.test(amount)) {
+    }
+
+    let reviewedVariants: Prisma.InputJsonValue | undefined;
+    if (input.variants !== undefined) {
+      const variants = input.variants.map((variant) => {
+        const name = variant.name.trim().slice(0, 200);
+        if (!name) {
+          throw new MenuImportError('Every variant needs a name.', 'INVALID');
+        }
+        const amount = variant.priceAmount?.trim() || null;
+        if (amount !== null && !/^\d{1,10}(\.\d{1,2})?$/.test(amount)) {
+          throw new MenuImportError(
+            'Every variant price must be a positive decimal amount.',
+            'INVALID'
+          );
+        }
+        return { name, price: { amount } };
+      });
+      reviewedVariants = variants as Prisma.InputJsonValue;
+    }
+
+    if (input.decision === 'MERGED') {
+      const mergeProductId = input.mergeProductId?.trim();
+      if (!mergeProductId) {
         throw new MenuImportError(
-          'Every variant price must be a positive decimal amount.',
+          'Merging into an existing product needs a target product.',
           'INVALID'
         );
       }
-      return { name, price: { amount } };
-    });
-    reviewedVariants = variants as Prisma.InputJsonValue;
-  }
-
-  if (input.decision === 'MERGED') {
-    const mergeProductId = input.mergeProductId?.trim();
-    if (!mergeProductId) {
-      throw new MenuImportError(
-        'Merging into an existing product needs a target product.',
-        'INVALID'
-      );
-    }
-    // Resolved through the tenant-scoped client, so a target from another
-    // organization simply does not exist here (the composite FK is the floor
-    // under this, not the only check).
-    const product = await db.restaurantProduct.findUnique({
-      where: { id: mergeProductId },
-      select: { id: true },
-    });
-    if (!product) {
-      throw new MenuImportError(
-        'The merge target product does not exist.',
-        'MERGE_TARGET_NOT_FOUND'
-      );
-    }
-    const mergeVariantId = input.mergeVariantId?.trim() || null;
-    if (mergeVariantId) {
-      const variant = await db.restaurantProductVariant.findUnique({
-        where: { id: mergeVariantId },
-        select: { id: true, productId: true },
+      // Resolved through the tenant-scoped client, so a target from another
+      // organization simply does not exist here (the composite FK is the floor
+      // under this, not the only check).
+      const product = await tx.restaurantProduct.findUnique({
+        where: { id: mergeProductId },
+        select: { id: true },
       });
-      if (!variant || variant.productId !== mergeProductId) {
+      if (!product) {
         throw new MenuImportError(
-          'The merge target variant does not belong to the target product.',
+          'The merge target product does not exist.',
           'MERGE_TARGET_NOT_FOUND'
+        );
+      }
+      const mergeVariantId = input.mergeVariantId?.trim() || null;
+      if (mergeVariantId) {
+        const variant = await tx.restaurantProductVariant.findUnique({
+          where: { id: mergeVariantId },
+          select: { id: true, productId: true },
+        });
+        if (!variant || variant.productId !== mergeProductId) {
+          throw new MenuImportError(
+            'The merge target variant does not belong to the target product.',
+            'MERGE_TARGET_NOT_FOUND'
+          );
+        }
+      }
+
+      return tx.restaurantMenuImportLine.update({
+        where: { id: input.lineId },
+        data: {
+          reviewStatus: 'MERGED',
+          reviewedById: input.reviewedById,
+          reviewedAt: now,
+          mergeProductId,
+          mergeVariantId,
+          ...(categoryName !== undefined ? { reviewedCategoryName: categoryName } : {}),
+          ...(productName !== undefined ? { reviewedProductName: productName } : {}),
+          ...(description !== undefined ? { reviewedDescription: description } : {}),
+          ...(priceAmount !== undefined ? { reviewedPriceAmount: priceAmount } : {}),
+          ...(currency !== undefined ? { reviewedCurrency: currency } : {}),
+          ...(note !== undefined ? { reviewNote: note } : {}),
+        },
+      });
+    }
+
+    if (input.mergeProductId || input.mergeVariantId) {
+      throw new MenuImportError('A merge target only applies to a MERGED decision.', 'INVALID');
+    }
+
+    if (input.decision === 'ACCEPTED') {
+      // An accepted line must be importable on its own terms: a name to create the
+      // product under and a price to put on the draft version. This is where a
+      // blurred or price-less OCR row is forced back to a human rather than
+      // becoming a product with an invented price.
+      const effectiveName = productName ?? line.extractedProductName;
+      if (!effectiveName) {
+        throw new MenuImportError(
+          'Accepting a line needs a product name; supply one to correct the extraction.',
+          'INVALID'
+        );
+      }
+      const effectivePrice = priceAmount ?? line.extractedPriceAmount;
+      if (effectivePrice === null || effectivePrice === undefined) {
+        throw new MenuImportError(
+          'Accepting a line needs a price; the menu did not state one.',
+          'PRICE_REQUIRED'
+        );
+      }
+      const extractedVariants = resolveVariants(line.extractedVariants);
+      if (extractedVariants.length > 0 && input.variants === undefined) {
+        throw new MenuImportError(
+          'Accepting a line with variants requires reviewing every variant name and price.',
+          'REVIEW_INCOMPLETE'
+        );
+      }
+      if (input.variants !== undefined && input.variants.length !== extractedVariants.length) {
+        throw new MenuImportError(
+          'Every extracted variant must be included in the review.',
+          'REVIEW_INCOMPLETE'
         );
       }
     }
 
-    return db.restaurantMenuImportLine.update({
+    return tx.restaurantMenuImportLine.update({
       where: { id: input.lineId },
       data: {
-        reviewStatus: 'MERGED',
+        reviewStatus: input.decision,
         reviewedById: input.reviewedById,
         reviewedAt: now,
-        mergeProductId,
-        mergeVariantId,
+        mergeProductId: null,
+        mergeVariantId: null,
         ...(categoryName !== undefined ? { reviewedCategoryName: categoryName } : {}),
         ...(productName !== undefined ? { reviewedProductName: productName } : {}),
         ...(description !== undefined ? { reviewedDescription: description } : {}),
         ...(priceAmount !== undefined ? { reviewedPriceAmount: priceAmount } : {}),
         ...(currency !== undefined ? { reviewedCurrency: currency } : {}),
+        ...(reviewedVariants !== undefined ? { reviewedVariants } : {}),
         ...(note !== undefined ? { reviewNote: note } : {}),
       },
     });
-  }
-
-  if (input.mergeProductId || input.mergeVariantId) {
-    throw new MenuImportError('A merge target only applies to a MERGED decision.', 'INVALID');
-  }
-
-  if (input.decision === 'ACCEPTED') {
-    // An accepted line must be importable on its own terms: a name to create the
-    // product under and a price to put on the draft version. This is where a
-    // blurred or price-less OCR row is forced back to a human rather than
-    // becoming a product with an invented price.
-    const effectiveName = productName ?? line.extractedProductName;
-    if (!effectiveName) {
-      throw new MenuImportError(
-        'Accepting a line needs a product name; supply one to correct the extraction.',
-        'INVALID'
-      );
-    }
-    const effectivePrice = priceAmount ?? line.extractedPriceAmount;
-    if (effectivePrice === null || effectivePrice === undefined) {
-      throw new MenuImportError(
-        'Accepting a line needs a price; the menu did not state one.',
-        'PRICE_REQUIRED'
-      );
-    }
-    const extractedVariants = resolveVariants(line.extractedVariants);
-    if (extractedVariants.length > 0 && input.variants === undefined) {
-      throw new MenuImportError(
-        'Accepting a line with variants requires reviewing every variant name and price.',
-        'REVIEW_INCOMPLETE'
-      );
-    }
-    if (input.variants !== undefined && input.variants.length !== extractedVariants.length) {
-      throw new MenuImportError(
-        'Every extracted variant must be included in the review.',
-        'REVIEW_INCOMPLETE'
-      );
-    }
-  }
-
-  return db.restaurantMenuImportLine.update({
-    where: { id: input.lineId },
-    data: {
-      reviewStatus: input.decision,
-      reviewedById: input.reviewedById,
-      reviewedAt: now,
-      mergeProductId: null,
-      mergeVariantId: null,
-      ...(categoryName !== undefined ? { reviewedCategoryName: categoryName } : {}),
-      ...(productName !== undefined ? { reviewedProductName: productName } : {}),
-      ...(description !== undefined ? { reviewedDescription: description } : {}),
-      ...(priceAmount !== undefined ? { reviewedPriceAmount: priceAmount } : {}),
-      ...(currency !== undefined ? { reviewedCurrency: currency } : {}),
-      ...(reviewedVariants !== undefined ? { reviewedVariants } : {}),
-      ...(note !== undefined ? { reviewNote: note } : {}),
-    },
   });
 }
 
