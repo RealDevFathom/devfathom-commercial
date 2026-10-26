@@ -234,6 +234,7 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     expect([closeResult.status, openResult.status].sort()).toEqual(['fulfilled', 'rejected']);
     if (closeResult.status === 'rejected') {
       expect(closeResult.reason).toMatchObject({ reason: 'OPEN_DRAWER' });
+      expect(openResult).toMatchObject({ status: 'fulfilled', value: { replayed: false } });
     } else {
       expect(openResult).toMatchObject({
         status: 'rejected',
