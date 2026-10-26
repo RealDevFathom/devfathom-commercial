@@ -154,4 +154,22 @@ describe('SplitBillDialog', () => {
       })
     );
   });
+
+  it('resets assignments when refreshed order lines are reordered', () => {
+    const { rerender } = render(
+      <SplitBillDialog items={items} onSplit={vi.fn().mockResolvedValue(true)} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Split bill' }));
+    fireEvent.change(screen.getByLabelText('Guest bill for Burger, order line 1'), {
+      target: { value: '2' },
+    });
+
+    rerender(
+      <SplitBillDialog items={[items[1], items[0]]} onSplit={vi.fn().mockResolvedValue(true)} />
+    );
+
+    expect(screen.getByLabelText('Guest bill for Soup, order line 1')).toHaveValue('1');
+    expect(screen.getByLabelText('Guest bill for Burger, order line 2')).toHaveValue('2');
+  });
 });

@@ -37,7 +37,7 @@ function createAssignments(items: SplitBillDialogProps['items']) {
 }
 
 export function SplitBillDialog({ items, disabled = false, onSplit }: SplitBillDialogProps) {
-  const itemIdentity = JSON.stringify(items.map((item) => item.id).sort());
+  const itemIdentity = JSON.stringify(items.map((item) => item.id));
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<BillSplit['kind']>('BY_ITEM');
   const [assignments, setAssignments] = useState<Record<string, number>>(() =>
