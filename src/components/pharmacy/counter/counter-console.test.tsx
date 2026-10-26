@@ -331,6 +331,28 @@ describe('CounterWhatsAppOffer', () => {
     );
     expect(onSaved).toHaveBeenCalledOnce();
   });
+
+  it('keeps a committed consent change visible when the follow-up refresh fails', async () => {
+    mocks.mutations.setCustomerWhatsAppOptIn.mockResolvedValue({ whatsappOptIn: false });
+    const onError = vi.fn();
+    render(
+      <CounterWhatsAppOffer
+        branchId="branch-a"
+        customerId="customer-a"
+        initialOptIn={true}
+        onSaved={vi.fn().mockRejectedValue(new Error('refresh failed'))}
+        onError={onError}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'WhatsApp consent' }));
+
+    await waitFor(() =>
+      expect(screen.getByText('Current status: Opted out')).toBeInTheDocument()
+    );
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).not.toBeChecked();
+    expect(onError).not.toHaveBeenCalled();
+  });
 });
 
 describe('PharmacyCounterConsole authoritative bill state', () => {

@@ -106,15 +106,26 @@ export function CounterWhatsAppOffer({
   onError: (error: unknown) => void;
 }) {
   const setOptIn = trpc.pharmacySales.setCustomerWhatsAppOptIn.useMutation();
+  const [confirmedOverride, setConfirmedOverride] = useState<{
+    customerId: string;
+    previousValue: boolean | null;
+    value: boolean;
+  } | null>(null);
+  const displayedOptIn =
+    confirmedOverride?.customerId === customerId &&
+    confirmedOverride.previousValue === initialOptIn
+      ? confirmedOverride.value
+      : initialOptIn;
+
   return (
     <div className="flex items-center justify-between gap-3 rounded-[var(--radius-sm)] bg-surface-sunken p-3">
       <div>
         <Label htmlFor="counter-whatsapp-opt-in">WhatsApp consent</Label>
         <p className="text-xs text-text-muted">
           Current status:{' '}
-          {initialOptIn === true
+          {displayedOptIn === true
             ? 'Opted in'
-            : initialOptIn === false
+            : displayedOptIn === false
               ? 'Opted out'
               : 'Not recorded'}
         </p>
@@ -122,18 +133,27 @@ export function CounterWhatsAppOffer({
       <input
         id="counter-whatsapp-opt-in"
         type="checkbox"
-        checked={initialOptIn === true}
+        checked={displayedOptIn === true}
         disabled={setOptIn.isPending}
         onChange={async (event) => {
+          const optedIn = event.currentTarget.checked;
           try {
             await setOptIn.mutateAsync({
               branchId,
               customerId,
-              optedIn: event.currentTarget.checked,
+              optedIn,
             });
-            await onSaved();
           } catch (error) {
             onError(error);
+            return;
+          }
+
+          setConfirmedOverride({ customerId, previousValue: initialOptIn, value: optedIn });
+          try {
+            await onSaved();
+          } catch {
+            // The consent write has committed. Keep its confirmed state visible
+            // even when the follow-up query refresh is temporarily unavailable.
           }
         }}
         className="size-4 accent-[var(--color-accent)]"
