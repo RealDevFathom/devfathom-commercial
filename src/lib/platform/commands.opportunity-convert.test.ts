@@ -79,6 +79,25 @@ describe('crm.opportunity.convert', () => {
     mocks.auditCreate.mockResolvedValue({ id: 'failure_audit_1' });
   });
 
+  it('rejects a missing opportunity id before attempting to lock or provision', async () => {
+    await expect(
+      executePlatformCommand(
+        actor,
+        'crm.opportunity.convert',
+        { ...payload, opportunityId: undefined },
+        request
+      )
+    ).rejects.toMatchObject({
+      status: 400,
+      message: 'An opportunity is required for conversion.',
+    });
+
+    expect(mocks.lockOpportunity).not.toHaveBeenCalled();
+    expect(mocks.packageFindUnique).not.toHaveBeenCalled();
+    expect(mocks.organizationCreate).not.toHaveBeenCalled();
+    expect(mocks.jobCreate).not.toHaveBeenCalled();
+  });
+
   it('locks and rejects a nonexistent opportunity before provisioning anything', async () => {
     const error = await executePlatformCommand(
       actor,
