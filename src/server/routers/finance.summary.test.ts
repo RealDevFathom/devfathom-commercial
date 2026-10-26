@@ -78,7 +78,8 @@ describe('finance.getFinancialSummary', () => {
 
   it('reports only the unpaid balance of a partially paid invoice', async () => {
     mocks.invoiceFindMany.mockResolvedValue([
-      { total: 1_000, currency: 'USD', payments: [{ amount: 600 }] },
+      // Prisma Decimal values stringify this way at the router boundary.
+      { total: '1000.00', currency: 'USD', payments: [{ amount: '600.00' }] },
     ]);
 
     const summary = await caller().getFinancialSummary();
