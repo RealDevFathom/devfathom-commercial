@@ -10,6 +10,7 @@ import {
   prepareControlPlaneFixture,
   withAdminDatabase,
 } from './fixtures/platform-control-plane';
+import { assertKeyboardFocusWalk, focusThemes, useFocusTheme } from './helpers/focus-visible';
 
 test.describe.configure({ mode: 'serial' });
 test.use({ viewport: { width: 1440, height: 900 } });
@@ -30,6 +31,7 @@ const routes = [
   ['Audit ledger', '/platform/audit'],
   ['Platform settings', '/platform/settings'],
 ] as const;
+const affectedFocusRoutes = routes.slice(1);
 const navigationName = (label: string) =>
   new RegExp(`${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
 const sharedBaseUrl = process.env.PLAYWRIGHT_SHARED_BASE_URL;
@@ -37,6 +39,23 @@ const fixtureIdentity =
   /E2E Restaurant|e2e-restaurant-control-plane|restaurant-owner@e2e\.invalid|E2E Platform Operator|platform-operator@e2e\.invalid/i;
 
 test.beforeAll(async () => prepareControlPlaneFixture());
+
+test('all nine affected platform screens retain logical, visible keyboard focus in both themes', async ({
+  page,
+}, testInfo) => {
+  test.slow();
+  await loginPlatform(page);
+
+  for (const theme of focusThemes) {
+    for (const [, route] of affectedFocusRoutes) {
+      const response = await page.goto(route);
+      expect(response?.status(), route).toBe(200);
+      await expect(page.getByRole('main')).toBeVisible();
+      await useFocusTheme(page, theme);
+      await assertKeyboardFocusWalk(page, `${route}-${theme}`, testInfo);
+    }
+  }
+});
 
 test('full administrator can load every declared route and matching navigation', async ({
   page,
