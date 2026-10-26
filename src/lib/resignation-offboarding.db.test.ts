@@ -50,8 +50,20 @@ describeIfDatabase('resignation offboarding, against PostgreSQL', () => {
          ($1, $5, 'Due', $1 || '@test.invalid', 'EMPLOYEE', 'OPS', 'Staff', 'ACTIVE', 4, now()),
          ($2, $5, 'Future', $2 || '@test.invalid', 'EMPLOYEE', 'OPS', 'Staff', 'ACTIVE', 7, now()),
          ($3, $5, 'Pending', $3 || '@test.invalid', 'EMPLOYEE', 'OPS', 'Staff', 'ACTIVE', 9, now()),
-         ($4, $5, 'Cross tenant', $4 || '@test.invalid', 'EMPLOYEE', 'OPS', 'Staff', 'ACTIVE', 11, now())`,
-      [id('due'), id('future'), id('pending'), id('cross_tenant'), org('primary')]
+         ($4, $5, 'Cross tenant', $4 || '@test.invalid', 'EMPLOYEE', 'OPS', 'Staff', 'ACTIVE', 11, now()),
+         ($6, $5, 'Declined', $6 || '@test.invalid', 'EMPLOYEE', 'OPS', 'Staff', 'ACTIVE', 13, now()),
+         ($7, $5, 'Withdrawn', $7 || '@test.invalid', 'EMPLOYEE', 'OPS', 'Staff', 'ACTIVE', 15, now()),
+         ($8, $5, 'No confirmed day', $8 || '@test.invalid', 'EMPLOYEE', 'OPS', 'Staff', 'ACTIVE', 17, now())`,
+      [
+        id('due'),
+        id('future'),
+        id('pending'),
+        id('cross_tenant'),
+        org('primary'),
+        id('declined'),
+        id('withdrawn'),
+        id('null_day'),
+      ]
     );
     await client.query(
       `INSERT INTO resignations
@@ -60,7 +72,10 @@ describeIfDatabase('resignation offboarding, against PostgreSQL', () => {
          ($1, $9, $5, 'Due', $10, 'APPROVED', $10, now()),
          ($2, $9, $6, 'Future', $11, 'APPROVED', $11, now()),
          ($3, $9, $7, 'Pending', $10, 'PENDING', NULL, now()),
-         ($4, $12, $8, 'Wrong tenant', $10, 'APPROVED', $10, now())`,
+         ($4, $12, $8, 'Wrong tenant', $10, 'APPROVED', $10, now()),
+         ($13, $9, $14, 'Declined', $10, 'DECLINED', $10, now()),
+         ($15, $9, $16, 'Withdrawn', $10, 'WITHDRAWN', $10, now()),
+         ($17, $9, $18, 'No confirmed day', $10, 'APPROVED', NULL, now())`,
       [
         id('resignation_due'),
         id('resignation_future'),
@@ -74,6 +89,12 @@ describeIfDatabase('resignation offboarding, against PostgreSQL', () => {
         cutoff,
         new Date(cutoff.getTime() + 1),
         org('foreign'),
+        id('resignation_declined'),
+        id('declined'),
+        id('resignation_withdrawn'),
+        id('withdrawn'),
+        id('resignation_null_day'),
+        id('null_day'),
       ]
     );
 
@@ -101,9 +122,12 @@ describeIfDatabase('resignation offboarding, against PostgreSQL', () => {
     );
     expect(firstRun.rows).toEqual([
       { id: id('cross_tenant'), status: 'ACTIVE', tokenVersion: 11 },
+      { id: id('declined'), status: 'ACTIVE', tokenVersion: 13 },
       { id: id('due'), status: 'INACTIVE', tokenVersion: 5 },
       { id: id('future'), status: 'ACTIVE', tokenVersion: 7 },
+      { id: id('null_day'), status: 'ACTIVE', tokenVersion: 17 },
       { id: id('pending'), status: 'ACTIVE', tokenVersion: 9 },
+      { id: id('withdrawn'), status: 'ACTIVE', tokenVersion: 15 },
     ]);
 
     await expect(processDueResignationOffboarding(cutoff)).resolves.toEqual({ offboarded: 0 });
