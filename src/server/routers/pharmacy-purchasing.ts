@@ -408,6 +408,7 @@ const purchasingRouter = router({
         })
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       if (!(await ctx.db.pharmacySupplier.findFirst({ where: { id: input.supplierId } })))
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Supplier is outside this workspace.' });
       const { verified, ...licence } = input;
@@ -459,6 +460,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       try {
         for (const line of input.lines) {
           if (
@@ -491,6 +493,7 @@ const purchasingRouter = router({
   submitRequisition: protectedProcedure
     .input(z.object({ requisitionId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       try {
         const requisition = await ctx.db.pharmacyRequisition.findFirst({
           where: { id: input.requisitionId },
@@ -547,6 +550,7 @@ const purchasingRouter = router({
         })
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       try {
         if (!(await ctx.db.pharmacySupplier.findFirst({ where: { id: input.supplierId } })))
           throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
@@ -719,6 +723,7 @@ const purchasingRouter = router({
   submitPurchaseOrder: protectedProcedure
     .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       try {
         const order = await ctx.db.pharmacyPurchaseOrder.findFirst({
           where: { id: input.purchaseOrderId },
@@ -808,6 +813,7 @@ const purchasingRouter = router({
   sendPurchaseOrder: protectedProcedure
     .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       try {
         const order = await ctx.db.pharmacyPurchaseOrder.findFirst({
           where: { id: input.purchaseOrderId },
@@ -1202,6 +1208,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
         return await ctx.db.$transaction((tx) =>
@@ -1248,6 +1255,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       try {
         return await resolveReceivingException(ctx.db, receivingScope(ctx, input.branchId), {
           receivingExceptionId: input.receivingExceptionId,
@@ -1292,6 +1300,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
         return await ctx.db.$transaction((tx) =>
@@ -1312,6 +1321,7 @@ const purchasingRouter = router({
   submitPurchaseReturn: auditedProtectedProcedure
     .input(z.object({ branchId, purchaseReturnId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
         return await ctx.db.$transaction((tx) =>
@@ -1337,6 +1347,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
         return await ctx.db.$transaction((tx) =>
@@ -1362,6 +1373,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
         return await issueDebitNote(ctx.db, scope, {
@@ -1387,6 +1399,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
         return await recordSupplierCredit(ctx.db, scope, {
@@ -1412,6 +1425,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
         return await ctx.db.$transaction((tx) =>
@@ -1542,6 +1556,7 @@ const purchasingRouter = router({
   authenticatePack: auditedProtectedProcedure
     .input(z.object({ branchId, payload: z.string().max(512) }).strict())
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'receiving_pack_scan' };
       return authenticatePharmacyPack(ctx.db, {
@@ -1602,6 +1617,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       try {
         return await createCentralPurchaseOrder(
           ctx.db,
@@ -1638,6 +1654,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       try {
         return await ctx.db.$transaction((tx) =>
           allocateCentralReceipt(

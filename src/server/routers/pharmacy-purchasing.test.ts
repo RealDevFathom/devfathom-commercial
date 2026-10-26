@@ -112,6 +112,15 @@ const ORDER_LINE = {
   listPricePerPackMinor: 10_000,
 };
 
+const RETURN_LINE = {
+  inventoryLotId: 'lot_a',
+  stockLocationId: 'location_a',
+  quantityUnits: 1,
+  reason: 'Damaged pack',
+  returnWindowEndsAt: FUTURE,
+  expectedCreditMinor: 100,
+};
+
 beforeEach(() => {
   db = makeDb();
   mocks.can.mockReset().mockResolvedValue(true);
@@ -132,11 +141,60 @@ describe('procurement write authorization', () => {
       act: () => caller('counter_user').createSupplier({ name: 'Unapproved supplier' }),
     },
     {
+      procedure: 'recordSupplierLicence',
+      act: () =>
+        caller('counter_user').recordSupplierLicence({
+          supplierId: 'supplier_a',
+          licenceType: 'wholesale',
+          licenceNumber: 'LIC-1',
+          issuingAuthority: 'Regulator',
+          issuedAt: PAST,
+          expiresAt: FUTURE,
+          verified: true,
+        }),
+    },
+    {
       procedure: 'setSupplierAuthorization',
       act: () =>
         caller('counter_user').setSupplierAuthorization({
           supplierId: 'supplier_a',
           authorized: true,
+        }),
+    },
+    {
+      procedure: 'createRequisition',
+      act: () =>
+        caller('counter_user').createRequisition({
+          reference: 'REQ-NO-PERMISSION',
+          lines: [
+            {
+              medicineId: 'medicine_a',
+              packLevelId: 'pack_a',
+              quantityPacks: 1,
+              canonicalUnitsPerPack: 10,
+            },
+          ],
+        }),
+    },
+    {
+      procedure: 'submitRequisition',
+      act: () => caller('counter_user').submitRequisition({ requisitionId: 'req_a' }),
+    },
+    {
+      procedure: 'recordQuote',
+      act: () =>
+        caller('counter_user').recordQuote({
+          requisitionId: 'req_a',
+          supplierId: 'supplier_a',
+          quotedAt: PAST,
+          validUntil: FUTURE,
+          lines: [
+            {
+              requisitionLineId: 'req_line_a',
+              pricePerPackMinor: 100,
+              canonicalUnitsPerPack: 10,
+            },
+          ],
         }),
     },
     {
@@ -149,11 +207,160 @@ describe('procurement write authorization', () => {
         }),
     },
     {
+      procedure: 'submitPurchaseOrder',
+      act: () => caller('counter_user').submitPurchaseOrder({ purchaseOrderId: 'po_a' }),
+    },
+    {
       procedure: 'approvePurchaseOrder',
       act: () =>
         caller('counter_user').approvePurchaseOrder({
           purchaseOrderId: 'po_a',
           decision: 'APPROVED',
+        }),
+    },
+    {
+      procedure: 'sendPurchaseOrder',
+      act: () => caller('counter_user').sendPurchaseOrder({ purchaseOrderId: 'po_a' }),
+    },
+    {
+      procedure: 'createGoodsReceipt',
+      act: () =>
+        caller('counter_user').createGoodsReceipt({
+          reference: 'GRN-1',
+          branchId: 'branch_a',
+          supplierId: 'supplier_a',
+          supplierInvoiceRef: 'INV-1',
+          supplierInvoiceDate: PAST,
+          warrantyEvidenceRef: 'evidence-1',
+          receivedAt: PAST,
+          directPurchase: { reason: 'Urgent', approvedByUserId: 'approver_a' },
+          lines: [
+            {
+              medicineId: 'medicine_a',
+              packLevelId: 'pack_a',
+              batchNumber: 'batch-a',
+              printedExpiry: FUTURE,
+              expiryPrecision: 'DAY',
+              printedMrpMinor: 100,
+              canonicalUnitsPerPack: 10,
+              receivedPacks: 1,
+              invoicedPricePerPackMinor: 80,
+              stockLocationId: 'location_a',
+            },
+          ],
+        }),
+    },
+    {
+      procedure: 'postGoodsReceipt',
+      act: () =>
+        caller('counter_user').postGoodsReceipt({
+          branchId: 'branch_a',
+          goodsReceiptId: 'receipt_a',
+        }),
+    },
+    {
+      procedure: 'reverseGoodsReceipt',
+      act: () =>
+        caller('counter_user').reverseGoodsReceipt({
+          branchId: 'branch_a',
+          goodsReceiptId: 'receipt_a',
+          reason: 'Correction',
+        }),
+    },
+    {
+      procedure: 'resolveReceivingException',
+      act: () =>
+        caller('counter_user').resolveReceivingException({
+          branchId: 'branch_a',
+          receivingExceptionId: 'exception_a',
+          resolutionNote: 'Reviewed',
+        }),
+    },
+    {
+      procedure: 'createPurchaseReturn',
+      act: () =>
+        caller('counter_user').createPurchaseReturn({
+          branchId: 'branch_a',
+          supplierId: 'supplier_a',
+          kind: 'PURCHASE_RETURN',
+          reference: 'RETURN-1',
+          lines: [RETURN_LINE],
+        }),
+    },
+    {
+      procedure: 'submitPurchaseReturn',
+      act: () =>
+        caller('counter_user').submitPurchaseReturn({
+          branchId: 'branch_a',
+          purchaseReturnId: 'return_a',
+        }),
+    },
+    {
+      procedure: 'dispatchPurchaseReturn',
+      act: () =>
+        caller('counter_user').dispatchPurchaseReturn({
+          branchId: 'branch_a',
+          purchaseReturnId: 'return_a',
+          idempotencyKey: 'dispatch-1',
+        }),
+    },
+    {
+      procedure: 'issueDebitNote',
+      act: () =>
+        caller('counter_user').issueDebitNote({
+          branchId: 'branch_a',
+          purchaseReturnId: 'return_a',
+          reference: 'DN-1',
+        }),
+    },
+    {
+      procedure: 'recordSupplierCredit',
+      act: () =>
+        caller('counter_user').recordSupplierCredit({
+          branchId: 'branch_a',
+          supplierId: 'supplier_a',
+          reference: 'CREDIT-1',
+          amountMinor: 100,
+          receivedAt: PAST,
+        }),
+    },
+    {
+      procedure: 'allocateSupplierCredit',
+      act: () =>
+        caller('counter_user').allocateSupplierCredit({
+          branchId: 'branch_a',
+          supplierCreditId: 'credit_a',
+          debitNoteId: 'debit_a',
+          amountMinor: 100,
+        }),
+    },
+    {
+      procedure: 'authenticatePack',
+      act: () => caller('counter_user').authenticatePack({ branchId: 'branch_a', payload: 'scan' }),
+    },
+    {
+      procedure: 'createCentralPurchaseOrder',
+      act: () =>
+        caller('counter_user').createCentralPurchaseOrder({
+          reference: 'CENTRAL-PO-1',
+          supplierId: 'supplier_a',
+          receivingBranchId: 'branch_a',
+          lines: [ORDER_LINE],
+        }),
+    },
+    {
+      procedure: 'allocateCentralReceipt',
+      act: () =>
+        caller('counter_user').allocateCentralReceipt({
+          goodsReceiptId: 'receipt_a',
+          allocations: [
+            {
+              goodsReceiptLineId: 'receipt_line_a',
+              destinationBranchId: 'branch_a',
+              destinationStockLocationId: 'location_a',
+              quantityUnits: 1,
+            },
+          ],
         }),
     },
   ])(
