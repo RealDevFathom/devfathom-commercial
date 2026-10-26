@@ -19,6 +19,8 @@ import {
   getRecipeVersion,
   listRecipeVersions,
   updateRecipeVersion,
+  updateIngredient,
+  updateRecipeLine,
   upsertConversion,
 } from './recipes';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -118,6 +120,16 @@ describe('deleteUnit', () => {
 // ── Conversion cycle guard ────────────────────────────────────────────────────
 
 describe('upsertConversion', () => {
+  it.each(['0', '-1', 'NaN', 'Infinity', 'not-a-number'])(
+    'rejects a nonpositive or non-finite factor %s',
+    async (factor) => {
+      await expect(upsertConversion(scoped(), 'A', 'B', factor)).rejects.toMatchObject({
+        reason: 'INVALID',
+      });
+      expect(db.restaurantUnitConversion.upsert).not.toHaveBeenCalled();
+    }
+  );
+
   it('rejects self-conversion', async () => {
     db.restaurantUnit.findUnique.mockResolvedValue({ id: 'u1' });
     await expect(upsertConversion(scoped(), 'u1', 'u1', '1')).rejects.toMatchObject({
@@ -197,6 +209,24 @@ describe('deleteAllergen', () => {
 // ── Ingredients ───────────────────────────────────────────────────────────────
 
 describe('createIngredient', () => {
+  it('rejects a negative reference cost but permits zero', async () => {
+    db.restaurantUnit.findUnique.mockResolvedValue({ id: 'u1' });
+    await expect(
+      createIngredient(scoped(), { name: 'Flour', baseUnitId: 'u1', referenceCost: '-0.01' })
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+
+    await createIngredient(scoped(), { name: 'Water', baseUnitId: 'u1', referenceCost: '0' });
+    expect(db.restaurantIngredient.create.mock.calls[0][0].data.referenceCost.toString()).toBe('0');
+  });
+
+  it('rejects a negative reference cost on update', async () => {
+    db.restaurantIngredient.findUnique.mockResolvedValue({ id: 'i1' });
+    await expect(updateIngredient(scoped(), 'i1', { referenceCost: '-1' })).rejects.toMatchObject({
+      reason: 'INVALID',
+    });
+    expect(db.restaurantIngredient.update).not.toHaveBeenCalled();
+  });
+
   it('creates with referenceCost as Decimal (C4)', async () => {
     db.restaurantUnit.findUnique.mockResolvedValue({ id: 'u1' });
     await createIngredient(scoped(), { name: 'Flour', baseUnitId: 'u1', referenceCost: '1.25' });
@@ -259,6 +289,13 @@ describe('createRecipe', () => {
 // ── Recipe version lifecycle (C3) ─────────────────────────────────────────────
 
 describe('createRecipeVersion', () => {
+  it.each(['0', '-2', 'NaN'])('rejects an invalid yield quantity %s', async (yieldQuantity) => {
+    await expect(
+      createRecipeVersion(scoped(), { recipeId: 'r1', yieldQuantity })
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+    expect(db.restaurantRecipeVersion.create).not.toHaveBeenCalled();
+  });
+
   it('assigns versionNumber = 1 for first version', async () => {
     db.restaurantRecipe.findUnique.mockResolvedValue({ id: 'r1' });
     db.restaurantUnit.findUnique.mockResolvedValue({ id: 'u1' });
@@ -281,6 +318,20 @@ describe('createRecipeVersion', () => {
 });
 
 describe('updateRecipeVersion — C3 immutability', () => {
+  it('rejects a nonpositive yield quantity on a draft', async () => {
+    db.restaurantRecipeVersion.findUnique.mockResolvedValue({
+      id: 'v1',
+      status: 'DRAFT',
+      recipeId: 'r1',
+    });
+    await expect(updateRecipeVersion(scoped(), 'v1', { yieldQuantity: '0' })).rejects.toMatchObject(
+      {
+        reason: 'INVALID',
+      }
+    );
+    expect(db.restaurantRecipeVersion.update).not.toHaveBeenCalled();
+  });
+
   it('allows editing DRAFT version', async () => {
     db.restaurantRecipeVersion.findUnique.mockResolvedValue({
       id: 'v1',
@@ -399,6 +450,34 @@ describe('listRecipeVersions', () => {
 // ── Recipe-line cycle detection ───────────────────────────────────────────────
 
 describe('createRecipeLine — recipe cycle detection', () => {
+  it.each(['0', '-1', 'Infinity'])(
+    'rejects an invalid BOM quantity %s before writing',
+    async (quantity) => {
+      await expect(
+        createRecipeLine(scoped(), {
+          recipeVersionId: 'v1',
+          ingredientId: 'i1',
+          quantity,
+          unitId: 'u1',
+        })
+      ).rejects.toMatchObject({ reason: 'INVALID' });
+      expect(db.restaurantRecipeLine.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects a nonpositive BOM quantity on update', async () => {
+    db.restaurantRecipeLine.findUnique.mockResolvedValue({ id: 'line1', recipeVersionId: 'v1' });
+    db.restaurantRecipeVersion.findUnique.mockResolvedValue({
+      id: 'v1',
+      status: 'DRAFT',
+      recipeId: 'r1',
+    });
+    await expect(updateRecipeLine(scoped(), 'line1', { quantity: '0' })).rejects.toMatchObject({
+      reason: 'INVALID',
+    });
+    expect(db.restaurantRecipeLine.update).not.toHaveBeenCalled();
+  });
+
   it('rejects a direct self-referencing sub-recipe line', async () => {
     db.restaurantRecipeVersion.findUnique.mockResolvedValue({
       id: 'v1',
