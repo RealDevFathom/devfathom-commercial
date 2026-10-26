@@ -39,6 +39,25 @@ describe('login credential error accessibility', () => {
     vi.unstubAllGlobals();
   });
 
+  it('associates a server-rendered tenant sign-in failure with both credential fields', () => {
+    render(
+      <LoginForm
+        connections={[]}
+        ssoEnforced={false}
+        callbackUrl="/dashboard"
+        initialError="invalid"
+      />
+    );
+
+    const alert = screen.getByRole('alert');
+    expectCredentialError(
+      screen.getByLabelText('Email'),
+      screen.getByLabelText('Password'),
+      alert,
+      'login-sign-in-error'
+    );
+  });
+
   it('associates a tenant sign-in failure with both fields until either field is edited', async () => {
     mocks.signIn.mockResolvedValue({ error: 'CredentialsSignin', code: 'credentials' });
     render(<LoginForm connections={[]} ssoEnforced={false} callbackUrl="/dashboard" />);
