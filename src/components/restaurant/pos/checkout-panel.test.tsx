@@ -71,10 +71,10 @@ describe('CheckoutPanel', () => {
 
   it('prefers the receipt number over the split kind label', async () => {
     const request: TerminalRequest = async <T,>() =>
-      ({ ...billed, bills: [{ ...billed.bills[0], receiptNumber: 'R-100' }] }) as T;
+      ({ ...billed, bills: [{ ...billed.bills[0], receiptNumber: 100 }] }) as T;
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
-    expect(await screen.findByText('Receipt R-100')).toBeVisible();
+    expect(await screen.findByText('Receipt 100')).toBeVisible();
     expect(screen.queryByText('Single bill')).not.toBeInTheDocument();
   });
 
