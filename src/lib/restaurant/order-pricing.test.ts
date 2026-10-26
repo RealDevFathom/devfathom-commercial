@@ -391,10 +391,14 @@ describe('resolveModifierSnapshots', () => {
     const db = makeDb({
       productGroups: { prod_1: [{ id: 'grp_required', name: 'Cooking', minSelect: 1 }] },
     });
+    const optionLookup = vi.spyOn(db.restaurantModifierOption, 'findMany');
+    const attachmentLookup = vi.spyOn(db.restaurantProductModifierGroup, 'findMany');
 
     await expect(resolveModifierSnapshots(db, 'prod_1', [])).rejects.toMatchObject({
       reason: 'MODIFIER_SELECTION_COUNT',
     });
+    expect(optionLookup).not.toHaveBeenCalled();
+    expect(attachmentLookup).toHaveBeenCalledOnce();
   });
 
   it('rejects omitting a required group when another attached group is selected', async () => {
