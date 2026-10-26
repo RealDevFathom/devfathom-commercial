@@ -1399,9 +1399,15 @@ export async function readWastageReport(db: ScopedDb, range: RestaurantStockRepo
     `),
     db.$queryRaw<WastageDayRow[]>(Prisma.sql`
       ${valuedWastageCte(range)}
-      SELECT TO_CHAR("occurredAt" AT TIME ZONE "branchTimezone", 'YYYY-MM-DD') AS "day", ${wastageAggregateSelect()}
+      SELECT TO_CHAR(
+        ("occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE "branchTimezone",
+        'YYYY-MM-DD'
+      ) AS "day", ${wastageAggregateSelect()}
       FROM valued_wastage
-      GROUP BY TO_CHAR("occurredAt" AT TIME ZONE "branchTimezone", 'YYYY-MM-DD')
+      GROUP BY TO_CHAR(
+        ("occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE "branchTimezone",
+        'YYYY-MM-DD'
+      )
       ORDER BY "day" ASC
     `),
     readWastageIngredientRows(db, range, MAX_INTERACTIVE_ROWS),
@@ -1650,7 +1656,10 @@ async function readWastageExportRows(db: ScopedDb, range: RestaurantStockReportR
     ${valuedWastageCte(range)}
     SELECT
       "id",
-      TO_CHAR("occurredAt" AT TIME ZONE "branchTimezone", 'YYYY-MM-DD') AS "day",
+      TO_CHAR(
+        ("occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE "branchTimezone",
+        'YYYY-MM-DD'
+      ) AS "day",
       "branchName",
       "locationName",
       "ingredientName",

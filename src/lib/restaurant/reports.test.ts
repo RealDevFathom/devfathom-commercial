@@ -661,7 +661,11 @@ describe('restaurant wastage and stock movement reports', () => {
       expect(sql).toContain('movement."occurredAt" <');
       expect(sql).toContain('AT TIME ZONE branch."timezone"');
     }
-    expect(queries.some((sql) => sql.includes('AT TIME ZONE "branchTimezone"'))).toBe(true);
+    expect(
+      queries.some((sql) =>
+        sql.includes(`("occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE "branchTimezone"`)
+      )
+    ).toBe(true);
     expect(
       rawQueries.every(
         (query) => query.values.includes('2026-01-01') && query.values.includes('2026-01-31')
@@ -883,9 +887,9 @@ describe('restaurant wastage and stock movement reports', () => {
     expect(exported.content).toContain('REFERENCE,true');
     expect(exported.content.split('\n')).toHaveLength(5_001);
     expect(exported.truncated).toBe(true);
-    expect(queryText((db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0]?.[0])).toContain(
-      'movement."locationId" ='
-    );
+    const sql = queryText((db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
+    expect(sql).toContain('movement."locationId" =');
+    expect(sql).toContain(`("occurredAt" AT TIME ZONE 'UTC') AT TIME ZONE "branchTimezone"`);
   });
 });
 
