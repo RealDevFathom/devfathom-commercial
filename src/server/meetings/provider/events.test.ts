@@ -137,6 +137,20 @@ describe('provider event ingestion', () => {
     );
   });
 
+  it('backfills participant attribution when a join follows an earlier leave', async () => {
+    await recordAndApplyProviderEvent(occurrence, joined);
+
+    const statement = executeRaw.mock.calls[0][0];
+    const sql = statement.strings.join('');
+    expect(sql).toContain('ON CONFLICT');
+    expect(sql).toContain(
+      '"occurrenceParticipantId" = COALESCE("meeting_participant_sessions"."occurrenceParticipantId", EXCLUDED."occurrenceParticipantId")'
+    );
+    expect(sql).toContain(
+      '"userId" = COALESCE("meeting_participant_sessions"."userId", EXCLUDED."userId")'
+    );
+  });
+
   it('rolls back instead of marking an event processed when applying its effect fails', async () => {
     executeRaw.mockRejectedValue(new Error('database write failed'));
     await expect(recordAndApplyProviderEvent(occurrence, joined)).rejects.toThrow(
