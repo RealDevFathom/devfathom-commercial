@@ -18,7 +18,11 @@ describe('platform audit actor relation migration', () => {
     );
     expect(migration).toContain('REFERENCES "platform_users"("id")');
     expect(migration).toContain('CONSTRAINT "platform_audit_logs_actorTenantUserId_fkey"');
-    expect(migration).toContain('REFERENCES "users"("id")');
+    expect(migration).toContain('FOREIGN KEY ("organizationId", "actorTenantUserId")');
+    expect(migration).toContain('REFERENCES "users"("organizationId", "id")');
+    expect(migration).toContain(
+      'CHECK ("actorTenantUserId" IS NULL OR "organizationId" IS NOT NULL) NOT VALID'
+    );
     expect(migration.match(/ON DELETE RESTRICT ON UPDATE CASCADE NOT VALID/g)).toHaveLength(2);
   });
 });
