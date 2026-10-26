@@ -541,6 +541,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     async ({ label, quantityUnits, breakPackFirst }) => {
       const fixture = await scenario(ORG_A, BRANCH_A, `transfer-${label}-arrangement`);
       const destinationBranch = `${BRANCH_A}_${label}_destination`;
+      const dispatchKey = tag(`${label}-dispatch`);
       const result = await inOrg(ORG_A, async (db) => {
         await ensureBranch(db, ORG_A, destinationBranch);
         const destination = await db.pharmacyStockLocation.create({
@@ -582,20 +583,43 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
           { ...scopeOf(fixture), actorId: `${label}_approver` },
           transfer.id
         );
-        await deps.operations.dispatchTransfer(db, scopeOf(fixture), transfer.id, tag(label));
-        return db.pharmacyStockBalance.findMany({ where: { inventoryLotId: lot.id } });
+        await deps.operations.dispatchTransfer(db, scopeOf(fixture), transfer.id, dispatchKey);
+        return {
+          balances: await db.pharmacyStockBalance.findMany({ where: { inventoryLotId: lot.id } }),
+          dispatchMovements: await db.pharmacyStockMovement.findMany({
+            where: { inventoryLotId: lot.id, idempotencyKey: { startsWith: dispatchKey } },
+            orderBy: { idempotencyKey: 'asc' },
+          }),
+        };
       });
 
-      expect(result.find((row) => row.disposition === 'IN_TRANSIT')).toMatchObject({
+      expect(result.balances.find((row) => row.disposition === 'IN_TRANSIT')).toMatchObject({
         onHandUnits: quantityUnits,
         sealedPacks: 0,
         looseUnits: quantityUnits,
       });
-      expect(result.find((row) => row.disposition === 'AVAILABLE')).toMatchObject({
+      expect(result.balances.find((row) => row.disposition === 'AVAILABLE')).toMatchObject({
         onHandUnits: 10 - quantityUnits,
         sealedPacks: 0,
         looseUnits: 10 - quantityUnits,
       });
+      expect(result.dispatchMovements.map((movement) => movement.kind)).toEqual(
+        label === 'sealed'
+          ? ['BREAK_PACK', 'TRANSFER_OUT', 'TRANSFER_IN']
+          : ['TRANSFER_OUT', 'TRANSFER_IN']
+      );
+      expect(result.dispatchMovements.slice(-2)).toEqual([
+        expect.objectContaining({
+          kind: 'TRANSFER_OUT',
+          sealedPackDelta: 0,
+          looseUnitDelta: -quantityUnits,
+        }),
+        expect.objectContaining({
+          kind: 'TRANSFER_IN',
+          sealedPackDelta: 0,
+          looseUnitDelta: quantityUnits,
+        }),
+      ]);
     }
   );
 
