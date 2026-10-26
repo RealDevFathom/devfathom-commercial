@@ -372,7 +372,10 @@ async function requireCounterReceiptAccess(
 
   if (
     requireCanonicalCounter &&
-    !(await can(subjectFromSession(user), 'pharmacy:counter', undefined, { db }))
+    !(await can(subjectFromSession(user), 'pharmacy:counter', undefined, {
+      db,
+      organizationId: scope.organizationId,
+    }))
   ) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -461,6 +464,49 @@ async function requireCounterReceiptAccess(
     return scope;
   }
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+}
+
+/**
+ * Stabilize every row that can revoke counter authority for the rest of the
+ * transaction. The order is deliberate (member, role, grants, assignment) so
+ * concurrent authorization changes cannot deadlock by taking these locks in a
+ * different order. PostgreSQL holds the locks until the money/stock transaction
+ * commits; an administrator's revocation therefore wins before a later action,
+ * or waits until an already-authorized action has committed.
+ */
+async function lockCounterReceiptAuthorization(
+  db: ScopedDb,
+  organizationId: string,
+  userId: string,
+  branch: string
+): Promise<void> {
+  await db.$queryRaw(Prisma.sql`
+    SELECT id FROM users
+    WHERE "organizationId"=${organizationId} AND id=${userId}
+    FOR UPDATE
+  `);
+  await db.$queryRaw(Prisma.sql`
+    SELECT r.id FROM organization_roles r
+    JOIN users u ON u."organizationRoleId"=r.id
+    WHERE u."organizationId"=${organizationId} AND u.id=${userId}
+    FOR UPDATE OF r
+  `);
+  await db.$queryRaw(Prisma.sql`
+    SELECT p.id FROM organization_role_permissions p
+    JOIN users u ON u."organizationRoleId"=p."organizationRoleId"
+    WHERE u."organizationId"=${organizationId} AND u.id=${userId}
+    ORDER BY p.id FOR SHARE OF p
+  `);
+  await db.$queryRaw(Prisma.sql`
+    SELECT id FROM user_permission_overrides
+    WHERE "organizationId"=${organizationId} AND "userId"=${userId}
+    ORDER BY id FOR SHARE
+  `);
+  await db.$queryRaw(Prisma.sql`
+    SELECT id FROM pharmacy_branch_assignments
+    WHERE "organizationId"=${organizationId} AND "userId"=${userId} AND "branchId"=${branch}
+    FOR UPDATE
+  `);
 }
 
 const closeDate = z
@@ -856,8 +902,13 @@ export const pharmacySalesRouter = router({
         await requireCounterReceiptAccess(ctx, input.branchId, true, true);
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          // Re-read authorization on the transaction client immediately before
-          // moving money so a revocation cannot be missed between admission and use.
+          await lockCounterReceiptAuthorization(
+            db,
+            ctx.entitlements!.organizationId,
+            ctx.session!.user.id,
+            input.branchId
+          );
+          // Re-read while the authorization rows remain locked through commit.
           const scope = await requireCounterReceiptAccess(ctx, input.branchId, true, true, db);
           const tender = await db.pharmacyTender.findFirst({
             where: {
@@ -1394,8 +1445,13 @@ export const pharmacySalesRouter = router({
         return await ctx.db.$transaction(async (tx) => {
           try {
             const db = txDb(tx);
-            // Re-read authorization on the transaction client immediately before
-            // moving stock so a revocation cannot be missed between admission and use.
+            await lockCounterReceiptAuthorization(
+              db,
+              ctx.entitlements!.organizationId,
+              ctx.session!.user.id,
+              input.branchId
+            );
+            // Re-read while the authorization rows remain locked through commit.
             const scope = await requireCounterReceiptAccess(ctx, input.branchId, true, true, db);
             return await returnSaleLine(db, scope, input);
           } catch (error) {

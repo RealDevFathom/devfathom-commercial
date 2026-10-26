@@ -24,16 +24,19 @@ export type CanOptions = {
   source?: Environment['source'];
   ip?: string | null;
   db?: AuthzDb;
+  /** Tenant expected to own the subject. Security-sensitive callers should always supply it. */
+  organizationId?: string;
 };
 
 async function customDecision(
   db: AuthzDb,
   userId: string,
+  organizationId: string | undefined,
   action: string,
   now: Date
 ): Promise<boolean | null> {
   const user = await db.user.findUnique({
-    where: { id: userId },
+    where: organizationId ? { organizationId_id: { organizationId, id: userId } } : { id: userId },
     select: {
       organizationRole: {
         select: { permissions: { select: { capability: true, effect: true } } },
@@ -74,7 +77,7 @@ export async function can(
     return false;
   }
   try {
-    const decision = await customDecision(db, subject.id, action, env.now);
+    const decision = await customDecision(db, subject.id, opts.organizationId, action, env.now);
     if (decision !== null) return decision;
   } catch (err) {
     console.error(`[abac] custom permission lookup for "${action}" threw:`, err);

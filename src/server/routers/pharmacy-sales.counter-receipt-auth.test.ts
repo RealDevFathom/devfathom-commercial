@@ -132,6 +132,7 @@ function fixture(
     },
     pharmacyTender: { findFirst: vi.fn(async () => ({ type: 'CASH' })) },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
+    $queryRaw: vi.fn(async () => []),
     $transaction: vi.fn(),
   };
   db.$transaction.mockImplementation(async (fn: (inner: typeof db) => Promise<unknown>) => fn(db));
@@ -327,6 +328,9 @@ describe('counter receipt authorization', () => {
         expect.objectContaining({ branchId: 'branch-a' }),
         expect.objectContaining({ manualCashFallback: true })
       );
+      // Five PostgreSQL row-lock queries protect the member, role grants,
+      // overrides, and exact assignment for each stock/money mutation.
+      expect(f.db.$queryRaw).toHaveBeenCalledTimes(10);
       expect(f.db.user.findUnique).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { organizationId_id: { id: 'user-a', organizationId: 'org-a' } },
