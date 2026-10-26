@@ -251,14 +251,11 @@ export const PROCEDURE_MODULES: Record<string, string> = {
  * not to HR. Exact full-path allowlist; the rest of the `team` namespace still
  * resolves to the HR module (WHA-305).
  */
-export const ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES = [
+export const ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES: ReadonlySet<string> = new Set([
   'team.getNotifications',
   'team.markNotificationRead',
   'team.markAllNotificationsRead',
-] as const;
-const entitlementIndependentTeamNotificationProcedures = new Set<string>(
-  ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES
-);
+]);
 
 /**
  * Procedures that act only on the caller's own account: profile, password,
@@ -285,7 +282,7 @@ export function moduleForProcedure(path: string): string | null {
   if (path === 'team.inviteMember') return 'admin';
   if (
     ACCOUNT_PROCEDURES.has(path) ||
-    entitlementIndependentTeamNotificationProcedures.has(path)
+    ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES.has(path)
   ) {
     return null;
   }

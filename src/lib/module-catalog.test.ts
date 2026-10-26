@@ -75,11 +75,13 @@ describe('module catalog routing', () => {
   });
 
   it('keeps the notification exception exact while the rest of team remains HR-gated', () => {
-    expect(ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES).toEqual([
-      'team.getNotifications',
-      'team.markNotificationRead',
-      'team.markAllNotificationsRead',
-    ]);
+    expect(ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES).toEqual(
+      new Set([
+        'team.getNotifications',
+        'team.markNotificationRead',
+        'team.markAllNotificationsRead',
+      ])
+    );
     expect(ACCOUNT_PROCEDURES.has('team.getNotifications')).toBe(false);
     expect(moduleForProcedure('team.getNotifications.future')).toBe('hr');
     expect(moduleForProcedure('team.deleteNotification')).toBe('hr');

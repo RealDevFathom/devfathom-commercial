@@ -86,7 +86,7 @@ describe('team shell notifications without HR entitlement', () => {
     const notificationProcedureNames = Object.keys(teamRouter._def.procedures).filter(
       (name) => name.includes('Notification') && !name.endsWith('NotificationPrefs')
     );
-    const exceptionNames = ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES.map(
+    const exceptionNames = [...ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES].map(
       (path) => path.split('.')[1]
     );
 
