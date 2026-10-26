@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   invoiceUpdate: vi.fn(),
   paymentAggregate: vi.fn(),
   paymentCreate: vi.fn(),
+  transaction: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -27,15 +28,17 @@ vi.mock('../audit', () => ({
 import type { TRPCContext } from '../trpc';
 import { financeRouter } from './finance';
 
-function caller() {
-  const tx = {
+function transactionClient() {
+  return {
     invoice: { findUnique: mocks.invoiceFindUnique, update: mocks.invoiceUpdate },
     payment: { aggregate: mocks.paymentAggregate, create: mocks.paymentCreate },
   };
+}
 
+function caller() {
   return financeRouter.createCaller({
     db: {
-      $transaction: vi.fn(async (callback: (transaction: typeof tx) => unknown) => callback(tx)),
+      $transaction: mocks.transaction,
     },
     entitlements: { organizationId: 'org-1', enabledModules: [], modules: [] },
     session: {
@@ -64,6 +67,10 @@ describe('finance.addPayment', () => {
     mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 40 } });
     mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 60 });
     mocks.invoiceUpdate.mockResolvedValue({});
+    mocks.transaction.mockImplementation(
+      async (callback: (transaction: ReturnType<typeof transactionClient>) => unknown) =>
+        callback(transactionClient())
+    );
   });
 
   it('logs invoice_paid when a payment covers the outstanding balance', async () => {
@@ -132,6 +139,23 @@ describe('finance.addPayment', () => {
     );
 
     expect(mocks.paymentCreate).not.toHaveBeenCalled();
+    expect(mocks.logActivity).not.toHaveBeenCalled();
+    expect(mocks.emitEvent).not.toHaveBeenCalled();
+  });
+
+  it('does not log invoice_paid when the payment transaction fails to commit', async () => {
+    mocks.transaction.mockImplementation(
+      async (callback: (transaction: ReturnType<typeof transactionClient>) => unknown) => {
+        await callback(transactionClient());
+        throw new Error('commit failed');
+      }
+    );
+
+    await expect(caller().addPayment({ invoiceId: 'invoice-1', amount: 60 })).rejects.toThrow(
+      'commit failed'
+    );
+
+    expect(mocks.invoiceUpdate).toHaveBeenCalledOnce();
     expect(mocks.logActivity).not.toHaveBeenCalled();
     expect(mocks.emitEvent).not.toHaveBeenCalled();
   });
