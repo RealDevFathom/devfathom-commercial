@@ -348,18 +348,22 @@ export function createTerminalIndexedDbDriver(
     compareAndSwap: async (scopeKey, expected, record) => {
       const db = await connection();
       const tx = db.transaction(database.objectStoreName, 'readwrite');
-      const store = tx.objectStore(database.objectStoreName);
-      const current = await requestToPromise(store.get(scopeKey));
-      if (JSON.stringify(current) !== JSON.stringify(expected)) {
-        tx.abort();
-        return false;
-      }
-      await requestToPromise(store.put(record, scopeKey));
-      await new Promise<void>((resolve, reject) => {
+      const settled = new Promise<void>((resolve, reject) => {
         tx.oncomplete = () => resolve();
         tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted.'));
         tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed.'));
       });
+      const store = tx.objectStore(database.objectStoreName);
+      const current = await requestToPromise(store.get(scopeKey));
+      if (JSON.stringify(current) !== JSON.stringify(expected)) {
+        // Let the read-only transaction finish normally. Resolving only after
+        // completion keeps the CAS contract durable for both outcomes and
+        // avoids surfacing an intentional mismatch as an abort error.
+        await settled;
+        return false;
+      }
+      await requestToPromise(store.put(record, scopeKey));
+      await settled;
       return true;
     },
     remove: async (scopeKey) => {
