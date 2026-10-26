@@ -3,6 +3,12 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { priceFromLot } from './medicine';
+import {
+  canonicalUnitsForPackLevel,
+  saleUnitOptions,
+  type PackLevelNode,
+  type SaleUnitKind,
+} from './counter-pricing';
 import { hashDeviceSecret } from '@/lib/retail-terminal/device-secret';
 import { canonicalJson } from './offline-snapshot-envelope';
 import { checkEnvelope } from './offline-snapshot-envelope';
@@ -138,6 +144,7 @@ export class PharmacySaleError extends Error {
       | 'NOT_FOUND'
       | 'INVALID_STATE'
       | 'INVALID_QUANTITY'
+      | 'INVALID_SALE_UNIT_CONVERSION'
       | 'PRICE_ABOVE_MRP'
       | 'MARGIN_GUARDRAIL'
       | 'APPROVAL_REQUIRED'
@@ -229,6 +236,35 @@ type AddSaleLineInput = {
   idempotencyKey: string;
 };
 
+export function assertSaleUnitConversion(input: {
+  packLevels: readonly PackLevelNode[];
+  packLevelId: string;
+  saleUnit: SaleUnitKind;
+  canonicalUnitsPerSaleUnit: number;
+  lots?: readonly { packLevelId: string; unitsPerPack: number }[];
+}) {
+  try {
+    const canonicalUnits = canonicalUnitsForPackLevel(input.packLevels, input.packLevelId);
+    if (canonicalUnits !== input.canonicalUnitsPerSaleUnit)
+      throw new PharmacySaleError('INVALID_SALE_UNIT_CONVERSION');
+    for (const lot of input.lots ?? []) {
+      const option = saleUnitOptions({
+        packLevels: input.packLevels,
+        rootPackLevelId: lot.packLevelId,
+        unitsPerPack: lot.unitsPerPack,
+      }).find(
+        (candidate) =>
+          candidate.packLevelId === input.packLevelId && candidate.kind === input.saleUnit
+      );
+      if (!option || option.canonicalUnitsPerSaleUnit !== canonicalUnits)
+        throw new PharmacySaleError('INVALID_SALE_UNIT_CONVERSION');
+    }
+  } catch (error) {
+    if (error instanceof PharmacySaleError) throw error;
+    throw new PharmacySaleError('INVALID_SALE_UNIT_CONVERSION');
+  }
+}
+
 export async function addSaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
   return addSaleLineWithAllocation(db, scope, input);
 }
@@ -282,6 +318,11 @@ async function addSaleLineWithAllocation(
     where: { id: input.medicineId, organizationId: scope.organizationId, saleable: true },
   });
   if (!medicine) throw new PharmacySaleError('NOT_FOUND');
+  const packLevels = await db.packLevel.findMany({
+    where: { organizationId: scope.organizationId, presentationId: input.presentationId },
+    select: { id: true, level: true, parentPackLevelId: true, unitsPerParent: true },
+  });
+  assertSaleUnitConversion({ ...input, packLevels });
   const allocationInput = {
     medicineId: input.medicineId,
     requiredUnits: canonicalUnits,
@@ -300,6 +341,7 @@ async function addSaleLineWithAllocation(
     },
   });
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
+  assertSaleUnitConversion({ ...input, packLevels, lots });
   let unitPriceMinor = 0,
     ceiling = 0,
     costMinor = 0;
