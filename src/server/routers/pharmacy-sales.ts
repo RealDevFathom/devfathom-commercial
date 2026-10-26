@@ -111,7 +111,6 @@ import { assertInOrganization } from '../org-refs';
 import {
   adminProcedure,
   auditedProtectedProcedure,
-  capabilityProcedure,
   protectedProcedure,
   router,
 } from '../trpc';
@@ -630,7 +629,7 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  redeemPoints: capabilityProcedure('pharmacy:dispense')
+  redeemPoints: protectedProcedure
     .input(
       z
         .object({
