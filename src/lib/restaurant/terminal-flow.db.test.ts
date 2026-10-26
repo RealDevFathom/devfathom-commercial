@@ -293,9 +293,9 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
         .sort()
     );
     expect(body.operators.every((operator) => Object.keys(operator).length === 5)).toBe(true);
-    expect(body.operators.find((operator) => operator.staffProfileId === STAFF.A.id)).toMatchObject({
-      canComp: false,
-    });
+    expect(
+      body.operators.find((operator) => operator.staffProfileId === STAFF.A.id)?.canComp
+    ).toBe(false);
     expect(JSON.stringify(body)).not.toContain('Other Branch Operator');
     expect(JSON.stringify(body)).not.toContain('Inactive Operator');
     expect(JSON.stringify(body)).not.toContain('Foreign Operator');
@@ -316,8 +316,9 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
     );
     expect(authorizedResponse.status).toBe(200);
     const authorizedBody = (await authorizedResponse.json()) as typeof body;
-    expect(authorizedBody.operators.find((operator) => operator.staffProfileId === STAFF.A.id))
-      .toMatchObject({ canComp: true });
+    expect(
+      authorizedBody.operators.find((operator) => operator.staffProfileId === STAFF.A.id)?.canComp
+    ).toBe(true);
   });
 
   it('establishes, unlocks, switches operator, and locks (C6 state machine)', async () => {
