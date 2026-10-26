@@ -75,9 +75,13 @@ describe('PH-RPT metric contract', () => {
     expect(sql).toContain('charge."amountMinor"::bigint-COALESCE(settlements.paid,0)');
     expect(sql).toContain(`CASE WHEN "kind"='PAYMENT' THEN "amountMinor" ELSE -"amountMinor" END`);
     expect(sql).toContain(`"kind" IN ('PAYMENT','DISHONOURED_CHEQUE')`);
+    expect(sql).toContain(
+      `"kind"='DISHONOURED_CHEQUE' AND "settlesChargeId" IS NULL`
+    );
+    expect(sql).toContain('+(SELECT value FROM unlinked_dishonours)');
     expect(sql).toContain(')::bigint AS value');
     expect(sql).toContain(`charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`);
-    expect(khataQuery.values).toEqual(['branch_1', 'branch_1']);
+    expect(khataQuery.values).toEqual(['branch_1', 'branch_1', 'branch_1']);
   });
 
   it('adds branch-scoped bigint results above the PostgreSQL integer limit', async () => {
