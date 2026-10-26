@@ -158,8 +158,9 @@ export const projectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
       await assertProjectAccess(ctx, id);
+      const organizationId = workspaceId(ctx);
       const existing = await ctx.db.project.findUnique({
-        where: { id },
+        where: { id, organizationId },
         select: { startDate: true, endDate: true },
       });
       const startDate = data.startDate === undefined ? existing?.startDate : data.startDate;
@@ -167,7 +168,7 @@ export const projectsRouter = router({
       if (!isValidProjectDateRange(startDate, endDate)) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: PROJECT_DATE_RANGE_MESSAGE });
       }
-      const project = await ctx.db.project.update({ where: { id }, data });
+      const project = await ctx.db.project.update({ where: { id, organizationId }, data });
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'project_updated',
         message:

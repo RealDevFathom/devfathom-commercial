@@ -67,6 +67,10 @@ describe('project date ranges', () => {
     await expect(
       caller().update({ id: 'project_1', endDate: new Date('2026-10-21T00:00:00.000Z') })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(projectFindUnique).toHaveBeenCalledWith({
+      where: { id: 'project_1', organizationId: 'org_1' },
+      select: { startDate: true, endDate: true },
+    });
     expect(projectUpdate).not.toHaveBeenCalled();
   });
 
@@ -79,6 +83,26 @@ describe('project date ranges', () => {
     await expect(
       caller().update({ id: 'project_1', startDate: new Date('2026-10-22T00:00:00.000Z') })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(projectFindUnique).toHaveBeenCalledWith({
+      where: { id: 'project_1', organizationId: 'org_1' },
+      select: { startDate: true, endDate: true },
+    });
     expect(projectUpdate).not.toHaveBeenCalled();
+  });
+
+  it('scopes a valid partial update to the caller organization', async () => {
+    const endDate = new Date('2026-10-20T00:00:00.000Z');
+    projectFindUnique.mockResolvedValue({
+      startDate: new Date('2026-10-10T00:00:00.000Z'),
+      endDate: null,
+    });
+    projectUpdate.mockResolvedValue({ id: 'project_1', name: 'Project' });
+
+    await caller().update({ id: 'project_1', endDate });
+
+    expect(projectUpdate).toHaveBeenCalledWith({
+      where: { id: 'project_1', organizationId: 'org_1' },
+      data: { endDate },
+    });
   });
 });
