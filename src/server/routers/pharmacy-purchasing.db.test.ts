@@ -10,7 +10,18 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-const databaseUrl = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? '';
+const databaseUrl = process.env.TEST_DATABASE_URL ?? '';
+const disposableDatabaseName = /(?:^|[_-])(test|e2e|tmp|disposable)(?:[_-]|$)/i;
+
+if (databaseUrl) {
+  const databaseName = decodeURIComponent(new URL(databaseUrl).pathname.replace(/^\//, ''));
+  if (!disposableDatabaseName.test(databaseName)) {
+    throw new Error(
+      'TEST_DATABASE_URL must name a dedicated disposable database (test, e2e, tmp, or disposable).'
+    );
+  }
+}
+
 const describeIfDatabase = databaseUrl ? describe : describe.skip;
 if (databaseUrl) process.env.DATABASE_URL = databaseUrl;
 
@@ -125,42 +136,9 @@ describeIfDatabase('purchase-order decision concurrency against PostgreSQL', () 
 
   afterAll(async () => {
     if (!databaseUrl) return;
-    try {
-      // These two regulated tables are append-only in normal operation. The
-      // disposable fixture is removed as database owner after its assertions.
-      await owner.query(
-        'ALTER TABLE pharmacy_purchase_order_approvals DISABLE TRIGGER pharmacy_purchase_order_approval_append_only'
-      );
-      await owner.query(
-        'ALTER TABLE pharmacy_supplier_licences DISABLE TRIGGER pharmacy_supplier_licence_append_only'
-      );
-      await owner.query(
-        'DELETE FROM pharmacy_purchase_order_approvals WHERE "organizationId" = $1',
-        [organizationId]
-      );
-      await owner.query('DELETE FROM pharmacy_purchase_orders WHERE "organizationId" = $1', [
-        organizationId,
-      ]);
-      await owner.query('DELETE FROM pharmacy_supplier_licences WHERE "organizationId" = $1', [
-        organizationId,
-      ]);
-      await owner.query('DELETE FROM pharmacy_suppliers WHERE "organizationId" = $1', [
-        organizationId,
-      ]);
-      await owner.query('DELETE FROM organizations WHERE id = $1', [organizationId]);
-    } finally {
-      await owner
-        .query(
-          'ALTER TABLE pharmacy_purchase_order_approvals ENABLE TRIGGER pharmacy_purchase_order_approval_append_only'
-        )
-        .catch(() => undefined);
-      await owner
-        .query(
-          'ALTER TABLE pharmacy_supplier_licences ENABLE TRIGGER pharmacy_supplier_licence_append_only'
-        )
-        .catch(() => undefined);
-      await owner.end();
-    }
+    // Append-only fixture rows intentionally remain in the throwaway database.
+    // Cleanup must never weaken the regulated tables' triggers, even briefly.
+    await owner.end();
   });
 
   it('commits exactly one competing decision and one matching approval event', async () => {
