@@ -83,6 +83,10 @@ describeIfDatabase('restaurant dependency graph concurrency (real PostgreSQL)', 
       [organizationId]
     );
     expect(persisted.rows).toHaveLength(1);
+    expect([
+      { fromUnitId: id('unit_a'), toUnitId: id('unit_b') },
+      { fromUnitId: id('unit_b'), toUnitId: id('unit_a') },
+    ]).toContainEqual(persisted.rows[0]);
   });
 
   it('commits exactly one of two reciprocal sub-recipe lines', async () => {
@@ -115,6 +119,9 @@ describeIfDatabase('restaurant dependency graph concurrency (real PostgreSQL)', 
       [organizationId]
     );
     expect(persisted.rows).toHaveLength(1);
-    expect(persisted.rows[0]!.recipeId).not.toBe(persisted.rows[0]!.subRecipeId);
+    expect([
+      { recipeId: id('recipe_a'), subRecipeId: id('recipe_b') },
+      { recipeId: id('recipe_b'), subRecipeId: id('recipe_a') },
+    ]).toContainEqual(persisted.rows[0]);
   });
 });
