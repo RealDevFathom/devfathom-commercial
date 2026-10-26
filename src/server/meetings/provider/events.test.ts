@@ -100,6 +100,16 @@ describe('provider event ingestion', () => {
     });
   });
 
+  it.each(['unknown:grant-1', 'usr:', 'gst:'])(
+    'leaves an invalid namespaced identity (%s) unattributed',
+    async (participantIdentity) => {
+      await recordAndApplyProviderEvent(occurrence, { ...joined, participantIdentity });
+
+      expect(findFirst).not.toHaveBeenCalled();
+      expect(executeRaw).toHaveBeenCalledTimes(1);
+    }
+  );
+
   it('makes a replay a no-op before any attendance or processed-state write', async () => {
     createMany.mockResolvedValue({ count: 0 });
     await expect(recordAndApplyProviderEvent(occurrence, joined)).resolves.toBe('duplicate');

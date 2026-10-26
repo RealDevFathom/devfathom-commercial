@@ -7,15 +7,23 @@ import type { NormalizedMeetingEvent } from './types';
 type OccurrenceRef = { id: string; organizationId: string };
 
 function participantIdentityWhere(identity: string) {
-  if (identity.startsWith('usr:')) {
-    return { userId: identity.slice('usr:'.length) };
-  }
-  if (identity.startsWith('gst:')) {
-    return { id: identity.slice('gst:'.length) };
+  const separator = identity.indexOf(':');
+  if (separator === -1) {
+    // Preserve support for identities created before admission began namespacing them.
+    return { OR: [{ id: identity }, { userId: identity }] };
   }
 
-  // Preserve support for identities created before admission began namespacing them.
-  return { OR: [{ id: identity }, { userId: identity }] };
+  const namespace = identity.slice(0, separator);
+  const value = identity.slice(separator + 1);
+  if (!value) return null;
+  if (namespace === 'usr') {
+    return { userId: value };
+  }
+  if (namespace === 'gst') {
+    return { id: value };
+  }
+
+  return null;
 }
 
 export async function resolveProviderRoom(roomName: string): Promise<OccurrenceRef | null> {
@@ -57,13 +65,13 @@ async function applyEvent(db: ScopedDb, occurrence: OccurrenceRef, event: Normal
     throw new Error('Normalized participant event is missing participant identity');
   }
 
-  const grant = await db.meetingOccurrenceParticipant.findFirst({
-    where: {
-      occurrenceId: occurrence.id,
-      ...participantIdentityWhere(event.participantIdentity),
-    },
-    select: { id: true, userId: true },
-  });
+  const identityWhere = participantIdentityWhere(event.participantIdentity);
+  const grant = identityWhere
+    ? await db.meetingOccurrenceParticipant.findFirst({
+        where: { occurrenceId: occurrence.id, ...identityWhere },
+        select: { id: true, userId: true },
+      })
+    : null;
 
   if (event.type === 'participant.joined') {
     await db.$executeRaw(Prisma.sql`
