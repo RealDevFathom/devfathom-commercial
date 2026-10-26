@@ -26,6 +26,11 @@ describe('PlatformAuditPage', () => {
             organization: { displayName: 'DevFathom' },
             actorPlatformUserId: actorId,
             actorTenantUserId: null,
+            actorPlatformUser: {
+              name: 'Staging Administrator',
+              email: 'admin.staging@devfathom.com',
+            },
+            actorTenantUser: null,
             targetType: 'OrganizationModule',
             targetId: 'module-1',
             success: true,
@@ -34,16 +39,6 @@ describe('PlatformAuditPage', () => {
           },
         ]),
       },
-      platformUser: {
-        findMany: vi.fn().mockResolvedValue([
-          {
-            id: actorId,
-            name: 'Staging Administrator',
-            email: 'admin.staging@devfathom.com',
-          },
-        ]),
-      },
-      user: { findMany: vi.fn().mockResolvedValue([]) },
     };
     mocks.withPlatformDb.mockImplementation((run: (database: typeof db) => Promise<unknown>) =>
       run(db)
@@ -72,6 +67,8 @@ describe('PlatformAuditPage', () => {
         organization: { displayName: 'Example' },
         actorPlatformUserId: null,
         actorTenantUserId: null,
+        actorPlatformUser: null,
+        actorTenantUser: null,
         targetType: 'Organization',
         targetId: 'org-1',
         success: true,
@@ -132,6 +129,83 @@ describe('PlatformAuditPage', () => {
     expect(csv).toContain(`'` + '=HYPERLINK(""https://example.invalid"")');
     expect(csv).toContain('audit-002');
     expect(csv).not.toContain('audit-001');
+  });
+
+  it('searches both actor relations by name and email', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    mocks.withPlatformDb.mockImplementation((run) => run({ platformAuditLog: { findMany } }));
+
+    render(await PlatformAuditPage({ searchParams: Promise.resolve({ q: 'administrator' }) }));
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: {
+          organization: { select: { displayName: true } },
+          actorPlatformUser: { select: { name: true, email: true } },
+          actorTenantUser: { select: { name: true, email: true } },
+        },
+        where: expect.objectContaining({
+          OR: expect.arrayContaining([
+            {
+              actorPlatformUser: {
+                is: {
+                  OR: [
+                    { name: { contains: 'administrator', mode: 'insensitive' } },
+                    { email: { contains: 'administrator', mode: 'insensitive' } },
+                  ],
+                },
+              },
+            },
+            {
+              actorTenantUser: {
+                is: {
+                  OR: [
+                    { name: { contains: 'administrator', mode: 'insensitive' } },
+                    { email: { contains: 'administrator', mode: 'insensitive' } },
+                  ],
+                },
+              },
+            },
+          ]),
+        }),
+      })
+    );
+    expect(screen.getByLabelText('Search')).toHaveAttribute(
+      'placeholder',
+      'Search actor, action, target, or reason'
+    );
+    expect(screen.getByLabelText('Outcome')).toBeInTheDocument();
+  });
+
+  it('falls back to an unresolved actor ID instead of calling it anonymous', async () => {
+    const actorId = 'deleted-actor-id';
+    const db = {
+      platformAuditLog: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'audit-1',
+            createdAt: new Date('2026-08-08T05:00:00Z'),
+            action: 'platform.session.created',
+            organization: null,
+            actorPlatformUserId: actorId,
+            actorTenantUserId: null,
+            actorPlatformUser: null,
+            actorTenantUser: null,
+            targetType: 'PlatformSession',
+            targetId: 'session-1',
+            success: true,
+            error: null,
+            reason: null,
+          },
+        ]),
+      },
+    };
+    mocks.withPlatformDb.mockImplementation((run) => run(db));
+
+    render(await PlatformAuditPage({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByText(actorId)).toBeInTheDocument();
+    expect(screen.queryByText('Anonymous')).not.toBeInTheDocument();
   });
 
   it.each([
