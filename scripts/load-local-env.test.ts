@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 describe('loadLocalEnvironment', () => {
-  it('loads .env.local before falling back to .env', () => {
+  it('gives .env.local precedence over .env', () => {
     const directory = mkdtempSync(join(tmpdir(), 'devfathom-env-'));
     directories.push(directory);
     writeFileSync(join(directory, '.env'), 'DATABASE_URL=from-dot-env\nFALLBACK=from-dot-env\n');
@@ -24,6 +24,17 @@ describe('loadLocalEnvironment', () => {
 
     expect(environment.DATABASE_URL).toBe('from-dot-env-local');
     expect(environment.FALLBACK).toBe('from-dot-env');
+  });
+
+  it('falls back to .env when .env.local is absent', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'devfathom-env-'));
+    directories.push(directory);
+    writeFileSync(join(directory, '.env'), 'DATABASE_URL=from-dot-env\n');
+
+    const environment: NodeJS.ProcessEnv = {};
+    loadLocalEnvironment(environment, directory);
+
+    expect(environment.DATABASE_URL).toBe('from-dot-env');
   });
 
   it('never shadows variables supplied by the process environment', () => {
