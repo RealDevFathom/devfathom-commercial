@@ -252,6 +252,22 @@ describe('SEC-374-01 write-off capability and actual-branch authority', () => {
     untouched();
   });
 
+  it('re-evaluates canonical capability inside the write transaction before stock access', async () => {
+    db.user.findUnique
+      .mockResolvedValueOnce({
+        organizationRole: { name: 'Inventory Manager', permissions: [allow('pharmacy:inventory')] },
+        permissionOverrides: [],
+      })
+      .mockResolvedValue({
+        organizationRole: { name: 'Inventory Manager', permissions: [deny('pharmacy:inventory')] },
+        permissionOverrides: [],
+      });
+
+    await expect(caller().writeOff(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.user.findUnique).toHaveBeenCalledTimes(2);
+    untouched();
+  });
+
   it('still requires an active same-tenant distinct witness after both authorizations succeed', async () => {
     grant([allow('pharmacy:inventory')]);
     db.user.findFirst.mockResolvedValue(null);
@@ -268,10 +284,15 @@ describe('SEC-374-01 write-off capability and actual-branch authority', () => {
     await caller().writeOff(input);
 
     const sql = db.$queryRaw.mock.calls.map(([query]) => query.strings.join('?'));
-    expect(sql).toHaveLength(2);
+    expect(sql).toHaveLength(6);
     expect(sql[0]).toContain('FOR UPDATE OF b, a');
-    expect(sql[1]).toContain('FROM users');
-    expect(sql[1]).toContain('FOR UPDATE');
+    expect(sql[1]).toContain('FROM users u');
+    expect(sql[2]).toContain('FROM organization_roles');
+    expect(sql[3]).toContain('FROM organization_role_permissions');
+    expect(sql[4]).toContain('FROM user_permission_overrides');
+    expect(sql.slice(1, 5).every((statement) => statement.includes('FOR UPDATE'))).toBe(true);
+    expect(sql[5]).toContain('FROM users');
+    expect(sql[5]).toContain('FOR UPDATE');
     expect(db.$transaction).toHaveBeenCalledTimes(1);
   });
 });

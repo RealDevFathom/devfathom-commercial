@@ -11,6 +11,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
+import { can, subjectFromSession } from '@/lib/abac';
 import { arrangementFor, PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   confirmPriceChange,
@@ -187,6 +188,47 @@ async function writeOffScopeFor(
     FOR UPDATE OF b, a`);
   if (!assignments[0]) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+
+  // The outer procedure gate is intentionally only an early refusal. Pin the
+  // rows which feed the canonical ABAC decision, then evaluate that decision
+  // again on this transaction handle. Locking both parents also serializes new
+  // role grants/denies and user overrides through their foreign keys; updates
+  // to existing rules serialize on the rule rows themselves.
+  await db.$queryRaw(Prisma.sql`
+    SELECT u.id FROM users u
+    WHERE u.id = ${actor.actorId} AND u."organizationId" = ${actor.organizationId}
+    FOR UPDATE`);
+  await db.$queryRaw(Prisma.sql`
+    SELECT r.id FROM organization_roles r
+    JOIN users u ON u."organizationRoleId" = r.id
+    WHERE u.id = ${actor.actorId} AND u."organizationId" = ${actor.organizationId}
+      AND r."organizationId" = ${actor.organizationId}
+    FOR UPDATE OF r`);
+  await db.$queryRaw(Prisma.sql`
+    SELECT rp.id FROM organization_role_permissions rp
+    JOIN users u ON u."organizationRoleId" = rp."organizationRoleId"
+    WHERE u.id = ${actor.actorId} AND u."organizationId" = ${actor.organizationId}
+      AND rp."organizationId" = ${actor.organizationId}
+    FOR UPDATE OF rp`);
+  await db.$queryRaw(Prisma.sql`
+    SELECT up.id FROM user_permission_overrides up
+    WHERE up."userId" = ${actor.actorId} AND up."organizationId" = ${actor.organizationId}
+    FOR UPDATE OF up`);
+
+  const sessionUser = ctx.session?.user;
+  const capabilityAllowed =
+    sessionUser &&
+    (await can(subjectFromSession(sessionUser), 'pharmacy:inventory', undefined, {
+      db: db as Prisma.TransactionClient,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }));
+  if (!capabilityAllowed) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
   }
   return { ...actor, branchId: requestedBranchId };
 }
