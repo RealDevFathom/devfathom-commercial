@@ -168,7 +168,7 @@ describe('PlatformAuditPage', () => {
     expect(csv).not.toContain('audit-001');
   });
 
-  it('searches both actor relations by name and email', async () => {
+  it('searches both actor IDs and actor relations by name and email', async () => {
     const findMany = vi.fn().mockResolvedValue([]);
     mocks.withPlatformDb.mockImplementation((run) => run({ platformAuditLog: { findMany } }));
 
@@ -183,6 +183,8 @@ describe('PlatformAuditPage', () => {
         },
         where: expect.objectContaining({
           OR: expect.arrayContaining([
+            { actorPlatformUserId: { contains: 'administrator', mode: 'insensitive' } },
+            { actorTenantUserId: { contains: 'administrator', mode: 'insensitive' } },
             {
               actorPlatformUser: {
                 is: {
