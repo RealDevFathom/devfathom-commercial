@@ -35,4 +35,13 @@ describe('procurementCapabilityGranted', () => {
       })
     ).toBe(false);
   });
+
+  it('does not let an override ALLOW bypass a role DENY', () => {
+    expect(
+      procurementCapabilityGranted({
+        overrides: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+        role: [{ capability: 'pharmacy:*', effect: 'DENY' }],
+      })
+    ).toBe(false);
+  });
 });
