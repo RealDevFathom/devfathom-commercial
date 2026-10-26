@@ -11,6 +11,9 @@ describe('Agency E2E owned fixture restoration', () => {
   test('licenses Notes for the agency demo package', () => {
     expect(seed).toContain("['notes', 'Notes', 'Knowledge', '/notes']");
     expect(seed).toContain("enabled: key !== 'api' && key !== 'webhooks'");
+    expect(seed).toMatch(
+      /platformPackageModule\.findFirst\([\s\S]*?module: \{ key: 'notes' \}[\s\S]*?if \(!notesLicense\?\.enabled\)/
+    );
   });
 
   test('uses exact owned IDs and restores the seed twice before execution', () => {

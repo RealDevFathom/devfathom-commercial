@@ -81,6 +81,29 @@ test('meetings expose only the owned scheduled meeting', async ({ page }) => {
   await expect(page.getByText('Atlas launch review E2E', { exact: true })).toBeVisible();
 });
 
+test('Notes is licensed and a created note persists', async ({ page }) => {
+  await signIn(page);
+  await expect(page.locator('a[href="/notes"]').first()).toBeVisible();
+  await page.goto('/notes');
+  await expect(page.getByRole('heading', { name: 'Notes' })).toBeVisible();
+
+  const title = `Agency acceptance note ${Date.now()}`;
+  await page.getByRole('button', { name: 'New Note' }).click();
+  await expect(page).toHaveURL(/\/notes\/[^/?]+(?:\?|$)/);
+  await page.getByRole('button', { name: 'Edit' }).click();
+  await page.getByPlaceholder('Untitled').fill(title);
+  await page.locator('.ProseMirror').fill('Persisted by the Agency A7 acceptance flow.');
+  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible();
+  await expect(page.getByDisplayValue(title)).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByDisplayValue(title)).toBeVisible();
+  await expect(page.locator('.ProseMirror')).toContainText(
+    'Persisted by the Agency A7 acceptance flow.'
+  );
+});
+
 test('finance exposes the owned transaction and invoice surface', async ({ page }) => {
   await signIn(page);
   await page.goto('/finance');

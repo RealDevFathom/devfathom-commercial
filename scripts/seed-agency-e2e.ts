@@ -202,6 +202,14 @@ async function main() {
           },
         });
       }
+
+      const notesLicense = await tx.platformPackageModule.findFirst({
+        where: { packageId, module: { key: 'notes' } },
+        select: { enabled: true },
+      });
+      if (!notesLicense?.enabled) {
+        throw new Error('Agency E2E package must license Notes.');
+      }
     });
 
     await seedOrganization(
