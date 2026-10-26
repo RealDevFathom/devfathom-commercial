@@ -89,7 +89,10 @@ describe('pharmacySales.addLine controlled actor', () => {
       { capability: 'pharmacy.counter', effect: 'ALLOW' },
       { capability: 'pharmacy:orders', effect: 'ALLOW' },
     ]);
-    await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller.addLine(line)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission to dispense a controlled medicine.',
+    });
     expect(credential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
@@ -100,7 +103,10 @@ describe('pharmacySales.addLine controlled actor', () => {
       { capability: 'pharmacy:dispense', effect: 'ALLOW' },
       { capability: 'pharmacy:dispense', effect: 'DENY' },
     ]);
-    await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller.addLine(line)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission to dispense a controlled medicine.',
+    });
     expect(credential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
@@ -110,7 +116,10 @@ describe('pharmacySales.addLine controlled actor', () => {
     const { caller, credential, register } = callerFor([
       { capability: 'pharmacy.dispense', effect: 'ALLOW' },
     ]);
-    await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller.addLine(line)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission to dispense a controlled medicine.',
+    });
     expect(credential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
