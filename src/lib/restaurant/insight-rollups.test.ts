@@ -103,6 +103,37 @@ describe('pure rollup calculations', () => {
     ).toBe('60.00');
   });
 
+  it('does not reduce net sales for a delivery-fee-only refund', () => {
+    const total = computeReconciledFinancials({
+      bills: [
+        {
+          status: 'SETTLED',
+          subtotal: D('100'),
+          deliveryFeeTotal: D('12'),
+          taxTotal: D('0'),
+          serviceChargeTotal: D('0'),
+          compTotal: D('0'),
+          discountTotal: D('0'),
+          grandTotal: D('112'),
+        },
+      ],
+      tenders: [],
+      refunds: [
+        {
+          amount: D('12'),
+          taxRefundAmount: D('0'),
+          serviceChargeRefundAmount: D('0'),
+          deliveryFeeRefundAmount: D('12'),
+        },
+      ],
+      drawers: [],
+    });
+
+    expect(total.netSales.toFixed(2)).toBe('100.00');
+    expect(total.refundTotal.toFixed(2)).toBe('0.00');
+    expect(total.deliveryFeeRefunds.toFixed(2)).toBe('12.00');
+  });
+
   it('uses exact decimal component arithmetic across full and partial refunds', () => {
     const total = computeReconciledFinancials({
       bills: [
