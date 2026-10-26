@@ -107,7 +107,11 @@ describe('platform command failure auditing', () => {
         executePlatformCommand(
           actor(role),
           'crm.opportunity.convert',
-          { opportunityId: 'opp_1' },
+          {
+            opportunityId: 'opp_1',
+            organization: { name: 'must-not-be-provisioned' },
+            administrator: { email: 'must-not-be-created@example.test' },
+          },
           request()
         )
       ).rejects.toMatchObject({ status: 403 });
@@ -123,6 +127,7 @@ describe('platform command failure auditing', () => {
         reason: 'Platform command capability denied.',
         metadata: { outcomeCategory: 'capability_denied' },
       });
+      expect(JSON.stringify(state.audits[0])).not.toContain('must-not-be');
     }
   );
 
