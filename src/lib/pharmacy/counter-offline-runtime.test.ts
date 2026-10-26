@@ -373,6 +373,20 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
     expect(stale.cachedSnapshotStates()).toEqual([]);
   });
 
+  it('clears stale counter state when rehydration finds a revoked scope', async () => {
+    const driver = createMemoryDriver();
+    const revoking = await readyCounter(driver);
+    const stale = runtime(driver);
+    expect(await stale.hydrate()).toBe('ready');
+
+    expect(await revoking.revoke()).toEqual({ commands: 0 });
+    expect(await stale.hydrate()).toBe('ready');
+
+    expect(stale.snapshot().queue?.leases).toEqual([]);
+    expect(stale.snapshot().queue?.quotas).toEqual([]);
+    expect(stale.cachedSnapshotStates()).toEqual([]);
+  });
+
   it('refuses a denied action and queues nothing', async () => {
     const counter = await readyCounter(createMemoryDriver());
     const result = await counter.enqueue(

@@ -178,6 +178,18 @@ export class PharmacyCounterRuntime {
         catalog: result.state.catalog ?? this.cache(),
       };
       this.persistedState = result.state;
+    } else {
+      // Hydration can be repeated on a long-lived runtime. If another context
+      // revoked and removed this counter, do not keep exposing its stale
+      // leases, quotas, or verified snapshots from an earlier hydration.
+      const snapshotPublicKey = this.cache().snapshotPublicKey;
+      this.state = emptyTerminalState<CounterQueueSnapshot, CounterCache>(
+        this.scope,
+        COUNTER_STORE_SCHEMA_VERSION
+      );
+      this.state.queue = createCounterQueue(this.scope.deviceId);
+      this.state.catalog = { snapshotPublicKey, snapshots: [] };
+      this.persistedState = undefined;
     }
     return 'ready';
   }
