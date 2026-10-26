@@ -199,6 +199,12 @@ const paths: {
     allowed: { status: 'READY', reprint: false },
   },
   {
+    name: 'counterReceiptBrowserPrint',
+    run: (caller, branchId = 'branch-a') =>
+      caller.counterReceiptBrowserPrint({ branchId, saleId: 'sale-a', locale: 'en' }),
+    allowed: { reprint: false, copyNumber: 1 },
+  },
+  {
     name: 'lookupReceiptByNumber',
     run: (caller, branchId = 'branch-a') =>
       caller.lookupReceiptByNumber({ branchId, receiptNumber: 7 }),
@@ -601,6 +607,21 @@ describe('counter receipt authorization', () => {
       'en',
       expect.objectContaining({ reprint: true })
     );
+  });
+
+  it('shares durable copy numbering between browser and ESC/POS transports', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    const input = { branchId: 'branch-a', saleId: 'sale-a', locale: 'en' as const };
+
+    await expect(f.caller().counterReceiptBrowserPrint(input)).resolves.toEqual({
+      reprint: false,
+      copyNumber: 1,
+    });
+    await expect(f.caller().counterReceiptPrintJob(input)).resolves.toMatchObject({
+      reprint: true,
+      copyNumber: 2,
+    });
+    expect(f.db.$executeRaw).toHaveBeenCalledTimes(2);
   });
 
   it('requires an active branch before an administrator saves the receipt format', async () => {

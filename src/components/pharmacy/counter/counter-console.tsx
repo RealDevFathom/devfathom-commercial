@@ -305,7 +305,7 @@ function ScopedPharmacyCounterConsole({
   const [redeemPoints, setRedeemPoints] = useState(0);
   const [receiptLocale, setReceiptLocale] = useState<CounterReceiptLocale>('en');
   const [receiptFormat, setReceiptFormat] = useState<CounterReceiptFormat>('THERMAL');
-  const [receiptRenders, setReceiptRenders] = useState(0);
+  const [receiptReprint, setReceiptReprint] = useState(false);
   const [autoPrint, setAutoPrint] = useState(false);
   const [receiptSettlement, setReceiptSettlement] = useState<CounterReceiptSettlement | null>(null);
   const receiptIntent = useRef<ReceiptIntent | null>(null);
@@ -365,7 +365,6 @@ function ScopedPharmacyCounterConsole({
       if (intent?.saleId !== result.saleId || intent.receiptNumber !== result.receiptNumber) return;
       discardReceiptIntent();
       setReceiptSettlement(null);
-      if (result.printStatus === 'dialog-requested') setReceiptRenders((count) => count + 1);
     },
     [discardReceiptIntent]
   );
@@ -508,6 +507,9 @@ function ScopedPharmacyCounterConsole({
   const addLine = trpc.pharmacySales.addLine.useMutation();
   const transition = trpc.pharmacySales.transition.useMutation();
   const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
+  const allocateBrowserPrint = trpc.pharmacySales.counterReceiptBrowserPrint.useMutation({
+    retry: false,
+  });
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
@@ -524,7 +526,7 @@ function ScopedPharmacyCounterConsole({
       discardReceiptIntent();
       setReceiptSettlement(null);
       setSaleId(nextSaleId);
-      setReceiptRenders(0);
+      setReceiptReprint(false);
       setCustomerId(null);
       setRedeemPoints(0);
       setTenderOutcome(null);
@@ -1445,7 +1447,8 @@ function ScopedPharmacyCounterConsole({
     substitutesQuery.data,
   ]);
 
-  const printReceipt = useCallback(() => {
+  const printReceipt = useCallback(async (existingReservation?: CounterBrowserPrintReservation) => {
+    const reservation = existingReservation ?? reserveCounterBrowserPrint();
     const receipt = receiptQuery.data;
     if (
       !receipt ||
@@ -1456,20 +1459,37 @@ function ScopedPharmacyCounterConsole({
       receiptQuery.isError
     ) {
       setNotice({ tone: 'danger', message: 'Load the settled receipt before printing.' });
-      return;
+      reservation.cancel();
+      return false;
     }
-    discardReceiptIntent();
-    setReceiptSettlement(null);
+    if (!existingReservation) {
+      discardReceiptIntent();
+      setReceiptSettlement(null);
+    }
     try {
-      printCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, receiptRenders > 0);
-      setReceiptRenders((count) => count + 1);
+      const allocation = await allocateBrowserPrint.mutateAsync({
+        branchId,
+        saleId: receipt.saleId,
+        locale: receiptLocale,
+      });
+      printCounterBrowserReceipt(
+        receipt,
+        receiptLocale,
+        receiptFormat,
+        allocation.reprint,
+        reservation
+      );
+      setReceiptReprint(allocation.reprint);
       setNotice({
         tone: 'success',
         message:
           'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
       });
+      return true;
     } catch (error) {
+      reservation.cancel();
       setNotice({ tone: 'danger', message: messageFrom(error) });
+      return false;
     }
   }, [
     billState,
@@ -1480,7 +1500,8 @@ function ScopedPharmacyCounterConsole({
     receiptQuery.data,
     receiptQuery.isError,
     receiptQuery.isFetching,
-    receiptRenders,
+    allocateBrowserPrint,
+    branchId,
     saleId,
   ]);
 
@@ -2190,7 +2211,7 @@ function ScopedPharmacyCounterConsole({
               onEvidenceRefresh={evidenceEligible ? () => void evidenceQuery.refetch() : undefined}
               locale={receiptLocale}
               format={receiptFormat}
-              reprint={receiptRenders > 0}
+              reprint={receiptReprint}
               printing={receiptQuery.isFetching}
               error={receiptQuery.error ? messageFrom(receiptQuery.error) : null}
               onLocaleChange={setReceiptLocale}

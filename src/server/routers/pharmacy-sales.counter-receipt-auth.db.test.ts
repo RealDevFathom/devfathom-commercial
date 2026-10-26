@@ -352,6 +352,31 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     expect(persisted.dispatches).toHaveLength(results.length);
   });
 
+  it('marks a browser copy after a new request reload boundary', async () => {
+    const browserPrint = () =>
+      act(ids.orgA, dispenser, (api) =>
+        api.counterReceiptBrowserPrint({
+          branchId: ids.branchA,
+          saleId: ids.printableSale,
+          locale: 'en',
+        })
+      );
+
+    const first = await browserPrint();
+    const afterReload = await browserPrint();
+    expect(first).toMatchObject({ copyNumber: 1, reprint: false });
+    expect(afterReload).toMatchObject({ copyNumber: 2, reprint: true });
+
+    const dispatches = await withTenantDb(ids.orgA, (tx) =>
+      tx.pharmacyReceiptPrintDispatch.findMany({
+        where: { branchId: ids.branchA, saleId: ids.printableSale },
+        orderBy: { copyNumber: 'asc' },
+      })
+    );
+    expect(dispatches).toHaveLength(2);
+    expect(dispatches.map(({ copyNumber }) => copyNumber)).toEqual([1, 2]);
+  });
+
   it('allows the assigned branch and denies the sibling sale, an empty assignment, and another organization', async () => {
     await act(ids.orgA, dispenser, async (api) => {
       await expect(

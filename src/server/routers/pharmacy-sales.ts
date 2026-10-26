@@ -1777,6 +1777,52 @@ export const pharmacySalesRouter = router({
       }
     }),
 
+  /** Allocate and audit a browser/OS receipt copy before opening its print dialog. */
+  counterReceiptBrowserPrint: auditedProtectedProcedure
+    .input(
+      z
+        .object({ branchId, saleId: z.string().min(1), locale: z.enum(['en', 'ur']) })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const receipt = await loadCounterReceipt({ ...ctx, db: tx }, scope, input.saleId);
+          if (receipt.receiptNumber === null || !receipt.completedAt) {
+            throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
+          }
+          const [state] = await tx.$queryRaw<[{ copyCount: number }]>(Prisma.sql`
+            INSERT INTO "pharmacy_receipt_print_states"
+              ("id", "organizationId", "branchId", "saleId", "copyCount", "updatedAt")
+            VALUES
+              (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.saleId}, 1, NOW())
+            ON CONFLICT ("organizationId", "branchId", "saleId") DO UPDATE
+              SET "copyCount" = "pharmacy_receipt_print_states"."copyCount" + 1,
+                  "updatedAt" = NOW()
+            RETURNING "copyCount"
+          `);
+          if (!state) throw new Error('Receipt print copy allocation failed.');
+          await tx.$executeRaw(Prisma.sql`
+            INSERT INTO "pharmacy_receipt_print_dispatches"
+              ("id", "organizationId", "branchId", "saleId", "copyNumber", "actorId", "locale")
+            VALUES
+              (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.saleId},
+               ${state.copyCount}, ${ctx.session.user.id}, ${input.locale})
+          `);
+          return { copyNumber: state.copyCount, reprint: state.copyCount > 1 };
+        });
+      } catch (error) {
+        if (error instanceof PharmacyReceiptPrintError) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This bill is not settled, so it has no receipt to print.',
+          });
+        }
+        fail(error);
+      }
+    }),
+
   /** PH-A7: this branch's saved receipt format (shared layout), for the counter. */
   counterReceiptFormat: auditedProtectedProcedure
     .input(z.object({ branchId }).strict())
