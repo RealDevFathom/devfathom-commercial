@@ -11500,8 +11500,8 @@ model PlatformAuditLog {
   createdAt           DateTime @default(now())
 
   organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
-  actorPlatformUser PlatformUser? @relation("PlatformAuditPlatformActor", fields: [actorPlatformUserId], references: [id])
-  actorTenantUser   User?         @relation("PlatformAuditTenantActor", fields: [actorTenantUserId], references: [id])
+  actorPlatformUser PlatformUser? @relation("PlatformAuditPlatformActor", fields: [actorPlatformUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  actorTenantUser   User?         @relation("PlatformAuditTenantActor", fields: [actorTenantUserId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
   @@index([organizationId, createdAt])
   @@index([actorPlatformUserId, createdAt])
