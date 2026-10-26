@@ -38,6 +38,21 @@ export function supplierLinkId(token: string): string | null {
   return expected.length === candidate.length && timingSafeEqual(expected, candidate) ? id : null;
 }
 
+/** Resolve the tenant-owned identifiers needed to audit a signed-link attempt. */
+export async function getSupplierLinkAuditTarget(
+  db: ScopedDb,
+  token: string,
+  organizationId: string
+) {
+  const id = supplierLinkId(token);
+  if (!id) return null;
+  const secret = token.split('.')[1]!;
+  return db.pharmacySupplierActionLink.findFirst({
+    where: { id, organizationId, tokenHash: digest(secret) },
+    select: { id: true, organizationId: true, branchId: true },
+  });
+}
+
 export async function issueSupplierActionLink(
   db: ScopedDb,
   input: {

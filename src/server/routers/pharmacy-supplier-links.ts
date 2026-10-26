@@ -5,11 +5,13 @@ import { publicProcedure, protectedProcedure, router, type TRPCContext } from '.
 import {
   SupplierLinkError,
   getSupplierActionPage,
+  getSupplierLinkAuditTarget,
   issueSupplierActionLink,
   recordManualSupplierEvidence,
   submitSupplierEvidence,
   uploadSupplierDocument,
 } from '@/lib/pharmacy/supplier-action-links';
+import { recordAudit } from '@/server/audit';
 
 const id = z.string().trim().min(1).max(200);
 const kind = z.enum([
@@ -39,6 +41,37 @@ function mapError(error: unknown): never {
   });
 }
 
+type SupplierAuditTarget = { id: string; organizationId: string; branchId: string };
+
+function auditSupplierLinkAction(
+  ctx: TRPCContext,
+  target: SupplierAuditTarget | null,
+  action: 'submit' | 'uploadDocument',
+  outcome: 'SUCCESS' | 'FAILURE',
+  kind: string,
+  error?: unknown
+) {
+  if (!target) return;
+  const reason =
+    error instanceof SupplierLinkError ? error.reason : error ? 'INTERNAL_ERROR' : null;
+  recordAudit({
+    organizationId: target.organizationId,
+    actorType: 'ANONYMOUS',
+    source: 'TRPC',
+    category: 'PHARMACY',
+    operation: 'CREATE',
+    action: `pharmacySupplierLinks.${action}`,
+    targetType: 'PharmacySupplierActionLink',
+    targetId: target.id,
+    metadata: { branchId: target.branchId, linkId: target.id, kind },
+    ip: ctx.requestMeta?.ip ?? null,
+    userAgent: ctx.requestMeta?.userAgent ?? null,
+    outcome,
+    errorCode: reason,
+    errorMessage: reason,
+  });
+}
+
 export const pharmacySupplierLinksRouter = router({
   get: publicProcedure.input(z.object({ token: id }).strict()).query(async ({ ctx, input }) => {
     try {
@@ -60,9 +93,17 @@ export const pharmacySupplierLinksRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const target = await getSupplierLinkAuditTarget(
+        ctx.db,
+        input.token,
+        ctx.entitlements.organizationId
+      );
       try {
-        return await submitSupplierEvidence(ctx.db, input);
+        const result = await submitSupplierEvidence(ctx.db, input);
+        auditSupplierLinkAction(ctx, target, 'submit', 'SUCCESS', input.kind);
+        return result;
       } catch (error) {
+        auditSupplierLinkAction(ctx, target, 'submit', 'FAILURE', input.kind, error);
         mapError(error);
       }
     }),
@@ -79,12 +120,20 @@ export const pharmacySupplierLinksRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const target = await getSupplierLinkAuditTarget(
+        ctx.db,
+        input.token,
+        ctx.entitlements.organizationId
+      );
       try {
-        return await uploadSupplierDocument(ctx.db, {
+        const result = await uploadSupplierDocument(ctx.db, {
           ...input,
           content: Buffer.from(input.contentBase64, 'base64'),
         });
+        auditSupplierLinkAction(ctx, target, 'uploadDocument', 'SUCCESS', 'DOCUMENT');
+        return result;
       } catch (error) {
+        auditSupplierLinkAction(ctx, target, 'uploadDocument', 'FAILURE', 'DOCUMENT', error);
         mapError(error);
       }
     }),
