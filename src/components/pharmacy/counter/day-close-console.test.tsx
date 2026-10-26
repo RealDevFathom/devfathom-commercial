@@ -237,14 +237,14 @@ describe('day-close console', () => {
     fireEvent.click(screen.getByRole('checkbox'));
     expect(submit).toBeDisabled();
     fireEvent.change(screen.getByLabelText(/Variance note/), {
-      target: { value: 'Short by one rupee' },
+      target: { value: 'Short by one dollar' },
     });
     expect(submit).toBeEnabled();
     fireEvent.click(submit);
     expect(mocks.mutate).toHaveBeenCalledWith(
       expect.objectContaining({
         counts: [{ drawerSessionId: 'd', countedCashMinor: 12400 }],
-        varianceNote: 'Short by one rupee',
+        varianceNote: 'Short by one dollar',
       })
     );
   });
