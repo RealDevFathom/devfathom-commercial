@@ -31,6 +31,7 @@ type OperatorOption = {
 export type PosNotice = { tone: 'success' | 'warning' | 'danger' | 'neutral'; message: string };
 type EstablishResponse = {
   sessionToken: string;
+  composerProof?: string;
   session: {
     id: string;
     state: 'LOCKED' | 'UNLOCKED';
@@ -320,6 +321,7 @@ export function useTerminalSession({
         state: data.session.state,
         branchName: data.device.branchName,
         operator: data.operator ?? null,
+        composerProof: data.composerProof,
       };
       if ((await lifecycle.current.onEstablish?.(established)) === false) return;
       setRuntime(established);

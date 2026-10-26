@@ -43,4 +43,14 @@ describe('POS composer proofs', () => {
     );
     expect(verifyPosComposerProof(proof, claims, new Date('2026-10-28T12:00:00.000Z'))).toBe(false);
   });
+
+  it('accepts through the expiry instant and rejects immediately after it', () => {
+    const issued = new Date('2026-10-26T12:00:00.000Z');
+    const proof = mintPosComposerProof(claims, issued);
+
+    expect(verifyPosComposerProof(proof, claims, new Date(issued.getTime() + 86_400_000))).toBe(true);
+    expect(verifyPosComposerProof(proof, claims, new Date(issued.getTime() + 86_400_001))).toBe(
+      false
+    );
+  });
 });

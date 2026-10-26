@@ -270,7 +270,8 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       const local = offlineRuntime.current;
       if (!local || !navigator.onLine || activeRuntime.state !== 'UNLOCKED') return;
       const staffProfileId = activeRuntime.operator?.staffProfileId;
-      if (!staffProfileId) return;
+      if (!staffProfileId || !activeRuntime.composerProof) return;
+      await local.renewComposerProof(staffProfileId, activeRuntime.composerProof);
       const result = await local.replay(staffProfileId, async (queued) => {
         try {
           const response = await fetch(queued.path, {

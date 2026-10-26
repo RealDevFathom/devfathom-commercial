@@ -337,7 +337,7 @@ export function nextReplayCommand(
 export type PosReplayRequest = {
   path: string;
   method: 'POST';
-  headers: { 'Idempotency-Key': string };
+  headers: { 'Idempotency-Key': string; 'X-POS-Composer-Proof': string };
   body: Record<string, unknown>;
 };
 

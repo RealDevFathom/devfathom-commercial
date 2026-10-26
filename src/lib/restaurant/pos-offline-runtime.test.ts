@@ -36,6 +36,20 @@ describe('PosOfflineRuntime', () => {
     expect(runtime.snapshot().queue?.drafts[0]?.status).toBe('COMPLETED');
   });
 
+  it('renews a queued proof only for the reauthenticated composing operator', async () => {
+    const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
+    await runtime.enqueue(input);
+
+    await runtime.renewComposerProof('staff-2', 'wrong-operator-proof');
+    expect(runtime.snapshot().queue?.drafts[0]?.composerProof).toBe('signed-composer-proof');
+
+    await runtime.renewComposerProof('staff-1', 'renewed-proof');
+    await runtime.replay('staff-1', async (request) => {
+      expect(request.headers['X-POS-Composer-Proof']).toBe('renewed-proof');
+      return { status: 201, serverRef: 'server-ref' };
+    });
+  });
+
   it('hydrates an atomically persisted draft and resumes at the first unacknowledged command', async () => {
     const driver = createMemoryDriver();
     const first = new PosOfflineRuntime(scope, driver);
