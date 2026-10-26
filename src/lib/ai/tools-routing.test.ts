@@ -93,8 +93,8 @@ describe('assistant tool routing', () => {
   it.each([
     ['full-set routing', ''],
     ['client-aware Notes routing', 'find the Acme note'],
-  ])('requires the clients entitlement for Notes tools through %s', (_route, hint) => {
-    const withoutClients = { ...ctx, enabledModules: ['notes', 'projects'] };
+  ])('requires every Notes dependency through %s', (_route, hint) => {
+    const noteDependencies = ['notes', 'projects', 'clients'];
     const noteToolNames = [
       'searchNotes',
       'getNote',
@@ -104,13 +104,15 @@ describe('assistant tool routing', () => {
       'setNoteShares',
     ];
 
-    const tools = buildAssistantTools(withoutClients, { hint });
-    for (const name of noteToolNames) expect(tools).not.toHaveProperty(name);
+    for (const missingModule of noteDependencies) {
+      const tools = buildAssistantTools(
+        { ...ctx, enabledModules: noteDependencies.filter((module) => module !== missingModule) },
+        { hint }
+      );
+      for (const name of noteToolNames) expect(tools).not.toHaveProperty(name);
+    }
 
-    const entitledTools = buildAssistantTools(
-      { ...withoutClients, enabledModules: ['notes', 'projects', 'clients'] },
-      { hint }
-    );
+    const entitledTools = buildAssistantTools({ ...ctx, enabledModules: noteDependencies }, { hint });
     for (const name of noteToolNames) expect(entitledTools).toHaveProperty(name);
   });
 
