@@ -175,6 +175,20 @@ async function cashTender(device: string): Promise<{ billId: string; tenderId: s
   return { billId, tenderId: result.tenderId };
 }
 
+/** Cash tips are stored separately from bill principal, just like card tips. The
+ * current terminal cash form does not collect one, so this updates the persisted
+ * tender to exercise refunds of historical/imported tipped cash tenders. */
+async function tippedCashTender(
+  device: string,
+  tipAmount: string
+): Promise<{ billId: string; tenderId: string }> {
+  const tender = await cashTender(device);
+  await read((tx) =>
+    tx.restaurantTender.update({ where: { id: tender.tenderId }, data: { tipAmount } })
+  );
+  return tender;
+}
+
 async function openDrawer(device: string): Promise<void> {
   await deps.drawer.openDrawerSession(deps.createTenantDb(orgId), {
     organizationId: orgId,
@@ -692,6 +706,30 @@ describeIfDatabase('card refunds (real DB)', () => {
     ).rejects.toMatchObject({ reason: 'INVALID_REVERSAL' });
   });
 
+  it('rejects a full-principal VOID_REVERSAL that would strand a captured tip', async () => {
+    const { tenderId, paymentId } = await cardTender('2.00');
+
+    await expect(
+      deps.refunds.refundTender(deps.createTenantDb(orgId), {
+        originalTenderId: tenderId,
+        amount: '12.50',
+        tipRefundAmount: '0.00',
+        kind: 'VOID_REVERSAL',
+        reason: 'cannot leave captured tip behind',
+        approvingStaffProfileId: ids.manager,
+        actor: actor(),
+        now: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_REVERSAL' });
+
+    const state = await read(async (tx) => ({
+      refundCount: await tx.restaurantRefund.count({ where: { originalTenderId: tenderId } }),
+      payment: await tx.restaurantPayment.findUniqueOrThrow({ where: { id: paymentId } }),
+    }));
+    expect(state.refundCount).toBe(0);
+    expect(state.payment.status).toBe('CAPTURED');
+  });
+
   it('posts a cross-business-date correction to the processing day, not the tender day', async () => {
     const { tenderId } = await cardTender(); // tender businessDate 2026-08-19
     const refund = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
@@ -735,6 +773,59 @@ describeIfDatabase('cash refunds + co-authorization (real DB)', () => {
     );
     expect(movements).toHaveLength(1);
     expect(movements[0]!.amount.toString()).toBe('12.5');
+  });
+
+  it('includes tip-only and combined tip refunds in exact-cent drawer movements', async () => {
+    const device = await newDevice('POS-cash-tip-refund');
+    await openDrawer(device);
+    const tipOnlyTender = await tippedCashTender(device, '0.03');
+
+    const tipOnlyRefundIds: string[] = [];
+    for (let cent = 0; cent < 3; cent += 1) {
+      const refund = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+        originalTenderId: tipOnlyTender.tenderId,
+        amount: '0.00',
+        tipRefundAmount: '0.01',
+        reason: 'return cash tip one cent at a time',
+        approvingStaffProfileId: ids.manager,
+        actor: actor(device),
+        now: AT,
+      });
+      tipOnlyRefundIds.push(refund.refundId);
+    }
+
+    const combinedTender = await tippedCashTender(device, '0.07');
+    const combined = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: combinedTender.tenderId,
+      amount: '12.50',
+      tipRefundAmount: '0.07',
+      reason: 'return principal and cash tip',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(device),
+      now: AT,
+    });
+
+    const movements = await read((tx) =>
+      tx.restaurantDrawerMovement.findMany({
+        where: { refundId: { in: [...tipOnlyRefundIds, combined.refundId] } },
+        orderBy: { createdAt: 'asc' },
+        select: { amount: true },
+      })
+    );
+    expect(movements.map((movement) => movement.amount.toFixed(2))).toEqual([
+      '0.01',
+      '0.01',
+      '0.01',
+      '12.57',
+    ]);
+    expect(
+      movements
+        .reduce(
+          (total, movement) => total.plus(movement.amount),
+          movements[0]!.amount.mul(0)
+        )
+        .toFixed(2)
+    ).toBe('12.60');
   });
 
   it('rejects a cash refund with no open drawer', async () => {

@@ -47,9 +47,9 @@ import {
  *                    adapter REFUND and moves the payment to REFUNDED / PARTIALLY_
  *                    REFUNDED; CASH posts a CASH_REFUND drawer movement (open drawer
  *                    required).
- *   - VOID_REVERSAL  a SAME-DAY FULL reversal (amount ≡ the whole tender, no prior
- *                    refund). CARD runs the adapter VOID and moves the payment to
- *                    VOIDED; CASH posts a CASH_REFUND movement.
+ *   - VOID_REVERSAL  a SAME-DAY FULL reversal (principal and tip ≡ the whole
+ *                    tender, with no prior refund). CARD runs the adapter VOID and
+ *                    moves the payment to VOIDED; CASH posts a CASH_REFUND movement.
  *
  * The refund posts to the PROCESSING business date (the register's current business
  * date, C6) — a cross-business-date correction lands on TODAY and NEVER mutates a
@@ -313,10 +313,13 @@ export async function refundTender(
     await assertMoneyDayOpen(tx, branchId, businessDate);
 
     // VOID_REVERSAL is only valid for a same-day FULL reversal with no prior refund.
+    // Both captured balances must be exhausted: reporting VOIDED while leaving a
+    // tip refundable would misrepresent the provider and local payment state.
     if (kind === 'VOID_REVERSAL') {
       const sameDay = businessDate.getTime() === tender.businessDate.getTime();
-      const fullAmount = equals(amount, tender.amount) && isZero(refundedSoFar);
-      if (!sameDay || !fullAmount) {
+      const fullPrincipal = equals(amount, tender.amount) && isZero(refundedSoFar);
+      const fullTip = equals(tipRefundAmount, tender.tipAmount) && isZero(tipRefundedSoFar);
+      if (!sameDay || !fullPrincipal || !fullTip) {
         throw new RefundError(
           'A VOID_REVERSAL must be a same-day full reversal with no prior refund; use a REFUND instead.',
           'INVALID_REVERSAL'
@@ -388,7 +391,7 @@ export async function refundTender(
       await appendMovement(tx, {
         drawerSessionId,
         kind: 'CASH_REFUND',
-        amount,
+        amount: add(amount, tipRefundAmount),
         refundId: refund.id,
         staffProfileId: input.actor.staffProfileId,
         deviceId: input.actor.deviceId,
