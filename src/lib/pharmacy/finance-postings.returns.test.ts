@@ -115,6 +115,36 @@ it('reverses revenue but not inventory for an unidentified return hold', async (
   ]);
   expect(posted.lines.some((line) => line.accountCode === 'INVENTORY')).toBe(false);
   expect(posted.lines.some((line) => line.accountCode === 'COST_OF_GOODS_SOLD')).toBe(false);
+  expect(
+    posted.lines.reduce(
+      (balance, line) => balance + (line.side === 'DEBIT' ? line.amountMinor : -line.amountMinor),
+      0
+    )
+  ).toBe(0);
+  expect(db.pharmacyUnidentifiedReturnHold.findFirst).toHaveBeenCalledWith({
+    where: { id: 'hold', organizationId: 'org' },
+    include: {
+      saleLine: { include: { returnLines: true, unidentifiedReturnHolds: true } },
+    },
+  });
+});
+
+it('rejects an unidentified return from another branch before posting', async () => {
+  const postingCalls = vi.mocked(postJournalEntry).mock.calls.length;
+  const db = {
+    pharmacyUnidentifiedReturnHold: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'hold', branchId: 'other-branch' }),
+    },
+  };
+
+  await expect(
+    postUnidentifiedSaleReturnEntry(
+      db as unknown as ScopedDb,
+      { organizationId: 'org', branchId: 'branch', actorId: 'actor' },
+      { holdingId: 'hold', at: new Date('2026-10-21') }
+    )
+  ).rejects.toThrow('CROSS_BRANCH_REFERENCE');
+  expect(vi.mocked(postJournalEntry).mock.calls).toHaveLength(postingCalls);
 });
 
 it('records a zero-minor-unit slice and assigns the rounding remainder to a later hold', async () => {
