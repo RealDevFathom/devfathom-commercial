@@ -90,4 +90,20 @@ describe('finance.getInvoiceById issuer', () => {
     await expect(caller('org-other').getInvoiceById({ id: 'invoice-1' })).resolves.toBeNull();
     expect(mocks.findOrganization).not.toHaveBeenCalled();
   });
+
+  it('returns the tenant identity when optional branding is not configured', async () => {
+    mocks.findOrganization.mockResolvedValue({
+      displayName: 'Northstar Studio',
+      legalName: 'Northstar Studio Limited',
+      brand: null,
+    });
+
+    await expect(caller().getInvoiceById({ id: 'invoice-1' })).resolves.toMatchObject({
+      issuer: {
+        displayName: 'Northstar Studio',
+        legalName: 'Northstar Studio Limited',
+        brand: null,
+      },
+    });
+  });
 });
