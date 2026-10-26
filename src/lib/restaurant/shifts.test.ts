@@ -502,9 +502,10 @@ describe('cancelShift', () => {
     });
 
     await expect(cancelShift(db, shift.id, { now: NOON })).rejects.toMatchObject({
+      message: 'This shift cannot be cancelled while the employee is clocked in.',
       reason: 'ACTIVE_ATTENDANCE',
     });
-    expect(shifts[0]).toMatchObject({ status: 'SCHEDULED', cancelledAt: null });
+    expect(shifts[0]).toMatchObject({ status: 'SCHEDULED', cancelledAt: null, version: 1 });
   });
 
   it('allows cancellation after the employee has clocked out', async () => {
