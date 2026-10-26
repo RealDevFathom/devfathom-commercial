@@ -289,6 +289,22 @@ describe('branch authorization', () => {
     expect(usedActions()).toContain('restaurant:configure');
   });
 
+  it('allows configured staff to mutate a purchase order from another branch', async () => {
+    mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b2', locationId: 'loc2' });
+    mocks.submitPurchaseOrder.mockResolvedValue({ ...minimalOrder(), branchId: 'b2' });
+
+    await expect(
+      caller().submitPurchaseOrder({ purchaseOrderId: 'po2' })
+    ).resolves.toMatchObject({ branchId: 'b2' });
+
+    expect(usedActions()).toContain('restaurant:configure');
+    expect(mocks.submitPurchaseOrder).toHaveBeenCalledWith(expect.anything(), 'po2');
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), {
+      targetType: 'RestaurantPurchaseOrder',
+      targetId: 'po2',
+    });
+  });
+
   it('denies branch-limited staff access to purchase orders and receipts from another branch', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
     mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b2', locationId: 'loc2' });
