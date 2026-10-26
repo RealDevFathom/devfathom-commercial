@@ -388,7 +388,7 @@ describe('PharmacyCounterConsole customer linking', () => {
       'Loyalty consent is required before linking this customer or redeeming loyalty points.'
     );
     expect(notice).not.toHaveTextContent(/dispensing/i);
-    expect(mocks.mutations.linkCustomer).toHaveBeenCalledWith({
+    expect(mocks.mutations.linkCustomer).toHaveBeenCalledExactlyOnceWith({
       branchId: 'branch-a',
       saleId: 'sale-a',
       patientId: 'patient-a',
