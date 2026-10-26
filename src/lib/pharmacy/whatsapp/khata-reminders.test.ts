@@ -7,6 +7,7 @@ const store = vi.hoisted(() => ({
   customers: [] as Array<Record<string, unknown>>,
   consents: [] as Array<Record<string, unknown>>,
   logs: [] as LogRow[],
+  updates: [] as Array<{ where: { id: string; organizationId?: string }; data: object }>,
   /** The workspace zone the organization row holds. */
   timezone: 'Asia/Karachi',
 }));
@@ -76,8 +77,20 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         store.logs.push(created);
         return [{ id: created.id }];
       },
-      update: async ({ where, data }: { where: { id: string }; data: object }) => {
-        const log = store.logs.find((row) => row.id === where.id)!;
+      update: async ({
+        where,
+        data,
+      }: {
+        where: { id: string; organizationId?: string };
+        data: object;
+      }) => {
+        store.updates.push({ where, data });
+        const log = store.logs.find(
+          (row) =>
+            row.id === where.id &&
+            (where.organizationId === undefined || row.organizationId === where.organizationId)
+        );
+        if (!log) throw new Error('Message log not found in organization');
         Object.assign(log, data);
         return log;
       },
@@ -130,6 +143,7 @@ beforeEach(() => {
   store.customers = [];
   store.consents = [];
   store.logs = [];
+  store.updates = [];
   store.timezone = 'Asia/Karachi';
 });
 
@@ -257,6 +271,20 @@ describe('processDueWhatsAppKhataReminders', () => {
     expect(store.logs).toHaveLength(1);
   });
 
+  it('cannot update a compatibility log outside the owning organization', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(store.updates[0]).toMatchObject({
+      where: { id: 'log-1', organizationId: 'org_a' },
+      data: { status: 'IGNORED' },
+    });
+  });
+
   it('honors the other legacy epoch bucket overlapping a Karachi week', async () => {
     const friday = new Date('2026-10-23T08:00:00.000Z');
     const legacySentAt = new Date('2026-10-20T08:00:00.000Z');
@@ -311,6 +339,33 @@ describe('processDueWhatsAppKhataReminders', () => {
 
     expect(provider.calls).toHaveLength(1);
     expect(store.logs.filter((log) => log.dedupeKey === legacyKey)).toHaveLength(1);
+  });
+
+  it('uses only Karachi ISO-week claims after the compatibility window', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const sunday = await processDueWhatsAppKhataReminders({
+      now: new Date('2026-11-08T08:00:00.000Z'),
+      config,
+      provider,
+    });
+    const monday = await processDueWhatsAppKhataReminders({
+      now: new Date('2026-11-09T08:00:00.000Z'),
+      config,
+      provider,
+    });
+
+    expect(sunday).toMatchObject({ prepared: 1, duplicate: 0 });
+    expect(monday).toMatchObject({ prepared: 1, duplicate: 0 });
+    expect(provider.calls).toHaveLength(2);
+    expect(store.logs.map((log) => log.dedupeKey)).toEqual([
+      'khata:family-1:w2026-45',
+      'khata:family-1:w2026-46',
+    ]);
+    expect(store.updates).toEqual([]);
   });
 
   it.each([

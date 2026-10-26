@@ -21,6 +21,9 @@ const KHATA_TIME_ZONE = 'Asia/Karachi';
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
 const KARACHI_UTC_OFFSET_MS = 5 * 60 * 60 * 1_000;
+// Old workers use epoch-week keys. Keep claiming those keys for one rollout
+// week, then let the Karachi ISO-week cadence operate independently.
+const LEGACY_WEEK_COMPATIBILITY_END = new Date('2026-11-02T19:00:00.000Z').getTime();
 
 /** Do not nag over a few paisa: a reminder needs a real outstanding balance. */
 const DEFAULT_MIN_BALANCE_MINOR = 10_000;
@@ -260,56 +263,57 @@ export async function processDueWhatsAppKhataReminders(
         month: '2-digit',
         day: '2-digit',
       }).format(now);
-      // Claim the exact key a pre-migration worker uses before claiming the new
-      // key. Both inserts share this transaction, so the unique constraint
-      // serializes old/new workers during rolling deployment. This temporarily
-      // preserves the legacy Thursday boundary rather than risking two sends.
-      const legacyClaimId = await claimMessageLogInTransaction(db, {
-        organizationId: account.organizationId,
-        direction: 'OUTBOUND',
-        status: 'PENDING',
-        kind: 'KHATA_REMINDER',
-        dedupeKey: legacyWeekKey(account.familyAccountId, now),
-        branchId: account.branchId,
-        customerId: customer.id,
-        patientId: customer.patientId,
-        phoneLast4: phoneLast4(to),
-        templateName: config.templates.khataReminder,
-        dueDate: plan.dueDate,
-      });
-      if (!legacyClaimId) {
-        return {
-          customerId: customer.id,
-          patientId: customer.patientId,
-          to,
-          logId: null,
-          skipReason: undefined,
-        };
-      }
-      await db.pharmacyMessageLog.update({
-        where: { id: legacyClaimId },
-        data: { status: 'IGNORED' },
-      });
-      const overlap = overlappingLegacyWeek(account.familyAccountId, now);
-      const otherLegacyClaim = await db.pharmacyMessageLog.findFirst({
-        where: {
+      if (now.getTime() < LEGACY_WEEK_COMPATIBILITY_END) {
+        // Claim the exact key a pre-migration worker uses before claiming the
+        // new key. The one-week rollout window serializes old/new workers
+        // without permanently retaining the legacy Thursday boundary.
+        const legacyClaimId = await claimMessageLogInTransaction(db, {
           organizationId: account.organizationId,
+          direction: 'OUTBOUND',
+          status: 'PENDING',
           kind: 'KHATA_REMINDER',
-          dedupeKey: {
-            in: overlap.keys.filter((key) => key !== legacyWeekKey(account.familyAccountId, now)),
-          },
-          createdAt: { gte: overlap.start, lt: overlap.end },
-        },
-        select: { id: true },
-      });
-      if (otherLegacyClaim) {
-        return {
+          dedupeKey: legacyWeekKey(account.familyAccountId, now),
+          branchId: account.branchId,
           customerId: customer.id,
           patientId: customer.patientId,
-          to,
-          logId: null,
-          skipReason: undefined,
-        };
+          phoneLast4: phoneLast4(to),
+          templateName: config.templates.khataReminder,
+          dueDate: plan.dueDate,
+        });
+        if (!legacyClaimId) {
+          return {
+            customerId: customer.id,
+            patientId: customer.patientId,
+            to,
+            logId: null,
+            skipReason: undefined,
+          };
+        }
+        await db.pharmacyMessageLog.update({
+          where: { id: legacyClaimId, organizationId: account.organizationId },
+          data: { status: 'IGNORED' },
+        });
+        const overlap = overlappingLegacyWeek(account.familyAccountId, now);
+        const otherLegacyClaim = await db.pharmacyMessageLog.findFirst({
+          where: {
+            organizationId: account.organizationId,
+            kind: 'KHATA_REMINDER',
+            dedupeKey: {
+              in: overlap.keys.filter((key) => key !== legacyWeekKey(account.familyAccountId, now)),
+            },
+            createdAt: { gte: overlap.start, lt: overlap.end },
+          },
+          select: { id: true },
+        });
+        if (otherLegacyClaim) {
+          return {
+            customerId: customer.id,
+            patientId: customer.patientId,
+            to,
+            logId: null,
+            skipReason: undefined,
+          };
+        }
       }
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: account.organizationId,
