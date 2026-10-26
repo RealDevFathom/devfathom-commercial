@@ -335,6 +335,9 @@ describe('staff CRUD', () => {
     });
     expect(mocks.userCreate).not.toHaveBeenCalled();
     expect(mocks.userCount).not.toHaveBeenCalled();
+    expect(mocks.staffCount).not.toHaveBeenCalled();
+    expect(mocks.staffCreate).not.toHaveBeenCalled();
+    expect(mocks.staffJobRoleCreate).not.toHaveBeenCalled();
     expect(mocks.sendEmail).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ emailDelivered: true, resent: true });
   });
