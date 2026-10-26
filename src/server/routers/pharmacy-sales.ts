@@ -611,10 +611,17 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, customerId: z.string().min(1), optedIn: z.boolean() }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
+        if (!hasModule(ctx.entitlements, 'pharmacy-counter')) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Pharmacy counter permission required.',
+          });
+        }
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
         return await ctx.db.$transaction(async (tx) =>
           setCustomerWhatsAppOptIn(
             txDb(tx),
-            await scopeFor(ctx, input.branchId),
+            scope,
             input.customerId,
             input.optedIn
           )

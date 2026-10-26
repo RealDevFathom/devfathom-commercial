@@ -34,6 +34,10 @@ vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
 }));
+vi.mock('@/lib/pharmacy/customer-loyalty', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/customer-loyalty')>()),
+  setCustomerWhatsAppOptIn: vi.fn(async () => ({ whatsappOptIn: true })),
+}));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
@@ -66,6 +70,7 @@ import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { readReturnHistory } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import { setCustomerWhatsAppOptIn } from '@/lib/pharmacy/customer-loyalty';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
@@ -215,6 +220,36 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it('denies WhatsApp consent updates without a counter capability', async () => {
+    const f = fixture([]);
+    assign(f, ['branch-a']);
+
+    await expect(
+      f.caller().setCustomerWhatsAppOptIn({
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        optedIn: true,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(setCustomerWhatsAppOptIn).not.toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('denies WhatsApp consent updates without an assignment to the requested branch', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-b']);
+
+    await expect(
+      f.caller().setCustomerWhatsAppOptIn({
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        optedIn: false,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(setCustomerWhatsAppOptIn).not.toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
   it('rejects status-only completion before opening a transaction', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
