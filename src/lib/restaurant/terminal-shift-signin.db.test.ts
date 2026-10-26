@@ -197,6 +197,14 @@ describeIfDatabase('shift-aware operator sign-in (real DB)', () => {
     expect(afterFour).toEqual({ failedAttempts: 4, lockedUntil: null });
 
     expect(await attempt('000000')).toEqual({ ok: false, reason: 'INVALID' });
+    const afterLockout = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOperatorCredential.findFirstOrThrow({
+        where: { staffProfileId: OPEN.id, type: 'PIN', deviceId: null },
+        select: { failedAttempts: true, lockedUntil: true },
+      })
+    );
+    expect(afterLockout.failedAttempts).toBe(0);
+    expect(afterLockout.lockedUntil?.getTime()).toBeGreaterThan(DURING_SHIFT.getTime());
     await expect(attempt(OPEN.pin)).resolves.toMatchObject({ ok: false, reason: 'LOCKED' });
   });
 
