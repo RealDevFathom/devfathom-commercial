@@ -338,8 +338,10 @@ describe('fail', () => {
   });
 
   it.each([
+    ['complete', 'worker-a', 1],
     ['complete', 'worker-a', 2],
     ['complete', 'worker-b', 1],
+    ['fail', 'worker-a', 1],
     ['fail', 'worker-a', 2],
     ['fail', 'worker-b', 1],
   ] as const)(
