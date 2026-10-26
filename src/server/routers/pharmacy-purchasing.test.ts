@@ -642,6 +642,18 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     // The tenant and branch are not repeated on the nested line: they travel in
     // the composite key of the header.
     expect(line).not.toHaveProperty('organizationId');
+    expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'po_a',
+        organizationId: 'org_a',
+        supplierId: 'supplier_a',
+        branchId: 'branch_a',
+      },
+    });
+    expect(db.pharmacyPurchaseOrderLine.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_a', purchaseOrderId: 'po_a' },
+      select: { id: true },
+    });
   });
 
   it('takes the receiver from the session, never from the payload', async () => {
@@ -717,7 +729,12 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       caller().createGoodsReceipt({ ...RECEIPT, branchId: 'branch_b' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
-      where: { id: 'po_a', supplierId: 'supplier_a', branchId: 'branch_b' },
+      where: {
+        id: 'po_a',
+        organizationId: 'org_a',
+        supplierId: 'supplier_a',
+        branchId: 'branch_b',
+      },
     });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });

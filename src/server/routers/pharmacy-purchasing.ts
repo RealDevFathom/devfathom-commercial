@@ -982,6 +982,7 @@ const purchasingRouter = router({
           !(await ctx.db.pharmacyPurchaseOrder.findFirst({
             where: {
               id: input.purchaseOrderId,
+              organizationId: scope.organizationId,
               supplierId: input.supplierId,
               branchId: input.branchId,
             },
@@ -994,7 +995,10 @@ const purchasingRouter = router({
           ? new Set(
               (
                 await ctx.db.pharmacyPurchaseOrderLine.findMany({
-                  where: { purchaseOrderId: input.purchaseOrderId },
+                  where: {
+                    organizationId: scope.organizationId,
+                    purchaseOrderId: input.purchaseOrderId,
+                  },
                   select: { id: true },
                 })
               ).map((line) => line.id)
