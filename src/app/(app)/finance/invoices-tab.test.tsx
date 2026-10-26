@@ -5,14 +5,14 @@ import { InvoiceRow } from './invoices-tab';
 
 describe('InvoiceRow', () => {
   it.each([
-    { currency: 'PKR', total: 125000, expected: 'Rs 125,000' },
-    { currency: 'USD', total: 125000, expected: '$125,000' },
+    { currency: 'PKR', total: 125000, expected: 'Rs 125,000', unexpected: '$125,000' },
+    { currency: 'USD', total: 125000, expected: '$125,000', unexpected: 'Rs 125,000' },
     { currency: 'PKR', total: '125000.5', expected: 'Rs 125,000.5' },
     { currency: 'PKR', total: -125000, expected: '-Rs 125,000' },
     { currency: 'USD', total: 0, expected: '$0' },
   ])(
     'renders $currency invoice totals with the matching currency symbol',
-    ({ currency, total, expected }) => {
+    ({ currency, total, expected, unexpected }) => {
       render(
         <InvoiceRow
           inv={{
@@ -30,6 +30,7 @@ describe('InvoiceRow', () => {
       );
 
       expect(screen.getByText(expected)).toBeInTheDocument();
+      if (unexpected) expect(screen.queryByText(unexpected)).not.toBeInTheDocument();
     }
   );
 });
