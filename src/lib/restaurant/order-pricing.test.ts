@@ -391,6 +391,7 @@ describe('resolveOrderPricingRefs', () => {
     const db = makeDb({
       publication: { ...basePublication, branchId: 'branch_2', channels: ['TAKEAWAY'] },
     });
+    const findPriceListVersions = vi.spyOn(db.restaurantPriceListVersion, 'findMany');
 
     await expect(
       resolveOrderPricingRefs(db, {
@@ -400,6 +401,7 @@ describe('resolveOrderPricingRefs', () => {
         at: AT,
       })
     ).rejects.toMatchObject({ reason: 'PUBLICATION_NOT_FOUND' });
+    expect(findPriceListVersions).not.toHaveBeenCalled();
   });
 
   it('rejects an unpublished channel for a publication belonging to the requested branch', async () => {
