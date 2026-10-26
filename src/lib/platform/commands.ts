@@ -1879,6 +1879,16 @@ async function runCommand(
       let correctionReason: string | undefined;
       const before = await db.organization.findUnique({ where: { id: organizationId } });
       if (!before) throw new PlatformSecurityError('Organization not found.', 400);
+      if (
+        data.deploymentMode === 'DEDICATED' &&
+        data.deploymentMode !== before.deploymentMode &&
+        !isDedicatedProvisioningConfigured()
+      ) {
+        throw new PlatformSecurityError(
+          'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
+          400
+        );
+      }
       const changesVertical = data.vertical !== undefined && data.vertical !== before.vertical;
       // A vertical correction is deliberately narrower than ordinary onboarding
       // edits: it is an early correction only, before activation or any

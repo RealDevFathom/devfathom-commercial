@@ -12,6 +12,12 @@ vi.mock('server-only', () => ({}));
 vi.mock('bcryptjs', () => ({ hash: vi.fn(async () => 'hashed'), compare: vi.fn() }));
 vi.mock('@/lib/secret-crypto', () => ({ encryptSecret: vi.fn(), decryptSecret: vi.fn() }));
 vi.mock('@/lib/platform/auth', () => ({ assertPlatformCapability: vi.fn() }));
+const { provisioningConfigured } = vi.hoisted(() => ({
+  provisioningConfigured: vi.fn((): boolean => false),
+}));
+vi.mock('@/lib/platform/provisioning-config', () => ({
+  isDedicatedProvisioningConfigured: provisioningConfigured,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withPlatformDb: vi.fn(async (run: (db: unknown) => Promise<unknown>) => run(platformDb)),
 }));
@@ -30,6 +36,8 @@ const platformDb = {
     findUnique: vi.fn(async () => before),
     update: vi.fn(async (args: { data: object }) => ({ ...before, ...args.data })),
   },
+  organizationDeployment: { upsert: vi.fn(async () => ({ id: 'deployment_1' })) },
+  platformJob: { create: vi.fn(async () => ({ id: 'job_1' })) },
   platformAuditLog: { create: vi.fn(async () => ({ id: 'audit_1' })) },
 };
 
@@ -40,7 +48,11 @@ const request = new Request('https://admin.devfathom.com/api/platform/control', 
 const update = (timezone: string) =>
   executePlatformCommand(actor, 'organization.update', { id: 'org_1', timezone }, request);
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  provisioningConfigured.mockReturnValue(false);
+  platformDb.organization.findUnique.mockResolvedValue(before);
+});
 
 describe('organization.update time zone', () => {
   it.each(['PKT', 'UTC+5', 'Mars/Olympus'])(
@@ -60,6 +72,52 @@ describe('organization.update time zone', () => {
     expect(platformDb.organization.update).toHaveBeenCalledExactlyOnceWith({
       where: { id: 'org_1' },
       data: expect.objectContaining({ timezone: 'America/Chicago' }),
+    });
+  });
+});
+
+describe('organization.update deployment mode', () => {
+  it('refuses switching to dedicated when dedicated provisioning is unavailable', async () => {
+    const error = await executePlatformCommand(
+      actor,
+      'organization.update',
+      { id: 'org_1', deploymentMode: 'DEDICATED' },
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      message: expect.stringContaining('Dedicated provisioning is unavailable'),
+      status: 400,
+    });
+    expect(platformDb.organization.update).not.toHaveBeenCalled();
+    expect(platformDb.organizationDeployment.upsert).not.toHaveBeenCalled();
+    expect(platformDb.platformJob.create).not.toHaveBeenCalled();
+  });
+
+  it('preserves the dedicated provisioning flow when it is configured', async () => {
+    provisioningConfigured.mockReturnValue(true);
+
+    await executePlatformCommand(
+      actor,
+      'organization.update',
+      { id: 'org_1', deploymentMode: 'DEDICATED' },
+      request
+    );
+
+    expect(platformDb.organization.update).toHaveBeenCalledWith({
+      where: { id: 'org_1' },
+      data: expect.objectContaining({ deploymentMode: 'DEDICATED' }),
+    });
+    expect(platformDb.organizationDeployment.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: { mode: 'DEDICATED', status: 'PENDING' },
+      })
+    );
+    expect(platformDb.platformJob.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org_1',
+        type: 'PROVISION_DEDICATED',
+      }),
     });
   });
 });
