@@ -367,6 +367,41 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
       consumed: 1,
       nextNumber: f.lease.blockStart + 1,
     });
+    const journal = await inOrg(ORG_A, async (db) => {
+      const sale = await db.pharmacySale.findFirstOrThrow({
+        where: { id: results[0].saleId },
+        select: { lines: { select: { id: true } }, tenders: { select: { id: true } } },
+      });
+      return db.financeJournalEntry.findMany({
+        where: {
+          OR: [
+            { sourceKind: 'PHARMACY_SALE_LINE', sourceId: { in: sale.lines.map(({ id }) => id) } },
+            { sourceKind: 'PHARMACY_TENDER', sourceId: { in: sale.tenders.map(({ id }) => id) } },
+          ],
+        },
+        select: { lines: { select: { side: true, amountMinor: true } } },
+      });
+    });
+    expect(journal).toHaveLength(2);
+    for (const entry of journal) {
+      const debit = entry.lines
+        .filter(({ side }) => side === 'DEBIT')
+        .reduce((sum, { amountMinor }) => sum + amountMinor, 0);
+      const credit = entry.lines
+        .filter(({ side }) => side === 'CREDIT')
+        .reduce((sum, { amountMinor }) => sum + amountMinor, 0);
+      expect(debit).toBe(credit);
+    }
+    const totals = journal
+      .flatMap(({ lines }) => lines)
+      .reduce(
+        (sum, line) =>
+          line.side === 'DEBIT'
+            ? { ...sum, debit: sum.debit + line.amountMinor }
+            : { ...sum, credit: sum.credit + line.amountMinor },
+        { debit: 0, credit: 0 }
+      );
+    expect(totals).toEqual({ debit: 250, credit: 250 });
   });
   it.each(['signature', 'scope', 'payload'] as const)(
     'rejects bad snapshot %s with no effects',
