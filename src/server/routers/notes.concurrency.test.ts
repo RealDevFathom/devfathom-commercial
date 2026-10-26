@@ -1,0 +1,104 @@
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('server-only', () => ({}));
+vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
+vi.mock('@/server/audit', () => ({
+  annotateAudit: vi.fn(),
+  ipFromHeaders: vi.fn(() => null),
+  isAuditExcludedPath: vi.fn(() => true),
+  recordTrpcAudit: vi.fn(),
+}));
+
+import { notesRouter } from './notes';
+
+const doc = (text: string) => ({ type: 'doc', content: [{ type: 'text', text }] });
+
+describe('notes.update concurrency', () => {
+  it('serializes snapshot and update so every accepted edit remains in history', async () => {
+    let note = {
+      id: 'note_1',
+      title: 'Shared plan',
+      contentJson: doc('A'),
+      contentText: 'A',
+      authorId: 'author',
+      visibility: 'TEAM',
+      projectId: null,
+      clientId: null,
+      shares: [],
+      mentions: [],
+    };
+    const revisions: Array<{ contentText: string; editedById: string }> = [];
+    let transactionTail = Promise.resolve();
+
+    const tx = {
+      $queryRaw: vi.fn(async () => [{ id: note.id }]),
+      note: {
+        findUnique: vi.fn(async () => structuredClone(note)),
+        findMany: vi.fn(async () => []),
+        update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          note = { ...note, ...data } as typeof note;
+          return structuredClone(note);
+        }),
+      },
+      noteRevision: {
+        create: vi.fn(async ({ data }: { data: { contentText: string; editedById: string } }) => {
+          revisions.push({ contentText: data.contentText, editedById: data.editedById });
+        }),
+        findMany: vi.fn(async () => []),
+        deleteMany: vi.fn(),
+      },
+      noteLink: { deleteMany: vi.fn(), createMany: vi.fn() },
+      noteMention: { deleteMany: vi.fn(), createMany: vi.fn() },
+      user: { findMany: vi.fn(async () => []) },
+    };
+    const db = {
+      ...tx,
+      project: { findMany: vi.fn() },
+      client: { findMany: vi.fn() },
+      // A transaction queue models PostgreSQL's row-lock serialization. Keeping
+      // findUnique on the root also makes this test fail against the old router,
+      // where both callers read A before entering their transactions.
+      $transaction: vi.fn(async (callback: (client: typeof tx) => Promise<unknown>) => {
+        const run = transactionTail.then(() => callback(tx));
+        transactionTail = run.then(
+          () => undefined,
+          () => undefined
+        );
+        return run;
+      }),
+    };
+    const caller = (userId: string) =>
+      notesRouter.createCaller({
+        db,
+        session: {
+          expires: 'later',
+          user: {
+            id: userId,
+            name: userId,
+            role: 'EMPLOYEE',
+            department: 'ENGINEERING',
+            status: 'ACTIVE',
+            organizationId: 'org_1',
+          },
+        },
+        organization: { id: 'org_1' },
+        entitlements: { organizationId: 'org_1', enabledModules: [], modules: [], limits: {} },
+        support: null,
+        requestMeta: { ip: null, userAgent: null },
+        audit: { detail: {} },
+      } as never);
+
+    await Promise.all([
+      caller('editor_b').update({ id: note.id, contentJson: doc('B') }),
+      caller('editor_c').update({ id: note.id, contentJson: doc('C') }),
+    ]);
+
+    expect(note.contentText).toBe('C');
+    expect(revisions).toEqual([
+      { contentText: 'A', editedById: 'editor_b' },
+      { contentText: 'B', editedById: 'editor_c' },
+    ]);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(tx.$queryRaw.mock.calls[0]?.[0].join('?')).toContain('FOR UPDATE');
+  });
+});
