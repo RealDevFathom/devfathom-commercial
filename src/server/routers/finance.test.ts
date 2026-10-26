@@ -86,6 +86,7 @@ describe('finance.getFinancialSummary', () => {
     expect(summary.monthlyProfit).toEqual([{ currency: 'USD', amount: 200 }]);
     expect(summary.yearlyExpense).toEqual([{ currency: 'USD', amount: 100 }]);
     expect(summary.yearlyProfit).toEqual([{ currency: 'USD', amount: 200 }]);
+    expect(mocks.transactionGroupBy).toHaveBeenCalledTimes(4);
     expect(mocks.recurringFindMany).not.toHaveBeenCalled();
   });
 });
