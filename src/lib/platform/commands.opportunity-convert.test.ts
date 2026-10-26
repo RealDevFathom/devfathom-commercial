@@ -117,12 +117,14 @@ describe('crm.opportunity.convert', () => {
     expect(mocks.organizationCreate).not.toHaveBeenCalled();
     expect(mocks.roleCreate).not.toHaveBeenCalled();
     expect(mocks.departmentCreateMany).not.toHaveBeenCalled();
+    expect(mocks.userFindFirst).not.toHaveBeenCalled();
     expect(mocks.userCreate).not.toHaveBeenCalled();
     expect(mocks.brandCreate).not.toHaveBeenCalled();
     expect(mocks.emailSettingsCreate).not.toHaveBeenCalled();
     expect(mocks.deploymentCreate).not.toHaveBeenCalled();
     expect(mocks.jobCreate).not.toHaveBeenCalled();
     expect(mocks.lifecycleCreate).not.toHaveBeenCalled();
+    expect(mocks.opportunityFindUnique).not.toHaveBeenCalled();
     expect(mocks.opportunityUpdate).not.toHaveBeenCalled();
     expect(mocks.stageEventCreate).not.toHaveBeenCalled();
     expect(mocks.accountUpdate).not.toHaveBeenCalled();
