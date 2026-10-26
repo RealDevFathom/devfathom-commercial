@@ -5,6 +5,7 @@ vi.mock('@/lib/pharmacy/supplier-action-links', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pharmacy/supplier-action-links')>();
   return {
     ...actual,
+    compensateSupplierDocumentUpload: vi.fn(),
     getSupplierLinkAuditTarget: vi.fn(),
     submitSupplierEvidence: vi.fn(),
     uploadSupplierDocument: vi.fn(),
@@ -14,6 +15,7 @@ vi.mock('@/lib/pharmacy/supplier-action-links', async (importOriginal) => {
 import { recordAudit } from '@/server/audit';
 import {
   SupplierLinkError,
+  compensateSupplierDocumentUpload,
   getSupplierLinkAuditTarget,
   submitSupplierEvidence,
   uploadSupplierDocument,
@@ -21,8 +23,11 @@ import {
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
 
 const target = { id: 'link_a', organizationId: 'org_a', branchId: 'branch_a' };
+const db = {
+  $transaction: vi.fn(async (run: (tx: typeof db) => Promise<unknown>) => run(db)),
+};
 const context = {
-  db: {},
+  db,
   entitlements: { organizationId: 'org_a' },
   requestMeta: { ip: '192.0.2.1', userAgent: 'supplier-browser' },
 };
@@ -58,6 +63,7 @@ describe('pharmacy supplier signed-link auditing', () => {
       }),
       context.db
     );
+    expect(db.$transaction).toHaveBeenCalledOnce();
   });
 
   it('audits a rejected supplier response and preserves the public error mapping', async () => {
@@ -88,7 +94,10 @@ describe('pharmacy supplier signed-link auditing', () => {
   });
 
   it('audits a successful document upload', async () => {
-    vi.mocked(uploadSupplierDocument).mockResolvedValue({ id: 'document_a' } as never);
+    vi.mocked(uploadSupplierDocument).mockResolvedValue({
+      document: { id: 'document_a', storageUri: 'supplier-po/link_a/submission_a/hash' },
+      storedObjectCreated: true,
+    } as never);
 
     await pharmacySupplierLinksRouter.createCaller(context as never).uploadDocument({
       token: 'link.secret.signature',
@@ -220,5 +229,26 @@ describe('pharmacy supplier signed-link auditing', () => {
     ).rejects.toThrow('audit insert failed');
 
     expect(recordAudit).toHaveBeenCalledWith(expect.any(Object), context.db);
+  });
+
+  it('compensates a stored document when its success audit insert fails', async () => {
+    const upload = {
+      document: { id: 'document_a', storageUri: 'supplier-po/link_a/submission_a/hash' },
+      storedObjectCreated: true,
+    };
+    vi.mocked(uploadSupplierDocument).mockResolvedValue(upload as never);
+    vi.mocked(recordAudit).mockRejectedValueOnce(new Error('audit insert failed'));
+
+    await expect(
+      pharmacySupplierLinksRouter.createCaller(context as never).uploadDocument({
+        token: 'link.secret.signature',
+        idempotencyKey: 'idem_document_audit_failure',
+        fileName: 'invoice.pdf',
+        declaredMimeType: 'application/pdf',
+        contentBase64: 'JVBERg==',
+      })
+    ).rejects.toThrow('audit insert failed');
+
+    expect(compensateSupplierDocumentUpload).toHaveBeenCalledWith('org_a', upload);
   });
 });

@@ -4,6 +4,7 @@ import { assertInOrganization } from '../org-refs';
 import { publicProcedure, protectedProcedure, router, type TRPCContext } from '../trpc';
 import {
   SupplierLinkError,
+  compensateSupplierDocumentUpload,
   getSupplierActionPage,
   getSupplierLinkAuditTarget,
   issueSupplierActionLink,
@@ -45,6 +46,7 @@ type SupplierAuditTarget = { id: string; organizationId: string; branchId: strin
 
 async function auditSupplierLinkAction(
   ctx: TRPCContext,
+  db: TRPCContext['db'],
   target: SupplierAuditTarget | null,
   action: 'submit' | 'uploadDocument',
   outcome: 'SUCCESS' | 'FAILURE',
@@ -77,7 +79,7 @@ async function auditSupplierLinkAction(
       errorCode: reason,
       errorMessage: reason,
     },
-    ctx.db
+    db
   );
 }
 
@@ -104,6 +106,7 @@ function auditedSupplierLinkProcedure(action: 'submit' | 'uploadDocument') {
         const rawKind = typeof raw?.kind === 'string' ? raw.kind : null;
         await auditSupplierLinkAction(
           ctx,
+          ctx.db,
           target,
           action,
           'FAILURE',
@@ -145,12 +148,15 @@ export const pharmacySupplierLinksRouter = router({
       );
       let result;
       try {
-        result = await submitSupplierEvidence(ctx.db, input);
+        result = await ctx.db.$transaction(async (tx) => {
+          const submission = await submitSupplierEvidence(tx, input);
+          await auditSupplierLinkAction(ctx, tx, target, 'submit', 'SUCCESS', input.kind);
+          return submission;
+        });
       } catch (error) {
-        await auditSupplierLinkAction(ctx, target, 'submit', 'FAILURE', input.kind, error);
+        await auditSupplierLinkAction(ctx, ctx.db, target, 'submit', 'FAILURE', input.kind, error);
         mapError(error);
       }
-      await auditSupplierLinkAction(ctx, target, 'submit', 'SUCCESS', input.kind);
       return result;
     }),
   uploadDocument: auditedSupplierLinkProcedure('uploadDocument')
@@ -171,15 +177,31 @@ export const pharmacySupplierLinksRouter = router({
         input.token,
         ctx.entitlements.organizationId
       );
-      let result;
+      let upload: Awaited<ReturnType<typeof uploadSupplierDocument>> | undefined;
       try {
-        result = await uploadSupplierDocument(ctx.db, {
-          ...input,
-          content: Buffer.from(input.contentBase64, 'base64'),
+        upload = await ctx.db.$transaction(async (tx) => {
+          const stored = await uploadSupplierDocument(tx, {
+            ...input,
+            content: Buffer.from(input.contentBase64, 'base64'),
+          });
+          // Retain the storage receipt before the audit insert so the catch
+          // path can compensate when that insert aborts the DB transaction.
+          upload = stored;
+          await auditSupplierLinkAction(
+            ctx,
+            tx,
+            target,
+            'uploadDocument',
+            'SUCCESS',
+            'DOCUMENT'
+          );
+          return stored;
         });
       } catch (error) {
+        if (upload && target) await compensateSupplierDocumentUpload(target.organizationId, upload);
         await auditSupplierLinkAction(
           ctx,
+          ctx.db,
           target,
           'uploadDocument',
           'FAILURE',
@@ -188,8 +210,7 @@ export const pharmacySupplierLinksRouter = router({
         );
         mapError(error);
       }
-      await auditSupplierLinkAction(ctx, target, 'uploadDocument', 'SUCCESS', 'DOCUMENT');
-      return result;
+      return upload.document;
     }),
   createRelationship: protectedProcedure
     .input(z.object({ branchId: id, supplierId: id }).strict())

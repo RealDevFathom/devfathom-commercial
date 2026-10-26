@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { Prisma } from '@/generated/prisma/client';
-import { putUpload } from '@/lib/storage';
+import { deleteUpload, putUpload } from '@/lib/storage';
 import {
   structuralSupplierFileScanner,
   SupplierFileScanError,
@@ -292,8 +292,6 @@ export async function uploadSupplierDocument(
     payload,
     now: input.now,
   });
-  const objectName = `supplier-po/${link.id}/${file.sha256}`;
-  await putUpload(link.organizationId, objectName, input.content, file.mimeType);
   const existing = await db.pharmacySupplierDocument.findUnique({
     where: {
       organizationId_submissionId_sha256: {
@@ -303,17 +301,37 @@ export async function uploadSupplierDocument(
       },
     },
   });
-  if (existing) return existing;
-  return db.pharmacySupplierDocument.create({
-    data: {
-      organizationId: link.organizationId,
-      branchId: link.branchId,
-      submissionId: submission.id,
-      fileName: input.fileName,
-      ...file,
-      storageUri: objectName,
-      scanMode: file.mode,
-      malwareChecked: file.mode === 'MALWARE_SCANNED',
-    },
-  });
+  if (existing) return { document: existing, storedObjectCreated: false };
+
+  // Include the submission in the key so compensation can never remove an
+  // object referenced by an earlier submission with identical contents.
+  const objectName = `supplier-po/${link.id}/${submission.id}/${file.sha256}`;
+  await putUpload(link.organizationId, objectName, input.content, file.mimeType);
+  let document;
+  try {
+    document = await db.pharmacySupplierDocument.create({
+      data: {
+        organizationId: link.organizationId,
+        branchId: link.branchId,
+        submissionId: submission.id,
+        fileName: input.fileName,
+        ...file,
+        storageUri: objectName,
+        scanMode: file.mode,
+        malwareChecked: file.mode === 'MALWARE_SCANNED',
+      },
+    });
+  } catch (error) {
+    await deleteUpload(link.organizationId, objectName);
+    throw error;
+  }
+  return { document, storedObjectCreated: true };
+}
+
+/** Undo the non-transactional storage part of a failed document transaction. */
+export async function compensateSupplierDocumentUpload(
+  organizationId: string,
+  upload: Awaited<ReturnType<typeof uploadSupplierDocument>>
+): Promise<void> {
+  if (upload.storedObjectCreated) await deleteUpload(organizationId, upload.document.storageUri);
 }

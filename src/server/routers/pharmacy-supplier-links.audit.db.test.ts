@@ -18,6 +18,7 @@ vi.mock('@/lib/pharmacy/supplier-action-links', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pharmacy/supplier-action-links')>();
   return {
     ...actual,
+    compensateSupplierDocumentUpload: vi.fn(),
     getSupplierLinkAuditTarget: vi.fn(),
     submitSupplierEvidence: vi.fn(),
     uploadSupplierDocument: vi.fn(),
@@ -170,7 +171,10 @@ describeIfDatabase('pharmacy supplier signed-link audit persistence', () => {
       organizationId: ORGANIZATION,
       branchId: BRANCH,
     });
-    vi.mocked(uploadSupplierDocument).mockResolvedValue({ id: `document_${suffix}` } as never);
+    vi.mocked(uploadSupplierDocument).mockResolvedValue({
+      document: { id: `document_${suffix}` },
+      storedObjectCreated: false,
+    } as never);
 
     await deps.withTenantDb(ORGANIZATION, async (db) => {
       const caller = deps.router.createCaller({
