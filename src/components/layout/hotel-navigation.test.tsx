@@ -167,9 +167,6 @@ describe('Hotel navigation composition', () => {
     const hrefs = navigation.map((n) => n.href);
     expect(new Set(hrefs).size).toBe(64);
     expect(new Set(hrefs)).toEqual(new Set([...priorHrefs, ...hospitalityHrefs]));
-    expect(visibleNavigation(everyHotelModule, 'ADMIN', EVERY_RAIL_CAPABILITY)).not.toContainEqual(
-      expect.objectContaining({ href: MENU_IMPORT })
-    );
     expect(navigation.filter((n) => n.group === 'Hospitality').map((n) => n.href)).toEqual(
       hospitalityHrefs
     );
@@ -178,6 +175,15 @@ describe('Hotel navigation composition', () => {
     for (const href of [ROOMS, MEAL_PLANS, SPACES, GUEST_MESSAGES])
       expect(moduleForPath(href)).toBe('hotel-core');
     expect(moduleForPath('/hotel/future')).toBeNull();
+  });
+  it('keeps restaurant menu import hidden from fully entitled hospitality administrators', () => {
+    const visibleHrefs = visibleNavigation(
+      everyHotelModule,
+      'ADMIN',
+      EVERY_RAIL_CAPABILITY
+    ).map((item) => item.href);
+
+    expect(visibleHrefs).not.toContain(MENU_IMPORT);
   });
   it('licenses each entry on its module and opens it on the capability its page checks', () => {
     const entry = (href: string) => navigation.find((n) => n.href === href)!;
