@@ -1877,6 +1877,16 @@ async function runCommand(
         .parse(payload);
       const { id: organizationId, ...data } = input;
       let correctionReason: string | undefined;
+      // Deployment-mode decisions must use the current value at the point of
+      // the write. Without this lock, an unchanged DEDICATED request can read
+      // a stale value, race a transition to SHARED, and silently restore
+      // DEDICATED without creating its provisioning job.
+      if (data.deploymentMode !== undefined) {
+        await db.$queryRawUnsafe(
+          'SELECT id FROM organizations WHERE id = $1 FOR UPDATE',
+          organizationId
+        );
+      }
       const before = await db.organization.findUnique({ where: { id: organizationId } });
       if (!before) throw new PlatformSecurityError('Organization not found.', 400);
       if (

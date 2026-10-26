@@ -32,6 +32,7 @@ const before = {
   timezone: 'Asia/Karachi',
 };
 const platformDb = {
+  $queryRawUnsafe: vi.fn(async () => [{ id: 'org_1' }]),
   organization: {
     findUnique: vi.fn(async () => before),
     update: vi.fn(async (args: { data: object }) => ({ ...before, ...args.data })),
@@ -89,6 +90,13 @@ describe('organization.update deployment mode', () => {
       message: expect.stringContaining('Dedicated provisioning is unavailable'),
       status: 400,
     });
+    expect(platformDb.$queryRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('FOR UPDATE'),
+      'org_1'
+    );
+    expect(platformDb.$queryRawUnsafe.mock.invocationCallOrder[0]).toBeLessThan(
+      platformDb.organization.findUnique.mock.invocationCallOrder[0]!
+    );
     expect(platformDb.organization.update).not.toHaveBeenCalled();
     expect(platformDb.organizationDeployment.upsert).not.toHaveBeenCalled();
     expect(platformDb.platformJob.create).not.toHaveBeenCalled();
