@@ -307,6 +307,21 @@ describe('restaurant catering lifecycle', () => {
       })
     ).rejects.toBeDefined();
   });
+
+  it.each([
+    { portions: '1', unitPrice: '1.9999' },
+    { portions: '1.2345', unitPrice: '1.99' },
+  ])('rejects line decimals beyond their durable database scale', async (decimals) => {
+    await expect(
+      caller().addLine({
+        orderId: 'order_1',
+        recipeId: 'recipe_1',
+        description: 'Precision test',
+        ...decimals,
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.restaurantCateringOrderLine.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('restaurant catering production and cost', () => {
