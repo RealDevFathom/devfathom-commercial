@@ -125,11 +125,38 @@ const MATRIX = {
   deviceUsable: true,
 };
 
-function cashSale(units = 1) {
+let cashCommandSequence = 0;
+function cashSale(units = 1, receiptNumber = 900) {
+  const receiptEnvelope = envelopeFor('RULES', { kind: 'RULES' });
   return {
+    commandId: `command_${++cashCommandSequence}`,
     deviceId: SCOPE.deviceId,
     action: 'CASH_OTC_SALE' as const,
-    payload: { lines: [{ medicineId: 'med_1', units }] },
+    payload: {
+      leasedReceipt: {
+        leaseId: 'lease_1',
+        receiptNumber,
+        originalSaleAt: '2026-09-02T12:05:00.000Z',
+        envelope: receiptEnvelope,
+        signature: signing.signSnapshotEnvelope(receiptEnvelope),
+      },
+      snapshots: [],
+      lines: [
+        {
+          medicineId: 'med_1',
+          presentationId: 'presentation_1',
+          packLevelId: 'pack_1',
+          saleUnit: 'UNIT' as const,
+          quantity: units,
+          canonicalUnitsPerSaleUnit: 1,
+          inventoryLotId: 'lot_1',
+          stockLocationId: 'loc_1',
+        },
+      ],
+      amountMinor: 100,
+      cashReceivedMinor: 100,
+    },
+    authentication: { commandSignature: 'command-mac', receiptSignature: 'receipt-mac' },
     clientOriginAt: '2026-09-02T12:05:00.000Z',
     bucket: { inventoryLotId: 'lot_1', stockLocationId: 'loc_1' },
     requestedUnits: units,
@@ -148,7 +175,7 @@ describe('PH-OFF OFF-01 — hydration fails closed', () => {
       [
         'org_a::branch_a::counter_1',
         {
-          schemaVersion: 2,
+          schemaVersion: 3,
           scope: SCOPE,
           catalog: null,
           queue: {
@@ -180,7 +207,7 @@ describe('PH-OFF OFF-01 — hydration fails closed', () => {
     const driver = createMemoryDriver([
       [
         'org_a::branch_a::counter_1',
-        { schemaVersion: 2, scope: { ...SCOPE, branchId: 'branch_b' }, catalog: null, queue: null },
+        { schemaVersion: 3, scope: { ...SCOPE, branchId: 'branch_b' }, catalog: null, queue: null },
       ],
     ]);
     expect(await runtime(driver).hydrate()).toBe('unrecoverable');
@@ -389,12 +416,9 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
       ok: false,
       reason: 'SAFETY_LEASE_EXPIRED',
     });
-    expect(
-      await counter.enqueue(
-        { ...cashSale(), medicineSale: false, payload: { lines: [{ sku: 'soap', units: 1 }] } },
-        afterLease
-      )
-    ).toMatchObject({ ok: true });
+    expect(await counter.enqueue({ ...cashSale(), medicineSale: false }, afterLease)).toMatchObject(
+      { ok: true }
+    );
   });
 });
 
@@ -403,8 +427,8 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
     const driver = createMemoryDriver();
     const offline = await readyCounter(driver);
 
-    const first = await offline.enqueue(cashSale(1), MATRIX);
-    const second = await offline.enqueue(cashSale(1), MATRIX);
+    const first = await offline.enqueue(cashSale(1, 900), MATRIX);
+    const second = await offline.enqueue(cashSale(1, 901), MATRIX);
     expect(first.ok && second.ok).toBe(true);
     const printed = [first, second].map((r) => (r.ok ? r.command.receiptNumber : null));
     // Consecutive, from the reserved block, and handed to the customer already.
@@ -422,14 +446,17 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
     const outcome = await reconnected.replay(async (request) => {
       sent.push({
         key: request.headers['Idempotency-Key'],
-        receiptNumber: request.body.receiptNumber,
+        receiptNumber: request.body.leasedReceipt.receiptNumber,
         sequence: request.body.sequence,
       });
       if (failFirst) {
         failFirst = false;
         return { status: 0 };
       }
-      return { status: 200, serverRef: `sale_${String(request.body.receiptNumber)}` };
+      return {
+        status: 200,
+        serverRef: `sale_${String(request.body.leasedReceipt.receiptNumber)}`,
+      };
     });
     expect(outcome.state).toBe('PAUSED');
 
@@ -437,10 +464,13 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
     const drained = await reconnected.replay(async (request) => {
       sent.push({
         key: request.headers['Idempotency-Key'],
-        receiptNumber: request.body.receiptNumber,
+        receiptNumber: request.body.leasedReceipt.receiptNumber,
         sequence: request.body.sequence,
       });
-      return { status: 200, serverRef: `sale_${String(request.body.receiptNumber)}` };
+      return {
+        status: 200,
+        serverRef: `sale_${String(request.body.leasedReceipt.receiptNumber)}`,
+      };
     });
     expect(drained.state).toBe('IDLE');
 
@@ -532,7 +562,7 @@ describe('PH-OFF OFF-01 — storage minimization is enforced on every write', ()
       counter.enqueue(
         {
           ...cashSale(1),
-          payload: { lines: [], customerPhone: '+92-300-0000000' },
+          payload: { ...cashSale(1).payload, customerPhone: '+92-300-0000000' },
         },
         MATRIX
       )
@@ -542,7 +572,10 @@ describe('PH-OFF OFF-01 — storage minimization is enforced on every write', ()
   it('refuses a device secret anywhere in the document', async () => {
     const counter = await readyCounter(createMemoryDriver());
     await expect(
-      counter.enqueue({ ...cashSale(1), payload: { deviceSecret: 'pcd_x' } }, MATRIX)
+      counter.enqueue(
+        { ...cashSale(1), payload: { ...cashSale(1).payload, deviceSecret: 'pcd_x' } },
+        MATRIX
+      )
     ).rejects.toMatchObject({ reason: 'FORBIDDEN_FIELD' });
   });
 });

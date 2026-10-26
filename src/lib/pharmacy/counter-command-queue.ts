@@ -35,6 +35,7 @@
  */
 import { browserUuid } from '@/lib/browser-uuid';
 import type { TerminalReplayOutcome } from '@/lib/retail-terminal/replay-outcome';
+import type { CounterReplay } from '@/server/routers/pharmacy-offline';
 
 import { decideOfflineAction } from './offline-action-matrix';
 import type {
@@ -57,6 +58,8 @@ export type CounterQueuedCommand = {
   sequence: number;
   action: PharmacyOfflineAction;
   payload: Record<string, unknown>;
+  /** Device MACs for the exact replay body and its leased receipt. */
+  authentication: CounterReplayAuthentication | null;
   /** Client-origin UTC instant, metadata only. */
   clientOriginAt: string;
   /** The lease number ALREADY PRINTED for this command, or null when it printed none. */
@@ -180,10 +183,10 @@ function consumeQuota(
 
 // ── Enqueue ──────────────────────────────────────────────────────────────────
 
-export type CounterCommandInput = {
+type CounterCommandInputBase = {
+  /** May be pre-minted so the device can sign the final idempotent body before enqueueing. */
+  commandId?: string;
   deviceId: string;
-  action: PharmacyOfflineAction;
-  payload: Record<string, unknown>;
   /** Client-origin UTC instant, metadata only. */
   clientOriginAt: string;
   /** The bucket this command draws stock from, and how much. */
@@ -193,6 +196,35 @@ export type CounterCommandInput = {
   /** Defaults true for sale actions, keeping older callers fail closed. */
   medicineSale?: boolean;
 };
+
+export type CounterReplayAuthentication = {
+  commandSignature: string;
+  receiptSignature: string;
+};
+
+type SaleReplayAction = CounterReplay['action'];
+export type CounterReplayPayload = Omit<CounterReplay, 'sequence' | 'idempotencyKey' | 'action'>;
+
+/** Sale inputs carry the complete server contract and MACs; non-sale commands
+ * remain available to their dedicated reconciliation transports. */
+export type CounterCommandInput = CounterCommandInputBase &
+  (
+    | {
+        commandId: string;
+        action: SaleReplayAction;
+        payload: CounterReplayPayload;
+        authentication: CounterReplayAuthentication;
+      }
+    | {
+        action: Exclude<PharmacyOfflineAction, SaleReplayAction>;
+        payload: Record<string, unknown>;
+        authentication?: CounterReplayAuthentication;
+      }
+  );
+
+function isSaleReplayAction(action: PharmacyOfflineAction): action is SaleReplayAction {
+  return action === 'CASH_OTC_SALE' || action === 'CONTROLLED_MEDICINE_SALE';
+}
 
 /** What the matrix needs that the queue does not itself hold. */
 export type CounterMatrixInputs = {
@@ -210,7 +242,12 @@ export type CounterEnqueueResult =
   | { ok: true; snapshot: CounterQueueSnapshot; command: CounterQueuedCommand }
   | {
       ok: false;
-      reason: OfflineDenialReason | 'DEVICE_MISMATCH' | 'DEVICE_REVOKED' | 'QUEUE_FULL';
+      reason:
+        | OfflineDenialReason
+        | 'DEVICE_MISMATCH'
+        | 'DEVICE_REVOKED'
+        | 'QUEUE_FULL'
+        | 'INVALID_REPLAY_CONTRACT';
       message: string;
       decision: OfflineActionDecision | null;
     };
@@ -259,6 +296,17 @@ export function enqueueCounterCommand(
       decision: null,
     };
   }
+  if (
+    isSaleReplayAction(input.action) &&
+    (!input.authentication?.commandSignature || !input.authentication.receiptSignature)
+  ) {
+    return {
+      ok: false,
+      reason: 'INVALID_REPLAY_CONTRACT',
+      message: 'A queued pharmacy sale must include command and receipt signatures.',
+      decision: null,
+    };
+  }
 
   const requestedUnits = input.requestedUnits ?? 0;
   const decision = decideOfflineAction(input.action, {
@@ -303,13 +351,14 @@ export function enqueueCounterCommand(
       ? consumeQuota(snapshot.quotas, input.bucket, requestedUnits)
       : snapshot.quotas;
 
-  const commandId = newId();
+  const commandId = input.commandId ?? newId();
   const command: CounterQueuedCommand = {
     commandId,
     idempotencyKey: commandId,
     sequence: snapshot.nextSequence,
     action: input.action,
     payload: input.payload,
+    authentication: input.authentication ?? null,
     clientOriginAt: input.clientOriginAt,
     receiptNumber,
     status: 'PENDING',
@@ -363,28 +412,45 @@ export function nextCounterReplay(
 export type CounterReplayRequest = {
   path: string;
   method: 'POST';
-  headers: { 'Idempotency-Key': string };
-  body: Record<string, unknown>;
+  headers: {
+    'Idempotency-Key': string;
+    'X-Command-Signature': string;
+    'X-Receipt-Signature': string;
+  };
+  body: CounterReplay;
 };
 
+/** Construct the one canonical body a device signs and the server parses. */
+export function counterReplayBody(
+  sequence: number,
+  idempotencyKey: string,
+  action: SaleReplayAction,
+  payload: CounterReplayPayload
+): CounterReplay {
+  return { sequence, idempotencyKey, action, ...payload };
+}
+
 export function buildCounterReplayRequest(
-  snapshot: CounterQueueSnapshot,
+  _snapshot: CounterQueueSnapshot,
   command: CounterQueuedCommand
 ): CounterReplayRequest {
+  if (!isSaleReplayAction(command.action) || !command.authentication) {
+    throw new Error('INVALID_REPLAY_CONTRACT');
+  }
   return {
-    path: '/api/pharmacy/offline/commands',
+    path: '/api/pharmacy/counter/replay',
     method: 'POST',
-    headers: { 'Idempotency-Key': command.idempotencyKey },
-    body: {
-      deviceId: snapshot.deviceId,
-      sequence: command.sequence,
-      action: command.action,
-      payload: command.payload,
-      clientOriginAt: command.clientOriginAt,
-      // The number this counter ALREADY printed. The server records it; it never
-      // assigns a different one (§8A invariant 16).
-      receiptNumber: command.receiptNumber,
+    headers: {
+      'Idempotency-Key': command.idempotencyKey,
+      'X-Command-Signature': command.authentication.commandSignature,
+      'X-Receipt-Signature': command.authentication.receiptSignature,
     },
+    body: counterReplayBody(
+      command.sequence,
+      command.idempotencyKey,
+      command.action,
+      command.payload as CounterReplayPayload
+    ),
   };
 }
 

@@ -66,7 +66,7 @@ import { applyRecallBulletin, checkSafetyLease } from './offline-safety-lease';
 import type { OfflineRecallBulletin, SafetyLeaseState } from './offline-safety-lease';
 
 /** Bump when the persisted document shape changes; an older record fails closed. */
-export const COUNTER_STORE_SCHEMA_VERSION = 2;
+export const COUNTER_STORE_SCHEMA_VERSION = 3;
 
 export const COUNTER_STORE_DATABASE: TerminalStoreDatabase = {
   // A distinct database name from the Restaurant POS: a device enrolled in both
