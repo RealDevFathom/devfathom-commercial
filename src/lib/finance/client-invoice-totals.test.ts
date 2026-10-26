@@ -38,4 +38,22 @@ describe('clientInvoiceTotals', () => {
     expect(moneyListLabel(totals.revenue)).toBe('$0');
     expect(moneyListLabel(totals.outstanding)).toBe('$0');
   });
+
+  it('rounds accumulated decimal amounts to cents without combining currencies', () => {
+    const totals = clientInvoiceTotals([
+      { status: 'PAID', currency: 'USD', total: '0.10' },
+      { status: 'PAID', currency: 'USD', total: '0.20' },
+      { status: 'PAID', currency: 'PKR', total: '100.00' },
+      { status: 'SENT', currency: 'USD', total: '1.01' },
+      { status: 'OVERDUE', currency: 'USD', total: '2.02' },
+    ]);
+
+    expect(totals).toEqual({
+      revenue: [
+        { currency: 'USD', amount: 0.3 },
+        { currency: 'PKR', amount: 100 },
+      ],
+      outstanding: [{ currency: 'USD', amount: 3.03 }],
+    });
+  });
 });
