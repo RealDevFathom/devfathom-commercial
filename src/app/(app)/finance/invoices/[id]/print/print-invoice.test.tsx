@@ -61,10 +61,10 @@ describe('InvoicePrintView', () => {
     expect(screen.getByText('Balance due').nextElementSibling).toHaveTextContent('$600');
   });
 
-  it('omits payment totals when the invoice has no payments', () => {
+  it('omits payment totals when the authoritative aggregate reports no payment', () => {
     mocks.useQuery.mockReturnValue({
       isLoading: false,
-      data: invoice({ amountPaid: 0, balance: 1000, payments: [] }),
+      data: invoice({ amountPaid: 0, balance: 1000 }),
     });
 
     render(<InvoicePrintView invoiceId="invoice-497" />);
