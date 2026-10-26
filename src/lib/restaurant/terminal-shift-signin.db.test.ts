@@ -167,6 +167,39 @@ beforeAll(async () => {
 });
 
 describeIfDatabase('shift-aware operator sign-in (real DB)', () => {
+  it('serializes concurrent back-office waiver credential failures before lockout', async () => {
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOperatorCredential.updateMany({
+        where: { staffProfileId: OPEN.id, type: 'PIN', deviceId: null },
+        data: { failedAttempts: 0, lockedUntil: null },
+      })
+    );
+
+    const attempt = (secret: string) =>
+      deps.withTenantDb(orgId, (tx) =>
+        deps.authenticateOperator(tx, {
+          staffProfileId: OPEN.id,
+          type: 'PIN',
+          secret,
+          now: DURING_SHIFT,
+        })
+      );
+
+    const failures = await Promise.all(Array.from({ length: 4 }, () => attempt('000000')));
+    expect(failures).toEqual(Array.from({ length: 4 }, () => ({ ok: false, reason: 'INVALID' })));
+
+    const afterFour = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOperatorCredential.findFirstOrThrow({
+        where: { staffProfileId: OPEN.id, type: 'PIN', deviceId: null },
+        select: { failedAttempts: true, lockedUntil: true },
+      })
+    );
+    expect(afterFour).toEqual({ failedAttempts: 4, lockedUntil: null });
+
+    expect(await attempt('000000')).toEqual({ ok: false, reason: 'INVALID' });
+    await expect(attempt(OPEN.pin)).resolves.toMatchObject({ ok: false, reason: 'LOCKED' });
+  });
+
   it('refuses a genuine credential with 403 and a named reason when nothing is rostered', async () => {
     const secret = await enroll(rosteredBranchId, 'no-shift');
     const token = await establish(secret);

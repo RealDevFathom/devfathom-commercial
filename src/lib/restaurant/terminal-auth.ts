@@ -583,6 +583,24 @@ export async function authenticateOperator(
 ): Promise<OperatorAuthResult> {
   const { staffProfileId, deviceId, branchId, type, secret, now } = params;
 
+  // Authentication is normally called inside the request's tenant transaction.
+  // Lock every eligible credential row before reading its lockout state so two
+  // concurrent requests cannot both read (for example) zero failures and then
+  // overwrite one another with the same next value. The stable ordering also
+  // avoids deadlocks for the terminal path, where a device-scoped and an
+  // organization-wide credential may both be eligible.
+  await db.$queryRaw`
+    SELECT id
+    FROM restaurant_operator_credentials
+    WHERE "staffProfileId" = ${staffProfileId}
+      AND type = ${type}::"RestaurantOperatorCredentialType"
+      AND "revokedAt" IS NULL
+      AND (${deviceId ?? null}::text IS NULL AND "deviceId" IS NULL
+        OR ${deviceId ?? null}::text IS NOT NULL AND ("deviceId" = ${deviceId ?? null} OR "deviceId" IS NULL))
+    ORDER BY "deviceId" NULLS LAST, id
+    FOR UPDATE
+  `;
+
   const [profile, branch, credentials] = await Promise.all([
     db.restaurantStaffProfile.findUnique({
       where: { id: staffProfileId },
