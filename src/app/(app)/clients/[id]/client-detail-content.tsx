@@ -44,7 +44,8 @@ import { NotesContent } from '@/app/(app)/notes/notes-content';
 import { uploadAttachment } from '@/lib/chat/upload-client';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
-import { moneyListLabel, sumByCurrency, type CurrencyAmount } from '@/lib/finance/currency';
+import { moneyListLabel } from '@/lib/finance/currency';
+import { clientInvoiceTotals } from '@/lib/finance/client-invoice-totals';
 
 type ClientDetail = NonNullable<inferRouterOutputs<AppRouter>['clients']['getById']>;
 type ContractItem = ClientDetail['contracts'][number];
@@ -178,14 +179,9 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
   }
 
   const config = statusConfig[client.status] || statusConfig.ACTIVE;
-  const totalRevenue = client.invoices
-    .filter((i) => i.status === 'PAID')
-    .map((i) => [{ currency: i.currency, amount: Number(i.total) }])
-    .reduce<CurrencyAmount[]>((totals, invoice) => sumByCurrency(totals, invoice), []);
-  const outstandingAmount = client.invoices
-    .filter((i) => ['SENT', 'OVERDUE'].includes(i.status))
-    .map((i) => [{ currency: i.currency, amount: Number(i.total) }])
-    .reduce<CurrencyAmount[]>((totals, invoice) => sumByCurrency(totals, invoice), []);
+  const { revenue: totalRevenue, outstanding: outstandingAmount } = clientInvoiceTotals(
+    client.invoices
+  );
 
   return (
     <div className="space-y-6">
