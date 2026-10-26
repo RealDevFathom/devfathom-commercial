@@ -69,16 +69,19 @@ describe('finance.updateInvoiceStatus', () => {
     expect(mocks.logActivity).not.toHaveBeenCalled();
   });
 
-  it('preserves sentAt using a status compare-and-set', async () => {
-    mocks.findUnique.mockResolvedValue({ status: 'SENT' });
+  it.each(['OVERDUE', 'CANCELLED'] as const)(
+    'preserves sentAt when changing SENT to %s using a status compare-and-set',
+    async (status) => {
+      mocks.findUnique.mockResolvedValue({ status: 'SENT' });
 
-    await caller().updateInvoiceStatus({ id: 'invoice-1', status: 'CANCELLED' });
+      await caller().updateInvoiceStatus({ id: 'invoice-1', status });
 
-    expect(mocks.updateMany).toHaveBeenCalledWith({
-      where: { id: 'invoice-1', status: 'SENT' },
-      data: { status: 'CANCELLED' },
-    });
-  });
+      expect(mocks.updateMany).toHaveBeenCalledWith({
+        where: { id: 'invoice-1', status: 'SENT' },
+        data: { status },
+      });
+    }
+  );
 
   it('preserves sentAt when bulk marking past-due invoices overdue', async () => {
     await caller().markOverdueInvoices();
