@@ -90,8 +90,9 @@ function baseConfigurationErrors(config: WhatsAppConfig): string[] {
   const hasUsableKhataTemplate = (['en', 'ur'] as const).some(
     (language) => config.khataTemplates[language] && config.khataParameterOrder[language]
   );
-  if (!hasUsableKhataTemplate)
+  if (!hasUsableKhataTemplate) {
     errors.push('KHATA_TEMPLATES_NOT_CONFIGURED');
+  }
   return errors;
 }
 

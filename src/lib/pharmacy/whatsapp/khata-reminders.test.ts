@@ -284,6 +284,28 @@ describe('processDueWhatsAppKhataReminders', () => {
     });
   });
 
+  it('accepts an Urdu-only template with an explicit parameter contract', async () => {
+    const urduConfig = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sandbox-owner',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR: 'khata_due_ur',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR_PARAMETERS: 'name,balance',
+    });
+    store.accounts = [account()];
+    store.customers = [customer(true, 'ur')];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(urduConfig);
+
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config: urduConfig, provider });
+
+    expect(result).toMatchObject({ configured: true, scanned: 1, prepared: 1 });
+    expect(provider.calls[0]).toMatchObject({
+      templateName: 'khata_due_ur',
+      language: 'ur',
+      parameters: ['Khan household', '500.00'],
+    });
+  });
+
   it('fails closed for Urdu when its approved template or parameter contract is absent', async () => {
     store.accounts = [account()];
     store.customers = [customer(true, 'ur')];
