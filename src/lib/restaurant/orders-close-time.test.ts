@@ -159,7 +159,13 @@ describe('cancelOrder recipe consumption', () => {
       wastageDisposition: null,
       product: { categoryId: null },
     };
-    const preparedOrder = { ...order, status: 'READY', items: [preparedItem] };
+    const pendingItem = {
+      ...preparedItem,
+      id: 'item-2',
+      status: 'NEW',
+      name: 'Unprepared meal',
+    };
+    const preparedOrder = { ...order, status: 'READY', items: [preparedItem, pendingItem] };
     let idempotency: { resultRef: string | null } | null = null;
     const tx = {
       $queryRaw: vi.fn(async () => []),
@@ -167,7 +173,11 @@ describe('cancelOrder recipe consumption', () => {
         findUnique: vi.fn(async () => preparedOrder),
         update: vi.fn(async () => preparedOrder),
       },
-      restaurantOrderItem: { update: vi.fn(async () => preparedItem) },
+      restaurantOrderItem: {
+        update: vi.fn(async ({ where }: { where: { id: string } }) =>
+          where.id === preparedItem.id ? preparedItem : pendingItem
+        ),
+      },
       restaurantOrderTable: { updateMany: vi.fn() },
       restaurantCoAuthorization: { create: vi.fn(async () => ({ id: 'co-auth-1' })) },
       restaurantOrderIdempotencyKey: {
@@ -218,6 +228,11 @@ describe('cancelOrder recipe consumption', () => {
           status: 'VOIDED',
           wastageDisposition: 'WASTE',
         }),
+        expect.objectContaining({
+          id: pendingItem.id,
+          status: 'VOIDED',
+          wastageDisposition: 'NONE',
+        }),
       ],
       { staffProfileId: actor.staffProfileId, deviceId: actor.deviceId },
       expect.any(Date)
@@ -225,6 +240,15 @@ describe('cancelOrder recipe consumption', () => {
     expect(tx.restaurantOrder.update).toHaveBeenCalledWith({
       where: { id: preparedOrder.id },
       data: { status: 'CANCELLED', cancelledAt: expect.any(Date) },
+    });
+    expect(tx.restaurantOrderItem.update).toHaveBeenCalledWith({
+      where: { id: pendingItem.id },
+      data: expect.objectContaining({
+        status: 'VOIDED',
+        voidedPostPrep: false,
+        wastageDisposition: 'NONE',
+        voidCoAuthorizationId: null,
+      }),
     });
   });
 });
