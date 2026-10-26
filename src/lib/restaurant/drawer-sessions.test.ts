@@ -213,13 +213,14 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     const date = '2026-08-21';
     const closingDeviceId = await newDevice('POS-concurrent-close');
     const openingDeviceId = await newDevice('POS-concurrent-open');
+    const closingActor = actor(closingDeviceId);
     const openingActor = actor(openingDeviceId);
 
     const [closeResult, openResult] = await Promise.allSettled([
       deps.close.cutClose(deps.createTenantDb(orgId), {
         branchId: ids.branch,
         businessDate: date,
-        actor: actor(closingDeviceId),
+        actor: closingActor,
       }),
       deps.drawer.openDrawerSession(deps.createTenantDb(orgId), {
         organizationId: orgId,
@@ -242,28 +243,39 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
       });
     }
 
-    const [closes, sessions, movements, openingIdempotencyKeys] = await read((tx) =>
-      Promise.all([
-        tx.restaurantDailyClose.count({
-          where: { branchId: ids.branch, businessDate: new Date(`${date}T00:00:00.000Z`) },
-        }),
-        tx.restaurantDrawerSession.findMany({
-          where: { deviceId: openingDeviceId },
-          select: { openingFloat: true },
-        }),
-        tx.restaurantDrawerMovement.findMany({
-          where: { deviceId: openingDeviceId },
-          select: { amount: true, kind: true },
-        }),
-        tx.restaurantMoneyIdempotencyKey.count({
-          where: { deviceId: openingDeviceId, key: openingActor.idempotencyKey },
-        }),
-      ])
+    const [closes, sessions, movements, closingIdempotencyKeys, openingIdempotencyKeys] = await read(
+      (tx) =>
+        Promise.all([
+          tx.restaurantDailyClose.count({
+            where: { branchId: ids.branch, businessDate: new Date(`${date}T00:00:00.000Z`) },
+          }),
+          tx.restaurantDrawerSession.findMany({
+            where: { deviceId: openingDeviceId },
+            select: { openingFloat: true },
+          }),
+          tx.restaurantDrawerMovement.findMany({
+            where: { deviceId: openingDeviceId },
+            select: { amount: true, kind: true },
+          }),
+          tx.restaurantMoneyIdempotencyKey.count({
+            where: { deviceId: closingDeviceId, key: closingActor.idempotencyKey },
+          }),
+          tx.restaurantMoneyIdempotencyKey.count({
+            where: { deviceId: openingDeviceId, key: openingActor.idempotencyKey },
+          }),
+        ])
     );
     if (closeResult.status === 'fulfilled') {
-      expect([closes, sessions, movements, openingIdempotencyKeys]).toEqual([1, [], [], 0]);
+      expect([closes, sessions, movements, closingIdempotencyKeys, openingIdempotencyKeys]).toEqual([
+        1,
+        [],
+        [],
+        1,
+        0,
+      ]);
     } else {
       expect(closes).toBe(0);
+      expect(closingIdempotencyKeys).toBe(0);
       expect(openingIdempotencyKeys).toBe(1);
       expect(sessions).toHaveLength(1);
       expect(sessions[0]?.openingFloat.toString()).toBe('100');
