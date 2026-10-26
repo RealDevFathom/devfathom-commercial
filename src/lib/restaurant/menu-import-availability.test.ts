@@ -25,6 +25,7 @@ function fake() {
     adapter: 'FIXTURE',
     storageObjectName: 'menu.png',
     sourceDeletedAt: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
     mimeType: 'image/png',
     pageCount: 1,
     defaultCurrency: null,
@@ -246,6 +247,7 @@ describe('retention survives failed deletion', () => {
       organizationId: record.organizationId,
       status: 'COMMITTED',
       storageObjectName: record.storageObjectName,
+      createdAt: record.createdAt,
     }));
 
     await expect(purgeStaleMenuImports(db, { runtime })).resolves.toEqual({
@@ -254,6 +256,24 @@ describe('retention survives failed deletion', () => {
     });
 
     expect(db.$queryRaw).toHaveBeenCalledOnce();
+    expect(runtime.deleteSource).not.toHaveBeenCalled();
+    expect(table.delete).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the retention cutoff under the commit lock before deleting it', async () => {
+    const { db, record, table, runtime } = fake();
+    table.findMany.mockResolvedValueOnce([record]).mockResolvedValueOnce([]);
+    table.findUnique.mockResolvedValue({
+      organizationId: record.organizationId,
+      status: record.status,
+      storageObjectName: record.storageObjectName,
+      createdAt: new Date('2026-10-26T00:00:00.000Z'),
+    });
+
+    await expect(
+      purgeStaleMenuImports(db, { runtime, now: new Date('2026-10-26T12:00:00.000Z') })
+    ).resolves.toEqual({ purgedDrafts: 0, deletedSources: 0 });
+
     expect(runtime.deleteSource).not.toHaveBeenCalled();
     expect(table.delete).not.toHaveBeenCalled();
   });

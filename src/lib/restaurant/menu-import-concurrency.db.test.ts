@@ -76,7 +76,7 @@ describeIfDatabase('menu import retention concurrency', () => {
       }),
       findUnique: vi.fn(async ({ where }: { where: { id: string; organizationId: string } }) => {
         const result = await sweepConnection.query(
-          `SELECT "organizationId", status, "storageObjectName"
+          `SELECT "organizationId", status, "storageObjectName", "createdAt"
              FROM restaurant_menu_imports
             WHERE id = $1 AND "organizationId" = $2`,
           [where.id, where.organizationId]

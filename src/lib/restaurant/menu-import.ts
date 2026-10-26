@@ -1289,10 +1289,16 @@ export async function purgeStaleMenuImports(
       await tx.$queryRaw`SELECT "id" FROM "restaurant_menu_imports" WHERE "id" = ${record.id} AND "organizationId" = ${record.organizationId} FOR UPDATE`;
       const current = await tx.restaurantMenuImport.findUnique({
         where: { id: record.id, organizationId: record.organizationId },
-        select: { organizationId: true, status: true, storageObjectName: true },
+        select: {
+          organizationId: true,
+          status: true,
+          storageObjectName: true,
+          createdAt: true,
+        },
       });
       if (
         !current ||
+        current.createdAt >= cutoff ||
         !([...OPEN_STATUSES, 'EXTRACTION_FAILED'] as string[]).includes(current.status)
       ) {
         return false;
