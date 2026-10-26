@@ -288,6 +288,8 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
     await deps.withTenantDb(orgB, async (tx) => {
       expect(await tx.restaurantTender.count()).toBe(0);
       expect(await tx.restaurantPayment.count()).toBe(0);
+      expect(await tx.restaurantPaymentEvent.count()).toBe(0);
+      expect(await tx.restaurantMoneyIdempotencyKey.count()).toBe(0);
       expect(
         await tx.restaurantTerminalReconciliation.count({ where: { source, externalEventId } })
       ).toBe(1);
