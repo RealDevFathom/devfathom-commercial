@@ -366,14 +366,32 @@ export async function cancelShift(
     cancelledAt: requireInstant(options.now, 'cancellation time'),
     cancelReason: normalizeOptionalText(options.reason, 500),
   };
-  if (!cas) {
-    return db.restaurantShift.update({ where: { id: existing.id }, data, select: SHIFT_SELECT });
-  }
+  // Keep this predicate on the write itself. Workforce commands lock the shift
+  // before clocking in, but a cancellation may have read the row just before
+  // that transaction commits. A conditional update prevents that interleaving
+  // from producing a cancelled shift with open attendance.
   const won = await db.restaurantShift.updateMany({
-    where: { id: existing.id, organizationId: cas.organizationId, version: cas.expectedVersion },
-    data: { ...data, version: { increment: 1 } },
+    where: {
+      id: existing.id,
+      ...(cas ? { organizationId: cas.organizationId, version: cas.expectedVersion } : {}),
+      OR: [{ clockedInAt: null }, { clockedOutAt: { not: null } }],
+    },
+    data: cas ? { ...data, version: { increment: 1 } } : data,
   });
   if (won.count !== 1) {
+    const current = await db.restaurantShift.findUnique({
+      where: { id: existing.id },
+      select: { status: true, clockedInAt: true, clockedOutAt: true },
+    });
+    if (current?.status === 'CANCELLED') {
+      throw new ShiftError('This shift is already cancelled.', 'ALREADY_CANCELLED');
+    }
+    if (current?.clockedInAt && !current.clockedOutAt) {
+      throw new ShiftError(
+        'This shift cannot be cancelled while the employee is clocked in.',
+        'ACTIVE_ATTENDANCE'
+      );
+    }
     throw new ShiftError(
       'This shift changed since it was loaded. Refresh the roster and try again.',
       'VERSION_CONFLICT'
