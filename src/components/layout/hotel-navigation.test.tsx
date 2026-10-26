@@ -178,7 +178,10 @@ describe('Hotel navigation composition', () => {
   });
   it('keeps restaurant menu import hidden from fully entitled hospitality administrators', () => {
     const visibleHrefs = visibleNavigation(
-      everyHotelModule,
+      {
+        ...everyHotelModule,
+        enabledModules: [...everyHotelModule.enabledModules, 'restaurant-menu'],
+      },
       'ADMIN',
       EVERY_RAIL_CAPABILITY
     ).map((item) => item.href);
