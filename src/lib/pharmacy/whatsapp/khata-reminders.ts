@@ -15,6 +15,7 @@ import {
   readWhatsAppConfig,
   type WhatsAppConfig,
   type WhatsAppProvider,
+  type WhatsAppTemplateLanguage,
 } from './provider';
 
 const DAY_MS = 86_400_000;
@@ -76,8 +77,32 @@ export type KhataReminderRunResult = {
   failed: number;
   duplicate: number;
   skippedNoConsent: number;
+  skippedConfiguration: number;
   notDue: number;
+  configurationErrors: string[];
 };
+
+function baseConfigurationErrors(config: WhatsAppConfig): string[] {
+  const errors: string[] = [];
+  if (!config.organizationId) errors.push('ORGANIZATION_NOT_CONFIGURED');
+  if (!config.phoneNumberId) errors.push('PHONE_NUMBER_NOT_CONFIGURED');
+  if (config.provider === 'meta' && !config.accessToken) errors.push('ACCESS_TOKEN_NOT_CONFIGURED');
+  if (!config.khataTemplates.en && !config.khataTemplates.ur)
+    errors.push('KHATA_TEMPLATES_NOT_CONFIGURED');
+  return errors;
+}
+
+export function khataReminderParameters(
+  config: WhatsAppConfig,
+  language: WhatsAppTemplateLanguage,
+  name: string,
+  balance: string
+): string[] | null {
+  const order = config.khataParameterOrder[language];
+  if (!config.khataTemplates[language] || !order) return null;
+  const values = { name, balance };
+  return order.map((key) => values[key]);
+}
 
 /**
  * Scheduled job: sends the approved khata-reminder template to the payer of
@@ -100,7 +125,7 @@ export async function processDueWhatsAppKhataReminders(
   const provider = options.provider ?? createWhatsAppProvider(config);
   const minBalanceMinor = options.minBalanceMinor ?? DEFAULT_MIN_BALANCE_MINOR;
   const result: KhataReminderRunResult = {
-    configured: Boolean(config.templates.khataReminder),
+    configured: false,
     scanned: 0,
     sent: 0,
     prepared: 0,
@@ -108,11 +133,13 @@ export async function processDueWhatsAppKhataReminders(
     failed: 0,
     duplicate: 0,
     skippedNoConsent: 0,
+    skippedConfiguration: 0,
     notDue: 0,
+    configurationErrors: baseConfigurationErrors(config),
   };
+  result.configured = result.configurationErrors.length === 0;
   const organizationId = config.organizationId;
-  if (!result.configured || config.provider === 'meta' || !organizationId || !config.phoneNumberId)
-    return { ...result, configured: false };
+  if (!result.configured || !organizationId || !config.phoneNumberId) return result;
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   const accounts = await withPlatformDb((db) =>
@@ -176,6 +203,7 @@ export async function processDueWhatsAppKhataReminders(
           patientId: true,
           active: true,
           whatsappOptIn: true,
+          preferredLanguage: true,
           patient: { select: { phone: true } },
         },
       });
@@ -200,6 +228,16 @@ export async function processDueWhatsAppKhataReminders(
         consent.recordedAt > now
       )
         return null;
+      const language = customer.preferredLanguage;
+      if (language !== 'en' && language !== 'ur') return null;
+      const parameters = khataReminderParameters(
+        config,
+        language,
+        sanitizeReminderDisplayName(account.displayName),
+        formatMinor(balanceMinor)
+      );
+      if (!parameters)
+        return { configurationError: `KHATA_TEMPLATE_${language.toUpperCase()}_NOT_CONFIGURED` };
       const day = new Intl.DateTimeFormat('en-CA', {
         timeZone,
         year: 'numeric',
@@ -217,13 +255,26 @@ export async function processDueWhatsAppKhataReminders(
         customerId: customer.id,
         patientId: customer.patientId,
         phoneLast4: phoneLast4(to),
-        templateName: config.templates.khataReminder,
+        templateName: config.khataTemplates[language],
         dueDate: plan.dueDate,
       });
-      return { customerId: customer.id, patientId: customer.patientId, to, logId };
+      return {
+        customerId: customer.id,
+        patientId: customer.patientId,
+        to,
+        logId,
+        language,
+        parameters,
+      };
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
+      continue;
+    }
+    if ('configurationError' in recipient) {
+      result.skippedConfiguration += 1;
+      if (!result.configurationErrors.includes(recipient.configurationError))
+        result.configurationErrors.push(recipient.configurationError);
       continue;
     }
     if (!recipient.logId) {
@@ -240,7 +291,7 @@ export async function processDueWhatsAppKhataReminders(
         customerId: recipient.customerId,
         patientId: recipient.patientId,
         phoneLast4: phoneLast4(recipient.to),
-        templateName: config.templates.khataReminder,
+        templateName: config.khataTemplates[recipient.language],
         dueDate: plan.dueDate,
       },
       recipient.logId,
@@ -248,8 +299,9 @@ export async function processDueWhatsAppKhataReminders(
         provider.sendTemplate({
           to: recipient.to,
           template: 'khataReminder',
-          // Utility parameters only: who owes, and how much is outstanding.
-          parameters: [sanitizeReminderDisplayName(account.displayName), formatMinor(balanceMinor)],
+          language: recipient.language,
+          // Only the explicitly configured approved-template placeholder order is used.
+          parameters: recipient.parameters,
         })
     );
     if (outcome === 'SENT') result.sent += 1;

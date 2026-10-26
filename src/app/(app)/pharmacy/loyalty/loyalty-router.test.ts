@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   branches: vi.fn(),
   customers: vi.fn(),
   history: vi.fn(),
+  branch: vi.fn(),
+  updateCustomers: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -37,7 +39,10 @@ function caller({
   session = true,
 } = {}) {
   return pharmacyLoyaltyRouter.createCaller({
-    db: { pharmacyBranch: { findMany: mocks.branches } },
+    db: {
+      pharmacyBranch: { findMany: mocks.branches, findFirst: mocks.branch },
+      pharmacyCustomer: { updateMany: mocks.updateCustomers },
+    },
     session: session
       ? { expires: 'later', user: { id: 'owner-a', organizationId, role: 'ADMIN', status } }
       : null,
@@ -55,6 +60,8 @@ beforeEach(() => {
   mocks.branches.mockResolvedValue([]);
   mocks.customers.mockResolvedValue({ customers: [], hasMore: false });
   mocks.history.mockResolvedValue({ entries: [] });
+  mocks.branch.mockResolvedValue({ id: 'branch-a' });
+  mocks.updateCustomers.mockResolvedValue({ count: 1 });
 });
 describe('ordinary loyalty router visibility', () => {
   it('hands trusted scope and requested page to history', async () => {
@@ -109,5 +116,25 @@ describe('ordinary loyalty router visibility', () => {
       } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.history).not.toHaveBeenCalled();
+  });
+  it('persists only a validated language for an active customer in the authorized tenant', async () => {
+    await expect(
+      caller().setReminderLanguage({
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        preferredLanguage: 'ur',
+      })
+    ).resolves.toEqual({ preferredLanguage: 'ur' });
+    expect(mocks.updateCustomers).toHaveBeenCalledWith({
+      where: { id: 'customer-a', organizationId: 'org-a', active: true },
+      data: { preferredLanguage: 'ur' },
+    });
+    await expect(
+      caller().setReminderLanguage({
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        preferredLanguage: 'fr',
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 });

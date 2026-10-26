@@ -1,7 +1,12 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
-const mocks = vi.hoisted(() => ({ branches: vi.fn(), customers: vi.fn(), history: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  branches: vi.fn(),
+  customers: vi.fn(),
+  history: vi.fn(),
+  setReminderLanguage: vi.fn(),
+}));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: vi.fn().mockResolvedValue({}) }));
 vi.mock('./loyalty-router', () => ({ pharmacyLoyaltyRouter: { createCaller: () => mocks } }));
 import LoyaltyPage from './page';
@@ -14,7 +19,11 @@ beforeEach(() => {
     hasMore: false,
   });
   mocks.history.mockResolvedValue({
-    customer: { id: 'customer-a', displayName: 'Retail customer' },
+    customer: {
+      id: 'customer-a',
+      displayName: 'Retail customer',
+      preferredLanguage: 'ur',
+    },
     pointsBalance: 14,
     total: 26,
     page: 1,
@@ -71,10 +80,12 @@ describe('ordinary loyalty history page', () => {
     );
     expect(screen.getByText('Previous')).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('link', { name: /Selected/ })).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByLabelText('Reminder language')).toHaveValue('ur');
+    expect(screen.getByRole('button', { name: 'Save reminder language' })).toBeInTheDocument();
   });
   it('shows empty branch history without inventing points', async () => {
     mocks.history.mockResolvedValue({
-      customer: { displayName: 'Retail customer' },
+      customer: { displayName: 'Retail customer', preferredLanguage: 'en' },
       pointsBalance: 0,
       total: 0,
       page: 1,

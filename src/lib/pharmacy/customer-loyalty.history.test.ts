@@ -75,7 +75,7 @@ describe('ordinary loyalty history reads', () => {
     );
     expect(db.pharmacyCustomer.findFirst).toHaveBeenCalledWith({
       where: { id: 'foreign-customer', organizationId: 'org-a', active: true },
-      select: { id: true, displayName: true, phoneLast4: true },
+      select: { id: true, displayName: true, phoneLast4: true, preferredLanguage: true },
     });
     expect(db.pharmacyLoyaltyPointsEntry.findMany).not.toHaveBeenCalled();
   });

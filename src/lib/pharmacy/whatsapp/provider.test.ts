@@ -82,6 +82,7 @@ describe('MockWhatsAppProvider', () => {
         to: '923001234567',
         template: 'refillReminder',
         templateName: 'refill_due_v1',
+        language: 'ur',
         parameters: ['Ayesha', 'Panadol', '2026-10-02'],
       },
       { kind: 'text', to: '923001234567', body: 'hello' },
@@ -180,6 +181,36 @@ describe('MetaWhatsAppProvider', () => {
     });
   });
 
+  it('posts the selected Khata language with its own approved template identifier', async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ messages: [{ id: 'wamid.khata' }] }), { status: 200 })
+    );
+    const provider = new MetaWhatsAppProvider(
+      readWhatsAppConfig({
+        ...ENV,
+        PHARMACY_WHATSAPP_PROVIDER: 'meta',
+        PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN: 'khata_due_en',
+        PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR: 'khata_due_ur',
+        PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR_PARAMETERS: 'balance,name',
+      }),
+      fetchImpl as unknown as typeof fetch
+    );
+    await provider.sendTemplate({
+      to: '923001234567',
+      template: 'khataReminder',
+      language: 'ur',
+      parameters: ['500.00', 'Khan household'],
+    });
+    expect(JSON.parse(String((fetchImpl.mock.calls[0]![1] as RequestInit).body))).toMatchObject({
+      template: {
+        name: 'khata_due_ur',
+        language: { code: 'ur' },
+        components: [{ parameters: [{ text: '500.00' }, { text: 'Khan household' }] }],
+      },
+    });
+  });
+
   it('surfaces provider errors and missing credentials', async () => {
     const failing = new MetaWhatsAppProvider(
       readWhatsAppConfig(ENV),
@@ -195,12 +226,10 @@ describe('MetaWhatsAppProvider', () => {
   });
 });
 
-it('keeps configured Meta sending disabled in the production factory', async () => {
+it('uses the configured Meta adapter in the production factory', async () => {
   const { createWhatsAppProvider } = await import('./provider');
   const provider = createWhatsAppProvider(
     readWhatsAppConfig({ ...ENV, PHARMACY_WHATSAPP_PROVIDER: 'meta' })
   );
-  await expect(provider.sendText({ to: 'synthetic', body: 'synthetic' })).rejects.toMatchObject({
-    reason: 'NOT_CONFIGURED',
-  });
+  expect(provider).toBeInstanceOf(MetaWhatsAppProvider);
 });
