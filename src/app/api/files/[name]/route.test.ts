@@ -13,6 +13,7 @@ import { GET } from './route';
 const db = {
   restaurantSopEvidence: { findFirst: vi.fn() },
   restaurantBranchAssignment: { findUnique: vi.fn() },
+  branchRegulatoryProfile: { findFirst: vi.fn() },
   messageAttachment: { findFirst: vi.fn() },
   channelMember: { findUnique: vi.fn() },
 };
@@ -29,6 +30,7 @@ beforeEach(() => {
   mocks.tenantDb.mockImplementation(async (_org, fn) => fn(db));
   mocks.getUpload.mockResolvedValue(Buffer.from([1, 2, 3]));
   db.restaurantSopEvidence.findFirst.mockResolvedValue(null);
+  db.branchRegulatoryProfile.findFirst.mockResolvedValue(null);
   db.messageAttachment.findFirst.mockResolvedValue(null);
 });
 describe('private attachment delivery', () => {
@@ -83,7 +85,26 @@ describe('private attachment delivery', () => {
     expect(db.messageAttachment.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { url: '/api/files/' + name } })
     );
+    expect(db.branchRegulatoryProfile.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        licenceEvidenceFileRef: '/api/files/' + name,
+      },
+      select: { id: true },
+    });
     expect(mocks.tenantDb.mock.calls.every(([org]) => org === 'org_a')).toBe(true);
+  });
+
+  it('restricts licence evidence to the admin role used by the regulatory profile', async () => {
+    db.branchRegulatoryProfile.findFirst.mockResolvedValue({ id: 'profile_1' });
+
+    expect((await read('pharmacy-licence.pdf')).status).toBe(404);
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+    expect(db.messageAttachment.findFirst).not.toHaveBeenCalled();
+
+    mocks.actor.mockResolvedValue(actor('ADMIN'));
+    expect((await read('pharmacy-licence.pdf')).status).toBe(200);
+    expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'pharmacy-licence.pdf');
   });
 
   it('keeps the SOP branch membership gate and admin exception', async () => {

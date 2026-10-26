@@ -76,6 +76,24 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     if (!branchAccess) return new Response('Not found', { status: 404 });
   }
 
+  // The regulatory profile itself is admin-only. Apply the same role gate to
+  // its licence evidence so knowing (or leaking) the otherwise opaque URL does
+  // not let an ordinary tenant member bypass that profile's authorization.
+  // The tenant-scoped transaction and explicit predicate keep the lookup from
+  // classifying a file referenced by another organization as this tenant's.
+  const licenceEvidence = await withTenantDb(organization.id, (db) =>
+    db.branchRegulatoryProfile.findFirst({
+      where: {
+        organizationId: organization.id,
+        licenceEvidenceFileRef: '/api/files/' + name,
+      },
+      select: { id: true },
+    })
+  );
+  if (licenceEvidence && session.user.role !== 'ADMIN') {
+    return new Response('Not found', { status: 404 });
+  }
+
   // IMP-RT-05: per-channel membership enforcement. If this file is a chat
   // attachment, only members of its channel may fetch it — a stale URL no longer
   // leaks a private-channel/DM file to any signed-in user. Non-chat uploads

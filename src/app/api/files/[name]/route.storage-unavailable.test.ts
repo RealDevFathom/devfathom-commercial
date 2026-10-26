@@ -5,6 +5,7 @@ const m = vi.hoisted(() => ({
   sop: vi.fn(),
   branch: vi.fn(),
   attachment: vi.fn(),
+  licence: vi.fn(),
   member: vi.fn(),
   get: vi.fn(),
   tenant: vi.fn(),
@@ -29,6 +30,7 @@ beforeEach(() => {
     callback({
       restaurantSopEvidence: { findFirst: m.sop },
       restaurantBranchAssignment: { findUnique: m.branch },
+      branchRegulatoryProfile: { findFirst: m.licence },
       messageAttachment: { findFirst: m.attachment },
       channelMember: { findUnique: m.member },
     })
