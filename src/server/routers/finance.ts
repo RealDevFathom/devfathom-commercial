@@ -15,6 +15,7 @@ import {
   type CurrencyAmount,
 } from '@/lib/finance/currency';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
+import { multiplyMoney, roundMoney, sumMoney } from '@/lib/finance/money';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -55,7 +56,7 @@ export const createInvoiceInputSchema = z.object({
 
 // Round to 2 decimal places (cents). Used to derive invoice money server-side so
 // caller-supplied subtotal/total are never trusted (FIN-01).
-const round2 = (n: number) => Math.round(n * 100) / 100;
+const round2 = roundMoney;
 
 // IMP-FIN-04: money is Decimal(12,2), so a partial payment can legitimately pay an
 // invoice off to the exact cent. Compare paid-vs-total with a half-cent tolerance
@@ -256,11 +257,11 @@ export const financeRouter = router({
       description: it.description,
       quantity: it.quantity,
       rate: it.rate,
-      amount: round2(it.quantity * it.rate),
+      amount: multiplyMoney(it.quantity, it.rate),
     }));
-    const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
+    const subtotal = sumMoney(lineItems.map((it) => it.amount));
     const tax = round2(input.tax ?? 0);
-    const total = round2(subtotal + tax);
+    const total = sumMoney([subtotal, tax]);
 
     // Generate invoice number. FIN-09: scope the count to THIS year's invoices
     // so the sequence resets to -001 each January (was a global count that never
@@ -340,11 +341,11 @@ export const financeRouter = router({
         description: it.description,
         quantity: it.quantity,
         rate: it.rate,
-        amount: round2(it.quantity * it.rate),
+        amount: multiplyMoney(it.quantity, it.rate),
       }));
-      const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
+      const subtotal = sumMoney(lineItems.map((it) => it.amount));
       const tax = round2(input.tax ?? 0);
-      const total = round2(subtotal + tax);
+      const total = sumMoney([subtotal, tax]);
 
       const data: Record<string, unknown> = { items: lineItems, subtotal, tax, total };
       if (input.dueDate) data.dueDate = input.dueDate;
