@@ -240,13 +240,26 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
         tx.restaurantDailyClose.count({
           where: { branchId: ids.branch, businessDate: new Date(`${date}T00:00:00.000Z`) },
         }),
-        tx.restaurantDrawerSession.count({ where: { deviceId: openingDeviceId } }),
-        tx.restaurantDrawerMovement.count({ where: { deviceId: openingDeviceId } }),
+        tx.restaurantDrawerSession.findMany({
+          where: { deviceId: openingDeviceId },
+          select: { openingFloat: true },
+        }),
+        tx.restaurantDrawerMovement.findMany({
+          where: { deviceId: openingDeviceId },
+          select: { amount: true, kind: true },
+        }),
       ])
     );
-    expect([closes, sessions, movements]).toEqual(
-      closeResult.status === 'fulfilled' ? [1, 0, 0] : [0, 1, 1]
-    );
+    if (closeResult.status === 'fulfilled') {
+      expect([closes, sessions, movements]).toEqual([1, [], []]);
+    } else {
+      expect(closes).toBe(0);
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]?.openingFloat.toString()).toBe('100');
+      expect(movements).toHaveLength(1);
+      expect(movements[0]).toMatchObject({ kind: 'OPENING_FLOAT' });
+      expect(movements[0]?.amount.toString()).toBe('100');
+    }
   });
 
   it('rejects a second OPEN drawer on the same register', async () => {
