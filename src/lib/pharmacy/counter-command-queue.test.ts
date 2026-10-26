@@ -30,6 +30,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 it('composes on HTTP LAN and preserves the command key across persisted replay and retry', () => {
   const snapshot = createCounterQueue('counter-test');
+  snapshot.leases.push({ leaseId: 'lease', blockStart: 1, blockEnd: 10, nextNumber: 2 });
   const command = {
     commandId: 'command-1',
     idempotencyKey: 'command-1',
@@ -110,4 +111,13 @@ it('composes on HTTP LAN and preserves the command key across persisted replay a
   expect(() => buildCounterReplayRequest(snapshot, { ...command, payload: {} })).toThrow(
     'INVALID_REPLAY_CONTRACT'
   );
+  expect(() =>
+    buildCounterReplayRequest(snapshot, {
+      ...command,
+      payload: {
+        ...command.payload,
+        leasedReceipt: { ...command.payload.leasedReceipt, leaseId: 'different-lease' },
+      },
+    })
+  ).toThrow('INVALID_REPLAY_CONTRACT');
 });

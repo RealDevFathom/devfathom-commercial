@@ -480,13 +480,13 @@ export function counterReplayBody(
 }
 
 export function buildCounterReplayRequest(
-  _snapshot: CounterQueueSnapshot,
+  snapshot: CounterQueueSnapshot,
   command: CounterQueuedCommand
 ): CounterReplayRequest {
   if (
     !isSaleReplayAction(command.action) ||
     !command.authentication ||
-    !isValidQueuedCounterCommand(command)
+    !isValidQueuedCounterCommand(snapshot, command)
   ) {
     throw new Error('INVALID_REPLAY_CONTRACT');
   }
@@ -508,7 +508,10 @@ export function buildCounterReplayRequest(
 }
 
 /** Fail closed when persisted sale data can no longer produce its issued request. */
-export function isValidQueuedCounterCommand(command: CounterQueuedCommand): boolean {
+export function isValidQueuedCounterCommand(
+  snapshot: CounterQueueSnapshot,
+  command: CounterQueuedCommand
+): boolean {
   if (!isSaleReplayAction(command.action)) return true;
   if (!command.authentication?.commandSignature || !command.authentication.receiptSignature) {
     return false;
@@ -519,10 +522,15 @@ export function isValidQueuedCounterCommand(command: CounterQueuedCommand): bool
     idempotencyKey: command.idempotencyKey,
     action: command.action,
   });
+  if (!parsed.success || command.idempotencyKey !== command.commandId) return false;
+  const receipt = parsed.data.leasedReceipt;
+  const lease = snapshot.leases.find((candidate) => candidate.leaseId === receipt.leaseId);
   return (
-    parsed.success &&
-    command.idempotencyKey === command.commandId &&
-    parsed.data.leasedReceipt.receiptNumber === command.receiptNumber
+    receipt.receiptNumber === command.receiptNumber &&
+    lease !== undefined &&
+    receipt.receiptNumber >= lease.blockStart &&
+    receipt.receiptNumber < lease.nextNumber &&
+    receipt.receiptNumber <= lease.blockEnd
   );
 }
 

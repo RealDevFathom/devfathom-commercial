@@ -165,7 +165,9 @@ export class PharmacyCounterRuntime {
       if (
         result.state.queue &&
         (result.state.queue.deviceId !== this.scope.deviceId ||
-          !result.state.queue.commands.every(isValidQueuedCounterCommand))
+          !result.state.queue.commands.every((command) =>
+            isValidQueuedCounterCommand(result.state.queue!, command)
+          ))
       ) {
         return 'unrecoverable';
       }
