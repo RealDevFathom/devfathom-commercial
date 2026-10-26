@@ -74,7 +74,7 @@ type CheckoutPanelProps = {
   onClose: (result: { settled: boolean }) => void;
 };
 
-const splitKindLabels: Record<string, string> = {
+const splitKindLabels: Readonly<Record<string, string>> = {
   NONE: 'Single bill',
   BY_ITEM: 'By item',
   BY_SEAT: 'By seat',
