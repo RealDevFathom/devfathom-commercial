@@ -632,6 +632,10 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
 
   it('derives canonical units and the landed unit cost instead of trusting the payload', async () => {
     await caller().createGoodsReceipt(RECEIPT);
+    expect(db.pharmacyPurchaseOrderLine.findMany).toHaveBeenCalledWith({
+      where: { purchaseOrderId: 'po_a' },
+      select: { id: true, medicineId: true, packLevelId: true },
+    });
     const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
     // 10 paid packs + 2 free at 10 units each, and 100_000 minor over 120 units.
     expect(line).toMatchObject({
