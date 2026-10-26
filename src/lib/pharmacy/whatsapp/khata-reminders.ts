@@ -18,6 +18,9 @@ import {
 } from './provider';
 
 const KHATA_TIME_ZONE = 'Asia/Karachi';
+const DAY_MS = 86_400_000;
+const WEEK_MS = 7 * DAY_MS;
+const KARACHI_UTC_OFFSET_MS = 5 * 60 * 60 * 1_000;
 
 /** Do not nag over a few paisa: a reminder needs a real outstanding balance. */
 const DEFAULT_MIN_BALANCE_MINOR = 10_000;
@@ -45,6 +48,32 @@ function karachiWeek(now: Date): string {
   const firstDay = Date.UTC(weekYear, 0, 1);
   const week = Math.ceil((localDate.getTime() - firstDay + 86_400_000) / 604_800_000);
   return `${weekYear}-${String(week).padStart(2, '0')}`;
+}
+
+/** Legacy UTC epoch-week claims that can overlap the current Karachi ISO week. */
+function legacyWeekClaims(
+  familyAccountId: string,
+  now: Date
+): { keys: string[]; weekStart: Date; weekEnd: Date } {
+  const localNow = new Date(now.getTime() + KARACHI_UTC_OFFSET_MS);
+  const weekday = localNow.getUTCDay() || 7;
+  const weekStart = new Date(
+    Date.UTC(
+      localNow.getUTCFullYear(),
+      localNow.getUTCMonth(),
+      localNow.getUTCDate() - weekday + 1
+    ) - KARACHI_UTC_OFFSET_MS
+  );
+  const weekEnd = new Date(weekStart.getTime() + WEEK_MS);
+  const legacyWeeks = new Set([
+    Math.floor(weekStart.getTime() / WEEK_MS),
+    Math.floor((weekEnd.getTime() - 1) / WEEK_MS),
+  ]);
+  return {
+    keys: [...legacyWeeks].map((week) => `khata:${familyAccountId}:w${week}`),
+    weekStart,
+    weekEnd,
+  };
 }
 
 /**
@@ -225,6 +254,25 @@ export async function processDueWhatsAppKhataReminders(
         month: '2-digit',
         day: '2-digit',
       }).format(now);
+      const legacyClaims = legacyWeekClaims(account.familyAccountId, now);
+      const legacyClaim = await db.pharmacyMessageLog.findFirst({
+        where: {
+          organizationId: account.organizationId,
+          kind: 'KHATA_REMINDER',
+          dedupeKey: { in: legacyClaims.keys },
+          createdAt: { gte: legacyClaims.weekStart, lt: legacyClaims.weekEnd },
+        },
+        select: { id: true },
+      });
+      if (legacyClaim) {
+        return {
+          customerId: customer.id,
+          patientId: customer.patientId,
+          to,
+          logId: null,
+          skipReason: undefined,
+        };
+      }
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: account.organizationId,
         direction: 'OUTBOUND',

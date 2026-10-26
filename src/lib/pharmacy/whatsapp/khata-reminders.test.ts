@@ -42,6 +42,25 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     },
     pharmacyMessageLog: {
       count: async () => store.logs.length,
+      findFirst: async ({
+        where,
+      }: {
+        where: {
+          organizationId: string;
+          kind: string;
+          dedupeKey: { in: string[] };
+          createdAt: { gte: Date; lt: Date };
+        };
+      }) =>
+        store.logs.find(
+          (log) =>
+            log.organizationId === where.organizationId &&
+            log.kind === where.kind &&
+            where.dedupeKey.in.includes(log.dedupeKey) &&
+            log.createdAt instanceof Date &&
+            log.createdAt >= where.createdAt.gte &&
+            log.createdAt < where.createdAt.lt
+        ) ?? null,
       createManyAndReturn: async ({ data }: { data: Array<Omit<LogRow, 'id'>> }) => {
         const row = data[0]!;
         if (
@@ -121,7 +140,7 @@ describe('planKhataReminder', () => {
       NOW
     );
     expect(plan).toMatchObject({ due: true, dueDate: '2026-10-21' });
-    expect(plan.dedupeKey).toMatch(/^khata:family-1:w\d+$/);
+    expect(plan.dedupeKey).toMatch(/^khata:family-1:w\d{4}-\d{2}$/);
   });
 
   it('is not due without an overdue charge, below the floor, or in the future', () => {
@@ -212,6 +231,29 @@ describe('processDueWhatsAppKhataReminders', () => {
       phoneLast4: '4567',
       dueDate: '2026-10-10',
     });
+  });
+
+  it('honors a legacy epoch-week claim made earlier in the same Karachi week', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const legacySentAt = new Date('2026-10-20T08:00:00.000Z');
+    store.logs = [
+      {
+        id: 'legacy-log',
+        organizationId: 'org_a',
+        kind: 'KHATA_REMINDER',
+        dedupeKey: `khata:family-1:w${Math.floor(legacySentAt.getTime() / (7 * 86_400_000))}`,
+        createdAt: legacySentAt,
+      },
+    ];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+
+    expect(result).toMatchObject({ scanned: 1, sent: 0, duplicate: 1 });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toHaveLength(1);
   });
 
   it.each([
