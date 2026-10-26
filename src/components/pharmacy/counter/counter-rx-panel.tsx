@@ -76,7 +76,9 @@ function CounterRxPhotoCapture({
 }) {
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
-  const workspace = trpc.pharmacyPrescriptions.workspace.useQuery(undefined, { enabled: open });
+  const workspace = trpc.pharmacyPrescriptions.captureWorkspace.useQuery(undefined, {
+    enabled: open,
+  });
   const uploadSource = trpc.pharmacyPrescriptions.uploadSource.useMutation();
   const extractSource = trpc.pharmacyPrescriptions.extractSource.useMutation();
   const capture = trpc.pharmacyPrescriptions.capture.useMutation();
@@ -199,7 +201,7 @@ function CounterRxPhotoCapture({
     }
     await Promise.allSettled([
       utils.pharmacyPrescriptions.counterPatientPanel.invalidate({ patientId }),
-      utils.pharmacyPrescriptions.workspace.invalidate(),
+      utils.pharmacyPrescriptions.captureWorkspace.invalidate(),
     ]);
   }
 

@@ -37,7 +37,7 @@ const channel = z.enum(['IN_PERSON', 'PHONE', 'SMS', 'WHATSAPP', 'EMAIL']);
 
 // Suppress sensitive payload auditing before authentication/input validation,
 // including denied uploads. Keep the existing audited guards and ABAC engine.
-const fileProcedure = publicProcedure
+const prescriptionFileProcedure = publicProcedure
   .use(({ ctx, next }) => {
     ctx.audit.detail.skipInput = true;
     return next();
@@ -48,16 +48,36 @@ const fileProcedure = publicProcedure
     const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
     if (
       !hasModule(ctx.entitlements, 'pharmacy-dispensing') ||
-      !(await canAny(
-        subject,
-        ['pharmacy:prescriptions', 'pharmacy:dispense'],
-        undefined,
-        options
-      ))
+      !(await canAny(subject, ['pharmacy:prescriptions', 'pharmacy:dispense'], undefined, options))
     ) {
       throw new TRPCError({
         code: 'FORBIDDEN',
         message: 'Prescription file access is not permitted.',
+      });
+    }
+    return next();
+  });
+
+// Historical clinical records and retained images require dispensing authority.
+// Prescription intake users receive only the lookup data needed for a new capture.
+const dispensingFileProcedure = publicProcedure
+  .use(({ ctx, next }) => {
+    ctx.audit.detail.skipInput = true;
+    return next();
+  })
+  .concat(auditedProtectedProcedure)
+  .use(async ({ ctx, next }) => {
+    const allowed =
+      hasModule(ctx.entitlements, 'pharmacy-dispensing') &&
+      (await can(subjectFromSession(ctx.session.user), 'pharmacy:dispense', undefined, {
+        db: ctx.db,
+        source: 'TRPC',
+        ip: ctx.requestMeta.ip,
+      }));
+    if (!allowed) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Prescription records are not permitted.',
       });
     }
     return next();
@@ -93,7 +113,7 @@ async function readableSourceFile(
 }
 
 export const pharmacyPrescriptionsRouter = router({
-  workspace: fileProcedure
+  workspace: dispensingFileProcedure
     .input(
       z
         .object({ branchId: z.string().trim().min(1).optional() })
@@ -165,6 +185,19 @@ export const pharmacyPrescriptionsRouter = router({
         })),
       };
     }),
+
+  captureWorkspace: prescriptionFileProcedure.query(async ({ ctx }) => {
+    const [prescribers, medicines] = await Promise.all([
+      ctx.db.pharmacyPrescriber.findMany({ orderBy: { name: 'asc' } }),
+      ctx.db.medicine.findMany({
+        where: { saleable: true },
+        orderBy: { productName: 'asc' },
+        include: { presentations: { orderBy: { presentation: 'asc' } } },
+      }),
+    ]);
+    return { prescribers, medicines };
+  }),
+
   createPatient: protectedProcedure
     .input(
       z
@@ -202,17 +235,19 @@ export const pharmacyPrescriptionsRouter = router({
       )
     ),
 
-  uploadSource: fileProcedure.input(prescriptionUploadSchema).mutation(async ({ ctx, input }) => {
-    const organizationId = ctx.entitlements.organizationId;
-    const patient = await ctx.db.pharmacyPatient.findFirst({
-      where: { id: input.patientId, organizationId },
-      select: { id: true },
-    });
-    if (!patient) throw new TRPCError({ code: 'NOT_FOUND', message: 'Patient not found.' });
-    return persistPrescriptionFile(organizationId, ctx.session.user.id, input);
-  }),
+  uploadSource: prescriptionFileProcedure
+    .input(prescriptionUploadSchema)
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      const patient = await ctx.db.pharmacyPatient.findFirst({
+        where: { id: input.patientId, organizationId },
+        select: { id: true },
+      });
+      if (!patient) throw new TRPCError({ code: 'NOT_FOUND', message: 'Patient not found.' });
+      return persistPrescriptionFile(organizationId, ctx.session.user.id, input);
+    }),
 
-  readSource: fileProcedure
+  readSource: dispensingFileProcedure
     .input(z.object({ sourceFileRef: prescriptionFileRefSchema }).strict())
     .query(async ({ ctx, input }) => {
       const file = await readableSourceFile(ctx, input.sourceFileRef);
@@ -224,7 +259,7 @@ export const pharmacyPrescriptionsRouter = router({
    * written; the pharmacist confirms each value into the capture form, and
    * `capture` never reads OCR output. Off unless PHARMACY_RX_OCR_ADAPTER is set.
    */
-  extractSource: fileProcedure
+  extractSource: prescriptionFileProcedure
     .input(z.object({ sourceFileRef: prescriptionFileRefSchema }).strict())
     .mutation(async ({ ctx, input }) => {
       const adapterName = configuredRxOcrAdapterName();
@@ -261,7 +296,7 @@ export const pharmacyPrescriptionsRouter = router({
       return proposeRxPrefill(extraction, medicines);
     }),
 
-  capture: fileProcedure
+  capture: prescriptionFileProcedure
     .input(
       z
         .object({

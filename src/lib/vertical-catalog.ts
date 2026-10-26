@@ -732,6 +732,7 @@ export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
 export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:*',
   'pharmacy:dispense',
+  'pharmacy:prescriptions',
   'pharmacy:catalogue-review',
   'pharmacy:manage',
   'pharmacy:counter',
@@ -749,6 +750,7 @@ export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:manage',
   'pharmacy:procurement',
   'pharmacy:inventory',
+  'pharmacy:prescriptions',
   'pharmacy:dispense',
   'pharmacy:safety',
   'pharmacy:catalogue-review',
@@ -797,7 +799,7 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'cashier',
     name: 'Cashier',
     isSystem: true,
-    capabilities: ['pharmacy:counter', 'pharmacy:orders'],
+    capabilities: ['pharmacy:counter', 'pharmacy:orders', 'pharmacy:prescriptions'],
   },
   {
     key: 'procurement',

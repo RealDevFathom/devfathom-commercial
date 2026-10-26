@@ -148,7 +148,7 @@ describe('opt-in pharmacy Owner / Operator access', () => {
       await expect(canAny(employee, workspaceActions, undefined, { db })).resolves.toBe(true);
     });
 
-    it('does not let a cashier orders grant into the workspace', async () => {
+    it('does not treat an orders grant as prescription intake authority', async () => {
       const db = authorizationDb({
         rolePermissions: [{ capability: 'pharmacy:orders', effect: 'ALLOW' }],
       });
@@ -297,7 +297,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);

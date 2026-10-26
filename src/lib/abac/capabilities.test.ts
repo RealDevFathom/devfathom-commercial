@@ -15,7 +15,7 @@ export const intendedPharmacyGrants = {
   ],
   pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
   manager: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
-  cashier: ['pharmacy:counter', 'pharmacy:orders'],
+  cashier: ['pharmacy:counter', 'pharmacy:orders', 'pharmacy:prescriptions'],
   procurement: ['pharmacy:procurement'],
   inventory: ['pharmacy:inventory'],
   finance: ['reports:financial'],
@@ -76,7 +76,7 @@ describe('canonical capability contract (#130)', () => {
 
   it.each([
     ['pharmacist', ['pharmacy:dispense', 'pharmacy:catalogue-review']],
-    ['cashier', ['pharmacy:counter', 'pharmacy:orders']],
+    ['cashier', ['pharmacy:counter', 'pharmacy:orders', 'pharmacy:prescriptions']],
     ['finance', ['reports:financial']],
     ['auditor', ['reports:operational']],
   ])('limits %s to its intended checked actions', (key, actions) => {

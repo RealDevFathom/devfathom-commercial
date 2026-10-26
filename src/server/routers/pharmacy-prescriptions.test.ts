@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   hasModule: vi.fn(),
   patient: vi.fn(),
   prescriber: vi.fn(),
+  prescribers: vi.fn(),
   find: vi.fn(),
   create: vi.fn(),
   putUpload: vi.fn(),
@@ -49,7 +50,7 @@ function context(userId = 'user-a', organizationId = 'org-a', status = 'ACTIVE')
   return {
     db: {
       pharmacyPatient: { findFirst: mocks.patient },
-      pharmacyPrescriber: { findFirst: mocks.prescriber },
+      pharmacyPrescriber: { findFirst: mocks.prescriber, findMany: mocks.prescribers },
       prescription: { findFirst: mocks.find, create: mocks.create },
       medicine: { findMany: mocks.medicines },
     },
@@ -104,6 +105,8 @@ describe('prescription capture and private delivery', () => {
     mocks.hasModule.mockReturnValue(true);
     mocks.patient.mockResolvedValue({ id: 'patient-a' });
     mocks.prescriber.mockResolvedValue({ id: 'prescriber-a' });
+    mocks.prescribers.mockResolvedValue([{ id: 'prescriber-a', name: 'Dr Test' }]);
+    mocks.medicines.mockResolvedValue([]);
     mocks.find.mockResolvedValue(null);
     mocks.create.mockImplementation(async ({ data }) => ({
       ...data,
@@ -216,12 +219,12 @@ describe('prescription capture and private delivery', () => {
     );
   });
 
-  it('refuses a tenant administrator when central ABAC finds a prescription-workspace denial', async () => {
+  it('refuses a tenant administrator when central ABAC finds a prescription-intake denial', async () => {
     mocks.canAny.mockResolvedValue(false);
     const admin = context();
     admin.session!.user.role = 'ADMIN';
 
-    await expect(caller(admin).workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller(admin).captureWorkspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.canAny).toHaveBeenCalledWith(
       expect.objectContaining({ role: 'ADMIN' }),
       ['pharmacy:prescriptions', 'pharmacy:dispense'],
@@ -253,15 +256,27 @@ describe('prescription capture and private delivery', () => {
     );
   });
 
-  it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
-    mocks.canAny.mockResolvedValue(false);
+  it('lets a capture-only cashier load intake choices, upload, and capture', async () => {
+    mocks.can.mockResolvedValue(false);
+    mocks.canAny.mockResolvedValue(true);
+
+    await expect(caller().captureWorkspace()).resolves.toEqual({
+      prescribers: [{ id: 'prescriber-a', name: 'Dr Test' }],
+      medicines: [],
+    });
+    const receipt = await upload();
+    await expect(caller().capture(captureInput(receipt.url))).resolves.toHaveProperty('id');
+  });
+
+  it('keeps historical records and retained images unavailable to capture-only users', async () => {
+    mocks.can.mockResolvedValue(false);
+    mocks.canAny.mockResolvedValue(true);
+
     await expect(caller().workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(upload()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(
-      caller().capture(captureInput('/api/pharmacy/prescription-files?id=rx'))
+      caller().readSource({ sourceFileRef: '/api/pharmacy/prescription-files?id=another-user' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(mocks.putUpload).not.toHaveBeenCalled();
-    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.getUpload).not.toHaveBeenCalled();
   });
 
   it.each(['capture://rx.png', '/api/files/foreign.png', 'https://foreign.test/image.png'])(
