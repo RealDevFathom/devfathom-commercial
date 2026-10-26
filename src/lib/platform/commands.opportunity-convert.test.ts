@@ -29,7 +29,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 }));
 
 const platformDb = {
-  $queryRawUnsafe: mocks.lockOpportunity,
+  $queryRaw: mocks.lockOpportunity,
   platformPackage: { findUnique: mocks.packageFindUnique },
   organization: { create: mocks.organizationCreate },
   organizationRole: { create: mocks.roleCreate },
@@ -89,10 +89,11 @@ describe('crm.opportunity.convert', () => {
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400, message: 'Opportunity not found.' });
-    expect(mocks.lockOpportunity).toHaveBeenCalledWith(
-      'SELECT id, "convertedOrganizationId" FROM platform_opportunities WHERE id = $1 FOR UPDATE',
-      payload.opportunityId
+    const [query, opportunityId] = mocks.lockOpportunity.mock.calls[0];
+    expect(Array.from(query).join('$1')).toMatch(
+      /SELECT id, "convertedOrganizationId"\s+FROM platform_opportunities\s+WHERE id = \$1\s+FOR UPDATE/
     );
+    expect(opportunityId).toBe(payload.opportunityId);
     expect(mocks.packageFindUnique).not.toHaveBeenCalled();
     expect(mocks.organizationCreate).not.toHaveBeenCalled();
     expect(mocks.roleCreate).not.toHaveBeenCalled();

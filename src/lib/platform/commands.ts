@@ -3058,12 +3058,12 @@ async function runCommand(
       if (!input.opportunityId) {
         throw new PlatformSecurityError('An opportunity is required for conversion.', 400);
       }
-      const lockedOpportunity = await db.$queryRawUnsafe<
+      const lockedOpportunity = await db.$queryRaw<
         Array<{ id: string; convertedOrganizationId: string | null }>
-      >(
-        'SELECT id, "convertedOrganizationId" FROM platform_opportunities WHERE id = $1 FOR UPDATE',
-        input.opportunityId
-      );
+      >`SELECT id, "convertedOrganizationId"
+        FROM platform_opportunities
+        WHERE id = ${input.opportunityId}
+        FOR UPDATE`;
       if (lockedOpportunity.length === 0) {
         throw new PlatformSecurityError('Opportunity not found.', 400);
       }
