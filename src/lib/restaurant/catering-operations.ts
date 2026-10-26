@@ -224,6 +224,9 @@ export async function publishQuote(
   };
   const grouped = new Map<string, FrozenRequirement>();
   for (const line of order.lines) {
+    // Keep this local guard in addition to the preflight check above so
+    // recipeId is narrowed before it is passed to Prisma.
+    if (!line.recipeId) fail('A recipe is required for every quoted line.');
     // Pin the root before costing: the helper's quantities and denominators must
     // describe that same version even if another transaction activates a recipe.
     const version = resolveActiveVersion(
