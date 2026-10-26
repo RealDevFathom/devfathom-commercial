@@ -110,8 +110,17 @@ export default async function PharmacyFinancePage({
   }
   const caller = pharmacyFinanceRouter.createCaller(ctx);
   let workspace: Awaited<ReturnType<typeof caller.workspace>>;
+  let nativeAp: Awaited<ReturnType<typeof caller.expenseAging>>;
   try {
     workspace = await caller.workspace({ branchId: branch.id });
+    const asOf = new Date();
+    nativeAp = await caller.expenseAging({
+      branchId: branch.id,
+      asOf,
+      from: new Date(asOf.getTime() - 90 * 86_400_000),
+      format: 'CSV',
+      limit: 200,
+    });
   } catch {
     return (
       <main className="space-y-6">
@@ -138,6 +147,33 @@ export default async function PharmacyFinancePage({
       if (!actionCtx?.session?.user || actionCtx.session.user.role !== 'ADMIN')
         throw new Error('Administrator access is required.');
       const actionCaller = pharmacyFinanceRouter.createCaller(actionCtx);
+      if (action === 'create-expense-invoice') {
+        const amountMinor = moneyMinor(data, 'amount');
+        await actionCaller.createExpenseInvoice({
+          branchId,
+          supplierId: field(data, 'supplierId'),
+          supplierInvoiceRef: field(data, 'supplierInvoiceRef'),
+          description: field(data, 'description'),
+          issuedAt: new Date(`${field(data, 'issuedAt')}T12:00:00Z`),
+          dueAt: new Date(`${field(data, 'dueAt')}T12:00:00Z`),
+          amountMinor,
+          idempotencyKey: browserUuid(),
+          lines: [{ description: field(data, 'description'), amountMinor }],
+        });
+        redirect(destination(branchId, 'Supplier expense invoice posted to accounts payable.'));
+      }
+      if (action === 'settle-expense-invoice') {
+        await actionCaller.settleExpenseInvoice({
+          branchId,
+          invoiceId: field(data, 'invoiceId'),
+          amountMinor: moneyMinor(data, 'amount'),
+          occurredAt: new Date(`${field(data, 'occurredAt')}T12:00:00Z`),
+          reference: field(data, 'reference'),
+          idempotencyKey: browserUuid(),
+          fundingAccount: field(data, 'fundingAccount') === 'CASH' ? 'CASH' : 'BANK',
+        });
+        redirect(destination(branchId, 'Invoice payment posted and allocated.'));
+      }
       if (action === 'post') {
         const kind = field(data, 'transactionKind') as
           | 'SUPPLIER_PAYMENT'
@@ -343,6 +379,35 @@ export default async function PharmacyFinancePage({
             Switch branch
           </Button>
         </form>
+      </SectionCard>
+      <SectionCard title="Non-stock supplier invoices" eyebrow="Native accounts payable">
+        <div className="grid gap-5 xl:grid-cols-2">
+          <form action={perform} className="grid gap-3 sm:grid-cols-2">
+            <input type="hidden" name="action" value="create-expense-invoice" />
+            <input type="hidden" name="branchId" value={branch.id} />
+            <label className="text-sm">Supplier ID<Input className="mt-1" name="supplierId" required /></label>
+            <label className="text-sm">Supplier invoice reference<Input className="mt-1" name="supplierInvoiceRef" required /></label>
+            <label className="text-sm sm:col-span-2">Expense description<Input className="mt-1" name="description" required /></label>
+            <label className="text-sm">Invoice date<Input className="mt-1" name="issuedAt" type="date" required /></label>
+            <label className="text-sm">Due date<Input className="mt-1" name="dueAt" type="date" required /></label>
+            <label className="text-sm">Amount (PKR)<Input className="mt-1" name="amount" type="number" min="0.01" step="0.01" required /></label>
+            <Button type="submit" className="self-end">Post invoice</Button>
+          </form>
+          <form action={perform} className="grid content-start gap-3 sm:grid-cols-2">
+            <input type="hidden" name="action" value="settle-expense-invoice" />
+            <input type="hidden" name="branchId" value={branch.id} />
+            <label className="text-sm sm:col-span-2">Open invoice<select className={inputClass} name="invoiceId" required>{nativeAp.rows.map(invoice => <option key={invoice.id} value={invoice.id}>{invoice.supplierInvoiceRef} · {money(invoice.outstandingMinor)}</option>)}</select></label>
+            <label className="text-sm">Payment reference<Input className="mt-1" name="reference" required /></label>
+            <label className="text-sm">Amount (PKR)<Input className="mt-1" name="amount" type="number" min="0.01" step="0.01" required /></label>
+            <label className="text-sm">Payment date<Input className="mt-1" name="occurredAt" type="date" defaultValue={today} required /></label>
+            <label className="text-sm">Pay from<select className={inputClass} name="fundingAccount"><option value="BANK">Bank</option><option value="CASH">Cash</option></select></label>
+            <Button type="submit" disabled={!nativeAp.rows.length} className="sm:col-span-2">Pay selected invoice</Button>
+          </form>
+        </div>
+        <div className="mt-5 flex items-center justify-between gap-3">
+          <p className="text-xs text-text-muted">Native non-stock invoices only · 90-day due-date view · maximum {nativeAp.bounds.maxRows} rows</p>
+          {'csv' in nativeAp ? <a className="text-sm font-medium text-link underline" download="native-ap-aging.csv" href={`data:text/csv;charset=utf-8,${encodeURIComponent(nativeAp.csv)}`}>Download CSV</a> : null}
+        </div>
       </SectionCard>
       <SectionCard title="Create POS settlement batch" eyebrow="Card · wallet · bank transfer">
         {workspace.settlementCandidates.length ? (

@@ -20,6 +20,13 @@ import {
   reverseBookkeepingTransaction,
 } from '@/lib/pharmacy/bookkeeping';
 import { PharmacyTaxProfileError, publishPharmacyTaxProfile } from '@/lib/pharmacy/tax-profiles';
+import {
+  createSupplierExpenseInvoice,
+  nativeApAgingCsv,
+  reverseSupplierExpenseSettlement,
+  settleSupplierExpenseInvoice,
+  supplierExpenseAging,
+} from '@/lib/pharmacy/native-ap';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { assertInOrganization } from '../org-refs';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
@@ -145,6 +152,56 @@ const allocation = z.object({
 });
 
 export const pharmacyFinanceRouter = router({
+  expenseAging: bookkeepingProcedure
+    .input(
+      z.object({
+        branchId: id,
+        from: at,
+        asOf: at,
+        limit: z.number().int().min(1).max(200).default(200),
+        format: z.enum(['JSON', 'CSV']).default('JSON'),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const scoped = await scope(ctx, input.branchId);
+      const report = await supplierExpenseAging(ctx.db, scoped, input);
+      return input.format === 'CSV' ? { ...report, csv: nativeApAgingCsv(report) } : report;
+    }),
+
+  createExpenseInvoice: bookkeepingProcedure
+    .input(z.object({
+      branchId: id, supplierId: id, supplierInvoiceRef: z.string().trim().min(1).max(160),
+      description: z.string().trim().min(1).max(500), issuedAt: at, dueAt: at,
+      amountMinor: moneyMinor, idempotencyKey: id,
+      lines: z.array(z.object({ description: z.string().trim().min(1).max(300), amountMinor: moneyMinor })).min(1).max(100),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scoped = await scope(ctx, input.branchId);
+        return await ctx.db.$transaction(tx => createSupplierExpenseInvoice(txDb(tx), scoped, input));
+      } catch (error) { fail(error); }
+    }),
+
+  settleExpenseInvoice: bookkeepingProcedure
+    .input(z.object({ branchId: id, invoiceId: id, amountMinor: moneyMinor, occurredAt: at,
+      reference: z.string().trim().min(1).max(80), idempotencyKey: id,
+      fundingAccount: z.enum(['CASH', 'BANK']).optional() }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scoped = await scope(ctx, input.branchId);
+        return await ctx.db.$transaction(tx => settleSupplierExpenseInvoice(txDb(tx), scoped, input));
+      } catch (error) { fail(error); }
+    }),
+
+  reverseExpenseSettlement: bookkeepingProcedure
+    .input(z.object({ branchId: id, settlementId: id, reason: z.string().trim().min(1).max(500), at, idempotencyKey: id }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scoped = await scope(ctx, input.branchId);
+        return await ctx.db.$transaction(tx => reverseSupplierExpenseSettlement(txDb(tx), scoped, input));
+      } catch (error) { fail(error); }
+    }),
+
   financialStatements: ledgerReportProcedure
     .input(reportPeriod.safeExtend({ page: z.number().int().min(1).max(10000).default(1) }))
     .query(async ({ ctx, input }) => ({

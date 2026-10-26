@@ -177,10 +177,36 @@ export async function postBookkeepingTransaction(
 export async function reverseBookkeepingTransaction(
   db: ScopedDb,
   scope: BookkeepingScope,
-  input: { transactionId: string; at: Date; reason: string; idempotencyKey: string }
+  input: {
+    transactionId: string;
+    at: Date;
+    reason: string;
+    idempotencyKey: string;
+    /** Only the invoice-directed wrapper may reverse a native AP payment. */
+    nativeSettlementId?: string;
+  }
 ) {
   if (!input.reason.trim()) throw new PharmacyBookkeepingError('MISSING_REASON');
   await assertPeriodOpen(db, scope, input.at);
+  // This interlock deliberately runs before the canonical transaction's status/replay
+  // handling.  Otherwise a caller could use a guessed transaction id and learn or
+  // replay the reversal without proving which tenant/branch invoice owns it.
+  const nativeSettlement = await (
+    db as ScopedDb & {
+      pharmacySupplierExpenseSettlement?: {
+        findFirst(args: unknown): Promise<{ id: string } | null>;
+      };
+    }
+  ).pharmacySupplierExpenseSettlement?.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      bookkeepingTransactionId: input.transactionId,
+      invoice: { branchId: scope.branchId },
+    },
+    select: { id: true },
+  });
+  if (nativeSettlement && nativeSettlement.id !== input.nativeSettlementId)
+    throw new PharmacyBookkeepingError('INVALID_STATE');
   const transaction = await db.pharmacyBookkeepingTransaction.findFirst({
     where: {
       organizationId: scope.organizationId,

@@ -230,6 +230,7 @@ model PharmacyBranch {
   visibilityPharmacyAccountingPeriod       PharmacyAccountingPeriod[]        @relation("PharmacyAccountingPeriodVisibilityAnchor")
   visibilityPharmacyBankStatementLine      PharmacyBankStatementLine[]       @relation("PharmacyBankStatementLineVisibilityAnchor")
   visibilityPharmacyBookkeepingTransaction PharmacyBookkeepingTransaction[]  @relation("PharmacyBookkeepingTransactionVisibilityAnchor")
+  visibilityPharmacySupplierExpenseInvoice PharmacySupplierExpenseInvoice[] @relation("PharmacySupplierExpenseInvoiceVisibilityAnchor")
   visibilityPharmacyDailyClose             PharmacyDailyClose[]              @relation("PharmacyDailyCloseVisibilityAnchor")
   visibilityPharmacyDrawerSession          PharmacyDrawerSession[]           @relation("PharmacyDrawerSessionVisibilityAnchor")
   visibilityPharmacyReceiptNumberSequence  PharmacyReceiptNumberSequence[]   @relation("PharmacyReceiptNumberSequenceVisibilityAnchor")
@@ -2394,6 +2395,7 @@ enum FinanceSourceKind {
   PHARMACY_OPENING_STOCK
   PHARMACY_OPENING_LEDGER
   PHARMACY_BOOKKEEPING_TRANSACTION
+  PHARMACY_SUPPLIER_EXPENSE_INVOICE
 }
 
 enum PharmacyBookkeepingKind {
@@ -2436,6 +2438,17 @@ enum PharmacyAccountingPeriodStatus {
 enum PharmacyBankLineStatus {
   UNMATCHED
   MATCHED
+  REVERSED
+}
+
+enum PharmacySupplierExpenseInvoiceStatus {
+  OPEN
+  PAID
+  VOID
+}
+
+enum PharmacySupplierExpenseSettlementStatus {
+  POSTED
   REVERSED
 }
 
@@ -3588,6 +3601,103 @@ model PharmacyBookkeepingTransaction {
   @@index([organizationId, branchId, occurredAt])
   @@index([organizationId, status, kind])
   @@map("pharmacy_bookkeeping_transactions")
+}
+
+/// A supplier invoice that does not receive stock.  Stock invoices continue to
+/// be identified by PharmacyGoodsReceipt; keeping this source separate prevents
+/// an operating expense from changing inventory valuation.
+model PharmacySupplierExpenseInvoice {
+  id                String                               @id @default(cuid())
+  organizationId    String                               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  supplierId         String
+  supplierInvoiceRef String
+  description        String
+  issuedAt            DateTime
+  dueAt               DateTime
+  amountMinor         Int
+  currency            Currency                             @default(PKR)
+  status              PharmacySupplierExpenseInvoiceStatus @default(OPEN)
+  idempotencyKey      String
+  journalEntryId      String
+  createdByUserId     String
+  createdAt           DateTime                              @default(now())
+
+  lines             PharmacySupplierExpenseInvoiceLine[]
+  settlements       PharmacySupplierExpenseSettlement[]
+  events            PharmacySupplierExpenseInvoiceEvent[]
+  supplier          PharmacySupplier @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
+  visibilityAnchor  PharmacyBranch @relation("PharmacySupplierExpenseInvoiceVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, supplierId, supplierInvoiceRef])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, branchId, dueAt, id])
+  @@map("pharmacy_supplier_expense_invoices")
+}
+
+model PharmacySupplierExpenseInvoiceLine {
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  invoiceId      String
+  description    String
+  amountMinor    Int
+  createdAt      DateTime @default(now())
+  invoice PharmacySupplierExpenseInvoice @relation(fields: [organizationId, invoiceId], references: [organizationId, id], onDelete: Restrict)
+  @@unique([organizationId, id])
+  @@index([organizationId, invoiceId])
+  @@map("pharmacy_supplier_expense_invoice_lines")
+}
+
+/// Links an invoice-directed payment to the existing canonical bookkeeping
+/// transaction.  The journal is therefore posted once, not by this row.
+model PharmacySupplierExpenseSettlement {
+  id                    String                                  @id @default(cuid())
+  organizationId        String                                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  invoiceId             String
+  bookkeepingTransactionId String
+  amountMinor           Int
+  status                PharmacySupplierExpenseSettlementStatus @default(POSTED)
+  idempotencyKey        String
+  occurredAt            DateTime
+  createdAt             DateTime @default(now())
+  invoice PharmacySupplierExpenseInvoice @relation(fields: [organizationId, invoiceId], references: [organizationId, id], onDelete: Restrict)
+  reversals PharmacySupplierExpenseSettlementReversal[]
+  @@unique([organizationId, id])
+  @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, bookkeepingTransactionId])
+  @@index([organizationId, invoiceId, occurredAt])
+  @@map("pharmacy_supplier_expense_settlements")
+}
+
+model PharmacySupplierExpenseSettlementReversal {
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  settlementId   String
+  idempotencyKey String
+  reason         String
+  reversedAt     DateTime
+  createdByUserId String
+  createdAt      DateTime @default(now())
+  settlement PharmacySupplierExpenseSettlement @relation(fields: [organizationId, settlementId], references: [organizationId, id], onDelete: Restrict)
+  @@unique([organizationId, id])
+  @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, settlementId])
+  @@map("pharmacy_supplier_expense_settlement_reversals")
+}
+
+model PharmacySupplierExpenseInvoiceEvent {
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  invoiceId      String
+  kind           String
+  actorId        String
+  occurredAt     DateTime
+  detail         String?
+  invoice PharmacySupplierExpenseInvoice @relation(fields: [organizationId, invoiceId], references: [organizationId, id], onDelete: Restrict)
+  @@unique([organizationId, id])
+  @@index([organizationId, invoiceId, occurredAt])
+  @@map("pharmacy_supplier_expense_invoice_events")
 }
 
 /// Allocation remains explicit so partial supplier/customer settlement and
@@ -11731,6 +11841,7 @@ model PharmacySupplier {
   debitNotes      PharmacyDebitNote[]
   credits         PharmacySupplierCredit[]
   relationships   PharmacySupplierRelationship[]
+  expenseInvoices PharmacySupplierExpenseInvoice[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, name])
