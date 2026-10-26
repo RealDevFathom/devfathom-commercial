@@ -14,6 +14,9 @@ const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
+vi.mock('@/lib/auth/anonymous-tenant', () => ({
+  organizationForAnonymousToken: vi.fn(async () => ORGANIZATION),
+}));
 vi.mock('@/lib/pharmacy/supplier-action-links', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pharmacy/supplier-action-links')>();
   return {
@@ -35,6 +38,7 @@ type Deps = {
   withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
   flushAuditWritesForTest: (typeof import('@/server/audit'))['flushAuditWritesForTest'];
+  post: (typeof import('@/app/api/trpc/[trpc]/route'))['POST'];
   router: (typeof import('./pharmacy-supplier-links'))['pharmacySupplierLinksRouter'];
 };
 
@@ -49,6 +53,7 @@ describeIfDatabase('pharmacy supplier signed-link audit persistence', () => {
     deps = {
       ...scopedDb,
       flushAuditWritesForTest: (await import('@/server/audit')).flushAuditWritesForTest,
+      post: (await import('@/app/api/trpc/[trpc]/route')).POST,
       router: (await import('./pharmacy-supplier-links')).pharmacySupplierLinksRouter,
     };
 
@@ -121,21 +126,21 @@ describeIfDatabase('pharmacy supplier signed-link audit persistence', () => {
     });
     vi.mocked(submitSupplierEvidence).mockRejectedValue(new SupplierLinkError('MISMATCH'));
 
-    await deps.withTenantDb(ORGANIZATION, async (db) => {
-      const caller = deps.router.createCaller({
-        db,
-        entitlements: { organizationId: ORGANIZATION },
-        requestMeta: { ip: '192.0.2.11', userAgent: 'supplier-audit-failure-test' },
-      } as never);
-      await expect(
-        caller.submit({
+    await expect(
+      deps.withTenantDb(ORGANIZATION, async (db) => {
+        const caller = deps.router.createCaller({
+          db,
+          entitlements: { organizationId: ORGANIZATION },
+          requestMeta: { ip: '192.0.2.11', userAgent: 'supplier-audit-failure-test' },
+        } as never);
+        return caller.submit({
           token: 'link.secret.signature',
           kind: 'REJECTION',
           idempotencyKey: `idem_failure_${suffix}`,
           payload: {},
-        })
-      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'MISMATCH' });
-    });
+        });
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'MISMATCH' });
     await deps.flushAuditWritesForTest();
 
     const row = await deps.withTenantDb(ORGANIZATION, (db) =>
@@ -159,6 +164,53 @@ describeIfDatabase('pharmacy supplier signed-link audit persistence', () => {
       ip: '192.0.2.11',
       userAgent: 'supplier-audit-failure-test',
       metadata: { branchId: BRANCH, linkId: LINK, kind: 'REJECTION' },
+    });
+  });
+
+  it('keeps a failed supplier audit after the HTTP request transaction rolls back', async () => {
+    const { SupplierLinkError, getSupplierLinkAuditTarget, submitSupplierEvidence } = await import(
+      '@/lib/pharmacy/supplier-action-links'
+    );
+    vi.mocked(getSupplierLinkAuditTarget).mockResolvedValue({
+      id: LINK,
+      organizationId: ORGANIZATION,
+      branchId: BRANCH,
+    });
+    vi.mocked(submitSupplierEvidence).mockRejectedValue(new SupplierLinkError('MISMATCH'));
+
+    const response = await deps.post(
+      new Request('http://supplier.example/api/trpc/pharmacySupplierLinks.submit', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'user-agent': 'supplier-http-audit-test' },
+        body: JSON.stringify({
+          json: {
+            token: 'link.secret.signature',
+            kind: 'REJECTION',
+            idempotencyKey: `idem_http_failure_${suffix}`,
+            payload: {},
+          },
+        }),
+      })
+    );
+    expect(response.status).toBe(400);
+    await deps.flushAuditWritesForTest();
+
+    const row = await deps.withTenantDb(ORGANIZATION, (db) =>
+      db.auditLog.findFirst({
+        where: {
+          action: 'pharmacySupplierLinks.submit',
+          targetId: LINK,
+          outcome: 'FAILURE',
+          userAgent: 'supplier-http-audit-test',
+        },
+        orderBy: { createdAt: 'desc' },
+      })
+    );
+    expect(row).toMatchObject({
+      organizationId: ORGANIZATION,
+      outcome: 'FAILURE',
+      errorCode: 'MISMATCH',
+      userAgent: 'supplier-http-audit-test',
     });
   });
 

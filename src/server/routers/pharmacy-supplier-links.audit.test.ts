@@ -88,8 +88,7 @@ describe('pharmacy supplier signed-link auditing', () => {
         outcome: 'FAILURE',
         errorCode: 'IDEMPOTENCY_CONFLICT',
         metadata: { branchId: 'branch_a', linkId: 'link_a', kind: 'REJECTION' },
-      }),
-      context.db
+      })
     );
   });
 
@@ -140,8 +139,7 @@ describe('pharmacy supplier signed-link auditing', () => {
         outcome: 'FAILURE',
         errorCode: 'INVALID_UPLOAD',
         metadata: { branchId: 'branch_a', linkId: 'link_a', kind: 'DOCUMENT' },
-      }),
-      context.db
+      })
     );
   });
 
@@ -169,8 +167,7 @@ describe('pharmacy supplier signed-link auditing', () => {
         outcome: 'FAILURE',
         errorCode: 'BAD_REQUEST',
         metadata: { branchId: 'branch_a', linkId: 'link_a', kind: 'UNSUPPORTED' },
-      }),
-      context.db
+      })
     );
   });
 
@@ -194,8 +191,7 @@ describe('pharmacy supplier signed-link auditing', () => {
         outcome: 'FAILURE',
         errorCode: 'BAD_REQUEST',
         metadata: { branchId: 'branch_a', linkId: 'link_a', kind: 'DOCUMENT' },
-      }),
-      context.db
+      })
     );
   });
 
@@ -250,5 +246,41 @@ describe('pharmacy supplier signed-link auditing', () => {
     ).rejects.toThrow('audit insert failed');
 
     expect(compensateSupplierDocumentUpload).toHaveBeenCalledWith('org_a', upload);
+  });
+
+  it('still audits a failed upload when storage compensation also fails', async () => {
+    const upload = {
+      document: { id: 'document_a', storageUri: 'supplier-po/link_a/submission_a/hash' },
+      storedObjectCreated: true,
+    };
+    vi.mocked(uploadSupplierDocument).mockResolvedValue(upload as never);
+    vi.mocked(recordAudit).mockRejectedValueOnce(new Error('success audit insert failed'));
+    vi.mocked(compensateSupplierDocumentUpload).mockRejectedValueOnce(
+      new Error('storage delete failed')
+    );
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await expect(
+      pharmacySupplierLinksRouter.createCaller(context as never).uploadDocument({
+        token: 'link.secret.signature',
+        idempotencyKey: 'idem_compensation_failure',
+        fileName: 'invoice.pdf',
+        declaredMimeType: 'application/pdf',
+        contentBase64: 'JVBERg==',
+      })
+    ).rejects.toThrow('success audit insert failed');
+
+    expect(recordAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        action: 'pharmacySupplierLinks.uploadDocument',
+        outcome: 'FAILURE',
+        errorCode: 'INTERNAL_ERROR',
+      })
+    );
+    expect(consoleError).toHaveBeenCalledWith(
+      '[supplier-document] failed to compensate upload:',
+      expect.objectContaining({ message: 'storage delete failed' })
+    );
+    consoleError.mockRestore();
   });
 });

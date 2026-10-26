@@ -46,7 +46,7 @@ type SupplierAuditTarget = { id: string; organizationId: string; branchId: strin
 
 async function auditSupplierLinkAction(
   ctx: TRPCContext,
-  db: TRPCContext['db'],
+  db: TRPCContext['db'] | undefined,
   target: SupplierAuditTarget | null,
   action: 'submit' | 'uploadDocument',
   outcome: 'SUCCESS' | 'FAILURE',
@@ -62,25 +62,28 @@ async function auditSupplierLinkAction(
         : error
           ? 'INTERNAL_ERROR'
           : null;
-  await recordAudit(
-    {
-      organizationId: target.organizationId,
-      actorType: 'ANONYMOUS',
-      source: 'TRPC',
-      category: 'PHARMACY',
-      operation: 'CREATE',
-      action: `pharmacySupplierLinks.${action}`,
-      targetType: 'PharmacySupplierActionLink',
-      targetId: target.id,
-      metadata: { branchId: target.branchId, linkId: target.id, kind },
-      ip: ctx.requestMeta?.ip ?? null,
-      userAgent: ctx.requestMeta?.userAgent ?? null,
-      outcome,
-      errorCode: reason,
-      errorMessage: reason,
-    },
-    db
-  );
+  const row = {
+    organizationId: target.organizationId,
+    actorType: 'ANONYMOUS' as const,
+    source: 'TRPC' as const,
+    category: 'PHARMACY',
+    operation: 'CREATE' as const,
+    action: `pharmacySupplierLinks.${action}`,
+    targetType: 'PharmacySupplierActionLink',
+    targetId: target.id,
+    metadata: { branchId: target.branchId, linkId: target.id, kind },
+    ip: ctx.requestMeta?.ip ?? null,
+    userAgent: ctx.requestMeta?.userAgent ?? null,
+    outcome,
+    errorCode: reason,
+    errorMessage: reason,
+  };
+
+  // Successful action + audit writes share the action transaction. Failure
+  // audits use recordAudit's post-transaction path so the request rollback
+  // cannot discard the evidence of the rejected attempt.
+  if (db) await recordAudit(row, db);
+  else recordAudit(row);
 }
 
 function auditedSupplierLinkProcedure(action: 'submit' | 'uploadDocument') {
@@ -106,7 +109,7 @@ function auditedSupplierLinkProcedure(action: 'submit' | 'uploadDocument') {
         const rawKind = typeof raw?.kind === 'string' ? raw.kind : null;
         await auditSupplierLinkAction(
           ctx,
-          ctx.db,
+          undefined,
           target,
           action,
           'FAILURE',
@@ -154,7 +157,7 @@ export const pharmacySupplierLinksRouter = router({
           return submission;
         });
       } catch (error) {
-        await auditSupplierLinkAction(ctx, ctx.db, target, 'submit', 'FAILURE', input.kind, error);
+        await auditSupplierLinkAction(ctx, undefined, target, 'submit', 'FAILURE', input.kind, error);
         mapError(error);
       }
       return result;
@@ -198,10 +201,16 @@ export const pharmacySupplierLinksRouter = router({
           return stored;
         });
       } catch (error) {
-        if (upload && target) await compensateSupplierDocumentUpload(target.organizationId, upload);
+        if (upload && target) {
+          try {
+            await compensateSupplierDocumentUpload(target.organizationId, upload);
+          } catch (compensationError) {
+            console.error('[supplier-document] failed to compensate upload:', compensationError);
+          }
+        }
         await auditSupplierLinkAction(
           ctx,
-          ctx.db,
+          undefined,
           target,
           'uploadDocument',
           'FAILURE',
