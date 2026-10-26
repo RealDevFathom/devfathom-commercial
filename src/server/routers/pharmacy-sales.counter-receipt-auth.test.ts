@@ -85,6 +85,7 @@ function fixture(
   role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE',
   overrides: Permission[] = []
 ) {
+  let printCopyCount = 0;
   const db = {
     user: {
       findUnique: vi.fn(async () => ({
@@ -129,6 +130,8 @@ function fixture(
       ]),
     },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
+    $queryRaw: vi.fn(async () => [{ copyCount: ++printCopyCount }]),
+    $executeRaw: vi.fn(async () => 1),
     $transaction: vi.fn(),
   };
   db.$transaction.mockImplementation(async (fn: (inner: typeof db) => Promise<unknown>) => fn(db));
@@ -192,14 +195,8 @@ const paths: {
   {
     name: 'counterReceiptPrintJob',
     run: (caller, branchId = 'branch-a') =>
-      caller.counterReceiptPrintJob({ branchId, saleId: 'sale-a', locale: 'en', reprint: false }),
+      caller.counterReceiptPrintJob({ branchId, saleId: 'sale-a', locale: 'en' }),
     allowed: { status: 'READY', reprint: false },
-  },
-  {
-    name: 'counterReceiptPrintJob reprint',
-    run: (caller, branchId = 'branch-a') =>
-      caller.counterReceiptPrintJob({ branchId, saleId: 'sale-a', locale: 'en', reprint: true }),
-    allowed: { status: 'READY', reprint: true },
   },
   {
     name: 'lookupReceiptByNumber',
@@ -576,12 +573,34 @@ describe('counter receipt authorization', () => {
         branchId: 'branch-a',
         saleId: 'sale-a',
         locale: 'en',
-        reprint: true,
       })
-    ).resolves.toMatchObject({ status: 'READY', reprint: true });
+    ).resolves.toMatchObject({ status: 'READY', reprint: false, copyNumber: 1 });
     expect(admin.context.audit.detail).toMatchObject({
       metadata: { reason: 'org-admin-receipt-access' },
     });
+  });
+
+  it('allocates one original then durably marks and audits every later copy', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    const input = { branchId: 'branch-a', saleId: 'sale-a', locale: 'en' as const };
+
+    await expect(f.caller().counterReceiptPrintJob(input)).resolves.toMatchObject({
+      reprint: false,
+      copyNumber: 1,
+    });
+    await expect(f.caller().counterReceiptPrintJob(input)).resolves.toMatchObject({
+      reprint: true,
+      copyNumber: 2,
+    });
+
+    expect(f.db.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(f.db.$executeRaw).toHaveBeenCalledTimes(2);
+    expect(buildPharmacyReceiptEscPosJob).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      'en',
+      expect.objectContaining({ reprint: true })
+    );
   });
 
   it('requires an active branch before an administrator saves the receipt format', async () => {

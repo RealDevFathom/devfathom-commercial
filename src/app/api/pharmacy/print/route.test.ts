@@ -28,9 +28,9 @@ beforeEach(() => {
 
 describe('GET /api/pharmacy/print', () => {
   it('returns the guarded print job for a first print and a reprint', async () => {
-    printJob.mockImplementation(async (input: { reprint: boolean }) => ({
+    printJob.mockImplementation(async () => ({
       status: 'READY',
-      reprint: input.reprint,
+      reprint: false,
       document: { kind: 'RECEIPT' },
     }));
     const first = await GET(request('0'));
@@ -41,15 +41,13 @@ describe('GET /api/pharmacy/print', () => {
       branchId: 'branch-a',
       saleId: 'sale-a',
       locale: 'en',
-      reprint: false,
     });
     expect(printJob).toHaveBeenNthCalledWith(2, {
       branchId: 'branch-a',
       saleId: 'sale-a',
       locale: 'en',
-      reprint: true,
     });
-    await expect(again.json()).resolves.toMatchObject({ mode: 'ESC_POS_JOB', reprint: true });
+    await expect(again.json()).resolves.toMatchObject({ mode: 'ESC_POS_JOB' });
   });
 
   it('surfaces a forbidden receipt read as 403 and does not invent a payload', async () => {

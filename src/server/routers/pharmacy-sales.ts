@@ -35,6 +35,7 @@ import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-sour
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
+import { randomUUID } from 'node:crypto';
 import {
   authorizeKhataCharge,
   FamilyKhataError,
@@ -1701,9 +1702,10 @@ export const pharmacySalesRouter = router({
 
   /**
    * PH-A7: the settled receipt as a validated ESC/POS `RECEIPT` job, using the
-   * branch's saved format. A read: printing and reprinting from history
-   * re-read the same sale, so neither can issue or change a receipt number.
-   * Text the raw baseline cannot print returns the browser/OS fallback.
+   * branch's saved format. Each delivered job atomically claims a durable copy
+   * number; only copy one is an original, regardless of caller hints, reloads,
+   * retries, or concurrent requests. This never changes the sale's receipt
+   * number. Text the raw baseline cannot print returns the browser/OS fallback.
    */
   counterReceiptPrintJob: auditedProtectedProcedure
     .input(
@@ -1712,29 +1714,50 @@ export const pharmacySalesRouter = router({
           branchId,
           saleId: z.string().min(1),
           locale: z.enum(['en', 'ur']),
-          reprint: z.boolean(),
         })
         .strict()
     )
-    .query(async ({ ctx, input }) => {
+    .mutation(async ({ ctx, input }) => {
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
-        const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
-        if (receipt.receiptNumber === null || !receipt.completedAt) {
-          throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
-        }
-        const [format, taxIdentity] = await Promise.all([
-          readPharmacyReceiptFormat(ctx.db, scope),
-          readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt)),
-        ]);
-        return {
-          status: 'READY' as const,
-          ...buildPharmacyReceiptEscPosJob(receipt, input.locale, {
+        return await ctx.db.$transaction(async (tx) => {
+          const receipt = await loadCounterReceipt({ ...ctx, db: tx }, scope, input.saleId);
+          if (receipt.receiptNumber === null || !receipt.completedAt) {
+            throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
+          }
+          const [format, taxIdentity] = await Promise.all([
+            readPharmacyReceiptFormat(tx, scope),
+            readPharmacyReceiptTaxIdentity(tx, scope, new Date(receipt.completedAt)),
+          ]);
+
+          // The upsert serializes concurrent first-print requests on the unique
+          // sale key; the atomic increment then assigns exactly one original.
+          const [state] = await tx.$queryRaw<[{ copyCount: number }]>(Prisma.sql`
+            INSERT INTO "pharmacy_receipt_print_states"
+              ("id", "organizationId", "branchId", "saleId", "copyCount", "updatedAt")
+            VALUES
+              (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.saleId}, 1, NOW())
+            ON CONFLICT ("organizationId", "branchId", "saleId") DO UPDATE
+              SET "copyCount" = "pharmacy_receipt_print_states"."copyCount" + 1,
+                  "updatedAt" = NOW()
+            RETURNING "copyCount"
+          `);
+          if (!state) throw new Error('Receipt print copy allocation failed.');
+          const reprint = state.copyCount > 1;
+          const job = buildPharmacyReceiptEscPosJob(receipt, input.locale, {
             layout: format.layout,
             taxIdentity,
-            reprint: input.reprint,
-          }),
-        };
+            reprint,
+          });
+          await tx.$executeRaw(Prisma.sql`
+            INSERT INTO "pharmacy_receipt_print_dispatches"
+              ("id", "organizationId", "branchId", "saleId", "copyNumber", "actorId", "locale")
+            VALUES
+              (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.saleId},
+               ${state.copyCount}, ${ctx.session.user.id}, ${input.locale})
+          `);
+          return { status: 'READY' as const, ...job, copyNumber: state.copyCount };
+        });
       } catch (error) {
         if (error instanceof RawPrintValidationError) {
           return {

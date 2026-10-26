@@ -10,7 +10,9 @@ const query = z
     branchId: z.string().trim().min(1).max(128),
     saleId: z.string().trim().min(1).max(128),
     locale: z.enum(['en', 'ur']).default('en'),
-    reprint: z.enum(['0', '1']).default('0'),
+    // Kept for compatibility with deployed counter clients. This hint is never
+    // trusted: the server derives copy status from its durable dispatch ledger.
+    reprint: z.enum(['0', '1']).optional(),
   })
   .strict();
 
@@ -41,7 +43,6 @@ export async function GET(request: Request) {
       branchId: parsed.data.branchId,
       saleId: parsed.data.saleId,
       locale: parsed.data.locale,
-      reprint: parsed.data.reprint === '1',
     });
     if (result.status === 'FALLBACK') {
       // Same error contract as the Restaurant print bridge: no payload in errors.
