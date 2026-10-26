@@ -17,15 +17,41 @@ function seedFunction(name: string) {
 }
 
 describe('Pharmacy E2E seed', () => {
-  test('grants the cashier the canonical counter capability', () => {
-    const capabilities: string[] = [];
+  test('removes the legacy dotted cashier capability', () => {
+    const legacyDeletes: string[] = [];
     const visit = (node: ts.Node) => {
-      if (ts.isStringLiteral(node)) capabilities.push(node.text);
+      if (
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === 'deleteMany'
+      ) {
+        const collectStrings = (child: ts.Node) => {
+          if (ts.isStringLiteral(child)) legacyDeletes.push(child.text);
+          ts.forEachChild(child, collectStrings);
+        };
+        node.arguments.forEach(collectStrings);
+      }
       ts.forEachChild(node, visit);
     };
     visit(seedFunction('seedCashier'));
 
-    expect(capabilities).toContain('pharmacy:counter');
-    expect(capabilities).not.toContain('pharmacy.counter');
+    expect(legacyDeletes).toContain('pharmacy.counter');
+  });
+
+  test('grants the cashier the canonical counter capability', () => {
+    const grantedCapabilities: string[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isForOfStatement(node) && ts.isArrayLiteralExpression(node.expression)) {
+        for (const tuple of node.expression.elements) {
+          if (!ts.isArrayLiteralExpression(tuple)) continue;
+          const capability = tuple.elements[1];
+          if (capability && ts.isStringLiteral(capability)) grantedCapabilities.push(capability.text);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(seedFunction('seedCashier'));
+
+    expect(grantedCapabilities).toEqual(['pharmacy:counter', 'pharmacy:orders']);
   });
 });
