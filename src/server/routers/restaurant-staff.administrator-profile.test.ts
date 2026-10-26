@@ -339,7 +339,7 @@ describe('administrator repair authorization before writes', () => {
     expect(mocks.staffFindUnique).not.toHaveBeenCalled();
     expectNoWrites();
   });
-  it.each<[string, (staffProfileId: string) => Promise<unknown>]>([
+  const accessMutations: [string, (staffProfileId: string) => Promise<unknown>][] = [
     [
       'setStaffJobRoles',
       (staffProfileId) =>
@@ -378,31 +378,40 @@ describe('administrator repair authorization before writes', () => {
           capability: 'payments:refund',
         }),
     ],
-  ])('%s denies a branch manager from delegating access to any target', async (_name, run) => {
-    mocks.can.mockImplementation(
-      async (_subject, capability) => capability !== 'restaurant:configure'
-    );
-    mocks.staffFindMany.mockResolvedValue([
-      {
-        id: 'staff_actor',
-        primaryBranchId: 'branch_default',
-        jobRoles: [{ branchId: 'branch_default' }],
-        directCapabilityGrants: [],
-      },
-    ]);
-    mocks.staffFindUnique.mockResolvedValue({ id: 'staff_actor' });
+  ];
+  const unauthorizedAccessCases = accessMutations.flatMap(([mutation, run]) =>
+    [
+      ['another staff member', 'staff_target'],
+      ['the acting staff member', 'staff_actor'],
+    ].map(([target, staffProfileId]) => [mutation, target, staffProfileId, run] as const)
+  );
+  it.each(unauthorizedAccessCases)(
+    '%s denies a branch manager from changing access for %s',
+    async (_mutation, _target, staffProfileId, run) => {
+      mocks.can.mockImplementation(
+        async (_subject, capability) => capability !== 'restaurant:configure'
+      );
+      mocks.staffFindMany.mockResolvedValue([
+        {
+          id: 'staff_actor',
+          primaryBranchId: 'branch_default',
+          jobRoles: [{ branchId: 'branch_default' }],
+          directCapabilityGrants: [],
+        },
+      ]);
+      mocks.staffFindUnique.mockResolvedValue({ id: 'staff_actor' });
 
-    await expect(run('staff_target')).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(run('staff_actor')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(run(staffProfileId)).rejects.toMatchObject({ code: 'FORBIDDEN' });
 
-    expect(mocks.resolveStaffCapabilities).toHaveBeenCalledWith(
-      db,
-      'staff_actor',
-      'branch_default'
-    );
-    expect(mocks.staffFindUnique).not.toHaveBeenCalled();
-    expectNoWrites();
-  });
+      expect(mocks.resolveStaffCapabilities).toHaveBeenCalledWith(
+        db,
+        'staff_actor',
+        'branch_default'
+      );
+      expect(mocks.staffFindUnique).not.toHaveBeenCalled();
+      expectNoWrites();
+    }
+  );
   it.each(['staff_other_tenant', 'staff_missing'])(
     'setStaffAccess denies invisible target %s on an authorized branch without writes',
     async (staffProfileId) => {
