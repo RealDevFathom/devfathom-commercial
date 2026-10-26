@@ -75,6 +75,8 @@ describe('projectTrialBalanceControl', () => {
     [row({ debitMinor: '-1' })],
     [row({ creditMinor: '1.2' })],
     [row({ openingMinor: '+1' })],
+    [row({ openingMinor: '-0' })],
+    [row({ closingMinor: '-0' })],
     [row({ accountCode: '' })],
     [row({ currency: 'x'.repeat(33) })],
   ])('rejects negative movements and malformed or over-bound fields', (accounts: unknown[]) => {

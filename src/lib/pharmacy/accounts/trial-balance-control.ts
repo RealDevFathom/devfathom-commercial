@@ -46,7 +46,7 @@ export class InvalidTrialBalanceError extends Error {
   }
 }
 
-const integer = /^-?(?:0|[1-9]\d*)$/;
+const integer = /^(?:0|-?[1-9]\d*)$/;
 const utf8 = new TextEncoder();
 
 function boundedText(value: unknown, bytes: number): value is string {
