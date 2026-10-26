@@ -146,7 +146,14 @@ export async function POST(request: Request) {
     path: '/',
     maxAge: 60 * 60 * 24 * 180,
   });
-  for (const name of ['authjs.session-token', '__Secure-authjs.session-token']) {
+  const sessionCookieNames = new Set(['authjs.session-token', '__Secure-authjs.session-token']);
+  for (const cookie of request.headers.get('cookie')?.split(';') ?? []) {
+    const name = cookie.slice(0, cookie.indexOf('=')).trim();
+    if (/^(?:__Secure-)?authjs\.session-token\.\d+$/.test(name)) {
+      sessionCookieNames.add(name);
+    }
+  }
+  for (const name of sessionCookieNames) {
     response.cookies.set(name, '', {
       httpOnly: true,
       sameSite: 'lax',
