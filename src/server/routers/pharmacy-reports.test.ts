@@ -488,6 +488,14 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
         externalReference: 'DRAP-1',
       })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(mocks.reportUpdateManyAndReturn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          state: 'READY',
+          externalSubmissionState: 'PENDING',
+        }),
+      })
+    );
   });
 
   it('exports every report in range with internal and external states distinguished', async () => {
