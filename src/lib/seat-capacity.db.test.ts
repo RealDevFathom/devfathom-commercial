@@ -69,9 +69,11 @@ describeDatabase('organization seat capacity serialization', () => {
       });
 
     const results = await Promise.allSettled([invite('one'), invite('two')]);
+    const rejected = results.filter((result) => result.status === 'rejected');
 
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toMatchObject({ reason: new Error('Seat limit reached (2/2).') });
     await expect(
       db!.user.count({
         where: { organizationId, status: { in: ['ACTIVE', 'ON_LEAVE', 'INVITED'] } },
