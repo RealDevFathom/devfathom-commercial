@@ -64,7 +64,9 @@ describeIfDatabase('organization.update deployment-mode concurrency', () => {
 
     const results = await Promise.allSettled([update('DEDICATED'), update('SHARED')]);
 
-    expect(results.some((result) => result.status === 'fulfilled')).toBe(true);
+    // The transition to SHARED must always succeed; only the stale DEDICATED
+    // request may be rejected after it acquires the row lock.
+    expect(results[1]).toMatchObject({ status: 'fulfilled' });
     const stored = await withPlatformDb((tx) =>
       tx.organization.findUniqueOrThrow({
         where: { id: organizationId },
