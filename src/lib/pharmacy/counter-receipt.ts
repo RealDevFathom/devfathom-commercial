@@ -45,6 +45,8 @@ export type CounterReceiptLine = {
   quantity: number;
   canonicalUnits: number;
   unitPriceMinor: number;
+  /** Exact allocation-weighted gross; it may differ from display unit price × quantity. */
+  grossMinor?: number;
   discountMinor: number;
   lineTotalMinor: number;
 };
@@ -287,11 +289,14 @@ export function buildCounterReceiptDocument(
  * the sale lines do not add up to (POS-08 acceptance).
  */
 export function counterReceiptTotals(input: {
-  lines: readonly Pick<CounterReceiptLine, 'unitPriceMinor' | 'quantity' | 'discountMinor'>[];
+  lines: readonly Pick<
+    CounterReceiptLine,
+    'unitPriceMinor' | 'quantity' | 'discountMinor' | 'grossMinor'
+  >[];
   tenders: readonly Pick<CounterReceiptTender, 'amountMinor' | 'changeGivenMinor'>[];
 }): CounterReceipt['totals'] {
   const grossMinor = input.lines.reduce(
-    (total, line) => total + line.unitPriceMinor * line.quantity,
+    (total, line) => total + (line.grossMinor ?? line.unitPriceMinor * line.quantity),
     0
   );
   const discountMinor = input.lines.reduce((total, line) => total + line.discountMinor, 0);

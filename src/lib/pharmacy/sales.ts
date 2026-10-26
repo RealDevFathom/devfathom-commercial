@@ -266,10 +266,9 @@ export function assertSaleUnitConversion(input: {
 }
 
 /**
- * Derive the one integer sale-unit price persisted on a line from every lot
- * that fulfilled it. The weighted average is rounded down: this preserves the
- * existing line model (`unitPriceMinor * quantity`) without ever moving a
- * rounding paisa from a cheaper lot onto the patient.
+ * Derive the display unit price and exact gross persisted on a line from every
+ * lot that fulfilled it. The display price is rounded down, while gross keeps
+ * the allocation-weighted amount so no minor unit is lost at a split-lot boundary.
  */
 export function allocationWeightedPrice(input: {
   allocations: readonly {
@@ -278,6 +277,7 @@ export function allocationWeightedPrice(input: {
     proRataCeilingMinor: number;
   }[];
   canonicalUnits: number;
+  canonicalUnitsPerSaleUnit: number;
 }) {
   if (!Number.isSafeInteger(input.canonicalUnits) || input.canonicalUnits <= 0)
     throw new PharmacySaleError('INVALID_QUANTITY');
@@ -299,9 +299,16 @@ export function allocationWeightedPrice(input: {
   )
     throw new PharmacySaleError('INVALID_QUANTITY');
 
+  if (
+    !Number.isSafeInteger(input.canonicalUnitsPerSaleUnit) ||
+    input.canonicalUnitsPerSaleUnit <= 0
+  )
+    throw new PharmacySaleError('INVALID_QUANTITY');
+
   return {
     unitPriceMinor: Math.floor(pricedUnitMinorTotal / input.canonicalUnits),
     proRataCeilingMinor: Math.floor(ceilingUnitMinorTotal / input.canonicalUnits),
+    grossMinor: Math.floor(pricedUnitMinorTotal / input.canonicalUnitsPerSaleUnit),
   };
 }
 
@@ -399,11 +406,11 @@ async function addSaleLineWithAllocation(
     allocationPrices.push({ canonicalUnits: part.units, ...price });
     costMinor += lot.unitCostMinor * part.units;
   }
-  const { unitPriceMinor, proRataCeilingMinor } = allocationWeightedPrice({
+  const { unitPriceMinor, proRataCeilingMinor, grossMinor } = allocationWeightedPrice({
     allocations: allocationPrices,
     canonicalUnits,
+    canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
   });
-  const grossMinor = unitPriceMinor * input.quantity;
   const discountMinor = input.discountMinor ?? 0;
   validateDiscount({
     regulated: medicine.rx || medicine.restricted || medicine.controlled,
@@ -426,6 +433,7 @@ async function addSaleLineWithAllocation(
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
       canonicalUnits,
       unitPriceMinor,
+      grossMinor,
       proRataCeilingMinor,
       unitCostMinor: Math.ceil(costMinor / input.quantity),
       discountKind: input.discountKind,
@@ -533,13 +541,15 @@ export function returnedLineValue(
   line: {
     quantity: number;
     unitPriceMinor: number;
+    grossMinor?: number;
     discountMinor: number;
     canonicalUnits: number;
   },
   units: number
 ) {
   return Math.floor(
-    ((line.quantity * line.unitPriceMinor - line.discountMinor) * units) / line.canonicalUnits
+    (((line.grossMinor ?? line.quantity * line.unitPriceMinor) - line.discountMinor) * units) /
+      line.canonicalUnits
   );
 }
 
@@ -611,7 +621,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       unidentifiedUnits,
       lots,
       returnedMinor: returnedLineValue(line, returnedUnits),
-      netMinor: line.quantity * line.unitPriceMinor - line.discountMinor,
+      netMinor: line.grossMinor - line.discountMinor,
     };
   });
   const tenders = sale.tenders.map((tender) => ({

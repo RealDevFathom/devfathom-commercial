@@ -194,7 +194,8 @@ export async function redeemSalePoints(
     _sum: { points: true },
   });
   const totalMinor = sale.lines.reduce(
-    (sum, line) => sum + line.quantity * line.unitPriceMinor - line.discountMinor,
+    (sum, line) =>
+      sum + (line.grossMinor ?? line.quantity * line.unitPriceMinor) - line.discountMinor,
     0
   );
   const outstandingMinor =
@@ -339,7 +340,9 @@ export async function readCustomerSnapshot(
         id: true,
         receiptNumber: true,
         completedAt: true,
-        lines: { select: { quantity: true, unitPriceMinor: true, discountMinor: true } },
+        lines: {
+          select: { quantity: true, unitPriceMinor: true, grossMinor: true, discountMinor: true },
+        },
         tenders: {
           select: { type: true, amountMinor: true, refunds: { select: { amountMinor: true } } },
         },
@@ -389,7 +392,8 @@ export async function readCustomerSnapshot(
       receiptNumber: sale.receiptNumber,
       completedAt: sale.completedAt,
       totalMinor: sale.lines.reduce(
-        (sum, line) => sum + line.quantity * line.unitPriceMinor - line.discountMinor,
+        (sum, line) =>
+          sum + (line.grossMinor ?? line.quantity * line.unitPriceMinor) - line.discountMinor,
         0
       ),
     })),

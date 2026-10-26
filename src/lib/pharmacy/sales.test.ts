@@ -237,10 +237,10 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
       canonicalUnits: 3,
       quantity: 3,
       unitPriceMinor: 133,
+      grossMinor: 400,
       proRataCeilingMinor: 133,
     });
-    expect(line.unitPriceMinor * line.quantity).toBe(399);
-    expect(line.unitPriceMinor * line.quantity).toBeLessThanOrEqual(100 * 2 + 200);
+    expect(line.grossMinor).toBe(400);
   });
 
   it('weights a split line by each allocated lot instead of charging the highest MRP', () => {
@@ -250,10 +250,10 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
         { canonicalUnits: 1, unitPriceMinor: 200, proRataCeilingMinor: 200 },
       ],
       canonicalUnits: 2,
+      canonicalUnitsPerSaleUnit: 1,
     });
 
-    expect(price).toEqual({ unitPriceMinor: 150, proRataCeilingMinor: 150 });
-    expect(price.unitPriceMinor * 2).toBe(300);
+    expect(price).toEqual({ unitPriceMinor: 150, proRataCeilingMinor: 150, grossMinor: 300 });
   });
 
   it('rounds an unequal allocation-weighted price down to avoid a patient overcharge', () => {
@@ -263,11 +263,10 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
         { canonicalUnits: 1, unitPriceMinor: 200, proRataCeilingMinor: 200 },
       ],
       canonicalUnits: 3,
+      canonicalUnitsPerSaleUnit: 1,
     });
 
-    expect(price).toEqual({ unitPriceMinor: 133, proRataCeilingMinor: 133 });
-    expect(price.unitPriceMinor * 3).toBe(399);
-    expect(price.unitPriceMinor * 3).toBeLessThanOrEqual(100 * 2 + 200);
+    expect(price).toEqual({ unitPriceMinor: 133, proRataCeilingMinor: 133, grossMinor: 400 });
   });
 
   it.each<{
@@ -302,9 +301,9 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
       canonicalUnits: Number.MAX_SAFE_INTEGER,
     },
   ])('rejects $label', ({ allocations, canonicalUnits }) => {
-    expect(() => allocationWeightedPrice({ allocations, canonicalUnits })).toThrow(
-      'INVALID_QUANTITY'
-    );
+    expect(() =>
+      allocationWeightedPrice({ allocations, canonicalUnits, canonicalUnitsPerSaleUnit: 1 })
+    ).toThrow('INVALID_QUANTITY');
   });
 
   it('rejects a client claiming that a ten-unit pack contains one canonical unit', () => {

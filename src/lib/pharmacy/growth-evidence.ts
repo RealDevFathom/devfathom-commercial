@@ -7,7 +7,7 @@ import type { MarketingScope } from './marketing-service';
 export function growthReceiptMoney(cutoff: Date) {
   return Prisma.sql`
     SELECT COUNT(*) > 0 AND BOOL_AND(COALESCE(
-      posted.entries > 0 AND posted.gross = l."unitPriceMinor"::bigint * l.quantity
+      posted.entries > 0 AND posted.gross = l."grossMinor"
       AND posted.discount = l."discountMinor" AND posted.cost = allocated.cost
       AND allocated.units = l."canonicalUnits"
       AND NOT EXISTS (

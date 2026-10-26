@@ -513,7 +513,7 @@ describeIfDatabase('FIN-01 — goods receipt', () => {
 });
 
 describeIfDatabase('FIN-01 / FIN-03 — sale line', () => {
-  it('balances the persisted 399-minor gross for a 2:1 split across differently priced lots', async () => {
+  it('balances the exact 400-minor gross for a 2:1 split across differently priced lots', async () => {
     const f = await fixture(ORG_A, branch('weighted-gross'), 'weighted-gross');
     const { entry, line } = await inOrg(ORG_A, async (db) => {
       await stockLot(db, f, {
@@ -543,10 +543,10 @@ describeIfDatabase('FIN-01 / FIN-03 — sale line', () => {
     });
 
     expect(line.unitPriceMinor).toBe(133);
-    expect(line.unitPriceMinor * line.quantity).toBe(399);
+    expect(line.grossMinor).toBe(400);
     expectBalanced(entry);
-    expect(totalFor(entry, 'SALES_REVENUE', 'CREDIT')).toBe(399);
-    expect(totalFor(entry, 'SALES_CLEARING', 'DEBIT')).toBe(399);
+    expect(totalFor(entry, 'SALES_REVENUE', 'CREDIT')).toBe(400);
+    expect(totalFor(entry, 'SALES_CLEARING', 'DEBIT')).toBe(400);
   });
 
   it('posts revenue and COGS at the EXACT allocated lot cost across two lots', async () => {
