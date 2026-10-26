@@ -289,7 +289,8 @@ export function moduleForProcedure(path: string): string | null {
   ) {
     return 'pharmacy-reports';
   }
-  return PROCEDURE_MODULES[path.split('.')[0] ?? ''] ?? null;
+  const namespace = path.split('.')[0] ?? '';
+  return Object.hasOwn(PROCEDURE_MODULES, namespace) ? PROCEDURE_MODULES[namespace] : null;
 }
 
 export function moduleForApiScope(scope: string): string | null {
