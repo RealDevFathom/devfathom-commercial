@@ -288,6 +288,15 @@ describe('Restaurant receipt dispatch', () => {
       '2 x Meal @ 12.00\nLine subtotal 24.00 / Comp 4.00 / Line total 20.00\nLine tax 2.00 / Line service 1.00',
     ]);
   });
+  it('does not synthesize a receipt line for a non-fractional bill', async () => {
+    Object.assign(receipt!, { lines: [] });
+
+    const response = await post();
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ code: 'INVALID_PRINT_DOCUMENT' });
+    expect(jobs).toHaveLength(0);
+  });
   it('preserves saved tax currency, rate buckets and discount allocations', async () => {
     findBill.mockResolvedValue({
       ...receipt,
