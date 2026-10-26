@@ -78,11 +78,6 @@ export default async function AccountCodeReferencePage({
     }
   }
 
-  const branches = await ctx.db.pharmacyBranch.findMany({
-    where: { organizationId: ctx.entitlements.organizationId, active: true },
-    orderBy: [{ name: 'asc' }, { id: 'asc' }],
-    select: { id: true, name: true },
-  });
   const hasRequestedBranch = Object.prototype.hasOwnProperty.call(query, 'branch');
   const requestedBranch =
     typeof query.branch === 'string' &&
@@ -90,10 +85,20 @@ export default async function AccountCodeReferencePage({
     query.branch.length <= MAX_BRANCH_ID_LENGTH
       ? query.branch
       : undefined;
+  if (hasRequestedBranch && !requestedBranch) {
+    return unavailable(
+      'Branch unavailable',
+      'The requested branch is not an active branch in this workspace.'
+    );
+  }
+
+  const branches = await ctx.db.pharmacyBranch.findMany({
+    where: { organizationId: ctx.entitlements.organizationId, active: true },
+    orderBy: [{ name: 'asc' }, { id: 'asc' }],
+    select: { id: true, name: true },
+  });
   const branch = hasRequestedBranch
-    ? requestedBranch
-      ? branches.find(({ id }) => id === requestedBranch)
-      : undefined
+    ? branches.find(({ id }) => id === requestedBranch)
     : branches[0];
   if (!branch) {
     return unavailable(

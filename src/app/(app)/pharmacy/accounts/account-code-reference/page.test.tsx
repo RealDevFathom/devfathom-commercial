@@ -147,6 +147,7 @@ describe('account code reference page authorization', () => {
 
     expect(screen.getByRole('heading', { name: 'Branch unavailable' })).toBeInTheDocument();
     expect(screen.queryByText('CASH')).not.toBeInTheDocument();
+    expect(mocks.branchRead).not.toHaveBeenCalled();
     expect(mocks.referenceRead).not.toHaveBeenCalled();
     expect(mocks.journalWriter).not.toHaveBeenCalled();
     expect(mocks.financeDataReader).not.toHaveBeenCalled();
