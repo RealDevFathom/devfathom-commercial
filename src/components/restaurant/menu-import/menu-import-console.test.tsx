@@ -337,6 +337,21 @@ describe('Restaurant menu-import console', () => {
       );
     });
 
+    it('accepts an untouched extracted line with its required name and price', () => {
+      renderConsole();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Accept Grilled Chicken' }));
+
+      expect(mocks.reviewLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lineId: 'line_1',
+          decision: 'ACCEPTED',
+          productName: 'Grilled Chicken',
+          priceAmount: '1250.00',
+        })
+      );
+    });
+
     it('sends reviewer edits with the accept decision', () => {
       renderConsole();
 
@@ -391,6 +406,8 @@ describe('Restaurant menu-import console', () => {
 
       expect(mocks.reviewLine).toHaveBeenCalledWith(
         expect.objectContaining({
+          productName: 'Grilled Chicken',
+          priceAmount: '1250.00',
           variants: [
             { name: 'Small', priceAmount: '900.00' },
             { name: 'Large', priceAmount: '1450.00' },

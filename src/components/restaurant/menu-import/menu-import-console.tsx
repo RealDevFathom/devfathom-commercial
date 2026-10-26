@@ -256,11 +256,11 @@ function editorFor(line: ImportLine): LineEditor {
   const variants = reviewed ?? variantsFor(line.extractedVariants);
   return {
     lineId: line.id,
-    categoryName: line.reviewedCategoryName ?? '',
-    productName: line.reviewedProductName ?? '',
-    description: line.reviewedDescription ?? '',
-    priceAmount: line.reviewedPriceAmount ?? '',
-    currency: line.reviewedCurrency ?? '',
+    categoryName: line.reviewedCategoryName ?? line.extractedCategoryName ?? '',
+    productName: line.reviewedProductName ?? line.extractedProductName ?? '',
+    description: line.reviewedDescription ?? line.extractedDescription ?? '',
+    priceAmount: line.reviewedPriceAmount ?? line.extractedPriceAmount ?? '',
+    currency: line.reviewedCurrency ?? line.extractedCurrency ?? '',
     note: line.reviewNote ?? '',
     mergeProductId: line.mergeProductId ?? '',
     mergeVariantId: line.mergeVariantId ?? '',
