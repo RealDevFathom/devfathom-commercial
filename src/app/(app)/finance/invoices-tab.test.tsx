@@ -20,6 +20,8 @@ describe('InvoiceRow', () => {
       unexpected: 'Rs 125,000.5',
     },
     { currency: 'PKR', total: -125000, expected: '-Rs 125,000', unexpected: '-$125,000' },
+    { currency: 'PKR', total: 0.1 + 0.2, expected: 'Rs 0.3', unexpected: '$0.3' },
+    { currency: 'PKR', total: 0, expected: 'Rs 0', unexpected: '$0' },
     { currency: 'USD', total: 0, expected: '$0', unexpected: 'Rs 0' },
   ])(
     'renders $currency invoice totals with the matching currency symbol',
