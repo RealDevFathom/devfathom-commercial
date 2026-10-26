@@ -86,18 +86,19 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
   for (const operation of ['UPDATE', 'DELETE']) {
     it(`audit_logs rejects tenant-scoped ${operation}`, async () => {
       const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
-      await expect(
-        withTenantDb(org, (db) =>
-          db.$executeRawUnsafe(
-            operation === 'UPDATE'
-              ? `UPDATE audit_logs SET action = 'tampered' WHERE id = $1`
-              : `DELETE FROM audit_logs WHERE id = $1`,
-            tenantAuditId
-          )
+      const mutation = withTenantDb(org, (db) =>
+        db.$executeRawUnsafe(
+          operation === 'UPDATE'
+            ? `UPDATE audit_logs SET action = 'tampered' WHERE id = $1`
+            : `DELETE FROM audit_logs WHERE id = $1`,
+          tenantAuditId
         )
-      ).rejects.toThrow(
+      );
+
+      await expect(mutation).rejects.toThrow(
         new RegExp(`audit_logs is append-only: ${operation} is forbidden`, 'i')
       );
+      await expect(mutation).rejects.toMatchObject({ meta: { code: '55000' } });
     });
   }
 
