@@ -36,7 +36,7 @@ const STATUS_TONE: Record<string, StatusTone> = {
   collected: 'success',
   done: 'success',
   live: 'success',
-  // info / abyss (primary)
+  // info
   sent: 'info',
   info: 'info',
   'in-progress': 'info',
@@ -78,7 +78,7 @@ interface StatusPillProps extends Omit<React.ComponentProps<'span'>, 'children'>
 
 /**
  * StatusPill — mono uppercase chip with a leading colored dot. The one place
- * a pill shape is allowed. paid/on-track → green, sent → abyss, pending/at-risk
+ * a pill shape is allowed. paid/on-track → green, sent → info, pending/at-risk
  * → amber, overdue/blocked → red, otherwise neutral.
  */
 function StatusPill({ status, tone, label, className, ...props }: StatusPillProps) {
