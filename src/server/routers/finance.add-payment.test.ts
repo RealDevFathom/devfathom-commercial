@@ -77,4 +77,49 @@ describe('finance.addPayment', () => {
       entityId: 'invoice-1',
     });
   });
+
+  it('does not log invoice_paid for a partial payment', async () => {
+    mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 50 });
+
+    await caller().addPayment({ invoiceId: 'invoice-1', amount: 50 });
+
+    expect(mocks.paymentCreate).toHaveBeenCalledOnce();
+    expect(mocks.invoiceUpdate).not.toHaveBeenCalled();
+    expect(mocks.logActivity).not.toHaveBeenCalled();
+    expect(mocks.emitEvent).not.toHaveBeenCalled();
+  });
+
+  it.each(['DRAFT', 'PAID', 'CANCELLED'] as const)(
+    'does not log invoice_paid when the invoice is %s',
+    async (status) => {
+      mocks.invoiceFindUnique.mockResolvedValue({
+        id: 'invoice-1',
+        invoiceNumber: 'INV-1',
+        status,
+        total: 100,
+        currency: 'USD',
+        clientId: 'client-1',
+      });
+
+      await expect(
+        caller().addPayment({ invoiceId: 'invoice-1', amount: 60 })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+      expect(mocks.paymentCreate).not.toHaveBeenCalled();
+      expect(mocks.logActivity).not.toHaveBeenCalled();
+      expect(mocks.emitEvent).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not log invoice_paid when an overpayment is rejected', async () => {
+    await expect(caller().addPayment({ invoiceId: 'invoice-1', amount: 61 })).rejects.toMatchObject(
+      {
+        code: 'BAD_REQUEST',
+      }
+    );
+
+    expect(mocks.paymentCreate).not.toHaveBeenCalled();
+    expect(mocks.logActivity).not.toHaveBeenCalled();
+    expect(mocks.emitEvent).not.toHaveBeenCalled();
+  });
 });
