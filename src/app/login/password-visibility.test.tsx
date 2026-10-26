@@ -24,6 +24,7 @@ import { ResetPasswordForm } from '../reset-password/[token]/reset-password-form
 function expectAccessiblePasswordToggle(password: HTMLInputElement) {
   const toggle = screen.getByRole('button', { name: 'Show password' });
 
+  expect(toggle).not.toHaveAttribute('tabindex');
   expect(toggle).toHaveProperty('tabIndex', 0);
   toggle.focus();
   expect(toggle).toHaveFocus();
