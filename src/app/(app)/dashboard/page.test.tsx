@@ -80,12 +80,10 @@ describe('DashboardPage vertical dispatch', () => {
 
       expect(mocks.redirect).toHaveBeenCalledWith(target);
       expect(mocks.withTenantDb).toHaveBeenCalledWith('restaurant-tenant', expect.any(Function));
-      expect(mocks.can).toHaveBeenCalledWith(user, capabilities[0], undefined, { db: mocks.db });
-      if (capabilities.includes('admin:access')) {
-        expect(mocks.can).not.toHaveBeenCalledWith(user, 'orders:take', undefined, {
-          db: mocks.db,
-        });
-      }
+      expect(mocks.can.mock.calls.map(([, action]) => action)).toEqual(
+        capabilities.includes('admin:access') ? ['admin:access'] : ['admin:access', 'orders:take']
+      );
+      expect(mocks.can).toHaveBeenCalledWith(user, 'admin:access', undefined, { db: mocks.db });
       expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
       expect(agencyHelpers.meetings.getUpcoming.prefetch).not.toHaveBeenCalled();
     }
@@ -114,6 +112,28 @@ describe('DashboardPage vertical dispatch', () => {
       'restaurant-inventory',
     ]);
   });
+
+  it.each([
+    ['organization', undefined, { user: { id: 'kitchen-user', role: 'EMPLOYEE' } }],
+    ['session user', { id: 'restaurant-tenant' }, undefined],
+  ])(
+    'does not resolve Restaurant capabilities without a %s',
+    async (_missing, organization, session) => {
+      mocks.createSSRHelpers.mockResolvedValue({
+        helpers: helpers(),
+        organization,
+        session,
+        entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
+      });
+
+      const page = await DashboardPage();
+
+      expect(mocks.withTenantDb).not.toHaveBeenCalled();
+      expect(mocks.can).not.toHaveBeenCalled();
+      expect(mocks.redirect).not.toHaveBeenCalled();
+      expect(page.props.children.type).toBe(RestaurantDashboardContent);
+    }
+  );
 
   it('lands a Hospitality organization on the property setup page, without Agency prefetches', async () => {
     const agencyHelpers = helpers();
