@@ -358,8 +358,8 @@ export async function searchCounterCatalog(
   const presentationByPackLevel = new Map(
     packLevels.map((level) => [level.id, level.presentationId])
   );
-  const roundingByPackLevel = new Map(
-    mrps.map((mrp) => [mrp.packLevelId, mrp.roundingIncrementMinor])
+  const roundingByPackAndBatch = new Map(
+    mrps.map((mrp) => [`${mrp.packLevelId}\0${mrp.batchReference}`, mrp.roundingIncrementMinor])
   );
 
   const rows: CounterSearchRow[] = [];
@@ -415,7 +415,9 @@ export async function searchCounterCatalog(
       }
     }
 
-    const roundingIncrementMinor = best ? (roundingByPackLevel.get(best.lot.packLevelId) ?? 1) : 1;
+    const roundingIncrementMinor = best
+      ? (roundingByPackAndBatch.get(`${best.lot.packLevelId}\0${best.lot.batch.batchNumber}`) ?? 1)
+      : 1;
 
     const saleableUnits = best
       ? saleUnits.map((option) => {
