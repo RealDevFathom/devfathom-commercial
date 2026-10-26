@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   tools: vi.fn(),
   reserve: vi.fn(),
   commit: vi.fn(),
+  cancel: vi.fn(),
   routedModel: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
@@ -27,6 +28,7 @@ vi.mock('@/lib/ai/ledger', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/ai/ledger')>()),
   reserveAIUsage: mocks.reserve,
   commitAIUsageReservation: mocks.commit,
+  cancelAIUsage: mocks.cancel,
 }));
 vi.mock('@/lib/ai/tools', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/ai/tools')>();
@@ -42,11 +44,11 @@ import { ASSISTANT_LIMITS, assistantRateKeys } from '@/lib/ai/assistant-request'
 import { POST } from './route';
 
 const user = { id: 'u', role: 'user', parts: [{ type: 'text', text: 'show my chat' }] };
-function request(body: unknown) {
+function request(body: unknown, idempotencyKey = crypto.randomUUID()) {
   return new Request('http://test.invalid/api/assistant', {
     method: 'POST',
     body: JSON.stringify(body),
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
   });
 }
 function actor(vertical = 'RESTAURANT') {
@@ -109,8 +111,9 @@ describe('assistant API scope', () => {
       })
       .mockResolvedValue({ provider: 'anthropic', model: 'model', isReplay: true });
 
-    const firstRequest = POST(request({ messages: [user] }));
-    const retry = await POST(request({ messages: [user] }));
+    const key = crypto.randomUUID();
+    const firstRequest = POST(request({ messages: [user] }, key));
+    const retry = await POST(request({ messages: [user] }, key));
     expect(retry.status).toBe(409);
     release();
     expect((await firstRequest).status).toBe(200);
@@ -118,11 +121,40 @@ describe('assistant API scope', () => {
 
     await mocks.stream.mock.calls[0][0].onAbort();
     expect(mocks.commit).toHaveBeenCalledTimes(1);
-    expect((await POST(request({ messages: [user] }))).status).toBe(409);
+    expect((await POST(request({ messages: [user] }, key))).status).toBe(409);
     expect(mocks.stream).toHaveBeenCalledTimes(1);
 
     const requestIds = mocks.reserve.mock.calls.map(([, input]) => input.requestId);
     expect(new Set(requestIds).size).toBe(1);
+  });
+
+  it('keys retries by an explicit attempt rather than serialized body contents', async () => {
+    vi.stubEnv('AI_ANTHROPIC_MONTHLY_BUDGET_USD', '5');
+    const key = crypto.randomUUID();
+    await POST(request({ messages: [user] }, key));
+    await POST(
+      new Request('http://test.invalid/api/assistant', {
+        method: 'POST',
+        body: JSON.stringify({ messages: [user] }, null, 2),
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
+      })
+    );
+    expect(new Set(mocks.reserve.mock.calls.map(([, input]) => input.requestId)).size).toBe(1);
+
+    await POST(request({ messages: [user] }));
+    expect(new Set(mocks.reserve.mock.calls.map(([, input]) => input.requestId)).size).toBe(2);
+  });
+
+  it('requires a valid idempotency key when budget routing is enabled', async () => {
+    vi.stubEnv('AI_ANTHROPIC_MONTHLY_BUDGET_USD', '5');
+    const response = await POST(
+      new Request('http://test.invalid/api/assistant', {
+        method: 'POST',
+        body: JSON.stringify({ messages: [user] }),
+      })
+    );
+    expect(response.status).toBe(400);
+    expect(mocks.reserve).not.toHaveBeenCalled();
   });
 
   it('ignores forged client organization, role, vertical, modules and branch', async () => {
@@ -225,7 +257,7 @@ describe('assistant API scope', () => {
     expect(mocks.model).not.toHaveBeenCalled();
   });
 
-  it('sanitizes provider-unavailable and synchronous stream failures', async () => {
+  it('sanitizes provider-unavailable and cancels synchronous stream setup failures', async () => {
     mocks.model.mockImplementationOnce(() => {
       throw new Error('secret user@example.invalid');
     });
@@ -233,15 +265,17 @@ describe('assistant API scope', () => {
     expect(unavailable.status).toBe(503);
     expect(await unavailable.text()).not.toContain('user@example.invalid');
     expect(mocks.stream).not.toHaveBeenCalled();
+    vi.stubEnv('AI_ANTHROPIC_MONTHLY_BUDGET_USD', '5');
     mocks.stream.mockImplementationOnce(() => {
       throw new Error('private payload');
     });
     const failed = await POST(request({ messages: [user] }));
     expect(failed.status).toBe(503);
     expect(await failed.text()).not.toContain('private payload');
+    expect(mocks.cancel).toHaveBeenCalledTimes(1);
     expect(vi.mocked(console.error).mock.calls).toEqual([
       ['ASSISTANT_PROVIDER_UNAVAILABLE'],
-      ['ASSISTANT_REQUEST_FAILED'],
+      ['ASSISTANT_STREAM_SETUP_FAILED'],
     ]);
   });
 

@@ -4,6 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { DEFAULT_AI_MODELS, type AIModelTier, type RoutedAIProvider } from './model-defaults';
 import { calculateAIUsageCost, UnknownAIModelPriceError } from './spend';
+import { providerForAnthropicBudget } from './router';
 
 export const AI_GENERATION_LIMITS = {
   maxSteps: 6,
@@ -47,27 +48,14 @@ export async function reserveAIUsage(
       organizationId: input.organizationId,
       provider: 'anthropic',
       occurredAt: { gte: monthStart(occurredAt), lte: occurredAt },
-      // RESERVED work remains a conservative liability even after its lease
-      // expires. Only an explicit terminal transition may release that spend.
-      status: { in: ['COMPLETED', 'RESERVED'] },
+      status: 'COMPLETED',
     },
     _sum: { costUsd: true },
   });
   const spent = aggregate._sum.costUsd ?? new Prisma.Decimal(0);
-  const anthropicModel = DEFAULT_AI_MODELS.anthropic[input.tier];
-  const price = await db.aiModelPrice.findFirst({
-    where: { provider: 'anthropic', model: anthropicModel, effectiveFrom: { lte: occurredAt } },
-    orderBy: { effectiveFrom: 'desc' },
-  });
-  if (!price) throw new UnknownAIModelPriceError('anthropic', anthropicModel);
-  const reservationUsd = calculateAIUsageCost(
-    price,
-    AI_GENERATION_LIMITS.maxInputTokensPerStep * AI_GENERATION_LIMITS.maxSteps,
-    AI_GENERATION_LIMITS.maxOutputTokensPerStep * AI_GENERATION_LIMITS.maxSteps
-  );
-  const provider: RoutedAIProvider = spent.plus(reservationUsd).greaterThan(input.monthlyBudgetUsd)
-    ? 'bedrock'
-    : 'anthropic';
+  // The crossover is based only on completed, persisted usage. In-flight work
+  // has a zero-valued reservation and is not treated as spend.
+  const provider: RoutedAIProvider = providerForAnthropicBudget(spent, input.monthlyBudgetUsd);
   const model = DEFAULT_AI_MODELS[provider][input.tier];
   await db.aiUsage.create({
     data: {
@@ -75,7 +63,7 @@ export async function reserveAIUsage(
       requestId: input.requestId,
       provider,
       model,
-      costUsd: provider === 'anthropic' ? reservationUsd : new Prisma.Decimal(0),
+      costUsd: new Prisma.Decimal(0),
       expiresAt: new Date(occurredAt.getTime() + AI_GENERATION_LIMITS.reservationTtlMs),
       occurredAt,
     },
@@ -132,8 +120,22 @@ export async function commitAIUsageReservation(
   organizationId: string,
   requestId: string
 ) {
+  const usage = await db.aiUsage.findUnique({
+    where: { organizationId_requestId: { organizationId, requestId } },
+  });
+  if (!usage || usage.status !== 'RESERVED') return;
+  const price = await db.aiModelPrice.findFirst({
+    where: { provider: usage.provider, model: usage.model, effectiveFrom: { lte: usage.occurredAt } },
+    orderBy: { effectiveFrom: 'desc' },
+  });
+  if (!price) throw new UnknownAIModelPriceError(usage.provider, usage.model);
+  const costUsd = calculateAIUsageCost(
+    price,
+    AI_GENERATION_LIMITS.maxInputTokensPerStep * AI_GENERATION_LIMITS.maxSteps,
+    AI_GENERATION_LIMITS.maxOutputTokensPerStep * AI_GENERATION_LIMITS.maxSteps
+  );
   await db.aiUsage.updateMany({
     where: { organizationId, requestId, status: 'RESERVED' },
-    data: { status: 'COMPLETED', completedAt: new Date() },
+    data: { costUsd, status: 'COMPLETED', completedAt: new Date() },
   });
 }

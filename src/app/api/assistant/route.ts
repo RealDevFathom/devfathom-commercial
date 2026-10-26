@@ -58,6 +58,8 @@ function recentUserText(messages: UIMessage[]): string {
 }
 
 const UNAVAILABLE = 'Ask Fathom is currently unavailable. No cached answer was used.';
+const IDEMPOTENCY_KEY =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function POST(req: Request) {
   try {
@@ -193,11 +195,14 @@ async function respond(req: Request) {
   try {
     if (budgetValue) {
       const monthlyBudgetUsd = new Prisma.Decimal(budgetValue);
-      // The authenticated actor and exact request payload form a stable retry
-      // identity. Identical HTTP retries therefore cannot reserve or execute
-      // the provider twice, while approval continuations have a new payload.
+      const idempotencyKey = req.headers.get('idempotency-key');
+      if (!idempotencyKey || !IDEMPOTENCY_KEY.test(idempotencyKey)) {
+        return Response.json({ error: 'A valid idempotency key is required.' }, { status: 400 });
+      }
+      // Bind the client-generated attempt identifier to authenticated scope;
+      // request contents are deliberately not used as identity.
       routedRequestId = createHash('sha256')
-        .update(`${session.user.id}\0${rawBody}`)
+        .update(`${organization.id}\0${session.user.id}\0${idempotencyKey.toLowerCase()}`)
         .digest('hex');
       const routed = await withTenantDb(organization.id, (tx) =>
         reserveAIUsage(tx, {
@@ -216,9 +221,13 @@ async function respond(req: Request) {
     }
   } catch {
     if (routedRequestId) {
-      await withTenantDb(organization.id, (tx) =>
-        cancelAIUsage(tx, organization.id, routedRequestId!)
-      );
+      try {
+        await withTenantDb(organization.id, (tx) =>
+          cancelAIUsage(tx, organization.id, routedRequestId!)
+        );
+      } catch {
+        console.error('ASSISTANT_RESERVATION_CLEANUP_FAILED');
+      }
     }
     console.error('ASSISTANT_PROVIDER_UNAVAILABLE');
     return Response.json(
@@ -226,52 +235,64 @@ async function respond(req: Request) {
       { status: 503 }
     );
   }
-  const result = streamText({
-    model: ai.model,
-    system: assistantSystemPrompt(ctx, Object.keys(tools)),
-    messages: modelMessages,
-    // Cost control: send only the tools relevant to what the user is asking
-    // about (a core read set + the matched domain), not all ~96 every request.
-    // The hint is the recent user text. See buildAssistantTools / tools.ts.
-    tools,
-    toolChoice: isApprovalContinuation ? 'auto' : assistantToolChoice(hint, tools),
-    // Operator actions chain resolve → act → confirm; 6 steps covers that while
-    // capping the worst-case number of (token-heavy) model round-trips per turn.
-    stopWhen: stepCountIs(AI_GENERATION_LIMITS.maxSteps),
-    maxOutputTokens: AI_GENERATION_LIMITS.maxOutputTokensPerStep,
-    providerOptions: ai.providerOptions,
-    onFinish: routedRequestId
-      ? async ({ totalUsage }) => {
-          await withTenantDb(organization.id, (tx) =>
-            recordAIUsage(tx, {
-              organizationId: organization.id,
-              requestId: routedRequestId!,
-              inputTokens: totalUsage.inputTokens ?? 0,
-              outputTokens: totalUsage.outputTokens ?? 0,
-            })
-          );
-        }
-      : undefined,
-    onError: routedRequestId
-      ? async () => {
-          await withTenantDb(organization.id, (tx) =>
-            commitAIUsageReservation(tx, organization.id, routedRequestId!)
-          );
-        }
-      : undefined,
-    onAbort: routedRequestId
-      ? async () => {
-          await withTenantDb(organization.id, (tx) =>
-            commitAIUsageReservation(tx, organization.id, routedRequestId!)
-          );
-        }
-      : undefined,
-  });
+  try {
+    const result = streamText({
+      model: ai.model,
+      system: assistantSystemPrompt(ctx, Object.keys(tools)),
+      messages: modelMessages,
+      // Cost control: send only the tools relevant to what the user is asking
+      // about (a core read set + the matched domain), not all ~96 every request.
+      // The hint is the recent user text. See buildAssistantTools / tools.ts.
+      tools,
+      toolChoice: isApprovalContinuation ? 'auto' : assistantToolChoice(hint, tools),
+      stopWhen: stepCountIs(AI_GENERATION_LIMITS.maxSteps),
+      maxOutputTokens: AI_GENERATION_LIMITS.maxOutputTokensPerStep,
+      providerOptions: ai.providerOptions,
+      onFinish: routedRequestId
+        ? async ({ totalUsage }) => {
+            await withTenantDb(organization.id, (tx) =>
+              recordAIUsage(tx, {
+                organizationId: organization.id,
+                requestId: routedRequestId!,
+                inputTokens: totalUsage.inputTokens ?? 0,
+                outputTokens: totalUsage.outputTokens ?? 0,
+              })
+            );
+          }
+        : undefined,
+      onError: routedRequestId
+        ? async () => {
+            await withTenantDb(organization.id, (tx) =>
+              commitAIUsageReservation(tx, organization.id, routedRequestId!)
+            );
+          }
+        : undefined,
+      onAbort: routedRequestId
+        ? async () => {
+            await withTenantDb(organization.id, (tx) =>
+              commitAIUsageReservation(tx, organization.id, routedRequestId!)
+            );
+          }
+        : undefined,
+    });
 
-  return result.toUIMessageStreamResponse({
-    onError: () => {
-      console.error('ASSISTANT_STREAM_FAILED');
-      return UNAVAILABLE;
-    },
-  });
+    return result.toUIMessageStreamResponse({
+      onError: () => {
+        console.error('ASSISTANT_STREAM_FAILED');
+        return UNAVAILABLE;
+      },
+    });
+  } catch {
+    if (routedRequestId) {
+      try {
+        await withTenantDb(organization.id, (tx) =>
+          cancelAIUsage(tx, organization.id, routedRequestId!)
+        );
+      } catch {
+        console.error('ASSISTANT_RESERVATION_CLEANUP_FAILED');
+      }
+    }
+    console.error('ASSISTANT_STREAM_SETUP_FAILED');
+    return Response.json({ error: UNAVAILABLE }, { status: 503 });
+  }
 }

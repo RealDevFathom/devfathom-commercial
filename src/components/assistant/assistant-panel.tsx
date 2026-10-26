@@ -117,7 +117,11 @@ function createConversationTransport(canChat: boolean) {
       api: '/api/assistant',
       fetch: async (url, options) => {
         if (!active || !canChat) throw new DOMException('Stopped', 'AbortError');
-        const response = await fetch(url, options);
+        // One identifier represents this transport attempt. Browser-level
+        // retries retain it, while a deliberate later send gets a fresh key.
+        const headers = new Headers(options?.headers);
+        headers.set('Idempotency-Key', crypto.randomUUID());
+        const response = await fetch(url, { ...options, headers });
         if (response.status === 401 || response.status === 403) {
           throw new Error('ASSISTANT_PERMISSION_DENIED');
         }

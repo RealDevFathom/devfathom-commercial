@@ -62,7 +62,7 @@ describeIfDatabase('AI ledger database integration', () => {
     expect(competingCompletion.costUsd.toFixed(6)).toBe(completed.costUsd.toFixed(6));
     expect(['0.010500', '0.021000']).toContain(completed.costUsd.toFixed(6));
 
-    const crossover = await withTenantDb(orgA, (db) =>
+    const belowBoundary = await withTenantDb(orgA, (db) =>
       reserveAIUsage(db, {
         organizationId: orgA,
         requestId: `crossover-${suffix}`,
@@ -70,7 +70,17 @@ describeIfDatabase('AI ledger database integration', () => {
         monthlyBudgetUsd: new Prisma.Decimal('3.9'),
       })
     );
-    expect(crossover.provider).toBe('bedrock');
+    expect(belowBoundary.provider).toBe('anthropic');
+
+    const boundary = await withTenantDb(orgA, (db) =>
+      reserveAIUsage(db, {
+        organizationId: orgA,
+        requestId: `boundary-${suffix}`,
+        tier: 'standard',
+        monthlyBudgetUsd: completed.costUsd,
+      })
+    );
+    expect(boundary.provider).toBe('bedrock');
 
     await withTenantDb(orgA, (db) => cancelAIUsage(db, orgA, `crossover-${suffix}`));
     await withTenantDb(orgA, async (db) => {
@@ -93,7 +103,7 @@ describeIfDatabase('AI ledger database integration', () => {
     });
   });
 
-  it('keeps an expired in-flight reservation in the budget and charges an abort', async () => {
+  it('does not treat unfinished work as persisted spend and charges an abort', async () => {
     const [{ withTenantDb }, { commitAIUsageReservation, reserveAIUsage }] = await Promise.all([
       import('@/lib/tenancy/scoped-db'),
       import('./ledger'),
@@ -119,7 +129,7 @@ describeIfDatabase('AI ledger database integration', () => {
         monthlyBudgetUsd: new Prisma.Decimal(5),
       })
     );
-    expect(second.provider).toBe('bedrock');
+    expect(second.provider).toBe('anthropic');
 
     await withTenantDb(orgA, (db) => commitAIUsageReservation(db, orgA, expiredId));
     await withTenantDb(orgA, async (db) => {
