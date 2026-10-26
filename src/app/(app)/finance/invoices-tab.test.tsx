@@ -6,7 +6,6 @@ const mocks = vi.hoisted(() => ({ toastError: vi.fn() }));
 vi.mock('sonner', () => ({ toast: { error: mocks.toastError } }));
 vi.mock('@/lib/trpc', () => ({ trpc: {} }));
 
-import { PAID_STATUS_ERROR } from '@/lib/finance/invoice-status';
 import { InvoiceRow } from './invoices-tab';
 
 describe('InvoiceRow status menu', () => {
@@ -39,7 +38,10 @@ describe('InvoiceRow status menu', () => {
       fireEvent.click(screen.getByRole('menuitem', { name: 'Paid' }));
 
       expect(onUpdateStatus).not.toHaveBeenCalled();
-      expect(mocks.toastError).toHaveBeenCalledWith(PAID_STATUS_ERROR);
+      expect(mocks.toastError).toHaveBeenCalledOnce();
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        'Record a payment to mark an invoice as paid.'
+      );
       expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     }
   );
