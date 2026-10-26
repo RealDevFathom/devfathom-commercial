@@ -334,7 +334,7 @@ function itemBill(
 export function planBills(order: LoadedBillOrder, split: SplitSpec): PlannedBill[] {
   const items = billableItems(order);
   if (items.length === 0) {
-    throw new BillCommandError('The order has no non-voided items to bill.', 'NO_ITEMS');
+    throw new BillCommandError('The order has no billable purchased items.', 'NO_ITEMS');
   }
 
   if (split.kind === 'FRACTIONAL' && order.serviceChargePolicyVersion) {
@@ -415,7 +415,7 @@ function planByItem(
       const item = byId.get(itemId);
       if (!item) {
         throw new BillCommandError(
-          `Item ${itemId} is not a billable (non-voided) item on this order.`,
+          `Item ${itemId} is not a billable purchased item on this order.`,
           'PARTITION_INCOMPLETE'
         );
       }
