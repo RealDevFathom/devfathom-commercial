@@ -28,6 +28,11 @@ import { summarizeSopReport } from '@/lib/restaurant/sop-reporting';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { can, subjectFromSession } from '@/lib/abac';
 import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import {
+  BADGE_MAX_LENGTH,
+  isValidBadgeFormat,
+  isValidPinFormat,
+} from '@/lib/restaurant/operator-credentials';
 import { staffHasCapability } from '@/lib/restaurant/job-roles';
 
 /**
@@ -589,7 +594,10 @@ export const restaurantSopExecutionRouter = router({
             .object({
               staffProfileId: z.string().min(1),
               type: z.enum(['PIN', 'BADGE']),
-              secret: z.string().min(1),
+              // The common upper bound prevents an unbounded bcrypt input. The
+              // type-specific policy is checked below without exposing which
+              // part of a credential was malformed.
+              secret: z.string().min(1).max(BADGE_MAX_LENGTH),
             })
             .strict(),
           reason: z.string().min(1).max(2_000),
@@ -618,6 +626,13 @@ export const restaurantSopExecutionRouter = router({
         }
 
         const actorStaffProfileId = actors[0]!.id;
+        const validSecret =
+          input.approving.type === 'PIN'
+            ? isValidPinFormat(input.approving.secret)
+            : isValidBadgeFormat(input.approving.secret);
+        if (!validSecret) {
+          return { blocked: 'Waiver authorization failed.' } as const;
+        }
         const approval = await authenticateOperator(ctx.db, {
           ...input.approving,
           now: new Date(),
@@ -632,7 +647,10 @@ export const restaurantSopExecutionRouter = router({
             'sop:verify'
           ))
         ) {
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Waiver authorization failed.' });
+          // Authentication failures update the durable credential lockout state.
+          // Return (rather than throw) so the request-wide tenant transaction
+          // commits that update; the caller still receives a generic refusal.
+          return { blocked: 'Waiver authorization failed.' } as const;
         }
 
         const result = await waiveOccurrence(ctx.db, {

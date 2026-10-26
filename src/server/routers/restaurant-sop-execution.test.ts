@@ -94,6 +94,7 @@ function makeDb() {
 let db: ReturnType<typeof makeDb>;
 
 beforeEach(() => {
+  vi.clearAllMocks();
   db = makeDb();
   db.restaurantStaffProfile.findMany.mockResolvedValue([{ id: 'staff_a' }]);
   mocks.can.mockResolvedValue(true);
@@ -384,7 +385,7 @@ describe('verify', () => {
 // ── waive command ──────────────────────────────────────────────────────────────
 
 describe('waive', () => {
-  it('rejects an invented second identity without an authenticated credential', async () => {
+  it('returns a refusal so an invalid credential attempt can commit its lockout update', async () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({
       id: OCC_ID,
       status: 'SUBMITTED',
@@ -398,9 +399,82 @@ describe('waive', () => {
         approving: { staffProfileId: 'invented_staff', type: 'PIN', secret: '1234' },
         reason: 'test',
       })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    ).resolves.toEqual({ blocked: 'Waiver authorization failed.' });
     expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), { skipInput: true });
+    expect(mocks.authenticateOperator).toHaveBeenCalledWith(db, {
+      staffProfileId: 'invented_staff',
+      type: 'PIN',
+      secret: '1234',
+      now: expect.any(Date),
+    });
+  });
+
+  it('refuses same-person approval', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ branchId: 'branch_1' });
+    mocks.authenticateOperator.mockResolvedValue({
+      ok: true,
+      credentialId: 'credential_1',
+      staffProfileId: 'staff_a',
+    });
+
+    await expect(
+      caller().waive({
+        occurrenceId: OCC_ID,
+        approving: { staffProfileId: 'staff_a', type: 'PIN', secret: '1234' },
+        reason: 'test',
+      })
+    ).resolves.toHaveProperty('blocked');
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an approver without branch verification capability', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ branchId: 'branch_1' });
+    mocks.staffHasCapability.mockResolvedValue(false);
+
+    await expect(
+      caller().waive({
+        occurrenceId: OCC_ID,
+        approving: { staffProfileId: 'staff_b', type: 'PIN', secret: '1234' },
+        reason: 'test',
+      })
+    ).resolves.toHaveProperty('blocked');
+    expect(mocks.staffHasCapability).toHaveBeenCalledWith(
+      db,
+      'staff_b',
+      'branch_1',
+      'sop:verify'
+    );
+  });
+
+  it.each([[], [{ id: 'staff_a' }, { id: 'staff_duplicate' }]])(
+    'refuses when the session user does not resolve to exactly one active staff profile',
+    async (profiles) => {
+      db.restaurantStaffProfile.findMany.mockResolvedValue(profiles);
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({ branchId: 'branch_1' });
+
+      await expect(
+        caller().waive({
+          occurrenceId: OCC_ID,
+          approving: { staffProfileId: 'staff_b', type: 'PIN', secret: '1234' },
+          reason: 'test',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.authenticateOperator).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses malformed credentials without invoking bcrypt authentication', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ branchId: 'branch_1' });
+
+    await expect(
+      caller().waive({
+        occurrenceId: OCC_ID,
+        approving: { staffProfileId: 'staff_b', type: 'PIN', secret: '12ab' },
+        reason: 'test',
+      })
+    ).resolves.toEqual({ blocked: 'Waiver authorization failed.' });
+    expect(mocks.authenticateOperator).not.toHaveBeenCalled();
   });
 
   it('waives with valid co-authorization', async () => {

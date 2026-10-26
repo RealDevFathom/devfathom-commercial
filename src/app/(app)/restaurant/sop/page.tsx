@@ -1102,7 +1102,7 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
               message: 'The approving manager and their credential are required.',
             });
           }
-          await caller.waive({
+          const waiver = await caller.waive({
             occurrenceId,
             approving: {
               staffProfileId: approvingStaffProfileId,
@@ -1111,6 +1111,9 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
             },
             reason: field(form, 'reason'),
           });
+          if ('blocked' in waiver) {
+            throw new TRPCError({ code: 'FORBIDDEN', message: waiver.blocked });
+          }
           success = 'SOP waived with co-authorization.';
           break;
         }
