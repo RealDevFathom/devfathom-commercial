@@ -9,6 +9,7 @@ import {
   linkCustomerToSale,
   PharmacyLoyaltyError,
   readCustomerSnapshot,
+  setCustomerWhatsAppOptIn,
   restoreRefundedLoyaltyPoints,
 } from './customer-loyalty';
 
@@ -128,6 +129,7 @@ describe('CRM-L01 pharmacy loyalty', () => {
           displayName: 'Retail name',
           phoneLast4: '1234',
           creditLimitMinor: 20_000,
+          whatsappOptIn: true,
         }),
       },
       pharmacyLoyaltyPointsEntry: {
@@ -149,6 +151,7 @@ describe('CRM-L01 pharmacy loyalty', () => {
     };
     const snapshot = await readCustomerSnapshot(db as never, scope, 'customer-a');
     expect(snapshot).toMatchObject({
+      customer: { id: 'customer-a', whatsappOptIn: true },
       pointsBalance: 35,
       creditBalanceMinor: 800,
       availableCreditMinor: 19_200,
@@ -160,5 +163,30 @@ describe('CRM-L01 pharmacy loyalty', () => {
         where: expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
       })
     );
+  });
+
+  it('updates WhatsApp consent only for the tenant customer under the consent lock', async () => {
+    const now = new Date('2026-10-26T12:00:00Z');
+    const db = {
+      pharmacyCustomer: {
+        findFirst: vi.fn().mockResolvedValue({ patientId: 'patient-a' }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      $queryRaw: vi
+        .fn()
+        .mockResolvedValueOnce([{ id: 'patient-a' }])
+        .mockResolvedValueOnce([{ patientId: 'patient-a' }]),
+    };
+    await expect(
+      setCustomerWhatsAppOptIn(db as never, scope, 'customer-a', true, now)
+    ).resolves.toEqual({
+      customerId: 'customer-a',
+      whatsappOptIn: true,
+      whatsappOptInChangedAt: now,
+    });
+    expect(db.pharmacyCustomer.updateMany).toHaveBeenCalledWith({
+      where: { id: 'customer-a', organizationId: 'org-a', active: true },
+      data: { whatsappOptIn: true, whatsappOptInChangedAt: now },
+    });
   });
 });

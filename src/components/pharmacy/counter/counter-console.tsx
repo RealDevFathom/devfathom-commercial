@@ -92,6 +92,56 @@ type ReceiptIntent = {
   printReservation?: CounterBrowserPrintReservation;
 };
 
+export function CounterWhatsAppOffer({
+  branchId,
+  customerId,
+  initialOptIn,
+  onSaved,
+  onError,
+}: {
+  branchId: string;
+  customerId: string;
+  initialOptIn: boolean | null;
+  onSaved: () => void | Promise<void>;
+  onError: (error: unknown) => void;
+}) {
+  const setOptIn = trpc.pharmacySales.setCustomerWhatsAppOptIn.useMutation();
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-[var(--radius-sm)] bg-surface-sunken p-3">
+      <div>
+        <Label htmlFor="counter-whatsapp-opt-in">WhatsApp consent</Label>
+        <p className="text-xs text-text-muted">
+          Current status:{' '}
+          {initialOptIn === true
+            ? 'Opted in'
+            : initialOptIn === false
+              ? 'Opted out'
+              : 'Not recorded'}
+        </p>
+      </div>
+      <input
+        id="counter-whatsapp-opt-in"
+        type="checkbox"
+        checked={initialOptIn === true}
+        disabled={setOptIn.isPending}
+        onChange={async (event) => {
+          try {
+            await setOptIn.mutateAsync({
+              branchId,
+              customerId,
+              optedIn: event.currentTarget.checked,
+            });
+            await onSaved();
+          } catch (error) {
+            onError(error);
+          }
+        }}
+        className="size-4 accent-[var(--color-accent)]"
+      />
+    </div>
+  );
+}
+
 /**
  * A stable per-browser identifier for the drawer session and receipt sequence.
  *
@@ -2235,6 +2285,16 @@ function ScopedPharmacyCounterConsole({
                     Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
                   </p>
                 </div>
+                <CounterWhatsAppOffer
+                  branchId={branchId}
+                  customerId={customerQuery.data.customer.id}
+                  initialOptIn={customerQuery.data.customer.whatsappOptIn}
+                  onSaved={async () => {
+                    await customerQuery.refetch();
+                    setNotice({ tone: 'success', message: 'WhatsApp consent updated.' });
+                  }}
+                  onError={(error) => setNotice({ tone: 'danger', message: messageFrom(error) })}
+                />
                 <div className="flex gap-2">
                   <Label htmlFor="counter-redeem-points" className="sr-only">
                     Points to redeem

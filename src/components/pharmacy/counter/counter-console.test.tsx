@@ -107,6 +107,7 @@ vi.mock('@/lib/trpc', () => {
         'captureDemand',
         'declineSubstitute',
         'linkCustomer',
+        'setCustomerWhatsAppOptIn',
         'redeemPoints',
         'authenticatePack',
         'substituteProposals',
@@ -133,7 +134,7 @@ vi.mock('./counter-search-results', () => ({ CounterSearchResults: () => null })
 vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: () => null }));
 vi.mock('./counter-unit-toggle', () => ({ CounterUnitToggle: () => null }));
 
-import { PharmacyCounterConsole } from './counter-console';
+import { CounterWhatsAppOffer, PharmacyCounterConsole } from './counter-console';
 import {
   persistTenderAttempt,
   readTenderAttempt,
@@ -257,6 +258,7 @@ beforeEach(() => {
     'captureDemand',
     'declineSubstitute',
     'linkCustomer',
+    'setCustomerWhatsAppOptIn',
     'redeemPoints',
     'authenticatePack',
   ])
@@ -281,6 +283,33 @@ beforeEach(() => {
 });
 
 afterEach(() => vi.restoreAllMocks());
+
+describe('CounterWhatsAppOffer', () => {
+  it('shows current consent and saves with the matching pharmacy customer id', async () => {
+    mocks.mutations.setCustomerWhatsAppOptIn.mockResolvedValue({ whatsappOptIn: false });
+    const onSaved = vi.fn();
+    render(
+      <CounterWhatsAppOffer
+        branchId="branch-a"
+        customerId="customer-a"
+        initialOptIn={true}
+        onSaved={onSaved}
+        onError={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Current status: Opted in')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'WhatsApp consent' }));
+    await waitFor(() =>
+      expect(mocks.mutations.setCustomerWhatsAppOptIn).toHaveBeenCalledWith({
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        optedIn: false,
+      })
+    );
+    expect(onSaved).toHaveBeenCalledOnce();
+  });
+});
 
 describe('PharmacyCounterConsole authoritative bill state', () => {
   it.each([
