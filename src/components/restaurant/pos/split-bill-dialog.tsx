@@ -32,15 +32,27 @@ type SplitBillDialogProps = {
   onSplit: (split: BillSplit) => Promise<boolean>;
 };
 
+function createAssignments(items: SplitBillDialogProps['items']) {
+  return Object.fromEntries(items.map((item, index) => [item.id, index + 1]));
+}
+
 export function SplitBillDialog({ items, disabled = false, onSplit }: SplitBillDialogProps) {
+  const itemIdentity = JSON.stringify(items.map((item) => item.id).sort());
   const [open, setOpen] = useState(false);
   const [kind, setKind] = useState<BillSplit['kind']>('BY_ITEM');
   const [assignments, setAssignments] = useState<Record<string, number>>(() =>
-    Object.fromEntries(items.map((item, index) => [item.id, index + 1]))
+    createAssignments(items)
   );
+  const [assignmentItemIdentity, setAssignmentItemIdentity] = useState(itemIdentity);
   const [weights, setWeights] = useState('1, 1');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  if (assignmentItemIdentity !== itemIdentity) {
+    setAssignmentItemIdentity(itemIdentity);
+    setAssignments(createAssignments(items));
+    setError(null);
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -48,6 +60,17 @@ export function SplitBillDialog({ items, disabled = false, onSplit }: SplitBillD
 
     let split: BillSplit;
     if (kind === 'BY_ITEM') {
+      if (
+        items.some(
+          (item) =>
+            !Number.isInteger(assignments[item.id]) ||
+            assignments[item.id] < 1 ||
+            assignments[item.id] > items.length
+        )
+      ) {
+        setError('Choose a valid guest bill for every order line.');
+        return;
+      }
       const billNumbers = [...new Set(items.map((item) => assignments[item.id]))].sort(
         (a, b) => a - b
       );

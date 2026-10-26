@@ -103,4 +103,34 @@ describe('SplitBillDialog', () => {
       })
     );
   });
+
+  it('resets visible assignments when the order lines change before submission', async () => {
+    const onSplit = vi.fn<(split: BillSplit) => Promise<boolean>>().mockResolvedValue(true);
+    const { rerender } = render(<SplitBillDialog items={items} onSplit={onSplit} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Split bill' }));
+    fireEvent.change(screen.getByLabelText('Guest bill for Burger'), {
+      target: { value: '2' },
+    });
+
+    const refreshedItems = [
+      items[0],
+      { id: 'item-3', name: 'Tea', quantity: 1, seatNumber: 2, modifiers: ['Iced'] },
+      { id: 'item-4', name: 'Cake', quantity: 1, seatNumber: null, modifiers: [] },
+    ];
+    rerender(<SplitBillDialog items={refreshedItems} onSplit={onSplit} />);
+
+    expect(screen.getByLabelText('Guest bill for Burger')).toHaveValue('1');
+    expect(screen.getByLabelText('Guest bill for Tea')).toHaveValue('2');
+    expect(screen.getByLabelText('Guest bill for Cake')).toHaveValue('3');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create split bills' }));
+
+    await waitFor(() =>
+      expect(onSplit).toHaveBeenCalledWith({
+        kind: 'BY_ITEM',
+        groups: [['item-1'], ['item-3'], ['item-4']],
+      })
+    );
+  });
 });
