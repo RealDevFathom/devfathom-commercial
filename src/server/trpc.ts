@@ -193,9 +193,9 @@ function auditMiddleware(opts: { auditReads: boolean }) {
     // including input validation and authorization, can reject the request.
     // Resolver-level `skipInput` annotations are too late for those failures.
     // A router can be mounted below the app router (qualified path) or called
-    // directly by a server action (local path). Match the procedure segment so
-    // both call shapes suppress the credential before validation runs.
-    const skipRawInput = path.split('.').at(-1) === 'waive';
+    // directly by a server action (local path). Keep this allowlist narrow so
+    // unrelated procedures named `waive` do not silently lose audit input.
+    const skipRawInput = path === 'restaurantSopExecution.waive' || path === 'waive';
     let rawInput: unknown;
     if (!skipRawInput) {
       try {

@@ -44,6 +44,7 @@ vi.mock('@/lib/restaurant/job-roles', () => ({
 
 import { restaurantSopExecutionRouter } from './restaurant-sop-execution';
 import { packageByKey } from '@/lib/vertical-catalog';
+import { router } from '../trpc';
 
 type Delegate = Record<string, ReturnType<typeof vi.fn>>;
 
@@ -172,39 +173,55 @@ describe('strict-zod boundary', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
-  it('suppresses a waiver credential from a direct sub-router call before validation', async () => {
-    const context = {
-      db: db as never,
-      entitlements: { organizationId: 'org_1', ...FULL_ENTITLEMENTS },
-      session: {
-        expires: 'later',
-        user: { id: 'user_1', role: 'EMPLOYEE', department: 'OPERATIONS', status: 'ACTIVE' },
-      },
-      organization: null,
-      support: null,
-      requestMeta: { ip: null, userAgent: null },
-      audit: { detail: {} },
-    } as never;
-    const recognizableSecret = 'PIN-DO-NOT-AUDIT-819';
+  it.each([
+    [
+      'direct sub-router call',
+      'waive',
+      (context: never) => restaurantSopExecutionRouter.createCaller(context),
+    ],
+    [
+      'app-router call',
+      'restaurantSopExecution.waive',
+      (context: never) =>
+        router({ restaurantSopExecution: restaurantSopExecutionRouter }).createCaller(context)
+          .restaurantSopExecution,
+    ],
+  ])(
+    'suppresses a waiver credential from a %s before validation',
+    async (_label, path, createCaller) => {
+      const context = {
+        db: db as never,
+        entitlements: { organizationId: 'org_1', ...FULL_ENTITLEMENTS },
+        session: {
+          expires: 'later',
+          user: { id: 'user_1', role: 'EMPLOYEE', department: 'OPERATIONS', status: 'ACTIVE' },
+        },
+        organization: null,
+        support: null,
+        requestMeta: { ip: null, userAgent: null },
+        audit: { detail: {} },
+      } as never;
+      const recognizableSecret = 'PIN-DO-NOT-AUDIT-819';
 
-    await expect(
-      restaurantSopExecutionRouter.createCaller(context).waive({
-        occurrenceId: OCC_ID,
-        approving: { staffProfileId: 'b', type: 'PIN', secret: recognizableSecret },
-        reason: 'r',
-        extra: true,
-      } as never)
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(
+        createCaller(context).waive({
+          occurrenceId: OCC_ID,
+          approving: { staffProfileId: 'b', type: 'PIN', secret: recognizableSecret },
+          reason: 'r',
+          extra: true,
+        } as never)
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 
-    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: 'waive',
-        input: undefined,
-        outcome: 'FAILURE',
-      })
-    );
-    expect(JSON.stringify(mocks.recordTrpcAudit.mock.calls)).not.toContain(recognizableSecret);
-  });
+      expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path,
+          input: undefined,
+          outcome: 'FAILURE',
+        })
+      );
+      expect(JSON.stringify(mocks.recordTrpcAudit.mock.calls)).not.toContain(recognizableSecret);
+    }
+  );
 
   it('rejects unknown key on listOccurrences', async () => {
     await expect(
