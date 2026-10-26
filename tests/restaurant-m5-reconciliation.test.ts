@@ -439,8 +439,10 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
           subtotal: true,
           taxTotal: true,
           serviceChargeTotal: true,
+          deliveryFeeTotal: true,
           compTotal: true,
           discountTotal: true,
+          roundingAdjustment: true,
           grandTotal: true,
         },
       }),
@@ -525,6 +527,18 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
 
     const settledBills = raw.bills.filter((bill) => bill.status === 'SETTLED');
     const voidBills = raw.bills.filter((bill) => bill.status === 'VOID');
+    for (const bill of settledBills) {
+      eqMoney(
+        bill.subtotal
+          .plus(bill.taxTotal)
+          .plus(bill.serviceChargeTotal)
+          .plus(bill.deliveryFeeTotal)
+          .minus(bill.compTotal)
+          .minus(bill.discountTotal)
+          .plus(bill.roundingAdjustment),
+        bill.grandTotal
+      );
+    }
     const expected = {
       grossSales: sum(settledBills.map((bill) => bill.subtotal)),
       compTotal: sum(settledBills.map((bill) => bill.compTotal)),
