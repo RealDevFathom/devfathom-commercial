@@ -98,6 +98,14 @@ describe('exact posted-journal lookup', () => {
     expect(mocks.journal).toHaveBeenCalledOnce();
   });
 
+  it('rejects an overlong lookup window before any database read', async () => {
+    await expect(
+      caller().lookup({ ...input, to: '2026-11-02T00:00:00Z' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.branch).not.toHaveBeenCalled();
+    expect(mocks.journal).not.toHaveBeenCalled();
+  });
+
   it('validates source rows and sums 200 maximum integers exactly with BigInt', async () => {
     mocks.journal.mockResolvedValue({
       id: '.',
