@@ -488,6 +488,18 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       const mutationError = await db.$transaction(async (tx) => {
         await lockProjectMembership(tx, pr.id);
 
+        if (
+          !isAdmin &&
+          (
+            await tx.projectMember.findUnique({
+              where: { projectId_userId: { projectId: pr.id, userId } },
+              select: { role: true },
+            })
+          )?.role !== 'LEAD'
+        ) {
+          return { error: 'Only the project lead or an admin can add members.' };
+        }
+
         const [target, leadCount] = await Promise.all([
           tx.projectMember.findUnique({
             where: { projectId_userId: { projectId: pr.id, userId: r.value.id } },
@@ -578,6 +590,19 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
       const mutationError = await db.$transaction(async (tx) => {
         await lockProjectMembership(tx, pr.id);
 
+        if (
+          !isSelf &&
+          !isAdmin &&
+          (
+            await tx.projectMember.findUnique({
+              where: { projectId_userId: { projectId: pr.id, userId } },
+              select: { role: true },
+            })
+          )?.role !== 'LEAD'
+        ) {
+          return { error: 'Only the project lead or an admin can remove other members.' };
+        }
+
         const [currentTarget, leadCount] = await Promise.all([
           tx.projectMember.findUnique({
             where: { projectId_userId: { projectId: pr.id, userId: targetUserId } },
@@ -647,6 +672,18 @@ export function buildProjectsTools(h: AssistantHelpers): ToolSet {
 
       const mutationError = await db.$transaction(async (tx) => {
         await lockProjectMembership(tx, pr.id);
+
+        if (
+          !isAdmin &&
+          (
+            await tx.projectMember.findUnique({
+              where: { projectId_userId: { projectId: pr.id, userId } },
+              select: { role: true },
+            })
+          )?.role !== 'LEAD'
+        ) {
+          return { error: 'Only the project lead or an admin can change roles.' };
+        }
 
         const [currentTarget, leadCount] = await Promise.all([
           tx.projectMember.findUnique({

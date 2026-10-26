@@ -8,7 +8,14 @@ import type { AssistantHelpers } from '@/lib/ai/context';
 type Member = { projectId: string; userId: string; role: string; name: string };
 type ToolResult = { error?: string };
 
-function testHarness(initialMembers?: Member[]) {
+function testHarness(
+  initialMembers?: Member[],
+  actor: { userId: string; name: string; isAdmin: boolean } = {
+    userId: 'admin',
+    name: 'Admin',
+    isAdmin: true,
+  }
+) {
   const members = initialMembers ?? [
     { projectId: 'project-1', userId: 'lead-a', role: 'LEAD', name: 'Lead A' },
     { projectId: 'project-1', userId: 'lead-b', role: 'LEAD', name: 'Lead B' },
@@ -104,8 +111,8 @@ function testHarness(initialMembers?: Member[]) {
   const helpers = {
     db,
     now: vi.fn(() => new Date()),
-    isAdmin: true,
-    ctx: { userId: 'admin', name: 'Admin' },
+    isAdmin: actor.isAdmin,
+    ctx: { userId: actor.userId, name: actor.name },
     canManageProject: vi.fn(async () => true),
     resolvePerson: vi.fn(async (name: string) => {
       const member = members.find((candidate) => candidate.name === name);
@@ -180,5 +187,31 @@ describe('assistant project lead invariant', () => {
     expect(result.error).toBe('Cannot demote the last lead. Promote another member to lead first.');
     expect(members[0].role).toBe('LEAD');
     expect(queryRaw).toHaveBeenCalledOnce();
+  });
+
+  it('denies a waiting role change after the caller is concurrently demoted', async () => {
+    const { members, queryRaw, tools } = testHarness(undefined, {
+      userId: 'lead-a',
+      name: 'Lead A',
+      isAdmin: false,
+    });
+
+    const [demotion, waitingChange] = await Promise.all([
+      tools.setProjectMemberRole.execute({
+        project: 'Project',
+        person: 'Lead A',
+        role: 'MEMBER',
+      }),
+      tools.setProjectMemberRole.execute({
+        project: 'Project',
+        person: 'Lead B',
+        role: 'MEMBER',
+      }),
+    ]);
+
+    expect(demotion.error).toBeUndefined();
+    expect(waitingChange.error).toBe('Only the project lead or an admin can change roles.');
+    expect(members.find((member) => member.userId === 'lead-b')?.role).toBe('LEAD');
+    expect(queryRaw).toHaveBeenCalledTimes(2);
   });
 });
