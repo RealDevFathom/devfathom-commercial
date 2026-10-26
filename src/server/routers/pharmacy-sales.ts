@@ -108,12 +108,7 @@ import {
 } from '@/lib/pharmacy/settlement';
 
 import { assertInOrganization } from '../org-refs';
-import {
-  adminProcedure,
-  auditedProtectedProcedure,
-  protectedProcedure,
-  router,
-} from '../trpc';
+import { adminProcedure, auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
