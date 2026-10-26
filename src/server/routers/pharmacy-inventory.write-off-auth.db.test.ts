@@ -401,4 +401,63 @@ describeDatabase('SEC-374-01 Postgres no-effect authorization regressions', () =
       movementId: result.movement.id,
     });
   });
+
+  it.each(['assignment', 'witness'] as const)(
+    'refuses the write when a concurrent %s revocation obtains the row lock first',
+    async (target) => {
+      const input = await fixture();
+      const before = await snapshot(org, input.inventoryLotId);
+      let release!: () => void;
+      let locked!: () => void;
+      const releaseGate = new Promise<void>((resolve) => (release = resolve));
+      const lockedGate = new Promise<void>((resolve) => (locked = resolve));
+
+      const revocation = admin(org, async (db) => {
+        if (target === 'assignment') {
+          await db.pharmacyBranchAssignment.update({
+            where: {
+              organizationId_branchId_userId: {
+                organizationId: org,
+                branchId: branchA,
+                userId: actors.allowed,
+              },
+            },
+            data: { active: false },
+          });
+        } else {
+          await db.user.update({ where: { id: witness }, data: { status: 'INACTIVE' } });
+        }
+        locked();
+        await releaseGate;
+      });
+      await lockedGate;
+      const attemptedWrite = call(actors.allowed, input);
+      // Let the write reach the authorization SELECT while the revocation owns
+      // the row lock, then publish the revoked state.
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      release();
+      await revocation;
+
+      await expect(attemptedWrite).rejects.toMatchObject({
+        code: target === 'assignment' ? 'FORBIDDEN' : 'BAD_REQUEST',
+      });
+      expect(await snapshot(org, input.inventoryLotId)).toEqual(before);
+      await admin(org, async (db) => {
+        if (target === 'assignment') {
+          await db.pharmacyBranchAssignment.update({
+            where: {
+              organizationId_branchId_userId: {
+                organizationId: org,
+                branchId: branchA,
+                userId: actors.allowed,
+              },
+            },
+            data: { active: true },
+          });
+        } else {
+          await db.user.update({ where: { id: witness }, data: { status: 'ACTIVE' } });
+        }
+      });
+    }
+  );
 });

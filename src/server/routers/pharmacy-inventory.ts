@@ -162,22 +162,33 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
  * name, before reading the witness or touching stock/custody. A privileged
  * system role or a valid witness is not a substitute for that assignment;
  * inventoryControl separately evaluates canonical grants and DENY via can(). */
-async function writeOffScopeFor(ctx: TRPCContext, requestedBranchId: string): Promise<LedgerScope> {
-  const scope = await scopeFor(ctx, requestedBranchId);
-  const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      userId: scope.actorId,
-      branchId: requestedBranchId,
-      active: true,
-      branch: { active: true },
-    },
-    select: { id: true },
+async function writeOffScopeFor(
+  ctx: TRPCContext,
+  db: ScopedDb,
+  requestedBranchId: string
+): Promise<LedgerScope> {
+  const actor = actorFor(ctx);
+  await assertInOrganization(db.pharmacyBranch, actor.organizationId, [requestedBranchId], {
+    active: true,
   });
-  if (!assignment) {
+  // Keep both authorization rows locked until the stock/custody transaction
+  // commits. A concurrent revocation therefore either commits first and is
+  // observed here, or waits until this already-authorized write-off commits.
+  const assignments = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT a.id
+    FROM pharmacy_branches b
+    JOIN pharmacy_branch_assignments a
+      ON a."organizationId" = b."organizationId" AND a."branchId" = b.id
+    WHERE b."organizationId" = ${actor.organizationId}
+      AND b.id = ${requestedBranchId}
+      AND b.active = true
+      AND a."userId" = ${actor.actorId}
+      AND a.active = true
+    FOR UPDATE OF b, a`);
+  if (!assignments[0]) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
-  return scope;
+  return { ...actor, branchId: requestedBranchId };
 }
 
 // ── PH-A5 — expiry board actions ────────────────────────────────────────────
@@ -1057,9 +1068,12 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const writeScope = await writeOffScopeFor(ctx, input.branchId);
       try {
-        return await ctx.db.$transaction(async (tx) => writeOff(txDb(tx), writeScope, input));
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const writeScope = await writeOffScopeFor(ctx, db, input.branchId);
+          return writeOff(db, writeScope, input);
+        });
       } catch (error) {
         domainError(error);
       }

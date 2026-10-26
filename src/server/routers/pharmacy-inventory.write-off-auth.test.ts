@@ -66,7 +66,28 @@ function makeDb() {
     pharmacyCustodyRecord: {
       create: vi.fn(async ({ data }: { data: object }) => ({ id: 'custody_a', ...data })),
     },
+    $queryRaw: vi.fn(),
   };
+  db.$queryRaw.mockImplementation(
+    async (query: { strings?: readonly string[]; values?: readonly unknown[] }) => {
+      const sql = query.strings?.join('?') ?? '';
+      if (sql.includes('pharmacy_branch_assignments')) {
+        const assignment = await db.pharmacyBranchAssignment.findFirst({
+          where: {
+            organizationId: 'org_a',
+            userId: 'actor_a',
+            branchId: String(query.values?.[1]),
+            active: true,
+            branch: { active: true },
+          },
+          select: { id: true },
+        });
+        return assignment ? [assignment] : [];
+      }
+      const witness = await db.user.findFirst();
+      return witness ? [witness] : [];
+    }
+  );
   return Object.assign(db, {
     $transaction: vi.fn(async (run: (tx: typeof db) => unknown) => run(db)),
   });
@@ -240,5 +261,17 @@ describe('SEC-374-01 write-off capability and actual-branch authority', () => {
     });
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
     expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
+  });
+
+  it('locks branch assignment and witness authorization rows in the write transaction', async () => {
+    grant([allow('pharmacy:inventory')]);
+    await caller().writeOff(input);
+
+    const sql = db.$queryRaw.mock.calls.map(([query]) => query.strings.join('?'));
+    expect(sql).toHaveLength(2);
+    expect(sql[0]).toContain('FOR UPDATE OF b, a');
+    expect(sql[1]).toContain('FROM users');
+    expect(sql[1]).toContain('FOR UPDATE');
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
   });
 });
