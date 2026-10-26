@@ -26,6 +26,7 @@ const LATER = new Date('2027-10-01T00:00:00.000Z');
 
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
+  withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
   devices: typeof import('@/lib/pharmacy/offline-devices');
   snapshots: typeof import('@/lib/pharmacy/offline-snapshots');
   leases: typeof import('@/lib/pharmacy/offline-receipt-leases');
@@ -202,7 +203,15 @@ beforeAll(async () => {
     import('@/lib/pharmacy/offline-command-log'),
     import('@/lib/testing/rls-role-guard'),
   ]);
-  deps = { withTenantDb: scopedDb.withTenantDb, devices, snapshots, leases, quotas, log };
+  deps = {
+    withTenantDb: scopedDb.withTenantDb,
+    withPlatformDb: scopedDb.withPlatformDb,
+    devices,
+    snapshots,
+    leases,
+    quotas,
+    log,
+  };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
   // Integrated tip (20261012120000_visibility_context_anchors): tenant rows must reference an
   // existing organization, so anchor this suite's synthetic tenants before any test runs.
@@ -451,36 +460,64 @@ describeIfDatabase('offline quota stock reservation', () => {
     });
   });
 
-  it('serializes a concurrent quota grant with a stock decrement', async () => {
+  it('rejects a decrement whose statement snapshot predates a blocked quota grant', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'concurrent-reservation', { units: 10 });
-    const [grant, decrement] = await Promise.allSettled([
-      inOrg(ORG_A, (db) =>
-        deps.quotas.grantDeviceLotQuota(db, scopeOf(fixture), {
-          deviceId: fixture.deviceId,
-          ...bucketOf(fixture),
-          units: 10,
-        })
-      ),
-      inOrg(ORG_A, (db) =>
-        db.pharmacyStockMovement.create({
-          data: {
-            organizationId: ORG_A,
-            branchId: BRANCH_A,
-            ...bucketOf(fixture),
-            kind: 'ADJUSTMENT',
-            disposition: 'AVAILABLE',
-            quantityUnits: -10,
-            sealedPackDelta: -1,
-            looseUnitDelta: 0,
-            actorId: ACTOR,
-            idempotencyKey: `concurrent-${tag('reservation')}`,
-            occurredAt: NOW,
-          },
-        })
-      ),
-    ]);
+    let grantReady!: () => void;
+    let commitGrant!: () => void;
+    let reportDecrementPid!: (pid: number) => void;
+    const grantIsReady = new Promise<void>((resolve) => (grantReady = resolve));
+    const mayCommitGrant = new Promise<void>((resolve) => (commitGrant = resolve));
+    const decrementPid = new Promise<number>((resolve) => (reportDecrementPid = resolve));
 
-    expect([grant.status, decrement.status].sort()).toEqual(['fulfilled', 'rejected']);
+    const grant = inOrg(ORG_A, async (db) => {
+      const quota = await deps.quotas.grantDeviceLotQuota(db, scopeOf(fixture), {
+        deviceId: fixture.deviceId,
+        ...bucketOf(fixture),
+        units: 10,
+      });
+      grantReady();
+      await mayCommitGrant;
+      return quota;
+    });
+    await grantIsReady;
+
+    const decrement = inOrg(ORG_A, async (db) => {
+      const [{ pid }] = await db.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+      reportDecrementPid(pid!);
+      return db.pharmacyStockMovement.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          ...bucketOf(fixture),
+          kind: 'ADJUSTMENT',
+          disposition: 'AVAILABLE',
+          quantityUnits: -10,
+          sealedPackDelta: -1,
+          looseUnitDelta: 0,
+          actorId: ACTOR,
+          idempotencyKey: `concurrent-${tag('reservation')}`,
+          occurredAt: NOW,
+        },
+      });
+    });
+
+    const pid = await decrementPid;
+    let blocked = false;
+    for (let attempt = 0; attempt < 100 && !blocked; attempt += 1) {
+      blocked = await deps.withPlatformDb(async (db) => {
+        const [row] = await db.$queryRaw<Array<{ blocked: boolean }>>`
+          SELECT cardinality(pg_blocking_pids(${pid})) > 0 AS blocked`;
+        return row?.blocked ?? false;
+      });
+      if (!blocked) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    commitGrant();
+
+    const [grantResult, decrementResult] = await Promise.allSettled([grant, decrement]);
+
+    expect(blocked).toBe(true);
+    expect(grantResult.status).toBe('fulfilled');
+    expect(decrementResult.status).toBe('rejected');
     const [balance, outstanding] = await Promise.all([
       inOrg(ORG_A, (db) =>
         db.pharmacyStockBalance.findFirst({
