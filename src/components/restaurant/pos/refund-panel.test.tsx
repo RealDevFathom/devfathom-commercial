@@ -58,7 +58,19 @@ describe('RefundPanel', () => {
 
   it('allows a tip-only refund when the principal is exhausted', async () => {
     const tipOnly = { ...tender, refundedAmount: '24.00', remainingAmount: '0.00' };
-    const request = mockRequest(async () => ({ tenders: [tipOnly] }));
+    const request = mockRequest(async (_path, options) =>
+      options?.method === 'POST'
+        ? {
+            amount: '0.00',
+            tipRefundAmount: '2.00',
+            businessDate: '2026-08-30',
+            paymentStatus: 'REFUNDED',
+            taxRefundAmount: '0.00',
+            serviceChargeRefundAmount: '0.00',
+            replayed: false,
+          }
+        : { tenders: [tipOnly] }
+    );
     await open(request);
     fireEvent.change(screen.getByLabelText('Settled receipt'), {
       target: { value: tipOnly.tenderId },
@@ -70,6 +82,18 @@ describe('RefundPanel', () => {
     fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
     expect(screen.getByRole('heading', { name: 'Confirm destructive refund' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+    await screen.findByText('refund recorded');
+    const submission = vi
+      .mocked(request)
+      .mock.calls.find(([, options]) => options?.method === 'POST');
+    expect(submission?.[1]?.body).toEqual({
+      originalTenderId: tipOnly.tenderId,
+      amount: '0.00',
+      tipRefundAmount: '2.00',
+      reason: 'Return remaining tip',
+      approving: { staffProfileId: 'manager', type: 'PIN', secret: '1234' },
+    });
   });
 
   it('submits one terminal refund and renders the durable server-authored tax receipt', async () => {
