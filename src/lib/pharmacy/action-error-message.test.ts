@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 import { pharmacyActionErrorMessage } from './action-error-message';
@@ -31,4 +33,14 @@ describe('pharmacyActionErrorMessage', () => {
       'The finance action could not be completed. Review the fields and try again.'
     );
   });
+
+  it.each(['inventory', 'finance'])(
+    'keeps raw errors out of the %s server-action redirect',
+    (page) => {
+      const source = readFileSync(`src/app/(app)/pharmacy/${page}/page.tsx`, 'utf8');
+
+      expect(source).toContain(`pharmacyActionErrorMessage('${page}')`);
+      expect(source).not.toMatch(/\berror\.message\b/);
+    }
+  );
 });
