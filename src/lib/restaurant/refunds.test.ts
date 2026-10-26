@@ -644,14 +644,17 @@ describeIfDatabase('card refunds (real DB)', () => {
     });
     expect(finalTenderRefund.serviceChargeRefundAmount.toFixed(2)).toBe('0.83');
 
-    const persistedServiceTotal = await read(async (tx) => {
-      const aggregate = await tx.restaurantRefund.aggregate({
+    const persistedServiceRefunds = await read(async (tx) => {
+      const refunds = await tx.restaurantRefund.findMany({
         where: { billId },
-        _sum: { serviceChargeRefundAmount: true },
+        orderBy: { serviceChargeRefundAmount: 'asc' },
+        select: { serviceChargeRefundAmount: true },
       });
-      return aggregate._sum.serviceChargeRefundAmount;
+      return refunds.map(({ serviceChargeRefundAmount }) =>
+        serviceChargeRefundAmount.toFixed(2)
+      );
     });
-    expect(persistedServiceTotal?.toFixed(2)).toBe('1.25');
+    expect(persistedServiceRefunds).toEqual(['0.42', '0.83']);
   });
 
   it('appends a capped REVERSAL pinned to the original earn program', async () => {
