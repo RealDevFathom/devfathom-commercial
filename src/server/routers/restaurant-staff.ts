@@ -289,6 +289,7 @@ export const restaurantStaffRouter = router({
         restaurantStaffProfiles: {
           ...(eligibleProfileWhere ? { where: eligibleProfileWhere } : {}),
           select: { id: true, displayName: true },
+          orderBy: { id: 'asc' },
           take: 1,
         },
       },

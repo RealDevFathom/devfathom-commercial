@@ -184,6 +184,7 @@ describe('staff CRUD', () => {
         select: expect.objectContaining({
           restaurantStaffProfiles: {
             select: { id: true, displayName: true },
+            orderBy: { id: 'asc' },
             take: 1,
           },
         }),
@@ -218,7 +219,11 @@ describe('staff CRUD', () => {
           restaurantStaffProfiles: { some: eligibleProfileWhere },
         },
         select: expect.objectContaining({
-          restaurantStaffProfiles: expect.objectContaining({ where: eligibleProfileWhere }),
+          restaurantStaffProfiles: expect.objectContaining({
+            where: eligibleProfileWhere,
+            orderBy: { id: 'asc' },
+            take: 1,
+          }),
         }),
       })
     );
