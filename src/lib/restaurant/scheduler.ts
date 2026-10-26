@@ -414,16 +414,17 @@ export async function recoverStaleJobs(
 /**
  * Release an in-flight claim back to QUEUED WITHOUT recording a failed attempt
  * (graceful shutdown: the handler never ran). The claim's `attempts` increment is
- * rolled back so the job is fully restored. No-op if the job is not RUNNING.
+ * rolled back so the job is fully restored. No-op unless every ownership field
+ * still identifies the exact RUNNING claim being released.
  */
 export async function releaseClaim(
   db: ScopedDb,
   jobId: string,
-  opts: { now?: Date } = {}
+  opts: SettleOptions
 ): Promise<void> {
   const now = opts.now ?? new Date();
   await db.restaurantJob.updateMany({
-    where: { id: jobId, status: 'RUNNING' },
+    where: runningClaimWhere(jobId, opts),
     data: {
       status: 'QUEUED',
       nextAttemptAt: now,
@@ -498,7 +499,14 @@ export async function drainDueJobs(options: DrainOptions): Promise<DrainResult> 
     result.claimed += 1;
 
     if (options.signal?.aborted) {
-      await options.runScoped((db) => releaseClaim(db, job.id, { now: clock() }));
+      await options.runScoped((db) =>
+        releaseClaim(db, job.id, {
+          workerId: job.claimedBy,
+          attempt: job.attempts,
+          claimToken: job.claimToken,
+          now: clock(),
+        })
+      );
       result.released += 1;
       break;
     }

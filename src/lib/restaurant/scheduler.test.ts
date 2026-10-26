@@ -366,6 +366,7 @@ describe('fail', () => {
   ] as const)(
     'rejects a stale claim attempting to %s with worker %s at attempt %i',
     async (operation, workerId, attempt) => {
+      const staleClaimToken = 'claim-stale';
       const { db, jobs, executions } = createFakeDb([
         {
           id: 'j1',
@@ -376,13 +377,20 @@ describe('fail', () => {
           claimedBy: 'worker-b',
         },
       ]);
+      expect(staleClaimToken).not.toBe(jobs.get('j1')!.claimToken);
 
       const settlement =
         operation === 'complete'
-          ? complete(db, 'j1', { workerId, attempt, now: T0 })
+          ? complete(db, 'j1', {
+              workerId,
+              attempt,
+              claimToken: staleClaimToken,
+              now: T0,
+            })
           : fail(db, 'j1', new Error('late failure'), {
               workerId,
               attempt,
+              claimToken: staleClaimToken,
               now: T0,
             });
 
@@ -467,7 +475,12 @@ describe('releaseClaim', () => {
     const { db, jobs } = createFakeDb([
       { id: 'j1', status: 'RUNNING', attempts: 1, maxAttempts: 5, claimedAt: T0, claimedBy: 'w' },
     ]);
-    await releaseClaim(db, 'j1', { now: T0 });
+    await releaseClaim(db, 'j1', {
+      workerId: 'w',
+      attempt: 1,
+      claimToken: 'claim-current',
+      now: T0,
+    });
     const job = jobs.get('j1')!;
     expect(job.status).toBe('QUEUED');
     expect(job.attempts).toBe(0);
@@ -492,11 +505,22 @@ describe('releaseClaim', () => {
         },
       ]);
       const staleClaim = await claimNextDue(db, { workerId: 'worker-a', now: T0 });
-      await releaseClaim(db, 'j1', { now: T0 });
+      await releaseClaim(db, 'j1', {
+        workerId: staleClaim!.claimedBy,
+        attempt: staleClaim!.attempts,
+        claimToken: staleClaim!.claimToken,
+        now: T0,
+      });
       const currentClaim = await claimNextDue(db, { workerId: 'worker-a', now: T0 });
 
       expect(staleClaim?.attempts).toBe(currentClaim?.attempts);
       expect(staleClaim?.claimToken).not.toBe(currentClaim?.claimToken);
+      await releaseClaim(db, 'j1', {
+        workerId: staleClaim!.claimedBy,
+        attempt: staleClaim!.attempts,
+        claimToken: staleClaim!.claimToken,
+        now: T0,
+      });
       const settlement =
         operation === 'complete'
           ? complete(db, 'j1', {
@@ -520,6 +544,40 @@ describe('releaseClaim', () => {
       expect(executions).toHaveLength(0);
     }
   );
+
+  it("does not release a newer worker's claim with stale ownership", async () => {
+    const due = new Date(T0.getTime() - DEFAULT_LEASE_MS - 1_000);
+    const { db, jobs } = createFakeDb([
+      {
+        id: 'j1',
+        type: 'test',
+        status: 'QUEUED',
+        attempts: 0,
+        maxAttempts: 5,
+        nextAttemptAt: due,
+        createdAt: due,
+        payload: {},
+      },
+    ]);
+    const staleClaim = await claimNextDue(db, { workerId: 'worker-a', now: due });
+    await recoverStaleJobs(db, { now: T0 });
+    const currentClaim = await claimNextDue(db, { workerId: 'worker-b', now: T0 });
+
+    await releaseClaim(db, 'j1', {
+      workerId: staleClaim!.claimedBy,
+      attempt: staleClaim!.attempts,
+      claimToken: staleClaim!.claimToken,
+      now: T0,
+    });
+
+    expect(currentClaim!.claimToken).not.toBe(staleClaim!.claimToken);
+    expect(jobs.get('j1')).toMatchObject({
+      status: 'RUNNING',
+      attempts: currentClaim!.attempts,
+      claimedBy: currentClaim!.claimedBy,
+      claimToken: currentClaim!.claimToken,
+    });
+  });
 });
 
 describe('claimNextDue', () => {
