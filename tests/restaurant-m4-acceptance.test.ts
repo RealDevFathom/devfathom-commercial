@@ -381,6 +381,7 @@ beforeAll(async () => {
             { capability: 'payments:collect', effect: 'ALLOW' },
             { capability: 'coauth:approve', effect: 'ALLOW' },
             { capability: 'orders:take', effect: 'ALLOW' },
+            { capability: 'kitchen:operate', effect: 'ALLOW' },
           ],
         },
       },
@@ -489,7 +490,12 @@ beforeAll(async () => {
         id: ids.orderRoleB,
         key: `wha49_orders_b_${suffix}`,
         name: 'WHA-49 Order Taking',
-        permissions: { create: [{ capability: 'orders:take', effect: 'ALLOW' }] },
+        permissions: {
+          create: [
+            { capability: 'orders:take', effect: 'ALLOW' },
+            { capability: 'kitchen:operate', effect: 'ALLOW' },
+          ],
+        },
       },
     });
     await tx.user.create({
