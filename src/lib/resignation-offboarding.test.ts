@@ -38,6 +38,9 @@ describe('processDueResignationOffboarding', () => {
     expect(sql).toContain(`r."status" = 'APPROVED'`);
     expect(sql).toContain('r."lastWorkingDay" IS NOT NULL');
     expect(sql).toContain('r."lastWorkingDay" <= $1');
+    expect(sql).toContain('r."offboardedAt" IS NULL');
+    expect(sql).toContain('SET "offboardedAt" = NOW()');
+    expect(sql).toContain('FROM due_resignations AS r');
     expect(sql).toContain(`u."status" <> 'INACTIVE'`);
     expect(sql).toContain(`"tokenVersion" = u."tokenVersion" + 1`);
   });

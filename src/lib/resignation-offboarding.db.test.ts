@@ -136,5 +136,13 @@ describeIfDatabase('resignation offboarding, against PostgreSQL', () => {
       [id('due')]
     );
     expect(repeated.rows).toEqual([{ tokenVersion: 5 }]);
+
+    await client.query(`UPDATE users SET status = 'ACTIVE' WHERE id = $1`, [id('due')]);
+    await expect(processDueResignationOffboarding(cutoff)).resolves.toEqual({ offboarded: 0 });
+    const reactivated = await client.query<{ status: string; tokenVersion: number }>(
+      `SELECT status, "tokenVersion" FROM users WHERE id = $1`,
+      [id('due')]
+    );
+    expect(reactivated.rows).toEqual([{ status: 'ACTIVE', tokenVersion: 5 }]);
   });
 });

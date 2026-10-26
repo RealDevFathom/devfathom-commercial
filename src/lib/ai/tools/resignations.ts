@@ -324,6 +324,10 @@ export function buildResignationsTools(h: AssistantHelpers): ToolSet {
             where: { id: resignation.userId },
             data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
           });
+          await h.db.resignation.update({
+            where: { id: updated.id },
+            data: { offboardedAt: h.now() },
+          });
         }
 
         h.audit({

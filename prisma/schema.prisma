@@ -2903,6 +2903,7 @@ model Resignation {
   reviewedAt      DateTime?
   reviewNote      String?
   lastWorkingDay  DateTime?
+  offboardedAt    DateTime?
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 

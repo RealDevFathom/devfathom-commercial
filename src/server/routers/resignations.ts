@@ -210,6 +210,10 @@ export const resignationsRouter = router({
           where: { id: resignation.userId },
           data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
         });
+        await ctx.db.resignation.update({
+          where: { id: updated.id },
+          data: { offboardedAt: new Date() },
+        });
       }
 
       annotateAudit(ctx, {
