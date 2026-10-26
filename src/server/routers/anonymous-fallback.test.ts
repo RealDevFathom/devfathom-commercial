@@ -140,13 +140,31 @@ const mutation = (path: string, input: unknown) =>
 describe('fallback and real routers serialize refusals identically', () => {
   it.each([
     ['invitations.get', 'query', { token: '' }],
-    ['invitations.accept', 'mutation', { token: '' }],
+    [
+      'invitations.accept',
+      'mutation',
+      { token: 'token', password: 'short', phone: '+15555550123' },
+    ],
     ['passwordReset.request', 'mutation', { email: '' }],
     ['passwordReset.validate', 'query', { token: '' }],
-    ['passwordReset.reset', 'mutation', { token: '', newPassword: '' }],
-    ['pharmacySupplierLinks.get', 'query', { token: '' }],
-    ['pharmacySupplierLinks.submit', 'mutation', { token: '' }],
-    ['pharmacySupplierLinks.uploadDocument', 'mutation', { token: '' }],
+    ['passwordReset.reset', 'mutation', { token: 'token', newPassword: 'short' }],
+    ['pharmacySupplierLinks.get', 'query', { token: '   ' }],
+    [
+      'pharmacySupplierLinks.submit',
+      'mutation',
+      { token: 'token', kind: 'UNKNOWN', idempotencyKey: 'key', payload: {} },
+    ],
+    [
+      'pharmacySupplierLinks.uploadDocument',
+      'mutation',
+      {
+        token: 'token',
+        idempotencyKey: 'key',
+        fileName: 'evidence.txt',
+        declaredMimeType: 'text/plain',
+        contentBase64: 'dGVzdA==',
+      },
+    ],
   ] as const)('matches production validation for malformed %s input', async (path, kind, input) => {
     const request = () => (kind === 'query' ? queryWithInput(path, input) : mutation(path, input));
 
