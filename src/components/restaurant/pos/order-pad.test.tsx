@@ -850,8 +850,16 @@ describe('OrderPad transport', () => {
 
     expect(await screen.findByText('Order settlement changed.')).toBeVisible();
     expect(screen.getByText('Order 42')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Close order' })).toBeEnabled();
+    const retryClose = screen.getByRole('button', { name: 'Close order' });
+    expect(retryClose).toBeEnabled();
     expect(screen.queryByRole('heading', { name: 'No active order' })).not.toBeInTheDocument();
+
+    fireEvent.click(retryClose);
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/close'))
+      ).toHaveLength(2)
+    );
   });
 
   it('keeps an unsettled check active when checkout closes', async () => {
