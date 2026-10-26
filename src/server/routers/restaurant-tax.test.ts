@@ -138,6 +138,8 @@ describe('restaurant tax activation router', () => {
     ['Asia/Karachi', '2026-07-01', '2026-06-30T19:00:00.000Z'],
     ['America/New_York', '2026-07-01', '2026-07-01T04:00:00.000Z'],
     ['America/New_York', '2026-12-01', '2026-12-01T05:00:00.000Z'],
+    ['Pacific/Kiritimati', '2026-07-01', '2026-06-30T10:00:00.000Z'],
+    ['Pacific/Pago_Pago', '2026-07-01', '2026-07-01T11:00:00.000Z'],
   ])(
     'publishes the selected preset at branch-local midnight in %s on %s',
     async (timezone, effectiveDate, expectedInstant) => {
