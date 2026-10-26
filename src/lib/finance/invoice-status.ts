@@ -21,7 +21,13 @@ export function invoiceStatusTransitionError(
   return `Cannot change an invoice from ${prior} to ${next}.`;
 }
 
-/** Fields changed by every non-no-op status transition, shared by every API surface. */
+/**
+ * Fields owned by a status transition, shared by every API surface.
+ *
+ * `sentAt` is deliberately omitted when leaving SENT for OVERDUE or CANCELLED so
+ * Prisma preserves the original delivery timestamp. Returning to DRAFT is the
+ * only transition that clears it.
+ */
 export function invoiceStatusUpdate(
   prior: InvoiceStatusValue,
   next: InvoiceStatusValue,
