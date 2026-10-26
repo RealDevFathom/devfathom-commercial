@@ -31,6 +31,35 @@ function receiptData(key: string) {
   return d;
 }
 describe('#357 UI receipt identity', () => {
+  it('renders only outstanding units and explains that an ordinary short receipt stays open', () => {
+    const markup = renderToStaticMarkup(
+      createElement(TransferReceiveForm, {
+        transfer: {
+          ...transfer,
+          lines: [
+            ...transfer.lines,
+            {
+              ...transfer.lines[0],
+              id: 'line_closed',
+              receivedUnits: 10,
+              medicineName: 'Already received medicine',
+            },
+          ],
+        },
+        branchId: 'branch_dest',
+        witnesses: [],
+        action: async () => '/pharmacy/inventory/transfers',
+      })
+    );
+
+    const openLineInput = markup.match(/<input[^>]*name="received:line_1"[^>]*>/)?.[0];
+    expect(openLineInput).toContain('max="6"');
+    expect(openLineInput).toContain('value="6"');
+    expect(markup).toContain('6 outstanding');
+    expect(markup).toContain('leave blank for a partial delivery');
+    expect(markup).not.toContain('Already received medicine');
+  });
+
   it('renders a fresh receipt UUID for each delivery form', () => {
     const form = () =>
       renderToStaticMarkup(
