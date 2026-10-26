@@ -103,6 +103,15 @@ describe('team shell notifications without HR entitlement', () => {
     expect(mocks.hasModule).not.toHaveBeenCalled();
   });
 
+  it('continues to HR-gate unrelated team procedures', async () => {
+    await expect(caller().team.getAll()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'The HR module is not enabled for this organization.',
+    });
+    expect(mocks.hasModule).toHaveBeenCalledWith(expect.any(Object), 'hr');
+    expect(mocks.findMany).not.toHaveBeenCalled();
+  });
+
   it('marks an owned notification and audits the mutation when HR is disabled', async () => {
     mocks.findUnique.mockResolvedValue({ userId: USER_ID });
 
