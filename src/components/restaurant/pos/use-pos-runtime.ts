@@ -269,7 +269,9 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     async (activeRuntime: Runtime) => {
       const local = offlineRuntime.current;
       if (!local || !navigator.onLine || activeRuntime.state !== 'UNLOCKED') return;
-      const result = await local.replay(async (queued) => {
+      const staffProfileId = activeRuntime.operator?.staffProfileId;
+      if (!staffProfileId) return;
+      const result = await local.replay(staffProfileId, async (queued) => {
         try {
           const response = await fetch(queued.path, {
             method: queued.method,
@@ -650,6 +652,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       if (!local) throw new Error('Local POS storage is unavailable.');
       const enqueued = await local.enqueue({
         deviceId: runtime.deviceId,
+        composerStaffProfileId: runtime.operator.staffProfileId,
         catalogVersion: draftMenu.version ?? '',
         clientOriginAt: new Date().toISOString(),
         open: body,

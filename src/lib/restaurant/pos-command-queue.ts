@@ -100,7 +100,11 @@ export type PosQueuedCommand =
 export type PosDraftStatus = 'QUEUED' | 'REPLAYING' | 'NEEDS_REVIEW' | 'QUARANTINED' | 'COMPLETED';
 
 export type PosDraftReviewReason =
-  'CATALOG_CONFLICT' | 'PRICE_CHANGED' | 'ITEM_UNAVAILABLE' | 'CHANNEL_CLOSED' | 'REJECTED';
+  | 'CATALOG_CONFLICT'
+  | 'PRICE_CHANGED'
+  | 'ITEM_UNAVAILABLE'
+  | 'CHANNEL_CLOSED'
+  | 'REJECTED';
 
 export type PosDraftReview = {
   reason: PosDraftReviewReason;
@@ -113,6 +117,8 @@ export type PosQueuedDraft = {
   draftId: string;
   /** The device that composed it. Replay is refused on any other device. */
   deviceId: string;
+  /** The staff profile that composed it. Replay is refused for another operator. */
+  composerStaffProfileId: string;
   /** Per-device monotonic FIFO position. Never derived from a clock. */
   sequence: number;
   /** Client-origin UTC instant, metadata only. */
@@ -156,6 +162,7 @@ export function countQueuedCommands(snapshot: PosQueueSnapshot): number {
 
 export type PosDraftInput = {
   deviceId: string;
+  composerStaffProfileId: string;
   catalogVersion: string;
   /** Client-origin UTC instant, metadata only. */
   clientOriginAt: string;
@@ -247,6 +254,7 @@ export function enqueueDraft(
   const draft: PosQueuedDraft = {
     draftId: newId(),
     deviceId: input.deviceId,
+    composerStaffProfileId: input.composerStaffProfileId,
     sequence: snapshot.nextSequence,
     clientOriginAt: input.clientOriginAt,
     catalogVersion: input.catalogVersion,
@@ -274,7 +282,7 @@ export type NextReplay =
   | { status: 'IDLE' }
   | { status: 'PAUSED'; reason: 'REAUTH' }
   | { status: 'STOPPED'; reason: 'DEVICE_REVOKED' }
-  | { status: 'REFUSED'; reason: 'DEVICE_MISMATCH' };
+  | { status: 'REFUSED'; reason: 'DEVICE_MISMATCH' | 'OPERATOR_MISMATCH' };
 
 const REPLAYABLE: readonly PosDraftStatus[] = ['QUEUED', 'REPLAYING'];
 
@@ -293,7 +301,11 @@ export function firstUnacknowledged(draft: PosQueuedDraft): PosQueuedCommand | n
  * `deviceId` is the device replay is being attempted on: a mismatch refuses, so
  * queued work is never rebound to a replacement device (M9 §3.5).
  */
-export function nextReplayCommand(snapshot: PosQueueSnapshot, deviceId: string): NextReplay {
+export function nextReplayCommand(
+  snapshot: PosQueueSnapshot,
+  deviceId: string,
+  staffProfileId: string
+): NextReplay {
   if (deviceId !== snapshot.deviceId) return { status: 'REFUSED', reason: 'DEVICE_MISMATCH' };
   if (snapshot.replay === 'STOPPED_REVOKED') {
     return { status: 'STOPPED', reason: 'DEVICE_REVOKED' };
@@ -305,6 +317,11 @@ export function nextReplayCommand(snapshot: PosQueueSnapshot, deviceId: string):
     .sort((a, b) => a.sequence - b.sequence);
 
   for (const draft of candidates) {
+    // Persisted legacy drafts have no composer and are deliberately not adoptable:
+    // replaying them as the current operator would recreate the attribution flaw.
+    if (draft.composerStaffProfileId !== staffProfileId) {
+      return { status: 'REFUSED', reason: 'OPERATOR_MISMATCH' };
+    }
     const command = firstUnacknowledged(draft);
     if (command) return { status: 'READY', draft, command };
   }

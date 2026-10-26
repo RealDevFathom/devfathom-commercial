@@ -6,6 +6,7 @@ import { PosOfflineRuntime } from './pos-offline-runtime';
 const scope = { organizationId: 'org-1', branchId: 'branch-1', deviceId: 'device-1' };
 const input = {
   deviceId: scope.deviceId,
+  composerStaffProfileId: 'staff-1',
   catalogVersion: 'catalog-1',
   clientOriginAt: '2026-08-31T00:00:00.000Z',
   open: { channel: 'TAKEAWAY' as const, publicationId: 'publication-1' },
@@ -19,13 +20,28 @@ const input = {
 };
 
 describe('PosOfflineRuntime', () => {
+  it('replays a persisted draft only as the operator who composed it', async () => {
+    const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
+    await runtime.enqueue(input);
+    const send = async () => ({ status: 201, serverRef: 'server-ref' });
+
+    expect(await runtime.replay('staff-2', send)).toEqual({
+      state: 'REFUSED',
+      discarded: null,
+    });
+    expect(runtime.snapshot().queue?.drafts[0]?.status).toBe('QUEUED');
+
+    expect((await runtime.replay('staff-1', send)).state).toBe('IDLE');
+    expect(runtime.snapshot().queue?.drafts[0]?.status).toBe('COMPLETED');
+  });
+
   it('hydrates an atomically persisted draft and resumes at the first unacknowledged command', async () => {
     const driver = createMemoryDriver();
     const first = new PosOfflineRuntime(scope, driver);
     await first.enqueue(input);
 
     const calls: string[] = [];
-    await first.replay(async (request) => {
+    await first.replay('staff-1', async (request) => {
       calls.push(request.path);
       if (calls.length === 1) return { status: 201, serverRef: 'order-1' };
       return { status: 0 };
@@ -33,7 +49,7 @@ describe('PosOfflineRuntime', () => {
 
     const reloaded = new PosOfflineRuntime(scope, driver);
     expect(await reloaded.hydrate()).toBe('ready');
-    await reloaded.replay(async (request) => {
+    await reloaded.replay('staff-1', async (request) => {
       calls.push(request.path);
       expect(request.body).toMatchObject({ orderId: 'order-1' });
       return { status: 201, serverRef: 'item-1' };
@@ -50,11 +66,11 @@ describe('PosOfflineRuntime', () => {
     const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
     await runtime.enqueue(input);
     const keys: string[] = [];
-    await runtime.replay(async (request) => {
+    await runtime.replay('staff-1', async (request) => {
       keys.push(request.headers['Idempotency-Key']);
       return { status: 0 };
     });
-    await runtime.replay(async (request) => {
+    await runtime.replay('staff-1', async (request) => {
       keys.push(request.headers['Idempotency-Key']);
       return { status: 401, serverMessage: 'Terminal session is no longer valid.' };
     });
@@ -85,8 +101,8 @@ describe('PosOfflineRuntime', () => {
       return { status: 201, serverRef: 'item-1' };
     };
 
-    const onlineReplay = runtime.replay(send);
-    const duplicateOnlineReplay = runtime.replay(send);
+    const onlineReplay = runtime.replay('staff-1', send);
+    const duplicateOnlineReplay = runtime.replay('staff-1', send);
     expect(duplicateOnlineReplay).toBe(onlineReplay);
     await started;
     expect(calls).toEqual(['/api/restaurant/orders/open']);
@@ -100,7 +116,7 @@ describe('PosOfflineRuntime', () => {
     const driver = createMemoryDriver();
     const runtime = new PosOfflineRuntime(scope, driver);
     await runtime.enqueue(input);
-    const result = await runtime.replay(async () => ({
+    const result = await runtime.replay('staff-1', async () => ({
       status: 403,
       serverMessage: 'This device has been revoked.',
     }));
