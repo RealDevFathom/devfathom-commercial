@@ -1587,3 +1587,11 @@
 .platform-workspace .bg-brass-100 {
   background-color: var(--accent-quiet);
 }
+
+/* Keep this rule unlayered so it wins over legacy `outline-none` utilities.
+   Component-specific rings can still add emphasis, but no keyboard-reachable
+   element may lose the persistent Studio focus outline. */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
