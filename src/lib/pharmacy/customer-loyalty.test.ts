@@ -165,8 +165,14 @@ describe('CRM-L01 pharmacy loyalty', () => {
     );
   });
 
-  it('updates WhatsApp consent only for the tenant customer under the consent lock', async () => {
-    const now = new Date('2026-10-26T12:00:00Z');
+  it('timestamps a blocked counter opt-in after the inbound opt-out holding the lock', async () => {
+    const inboundOptOutAt = new Date('2026-10-26T12:00:00Z');
+    const changedAt = new Date('2026-10-26T12:00:01Z');
+    let releasePatientLock!: (rows: Array<{ id: string }>) => void;
+    const patientLock = new Promise<Array<{ id: string }>>((resolve) => {
+      releasePatientLock = resolve;
+    });
+    const clock = vi.fn(() => changedAt);
     const db = {
       pharmacyCustomer: {
         findFirst: vi.fn().mockResolvedValue({ patientId: 'patient-a' }),
@@ -174,19 +180,33 @@ describe('CRM-L01 pharmacy loyalty', () => {
       },
       $queryRaw: vi
         .fn()
-        .mockResolvedValueOnce([{ id: 'patient-a' }])
+        .mockReturnValueOnce(patientLock)
         .mockResolvedValueOnce([{ patientId: 'patient-a' }]),
     };
-    await expect(
-      setCustomerWhatsAppOptIn(db as never, scope, 'customer-a', true, now)
-    ).resolves.toEqual({
+
+    const update = setCustomerWhatsAppOptIn(
+      db as never,
+      scope,
+      'customer-a',
+      true,
+      clock
+    );
+    await vi.waitFor(() => expect(db.$queryRaw).toHaveBeenCalledTimes(1));
+    expect(clock).not.toHaveBeenCalled();
+    expect(db.pharmacyCustomer.updateMany).not.toHaveBeenCalled();
+
+    // The inbound STOP commits and releases the patient consent lock.
+    releasePatientLock([{ id: 'patient-a' }]);
+    await expect(update).resolves.toEqual({
       customerId: 'customer-a',
       whatsappOptIn: true,
-      whatsappOptInChangedAt: now,
+      whatsappOptInChangedAt: changedAt,
     });
+    expect(clock).toHaveBeenCalledTimes(1);
+    expect(changedAt.getTime()).toBeGreaterThan(inboundOptOutAt.getTime());
     expect(db.pharmacyCustomer.updateMany).toHaveBeenCalledWith({
       where: { id: 'customer-a', organizationId: 'org-a', active: true },
-      data: { whatsappOptIn: true, whatsappOptInChangedAt: now },
+      data: { whatsappOptIn: true, whatsappOptInChangedAt: changedAt },
     });
   });
 });

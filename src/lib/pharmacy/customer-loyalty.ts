@@ -408,15 +408,18 @@ export async function setCustomerWhatsAppOptIn(
   scope: LedgerScope,
   customerId: string,
   optedIn: boolean,
-  now = new Date()
+  clock: () => Date = () => new Date()
 ) {
   await lockCustomerConsent(db, scope.organizationId, customerId);
+  // Resolve the server timestamp while holding the lock so a request that was
+  // queued behind a newer inbound consent event cannot backdate its write.
+  const changedAt = clock();
   const updated = await db.pharmacyCustomer.updateMany({
     where: { id: customerId, organizationId: scope.organizationId, active: true },
-    data: { whatsappOptIn: optedIn, whatsappOptInChangedAt: now },
+    data: { whatsappOptIn: optedIn, whatsappOptInChangedAt: changedAt },
   });
   if (updated.count !== 1) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
-  return { customerId, whatsappOptIn: optedIn, whatsappOptInChangedAt: now };
+  return { customerId, whatsappOptIn: optedIn, whatsappOptInChangedAt: changedAt };
 }
 
 // Ordinary history consumers only. Accounting and counter snapshot contracts stay separate.
