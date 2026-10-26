@@ -107,4 +107,56 @@ describeIfDatabase('pharmacy supplier signed-link audit persistence', () => {
       metadata: { branchId: BRANCH, linkId: LINK, kind: 'ACKNOWLEDGEMENT' },
     });
   });
+
+  it('durably writes a failed supplier action', async () => {
+    const { SupplierLinkError, getSupplierLinkAuditTarget, submitSupplierEvidence } = await import(
+      '@/lib/pharmacy/supplier-action-links'
+    );
+    vi.mocked(getSupplierLinkAuditTarget).mockResolvedValue({
+      id: LINK,
+      organizationId: ORGANIZATION,
+      branchId: BRANCH,
+    });
+    vi.mocked(submitSupplierEvidence).mockRejectedValue(new SupplierLinkError('MISMATCH'));
+
+    await deps.withTenantDb(ORGANIZATION, async (db) => {
+      const caller = deps.router.createCaller({
+        db,
+        entitlements: { organizationId: ORGANIZATION },
+        requestMeta: { ip: '192.0.2.11', userAgent: 'supplier-audit-failure-test' },
+      } as never);
+      await expect(
+        caller.submit({
+          token: 'link.secret.signature',
+          kind: 'REJECTION',
+          idempotencyKey: `idem_failure_${suffix}`,
+          payload: {},
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'MISMATCH' });
+    });
+    await deps.flushAuditWritesForTest();
+
+    const row = await deps.withTenantDb(ORGANIZATION, (db) =>
+      db.auditLog.findFirst({
+        where: {
+          action: 'pharmacySupplierLinks.submit',
+          targetId: LINK,
+          outcome: 'FAILURE',
+        },
+        orderBy: { createdAt: 'desc' },
+      })
+    );
+    expect(row).toMatchObject({
+      organizationId: ORGANIZATION,
+      action: 'pharmacySupplierLinks.submit',
+      targetType: 'PharmacySupplierActionLink',
+      targetId: LINK,
+      outcome: 'FAILURE',
+      errorCode: 'MISMATCH',
+      errorMessage: 'MISMATCH',
+      ip: '192.0.2.11',
+      userAgent: 'supplier-audit-failure-test',
+      metadata: { branchId: BRANCH, linkId: LINK, kind: 'REJECTION' },
+    });
+  });
 });

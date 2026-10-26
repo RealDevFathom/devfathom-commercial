@@ -59,6 +59,54 @@ describe('pharmacy supplier signed-link auditing', () => {
     );
   });
 
+  it('audits a rejected supplier response and preserves the public error mapping', async () => {
+    vi.mocked(submitSupplierEvidence).mockRejectedValue(
+      new SupplierLinkError('IDEMPOTENCY_CONFLICT')
+    );
+
+    await expect(
+      pharmacySupplierLinksRouter.createCaller(context as never).submit({
+        token: 'link.secret.signature',
+        kind: 'REJECTION',
+        idempotencyKey: 'idem_rejection',
+        payload: {},
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: 'IDEMPOTENCY_CONFLICT' });
+
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: 'org_a',
+        action: 'pharmacySupplierLinks.submit',
+        targetId: 'link_a',
+        outcome: 'FAILURE',
+        errorCode: 'IDEMPOTENCY_CONFLICT',
+        metadata: { branchId: 'branch_a', linkId: 'link_a', kind: 'REJECTION' },
+      })
+    );
+  });
+
+  it('audits a successful document upload', async () => {
+    vi.mocked(uploadSupplierDocument).mockResolvedValue({ id: 'document_a' } as never);
+
+    await pharmacySupplierLinksRouter.createCaller(context as never).uploadDocument({
+      token: 'link.secret.signature',
+      idempotencyKey: 'idem_document_success',
+      fileName: 'invoice.pdf',
+      declaredMimeType: 'application/pdf',
+      contentBase64: 'JVBERg==',
+    });
+
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: 'org_a',
+        action: 'pharmacySupplierLinks.uploadDocument',
+        targetId: 'link_a',
+        outcome: 'SUCCESS',
+        metadata: { branchId: 'branch_a', linkId: 'link_a', kind: 'DOCUMENT' },
+      })
+    );
+  });
+
   it('audits a rejected document upload and preserves the public error mapping', async () => {
     vi.mocked(uploadSupplierDocument).mockRejectedValue(new SupplierLinkError('INVALID_UPLOAD'));
 
