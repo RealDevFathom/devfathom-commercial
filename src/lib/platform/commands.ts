@@ -3058,6 +3058,13 @@ async function runCommand(
       if (!input.opportunityId) {
         throw new PlatformSecurityError('An opportunity is required for conversion.', 400);
       }
+      const lockedOpportunity = await db.$queryRawUnsafe<Array<{ id: string }>>(
+        'SELECT id FROM platform_opportunities WHERE id = $1 FOR UPDATE',
+        input.opportunityId
+      );
+      if (lockedOpportunity.length === 0) {
+        throw new PlatformSecurityError('Opportunity not found.', 400);
+      }
       const organization = await bootstrapOrganization(db, actor, input);
       return {
         targetType: 'Organization',
