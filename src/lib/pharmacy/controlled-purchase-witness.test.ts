@@ -192,12 +192,17 @@ describe('listGoodsReceiptPinWitnesses', () => {
     expect(findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
+          organizationId: 'org',
           userId: 'pharmacist',
+          status: 'ACTIVE',
           user: expect.objectContaining({
+            organizationId: 'org',
+            status: 'ACTIVE',
             pharmacyBranchAssignments: {
               some: { organizationId: 'org', branchId: 'branch', active: true },
             },
           }),
+          credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
         }),
       })
     );
