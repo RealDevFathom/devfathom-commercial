@@ -148,6 +148,10 @@ describe('restaurant tax activation router', () => {
         profileId: 'PK-ICT-RESTAURANT',
         eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
       });
+      expect(db.restaurantBranch.findFirst).toHaveBeenCalledWith({
+        where: { id: 'branch_1', organizationId: 'org_1', active: true },
+        select: { id: true, timezone: true },
+      });
       expect(db.restaurantTaxProfileVersion.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
