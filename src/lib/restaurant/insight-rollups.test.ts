@@ -98,6 +98,9 @@ describe('pure rollup calculations', () => {
     expect(total.taxTotal.toFixed(2)).toBe('5.00');
     expect(total.serviceChargeTotal.toFixed(2)).toBe('5.00');
     expect(total.refundTotal.toFixed(2)).toBe('60.00');
+    expect(
+      total.netSales.plus(total.taxTotal).plus(total.serviceChargeTotal).toFixed(2)
+    ).toBe('60.00');
   });
 
   it('uses exact decimal component arithmetic across full and partial refunds', () => {
@@ -137,6 +140,13 @@ describe('pure rollup calculations', () => {
     expect(total.serviceChargeTotal.toString()).toBe('2');
     expect(total.deliveryFeeRefunds.toString()).toBe('3');
     expect(total.refundTotal.toString()).toBe('129.3456');
+    expect(
+      total.netSales
+        .plus(total.taxTotal)
+        .plus(total.serviceChargeTotal)
+        .plus(total.deliveryFeeSales.minus(total.deliveryFeeRefunds))
+        .toString()
+    ).toBe('108.1');
   });
 
   it('projects deterministic product item mix from snapshot prices and non-voided inputs', () => {
