@@ -183,10 +183,10 @@ it('requires current review evidence even with persisted draft', async () => {
   });
   expect(write).not.toHaveBeenCalled();
 });
-it('normalizes STOP into existing withdrawn consent ledger', async () => {
-  await stopRestaurantGrowthSandbox(
+it.each([' stop ', 'بند'])('withdraws consent for %j and confirms in English and Urdu', async (text) => {
+  const result = await stopRestaurantGrowthSandbox(
     h,
-    { branchId: 'b', customerId: 'c1', eventId: input.requestId, text: ' stop ' },
+    { branchId: 'b', customerId: 'c1', eventId: input.requestId, text },
     policy
   );
   expect(mocks.consent).toHaveBeenCalledWith(
@@ -198,6 +198,10 @@ it('normalizes STOP into existing withdrawn consent ledger', async () => {
       idempotencyKey: 'restaurant-growth-stop:' + input.requestId,
     })
   );
+  expect(result.confirmation).toContain(
+    'آپ کو اب واٹس ایپ پر گروتھ پیغامات نہیں ملیں گے۔'
+  );
+  expect(result.confirmation.split('\n')).toHaveLength(2);
 });
 it('does not accept an arbitrary inbound message', async () => {
   await expect(
