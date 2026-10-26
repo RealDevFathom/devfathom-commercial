@@ -22,7 +22,9 @@ function invoice(overrides: Record<string, unknown> = {}) {
     amountPaid: 400,
     balance: 600,
     items: [{ description: 'Consulting', quantity: 1, rate: 1000, amount: 1000 }],
-    payments: [{ id: 'payment-1', amount: 400 }],
+    // Deliberately differs from the aggregate fields so the test catches any
+    // client-side re-summing instead of rendering the server-authoritative values.
+    payments: [{ id: 'payment-1', amount: 999 }],
     client: { name: 'Example Client', contacts: [] },
     project: null,
     notes: null,
