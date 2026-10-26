@@ -12,7 +12,10 @@ const mocks = vi.hoisted(() => ({
   staffFindMany: vi.fn(),
   staffFindUnique: vi.fn(),
   resolveStaffCapabilities: vi.fn(),
+  setStaffJobRoles: vi.fn(),
   setStaffAccess: vi.fn(),
+  setStaffCapabilityOverride: vi.fn(),
+  clearStaffCapabilityOverride: vi.fn(),
   staffCreate: vi.fn(),
   branchFindFirst: vi.fn(),
   branchFindMany: vi.fn(),
@@ -52,7 +55,10 @@ vi.mock('@/lib/restaurant/job-roles', async () => ({
     '@/lib/restaurant/job-roles'
   )),
   resolveStaffCapabilities: mocks.resolveStaffCapabilities,
+  setStaffJobRoles: mocks.setStaffJobRoles,
   setStaffAccess: mocks.setStaffAccess,
+  setStaffCapabilityOverride: mocks.setStaffCapabilityOverride,
+  clearStaffCapabilityOverride: mocks.clearStaffCapabilityOverride,
 }));
 
 import { restaurantStaffRouter } from './restaurant-staff';
@@ -265,7 +271,10 @@ describe('administrator repair authorization before writes', () => {
     expect(mocks.jobRoleCreate).not.toHaveBeenCalled();
     expect(mocks.stationCreate).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).not.toHaveBeenCalled();
+    expect(mocks.setStaffJobRoles).not.toHaveBeenCalled();
     expect(mocks.setStaffAccess).not.toHaveBeenCalled();
+    expect(mocks.setStaffCapabilityOverride).not.toHaveBeenCalled();
+    expect(mocks.clearStaffCapabilityOverride).not.toHaveBeenCalled();
   }
   it('denies non-ADMIN with staff:manage without provisioning writes', async () => {
     await expect(caller('EMPLOYEE').provisionMyProfile()).rejects.toMatchObject({
