@@ -282,6 +282,13 @@ describe('Restaurant receipt dispatch', () => {
       validation: null,
     });
     expect(jobs).toHaveLength(1);
+
+    jobs[0].status = 'PRINTED';
+    expect((await post(copy)).status).toBe(200);
+    expect(jobs).toHaveLength(2);
+    const reprintFacts = PrintDocumentSchema.parse(jobs[1].document).receiptSnapshot!.facts;
+    expect(reprintFacts.lines).toEqual(['Fractional share 1/3: 26.05']);
+    expect(reprintFacts.totals).toContain(`Reprint: ${copy.reason}`);
   });
   it('preserves persisted lines on a fractional bill', async () => {
     Object.assign(receipt!, {
