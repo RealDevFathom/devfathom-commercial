@@ -14,7 +14,7 @@ describe('sale posting MRP rounding', () => {
     allocateForSale.mockReset();
   });
 
-  it('charges the rounding increment for the allocated lot batch', async () => {
+  it('accepts the preview price for the allocated lot batch', async () => {
     allocateForSale.mockResolvedValue({
       allocations: [{ inventoryLotId: 'lot-a', stockLocationId: 'shelf-a', units: 1 }],
       movementIds: ['movement-a'],
@@ -79,6 +79,7 @@ describe('sale posting MRP rounding', () => {
         saleUnit: 'UNIT',
         quantity: 1,
         canonicalUnitsPerSaleUnit: 1,
+        expectedUnitPriceMinor: 5,
         idempotencyKey: 'line-a',
       }
     );
