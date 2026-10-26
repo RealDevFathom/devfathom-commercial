@@ -6,6 +6,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { buildCoAuthorizationRecord } from './co-authorization';
+import { assertMoneyDayOpen } from './daily-close';
 import { accrueLoyaltyForSettledBill, releaseLoyaltyRedemption } from './loyalty';
 import {
   add,
@@ -628,6 +629,10 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
     // not recover its former branch's order or bill IDs through a replay.
     await tx.$queryRaw`SELECT id FROM restaurant_orders WHERE id = ${input.orderId} AND "branchId" = ${input.branchId} FOR UPDATE`;
     const order = await loadBillOrder(tx, input.orderId, input.branchId);
+
+    // Share the branch-day lock with daily close. If close wins, this cut is
+    // rejected; if this cut wins, close observes the new OPEN bill.
+    await assertMoneyDayOpen(tx, order.branchId, order.businessDate);
 
     const idem = await beginMoneyIdempotent(tx, input.actor, 'bill.cut');
     if (idem.replay) {
