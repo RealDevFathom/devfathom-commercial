@@ -15,6 +15,7 @@ import {
   type CurrencyAmount,
 } from '@/lib/finance/currency';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
+import { calculateInvoiceMoney, fromCents, moneyCents } from '@/lib/finance/invoice-money';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -61,38 +62,6 @@ export const createInvoiceInputSchema = z.object({
 // Round to 2 decimal places (cents). Used to derive invoice money server-side so
 // caller-supplied subtotal/total are never trusted (FIN-01). Discounts are
 // bounded by the derived subtotal so an invoice can never have a negative net.
-function decimalParts(value: number): { coefficient: bigint; scale: number } {
-  const [mantissa, exponentText] = value.toString().toLowerCase().split('e');
-  const exponent = Number(exponentText ?? 0);
-  const [whole, fraction = ''] = mantissa.split('.');
-  const coefficient = BigInt(`${whole}${fraction}`);
-  const scale = fraction.length - exponent;
-  return scale < 0
-    ? { coefficient: coefficient * 10n ** BigInt(-scale), scale: 0 }
-    : { coefficient, scale };
-}
-
-function roundedCents(coefficient: bigint, scale: number): bigint {
-  if (scale <= 2) return coefficient * 10n ** BigInt(2 - scale);
-  const divisor = 10n ** BigInt(scale - 2);
-  return coefficient / divisor + ((coefficient % divisor) * 2n >= divisor ? 1n : 0n);
-}
-
-function moneyCents(value: number): bigint {
-  const valueParts = decimalParts(value);
-  return roundedCents(valueParts.coefficient, valueParts.scale);
-}
-
-function lineCents(quantity: number, rate: number): bigint {
-  const quantityParts = decimalParts(quantity);
-  const rateParts = decimalParts(rate);
-  return roundedCents(
-    quantityParts.coefficient * rateParts.coefficient,
-    quantityParts.scale + rateParts.scale
-  );
-}
-
-const fromCents = (cents: bigint) => Number(cents) / 100;
 const round2 = (n: number) => fromCents(moneyCents(n));
 
 function assertMoneyRange(cents: bigint) {
@@ -106,11 +75,9 @@ export function calculateInvoiceTotals(
   taxInput = 0,
   discountInput = 0
 ) {
-  const amountCents = items.map((item) => lineCents(item.quantity, item.rate));
+  const { amountCents, subtotalCents, taxCents, discountCents, totalCents } =
+    calculateInvoiceMoney(items, taxInput, discountInput);
   amountCents.forEach(assertMoneyRange);
-  const subtotalCents = amountCents.reduce((sum, amount) => sum + amount, 0n);
-  const taxCents = moneyCents(taxInput);
-  const discountCents = moneyCents(discountInput);
   assertMoneyRange(subtotalCents);
   assertMoneyRange(taxCents);
   assertMoneyRange(discountCents);
@@ -120,7 +87,6 @@ export function calculateInvoiceTotals(
       message: 'Discount cannot exceed the invoice subtotal',
     });
   }
-  const totalCents = subtotalCents - discountCents + taxCents;
   assertMoneyRange(totalCents);
   return {
     amounts: amountCents.map(fromCents),

@@ -18,6 +18,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { moneyLabel } from '@/lib/finance/currency';
+import { calculateInvoiceMoney } from '@/lib/finance/invoice-money';
 
 // Money columns are Decimal(12,2); largest value Postgres accepts. Mirrors the
 // server bound so an oversized rate fails inline, not at the DB.
@@ -224,22 +225,35 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
   const updateItem = (i: number, field: 'description' | 'quantity' | 'rate', value: string | number) =>
     setItems((cur) => cur.map((it, idx) => (idx === i ? { ...it, [field]: value } : it)));
 
-  // Live preview uses integer cents, matching the server's money arithmetic.
   const discountNum = parseFloat(discount) || 0;
   const taxNum = parseFloat(tax) || 0;
-  const subtotalCents = items.reduce(
-    (sum, item) => sum + Math.round(item.quantity * item.rate * 100),
-    0
+  const preview = calculateInvoiceMoney(
+    items.map((item) => ({
+      quantity: Number.isFinite(item.quantity) ? item.quantity : 0,
+      rate: Number.isFinite(item.rate) ? item.rate : 0,
+    })),
+    Number.isFinite(taxNum) ? taxNum : 0,
+    Number.isFinite(discountNum) ? discountNum : 0
   );
-  const subtotal = subtotalCents / 100;
-  const total =
-    (subtotalCents - Math.round(discountNum * 100) + Math.round(taxNum * 100)) / 100;
+  const subtotal = preview.subtotal;
+  const total = preview.total;
 
   const hasValidItems =
     items.length > 0 &&
-    items.every((it) => it.description.trim() && it.quantity > 0 && it.rate > 0);
-  const taxInvalid = taxNum < 0 || taxNum > MAX_MONEY;
-  const discountInvalid = discountNum < 0 || discountNum > MAX_MONEY || discountNum > subtotal;
+    items.every(
+      (it) =>
+        it.description.trim() &&
+        Number.isFinite(it.quantity) &&
+        it.quantity > 0 &&
+        Number.isFinite(it.rate) &&
+        it.rate > 0
+    );
+  const taxInvalid = !Number.isFinite(taxNum) || taxNum < 0 || taxNum > MAX_MONEY;
+  const discountInvalid =
+    !Number.isFinite(discountNum) ||
+    discountNum < 0 ||
+    discountNum > MAX_MONEY ||
+    preview.discountCents > preview.subtotalCents;
   const canSave =
     hasValidItems && !taxInvalid && !discountInvalid && !!dueDate && !updateInvoice.isPending;
 
@@ -292,7 +306,7 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
                 className="col-span-2 rounded-lg border border-border bg-background px-3 py-1.5 text-right text-sm text-foreground focus:border-primary focus:outline-none"
               />
               <span className="col-span-2 text-right text-sm font-medium tabular-nums text-foreground">
-                {moneyLabel(item.quantity * item.rate, inv.currency)}
+                {moneyLabel(preview.amounts[i] ?? 0, inv.currency)}
               </span>
               <button
                 onClick={() => removeItem(i)}

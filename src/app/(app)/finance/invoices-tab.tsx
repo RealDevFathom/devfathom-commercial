@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { moneyLabel } from '@/lib/finance/currency';
+import { calculateInvoiceMoney } from '@/lib/finance/invoice-money';
 import { format } from 'date-fns';
 
 type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
@@ -324,11 +325,27 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
     setItems(updated);
   };
 
-  const subtotal = items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
+  const preview = calculateInvoiceMoney(
+    items.map((item) => ({
+      quantity: Number.isFinite(item.quantity) ? item.quantity : 0,
+      rate: Number.isFinite(item.rate) ? item.rate : 0,
+    })),
+    Number.isFinite(tax) ? tax : 0,
+    Number.isFinite(discount) ? discount : 0
+  );
+  const subtotal = preview.subtotal;
   const discountNegative = !Number.isFinite(discount) || discount < 0;
-  const discountInvalid = discountNegative || discount > subtotal;
+  const discountInvalid = discountNegative || preview.discountCents > preview.subtotalCents;
   const taxInvalid = !Number.isFinite(tax) || tax < 0;
-  const total = Math.max(0, subtotal - discount) + tax;
+  const itemsInvalid = items.some(
+    (item) =>
+      !item.description ||
+      !Number.isFinite(item.quantity) ||
+      item.quantity <= 0 ||
+      !Number.isFinite(item.rate) ||
+      item.rate <= 0
+  );
+  const total = preview.total;
 
   const handleSubmit = () => {
     if (
@@ -336,13 +353,13 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
       !dueDate ||
       discountInvalid ||
       taxInvalid ||
-      items.some((i) => !i.description)
+      itemsInvalid
     )
       return;
     createInvoice.mutate({
       clientId,
       projectId: projectId || undefined,
-      items: items.map((i) => ({ ...i, amount: i.quantity * i.rate })),
+      items: items.map((item, index) => ({ ...item, amount: preview.amounts[index] ?? 0 })),
       subtotal,
       discount,
       tax,
@@ -432,7 +449,7 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
                   className="col-span-2 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground text-right focus:border-primary focus:outline-none"
                 />
                 <span className="col-span-2 text-sm font-medium text-foreground text-right tabular-nums">
-                  ${(item.quantity * item.rate).toLocaleString()}
+                  ${preview.amounts[i]?.toLocaleString() ?? '0'}
                 </span>
                 <button
                   onClick={() => removeItem(i)}
@@ -530,7 +547,12 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           <button
             onClick={handleSubmit}
             disabled={
-              !clientId || !dueDate || discountInvalid || taxInvalid || createInvoice.isPending
+              !clientId ||
+              !dueDate ||
+              discountInvalid ||
+              taxInvalid ||
+              itemsInvalid ||
+              createInvoice.isPending
             }
             className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
