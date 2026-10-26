@@ -333,6 +333,27 @@ describe('branch authorization', () => {
     expect(mocks.closePurchaseOrder).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).not.toHaveBeenCalled();
   });
+
+  it('returns not found without authorizing or mutating when the scoped resource is missing', async () => {
+    mocks.findPurchaseOrder.mockResolvedValue(null);
+    mocks.findPurchaseReceipt.mockResolvedValue(null);
+
+    await expect(caller().getPurchaseOrder({ purchaseOrderId: 'missing' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    await expect(caller().getReceipt({ receiptId: 'missing' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    await expect(caller().submitPurchaseOrder({ purchaseOrderId: 'missing' })).rejects.toMatchObject(
+      { code: 'NOT_FOUND' }
+    );
+
+    expect(mocks.findStaffProfiles).not.toHaveBeenCalled();
+    expect(mocks.getPurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.getPurchaseReceipt).not.toHaveBeenCalled();
+    expect(mocks.submitPurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
 });
 
 describe('actor + idempotency plumbing', () => {
