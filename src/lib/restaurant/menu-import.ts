@@ -824,23 +824,29 @@ type ResolvedLine = {
   price: Prisma.Decimal;
   mergeProductId: string | null;
   mergeVariantId: string | null;
-  variants: Array<{ name: string; amount: string | null }>;
+  variants: Array<{ name: string; amount: string | null; currency: string | null }>;
   sortOrder: number;
 };
 
 const VARIANT_SHAPE = z.array(
   z.object({
     name: z.string(),
-    price: z.object({ amount: z.string().nullable() }).partial().passthrough(),
+    price: z
+      .object({ amount: z.string().nullable(), currency: z.string().nullable() })
+      .partial()
+      .passthrough(),
   })
 );
 
-function resolveVariants(raw: Prisma.JsonValue): Array<{ name: string; amount: string | null }> {
+function resolveVariants(
+  raw: Prisma.JsonValue
+): Array<{ name: string; amount: string | null; currency: string | null }> {
   const parsed = VARIANT_SHAPE.safeParse(raw);
   if (!parsed.success) return [];
   return parsed.data.map((variant) => ({
     name: variant.name,
     amount: variant.price?.amount ?? null,
+    currency: variant.price?.currency ?? null,
   }));
 }
 
@@ -950,6 +956,15 @@ export async function commitMenuImport(
       );
     }
 
+    // Reload this value at commit time. The upload-time default is extraction
+    // context only; price-list entries must use the organization's currency at
+    // the instant they are created.
+    const organization = await tx.organization.findUnique({
+      where: { id: record.organizationId },
+      select: { currency: true },
+    });
+    const tenantCurrency = organization?.currency?.toUpperCase() ?? null;
+
     const lines = await tx.restaurantMenuImportLine.findMany({
       where: { importId: record.id },
       orderBy: [{ pageId: 'asc' }, { sortOrder: 'asc' }],
@@ -995,7 +1010,6 @@ export async function commitMenuImport(
           'REVIEW_INCOMPLETE'
         );
       }
-      const tenantCurrency = record.defaultCurrency?.toUpperCase() ?? null;
       const priceCurrency = (line.reviewedCurrency ?? line.extractedCurrency)?.toUpperCase() ?? null;
       const convertsForeignPrice =
         line.extractedCurrency?.toUpperCase() !== tenantCurrency &&
@@ -1013,6 +1027,18 @@ export async function commitMenuImport(
           'CURRENCY_MISMATCH'
         );
       }
+      const variants = resolveVariants(line.extractedVariants);
+      if (
+        variants.some(
+          (variant) =>
+            variant.amount !== null && variant.currency?.toUpperCase() !== tenantCurrency
+        )
+      ) {
+        throw new MenuImportError(
+          'Every priced variant must agree with the organization currency.',
+          'CURRENCY_MISMATCH'
+        );
+      }
       resolved.push({
         id: line.id,
         decision: line.reviewStatus === 'MERGED' ? 'MERGED' : 'ACCEPTED',
@@ -1022,7 +1048,7 @@ export async function commitMenuImport(
         price,
         mergeProductId: line.mergeProductId,
         mergeVariantId: line.mergeVariantId,
-        variants: resolveVariants(line.extractedVariants),
+        variants,
         sortOrder: line.sortOrder,
       });
     }

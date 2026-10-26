@@ -69,20 +69,20 @@ function setup(node = 'test', selected = 'FIXTURE') {
     'server-only': {},
     zod,
     '@/generated/prisma/client': { Prisma: { Decimal } },
-    '@/lib/restaurant/catalog': Object.fromEntries(
-      ['createProduct', 'createCategory', 'createVariant', 'ensureDefaultBrand'].map((n) => [
-        n,
-        effect(n),
-      ])
-    ),
+    '@/lib/restaurant/catalog': {
+      createProduct: effect('createProduct', { id: 'product_1' }),
+      createCategory: effect('createCategory', { id: 'category_1' }),
+      createVariant: effect('createVariant', { id: 'variant_1' }),
+      ensureDefaultBrand: effect('ensureDefaultBrand', { id: 'brand_1' }),
+    },
     '@/lib/restaurant/menus': {
-      createMenu: effect('createMenu'),
-      createMenuItem: effect('createMenuItem'),
-      createMenuSection: effect('createMenuSection'),
+      createMenu: effect('createMenu', { id: 'menu_1' }),
+      createMenuItem: effect('createMenuItem', { id: 'item_1' }),
+      createMenuSection: effect('createMenuSection', { id: 'section_1' }),
     },
     '@/lib/restaurant/price-lists': {
-      addPriceListEntry: effect('addPriceListEntry'),
-      createPriceListVersion: effect('createPriceListVersion'),
+      addPriceListEntry: effect('addPriceListEntry', { id: 'entry_1' }),
+      createPriceListVersion: effect('createPriceListVersion', { id: 'version_1' }),
     },
     '@/lib/restaurant/scheduler': { enqueue: effect('enqueue', { job: { id: 'job_1' } }) },
     '@/lib/storage': {
@@ -182,6 +182,14 @@ function setup(node = 'test', selected = 'FIXTURE') {
       },
     },
     restaurantProduct: { findMany: async () => [] },
+    restaurantCategory: { findMany: async () => [] },
+    restaurantPriceList: {
+      findFirst: async () => ({ id: 'price_list_1' }),
+      create: effect('price-list-create', { id: 'price_list_1' }),
+    },
+    organization: {
+      findUnique: async () => ({ currency: record.currentCurrency ?? record.defaultCurrency }),
+    },
     $queryRaw: effect('row-lock', []),
     $transaction: async (fn) => {
       events.push('transaction');
@@ -364,6 +372,103 @@ test('commit rejects a reviewed foreign-currency amount without an explicit loca
       (event) =>
         Array.isArray(event) && ['createProduct', 'createMenu', 'addPriceListEntry'].includes(event[0])
     )
+  );
+});
+
+test('commit accepts priced variants in the current organization currency', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  f.record.status = 'AWAITING_REVIEW';
+  f.record.fileName = 'local-menu.png';
+  f.record.defaultCurrency = 'PKR';
+  f.lines.push({
+    id: 'line_1',
+    reviewStatus: 'ACCEPTED',
+    sortOrder: 1,
+    extractedCategoryName: null,
+    extractedProductName: 'Local item',
+    extractedDescription: null,
+    extractedPriceAmount: new (f.load('@/generated/prisma/client').Prisma.Decimal)('500'),
+    extractedCurrency: 'PKR',
+    extractedVariants: [{ name: 'Large', price: { amount: '650', currency: 'pkr' } }],
+    reviewedCategoryName: null,
+    reviewedProductName: null,
+    reviewedDescription: null,
+    reviewedPriceAmount: null,
+    reviewedCurrency: null,
+    mergeProductId: null,
+    mergeVariantId: null,
+  });
+
+  await menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' });
+  assert.ok(
+    f.events.some(
+      (event) => Array.isArray(event) && event[0] === 'addPriceListEntry' && event[2]?.price === '650'
+    )
+  );
+});
+
+test('commit rejects a foreign priced variant even when the base price has a reviewed conversion', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  f.record.status = 'AWAITING_REVIEW';
+  f.record.fileName = 'mixed-menu.png';
+  f.record.defaultCurrency = 'PKR';
+  f.lines.push({
+    id: 'line_1',
+    reviewStatus: 'ACCEPTED',
+    sortOrder: 1,
+    extractedCategoryName: null,
+    extractedProductName: 'Mixed item',
+    extractedDescription: null,
+    extractedPriceAmount: new (f.load('@/generated/prisma/client').Prisma.Decimal)('10'),
+    extractedCurrency: 'USD',
+    extractedVariants: [{ name: 'Large', price: { amount: '15', currency: 'USD' } }],
+    reviewedCategoryName: null,
+    reviewedProductName: null,
+    reviewedDescription: null,
+    reviewedPriceAmount: new (f.load('@/generated/prisma/client').Prisma.Decimal)('2800'),
+    reviewedCurrency: 'PKR',
+    mergeProductId: null,
+    mergeVariantId: null,
+  });
+
+  await assert.rejects(
+    menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' }),
+    { reason: 'CURRENCY_MISMATCH' }
+  );
+  assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'createProduct'));
+});
+
+test('commit validates reviewed prices against the current organization currency', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  f.record.status = 'AWAITING_REVIEW';
+  f.record.fileName = 'stale-currency-menu.png';
+  f.record.defaultCurrency = 'PKR';
+  f.record.currentCurrency = 'USD';
+  f.lines.push({
+    id: 'line_1',
+    reviewStatus: 'ACCEPTED',
+    sortOrder: 1,
+    extractedCategoryName: null,
+    extractedProductName: 'Stale conversion',
+    extractedDescription: null,
+    extractedPriceAmount: new (f.load('@/generated/prisma/client').Prisma.Decimal)('10'),
+    extractedCurrency: 'USD',
+    extractedVariants: [],
+    reviewedCategoryName: null,
+    reviewedProductName: null,
+    reviewedDescription: null,
+    reviewedPriceAmount: new (f.load('@/generated/prisma/client').Prisma.Decimal)('2800'),
+    reviewedCurrency: 'PKR',
+    mergeProductId: null,
+    mergeVariantId: null,
+  });
+
+  await assert.rejects(
+    menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' }),
+    { reason: 'CURRENCY_MISMATCH' }
   );
 });
 
