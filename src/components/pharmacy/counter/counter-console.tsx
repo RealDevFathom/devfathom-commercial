@@ -958,74 +958,77 @@ function ScopedPharmacyCounterConsole({
     ]
   );
 
-  const runSearch = useCallback(async () => {
-    if (!branchAuthorized) return;
-    const trimmed = query.trim();
-    if (trimmed.length < 2) {
-      setNotice({ tone: 'warning', message: 'Type at least two characters to search.' });
-      return;
-    }
-    const stageBarcodeResult = async (search: string) => {
-      setSubmittedSearch({ text: trimmed, query: search, branchId });
-      if (barcodeAdd.current !== trimmed) return;
-      const input = { branchId, query: search };
-      const result = await utils.client.pharmacySales.counterSearch.query(input);
-      utils.pharmacySales.counterSearch.setData(input, result);
-      if (barcodeAdd.current !== trimmed) return;
-      barcodeAdd.current = null;
-      if (result.rows.length !== 1) return;
-      const row = result.rows[0]!;
-      const option = row.saleUnits[0];
-      stageRow(row);
-      if (!option || row.printedMrpMinor === null || row.unitsPerPack === null) return;
-      try {
-        const linePreview = previewSaleLine({
-          option,
-          quantity: 1,
-          printedMrpMinor: row.printedMrpMinor,
-          unitsPerPack: row.unitsPerPack,
-          roundingIncrementMinor: row.roundingIncrementMinor,
-          availableUnits: row.onHandUnits,
-        });
-        if (linePreview.sufficient)
-          await addToCart({ row, option, quantity: 1, preview: linePreview });
-      } catch {
-        // Keep the result staged so the operator can resolve invalid pricing manually.
+  const runSearch = useCallback(
+    async (submittedQuery?: string) => {
+      if (!branchAuthorized) return;
+      const trimmed = (submittedQuery ?? query).trim();
+      if (trimmed.length < 2) {
+        setNotice({ tone: 'warning', message: 'Type at least two characters to search.' });
+        return;
       }
-    };
-    const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
-    if (!looksLikeGs1) {
+      const stageBarcodeResult = async (search: string) => {
+        setSubmittedSearch({ text: trimmed, query: search, branchId });
+        if (barcodeAdd.current !== trimmed) return;
+        const input = { branchId, query: search };
+        const result = await utils.client.pharmacySales.counterSearch.query(input);
+        utils.pharmacySales.counterSearch.setData(input, result);
+        if (barcodeAdd.current !== trimmed) return;
+        barcodeAdd.current = null;
+        if (result.rows.length !== 1) return;
+        const row = result.rows[0]!;
+        const option = row.saleUnits[0];
+        stageRow(row);
+        if (!option || row.printedMrpMinor === null || row.unitsPerPack === null) return;
+        try {
+          const linePreview = previewSaleLine({
+            option,
+            quantity: 1,
+            printedMrpMinor: row.printedMrpMinor,
+            unitsPerPack: row.unitsPerPack,
+            roundingIncrementMinor: row.roundingIncrementMinor,
+            availableUnits: row.onHandUnits,
+          });
+          if (linePreview.sufficient)
+            await addToCart({ row, option, quantity: 1, preview: linePreview });
+        } catch {
+          // Keep the result staged so the operator can resolve invalid pricing manually.
+        }
+      };
+      const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
+      if (!looksLikeGs1) {
+        try {
+          await stageBarcodeResult(trimmed);
+        } catch (error) {
+          barcodeAdd.current = null;
+          setNotice({ tone: 'danger', message: messageFrom(error) });
+        }
+        return;
+      }
+      const revision = ++scannerRevision.current;
+      setPending('authenticatePack');
       try {
-        await stageBarcodeResult(trimmed);
+        const verdict = await authenticatePack.mutateAsync({ branchId, payload: trimmed });
+        if (revision !== scannerRevision.current) return;
+        setNotice({
+          tone:
+            verdict.status === 'VERIFIED'
+              ? 'success'
+              : verdict.status === 'BLOCKED_RECALL'
+                ? 'danger'
+                : 'warning',
+          message: verdict.explanation,
+        });
+        await stageBarcodeResult(verdict.parsed?.gtin ?? trimmed);
       } catch (error) {
+        if (revision !== scannerRevision.current) return;
         barcodeAdd.current = null;
         setNotice({ tone: 'danger', message: messageFrom(error) });
+      } finally {
+        setPending(null);
       }
-      return;
-    }
-    const revision = ++scannerRevision.current;
-    setPending('authenticatePack');
-    try {
-      const verdict = await authenticatePack.mutateAsync({ branchId, payload: trimmed });
-      if (revision !== scannerRevision.current) return;
-      setNotice({
-        tone:
-          verdict.status === 'VERIFIED'
-            ? 'success'
-            : verdict.status === 'BLOCKED_RECALL'
-              ? 'danger'
-              : 'warning',
-        message: verdict.explanation,
-      });
-      await stageBarcodeResult(verdict.parsed?.gtin ?? trimmed);
-    } catch (error) {
-      if (revision !== scannerRevision.current) return;
-      barcodeAdd.current = null;
-      setNotice({ tone: 'danger', message: messageFrom(error) });
-    } finally {
-      setPending(null);
-    }
-  }, [addToCart, authenticatePack, branchAuthorized, branchId, query, stageRow, utils]);
+    },
+    [addToCart, authenticatePack, branchAuthorized, branchId, query, stageRow, utils]
+  );
 
   const runTransition = useCallback(
     async (action: 'hold' | 'resume' | 'void', reason?: string) => {
@@ -1868,7 +1871,9 @@ function ScopedPharmacyCounterConsole({
                         trimmed.startsWith('(01)');
                       if (barcode) {
                         barcodeAdd.current = trimmed;
-                        void runSearch();
+                        // Read from the input event: React may not have committed the
+                        // preceding change render before a scanner sends Enter.
+                        void runSearch(trimmed);
                         return;
                       }
                       if (activeRow) {
