@@ -36,13 +36,14 @@ async function open(request: TerminalRequest = mockRequest(async () => ({ tender
 }
 
 describe('RefundPanel', () => {
-  it('uses human labels, excludes self-approval, validates over-refunds, and previews explicitly', async () => {
+  it('defaults both balances, uses human labels, excludes self-approval, validates over-refunds, and previews explicitly', async () => {
     await open();
     expect(screen.queryByText('tender-hidden')).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /Amina/ })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Settled receipt'), {
       target: { value: tender.tenderId },
     });
+    expect(screen.getByLabelText('Refund amount')).toHaveValue('20.00');
     expect(screen.getByLabelText('Tip refund')).toHaveValue('2.00');
     fireEvent.change(screen.getByLabelText('Refund amount'), { target: { value: '20.01' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Guest complaint' } });
