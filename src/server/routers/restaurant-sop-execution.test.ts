@@ -100,7 +100,10 @@ beforeEach(() => {
   db = makeDb();
   db.restaurantStaffProfile.findMany.mockResolvedValue([{ id: 'staff_a' }]);
   mocks.can.mockResolvedValue(true);
-  mocks.annotateAudit.mockReset();
+  mocks.annotateAudit.mockImplementation(
+    (ctx: { audit: { detail: Record<string, unknown> } }, detail: Record<string, unknown>) =>
+      Object.assign(ctx.audit.detail, detail)
+  );
   mocks.authenticateOperator.mockResolvedValue({
     ok: true,
     credentialId: 'credential_1',
@@ -461,6 +464,9 @@ describe('waive', () => {
       secret: '1234',
       now: expect.any(Date),
     });
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'waive', outcome: 'FAILURE' })
+    );
   });
 
   it('refuses same-person approval', async () => {
@@ -479,6 +485,9 @@ describe('waive', () => {
       })
     ).resolves.toHaveProperty('blocked');
     expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'waive', outcome: 'FAILURE' })
+    );
   });
 
   it('refuses an approver without branch verification capability', async () => {
@@ -493,6 +502,9 @@ describe('waive', () => {
       })
     ).resolves.toHaveProperty('blocked');
     expect(mocks.staffHasCapability).toHaveBeenCalledWith(db, 'staff_b', 'branch_1', 'sop:verify');
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'waive', outcome: 'FAILURE' })
+    );
   });
 
   it.each([[], [{ id: 'staff_a' }, { id: 'staff_duplicate' }]])(

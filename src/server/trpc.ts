@@ -214,7 +214,7 @@ function auditMiddleware(opts: { auditReads: boolean }) {
       path,
       type,
       input: skipRawInput ? undefined : rawInput,
-      outcome: result.ok ? 'SUCCESS' : 'FAILURE',
+      outcome: result.ok ? (ctx.audit.detail.outcome ?? 'SUCCESS') : 'FAILURE',
       error: result.ok ? undefined : result.error,
       durationMs: Date.now() - start,
     });

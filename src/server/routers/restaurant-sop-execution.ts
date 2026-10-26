@@ -607,6 +607,12 @@ export const restaurantSopExecutionRouter = router({
     .mutation(async ({ ctx, input }) => {
       // The approving credential is plaintext transport input and must never be audited.
       annotateAudit(ctx, { skipInput: true });
+      const refuseAuthorization = () => {
+        // This remains a normal result so credential-attempt state can commit,
+        // but it is still a denied security operation in the central audit log.
+        annotateAudit(ctx, { outcome: 'FAILURE' });
+        return { blocked: 'Waiver authorization failed.' } as const;
+      };
       assertSopDepth(ctx.entitlements, 'sop.waiver');
       try {
         return await ctx.db.$transaction(async (tx) => {
@@ -631,7 +637,7 @@ export const restaurantSopExecutionRouter = router({
             input.approving.type === 'PIN'
               ? isValidPinFormat(input.approving.secret)
               : isValidBadgeFormat(input.approving.secret);
-          if (!validSecret) return { blocked: 'Waiver authorization failed.' } as const;
+          if (!validSecret) return refuseAuthorization();
 
           const approval = await authenticateOperator(tx, {
             ...input.approving,
@@ -649,7 +655,7 @@ export const restaurantSopExecutionRouter = router({
           ) {
             // Return rather than throw so failed-attempt state commits while the
             // caller still receives the same generic authorization refusal.
-            return { blocked: 'Waiver authorization failed.' } as const;
+            return refuseAuthorization();
           }
 
           const result = await waiveOccurrence(tx, {
