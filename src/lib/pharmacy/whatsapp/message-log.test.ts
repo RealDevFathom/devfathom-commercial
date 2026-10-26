@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ claim: vi.fn(), update: vi.fn(), customer: vi.fn() }));
+const mocks = vi.hoisted(() => ({ claim: vi.fn(), update: vi.fn(), queryRaw: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: (_organizationId: string, fn: (db: unknown) => unknown) =>
     fn({
       pharmacyMessageLog: { createManyAndReturn: mocks.claim, update: mocks.update },
-      pharmacyCustomer: { findFirst: mocks.customer },
+      $queryRaw: mocks.queryRaw,
     }),
 }));
 import { sendAndLog } from './message-log';
@@ -16,7 +16,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.claim.mockResolvedValue([{ id: 'log-a' }]);
   mocks.update.mockResolvedValue({});
-  mocks.customer.mockResolvedValue({ id: 'customer-a' });
+  mocks.queryRaw.mockResolvedValue([{ id: 'customer-a' }]);
 });
 
 describe('outbound evidence and safe replay', () => {
@@ -95,27 +95,44 @@ describe('outbound evidence and safe replay', () => {
     expect(mocks.update).not.toHaveBeenCalled();
   });
   it('re-checks opt-in after claiming and suppresses a reminder opted out before send', async () => {
-    mocks.customer.mockResolvedValue(null);
+    mocks.queryRaw.mockResolvedValue([]);
     const send = vi.fn();
 
     await expect(sendAndLog({ ...entry, customerId: 'customer-a' }, send)).resolves.toBe(
       'PREPARED'
     );
 
-    expect(mocks.customer).toHaveBeenCalledWith({
-      where: {
-        organizationId: 'org-a',
-        id: 'customer-a',
-        active: true,
-        whatsappOptIn: true,
-      },
-      select: { id: true },
-    });
+    const query = mocks.queryRaw.mock.calls[0][0];
+    expect(query.sql).toContain('"organizationId" = ?');
+    expect(query.sql).toContain('id = ?');
+    expect(query.sql).toContain('active = true');
+    expect(query.sql).toContain('"whatsappOptIn" = true');
+    expect(query.sql).toContain('FOR UPDATE');
+    expect(query.values).toEqual(['org-a', 'customer-a']);
     expect(send).not.toHaveBeenCalled();
     expect(mocks.update).toHaveBeenCalledWith({
       where: { id: 'log-a' },
       data: { status: 'IGNORED', error: 'OPTED_OUT_BEFORE_SEND' },
     });
+  });
+  it('waits for the consent row lock and suppresses the send when STOP commits first', async () => {
+    let finishLock!: (rows: Array<{ id: string }>) => void;
+    mocks.queryRaw.mockReturnValue(
+      new Promise((resolve) => {
+        finishLock = resolve;
+      })
+    );
+    const send = vi.fn();
+
+    const outcome = sendAndLog({ ...entry, customerId: 'customer-a' }, send);
+    await vi.waitFor(() => expect(mocks.queryRaw).toHaveBeenCalledOnce());
+    expect(send).not.toHaveBeenCalled();
+
+    // An empty result after the lock wait models STOP updating and committing
+    // while this sender waited for the same customer row.
+    finishLock([]);
+    await expect(outcome).resolves.toBe('PREPARED');
+    expect(send).not.toHaveBeenCalled();
   });
   it('still sends STOP acknowledgements after the customer is opted out', async () => {
     const send = vi.fn().mockResolvedValue({
@@ -127,7 +144,7 @@ describe('outbound evidence and safe replay', () => {
       sendAndLog({ ...entry, kind: 'CONSENT_ACK', customerId: 'customer-a' }, send)
     ).resolves.toBe('SENT');
 
-    expect(mocks.customer).not.toHaveBeenCalled();
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
     expect(send).toHaveBeenCalledOnce();
   });
   it('treats an unclassified adapter response as unknown', async () => {
