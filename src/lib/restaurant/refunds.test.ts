@@ -558,7 +558,7 @@ describeIfDatabase('card refunds (real DB)', () => {
     ]);
   });
 
-  it('reloads the complete tender set after waiting for concurrent settlement', async () => {
+  it('reloads the complete tender set after concurrent settlement without rounding drift', async () => {
     const billId = await openBillAtBranchTwo();
     const partial = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
       billId,
@@ -575,9 +575,10 @@ describeIfDatabase('card refunds (real DB)', () => {
     const settlementMayCommit = new Promise<void>((resolve) => {
       releaseSettlement = resolve;
     });
+    let finalTenderId!: string;
     const concurrentSettlement = read(async (tx) => {
       await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${billId} FOR UPDATE`;
-      await tx.restaurantTender.create({
+      const finalTender = await tx.restaurantTender.create({
         data: {
           billId,
           type: 'OTHER',
@@ -586,7 +587,9 @@ describeIfDatabase('card refunds (real DB)', () => {
           staffProfileId: ids.operator,
           deviceId: branchTwoDeviceId,
         },
+        select: { id: true },
       });
+      finalTenderId = finalTender.id;
       await tx.restaurantBill.update({
         where: { id: billId },
         data: { status: 'SETTLED', settledAt: AT },
@@ -629,6 +632,26 @@ describeIfDatabase('card refunds (real DB)', () => {
     // The settled bill's 1.25 service charge is shared 5:10, rather than assigning
     // all 1.25 to the only tender visible before the settlement transaction committed.
     expect(result.serviceChargeRefundAmount.toFixed(2)).toBe('0.42');
+
+    const finalTenderRefund = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: finalTenderId,
+      amount: '10.00',
+      reason: 'verify balanced settlement allocation',
+      branchId: ids.branchTwo,
+      approvingStaffProfileId: ids.manager,
+      actor: actor(branchTwoDeviceId),
+      now: AT,
+    });
+    expect(finalTenderRefund.serviceChargeRefundAmount.toFixed(2)).toBe('0.83');
+
+    const persistedServiceTotal = await read(async (tx) => {
+      const aggregate = await tx.restaurantRefund.aggregate({
+        where: { billId },
+        _sum: { serviceChargeRefundAmount: true },
+      });
+      return aggregate._sum.serviceChargeRefundAmount;
+    });
+    expect(persistedServiceTotal?.toFixed(2)).toBe('1.25');
   });
 
   it('appends a capped REVERSAL pinned to the original earn program', async () => {
