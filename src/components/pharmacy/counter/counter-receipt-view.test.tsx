@@ -163,6 +163,8 @@ it('formats Urdu receipt amounts with Urdu digits', () => {
   const region = within(screen.getByRole('region', { name: 'رسید 12' }));
   expect(region.getAllByText('۱٫۰۰').length).toBeGreaterThan(0);
   expect(region.queryByText('1.00')).toBeNull();
+  expect(region.getByText(/CASH: ۱٫۰۰/)).toBeTruthy();
+  expect(region.getByText(/کل رقم: ۱٫۰۰/)).toBeTruthy();
 });
 
 it('disables printing when shared semantic validation rejects the receipt', () => {

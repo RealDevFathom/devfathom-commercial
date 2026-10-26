@@ -12,6 +12,7 @@ import {
   type CounterReceiptLine,
 } from './counter-receipt';
 import { PrintDocumentSchema } from '@/lib/restaurant/printing/contract';
+import { buildCounterReceiptPreview } from './counter-receipt-presentation';
 
 function receiptLine(overrides: Partial<CounterReceiptLine> = {}): CounterReceiptLine {
   return {
@@ -168,6 +169,16 @@ describe('buildCounterReceiptDocument (printing seam)', () => {
     const document = buildCounterReceiptDocument(receipt(), 'ur');
     expect(document.title).toContain(COUNTER_RECEIPT_STRINGS.ur.receipt);
     expect(document.footer).toContain(COUNTER_RECEIPT_STRINGS.ur.net);
+    expect(document.footer).toContain('۵۰٫۰۰');
+    expect(document.footer).not.toContain('50.00');
+  });
+
+  it('localizes every monetary value in the Urdu browser preview', () => {
+    const preview = buildCounterReceiptPreview(receipt(), 'ur', 58);
+    expect(preview).toContain('۲۵٫۰۰');
+    expect(preview).toContain('۵۰٫۰۰');
+    expect(preview).not.toContain('25.00');
+    expect(preview).not.toContain('50.00');
   });
 
   it('refuses an empty receipt rather than printing a blank slip', () => {
