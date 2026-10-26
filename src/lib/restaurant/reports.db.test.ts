@@ -1,14 +1,14 @@
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
-const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
+const databaseUrl = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+const describeIfDatabase = databaseUrl ? describe : describe.skip;
 
 describeIfDatabase('restaurant report timezone boundaries', () => {
   let client: Client;
 
   beforeAll(async () => {
-    client = new Client({ connectionString: TEST_DATABASE_URL });
+    client = new Client({ connectionString: databaseUrl });
     await client.connect();
     await client.query(`SET TIME ZONE 'Asia/Karachi'`);
   });
