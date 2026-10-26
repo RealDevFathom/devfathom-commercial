@@ -146,6 +146,7 @@ const mutation = (path: string, input: unknown) =>
 
 describe('fallback and real routers serialize refusals identically', () => {
   it.each([
+    ['invitations.get', 'query', undefined],
     ['invitations.get', 'query', null],
     ['invitations.get', 'query', { token: '' }],
     ['invitations.get', 'query', { token: 42 }],
