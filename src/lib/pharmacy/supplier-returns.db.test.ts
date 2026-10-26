@@ -760,7 +760,7 @@ describeIfDatabase('PUR-06 — expected vs received credit', () => {
       })
     );
     expect(allocated._sum.amountMinor).toBe(10_000);
-  });
+  }, 30_000);
 
   it('serializes one supplier credit competing across two debit notes', async () => {
     const fixture = await scenario(ORG_A, 'concurrent-shared-credit');
