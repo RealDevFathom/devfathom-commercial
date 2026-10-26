@@ -428,6 +428,28 @@ describe('listRecipeVersions', () => {
 // ── Recipe-line cycle detection ───────────────────────────────────────────────
 
 describe('createRecipeLine — recipe cycle detection', () => {
+  it('does not lock the recipe graph for an ingredient-only line', async () => {
+    db.restaurantRecipeVersion.findUnique.mockResolvedValue({
+      id: 'v1',
+      status: 'DRAFT',
+      recipeId: 'r1',
+    });
+    db.restaurantUnit.findUnique.mockResolvedValue({ id: 'u1' });
+    db.restaurantIngredient.findUnique.mockResolvedValue({ id: 'i1' });
+
+    await createRecipeLine(scoped(), {
+      recipeVersionId: 'v1',
+      ingredientId: 'i1',
+      quantity: '1',
+      unitId: 'u1',
+    });
+
+    expect(db.transactionQueryRaw).not.toHaveBeenCalled();
+    expect(db.restaurantRecipeLine.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ ingredientId: 'i1', subRecipeId: null }),
+    });
+  });
+
   it('locks the organization recipe graph before checking and writing a sub-recipe edge', async () => {
     db.restaurantRecipeVersion.findUnique.mockResolvedValue({
       id: 'v1',
