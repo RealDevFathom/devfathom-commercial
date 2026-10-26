@@ -62,6 +62,8 @@ describe('finance.getFinancialSummary', () => {
 
     expect(summary.monthlyIncome).toEqual([{ currency: 'USD', amount: 100 }]);
     expect(summary.monthlyProfit).toEqual([{ currency: 'USD', amount: 100 }]);
+    expect(summary.yearlyIncome).toEqual([{ currency: 'USD', amount: 100 }]);
+    expect(summary.yearlyProfit).toEqual([{ currency: 'USD', amount: 100 }]);
     expect(mocks.paymentGroupBy).toHaveBeenCalledWith({
       by: ['currency'],
       _sum: { amount: true },
@@ -72,5 +74,37 @@ describe('finance.getFinancialSummary', () => {
         },
       },
     });
+    expect(mocks.paymentGroupBy).toHaveBeenCalledWith({
+      by: ['currency'],
+      _sum: { amount: true },
+      where: {
+        paidAt: {
+          gte: new Date(2026, 0, 1),
+          lte: new Date(2026, 9, 22, 12),
+        },
+      },
+    });
+  });
+
+  it('adds invoice receipts to manual income without mixing currencies', async () => {
+    mocks.transactionGroupBy
+      .mockResolvedValueOnce([
+        { currency: 'USD', _sum: { amount: 25 } },
+        { currency: 'PKR', _sum: { amount: 500 } },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    mocks.paymentGroupBy.mockResolvedValueOnce([
+      { currency: 'USD', _sum: { amount: 100 } },
+      { currency: 'PKR', _sum: { amount: 1_000 } },
+    ]);
+
+    const summary = await caller().getFinancialSummary();
+
+    expect(summary.monthlyIncome).toEqual([
+      { currency: 'USD', amount: 125 },
+      { currency: 'PKR', amount: 1_500 },
+    ]);
   });
 });
