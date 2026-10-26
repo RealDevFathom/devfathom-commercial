@@ -36,6 +36,8 @@ import {
   authorizeReplayedCommand,
   settleOfflineCommand,
   skipOfflineCommandSequences,
+  MAX_OFFLINE_COMMAND_CURSOR,
+  MAX_OFFLINE_COMMAND_SEQUENCE,
 } from '@/lib/pharmacy/offline-command-log';
 import {
   authenticatePharmacyCommand,
@@ -118,8 +120,8 @@ export const pharmacyOfflineRouter = router({
     .input(
       branchInput.extend({
         deviceId: id,
-        expectedSequence: z.number().int().positive(),
-        nextSequence: z.number().int().positive(),
+        expectedSequence: z.number().int().positive().max(MAX_OFFLINE_COMMAND_CURSOR),
+        nextSequence: z.number().int().positive().max(MAX_OFFLINE_COMMAND_SEQUENCE),
       })
     )
     .mutation(({ ctx, input }) =>
@@ -195,7 +197,7 @@ const leasedReceipt = z
   .strict();
 export const counterReplaySchema = z
   .object({
-    sequence: z.number().int().positive(),
+    sequence: z.number().int().positive().max(MAX_OFFLINE_COMMAND_SEQUENCE),
     idempotencyKey: id,
     action: z.enum(['CASH_OTC_SALE', 'CONTROLLED_MEDICINE_SALE']),
     leasedReceipt,

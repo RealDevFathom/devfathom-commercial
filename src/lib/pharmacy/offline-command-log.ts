@@ -75,6 +75,11 @@ export type RecordOfflineCommandInput = {
   receiptNumber?: number | null;
 };
 
+// PostgreSQL stores both the command sequence and cursor as INTEGER. Reserve
+// the final value for the cursor produced after accepting the last command.
+export const MAX_OFFLINE_COMMAND_SEQUENCE = 2_147_483_646;
+export const MAX_OFFLINE_COMMAND_CURSOR = MAX_OFFLINE_COMMAND_SEQUENCE + 1;
+
 export function commandPayloadHash(payload: unknown): string {
   return createHash('sha256').update(canonicalJson(payload)).digest('hex');
 }
@@ -125,6 +130,13 @@ export async function recordOfflineCommand(
       throw new PharmacyOfflineCommandError('IDEMPOTENCY_CONFLICT');
     return { command: existing, replayed: existing.attempts > 0 || existing.status !== 'PENDING' };
   }
+
+  if (
+    !Number.isInteger(input.sequence) ||
+    input.sequence < 1 ||
+    input.sequence > MAX_OFFLINE_COMMAND_SEQUENCE
+  )
+    throw new PharmacyOfflineCommandError('SEQUENCE_OUT_OF_ORDER');
 
   // Claim exactly the device's next position. The compare-and-increment is the
   // durable FIFO guard; it also serializes callers that use this helper outside
@@ -209,7 +221,14 @@ export async function skipOfflineCommandSequences(
   expectedSequence: number,
   nextSequence: number
 ) {
-  if (nextSequence <= expectedSequence)
+  if (
+    !Number.isInteger(expectedSequence) ||
+    !Number.isInteger(nextSequence) ||
+    expectedSequence < 1 ||
+    expectedSequence > MAX_OFFLINE_COMMAND_CURSOR ||
+    nextSequence <= expectedSequence ||
+    nextSequence > MAX_OFFLINE_COMMAND_SEQUENCE
+  )
     throw new PharmacyOfflineCommandError('SEQUENCE_OUT_OF_ORDER');
   const advanced = await db.pharmacyRegisteredDevice.updateMany({
     where: {

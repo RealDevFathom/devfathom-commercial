@@ -6,7 +6,11 @@ ALTER TABLE "pharmacy_registered_devices"
 UPDATE "pharmacy_registered_devices" AS device
 SET "nextOfflineCommandSequence" = commands."nextSequence"
 FROM (
-  SELECT "organizationId", "deviceId", MAX("sequence") + 1 AS "nextSequence"
+  -- Cast before incrementing so a historically accepted INTEGER maximum does
+  -- not abort deployment. Such a device is placed at the terminal cursor; new
+  -- commands use at most 2147483646 and leave 2147483647 for that cursor.
+  SELECT "organizationId", "deviceId",
+    LEAST(MAX("sequence")::BIGINT + 1, 2147483647)::INTEGER AS "nextSequence"
   FROM "pharmacy_offline_commands"
   GROUP BY "organizationId", "deviceId"
 ) AS commands

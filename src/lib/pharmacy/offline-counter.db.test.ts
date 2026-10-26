@@ -681,6 +681,18 @@ describeIfDatabase('PH-OFF OFF-01 — the append-only command log', () => {
     ...over,
   });
 
+  it('backfills a previously accepted INTEGER-maximum sequence without overflow', async () => {
+    const [backfill] = await inOrg(
+      ORG_A,
+      (db) =>
+        db.$queryRaw<Array<{ nextSequence: number }>>`
+        SELECT LEAST(MAX("sequence")::BIGINT + 1, 2147483647)::INTEGER AS "nextSequence"
+        FROM (VALUES (2147483647::INTEGER)) AS historical("sequence")
+      `
+    );
+    expect(backfill?.nextSequence).toBe(2_147_483_647);
+  });
+
   it('records once and reports a re-presented key as a replay', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'log');
     const outcome = await inOrg(ORG_A, async (db) => {
@@ -762,6 +774,52 @@ describeIfDatabase('PH-OFF OFF-01 — the append-only command log', () => {
       deps.log.skipOfflineCommandSequences(db, scopeOf(fixture), fixture.deviceId, 1, 3)
     );
     expect(staleRecovery).toBe('SEQUENCE_OUT_OF_ORDER');
+  });
+
+  it('reserves the PostgreSQL INTEGER maximum for the terminal cursor', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'log-sequence-ceiling');
+    const maximumCommandSequence = deps.log.MAX_OFFLINE_COMMAND_SEQUENCE;
+
+    const nextSequence = await inOrg(ORG_A, async (db) => {
+      await deps.log.skipOfflineCommandSequences(
+        db,
+        scopeOf(fixture),
+        fixture.deviceId,
+        1,
+        maximumCommandSequence
+      );
+      await deps.log.recordOfflineCommand(
+        db,
+        scopeOf(fixture),
+        command(fixture, {
+          sequence: maximumCommandSequence,
+          idempotencyKey: `key-${fixture.deviceId}-maximum`,
+        })
+      );
+      const device = await db.pharmacyRegisteredDevice.findFirstOrThrow({
+        where: { id: fixture.deviceId },
+        select: { nextOfflineCommandSequence: true },
+      });
+      return device.nextOfflineCommandSequence;
+    });
+    expect(nextSequence).toBe(2_147_483_647);
+
+    const replayPastCeiling = await refusal(ORG_A, (db) =>
+      deps.log.recordOfflineCommand(
+        db,
+        scopeOf(fixture),
+        command(fixture, {
+          sequence: 2_147_483_647,
+          idempotencyKey: `key-${fixture.deviceId}-overflow`,
+        })
+      )
+    );
+    expect(replayPastCeiling).toBe('SEQUENCE_OUT_OF_ORDER');
+
+    const recoveryPastCeiling = await refusal(ORG_A, (db) =>
+      deps.log.skipOfflineCommandSequences(db, scopeOf(fixture), fixture.deviceId, 1, 2_147_483_647)
+    );
+    expect(recoveryPastCeiling).toBe('SEQUENCE_OUT_OF_ORDER');
   });
 
   it('the identity of a recorded command is immutable and it is never deleted', async () => {
