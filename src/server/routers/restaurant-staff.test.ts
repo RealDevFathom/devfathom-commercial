@@ -178,6 +178,21 @@ describe('staff CRUD', () => {
     );
 
     await caller().listEligibleUsers();
+    expect(mocks.staffFindMany).toHaveBeenLastCalledWith({
+      where: { userId: 'user_gm', status: 'ACTIVE' },
+      select: {
+        id: true,
+        primaryBranchId: true,
+        jobRoles: { select: { branchId: true } },
+        directCapabilityGrants: { select: { branchId: true } },
+      },
+      orderBy: { id: 'asc' },
+      take: 2,
+    });
+    expect(mocks.branchFindMany).toHaveBeenLastCalledWith({
+      where: { organizationId: 'org_workspace', active: true },
+      select: { id: true },
+    });
     expect(mocks.userFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { organizationId: 'org_workspace' },
