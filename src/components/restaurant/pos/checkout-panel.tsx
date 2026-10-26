@@ -963,7 +963,7 @@ export function CheckoutPanel({
                 </dl>
                 {bill.status === 'OPEN' ? (
                   <>
-                    {canComp ? (
+                    {canComp === true ? (
                       <CompControl
                         billId={bill.id}
                         lines={bill.lines ?? []}
