@@ -74,7 +74,11 @@ const centsToSafeNumber = (cents: bigint): number => {
   if (cents > BigInt(Number.MAX_SAFE_INTEGER) || cents < BigInt(Number.MIN_SAFE_INTEGER)) {
     throw new Error('Outstanding balance exceeds the safely representable amount');
   }
-  return Number(cents) / 100;
+  const amount = Number(cents) / 100;
+  if (BigInt(Math.round(amount * 100)) !== cents) {
+    throw new Error('Outstanding balance exceeds the safely representable amount');
+  }
+  return amount;
 };
 
 // IMP-FIN-04: money is Decimal(12,2), so a partial payment can legitimately pay an

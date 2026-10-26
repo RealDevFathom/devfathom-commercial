@@ -140,4 +140,22 @@ describe('finance.getFinancialSummary', () => {
       'Outstanding balance exceeds the safely representable amount'
     );
   });
+
+  it('rejects a safe-integer cent aggregate when the dollar DTO loses a cent', async () => {
+    // 9,007 maximum-value invoices plus this remainder total exactly
+    // 9,007,199,254,740,990 cents. The integer is safe, but converting it to
+    // dollars and back rounds it to 9,007,199,254,740,991 cents.
+    mocks.invoiceFindMany.mockResolvedValue([
+      ...Array.from({ length: 9_007 }, () => ({
+        total: 9_999_999_999.99,
+        currency: 'USD',
+        payments: [],
+      })),
+      { total: 1_992_547_499.97, currency: 'USD', payments: [] },
+    ]);
+
+    await expect(caller().getFinancialSummary()).rejects.toThrow(
+      'Outstanding balance exceeds the safely representable amount'
+    );
+  });
 });
