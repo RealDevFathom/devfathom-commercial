@@ -697,6 +697,18 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     });
   });
 
+  it('refuses to attach a purchase-order line to a direct-purchase receipt', async () => {
+    await expect(
+      caller().createGoodsReceipt({
+        ...withoutOrder(),
+        directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_manager' },
+        lines: [RECEIPT_LINE],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacySupplier.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
   it('refuses a purchase-order receipt line that omits its order-line identity', async () => {
     await expect(
       caller().createGoodsReceipt({

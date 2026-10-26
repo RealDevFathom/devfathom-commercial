@@ -958,9 +958,12 @@ const purchasingRouter = router({
         })
         .refine(
           (value) =>
-            !value.purchaseOrderId || value.lines.every((line) => line.purchaseOrderLineId),
+            value.lines.every(
+              (line) => Boolean(line.purchaseOrderLineId) === Boolean(value.purchaseOrderId)
+            ),
           {
-            message: 'Every purchase-order receipt line must identify its purchase-order line.',
+            message:
+              'Every purchase-order receipt line must identify its purchase-order line; direct-purchase lines must remain unlinked.',
             path: ['lines'],
           }
         )
