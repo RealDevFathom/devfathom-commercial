@@ -61,8 +61,65 @@ BEGIN
     NEW.currency IS DISTINCT FROM OLD.currency OR NEW."occurredAt" IS DISTINCT FROM OLD."occurredAt" OR
     NEW.evidence IS DISTINCT FROM OLD.evidence OR NEW.reason IS DISTINCT FROM OLD.reason OR
     NEW."journalEntryId" IS DISTINCT FROM OLD."journalEntryId" OR
-    (OLD.status = 'REVERSED' AND NEW."reversalEntryId" IS DISTINCT FROM OLD."reversalEntryId")
+    NEW."postedAt" IS DISTINCT FROM OLD."postedAt" OR
+    NEW."postKey" IS DISTINCT FROM OLD."postKey" OR
+    NEW."postPayloadHash" IS DISTINCT FROM OLD."postPayloadHash" OR
+    (OLD.status = 'POSTED' AND NEW.status = 'POSTED' AND (
+      NEW."reversalEntryId" IS DISTINCT FROM OLD."reversalEntryId" OR
+      NEW."reversedAt" IS DISTINCT FROM OLD."reversedAt" OR
+      NEW."reverseKey" IS DISTINCT FROM OLD."reverseKey" OR
+      NEW."reversePayloadHash" IS DISTINCT FROM OLD."reversePayloadHash"
+    )) OR
+    (OLD.status = 'REVERSED' AND (
+      NEW."reversalEntryId" IS DISTINCT FROM OLD."reversalEntryId" OR
+      NEW."reversedAt" IS DISTINCT FROM OLD."reversedAt" OR
+      NEW."reverseKey" IS DISTINCT FROM OLD."reverseKey" OR
+      NEW."reversePayloadHash" IS DISTINCT FROM OLD."reversePayloadHash"
+    ))
   ) THEN RAISE EXCEPTION 'posted pharmacy journal vouchers are immutable'; END IF;
+
+  -- A posted voucher must name its own fixed-shape posting. This also prevents
+  -- an arbitrary same-tenant finance entry from being attached to the document.
+  IF NEW.status IN ('POSTED', 'REVERSED') AND NOT EXISTS (
+    SELECT 1 FROM "finance_journal_entries" entry
+    WHERE entry."organizationId" = NEW."organizationId"
+      AND entry.id = NEW."journalEntryId"
+      AND entry."sourceKind" = 'PHARMACY_JOURNAL_VOUCHER'
+      AND entry."sourceId" = NEW.id
+      AND entry."branchId" = NEW."branchId"
+      AND entry.currency = NEW.currency
+      AND entry."occurredAt" = NEW."occurredAt"
+      AND entry."reversesEntryId" IS NULL
+      AND (SELECT COUNT(*) FROM "finance_journal_lines" line
+           WHERE line."organizationId" = NEW."organizationId" AND line."entryId" = entry.id) = 2
+      AND EXISTS (SELECT 1 FROM "finance_journal_lines" line
+                  WHERE line."organizationId" = NEW."organizationId" AND line."entryId" = entry.id
+                    AND line."accountCode" = 'OPERATING_EXPENSE' AND line.side = 'DEBIT'
+                    AND line."amountMinor" = NEW."amountMinor" AND line."branchId" = NEW."branchId")
+      AND EXISTS (SELECT 1 FROM "finance_journal_lines" line
+                  WHERE line."organizationId" = NEW."organizationId" AND line."entryId" = entry.id
+                    AND line."accountCode" = 'MANUAL_NONTRADE_ACCRUAL' AND line.side = 'CREDIT'
+                    AND line."amountMinor" = NEW."amountMinor" AND line."branchId" = NEW."branchId")
+  ) THEN
+    RAISE EXCEPTION 'pharmacy journal voucher must link its canonical posting';
+  END IF;
+
+  -- The finance journal's unique reversesEntryId index and deferred exact-
+  -- negation trigger make this the one canonical additive reversal.
+  IF NEW.status = 'REVERSED' AND (
+    NEW."reversalEntryId" IS NULL OR NEW."reversedAt" IS NULL OR
+    NEW."reverseKey" IS NULL OR NEW."reversePayloadHash" IS NULL OR
+    NOT EXISTS (
+      SELECT 1 FROM "finance_journal_entries" reversal
+      WHERE reversal."organizationId" = NEW."organizationId"
+        AND reversal.id = NEW."reversalEntryId"
+        AND reversal."reversesEntryId" = NEW."journalEntryId"
+        AND reversal."sourceKind" = 'PHARMACY_JOURNAL_VOUCHER'
+        AND reversal."sourceId" = NEW.id
+    )
+  ) THEN
+    RAISE EXCEPTION 'pharmacy journal voucher must link its canonical reversal';
+  END IF;
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
 CREATE TRIGGER "pharmacy_general_journal_posted_immutable" BEFORE UPDATE ON "pharmacy_general_journal_documents"
