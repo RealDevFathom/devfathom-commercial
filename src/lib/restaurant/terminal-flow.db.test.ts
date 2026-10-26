@@ -314,6 +314,7 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
         headers: { authorization: `Bearer ${secret}`, 'x-terminal-session': token },
       })
     );
+    expect(authorizedResponse.status).toBe(200);
     const authorizedBody = (await authorizedResponse.json()) as typeof body;
     expect(authorizedBody.operators.find((operator) => operator.staffProfileId === STAFF.A.id))
       .toMatchObject({ canComp: true });
