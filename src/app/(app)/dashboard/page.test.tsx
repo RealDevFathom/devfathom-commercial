@@ -60,11 +60,12 @@ function helpers() {
 
 describe('DashboardPage vertical dispatch', () => {
   it.each([
-    ['owner', 'admin:access', '/restaurant'],
-    ['waiter', 'orders:take', '/pos'],
+    ['owner', ['admin:access'], '/restaurant'],
+    ['owner with order-taking access', ['admin:access', 'orders:take'], '/restaurant'],
+    ['waiter', ['orders:take'], '/pos'],
   ])(
     'redirects a Restaurant %s with %s to %s before loading dashboard data',
-    async (_persona, capability, target) => {
+    async (_persona, capabilities, target) => {
       const agencyHelpers = helpers();
       const user = { id: 'restaurant-user', role: 'EMPLOYEE', status: 'ACTIVE' };
       mocks.createSSRHelpers.mockResolvedValue({
@@ -73,13 +74,18 @@ describe('DashboardPage vertical dispatch', () => {
         organization: { id: 'restaurant-tenant' },
         entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
       });
-      mocks.can.mockImplementation(async (_subject, action) => action === capability);
+      mocks.can.mockImplementation(async (_subject, action) => capabilities.includes(action));
 
       await expect(DashboardPage()).rejects.toThrow('redirect');
 
       expect(mocks.redirect).toHaveBeenCalledWith(target);
       expect(mocks.withTenantDb).toHaveBeenCalledWith('restaurant-tenant', expect.any(Function));
-      expect(mocks.can).toHaveBeenCalledWith(user, capability, undefined, { db: mocks.db });
+      expect(mocks.can).toHaveBeenCalledWith(user, capabilities[0], undefined, { db: mocks.db });
+      if (capabilities.includes('admin:access')) {
+        expect(mocks.can).not.toHaveBeenCalledWith(user, 'orders:take', undefined, {
+          db: mocks.db,
+        });
+      }
       expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
       expect(agencyHelpers.meetings.getUpcoming.prefetch).not.toHaveBeenCalled();
     }
