@@ -257,7 +257,7 @@ export async function supplierExpenseAging(database: ScopedDb, scope: Omit<Bookk
       AND NOT EXISTS (
         SELECT 1 FROM "pharmacy_supplier_expense_invoice_events" v
         WHERE v."organizationId"=i."organizationId" AND v."invoiceId"=i.id AND v.kind='VOID'
-          AND v."occurredAt" <= ${input.asOf} AND v."createdAt" <= ${retrievedAt}
+          AND v."occurredAt" <= ${input.asOf} AND v."createdAt" <= ${input.asOf} AND v."createdAt" <= ${retrievedAt}
       )
     GROUP BY i.id HAVING i."amountMinor" - COALESCE(SUM(s."amountMinor") FILTER (WHERE s."occurredAt" <= ${input.asOf}
       AND s."createdAt" <= ${input.asOf} AND s."createdAt" <= ${retrievedAt}

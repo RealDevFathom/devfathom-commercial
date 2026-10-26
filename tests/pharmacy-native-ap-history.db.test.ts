@@ -34,7 +34,7 @@ describeIfDatabase('native AP historical aging in PostgreSQL', () => {
       INSERT INTO pharmacy_supplier_expense_invoices VALUES
         ('invoice', 'org', 'branch', 'REF', 'Utilities', '2026-01-01Z', '2026-01-15Z', 100, '2026-01-01Z');
       INSERT INTO pharmacy_supplier_expense_invoice_events VALUES
-        ('void', 'org', 'invoice', 'VOID', '2026-03-01Z', '2026-03-02Z');
+        ('void', 'org', 'invoice', 'VOID', '2026-01-15Z', '2026-03-02Z');
     `);
   });
 
@@ -43,7 +43,7 @@ describeIfDatabase('native AP historical aging in PostgreSQL', () => {
     await client?.end();
   });
 
-  it('keeps an invoice voided later in an earlier as-of report', async () => {
+  it('keeps a backdated void that was recorded later out of an earlier as-of report', async () => {
     const database = {
       $queryRaw: async (statement: { strings: readonly string[]; values: readonly unknown[] }) => {
         const text = statement.strings.reduce(

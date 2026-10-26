@@ -151,13 +151,13 @@ describe('native non-stock AP', () => {
     const now = new Date('2026-10-26T12:00:00Z');
     const db = { $queryRaw: vi.fn().mockResolvedValueOnce([{ now }]).mockResolvedValueOnce([]) } as any;
     await supplierExpenseAging(db, scope, { from: new Date('2026-01-01Z'), asOf: new Date('2026-10-01Z') });
-    const sql = db.$queryRaw.mock.calls[1]![0].strings.join(' ');
+    const sql = db.$queryRaw.mock.calls[1]![0].strings.join('?');
     expect(sql).toContain('i."createdAt" <= ');
     expect(sql).toContain('s."createdAt" <= ');
     expect(sql).toContain('r."createdAt" <= ');
     expect(sql).toContain("v.kind='VOID'");
     expect(sql).toContain('v."occurredAt" <= ');
-    expect(sql).toContain('v."createdAt" <= ');
+    expect(sql).toContain('v."occurredAt" <= ? AND v."createdAt" <= ? AND v."createdAt" <= ?');
     expect(sql).not.toContain("i.status <> 'VOID'");
   });
 
