@@ -86,6 +86,7 @@ describe('projects.moveTask', () => {
       where: {
         taskId: 'task-1',
         user: {
+          role: { not: 'ADMIN' },
           projectMembers: { none: { projectId: 'destination-project' } },
         },
       },
@@ -93,7 +94,12 @@ describe('projects.moveTask', () => {
     expect(defaultAssigneeFindMany).toHaveBeenCalledWith({
       where: {
         columnId: 'target-column',
-        user: { projectMembers: { some: { projectId: 'destination-project' } } },
+        user: {
+          OR: [
+            { role: 'ADMIN' },
+            { projectMembers: { some: { projectId: 'destination-project' } } },
+          ],
+        },
       },
       select: { userId: true },
     });
@@ -133,6 +139,7 @@ describe('projects.moveTask', () => {
       where: {
         taskId: { in: ['task-1'] },
         user: {
+          role: { not: 'ADMIN' },
           projectMembers: { none: { projectId: 'destination-project' } },
         },
       },
@@ -140,7 +147,12 @@ describe('projects.moveTask', () => {
     expect(defaultAssigneeFindMany).toHaveBeenCalledWith({
       where: {
         columnId: 'target-column',
-        user: { projectMembers: { some: { projectId: 'destination-project' } } },
+        user: {
+          OR: [
+            { role: 'ADMIN' },
+            { projectMembers: { some: { projectId: 'destination-project' } } },
+          ],
+        },
       },
       select: { userId: true },
     });
