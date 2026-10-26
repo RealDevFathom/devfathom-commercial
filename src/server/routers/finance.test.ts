@@ -73,10 +73,16 @@ describe('finance.getFinancialSummary', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-26T12:34:56.000Z'));
     mocks.transactionGroupBy.mockImplementation(
-      ({ where }: { where: { type: 'INCOME' | 'EXPENSE' } }) =>
-        Promise.resolve([
-          { currency: 'USD', _sum: { amount: where.type === 'EXPENSE' ? 100 : 300 } },
-        ])
+      ({ where }: { where: { type: 'INCOME' | 'EXPENSE'; date: { gte: Date } } }) => {
+        const yearly = where.date.gte.getUTCMonth() === 0;
+        const amount = where.type === 'EXPENSE' ? (yearly ? 400 : 100) : yearly ? 1200 : 300;
+        return Promise.resolve([
+          {
+            currency: 'USD',
+            _sum: { amount },
+          },
+        ]);
+      }
     );
     mocks.recurringFindMany.mockResolvedValue([
       { amount: 100, currency: 'USD', interval: 'monthly' },
@@ -86,8 +92,8 @@ describe('finance.getFinancialSummary', () => {
 
     expect(summary.monthlyExpense).toEqual([{ currency: 'USD', amount: 100 }]);
     expect(summary.monthlyProfit).toEqual([{ currency: 'USD', amount: 200 }]);
-    expect(summary.yearlyExpense).toEqual([{ currency: 'USD', amount: 100 }]);
-    expect(summary.yearlyProfit).toEqual([{ currency: 'USD', amount: 200 }]);
+    expect(summary.yearlyExpense).toEqual([{ currency: 'USD', amount: 400 }]);
+    expect(summary.yearlyProfit).toEqual([{ currency: 'USD', amount: 800 }]);
     expect(mocks.transactionGroupBy).toHaveBeenCalledTimes(4);
     expect(mocks.transactionGroupBy.mock.calls.map(([query]) => query)).toEqual([
       {
