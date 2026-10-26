@@ -11,7 +11,7 @@ const sql = readFileSync(
 );
 
 (databaseUrl ? describe : describe.skip)('prescription calendar-validity migration', () => {
-  it('retains UTC calendar dates when the database session is west of UTC', async () => {
+  it('retains entered calendar dates when the database session is west of UTC', async () => {
     const client = new Client({ connectionString: databaseUrl });
     await client.connect();
 
@@ -20,13 +20,13 @@ const sql = readFileSync(
       await client.query("SET LOCAL TIME ZONE 'America/Los_Angeles'");
       await client.query(`
         CREATE TEMP TABLE pharmacy_prescriptions (
-          "validFrom" timestamptz NOT NULL,
-          "validUntil" timestamptz NOT NULL
+          "validFrom" timestamp(3) NOT NULL,
+          "validUntil" timestamp(3) NOT NULL
         ) ON COMMIT DROP
       `);
       await client.query(`
         INSERT INTO pharmacy_prescriptions ("validFrom", "validUntil")
-        VALUES ('2026-10-22T00:00:00Z', '2026-10-31T00:00:00Z')
+        VALUES ('2026-10-22 00:00:00', '2026-10-31 00:00:00')
       `);
 
       await client.query(sql);
