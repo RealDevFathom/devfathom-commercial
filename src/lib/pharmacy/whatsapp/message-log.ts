@@ -87,6 +87,30 @@ export async function sendClaimedMessage(
   logId: string,
   send: () => Promise<WhatsAppSendResult>
 ): Promise<'SENT' | 'PREPARED' | 'UNKNOWN' | 'FAILED'> {
+  // A reminder's reservation and provider call are deliberately separated by a
+  // commit. Consent can change in that gap, so never rely solely on the customer
+  // loaded while claiming the row. Consent acknowledgements are excluded: a
+  // STOP acknowledgement must still be sent after recording the opt-out.
+  if (entry.customerId && (entry.kind === 'REFILL_REMINDER' || entry.kind === 'KHATA_REMINDER')) {
+    const eligible = await withTenantDb(entry.organizationId, (db) =>
+      db.pharmacyCustomer.findFirst({
+        where: {
+          organizationId: entry.organizationId,
+          id: entry.customerId!,
+          active: true,
+          whatsappOptIn: true,
+        },
+        select: { id: true },
+      })
+    );
+    if (!eligible) {
+      await updateMessageLog(entry.organizationId, logId, {
+        status: 'IGNORED',
+        error: 'OPTED_OUT_BEFORE_SEND',
+      });
+      return 'PREPARED';
+    }
+  }
   let result: WhatsAppSendResult;
   try {
     result = await send();

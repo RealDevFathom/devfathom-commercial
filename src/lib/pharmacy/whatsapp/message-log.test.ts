@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ claim: vi.fn(), update: vi.fn() }));
+const mocks = vi.hoisted(() => ({ claim: vi.fn(), update: vi.fn(), customer: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: (_organizationId: string, fn: (db: unknown) => unknown) =>
     fn({
       pharmacyMessageLog: { createManyAndReturn: mocks.claim, update: mocks.update },
+      pharmacyCustomer: { findFirst: mocks.customer },
     }),
 }));
 import { sendAndLog } from './message-log';
@@ -15,6 +16,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.claim.mockResolvedValue([{ id: 'log-a' }]);
   mocks.update.mockResolvedValue({});
+  mocks.customer.mockResolvedValue({ id: 'customer-a' });
 });
 
 describe('outbound evidence and safe replay', () => {
@@ -91,6 +93,42 @@ describe('outbound evidence and safe replay', () => {
     expect(await sendAndLog(entry, send)).toBe('DUPLICATE');
     expect(send).not.toHaveBeenCalled();
     expect(mocks.update).not.toHaveBeenCalled();
+  });
+  it('re-checks opt-in after claiming and suppresses a reminder opted out before send', async () => {
+    mocks.customer.mockResolvedValue(null);
+    const send = vi.fn();
+
+    await expect(sendAndLog({ ...entry, customerId: 'customer-a' }, send)).resolves.toBe(
+      'PREPARED'
+    );
+
+    expect(mocks.customer).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-a',
+        id: 'customer-a',
+        active: true,
+        whatsappOptIn: true,
+      },
+      select: { id: true },
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(mocks.update).toHaveBeenCalledWith({
+      where: { id: 'log-a' },
+      data: { status: 'IGNORED', error: 'OPTED_OUT_BEFORE_SEND' },
+    });
+  });
+  it('still sends STOP acknowledgements after the customer is opted out', async () => {
+    const send = vi.fn().mockResolvedValue({
+      providerMessageId: 'ack-1',
+      acceptedByProvider: true,
+    });
+
+    await expect(
+      sendAndLog({ ...entry, kind: 'CONSENT_ACK', customerId: 'customer-a' }, send)
+    ).resolves.toBe('SENT');
+
+    expect(mocks.customer).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledOnce();
   });
   it('treats an unclassified adapter response as unknown', async () => {
     expect(await sendAndLog(entry, async () => ({ providerMessageId: 'legacy' }))).toBe('UNKNOWN');
