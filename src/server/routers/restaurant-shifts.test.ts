@@ -1139,7 +1139,8 @@ describe('restaurantShifts.reviewSwap', () => {
       requestId: request!.id,
       branchId: 'branch_1',
       decision: 'REJECTED',
-      idempotencyKey: 'rv-reject-attendance',
+      // The failed approval must not consume its idempotency key or the pending request.
+      idempotencyKey: 'rv-approve-before-reject',
     });
 
     expect(decision).toMatchObject({ requestId: request!.id, decision: 'REJECTED' });
