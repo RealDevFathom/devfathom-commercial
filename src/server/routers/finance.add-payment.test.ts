@@ -69,6 +69,7 @@ describe('finance.addPayment', () => {
   it('logs invoice_paid when a payment covers the outstanding balance', async () => {
     await caller().addPayment({ invoiceId: 'invoice-1', amount: 60 });
 
+    expect(mocks.invoiceUpdate).toHaveBeenCalledOnce();
     expect(mocks.logActivity).toHaveBeenCalledOnce();
     expect(mocks.logActivity).toHaveBeenCalledWith(expect.anything(), 'admin-1', {
       type: 'invoice_paid',
@@ -76,6 +77,18 @@ describe('finance.addPayment', () => {
       entityType: 'Invoice',
       entityId: 'invoice-1',
     });
+    expect(mocks.emitEvent).toHaveBeenCalledOnce();
+    expect(mocks.emitEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'invoice.paid',
+      {
+        invoiceId: 'invoice-1',
+        total: 100,
+        currency: 'USD',
+        clientId: 'client-1',
+      }
+    );
   });
 
   it('does not log invoice_paid for a partial payment', async () => {
