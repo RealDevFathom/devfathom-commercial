@@ -92,29 +92,32 @@ describe('DashboardPage vertical dispatch', () => {
     }
   );
 
-  it('keeps a Restaurant user without order-taking access on the usable dashboard', async () => {
-    const user = { id: 'kitchen-user', role: 'EMPLOYEE', status: 'ACTIVE' };
-    mocks.createSSRHelpers.mockResolvedValue({
-      helpers: helpers(),
-      session: { user },
-      organization: { id: 'restaurant-tenant' },
-      entitlements: {
-        vertical: 'RESTAURANT',
-        enabledModules: ['restaurant-core', 'restaurant-inventory'],
-      },
-    });
-    mocks.can.mockResolvedValue(false);
+  it.each(['ADMIN', 'EMPLOYEE'])(
+    'keeps a Restaurant %s without order-taking access on the usable dashboard',
+    async (role) => {
+      const user = { id: 'kitchen-user', role, status: 'ACTIVE' };
+      mocks.createSSRHelpers.mockResolvedValue({
+        helpers: helpers(),
+        session: { user },
+        organization: { id: 'restaurant-tenant' },
+        entitlements: {
+          vertical: 'RESTAURANT',
+          enabledModules: ['restaurant-core', 'restaurant-inventory'],
+        },
+      });
+      mocks.can.mockResolvedValue(false);
 
-    const page = await DashboardPage();
+      const page = await DashboardPage();
 
-    expect(mocks.redirect).not.toHaveBeenCalled();
-    expect(mocks.can).toHaveBeenCalledWith(user, 'orders:take', undefined, { db: mocks.db });
-    expect(page.props.children.type).toBe(RestaurantDashboardContent);
-    expect(page.props.children.props.enabledModules).toEqual([
-      'restaurant-core',
-      'restaurant-inventory',
-    ]);
-  });
+      expect(mocks.redirect).not.toHaveBeenCalled();
+      expect(mocks.can).toHaveBeenCalledWith(user, 'orders:take', undefined, { db: mocks.db });
+      expect(page.props.children.type).toBe(RestaurantDashboardContent);
+      expect(page.props.children.props.enabledModules).toEqual([
+        'restaurant-core',
+        'restaurant-inventory',
+      ]);
+    }
+  );
 
   it.each([
     ['organization', undefined, { user: { id: 'kitchen-user', role: 'EMPLOYEE' } }],
