@@ -903,7 +903,6 @@ export async function commitMenuImport(
         organizationId: true,
         status: true,
         fileName: true,
-        defaultCurrency: true,
         storageObjectName: true,
         committedMenuId: true,
         committedPriceListVersionId: true,

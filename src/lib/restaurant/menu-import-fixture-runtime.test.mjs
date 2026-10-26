@@ -486,6 +486,39 @@ test('commit validates reviewed prices against the current organization currency
   );
 });
 
+test('commit rejects an extracted price when the organization currency changed after upload', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  f.record.status = 'AWAITING_REVIEW';
+  f.record.fileName = 'stale-extraction-menu.png';
+  f.record.defaultCurrency = 'PKR';
+  f.record.currentCurrency = 'USD';
+  f.lines.push({
+    id: 'line_1',
+    reviewStatus: 'ACCEPTED',
+    sortOrder: 1,
+    extractedCategoryName: null,
+    extractedProductName: 'Stale extracted price',
+    extractedDescription: null,
+    extractedPriceAmount: new (f.load('@/generated/prisma/client').Prisma.Decimal)('500'),
+    extractedCurrency: 'PKR',
+    extractedVariants: [],
+    reviewedCategoryName: null,
+    reviewedProductName: null,
+    reviewedDescription: null,
+    reviewedPriceAmount: null,
+    reviewedCurrency: null,
+    mergeProductId: null,
+    mergeVariantId: null,
+  });
+
+  await assert.rejects(
+    menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' }),
+    { reason: 'CURRENCY_MISMATCH' }
+  );
+  assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'createProduct'));
+});
+
 for (const node of ['test', 'development', 'production']) {
   test(`configured FIXTURE upload in ${node} preserves preflight and composition policy`, async () => {
     const f = setup(node);
