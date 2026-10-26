@@ -287,26 +287,29 @@ describe('createAssignment — recurrence validation mapping', () => {
 });
 
 describe('updateAssignment — effective-dated successor', () => {
+  const assignment = (overrides: Record<string, unknown> = {}) => ({
+    id: 'assignment_1',
+    branchId: 'b1',
+    templateId: 't1',
+    frequency: 'DAILY',
+    interval: 1,
+    daysOfWeek: [],
+    monthDay: null,
+    startDate: new Date('2026-05-01T00:00:00.000Z'),
+    endDate: null,
+    dueTimeMinutes: 600,
+    intervalEndTimeMinutes: null,
+    windowMinutes: 60,
+    graceMinutes: 15,
+    active: true,
+    assigneeTargetType: 'ROLE',
+    assigneeStaffProfileId: null,
+    assigneeJobRoleId: 'jr1',
+    ...overrides,
+  });
+
   it('keeps the predecessor schedulable until a future successor becomes effective', async () => {
-    db.restaurantSopAssignment.findUnique.mockResolvedValue({
-      id: 'assignment_1',
-      branchId: 'b1',
-      templateId: 't1',
-      frequency: 'DAILY',
-      interval: 1,
-      daysOfWeek: [],
-      monthDay: null,
-      startDate: new Date('2026-05-01T00:00:00.000Z'),
-      endDate: null,
-      dueTimeMinutes: 600,
-      intervalEndTimeMinutes: null,
-      windowMinutes: 60,
-      graceMinutes: 15,
-      active: true,
-      assigneeTargetType: 'ROLE',
-      assigneeStaffProfileId: null,
-      assigneeJobRoleId: 'jr1',
-    });
+    db.restaurantSopAssignment.findUnique.mockResolvedValue(assignment());
 
     const successor = await caller().updateAssignment({
       id: 'assignment_1',
@@ -336,6 +339,47 @@ describe('updateAssignment — effective-dated successor', () => {
       },
     });
     expect(db.restaurantSopOccurrence.findMany).not.toHaveBeenCalled();
+  });
+
+  it('preserves an earlier predecessor end date when the successor extends the schedule', async () => {
+    db.restaurantSopAssignment.findUnique.mockResolvedValue(
+      assignment({
+        endDate: new Date('2026-05-15T00:00:00.000Z'),
+      })
+    );
+
+    await caller().updateAssignment({
+      id: 'assignment_1',
+      effectiveDate: '2026-06-01',
+      endDate: '2026-06-30',
+    });
+
+    expect(db.restaurantSopAssignment.update).toHaveBeenCalledWith({
+      where: { id: 'assignment_1' },
+      data: {
+        active: true,
+        endDate: new Date('2026-05-15T00:00:00.000Z'),
+        supersededAt: expect.any(Date),
+      },
+    });
+  });
+
+  it('keeps a paused assignment and its successor inactive', async () => {
+    db.restaurantSopAssignment.findUnique.mockResolvedValue(assignment({ active: false }));
+
+    await caller().updateAssignment({ id: 'assignment_1', effectiveDate: '2026-06-01' });
+
+    expect(db.restaurantSopAssignment.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ active: false }) })
+    );
+    expect(db.restaurantSopAssignment.update).toHaveBeenCalledWith({
+      where: { id: 'assignment_1' },
+      data: {
+        active: false,
+        endDate: new Date('2026-05-31T00:00:00.000Z'),
+        supersededAt: expect.any(Date),
+      },
+    });
   });
 });
 
