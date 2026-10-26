@@ -259,6 +259,15 @@ describe('retention survives failed deletion', () => {
     expect(vi.mocked(db.$queryRaw).mock.invocationCallOrder[0]).toBeLessThan(
       table.findUnique.mock.invocationCallOrder[0]!
     );
+    expect(table.findUnique).toHaveBeenCalledWith({
+      where: { id: record.id, organizationId: record.organizationId },
+      select: {
+        organizationId: true,
+        status: true,
+        storageObjectName: true,
+        createdAt: true,
+      },
+    });
     expect(runtime.deleteSource).not.toHaveBeenCalled();
     expect(table.delete).not.toHaveBeenCalled();
   });
