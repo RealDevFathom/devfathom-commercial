@@ -6,7 +6,7 @@ describe('accountCodeReference', () => {
   it('contains every canonical account exactly once with its exact normal side', () => {
     const reference = accountCodeReference();
     const canonical = Object.entries(ACCOUNT_NORMAL_SIDE).sort(([left], [right]) =>
-      left.localeCompare(right)
+      left < right ? -1 : left > right ? 1 : 0
     );
 
     expect(reference.map(({ code, normalSide }) => [code, normalSide])).toEqual(canonical);

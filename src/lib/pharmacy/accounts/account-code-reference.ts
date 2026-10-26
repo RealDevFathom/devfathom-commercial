@@ -15,6 +15,6 @@ export function accountCodeReference(): readonly AccountCodeReferenceRow[] {
   return Object.freeze(
     (Object.entries(ACCOUNT_NORMAL_SIDE) as [FinanceAccountCode, JournalSide][])
       .map(([code, normalSide]) => Object.freeze({ code, normalSide }))
-      .sort((left, right) => left.code.localeCompare(right.code))
+      .sort((left, right) => (left.code < right.code ? -1 : left.code > right.code ? 1 : 0))
   );
 }
