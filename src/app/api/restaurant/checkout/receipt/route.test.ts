@@ -252,9 +252,11 @@ describe('Restaurant receipt dispatch', () => {
       fractionDenominator: 3,
       lines: [],
     });
-    const preview = await (
-      await GET(new Request('https://tenant.test/api/restaurant/checkout/receipt?billId=bill-1'))
-    ).json();
+    const previewResponse = await GET(
+      new Request('https://tenant.test/api/restaurant/checkout/receipt?billId=bill-1')
+    );
+    expect(previewResponse.status).toBe(200);
+    const preview = await previewResponse.json();
     expect(preview.printing.preview).toMatchObject({
       source: 'saved',
       text: expect.stringContaining('Fractional share 1/3: 26.05'),
@@ -263,6 +265,7 @@ describe('Restaurant receipt dispatch', () => {
 
     const response = await post();
     expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ latestJob: { status: 'PENDING' } });
     expect(jobs).toHaveLength(1);
     const facts = PrintDocumentSchema.parse(jobs[0].document).receiptSnapshot!.facts;
     expect(facts.lines).toEqual(['Fractional share 1/3: 26.05']);
