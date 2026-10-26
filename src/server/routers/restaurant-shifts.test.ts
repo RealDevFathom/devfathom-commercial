@@ -726,6 +726,7 @@ describe('restaurantShifts.cancel', () => {
     await expect(
       caller('OWNER').cancel({ id: 'shift_emp', expectedVersion: 1 })
     ).rejects.toMatchObject({ code: 'CONFLICT', message: 'The employee is clocked in.' });
+    expect(eventsOf('CANCELLED')).toHaveLength(1);
 
     await expect(
       caller('EMPLOYEE').cancel({ id: 'shift_emp', expectedVersion: 1 })
