@@ -37,6 +37,7 @@ function request(overrides?: {
   fetchSite?: string;
   omitOrigin?: boolean;
   file?: unknown;
+  uploaderStaffProfileId?: string;
 }) {
   const form = new FormData();
   form.set('branchId', 'branch-1');
@@ -44,7 +45,9 @@ function request(overrides?: {
   form.set('occurrenceId', 'occurrence-1');
   form.set('occurrenceStepId', 'step-1');
   form.set('evidencePurpose', 'photo');
-  form.set('uploaderStaffProfileId', 'staff-1');
+  if (overrides?.uploaderStaffProfileId) {
+    form.set('uploaderStaffProfileId', overrides.uploaderStaffProfileId);
+  }
   form.set('file', new File(['proof'], 'proof.jpg', { type: overrides?.type ?? 'image/jpeg' }));
   if (overrides && 'file' in overrides) {
     const get = form.get.bind(form);
@@ -110,6 +113,7 @@ describe('POST SOP evidence', () => {
         forwardedHost: 'wha346.devfathom.test',
         origin: 'https://wha346.devfathom.test',
         fetchSite: 'same-origin',
+        uploaderStaffProfileId: 'spoofed-staff',
       })
     );
 
@@ -131,6 +135,10 @@ describe('POST SOP evidence', () => {
         mimeType: 'image/jpeg; evidence=photo',
         uploaderStaffProfileId: 'session-staff',
       })
+    );
+    expect(mocks.attachEvidence).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ uploaderStaffProfileId: 'spoofed-staff' })
     );
     expect(mocks.resolveRestaurantActor).toHaveBeenCalledWith(
       expect.objectContaining({ session: { user: { id: 'user-1' } } }),
