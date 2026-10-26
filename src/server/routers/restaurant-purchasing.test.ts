@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => {
     findStaffProfiles: fn(),
     findBranchAssignments: fn(),
     findPurchaseOrder: fn(),
+    findPurchaseReceipt: fn(),
     findStockLocation: fn(),
     annotateAudit: fn(),
   };
@@ -108,6 +109,7 @@ function caller() {
         ),
       },
       restaurantPurchaseOrder: { findUnique: mocks.findPurchaseOrder },
+      restaurantPurchaseReceipt: { findUnique: mocks.findPurchaseReceipt },
       restaurantStockLocation: { findUnique: mocks.findStockLocation },
     } as never,
     entitlements: {
@@ -142,6 +144,7 @@ beforeEach(() => {
   mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff_server', primaryBranchId: 'b1' }]);
   mocks.findBranchAssignments.mockResolvedValue([]);
   mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b1', locationId: 'loc1' });
+  mocks.findPurchaseReceipt.mockResolvedValue({ branchId: 'b1' });
   mocks.findStockLocation.mockResolvedValue({ branchId: 'b1' });
 });
 
@@ -245,6 +248,51 @@ describe('Decimal-as-string serialization (D07)', () => {
 });
 
 describe('actor + idempotency plumbing', () => {
+  it('denies branch-limited staff access to purchase orders and receipts from another branch', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+    mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b2', locationId: 'loc2' });
+    mocks.findPurchaseReceipt.mockResolvedValue({ branchId: 'b2' });
+
+    await expect(caller().listPurchaseOrders({})).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().listPurchaseOrders({ branchId: 'b2' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(caller().getPurchaseOrder({ purchaseOrderId: 'po2' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(caller().getReceipt({ receiptId: 'receipt2' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+
+    const mutations = [
+      () => caller().addPurchaseOrderLine({ purchaseOrderId: 'po2', line: lineInput() }),
+      () =>
+        caller().updatePurchaseOrderLine({
+          purchaseOrderId: 'po2',
+          lineId: 'line2',
+          unitCost: '2',
+        }),
+      () => caller().removePurchaseOrderLine({ purchaseOrderId: 'po2', lineId: 'line2' }),
+      () => caller().submitPurchaseOrder({ purchaseOrderId: 'po2' }),
+      () => caller().cancelPurchaseOrder({ purchaseOrderId: 'po2' }),
+      () => caller().closePurchaseOrder({ purchaseOrderId: 'po2' }),
+    ];
+    for (const mutation of mutations) {
+      await expect(mutation()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+
+    expect(mocks.listPurchaseOrders).not.toHaveBeenCalled();
+    expect(mocks.getPurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.getPurchaseReceipt).not.toHaveBeenCalled();
+    expect(mocks.addPurchaseOrderLine).not.toHaveBeenCalled();
+    expect(mocks.updatePurchaseOrderLine).not.toHaveBeenCalled();
+    expect(mocks.removePurchaseOrderLine).not.toHaveBeenCalled();
+    expect(mocks.submitPurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.cancelPurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.closePurchaseOrder).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+  });
+
   it('rejects a create location outside the authorized branch before mutation', async () => {
     mocks.findStockLocation.mockResolvedValue({ branchId: 'b2' });
 
@@ -415,4 +463,8 @@ function minimalOrder() {
     lines: [],
     receipts: [],
   };
+}
+
+function lineInput() {
+  return { stockItemId: 'si1', orderedQuantity: '1', unitId: 'u1', unitCost: '1' };
 }
