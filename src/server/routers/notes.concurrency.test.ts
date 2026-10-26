@@ -93,13 +93,15 @@ describe('notes.update concurrency', () => {
       caller('editor_b').update({ id: note.id, contentJson: doc('B') }),
       caller('editor_c').update({ id: note.id, contentJson: doc('C') }),
     ]);
+    await caller('editor_c').update({ id: note.id, contentJson: doc('C') });
 
     expect(note.contentText).toBe('C');
     expect(revisions).toEqual([
       { contentText: 'A', editedById: 'editor_b' },
       { contentText: 'B', editedById: 'editor_c' },
     ]);
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(tx.noteRevision.create).toHaveBeenCalledTimes(2);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(3);
     const lockQuery = tx.$queryRaw.mock.calls[0]?.[0].join('?');
     expect(lockQuery).toContain('"organizationId" = ?');
     expect(lockQuery).toContain('FOR UPDATE');
