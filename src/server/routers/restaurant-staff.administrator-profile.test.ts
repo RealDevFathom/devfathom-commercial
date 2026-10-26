@@ -403,6 +403,12 @@ describe('administrator repair authorization before writes', () => {
 
       await expect(run(staffProfileId)).rejects.toMatchObject({ code: 'FORBIDDEN' });
 
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.anything(),
+        'restaurant:configure',
+        undefined,
+        expect.objectContaining({ db, source: 'TRPC' })
+      );
       expect(mocks.resolveStaffCapabilities).toHaveBeenCalledWith(
         db,
         'staff_actor',
