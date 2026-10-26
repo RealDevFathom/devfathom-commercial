@@ -33,10 +33,12 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
+  returnSaleLine: vi.fn(async () => ({ returnLine: { id: 'return-line-1' } })),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
+  refundPharmacyTender: vi.fn(async () => ({ refundId: 'refund-1' })),
 }));
 vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),
@@ -64,8 +66,8 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { readReturnHistory } from '@/lib/pharmacy/sales';
-import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import { readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
+import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
@@ -128,6 +130,7 @@ function fixture(
         },
       ]),
     },
+    pharmacyTender: { findFirst: vi.fn(async () => ({ type: 'CASH' })) },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     $transaction: vi.fn(),
   };
@@ -215,6 +218,70 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  const refundInput = {
+    branchId: 'branch-a',
+    originalTenderId: 'tender-1',
+    deviceId: 'device-a',
+    businessDate: new Date('2026-10-01T00:00:00.000Z'),
+    amountMinor: 100,
+    reason: 'Returned medicine',
+    manualCashFallback: true,
+    idempotencyKey: 'refund-1',
+  };
+  const returnInput = {
+    branchId: 'branch-a',
+    saleLineId: 'line-1',
+    lotId: 'lot-1',
+    canonicalUnits: 1,
+    disposition: 'QUARANTINE' as const,
+    reason: 'Customer return',
+    integrityDecision: 'Seal opened',
+    idempotencyKey: 'return-1',
+  };
+
+  it.each([
+    ['refundTender', (caller: Caller) => caller.refundTender(refundInput)],
+    ['returnLine', (caller: Caller) => caller.returnLine(returnInput)],
+  ])(
+    '%s denies users without canonical counter capability before opening a transaction',
+    async (_name, run) => {
+      const f = fixture([{ capability: 'pharmacy:orders', effect: 'ALLOW' }]);
+      assign(f, ['branch-a']);
+
+      await expect(run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(refundPharmacyTender).not.toHaveBeenCalled();
+      expect(returnSaleLine).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    ['refundTender', (caller: Caller) => caller.refundTender(refundInput)],
+    ['returnLine', (caller: Caller) => caller.returnLine(returnInput)],
+  ])('%s denies a counter user who is not assigned to the branch', async (_name, run) => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+
+    await expect(run(f.caller())).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(returnSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('allows an assigned counter user to record a return and issue a cash fallback refund', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+
+    await expect(f.caller().returnLine(returnInput)).resolves.toMatchObject({
+      returnLine: { id: 'return-line-1' },
+    });
+    await expect(f.caller().refundTender(refundInput)).resolves.toEqual({ refundId: 'refund-1' });
+    expect(returnSaleLine).toHaveBeenCalled();
+    expect(refundPharmacyTender).toHaveBeenCalled();
+  });
+
   it('rejects status-only completion before opening a transaction', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
