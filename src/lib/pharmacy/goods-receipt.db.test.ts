@@ -470,6 +470,72 @@ describeIfDatabase('PUR-02 — posting a receipt into the batch ledger', () => {
     expect(result.posted.exceptions).toEqual([]);
   });
 
+  it('serializes posting against cancellation of the linked order', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'post-cancel-race');
+    const drafted = await inOrg(ORG_A, (db) => draftReceipt(db, f, 'post-cancel-race'));
+
+    let releaseOrderLock!: () => void;
+    const holdOrderLock = new Promise<void>((resolve) => {
+      releaseOrderLock = resolve;
+    });
+    let orderLocked!: () => void;
+    const hasOrderLock = new Promise<void>((resolve) => {
+      orderLocked = resolve;
+    });
+
+    const posting = inOrg(ORG_A, async (db) => {
+      let lockQueries = 0;
+      const pausedDb = new Proxy(db, {
+        get(target, property, receiver) {
+          const value = Reflect.get(target, property, receiver);
+          if (property !== '$queryRaw' || typeof value !== 'function') return value;
+          return async (...args: unknown[]) => {
+            const rows = await Reflect.apply(value, target, args);
+            lockQueries += 1;
+            if (lockQueries === 2) {
+              orderLocked();
+              await holdOrderLock;
+            }
+            return rows;
+          };
+        },
+      }) as ScopedDb;
+      return deps.receipts.postGoodsReceipt(pausedDb, scopeOf(f), {
+        goodsReceiptId: drafted.id,
+        at: RECEIVED_AT,
+      });
+    });
+
+    await hasOrderLock;
+    let cancellationSettled = false;
+    const cancellation = inOrg(ORG_A, (db) =>
+      db.pharmacyPurchaseOrder
+        .update({ where: { id: f.purchaseOrderId }, data: { status: 'CANCELLED' } })
+        .finally(() => {
+          cancellationSettled = true;
+        })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(cancellationSettled).toBe(false);
+
+    releaseOrderLock();
+    await posting;
+    await expect(cancellation).rejects.toThrow();
+
+    const result = await inOrg(ORG_A, async (db) => ({
+      order: await db.pharmacyPurchaseOrder.findFirstOrThrow({
+        where: { id: f.purchaseOrderId },
+      }),
+      receipt: await db.pharmacyGoodsReceipt.findFirstOrThrow({ where: { id: drafted.id } }),
+      movements: await db.pharmacyStockMovement.count({
+        where: { organizationId: ORG_A, branchId: BRANCH_A, kind: 'RECEIPT' },
+      }),
+    }));
+    expect(result.order.status).toBe('RECEIVING');
+    expect(result.receipt.status).toBe('POSTED');
+    expect(result.movements).toBeGreaterThan(0);
+  });
+
   it('joins a second delivery of the same batch number to the one batch', async () => {
     // §8A invariant 18: one manufacturing batch, many inventory lots — which is
     // what lets a recall reach every lot of it at once.

@@ -24,6 +24,23 @@ function receiptDb(line: {
   const batchFind = vi.fn().mockResolvedValue(null);
   const lineUpdate = vi.fn().mockResolvedValue({});
   const db = {
+    $queryRaw: vi.fn().mockImplementation((query: TemplateStringsArray) => {
+      const sql = query.join('');
+      if (sql.includes('pharmacy_purchase_orders')) {
+        return Promise.resolve(
+          line.purchaseOrderStatus
+            ? [
+                {
+                  id: 'po',
+                  branchId: line.purchaseOrderBranchId ?? 'branch_a',
+                  status: line.purchaseOrderStatus,
+                },
+              ]
+            : []
+        );
+      }
+      return Promise.resolve([{ id: 'gr' }]);
+    }),
     medicine: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyGoodsReceipt: {
       findFirst: vi.fn().mockResolvedValue({
@@ -87,6 +104,7 @@ function receiptDb(line: {
     pharmacyReceivingException: {
       create: vi.fn().mockResolvedValue({ id: 'ex', kind: 'DAMAGE', detail: '' }),
     },
+    pharmacyPurchaseOrder: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
   };
   return { db: db as unknown as ScopedDb, batchFind, lineUpdate };
 }
