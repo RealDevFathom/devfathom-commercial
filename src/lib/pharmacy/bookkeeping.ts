@@ -60,7 +60,7 @@ function positiveMinor(value: number) {
     throw new PharmacyBookkeepingError('INVALID_AMOUNT');
 }
 
-async function assertPeriodOpen(db: ScopedDb, scope: BookkeepingScope, at: Date) {
+export async function assertAccountingPeriodOpen(db: ScopedDb, scope: BookkeepingScope, at: Date) {
   const closed = await db.pharmacyAccountingPeriod.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -115,7 +115,7 @@ export async function postBookkeepingTransaction(
   input: PostBookkeepingInput
 ) {
   positiveMinor(input.amountMinor);
-  await assertPeriodOpen(db, scope, input.occurredAt);
+  await assertAccountingPeriodOpen(db, scope, input.occurredAt);
   if (input.kind === 'CHEQUE' && !input.chequeNumber?.trim())
     throw new PharmacyBookkeepingError('INVALID_CHEQUE');
   const allocations = input.allocations ?? [];
@@ -187,7 +187,7 @@ export async function reverseBookkeepingTransaction(
   }
 ) {
   if (!input.reason.trim()) throw new PharmacyBookkeepingError('MISSING_REASON');
-  await assertPeriodOpen(db, scope, input.at);
+  await assertAccountingPeriodOpen(db, scope, input.at);
   // This interlock deliberately runs before the canonical transaction's status/replay
   // handling.  Otherwise a caller could use a guessed transaction id and learn or
   // replay the reversal without proving which tenant/branch invoice owns it.
@@ -207,6 +207,15 @@ export async function reverseBookkeepingTransaction(
   });
   if (nativeSettlement && nativeSettlement.id !== input.nativeSettlementId)
     throw new PharmacyBookkeepingError('INVALID_STATE');
+  // Serialize every reversal path on the canonical money-moving row. This lock
+  // is held by the caller's transaction until both the journal and status
+  // changes commit, so differently keyed concurrent requests cannot both post.
+  await db.$queryRaw`
+    SELECT id FROM pharmacy_bookkeeping_transactions
+    WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId}
+      AND id=${input.transactionId}
+    FOR UPDATE
+  `;
   const transaction = await db.pharmacyBookkeepingTransaction.findFirst({
     where: {
       organizationId: scope.organizationId,

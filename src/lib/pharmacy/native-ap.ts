@@ -2,6 +2,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { postJournalEntry } from '@/lib/finance/journal';
 import {
   PharmacyBookkeepingError,
+  assertAccountingPeriodOpen,
   postBookkeepingTransaction,
   reverseBookkeepingTransaction,
   type BookkeepingScope,
@@ -81,6 +82,8 @@ export async function createSupplierExpenseInvoice(
     select: { id: true },
   });
   if (!supplier) throw new PharmacyBookkeepingError('NOT_FOUND');
+
+  await assertAccountingPeriodOpen(database, scope, input.issuedAt);
 
   const entry = await postJournalEntry(database, scope, {
     sourceKind: 'PHARMACY_SUPPLIER_EXPENSE_INVOICE',
@@ -193,12 +196,23 @@ export async function reverseSupplierExpenseSettlement(
   input: { settlementId: string; reason: string; at: Date; idempotencyKey: string }
 ) {
   const db = database as NativeDb;
-  const settlement = await db.pharmacySupplierExpenseSettlement.findFirst({
-    where: { organizationId: scope.organizationId, id: input.settlementId },
-    include: { invoice: true },
-  });
-  if (!settlement || settlement.invoice.branchId !== scope.branchId)
-    throw new PharmacyBookkeepingError('NOT_FOUND');
+  // Lock the native settlement before inspecting status or replay evidence.
+  // The lock is retained by the router's transaction through canonical journal
+  // reversal and native status updates.
+  const settlements = await db.$queryRaw<Array<{
+    id: string; invoiceId: string; bookkeepingTransactionId: string;
+    status: string; occurredAt: Date;
+  }>>(Prisma.sql`
+    SELECT s.id, s."invoiceId", s."bookkeepingTransactionId", s.status, s."occurredAt"
+    FROM pharmacy_supplier_expense_settlements s
+    JOIN pharmacy_supplier_expense_invoices i
+      ON i."organizationId"=s."organizationId" AND i.id=s."invoiceId"
+    WHERE s."organizationId"=${scope.organizationId} AND i."branchId"=${scope.branchId}
+      AND s.id=${input.settlementId}
+    FOR UPDATE OF s
+  `);
+  const settlement = settlements[0];
+  if (!settlement) throw new PharmacyBookkeepingError('NOT_FOUND');
   if (input.at < new Date(settlement.occurredAt))
     throw new PharmacyBookkeepingError('INVALID_STATE');
   const replay = await db.pharmacySupplierExpenseSettlementReversal.findFirst({
