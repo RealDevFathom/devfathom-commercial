@@ -1,10 +1,32 @@
 import { describe, expect, it } from 'vitest';
-import { classifyBalanceSheet } from './balance-sheet';
+import { classifyBalanceSheet, parseBalanceSheetCutoff } from './balance-sheet';
 
 const account = (accountCode: string, closingMinor: bigint, currency = 'PKR') => ({
   accountCode,
   currency,
   closingMinor: closingMinor.toString(),
+});
+
+describe('parseBalanceSheetCutoff', () => {
+  it('accepts valid offset-bearing instants and preserves the instant', () => {
+    expect(parseBalanceSheetCutoff('2026-10-26T12:00:00Z')?.toISOString()).toBe(
+      '2026-10-26T12:00:00.000Z'
+    );
+    expect(parseBalanceSheetCutoff('2026-10-26T14:00:00+02:00')?.toISOString()).toBe(
+      '2026-10-26T12:00:00.000Z'
+    );
+  });
+
+  it.each([
+    '2026-10-26',
+    '2026-10-26T12:00:00',
+    'October 26, 2026',
+    '2026-02-30T12:00:00Z',
+    '2026-10-26T24:00:00Z',
+    'not-a-date',
+  ])('rejects invalid or offset-free input %s', (value) => {
+    expect(parseBalanceSheetCutoff(value)).toBeNull();
+  });
 });
 
 describe('classifyBalanceSheet', () => {

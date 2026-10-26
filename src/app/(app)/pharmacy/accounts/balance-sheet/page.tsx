@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
+import { parseBalanceSheetCutoff } from '@/lib/pharmacy/accounts/balance-sheet';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 import { createTRPCContext } from '@/server/trpc';
@@ -45,8 +46,7 @@ export default async function BalanceSheetPage({
     select: { id: true, name: true },
   });
   const branch = branches.find(({ id }) => id === query.branch) ?? branches[0];
-  const parsedCutoff = query.cutoff ? new Date(query.cutoff) : new Date();
-  const cutoff = Number.isNaN(parsedCutoff.getTime()) ? new Date() : parsedCutoff;
+  const cutoff = query.cutoff ? parseBalanceSheetCutoff(query.cutoff) : new Date();
 
   return (
     <main className="space-y-6">
@@ -73,29 +73,35 @@ export default async function BalanceSheetPage({
           </label>
           <label className="grid min-w-72 gap-2 text-sm">
             As-of exclusive cutoff (UTC ISO 8601)
-            <Input name="cutoff" defaultValue={cutoff.toISOString()} required />
+            <Input name="cutoff" defaultValue={query.cutoff ?? cutoff?.toISOString()} required />
           </label>
           <Button className="min-h-11">Read balance sheet</Button>
         </form>
-        {branch && (
+        {query.cutoff && !cutoff && (
+          <p role="alert" className="mt-3 text-sm text-destructive">
+            Enter a valid ISO 8601 timestamp with an explicit UTC offset, such as
+            2026-10-26T12:00:00Z. No financial balances were requested.
+          </p>
+        )}
+        {branch && cutoff && (
           <p className="mt-3 text-xs text-text-muted">
             Branch: {branch.name} · Cutoff: {cutoff.toISOString()} (exclusive)
           </p>
         )}
       </SectionCard>
-      {branch ? (
+      {branch && cutoff ? (
         <BalanceSheetReport
           caller={pharmacyFinanceRouter.createCaller(ctx)}
           branchId={branch.id}
           cutoff={cutoff}
         />
-      ) : (
+      ) : !branch ? (
         <SectionCard title="No active branch">
           <p className="text-sm text-text-muted">
             Create an active pharmacy branch before reading balances.
           </p>
         </SectionCard>
-      )}
+      ) : null}
     </main>
   );
 }

@@ -121,3 +121,21 @@ export function classifyBalanceSheet(accounts: PostedAccountBalance[]): Classifi
 }
 
 export const balanceSheetAccountLabel = labelFor;
+
+/** Parses only an explicit, valid ISO-8601 timestamp carrying UTC or a numeric offset. */
+export function parseBalanceSheetCutoff(value: string): Date | null {
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return null;
+
+  const [, year, month, day, hour, minute, second] = match;
+  const parts = [year, month, day, hour, minute, second].map(Number);
+  const [y, m, d, h, min, s] = parts;
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  if (m < 1 || m > 12 || d < 1 || d > daysInMonth || h > 23 || min > 59 || s > 59) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}

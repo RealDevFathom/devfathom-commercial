@@ -23,8 +23,10 @@ function Lines({ lines, currency }: { lines: BalanceSheetLine[]; currency: strin
             <span className="font-mono text-xs text-text-muted">({line.accountCode})</span>
           </span>
           <span className="font-mono tabular-nums">
-            {currency} {money(line.amountMinor)}{' '}
-            <span className="text-text-muted">{line.normalSide}</span>
+            {currency} {money(line.amountMinor)} {line.normalSide}
+            <span className="ml-2 text-xs text-text-muted">
+              (raw Dr−Cr {currency} {money(line.closingMinor)})
+            </span>
           </span>
         </li>
       ))}
@@ -130,6 +132,16 @@ export async function BalanceSheetReport({
                     {sheet.currency} {money(sheet.currentResultMinor)}
                   </span>
                 </p>
+                <div className="grid gap-4 border-t border-border-subtle pt-3 sm:grid-cols-2">
+                  <div>
+                    <h4 className="mb-1 text-sm font-semibold">Revenue accounts</h4>
+                    <Lines lines={sheet.revenue} currency={sheet.currency} />
+                  </div>
+                  <div>
+                    <h4 className="mb-1 text-sm font-semibold">Expense accounts</h4>
+                    <Lines lines={sheet.expenses} currency={sheet.currency} />
+                  </div>
+                </div>
                 <p className="border-t border-border-default pt-3 text-right font-mono font-semibold tabular-nums">
                   Total liabilities and equity · {sheet.currency}{' '}
                   {money(sheet.totals.equityAndLiabilitiesMinor)}
