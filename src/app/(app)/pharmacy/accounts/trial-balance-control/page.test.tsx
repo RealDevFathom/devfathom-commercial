@@ -200,6 +200,21 @@ describe('TrialBalanceControlPage', () => {
   });
 
   it.each([
+    ['branch', { scope: { organizationId: 'org-1', branchId: 'branch-2' } }],
+    ['from', { from: new Date('2026-01-02T00:00:00.000Z') }],
+    ['to', { to: new Date('2026-01-31T00:00:00.000Z') }],
+  ])('fails closed when the source returns a mismatched %s', async (_description, mismatch) => {
+    mocks.financialStatements.mockResolvedValueOnce({
+      ...report(),
+      ...mismatch,
+    });
+
+    const output = await html({ branch: 'branch-1', from: '2026-01-01', to: '2026-02-01' });
+    expect(output).toContain('Trial-balance source unavailable');
+    expect(output).not.toContain('All account rows');
+  });
+
+  it.each([
     ['missing', {}],
     ['non-Date', { retrievedAt: '2026-02-02T03:04:05.000Z' }],
     ['invalid Date', { retrievedAt: new Date(Number.NaN) }],
