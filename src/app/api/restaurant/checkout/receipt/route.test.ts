@@ -269,6 +269,20 @@ describe('Restaurant receipt dispatch', () => {
     expect(facts.totals).toContain('Split FRACTIONAL 1/3');
     expect(facts.payments).toEqual(['CASH 26.05 / Tip 1.50 / Change 3.95 / Cash received 30.00']);
   });
+  it('preserves persisted lines on a fractional bill', async () => {
+    Object.assign(receipt!, {
+      splitKind: 'FRACTIONAL',
+      fractionNumerator: 1,
+      fractionDenominator: 3,
+    });
+
+    await post();
+
+    const facts = PrintDocumentSchema.parse(jobs[0].document).receiptSnapshot!.facts;
+    expect(facts.lines).toEqual([
+      '2 x Meal @ 12.00\nLine subtotal 24.00 / Comp 4.00 / Line total 20.00\nLine tax 2.00 / Line service 1.00',
+    ]);
+  });
   it('preserves saved tax currency, rate buckets and discount allocations', async () => {
     findBill.mockResolvedValue({
       ...receipt,
