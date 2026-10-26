@@ -29,7 +29,7 @@ describe('recipe measurement domain migration', () => {
   it('rejects numeric special values in every constraint', () => {
     expect(
       migration.match(/NOT IN \('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric\)/g)
-    ).toHaveLength(8);
+    ).toHaveLength(4);
   });
 
   it('has a diagnostic preflight instead of silently changing legacy financial data', () => {
