@@ -403,8 +403,8 @@ export const meetingsRouter = router({
       const { id, attendeeIds, ...data } = input;
 
       if (data.startTime !== undefined || data.endTime !== undefined) {
-        const currentTimes = await ctx.db.meeting.findUnique({
-          where: { id },
+        const currentTimes = await ctx.db.meeting.findFirst({
+          where: { id, organizationId: workspaceId(ctx) },
           select: { startTime: true, endTime: true },
         });
         if (!currentTimes) {

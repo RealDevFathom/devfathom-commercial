@@ -257,4 +257,37 @@ describeIfDatabase('meetings list policy, against PostgreSQL', () => {
       PAST_MEMBER
     );
   });
+
+  it('atomically rejects complementary partial updates that would create an invalid range', async () => {
+    const original = await deps.withTenantDb(ORGANIZATION_A, (db) =>
+      db.meeting.findUniqueOrThrow({
+        where: { id: FUTURE_MEMBER },
+        select: { startTime: true, endTime: true },
+      })
+    );
+    const laterStart = new Date(original.endTime.getTime() - 30 * 60 * 1000);
+    const earlierEnd = new Date(original.startTime.getTime() + 30 * 60 * 1000);
+
+    const results = await Promise.allSettled([
+      deps.withTenantDb(ORGANIZATION_A, (db) =>
+        db.meeting.update({ where: { id: FUTURE_MEMBER }, data: { startTime: laterStart } })
+      ),
+      deps.withTenantDb(ORGANIZATION_A, (db) =>
+        db.meeting.update({ where: { id: FUTURE_MEMBER }, data: { endTime: earlierEnd } })
+      ),
+    ]);
+
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const stored = await deps.withTenantDb(ORGANIZATION_A, (db) =>
+      db.meeting.findUniqueOrThrow({
+        where: { id: FUTURE_MEMBER },
+        select: { startTime: true, endTime: true },
+      })
+    );
+    expect(stored.endTime.getTime()).toBeGreaterThan(stored.startTime.getTime());
+
+    await deps.withTenantDb(ORGANIZATION_A, (db) =>
+      db.meeting.update({ where: { id: FUTURE_MEMBER }, data: original })
+    );
+  });
 });

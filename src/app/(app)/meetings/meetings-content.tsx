@@ -38,6 +38,8 @@ const recurrenceLabels: Record<string, string> = {
   monthly: 'Monthly',
 };
 
+const INVALID_MEETING_TIME_MESSAGE = 'End time must be after start time.';
+
 export function MeetingsContent() {
   const utils = trpc.useUtils();
   const { data: upcoming, isLoading: loadingUpcoming } = trpc.meetings.getUpcoming.useQuery();
@@ -309,7 +311,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
         </div>
         {hasInvalidTimeRange && (
           <p id="meeting-time-error" role="alert" className="text-xs text-destructive">
-            End time must be after start time.
+            {INVALID_MEETING_TIME_MESSAGE}
           </p>
         )}
 
@@ -487,8 +489,13 @@ const MeetingCard = memo(function MeetingCard({
     setIsEditing(true);
   };
 
+  const hasCompleteEditTimeRange = Boolean(eDate && eStart && eEnd);
+  const hasInvalidEditTimeRange =
+    hasCompleteEditTimeRange &&
+    new Date(`${eDate}T${eEnd}`).getTime() <= new Date(`${eDate}T${eStart}`).getTime();
+
   const handleSave = () => {
-    if (!eTitle.trim() || !eDate || !eStart || !eEnd) return;
+    if (!eTitle.trim() || !eDate || !eStart || !eEnd || hasInvalidEditTimeRange) return;
     updateMeeting.mutate({
       id: meeting.id,
       title: eTitle.trim(),
@@ -549,6 +556,8 @@ const MeetingCard = memo(function MeetingCard({
                 value={eStart}
                 onChange={setEStart}
                 aria-label="Start time"
+                aria-invalid={hasInvalidEditTimeRange}
+                aria-describedby={hasInvalidEditTimeRange ? 'edit-meeting-time-error' : undefined}
                 className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
@@ -558,10 +567,17 @@ const MeetingCard = memo(function MeetingCard({
                 value={eEnd}
                 onChange={setEEnd}
                 aria-label="End time"
+                aria-invalid={hasInvalidEditTimeRange}
+                aria-describedby={hasInvalidEditTimeRange ? 'edit-meeting-time-error' : undefined}
                 className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
           </div>
+          {hasInvalidEditTimeRange && (
+            <p id="edit-meeting-time-error" role="alert" className="text-xs text-destructive">
+              {INVALID_MEETING_TIME_MESSAGE}
+            </p>
+          )}
           <div>
             <label className="block text-[10px] font-medium text-foreground mb-1">Repeat</label>
             <div className="flex gap-1">
@@ -623,7 +639,14 @@ const MeetingCard = memo(function MeetingCard({
             </button>
             <button
               onClick={handleSave}
-              disabled={!eTitle.trim() || !eDate || !eStart || !eEnd || updateMeeting.isPending}
+              disabled={
+                !eTitle.trim() ||
+                !eDate ||
+                !eStart ||
+                !eEnd ||
+                hasInvalidEditTimeRange ||
+                updateMeeting.isPending
+              }
               className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
             >
               {updateMeeting.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Save

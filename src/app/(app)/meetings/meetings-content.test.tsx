@@ -51,6 +51,7 @@ const mocks = vi.hoisted(() => ({
   hasNextPage: false,
   fetchNextPage: vi.fn(),
   createMeeting: vi.fn(),
+  updateMeeting: vi.fn(),
 }));
 
 vi.mock('next-auth/react', () => ({
@@ -85,7 +86,9 @@ vi.mock('@/lib/trpc', () => {
         create: {
           useMutation: () => ({ mutate: mocks.createMeeting, isPending: false }),
         },
-        update: mutation(),
+        update: {
+          useMutation: () => ({ mutate: mocks.updateMeeting, isPending: false }),
+        },
         delete: mutation(),
       },
       team: { getAll: { useQuery: () => ({ data: [] }) } },
@@ -112,6 +115,7 @@ describe('MeetingsContent pagination', () => {
     mocks.hasNextPage = false;
     mocks.fetchNextPage.mockClear();
     mocks.createMeeting.mockClear();
+    mocks.updateMeeting.mockClear();
   });
 
   // The defect issue #44 reports, at the surface that shows it. A tenant whose
@@ -205,5 +209,26 @@ describe('MeetingsContent pagination', () => {
     expect(schedule).toBeDisabled();
     fireEvent.click(schedule);
     expect(mocks.createMeeting).not.toHaveBeenCalled();
+  });
+
+  it('prevents saving an edited meeting with a reversed time range', () => {
+    mocks.upcoming = [meeting('Editable meeting', new Date('2026-10-26T10:00:00'))];
+    render(<MeetingsContent />);
+
+    fireEvent.click(screen.getByTitle('Edit'));
+    fireEvent.click(screen.getByRole('button', { name: 'Start time' }));
+    fireEvent.click(screen.getByRole('option', { name: '10:00 AM' }));
+    fireEvent.click(screen.getByRole('button', { name: 'End time' }));
+    fireEvent.click(screen.getByRole('option', { name: '9:00 AM' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('End time must be after start time.');
+    expect(screen.getByRole('button', { name: 'Start time' })).toHaveAttribute(
+      'aria-describedby',
+      'edit-meeting-time-error'
+    );
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(mocks.updateMeeting).not.toHaveBeenCalled();
   });
 });
