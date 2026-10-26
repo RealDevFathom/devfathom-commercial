@@ -128,8 +128,10 @@ export const PATCH = withApiAuth(
     // New assignees must belong to the project that will own the task. Validate
     // before any writes so a rejected full replacement cannot clear assignees.
     const projectForAssignees = targetColumn?.board.project.id ?? projectId;
+    const uniqueAssigneeIds = assigneeIds ? [...new Set(assigneeIds)] : undefined;
+    const uniqueAddAssigneeIds = addAssigneeIds ? [...new Set(addAssigneeIds)] : undefined;
     const requestedAssigneeIds = [
-      ...new Set([...(assigneeIds ?? []), ...(addAssigneeIds ?? [])]),
+      ...new Set([...(uniqueAssigneeIds ?? []), ...(uniqueAddAssigneeIds ?? [])]),
     ];
     if (requestedAssigneeIds.length > 0) {
       const memberCount = await authCtx.db.projectMember.count({
@@ -173,17 +175,17 @@ export const PATCH = withApiAuth(
 
       // Apply assignee edits after the move so the database invariant validates
       // destination-only members against the task's new project.
-      if (assigneeIds) {
+      if (uniqueAssigneeIds) {
         await tx.taskAssignee.deleteMany({ where: { taskId: id } });
-        if (assigneeIds.length > 0) {
+        if (uniqueAssigneeIds.length > 0) {
           await tx.taskAssignee.createMany({
-            data: assigneeIds.map((userId) => ({ taskId: id, userId })),
+            data: uniqueAssigneeIds.map((userId) => ({ taskId: id, userId })),
           });
         }
       }
-      if (addAssigneeIds && addAssigneeIds.length > 0) {
+      if (uniqueAddAssigneeIds && uniqueAddAssigneeIds.length > 0) {
         await tx.taskAssignee.createMany({
-          data: addAssigneeIds.map((userId) => ({ taskId: id, userId })),
+          data: uniqueAddAssigneeIds.map((userId) => ({ taskId: id, userId })),
           skipDuplicates: true,
         });
       }

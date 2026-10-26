@@ -134,4 +134,23 @@ describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
     expect(mocks.taskAssignee.deleteMany).not.toHaveBeenCalled();
     expect(mocks.taskAssignee.createMany).not.toHaveBeenCalled();
   });
+
+  it('deduplicates assignees before replacing the assignment list', async () => {
+    const response = await PATCH(
+      new Request('https://example.test/api/v1/tasks/task-1', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ assigneeIds: ['destination-member', 'destination-member'] }),
+      }),
+      { params: Promise.resolve({ id: 'task-1' }) }
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.db.projectMember.count).toHaveBeenCalledWith({
+      where: { projectId: 'source-project', userId: { in: ['destination-member'] } },
+    });
+    expect(mocks.taskAssignee.createMany).toHaveBeenCalledWith({
+      data: [{ taskId: 'task-1', userId: 'destination-member' }],
+    });
+  });
 });
