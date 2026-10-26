@@ -550,6 +550,41 @@ describeIfDatabase('daily close (real DB)', () => {
     ).rejects.toMatchObject({ reason: 'UNSETTLED_BILL' });
   });
 
+  it('does not block a cut for resolved orders without bills', async () => {
+    const date = '2026-09-15';
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantOrder.createMany({
+        data: (['CLOSED', 'CANCELLED'] as const).map((status) => ({
+          branchId: ids.branch,
+          orderNumber: ++orderCounter,
+          businessDate: utcDate(date),
+          status,
+          channel: 'DINE_IN',
+          staffProfileId: ids.operator,
+          deviceId: ids.seedDevice,
+        })),
+      })
+    );
+
+    const db = deps.createTenantDb(orgId);
+    const preview = await deps.close.closePreview(db, {
+      branchId: ids.branch,
+      businessDate: date,
+    });
+    expect(preview.readiness).toMatchObject({
+      allBillsResolved: true,
+      openBillCount: 0,
+      unresolvedOrderCount: 0,
+    });
+    await expect(
+      deps.close.cutClose(db, {
+        branchId: ids.branch,
+        businessDate: date,
+        actor: mActor(ids.seedDevice),
+      })
+    ).resolves.toMatchObject({ replayed: false });
+  });
+
   it('cuts an immutable close: snapshot totals + tender-type children in one txn', async () => {
     const date = '2026-09-05';
     const settled = await seedBillWithTender({
