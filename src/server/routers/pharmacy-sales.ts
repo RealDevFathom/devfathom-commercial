@@ -31,6 +31,7 @@ import {
 } from '@/lib/restaurant/operator-credentials';
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
 import { workspaceTimezone } from '@/lib/timezone';
+import { prescriptionIsValidOn } from '@/lib/pharmacy/prescription-validity';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -1180,13 +1181,21 @@ export const pharmacySalesRouter = router({
               fills: true,
             },
           });
+          const prescriptionTimezone = await db.organization.findUnique({
+            where: { id: scope.organizationId },
+            select: { timezone: true },
+          });
           if (
             !rx ||
             rx.prescription.patientId !== authorization.patientId ||
             !rx.prescription.patient.cnic?.trim() ||
             !rx.prescription.prescriber.registrationNumber.trim() ||
-            rx.prescription.validFrom > now ||
-            rx.prescription.validUntil <= now
+            !prescriptionIsValidOn(
+              rx.prescription.validFrom,
+              rx.prescription.validUntil,
+              now,
+              prescriptionTimezone?.timezone
+            )
           )
             return blocked;
           const units = input.quantity * input.canonicalUnitsPerSaleUnit;
