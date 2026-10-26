@@ -450,6 +450,27 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
   });
 
+  it('returns an exact completed-submission retry without writing again', async () => {
+    const submitted = {
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'SUBMITTED',
+      externalReference: 'DRAP-1',
+      externalFailureReason: null,
+    };
+    mocks.reportFindFirst.mockResolvedValue(submitted);
+
+    const result = await pvCaller().recordPharmacovigilanceSubmission({
+      id: 'pv_1',
+      branchId: 'branch_1',
+      state: 'SUBMITTED',
+      externalReference: 'DRAP-1',
+    });
+
+    expect(result).toEqual(submitted);
+    expect(mocks.reportUpdateManyAndReturn).not.toHaveBeenCalled();
+  });
+
   it('does not record a submission for a draft report', async () => {
     mocks.reportFindFirst.mockResolvedValue({
       id: 'pv_1',
