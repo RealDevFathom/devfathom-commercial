@@ -92,19 +92,21 @@ export async function sendClaimedMessage(
   // commit. Consent can change in that gap, so never rely solely on the customer
   // loaded while claiming the row. Consent acknowledgements are excluded: a
   // STOP acknowledgement must still be sent after recording the opt-out.
-  if (entry.customerId && (entry.kind === 'REFILL_REMINDER' || entry.kind === 'KHATA_REMINDER')) {
+  if (entry.kind === 'REFILL_REMINDER' || entry.kind === 'KHATA_REMINDER') {
     return withTenantDb(entry.organizationId, async (db) => {
       // STOP updates this row under the same FOR UPDATE lock. If STOP commits
       // first this statement sees the new flag and returns no row; if this lock
       // wins, STOP cannot commit until provider submission has finished.
-      const eligible = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-        SELECT id FROM pharmacy_customers
-        WHERE "organizationId" = ${entry.organizationId}
-          AND id = ${entry.customerId}
-          AND active = true
-          AND "whatsappOptIn" = true
-        FOR UPDATE
-      `);
+      const eligible = entry.customerId
+        ? await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+            SELECT id FROM pharmacy_customers
+            WHERE "organizationId" = ${entry.organizationId}
+              AND id = ${entry.customerId}
+              AND active = true
+              AND "whatsappOptIn" = true
+            FOR UPDATE
+          `)
+        : [];
       if (eligible.length === 0) {
         await db.pharmacyMessageLog.update({
           where: { id: logId },

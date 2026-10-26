@@ -11,7 +11,8 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 import { sendAndLog } from './message-log';
 import { WhatsAppProviderError } from './provider';
 
-const entry = { organizationId: 'org-a', kind: 'REFILL_REMINDER' as const, dedupeKey: 'one' };
+const entry = { organizationId: 'org-a', kind: 'ORDER_CONFIRMATION' as const, dedupeKey: 'one' };
+const reminderEntry = { ...entry, kind: 'REFILL_REMINDER' as const, customerId: 'customer-a' };
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.claim.mockResolvedValue([{ id: 'log-a' }]);
@@ -98,9 +99,7 @@ describe('outbound evidence and safe replay', () => {
     mocks.queryRaw.mockResolvedValue([]);
     const send = vi.fn();
 
-    await expect(sendAndLog({ ...entry, customerId: 'customer-a' }, send)).resolves.toBe(
-      'PREPARED'
-    );
+    await expect(sendAndLog(reminderEntry, send)).resolves.toBe('PREPARED');
 
     const query = mocks.queryRaw.mock.calls[0][0];
     expect(query.sql).toContain('"organizationId" = ?');
@@ -109,6 +108,20 @@ describe('outbound evidence and safe replay', () => {
     expect(query.sql).toContain('"whatsappOptIn" = true');
     expect(query.sql).toContain('FOR UPDATE');
     expect(query.values).toEqual(['org-a', 'customer-a']);
+    expect(send).not.toHaveBeenCalled();
+    expect(mocks.update).toHaveBeenCalledWith({
+      where: { id: 'log-a' },
+      data: { status: 'IGNORED', error: 'OPTED_OUT_BEFORE_SEND' },
+    });
+  });
+  it('suppresses a reminder that has no customer to prove explicit consent', async () => {
+    const send = vi.fn();
+
+    await expect(
+      sendAndLog({ ...entry, kind: 'REFILL_REMINDER' }, send)
+    ).resolves.toBe('PREPARED');
+
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
     expect(mocks.update).toHaveBeenCalledWith({
       where: { id: 'log-a' },
@@ -124,7 +137,7 @@ describe('outbound evidence and safe replay', () => {
     );
     const send = vi.fn();
 
-    const outcome = sendAndLog({ ...entry, customerId: 'customer-a' }, send);
+    const outcome = sendAndLog(reminderEntry, send);
     await vi.waitFor(() => expect(mocks.queryRaw).toHaveBeenCalledOnce());
     expect(send).not.toHaveBeenCalled();
 
