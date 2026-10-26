@@ -216,6 +216,40 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
     expect(db.$transaction).not.toHaveBeenCalled();
   });
 
+  it('rejects oversized review decision IDs before opening a transaction', async () => {
+    const oversizedId = 'x'.repeat(201);
+
+    await expect(
+      caller().recordReviewDecision({
+        duplicateKey: 'duplicate',
+        action: 'ACCEPT',
+        medicineIds: [oversizedId],
+        payload: { assertionIds: ['assertion'] },
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().recordReviewDecision({
+        duplicateKey: 'duplicate',
+        action: 'ACCEPT',
+        medicineIds: ['medicine'],
+        payload: { assertionIds: [oversizedId] },
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().recordReviewDecision({
+        duplicateKey: 'duplicate',
+        action: 'CORRECT',
+        medicineIds: ['medicine'],
+        payload: {
+          assertionIds: ['assertion'],
+          corrections: [{ assertionId: oversizedId, value: 'corrected' }],
+        },
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
   it('rejects a cross-tenant presentation ID substitution', async () => {
     await expect(
       caller().createPackLevel({

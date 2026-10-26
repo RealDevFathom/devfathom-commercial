@@ -31,6 +31,7 @@ import {
 } from '../trpc';
 
 const family = z.enum(['PHARMACEUTICAL', 'BIOLOGICAL', 'DEVICE', 'ALTERNATIVE', 'FRONT_SHOP']);
+const boundedId = z.string().min(1).max(200);
 
 type BoundedJsonValue = string | number | boolean | null | BoundedJsonValue[] | BoundedJsonObject;
 type BoundedJsonObject = { [key: string]: BoundedJsonValue };
@@ -177,7 +178,7 @@ const connectorProposalPayload = z
 
 const assertionIdsPayload = z
   .object({
-    assertionIds: z.array(z.string().min(1)).min(1).max(20),
+    assertionIds: z.array(boundedId).min(1).max(20),
   })
   .strict();
 
@@ -195,7 +196,7 @@ const reviewDecisionInput = z.discriminatedUnion('action', [
     .object({
       duplicateKey: z.string().min(1).max(700),
       action: z.enum(['ACCEPT', 'REJECT', 'DEFER']),
-      medicineIds: z.array(z.string().min(1)).min(1).max(50),
+      medicineIds: z.array(boundedId).min(1).max(50),
       payload: assertionIdsPayload,
     })
     .strict(),
@@ -203,14 +204,14 @@ const reviewDecisionInput = z.discriminatedUnion('action', [
     .object({
       duplicateKey: z.string().min(1).max(700),
       action: z.literal('CORRECT'),
-      medicineIds: z.array(z.string().min(1)).min(1).max(50),
+      medicineIds: z.array(boundedId).min(1).max(50),
       payload: assertionIdsPayload
         .extend({
           corrections: z
             .array(
               z
                 .object({
-                  assertionId: z.string().min(1),
+                  assertionId: boundedId,
                   value: z.string().trim().min(1).max(1_000),
                 })
                 .strict()
@@ -1022,11 +1023,7 @@ export const pharmacyMedicineRouter = router({
   ),
 
   publishAssertions: adminProcedure
-    .input(
-      z
-        .object({ assertionIds: z.array(z.string().min(1).max(200)).min(1).max(20) })
-        .strict()
-    )
+    .input(assertionIdsPayload)
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {
         const assertionIds = [...new Set(input.assertionIds)];
