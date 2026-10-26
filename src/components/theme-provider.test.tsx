@@ -54,6 +54,12 @@ describe('ThemeProvider', () => {
     document.documentElement.style.colorScheme = '';
   });
 
+  it('exposes the information token to Tailwind utilities', () => {
+    const css = readFileSync('src/app/globals.css', 'utf8');
+
+    expect(css).toMatch(/--color-info:\s*var\(--info\);/);
+  });
+
   it('applies theme tokens atomically while CSS transitions are disabled', () => {
     const originalSetAttribute = document.documentElement.setAttribute.bind(
       document.documentElement
