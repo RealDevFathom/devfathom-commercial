@@ -98,3 +98,34 @@ $$;
 CREATE TRIGGER labels_task_board_guard
 BEFORE UPDATE OF "boardId", "organizationId" ON "labels"
 FOR EACH ROW EXECUTE FUNCTION enforce_task_labels_after_label_move();
+
+CREATE OR REPLACE FUNCTION enforce_task_labels_after_column_move()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- A column determines the board of every task it contains. Use the same
+  -- task-then-label lock order as the other writers before changing that board.
+  PERFORM pg_advisory_xact_lock(506, hashtext('task:' || t.id))
+  FROM "tasks" t
+  WHERE t."columnId" = NEW.id
+  ORDER BY t.id;
+  PERFORM pg_advisory_xact_lock(506, hashtext('label:' || tl."labelId"))
+  FROM "tasks" t
+  JOIN "task_labels" tl ON tl."taskId" = t.id
+  WHERE t."columnId" = NEW.id
+  ORDER BY tl."labelId";
+
+  DELETE FROM "task_labels" tl
+  USING "tasks" t, "labels" l
+  WHERE t."columnId" = NEW.id
+    AND tl."taskId" = t.id
+    AND l.id = tl."labelId"
+    AND l."boardId" <> NEW."boardId";
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER columns_task_label_board_guard
+BEFORE UPDATE OF "boardId" ON "columns"
+FOR EACH ROW EXECUTE FUNCTION enforce_task_labels_after_column_move();

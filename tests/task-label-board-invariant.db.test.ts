@@ -86,6 +86,20 @@ describeIfDatabase('task-label board invariant concurrency', () => {
     await Promise.allSettled([setup?.end(), mover?.end(), attacher?.end()]);
   });
 
+  it('removes existing attachments when their column moves to another board', async () => {
+    await setup!.query(
+      `INSERT INTO "task_labels" ("id", "organizationId", "taskId", "labelId")
+       VALUES ('existing_tl', 'org', 'task', 'label')`
+    );
+    await setup!.query(`UPDATE "columns" SET "boardId" = 'board_b' WHERE id = 'column_a'`);
+
+    const remaining = await setup!.query(
+      `SELECT 1 FROM "task_labels" WHERE id = 'existing_tl'`
+    );
+    expect(remaining.rowCount).toBe(0);
+    await setup!.query(`UPDATE "columns" SET "boardId" = 'board_a' WHERE id = 'column_a'`);
+  });
+
   it('serializes attachment with a task move and rejects the stale attachment', async () => {
     await expectRejectedAttachAfterMove(
       `UPDATE "tasks" SET "columnId" = 'column_b' WHERE id = 'task'`
@@ -96,6 +110,13 @@ describeIfDatabase('task-label board invariant concurrency', () => {
   it('serializes attachment with a label move and rejects the stale attachment', async () => {
     await expectRejectedAttachAfterMove(
       `UPDATE "labels" SET "boardId" = 'board_b' WHERE id = 'label'`
+    );
+    await setup!.query(`UPDATE "labels" SET "boardId" = 'board_a' WHERE id = 'label'`);
+  });
+
+  it('serializes attachment with a column move and rejects the stale attachment', async () => {
+    await expectRejectedAttachAfterMove(
+      `UPDATE "columns" SET "boardId" = 'board_b' WHERE id = 'column_a'`
     );
   });
 });
