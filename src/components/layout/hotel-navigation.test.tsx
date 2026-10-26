@@ -194,7 +194,7 @@ describe('Hotel navigation composition', () => {
       'ADMIN'
     ).map((item) => item.href);
 
-    expect(visibleHrefs).toContain(MENU_IMPORT);
+    expect(visibleHrefs.filter((href) => href === MENU_IMPORT)).toHaveLength(1);
   });
   it('licenses each entry on its module and opens it on the capability its page checks', () => {
     const entry = (href: string) => navigation.find((n) => n.href === href)!;
