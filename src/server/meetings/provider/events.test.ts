@@ -107,6 +107,7 @@ describe('provider event ingestion', () => {
 
       expect(findFirst).not.toHaveBeenCalled();
       expect(executeRaw).toHaveBeenCalledTimes(1);
+      expect(executeRaw.mock.calls[0][0].values.slice(3, 5)).toEqual([null, null]);
     }
   );
 
