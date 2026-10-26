@@ -29,7 +29,6 @@ import {
   createMemoryDriver,
   createTerminalIndexedDbDriver,
   emptyTerminalState,
-  purgeTerminalScope,
   readTerminalState,
   terminalScopeKey,
 } from '@/lib/retail-terminal/local-store';
@@ -251,6 +250,14 @@ export class PharmacyCounterRuntime {
       COUNTER_STORE_SCHEMA_VERSION
     );
     if (durable.status === 'unrecoverable') throw new Error(durable.message);
+    if (durable.status === 'ok' && durable.state.queue?.replay === 'STOPPED_REVOKED') {
+      this.adoptRevokedState(durable.state);
+      return {
+        ok: false,
+        reason: 'DEVICE_REVOKED',
+        message: 'This counter has been revoked and cannot install snapshots.',
+      };
+    }
     if (durable.status === 'empty' && rejectMissing) {
       const snapshotPublicKey = this.cache().snapshotPublicKey;
       this.state = emptyTerminalState<CounterQueueSnapshot, CounterCache>(
@@ -491,6 +498,14 @@ export class PharmacyCounterRuntime {
       this.state.catalog = { snapshotPublicKey, snapshots: [] };
       this.persistedState = undefined;
     }
+    if (this.queue().replay === 'STOPPED_REVOKED') {
+      return {
+        ok: false,
+        reason: 'DEVICE_REVOKED',
+        message: 'This counter has been revoked and cannot queue offline work.',
+        decision: null,
+      };
+    }
     const leaseState = this.safetyLeaseState();
     const leaseCheck = checkSafetyLease(leaseState, matrix.nowMs);
     if (!leaseCheck.ok && leaseCheck.reason === 'EXPIRED') {
@@ -580,8 +595,10 @@ export class PharmacyCounterRuntime {
       const nextState = { ...this.state, queue: applied.snapshot };
 
       if (applied.snapshot.replay === 'STOPPED_REVOKED') {
-        this.state = nextState;
-        await purgeTerminalScope(this.driver, this.scope);
+        await this.commit(
+          { ...nextState, catalog: { ...this.cache(), snapshots: [] } },
+          this.persistedState
+        );
         return { state: 'STOPPED', discarded: applied.discarded };
       }
       await this.commit(nextState, this.persistedState);
@@ -591,10 +608,33 @@ export class PharmacyCounterRuntime {
 
   /** Confirmed revocation outside a replay (a heartbeat said so). */
   async revoke(): Promise<{ commands: number } | null> {
-    const purged = purgeCounterQueue(this.queue());
-    this.state = { ...this.state, queue: purged.snapshot };
-    await purgeTerminalScope(this.driver, this.scope);
-    return purged.discarded;
+    for (;;) {
+      const durable = await readTerminalState<CounterQueueSnapshot, CounterCache>(
+        this.driver,
+        this.scope,
+        COUNTER_STORE_SCHEMA_VERSION
+      );
+      if (durable.status === 'unrecoverable') throw new Error(durable.message);
+      if (durable.status === 'ok' && durable.state.queue?.replay === 'STOPPED_REVOKED') {
+        this.adoptRevokedState(durable.state);
+        return null;
+      }
+      const source = durable.status === 'ok' ? durable.state : this.state;
+      const purged = purgeCounterQueue(
+        source.queue ?? createCounterQueue(this.scope.deviceId)
+      );
+      const tombstone: CounterRuntimeState = {
+        ...source,
+        catalog: { snapshotPublicKey: this.cache().snapshotPublicKey, snapshots: [] },
+        queue: purged.snapshot,
+      };
+      try {
+        await this.commit(tombstone, durable.status === 'ok' ? durable.state : undefined);
+        return purged.discarded;
+      } catch (error) {
+        if (!(error instanceof CounterStorageConflictError)) throw error;
+      }
+    }
   }
 
   close(): void {
@@ -607,6 +647,15 @@ export class PharmacyCounterRuntime {
 
   private cache(): CounterCache {
     return this.state.catalog ?? { snapshotPublicKey: '', snapshots: [] };
+  }
+
+  private adoptRevokedState(state: CounterRuntimeState): void {
+    this.state = {
+      ...state,
+      catalog: state.catalog ?? { snapshotPublicKey: this.cache().snapshotPublicKey, snapshots: [] },
+      queue: state.queue ?? purgeCounterQueue(createCounterQueue(this.scope.deviceId)).snapshot,
+    };
+    this.persistedState = state;
   }
 
   /** Publish a state transition only after its whole-document write succeeds. */

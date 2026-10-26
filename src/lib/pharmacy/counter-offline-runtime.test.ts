@@ -324,8 +324,31 @@ describe('PH-OFF OFF-01 — signed snapshots', () => {
     finishVerification?.();
 
     expect(await installation).toMatchObject({ ok: false, reason: 'DEVICE_REVOKED' });
-    expect(await driver.read('org_a::branch_a::counter_1')).toBeUndefined();
+    expect(await driver.read('org_a::branch_a::counter_1')).toMatchObject({
+      queue: { replay: 'STOPPED_REVOKED' },
+    });
     expect(installing.cachedSnapshotStates()).toEqual([]);
+  });
+
+  it('cannot reinstall a cached snapshot after revocation has completed', async () => {
+    const driver = createMemoryDriver();
+    const enrolled = runtime(driver);
+    await enrolled.hydrate();
+    await install(enrolled, 'RULES');
+
+    // This context retained the public verification key and a previously issued
+    // signed envelope, but does not read storage until after revocation.
+    const stale = runtime(driver);
+    expect(await enrolled.revoke()).toEqual({ commands: 0 });
+
+    expect(await install(stale, 'RULES')).toMatchObject({
+      ok: false,
+      reason: 'DEVICE_REVOKED',
+    });
+    expect(await driver.read('org_a::branch_a::counter_1')).toMatchObject({
+      catalog: { snapshots: [] },
+      queue: { replay: 'STOPPED_REVOKED' },
+    });
   });
 
   it('survives a reload: an installed snapshot is read back from storage', async () => {
@@ -437,7 +460,9 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
     expect(await revoking.revoke()).toEqual({ commands: 0 });
     expect(await stale.enqueue(cashSale(1), MATRIX)).toMatchObject({ ok: false });
 
-    expect(await driver.read('org_a::branch_a::counter_1')).toBeUndefined();
+    expect(await driver.read('org_a::branch_a::counter_1')).toMatchObject({
+      queue: { replay: 'STOPPED_REVOKED' },
+    });
     expect(stale.snapshot().queue?.commands).toEqual([]);
     expect(stale.snapshot().queue?.leases).toEqual([]);
     expect(stale.snapshot().queue?.quotas).toEqual([]);
@@ -679,7 +704,9 @@ describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
     expect(counter.snapshot().queue?.commands).toEqual([]);
     // A revoked counter must not keep printing from a block it no longer owns.
     expect(counter.snapshot().queue?.leases).toEqual([]);
-    expect(await driver.read('org_a::branch_a::counter_1')).toBeUndefined();
+    expect(await driver.read('org_a::branch_a::counter_1')).toMatchObject({
+      queue: { replay: 'STOPPED_REVOKED' },
+    });
   });
 
   it('quarantines a command the server refuses outright instead of looping', async () => {
