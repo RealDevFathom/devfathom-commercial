@@ -137,6 +137,18 @@ describe('account code reference page authorization', () => {
     expect(mocks.financeDataReader).not.toHaveBeenCalled();
   });
 
+  it('denies access when the workspace has no active pharmacy branch', async () => {
+    mocks.branchRead.mockResolvedValueOnce([]);
+
+    render(await Page({ searchParams: Promise.resolve({}) }));
+
+    expect(screen.getByRole('heading', { name: 'No active branch' })).toBeInTheDocument();
+    expect(screen.queryByText('CASH')).not.toBeInTheDocument();
+    expect(mocks.referenceRead).not.toHaveBeenCalled();
+    expect(mocks.journalWriter).not.toHaveBeenCalled();
+    expect(mocks.financeDataReader).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['an empty value', ''],
     ['repeated values', ['stale-branch', 'branch-1']],
