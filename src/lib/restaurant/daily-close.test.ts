@@ -429,6 +429,26 @@ beforeAll(async () => {
 });
 
 describeIfDatabase('daily close (real DB)', () => {
+  it('rejects a future date using the branch business calendar before creating a close', async () => {
+    const date = '9999-12-31';
+    const db = deps.createTenantDb(orgId);
+
+    await expect(
+      deps.close.cutClose(db, {
+        branchId: ids.branch,
+        businessDate: date,
+        actor: mActor(ids.seedDevice),
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+
+    const closeCount = await read((tx) =>
+      tx.restaurantDailyClose.count({
+        where: { branchId: ids.branch, businessDate: utcDate(date) },
+      })
+    );
+    expect(closeCount).toBe(0);
+  });
+
   it('cross-business-date: a D2 refund of a D1 tender lands on D2, leaving D1 unchanged', async () => {
     const D1 = '2026-09-01';
     const D2 = '2026-09-02';

@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { Prisma, type RestaurantTenderType } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { businessDateToUtcDate } from './business-date';
+import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import {
   beginMoneyIdempotent,
   foldExpectedCash,
@@ -438,7 +438,13 @@ export type CutCloseResult = {
 export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutCloseResult> {
   const businessDate = businessDateToUtcDate(input.businessDate);
   return runMoneyTransaction(db, async (tx) => {
-    await lockDailyClose(tx, input.branchId, input.businessDate);
+    const branch = await lockDailyClose(tx, input.branchId, input.businessDate);
+    if (
+      input.businessDate >
+      resolveBusinessDate(new Date(), branch.timezone, branch.businessDayCutoff)
+    ) {
+      throw new DailyCloseError('A future business day cannot be closed.', 'INVALID');
+    }
     const canonical = canonicalClosePayload({
       version: 1,
       branchId: input.branchId,
@@ -654,14 +660,15 @@ function decodeFrozenCorrectCloseResult(
 
 /** Serialize a close chain at the organization + branch + business-date grain.
  * The transaction-scoped advisory lock releases automatically on commit/rollback. */
-async function lockDailyClose(tx: ScopedDb, branchId: string, businessDate: string): Promise<void> {
+async function lockDailyClose(tx: ScopedDb, branchId: string, businessDate: string) {
   const branch = await tx.restaurantBranch.findUnique({
     where: { id: branchId },
-    select: { organizationId: true },
+    select: { organizationId: true, timezone: true, businessDayCutoff: true },
   });
   if (!branch) throw new DailyCloseError('The branch does not exist.', 'INVALID');
   const key = `${branch.organizationId}:${branchId}:${businessDate}`;
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+  return branch;
 }
 
 /** Money writers hold the same lock as cut/correct until their transaction ends.
