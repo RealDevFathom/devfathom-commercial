@@ -40,6 +40,22 @@ describe('calculateInvoiceTotals', () => {
     });
   });
 
+  it('rounds positive line amounts, discounts, and tax at decimal midpoints', () => {
+    expect(calculateInvoiceTotals([{ quantity: 1, rate: 1.005 }], 0.005, 0.005)).toEqual({
+      amounts: [1.01],
+      subtotal: 1.01,
+      discount: 0.01,
+      tax: 0.01,
+      total: 1.01,
+    });
+  });
+
+  it('rejects derived values outside the database money range', () => {
+    expect(() =>
+      calculateInvoiceTotals([{ quantity: 2, rate: 9_999_999_999.99 }])
+    ).toThrow('Amount must be 9,999,999,999.99 or less');
+  });
+
   it('rejects a discount greater than the derived subtotal', () => {
     expect(() => calculateInvoiceTotals([{ quantity: 1, rate: 10 }], 0, 10.01)).toThrow(
       'Discount cannot exceed the invoice subtotal'

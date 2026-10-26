@@ -325,11 +325,20 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
   };
 
   const subtotal = items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
-  const discountInvalid = discount > subtotal;
+  const discountNegative = !Number.isFinite(discount) || discount < 0;
+  const discountInvalid = discountNegative || discount > subtotal;
+  const taxInvalid = !Number.isFinite(tax) || tax < 0;
   const total = Math.max(0, subtotal - discount) + tax;
 
   const handleSubmit = () => {
-    if (!clientId || !dueDate || discountInvalid || items.some((i) => !i.description)) return;
+    if (
+      !clientId ||
+      !dueDate ||
+      discountInvalid ||
+      taxInvalid ||
+      items.some((i) => !i.description)
+    )
+      return;
     createInvoice.mutate({
       clientId,
       projectId: projectId || undefined,
@@ -463,7 +472,9 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
               />
               {discountInvalid && (
                 <p id="invoice-discount-error" className="col-span-2 text-xs text-destructive">
-                  Discount cannot exceed the subtotal.
+                  {discountNegative
+                    ? 'Discount must be a non-negative amount.'
+                    : 'Discount cannot exceed the subtotal.'}
                 </p>
               )}
               <label htmlFor="invoice-tax" className="text-xs text-muted-foreground">
@@ -476,8 +487,15 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
                 step="0.01"
                 value={tax || ''}
                 onChange={(e) => setTax(parseFloat(e.target.value) || 0)}
+                aria-invalid={taxInvalid}
+                aria-describedby={taxInvalid ? 'invoice-tax-error' : undefined}
                 className="rounded-lg border border-border bg-background px-3 py-1.5 text-right text-sm tabular-nums text-foreground focus:border-primary focus:outline-none"
               />
+              {taxInvalid && (
+                <p id="invoice-tax-error" className="col-span-2 text-xs text-destructive">
+                  Tax must be a non-negative amount.
+                </p>
+              )}
             </div>
             <p className="text-xs text-muted-foreground">Total</p>
             <p className="font-display text-xl font-bold text-foreground">
@@ -498,6 +516,11 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex justify-end gap-2">
+          {createInvoice.error && (
+            <p role="alert" className="mr-auto self-center text-xs text-destructive">
+              {createInvoice.error.message}
+            </p>
+          )}
           <button
             onClick={onClose}
             className="rounded-xl px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground"
@@ -506,7 +529,9 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!clientId || !dueDate || discountInvalid || createInvoice.isPending}
+            disabled={
+              !clientId || !dueDate || discountInvalid || taxInvalid || createInvoice.isPending
+            }
             className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {createInvoice.isPending ? (

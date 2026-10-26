@@ -4,6 +4,9 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(async () => true),
   findUnique: vi.fn(),
   update: vi.fn(),
+  aggregate: vi.fn(),
+  queryRaw: vi.fn(),
+  transaction: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -21,14 +24,16 @@ vi.mock('../audit', () => ({
 import type { TRPCContext } from '../trpc';
 import { financeRouter } from './finance';
 
+const testDb = {
+  $transaction: mocks.transaction,
+  $queryRaw: mocks.queryRaw,
+  invoice: { findUnique: mocks.findUnique, update: mocks.update },
+  payment: { aggregate: mocks.aggregate },
+};
+
 function caller() {
   return financeRouter.createCaller({
-    db: {
-      invoice: {
-        findUnique: mocks.findUnique,
-        update: mocks.update,
-      },
-    },
+    db: testDb,
     entitlements: { organizationId: 'org-1', enabledModules: [], modules: [] },
     session: {
       expires: 'later',
@@ -46,6 +51,8 @@ describe('finance.updateInvoice', () => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
     mocks.findUnique.mockResolvedValue({ status: 'DRAFT', discount: 10, tax: 0 });
+    mocks.aggregate.mockResolvedValue({ _sum: { amount: null } });
+    mocks.transaction.mockImplementation(async (work) => work(testDb));
     mocks.update.mockResolvedValue({
       id: 'invoice-1',
       total: 90,
@@ -76,5 +83,38 @@ describe('finance.updateInvoice', () => {
         }),
       })
     );
+  });
+
+  it('rejects a reduction below payments collected inside the locked transaction', async () => {
+    mocks.aggregate.mockResolvedValue({ _sum: { amount: 95 } });
+
+    await expect(
+      caller().updateInvoice({
+        id: 'invoice-1',
+        items: [{ description: 'Consulting', quantity: 1, rate: 100 }],
+      })
+    ).rejects.toThrow('Invoice total cannot be less than the 95.00 already paid');
+
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('rechecks status only after acquiring the invoice lock', async () => {
+    const order: string[] = [];
+    mocks.queryRaw.mockImplementation(async () => void order.push('lock'));
+    mocks.findUnique.mockImplementation(async () => {
+      order.push('read');
+      return { status: 'PAID', discount: 0, tax: 0 };
+    });
+
+    await expect(
+      caller().updateInvoice({
+        id: 'invoice-1',
+        items: [{ description: 'Consulting', quantity: 1, rate: 100 }],
+      })
+    ).rejects.toThrow("A paid invoice can't be edited");
+
+    expect(order).toEqual(['lock', 'read']);
+    expect(mocks.update).not.toHaveBeenCalled();
   });
 });

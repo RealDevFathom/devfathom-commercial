@@ -28,6 +28,9 @@ const RECURRING_MONTHLY_FACTOR: Record<string, number> = {
 // largest value Postgres will accept is 9,999,999,999.99. Bound amounts here so an
 // oversized input fails as a clean validation error instead of a raw DB 500.
 const MAX_MONEY = 9_999_999_999.99;
+const MAX_MONEY_CENTS = 999_999_999_999n;
+const MAX_INVOICE_QUANTITY = 1_000_000;
+const MAX_INVOICE_ITEMS = 100;
 const MONEY_MAX_MESSAGE = 'Amount must be 9,999,999,999.99 or less';
 const positiveMoney = () => z.number().positive().max(MAX_MONEY, MONEY_MAX_MESSAGE);
 const nonNegativeMoney = () => z.number().nonnegative().max(MAX_MONEY, MONEY_MAX_MESSAGE);
@@ -39,12 +42,13 @@ export const createInvoiceInputSchema = z.object({
     .array(
       z.object({
         description: z.string(),
-        quantity: z.number().positive(),
+        quantity: z.number().positive().max(MAX_INVOICE_QUANTITY),
         rate: positiveMoney(),
         amount: nonNegativeMoney(),
       })
     )
-    .min(1, 'Invoice must have at least one line item'),
+    .min(1, 'Invoice must have at least one line item')
+    .max(MAX_INVOICE_ITEMS, `Invoice cannot have more than ${MAX_INVOICE_ITEMS} line items`),
   subtotal: nonNegativeMoney(),
   discount: nonNegativeMoney().default(0),
   tax: nonNegativeMoney().default(0),
@@ -57,24 +61,74 @@ export const createInvoiceInputSchema = z.object({
 // Round to 2 decimal places (cents). Used to derive invoice money server-side so
 // caller-supplied subtotal/total are never trusted (FIN-01). Discounts are
 // bounded by the derived subtotal so an invoice can never have a negative net.
-const round2 = (n: number) => Math.round(n * 100) / 100;
+function decimalParts(value: number): { coefficient: bigint; scale: number } {
+  const [mantissa, exponentText] = value.toString().toLowerCase().split('e');
+  const exponent = Number(exponentText ?? 0);
+  const [whole, fraction = ''] = mantissa.split('.');
+  const coefficient = BigInt(`${whole}${fraction}`);
+  const scale = fraction.length - exponent;
+  return scale < 0
+    ? { coefficient: coefficient * 10n ** BigInt(-scale), scale: 0 }
+    : { coefficient, scale };
+}
+
+function roundedCents(coefficient: bigint, scale: number): bigint {
+  if (scale <= 2) return coefficient * 10n ** BigInt(2 - scale);
+  const divisor = 10n ** BigInt(scale - 2);
+  return coefficient / divisor + ((coefficient % divisor) * 2n >= divisor ? 1n : 0n);
+}
+
+function moneyCents(value: number): bigint {
+  const valueParts = decimalParts(value);
+  return roundedCents(valueParts.coefficient, valueParts.scale);
+}
+
+function lineCents(quantity: number, rate: number): bigint {
+  const quantityParts = decimalParts(quantity);
+  const rateParts = decimalParts(rate);
+  return roundedCents(
+    quantityParts.coefficient * rateParts.coefficient,
+    quantityParts.scale + rateParts.scale
+  );
+}
+
+const fromCents = (cents: bigint) => Number(cents) / 100;
+const round2 = (n: number) => fromCents(moneyCents(n));
+
+function assertMoneyRange(cents: bigint) {
+  if (cents > MAX_MONEY_CENTS) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: MONEY_MAX_MESSAGE });
+  }
+}
 
 export function calculateInvoiceTotals(
   items: Array<{ quantity: number; rate: number }>,
   taxInput = 0,
   discountInput = 0
 ) {
-  const amounts = items.map((item) => round2(item.quantity * item.rate));
-  const subtotal = round2(amounts.reduce((sum, amount) => sum + amount, 0));
-  const tax = round2(taxInput);
-  const discount = round2(discountInput);
-  if (discount > subtotal) {
+  const amountCents = items.map((item) => lineCents(item.quantity, item.rate));
+  amountCents.forEach(assertMoneyRange);
+  const subtotalCents = amountCents.reduce((sum, amount) => sum + amount, 0n);
+  const taxCents = moneyCents(taxInput);
+  const discountCents = moneyCents(discountInput);
+  assertMoneyRange(subtotalCents);
+  assertMoneyRange(taxCents);
+  assertMoneyRange(discountCents);
+  if (discountCents > subtotalCents) {
     throw new TRPCError({
       code: 'BAD_REQUEST',
       message: 'Discount cannot exceed the invoice subtotal',
     });
   }
-  return { amounts, subtotal, discount, tax, total: round2(subtotal - discount + tax) };
+  const totalCents = subtotalCents - discountCents + taxCents;
+  assertMoneyRange(totalCents);
+  return {
+    amounts: amountCents.map(fromCents),
+    subtotal: fromCents(subtotalCents),
+    discount: fromCents(discountCents),
+    tax: fromCents(taxCents),
+    total: fromCents(totalCents),
+  };
 }
 
 // IMP-FIN-04: money is Decimal(12,2), so a partial payment can legitimately pay an
@@ -330,11 +384,12 @@ export const financeRouter = router({
           .array(
             z.object({
               description: z.string().min(1),
-              quantity: z.number().positive(),
+              quantity: z.number().positive().max(MAX_INVOICE_QUANTITY),
               rate: positiveMoney(),
             })
           )
-          .min(1),
+          .min(1)
+          .max(MAX_INVOICE_ITEMS),
         tax: nonNegativeMoney().optional(),
         discount: nonNegativeMoney().optional(),
         dueDate: z.date().optional(),
@@ -343,60 +398,71 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const current = await ctx.db.invoice.findUnique({
-        where: { id: input.id },
-        select: { status: true, discount: true, tax: true },
-      });
-      if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
-      if (current.status !== 'DRAFT' && current.status !== 'SENT') {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `A ${current.status.toLowerCase()} invoice can't be edited — only draft or sent invoices.`,
+      return ctx.db.$transaction(async (tx) => {
+        // Serialize edits with payment recording. Re-read only after acquiring the
+        // row lock so status, adjustments, and collected funds cannot go stale.
+        await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.id} FOR UPDATE`;
+        const current = await tx.invoice.findUnique({
+          where: { id: input.id },
+          select: { status: true, discount: true, tax: true },
         });
-      }
+        if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
+        if (current.status !== 'DRAFT' && current.status !== 'SENT') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `A ${current.status.toLowerCase()} invoice can't be edited — only draft or sent invoices.`,
+          });
+        }
 
-      // Recompute money server-side, identical to createInvoice. Monetary adjustments
-      // are optional update fields, so preserve their stored values when omitted.
-      const totals = calculateInvoiceTotals(
-        input.items,
-        input.tax ?? Number(current.tax),
-        input.discount ?? Number(current.discount)
-      );
-      const lineItems = input.items.map((it, index) => ({
-        description: it.description,
-        quantity: it.quantity,
-        rate: it.rate,
-        amount: totals.amounts[index],
-      }));
+        const totals = calculateInvoiceTotals(
+          input.items,
+          input.tax ?? Number(current.tax),
+          input.discount ?? Number(current.discount)
+        );
+        const paid = await tx.payment.aggregate({
+          where: { invoiceId: input.id },
+          _sum: { amount: true },
+        });
+        const amountPaid = round2(Number(paid._sum.amount ?? 0));
+        if (totals.total < amountPaid) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `Invoice total cannot be less than the ${amountPaid.toFixed(2)} already paid. Record a refund or adjustment first.`,
+          });
+        }
 
-      const data: Record<string, unknown> = {
-        items: lineItems,
-        subtotal: totals.subtotal,
-        discount: totals.discount,
-        tax: totals.tax,
-        total: totals.total,
-      };
-      if (input.dueDate) data.dueDate = input.dueDate;
-      if (input.notes !== undefined) data.notes = input.notes.trim() || null;
-      if (input.status && input.status !== current.status) {
-        data.status = input.status;
-        // Keep sentAt consistent with the status the same way updateInvoiceStatus does.
-        if (input.status === 'SENT') data.sentAt = new Date();
-        if (input.status === 'DRAFT') data.sentAt = null;
-      }
+        const lineItems = input.items.map((it, index) => ({
+          description: it.description,
+          quantity: it.quantity,
+          rate: it.rate,
+          amount: totals.amounts[index],
+        }));
+        const data: Record<string, unknown> = {
+          items: lineItems,
+          subtotal: totals.subtotal,
+          discount: totals.discount,
+          tax: totals.tax,
+          total: totals.total,
+        };
+        if (input.dueDate) data.dueDate = input.dueDate;
+        if (input.notes !== undefined) data.notes = input.notes.trim() || null;
+        if (input.status && input.status !== current.status) {
+          data.status = input.status;
+          if (input.status === 'SENT') data.sentAt = new Date();
+          if (input.status === 'DRAFT') data.sentAt = null;
+        }
 
-      const invoice = await ctx.db.invoice.update({
-        where: { id: input.id },
-        data,
-        include: {
-          client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
-          project: { select: { id: true, name: true } },
-          payments: { orderBy: { paidAt: 'desc' } },
-        },
+        const invoice = await tx.invoice.update({
+          where: { id: input.id },
+          data,
+          include: {
+            client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
+            project: { select: { id: true, name: true } },
+            payments: { orderBy: { paidAt: 'desc' } },
+          },
+        });
+        return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
       });
-
-      const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
-      return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
     }),
 
   // IMP-FIN-01: email the invoice to the client's primary contact (falling back to
@@ -560,6 +626,7 @@ export const financeRouter = router({
       } | null = null;
 
       const result = await ctx.db.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.invoiceId} FOR UPDATE`;
         const invoice = await tx.invoice.findUnique({
           where: { id: input.invoiceId },
           select: { id: true, status: true, total: true, currency: true, clientId: true },
