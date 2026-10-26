@@ -98,6 +98,13 @@ describe('crm.opportunity.convert', () => {
     expect(mocks.opportunityFindUnique).not.toHaveBeenCalled();
     expect(mocks.opportunityUpdate).not.toHaveBeenCalled();
     expect(mocks.jobCreate).not.toHaveBeenCalled();
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.auditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'crm.opportunity.convert',
+        success: false,
+      }),
+    });
   });
 
   it('locks and rejects a nonexistent opportunity before provisioning anything', async () => {
@@ -150,6 +157,8 @@ describe('crm.opportunity.convert', () => {
 
     expect(mocks.packageFindUnique).not.toHaveBeenCalled();
     expect(mocks.organizationCreate).not.toHaveBeenCalled();
+    expect(mocks.opportunityFindUnique).not.toHaveBeenCalled();
+    expect(mocks.opportunityUpdate).not.toHaveBeenCalled();
     expect(mocks.jobCreate).not.toHaveBeenCalled();
   });
 
