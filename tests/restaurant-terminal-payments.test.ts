@@ -177,6 +177,27 @@ describe('provider-neutral terminal payments', () => {
     expect(created[0]).toMatchObject({ outcome: 'REJECTED', failureReason: 'AMOUNT_MISMATCH' });
   });
 
+  it('rejects a pre-tax approval amount that does not match the live CARD quote', async () => {
+    const { db, created } = makeDb();
+    db.restaurantBill.findFirst.mockResolvedValueOnce({ id: 'bill-1' } as never);
+    quoteOpenBillSettlement.mockResolvedValueOnce({ remainingDue: '10.80' });
+
+    await processTerminalEvent(db as never, {
+      source: 'provider-neutral',
+      externalEventId: 'event-pre-tax-amount',
+      event: { ...baseEvent, amount: '10.00' },
+      requiredMode: 'WEBHOOK',
+    });
+
+    expect(applyTenderInTransaction).not.toHaveBeenCalled();
+    expect(quoteOpenBillSettlement).toHaveBeenCalledWith(db, 'bill-1', expect.any(Date), 'CARD');
+    expect(created[0]).toMatchObject({
+      amount: expect.objectContaining({ toFixed: expect.any(Function) }),
+      outcome: 'REJECTED',
+      failureReason: 'AMOUNT_MISMATCH',
+    });
+  });
+
   it('rejects an event without throwing when the live settlement cannot be quoted', async () => {
     const { db, created } = makeDb();
     quoteOpenBillSettlement.mockResolvedValueOnce(null);
