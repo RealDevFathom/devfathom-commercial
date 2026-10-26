@@ -63,5 +63,13 @@ describeIfDatabase('restaurant report timezone boundaries', () => {
       { branch: 'New York', occurred_at: 'ny just before upper', day: '2026-10-21' },
       { branch: 'New York', occurred_at: 'ny local 01:00', day: '2026-10-21' },
     ]);
+    expect(result.rows.map(({ occurred_at }) => occurred_at)).not.toEqual(
+      expect.arrayContaining([
+        'just before lower',
+        'exact upper',
+        'ny just before lower',
+        'ny exact upper',
+      ])
+    );
   });
 });
