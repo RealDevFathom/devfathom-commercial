@@ -155,21 +155,31 @@ suite('owner command centre Khata aging under forced PostgreSQL RLS', () => {
       overdue: [],
       partial: { amount: 500, paid: 500, dishonoured: 200 },
     });
+    const fullyBounced = await createFixture(orgA, `report-a4-${suffix}`, {
+      overdue: [],
+      partial: { amount: 100, paid: 100, dishonoured: 100 },
+    });
     const foreign = await createFixture(orgB, `report-b-${suffix}`, {
       overdue: [2_000_000_000],
     });
 
     const result = await withTenantDb(orgA, (db) =>
       readCommandCentre(db, {
-        branchIds: [first.branchId, second.branchId, third.branchId, foreign.branchId],
+        branchIds: [
+          first.branchId,
+          second.branchId,
+          third.branchId,
+          fullyBounced.branchId,
+          foreign.branchId,
+        ],
         from: '2026-01-01',
         to: '2026-01-01',
       })
     );
 
-    const fullyBounced = await withTenantDb(orgA, (db) =>
+    const fullyBouncedResult = await withTenantDb(orgA, (db) =>
       readCommandCentre(db, {
-        branchIds: [second.branchId],
+        branchIds: [fullyBounced.branchId],
         from: '2026-01-01',
         to: '2026-01-01',
       })
@@ -186,8 +196,8 @@ suite('owner command centre Khata aging under forced PostgreSQL RLS', () => {
     // debt back in.
     // Excludes the future charge and foreign organization's charge. The total is also deliberately
     // above PostgreSQL INTEGER_MAX.
-    expect(result.metrics.khataAgingMinor).toBe(2_750_001_000);
-    expect(fullyBounced.metrics.khataAgingMinor).toBe(800);
+    expect(result.metrics.khataAgingMinor).toBe(2_750_001_100);
+    expect(fullyBouncedResult.metrics.khataAgingMinor).toBe(100);
     expect(partiallyBounced.metrics.khataAgingMinor).toBe(200);
   });
 });
