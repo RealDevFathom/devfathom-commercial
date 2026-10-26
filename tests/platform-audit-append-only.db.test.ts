@@ -98,7 +98,9 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
       await expect(mutation).rejects.toThrow(
         new RegExp(`audit_logs is append-only: ${operation} is forbidden`, 'i')
       );
-      await expect(mutation).rejects.toMatchObject({ meta: { code: '55000' } });
+      await expect(mutation).rejects.toMatchObject({
+        meta: { driverAdapterError: { cause: { originalCode: '55000' } } },
+      });
 
       await expect(
         withTenantDb(org, (db) =>
