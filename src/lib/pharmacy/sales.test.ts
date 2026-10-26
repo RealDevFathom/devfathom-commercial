@@ -270,6 +270,43 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
     expect(price.unitPriceMinor * 3).toBeLessThanOrEqual(100 * 2 + 200);
   });
 
+  it.each<{
+    label: string;
+    allocations: Array<{
+      canonicalUnits: number;
+      unitPriceMinor: number;
+      proRataCeilingMinor: number;
+    }>;
+    canonicalUnits: number;
+  }>([
+    { label: 'an empty allocation', allocations: [], canonicalUnits: 1 },
+    {
+      label: 'a partial allocation',
+      allocations: [{ canonicalUnits: 1, unitPriceMinor: 100, proRataCeilingMinor: 100 }],
+      canonicalUnits: 2,
+    },
+    {
+      label: 'a non-positive allocation',
+      allocations: [{ canonicalUnits: 0, unitPriceMinor: 100, proRataCeilingMinor: 100 }],
+      canonicalUnits: 1,
+    },
+    {
+      label: 'an unsafe priced total',
+      allocations: [
+        {
+          canonicalUnits: Number.MAX_SAFE_INTEGER,
+          unitPriceMinor: 2,
+          proRataCeilingMinor: 2,
+        },
+      ],
+      canonicalUnits: Number.MAX_SAFE_INTEGER,
+    },
+  ])('rejects $label', ({ allocations, canonicalUnits }) => {
+    expect(() => allocationWeightedPrice({ allocations, canonicalUnits })).toThrow(
+      'INVALID_QUANTITY'
+    );
+  });
+
   it('rejects a client claiming that a ten-unit pack contains one canonical unit', () => {
     expect(() =>
       assertSaleUnitConversion({

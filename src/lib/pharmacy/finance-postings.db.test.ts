@@ -287,6 +287,7 @@ async function stockLot(
     locationId?: string;
     /** See `postedReceipt`: 1 when the scenario's sale takes part of a pack. */
     unitsPerPack?: number;
+    printedMrpMinor?: number;
   }
 ) {
   const batch = await db.pharmacyManufacturingBatch.create({
@@ -306,7 +307,7 @@ async function stockLot(
     supplierName: 'Distributor Ltd',
     supplierInvoiceRef: `INV-${tag(options.label)}`,
     unitCostMinor: options.unitCostMinor,
-    printedMrpMinor: 3_000 * (options.unitsPerPack ?? 10),
+    printedMrpMinor: options.printedMrpMinor ?? 3_000 * (options.unitsPerPack ?? 10),
     receivedExpiresAt: options.expiresAt,
     receivedExpiryPrecision: 'DAY',
     quantityUnits: options.units,
@@ -512,6 +513,42 @@ describeIfDatabase('FIN-01 — goods receipt', () => {
 });
 
 describeIfDatabase('FIN-01 / FIN-03 — sale line', () => {
+  it('balances the persisted 399-minor gross for a 2:1 split across differently priced lots', async () => {
+    const f = await fixture(ORG_A, branch('weighted-gross'), 'weighted-gross');
+    const { entry, line } = await inOrg(ORG_A, async (db) => {
+      await stockLot(db, f, {
+        label: 'weighted-cheap',
+        units: 2,
+        unitCostMinor: 60,
+        printedMrpMinor: 100,
+        expiresAt: EXPIRY_SOON,
+        unitsPerPack: 1,
+      });
+      await stockLot(db, f, {
+        label: 'weighted-dear',
+        units: 1,
+        unitCostMinor: 80,
+        printedMrpMinor: 200,
+        expiresAt: EXPIRY_LATER,
+        unitsPerPack: 1,
+      });
+      const sold = await completedSaleLine(db, f, { label: 'weighted-gross', quantity: 3 });
+      return {
+        line: sold.line,
+        entry: await deps.postings.postSaleLineEntry(db, scopeOf(f), {
+          saleLineId: sold.line.id,
+          at: SOLD_AT,
+        }),
+      };
+    });
+
+    expect(line.unitPriceMinor).toBe(133);
+    expect(line.unitPriceMinor * line.quantity).toBe(399);
+    expectBalanced(entry);
+    expect(totalFor(entry, 'SALES_REVENUE', 'CREDIT')).toBe(399);
+    expect(totalFor(entry, 'SALES_CLEARING', 'DEBIT')).toBe(399);
+  });
+
   it('posts revenue and COGS at the EXACT allocated lot cost across two lots', async () => {
     const f = await fixture(ORG_A, branch('cogs'), 'cogs');
     const result = await inOrg(ORG_A, async (db) => {
