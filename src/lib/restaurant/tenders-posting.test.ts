@@ -358,6 +358,13 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     expect(f.tenders[0]!.amount.toFixed(2)).toBe('10.80');
     expect((f.payments[0]!.amount as Prisma.Decimal).toFixed(2)).toBe('10.80');
     expect((f.paymentEvents[0]!.amount as Prisma.Decimal).toFixed(2)).toBe('10.80');
+    const tenderTotal = f.tenders.reduce((total, row) => total.plus(row.amount), D('0'));
+    const paymentEventTotal = f.paymentEvents.reduce(
+      (total, row) => total.plus(row.amount as Prisma.Decimal),
+      D('0')
+    );
+    expect(tenderTotal.minus(paymentEventTotal).toFixed(2)).toBe('0.00');
+    expect(quote!.remainingDue.minus(tenderTotal).toFixed(2)).toBe('0.00');
   });
 
   it('rejects a terminal approval when the locked CARD quote was repriced', async () => {
@@ -395,6 +402,8 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
       'SELECT id FROM restaurant_bills WHERE id = ? FOR UPDATE',
     ]);
     expect(f.tenders).toHaveLength(0);
+    expect(f.payments).toHaveLength(0);
+    expect(f.paymentEvents).toHaveLength(0);
   });
 
   it('collects a prior-day bill on the drawer date; reconciles sales and collections on their own days', async () => {
