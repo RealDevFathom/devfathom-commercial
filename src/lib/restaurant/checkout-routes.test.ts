@@ -9,6 +9,7 @@ import {
   getOrderSettlementForBranch,
   moneyErrorResponse,
 } from './checkout-routes';
+import { OrderCommandError } from './orders';
 import { quoteOpenBillSettlement } from './tenders';
 
 vi.mock('./bills', async (importOriginal) => ({
@@ -262,5 +263,18 @@ describe('tax configuration checkout refusal (#148)', () => {
     expect(response.status).toBe(409);
     expect((await response.json()).error).not.toContain('private-rule-id');
     expect(moneyErrorResponse(new Error('database failure'))).toBeNull();
+  });
+});
+
+describe('order command error responses', () => {
+  it('reports a closed business day as a conflict', async () => {
+    const response = moneyErrorResponse(
+      new OrderCommandError('This business day is closed; no order can be opened.', 'DAY_CLOSED')
+    )!;
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'This business day is closed; no order can be opened.',
+    });
   });
 });
