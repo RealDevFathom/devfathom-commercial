@@ -115,11 +115,7 @@ describe('Khata router trust and recovery boundary', () => {
   it.each([
     ['bootstrap admin wildcard', '*', ['pharmacy:counter']],
     ['counter operator', 'pharmacy:counter', ['pharmacy:counter']],
-    [
-      'finance operator',
-      'reports:financial',
-      ['pharmacy:counter', 'reports:financial'],
-    ],
+    ['finance operator', 'reports:financial', ['pharmacy:counter', 'reports:financial']],
   ])(
     'admits a %s without requiring clinical dispense permission',
     async (_name, grant, actions) => {
@@ -165,9 +161,17 @@ describe('Khata router trust and recovery boundary', () => {
     );
   });
 
-  it('uses server tenant, CREDIT settlement and an atomic member charge', async () => {
+  it('lets a finance operator use server tenant, CREDIT settlement and an atomic member charge', async () => {
     const f = fixture();
+    vi.mocked(can).mockImplementation(async (_subject, action) =>
+      capabilityMatches('reports:financial', action)
+    );
+
     await f.caller().tender(input);
+    expect(vi.mocked(can).mock.calls.map(([, action]) => action)).toEqual([
+      'pharmacy:counter',
+      'reports:financial',
+    ]);
     expect(applyPharmacyTender).toHaveBeenCalledWith(
       f.db,
       { organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' },
