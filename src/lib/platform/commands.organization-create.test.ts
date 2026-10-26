@@ -132,6 +132,7 @@ describe('organization.create admin email', () => {
 describe('crm.opportunity.convert eligibility', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    for (const key of Object.keys(created)) delete created[key];
     mocks.userFindFirst.mockResolvedValue(null);
     mocks.userCreate.mockResolvedValue({ id: 'user_new' });
     mocks.accountUpdateMany.mockResolvedValue({ count: 1 });
@@ -141,20 +142,50 @@ describe('crm.opportunity.convert eligibility', () => {
     ['WON', null],
     ['LOST', null],
     ['QUALIFIED', 'org_existing'],
-  ])('rejects an ineligible opportunity before provisioning', async (stage, convertedOrganizationId) => {
-    mocks.opportunityFindUnique.mockResolvedValue({
-      id: 'opp_1', accountId: 'account_1', stage, convertedOrganizationId,
-    });
+  ])(
+    'rejects an ineligible opportunity before provisioning',
+    async (stage, convertedOrganizationId) => {
+      mocks.opportunityFindUnique.mockResolvedValue({
+        id: 'opp_1',
+        accountId: 'account_1',
+        stage,
+        convertedOrganizationId,
+      });
 
-    const error = await executePlatformCommand(actor, 'crm.opportunity.convert',
-      { ...payload('admin@acme.com'), opportunityId: 'opp_1' }, request
+      const error = await executePlatformCommand(
+        actor,
+        'crm.opportunity.convert',
+        { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+        request
+      ).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(PlatformSecurityError);
+      expect(error).toMatchObject({
+        status: 409,
+        message: 'Opportunity is not eligible for conversion.',
+      });
+      expect(mocks.opportunityUpdateMany).not.toHaveBeenCalled();
+      expect(platformDb.organization.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects a missing opportunity before provisioning', async () => {
+    mocks.opportunityFindUnique.mockResolvedValue(null);
+
+    const error = await executePlatformCommand(
+      actor,
+      'crm.opportunity.convert',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_missing' },
+      request
     ).catch((caught: unknown) => caught);
 
+    expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({
       status: 409,
       message: 'Opportunity is not eligible for conversion.',
     });
     expect(mocks.opportunityUpdateMany).not.toHaveBeenCalled();
+    expect(mocks.accountUpdateMany).not.toHaveBeenCalled();
     expect(platformDb.organization.create).not.toHaveBeenCalled();
   });
 
@@ -213,8 +244,12 @@ describe('crm.opportunity.convert eligibility', () => {
     });
     mocks.opportunityUpdateMany.mockResolvedValue({ count: 1 });
 
-    await executePlatformCommand(actor, 'crm.opportunity.convert',
-      { ...payload('admin@acme.com'), opportunityId: 'opp_1' }, request);
+    await executePlatformCommand(
+      actor,
+      'crm.opportunity.convert',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+      request
+    );
 
     expect(mocks.opportunityUpdateMany).toHaveBeenCalledWith({
       where: { id: 'opp_1', stage: 'NEGOTIATION', convertedOrganizationId: null },
@@ -225,11 +260,16 @@ describe('crm.opportunity.convert eligibility', () => {
       data: { status: 'CUSTOMER' },
     });
     expect(created.opportunityUpdate).toContainEqual({ convertedOrganizationId: 'org_new' });
-    expect(created.opportunityStageEvent).toContainEqual(expect.objectContaining({
-      opportunityId: 'opp_1', fromStage: 'NEGOTIATION', toStage: 'WON',
-    }));
+    expect(created.opportunityStageEvent).toContainEqual(
+      expect.objectContaining({
+        opportunityId: 'opp_1',
+        fromStage: 'NEGOTIATION',
+        toStage: 'WON',
+      })
+    );
     expect(created.accountUpdate).toContainEqual({
-      organizationId: 'org_new', status: 'CUSTOMER',
+      organizationId: 'org_new',
+      status: 'CUSTOMER',
     });
   });
 });
