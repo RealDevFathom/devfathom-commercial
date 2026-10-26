@@ -3421,6 +3421,7 @@ model Invoice {
 model Payment {
   id             String   @id @default(cuid())
   organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  idempotencyKey String
   invoiceId      String
   amount         Decimal  @db.Decimal(12, 2)
   currency       Currency @default(USD)
@@ -3433,6 +3434,7 @@ model Payment {
 
   @@index([invoiceId])
   @@index([organizationId])
+  @@unique([organizationId, idempotencyKey])
   @@map("payments")
 }
 

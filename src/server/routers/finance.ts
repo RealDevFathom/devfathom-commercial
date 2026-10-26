@@ -584,6 +584,7 @@ export const financeRouter = router({
     .input(
       z.object({
         invoiceId: z.string(),
+        idempotencyKey: z.string().trim().min(8).max(200),
         amount: positiveMoney(),
         method: z.string().max(100).optional(),
         note: z.string().max(1000).optional(),
@@ -601,6 +602,45 @@ export const financeRouter = router({
       } | null = null;
 
       const result = await ctx.db.$transaction(async (tx) => {
+        // Serialize the idempotency domain before locking an invoice. This also
+        // prevents two concurrent requests from racing the unique constraint when
+        // a key is accidentally reused for different invoices.
+        await tx.$queryRaw`
+          SELECT pg_advisory_xact_lock(
+            hashtextextended(${`${orgId}:invoice-payment:${input.idempotencyKey}`}, 0)
+          )
+        `;
+        const replay = await tx.payment.findUnique({
+          where: {
+            organizationId_idempotencyKey: {
+              organizationId: orgId,
+              idempotencyKey: input.idempotencyKey,
+            },
+          },
+          include: { invoice: { select: { status: true, total: true } } },
+        });
+        if (replay) {
+          if (replay.invoiceId !== input.invoiceId) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'This payment idempotency key was already used for another invoice.',
+            });
+          }
+          const paid = await tx.payment.aggregate({
+            where: { invoiceId: replay.invoiceId, organizationId: orgId },
+            _sum: { amount: true },
+          });
+          const amountPaid = round2(Number(paid._sum.amount ?? 0));
+          const total = round2(Number(replay.invoice.total));
+          const { invoice: replayInvoice, ...payment } = replay;
+          return {
+            payment,
+            amountPaid,
+            balance: round2(total - amountPaid),
+            status: replayInvoice.status,
+          };
+        }
+
         const locked = await tx.$queryRaw<Array<{ id: string }>>`
           SELECT id FROM invoices
           WHERE id = ${input.invoiceId} AND "organizationId" = ${orgId}
@@ -656,6 +696,7 @@ export const financeRouter = router({
         const payment = await tx.payment.create({
           data: {
             organizationId: orgId,
+            idempotencyKey: input.idempotencyKey,
             invoiceId: invoice.id,
             amount: input.amount,
             currency: invoice.currency,

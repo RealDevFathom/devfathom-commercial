@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
   DollarSign,
@@ -1244,6 +1244,7 @@ function AddPaymentForm({
   const [method, setMethod] = useState('');
   const [note, setNote] = useState('');
   const [paidAt, setPaidAt] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const paymentKey = useRef<string | null>(null);
 
   const addPayment = trpc.finance.addPayment.useMutation({
     onSuccess: () => {
@@ -1251,6 +1252,7 @@ function AddPaymentForm({
       setAmount('');
       setMethod('');
       setNote('');
+      paymentKey.current = null;
     },
   });
 
@@ -1263,6 +1265,7 @@ function AddPaymentForm({
     if (!amountValid || overpay) return;
     addPayment.mutate({
       invoiceId,
+      idempotencyKey: (paymentKey.current ??= crypto.randomUUID()),
       amount: amountNum,
       method: method.trim() || undefined,
       note: note.trim() || undefined,

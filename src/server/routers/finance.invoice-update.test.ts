@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
   update: vi.fn(),
   aggregate: vi.fn(),
+  findPayment: vi.fn(),
   createPayment: vi.fn(),
   queryRaw: vi.fn(),
   transaction: vi.fn(),
@@ -29,7 +30,11 @@ const testDb = {
   $transaction: mocks.transaction,
   $queryRaw: mocks.queryRaw,
   invoice: { findUnique: mocks.findUnique, update: mocks.update },
-  payment: { aggregate: mocks.aggregate, create: mocks.createPayment },
+  payment: {
+    aggregate: mocks.aggregate,
+    findUnique: mocks.findPayment,
+    create: mocks.createPayment,
+  },
 };
 
 function caller() {
@@ -54,6 +59,7 @@ describe('finance.updateInvoice', () => {
     mocks.queryRaw.mockResolvedValue([{ id: 'invoice-1' }]);
     mocks.findUnique.mockResolvedValue({ status: 'DRAFT', discount: 10, tax: 0 });
     mocks.aggregate.mockResolvedValue({ _sum: { amount: null } });
+    mocks.findPayment.mockResolvedValue(null);
     mocks.transaction.mockImplementation(async (work) => work(testDb));
     mocks.update.mockResolvedValue({
       id: 'invoice-1',
@@ -106,7 +112,11 @@ describe('finance.updateInvoice', () => {
     mocks.queryRaw.mockResolvedValue([]);
 
     await expect(
-      caller().addPayment({ invoiceId: 'foreign-invoice', amount: 25 })
+      caller().addPayment({
+        invoiceId: 'foreign-invoice',
+        idempotencyKey: 'payment-request-1',
+        amount: 25,
+      })
     ).rejects.toThrow('Invoice not found');
 
     expect(mocks.findUnique).not.toHaveBeenCalled();
@@ -125,7 +135,11 @@ describe('finance.updateInvoice', () => {
     });
     mocks.createPayment.mockResolvedValue({ id: 'payment-1' });
 
-    await caller().addPayment({ invoiceId: 'invoice-1', amount: 25 });
+    await caller().addPayment({
+      invoiceId: 'invoice-1',
+      idempotencyKey: 'payment-request-1',
+      amount: 25,
+    });
 
     expect(mocks.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'invoice-1', organizationId: 'org-1' } })
@@ -136,9 +150,33 @@ describe('finance.updateInvoice', () => {
     });
     expect(mocks.createPayment).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ organizationId: 'org-1', invoiceId: 'invoice-1' }),
+        data: expect.objectContaining({
+          organizationId: 'org-1',
+          invoiceId: 'invoice-1',
+          idempotencyKey: 'payment-request-1',
+        }),
       })
     );
+  });
+
+  it('returns an existing payment when its idempotency key is retried', async () => {
+    mocks.findPayment.mockResolvedValue({
+      id: 'payment-1',
+      invoiceId: 'invoice-1',
+      amount: 25,
+      invoice: { status: 'SENT', total: 100 },
+    });
+    mocks.aggregate.mockResolvedValue({ _sum: { amount: 25 } });
+
+    const result = await caller().addPayment({
+      invoiceId: 'invoice-1',
+      idempotencyKey: 'payment-request-1',
+      amount: 25,
+    });
+
+    expect(result).toMatchObject({ amountPaid: 25, balance: 75, status: 'SENT' });
+    expect(mocks.createPayment).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
   });
 
   it('rejects a reduction below payments collected inside the locked transaction', async () => {
