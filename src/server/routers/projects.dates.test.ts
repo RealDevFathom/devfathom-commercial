@@ -65,7 +65,7 @@ describe('project date ranges', () => {
     expect(projectCreate).not.toHaveBeenCalled();
   });
 
-  it('accepts equal dates and omitted bounds when creating a project', async () => {
+  it('accepts equal dates and either omitted bound when creating a project', async () => {
     const date = new Date('2026-10-22T00:00:00.000Z');
     projectCreate.mockResolvedValue({ id: 'project_1', name: 'Valid dates' });
 
@@ -81,8 +81,20 @@ describe('project date ranges', () => {
       type: 'INTERNAL',
       createDefaultBoard: false,
     });
+    await caller().create({
+      name: 'Start only',
+      type: 'INTERNAL',
+      startDate: date,
+      createDefaultBoard: false,
+    });
+    await caller().create({
+      name: 'End only',
+      type: 'INTERNAL',
+      endDate: date,
+      createDefaultBoard: false,
+    });
 
-    expect(projectCreate).toHaveBeenCalledTimes(2);
+    expect(projectCreate).toHaveBeenCalledTimes(4);
   });
 
   it('checks a partial update against the stored start date', async () => {
