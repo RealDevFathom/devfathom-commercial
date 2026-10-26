@@ -225,11 +225,16 @@ export function RestaurantStaffConsole() {
     };
     if (editingStaff) updateStaff.mutate({ id: editingStaff.id, ...payload });
     else if (createMode === 'INVITE') {
+      const primaryBranchId = payload.primaryBranchId;
+      if (!primaryBranchId) {
+        toast.error('Select a primary branch before sending the invitation.');
+        return;
+      }
       inviteStaff.mutate({
         name: payload.displayName,
         email: formText(data, 'email'),
         staffRole: formText(data, 'staffRole') as 'WAITER' | 'MANAGER',
-        primaryBranchId: payload.primaryBranchId,
+        primaryBranchId,
       });
     } else createStaff.mutate(payload);
   };
