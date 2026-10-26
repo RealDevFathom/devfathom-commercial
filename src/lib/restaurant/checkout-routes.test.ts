@@ -9,6 +9,7 @@ import {
   getOrderSettlementForBranch,
   moneyErrorResponse,
 } from './checkout-routes';
+import { RefundError } from './refunds';
 import { quoteOpenBillSettlement } from './tenders';
 
 vi.mock('./bills', async (importOriginal) => ({
@@ -262,5 +263,18 @@ describe('tax configuration checkout refusal (#148)', () => {
     expect(response.status).toBe(409);
     expect((await response.json()).error).not.toContain('private-rule-id');
     expect(moneyErrorResponse(new Error('database failure'))).toBeNull();
+  });
+});
+
+describe('refund error responses', () => {
+  it('maps an unsettled-bill refund refusal to conflict', async () => {
+    const response = moneyErrorResponse(
+      new RefundError('Only a SETTLED bill can have a tender refunded.', 'BILL_NOT_SETTLED')
+    )!;
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'Only a SETTLED bill can have a tender refunded.',
+    });
   });
 });
