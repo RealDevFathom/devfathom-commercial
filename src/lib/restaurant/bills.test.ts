@@ -1150,6 +1150,110 @@ describeIfDatabase('bills command layer (real DB)', () => {
     });
   });
 
+  it('removes a participating zero-allocation line from the basis and reallocates without drift', async () => {
+    const { orderId, itemIds, db } = await openWithItems([{}, {}]);
+    const policy = await read((tx) =>
+      tx.restaurantServiceChargePolicyVersion.create({
+        data: {
+          branchId: ids.branch,
+          rate: '0.100000',
+          effectiveFrom: new Date('2026-08-18T00:00:00.000Z'),
+          effectiveTo: AT,
+          acknowledgedAt: AT,
+          acknowledgementRef: 'zero-allocation-regression',
+          idempotencyKey: `service_zero_${suffix}`,
+          payloadHash: `service-zero-${suffix}`,
+        },
+      })
+    );
+    await read(async (tx) => {
+      await tx.restaurantOrderItem.update({
+        where: { id: itemIds[0]! },
+        data: { unitPrice: '0.01' },
+      });
+      await tx.restaurantOrderItem.update({
+        where: { id: itemIds[1]! },
+        data: { unitPrice: '0.09' },
+      });
+      await tx.restaurantOrder.update({
+        where: { id: orderId },
+        data: { serviceChargePolicyVersionId: policy.id },
+      });
+    });
+    const { billIds } = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: actor(),
+    });
+    const billId = billIds[0]!;
+    const lines = await read((tx) =>
+      tx.restaurantBillLine.findMany({ where: { billId }, orderBy: { lineSubtotal: 'asc' } })
+    );
+    expect(lines.map((line) => line.serviceChargeAmount.toFixed(2))).toEqual(['0.00', '0.01']);
+
+    await deps.bills.compLine(db, {
+      billId,
+      branchId: ids.branch,
+      billLineId: lines[0]!.id,
+      reason: 'zero allocation regression',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+
+    const after = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({
+        where: { id: billId },
+        include: { lines: { orderBy: { lineSubtotal: 'asc' } } },
+      })
+    );
+    expect({
+      basis: after.serviceChargeBasis.toFixed(2),
+      service: after.serviceChargeTotal.toFixed(2),
+      grand: after.grandTotal.toFixed(2),
+      allocations: after.lines.map((line) => line.serviceChargeAmount.toFixed(2)),
+      lineTotals: after.lines.map((line) => line.lineTotal.toFixed(2)),
+    }).toEqual({
+      basis: '0.09',
+      service: '0.01',
+      grand: '0.10',
+      allocations: ['0.00', '0.01'],
+      lineTotals: ['0.00', '0.10'],
+    });
+    expect(
+      after.lines.reduce((total, line) => total.add(line.serviceChargeAmount), D(0)).toFixed(2)
+    ).toBe(after.serviceChargeTotal.toFixed(2));
+  });
+
+  it('leaves the zero service-charge sentinel unchanged when comping a non-participating line', async () => {
+    const { db, orderId } = await openWithItems([{}]);
+    const { billIds } = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: actor(),
+    });
+    const billId = billIds[0]!;
+    const line = await read((tx) => tx.restaurantBillLine.findFirstOrThrow({ where: { billId } }));
+    await deps.bills.compLine(db, {
+      billId,
+      branchId: ids.branch,
+      billLineId: line.id,
+      reason: 'non-participating regression',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+    const after = await read((tx) =>
+      tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } })
+    );
+    expect({
+      basis: after.serviceChargeBasis.toFixed(2),
+      service: after.serviceChargeTotal.toFixed(2),
+      policy: after.serviceChargePolicyVersionId,
+      grand: after.grandTotal.toFixed(2),
+    }).toEqual({ basis: '0.00', service: '0.00', policy: null, grand: '0.00' });
+  });
+
   it('re-split guard: blocks without recut, voids-and-recuts with co-auth, locks after tender/settle', async () => {
     const { orderId, db } = await openWithItems([{}, {}]);
     const firstCut = await deps.bills.cutBills(db, {

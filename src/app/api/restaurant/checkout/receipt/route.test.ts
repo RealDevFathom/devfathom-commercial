@@ -398,6 +398,24 @@ describe('Restaurant receipt dispatch', () => {
     expect(lock).not.toHaveBeenCalled();
     expect(createJob).not.toHaveBeenCalled();
   });
+  it('does not disclose bill existence before the payment capability gate', async () => {
+    allowed = false;
+    const existing = await post({ billId: 'bill-1', action: 'print' });
+    const missing = await post({ billId: 'missing-bill', action: 'print' }, 'missing-key');
+    expect(existing.status).toBe(403);
+    expect(missing.status).toBe(403);
+    expect(await existing.json()).toEqual(await missing.json());
+    expect(findBill).not.toHaveBeenCalled();
+  });
+  it('returns the same not-found response for foreign and nonexistent bills after authorization', async () => {
+    mocks.ctx.device.branchId = 'other-branch';
+    const foreign = await post({ billId: 'bill-1', action: 'print' });
+    mocks.ctx.device.branchId = 'branch-1';
+    const missing = await post({ billId: 'missing-bill', action: 'print' }, 'missing-key');
+    expect(foreign.status).toBe(404);
+    expect(missing.status).toBe(404);
+    expect(await foreign.json()).toEqual(await missing.json());
+  });
   it('requires an unlocked operator, payment capability, and POS register', async () => {
     mocks.ctx.state = 'LOCKED';
     expect((await post()).status).toBe(409);

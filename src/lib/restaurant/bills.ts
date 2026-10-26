@@ -933,6 +933,8 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         grandTotal: true,
         serviceChargeTotal: true,
         serviceChargeBasis: true,
+        serviceChargePolicyVersionId: true,
+        serviceChargeRate: true,
       },
     });
     if (!bill) {
@@ -978,8 +980,37 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       throw new BillCommandError('The line is already comped.', 'ALREADY_COMPED');
     }
 
+    // Policy membership is recorded by the bill's pinned policy and basis, not by a
+    // line's rounded allocation. A participating low-value line can legitimately
+    // have a 0.00 allocation. Re-price the remaining basis at the pinned rate and
+    // allocate that bill-level result afresh, rather than subtracting the old line
+    // allocation (which can leave both stale basis and a cent of rounding drift).
+    const participatesInServiceCharge = bill.serviceChargePolicyVersionId !== null;
+    const remainingLines = participatesInServiceCharge
+      ? await tx.restaurantBillLine.findMany({
+          where: { billId: bill.id, id: { not: line.id }, compAmount: ZERO },
+          select: { id: true, lineSubtotal: true },
+          orderBy: { id: 'asc' },
+        })
+      : [];
+    const serviceChargeBasis = participatesInServiceCharge
+      ? sub(bill.serviceChargeBasis, line.lineSubtotal)
+      : bill.serviceChargeBasis;
+    const serviceChargeTotal = participatesInServiceCharge
+      ? serviceChargeBasis.isZero()
+        ? ZERO
+        : roundMoney(multiply(serviceChargeBasis, bill.serviceChargeRate!))
+      : bill.serviceChargeTotal;
+    const remainingServiceCharges = participatesInServiceCharge
+      ? allocate(
+          serviceChargeTotal,
+          remainingLines.map((remaining) => remaining.lineSubtotal.mul(100).toNumber())
+        )
+      : [];
+    const removedServiceCharge = sub(bill.serviceChargeTotal, serviceChargeTotal);
+
     // What the comp cannot absorb out of the bill's own balance (B3).
-    const compedPayable = add(line.lineSubtotal, line.serviceChargeAmount);
+    const compedPayable = add(line.lineSubtotal, removedServiceCharge);
     const shortfall = sub(compedPayable, bill.grandTotal);
     let releasedDiscount = ZERO;
     if (compare(shortfall, ZERO) > 0 && compare(bill.discountTotal, ZERO) > 0) {
@@ -1027,15 +1058,17 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         compCoAuthorizationId: coAuthorizationId,
       },
     });
-    const serviceChargeTotal = sub(bill.serviceChargeTotal, line.serviceChargeAmount);
-    // Bills without a service-charge policy carry a zero basis.  Subtracting the
-    // merchandise subtotal from that sentinel produced a negative basis on an
-    // ordinary comp and violated the evidence CHECK.  Only charged lines
-    // participate in the policy basis.
-    const serviceChargeBasis = line.serviceChargeAmount.isZero()
-      ? bill.serviceChargeBasis
-      : sub(bill.serviceChargeBasis, line.lineSubtotal);
-    const clearedServiceCharge = serviceChargeTotal.isZero();
+    for (const [index, remaining] of remainingLines.entries()) {
+      const serviceChargeAmount = remainingServiceCharges[index]!;
+      await tx.restaurantBillLine.update({
+        where: { id: remaining.id },
+        data: {
+          serviceChargeAmount,
+          lineTotal: add(remaining.lineSubtotal, serviceChargeAmount),
+        },
+      });
+    }
+    const clearedServiceCharge = participatesInServiceCharge && serviceChargeBasis.isZero();
     await tx.restaurantBill.update({
       where: { id: bill.id },
       data: {
@@ -1625,7 +1658,10 @@ export async function finalizeBillSettlement(
 
 /** Why an order is not yet fully settled (the first failing condition). */
 export type OrderSettlementBlocker =
-  'NO_BILLS' | 'ITEMS_UNBILLED' | 'BILLS_OPEN' | 'TOTAL_MISMATCH';
+  | 'NO_BILLS'
+  | 'ITEMS_UNBILLED'
+  | 'BILLS_OPEN'
+  | 'TOTAL_MISMATCH';
 
 export type OrderSettlement = {
   orderId: string;

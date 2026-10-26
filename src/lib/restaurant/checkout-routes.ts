@@ -549,32 +549,14 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
   capability: MoneyCapability;
   run: (args: MoneyCommandArgs<S>) => Promise<unknown>;
   successStatus?: number;
-  /** Resolve bill ids within the authenticated register branch before the capability
-   * decision so foreign ids remain indistinguishable from missing ids. Authentication
-   * and the capability gate still apply to every bill that actually exists here. */
+  /** Resolve bill ids within the authenticated register branch only after the
+   * capability decision, so an unauthorized operator cannot probe bill existence. */
   obscureBillId?: (data: z.infer<S>) => string;
 }) {
   return withTerminalAuth(
     async (ctx, request) => {
       const operator = requireActingOperator(ctx);
       if (!operator.ok) return operator.response;
-
-      let key: string | null = null;
-      let parsed: { data: z.infer<S> } | undefined;
-      if (opts.obscureBillId) {
-        key = idempotencyKeyFromRequest(request);
-        if (!key) return missingIdempotencyKey();
-        const parsedJson = await readJson(request);
-        if (!parsedJson.ok) return parsedJson.response;
-        const candidate = opts.schema.safeParse(parsedJson.data);
-        if (!candidate.success) return invalidBody(candidate.error.issues);
-        parsed = candidate;
-        await requireBillInDeviceBranch(
-          ctx.db,
-          opts.obscureBillId(candidate.data),
-          ctx.device.branchId
-        );
-      }
 
       const now = new Date();
       const denied = await requireCapability(
@@ -586,17 +568,21 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
       );
       if (denied) return denied;
 
-      if (!parsed) {
-        key = idempotencyKeyFromRequest(request);
-        if (!key) return missingIdempotencyKey();
-        const parsedJson = await readJson(request);
-        if (!parsedJson.ok) return parsedJson.response;
-        const candidate = opts.schema.safeParse(parsedJson.data);
-        if (!candidate.success) return invalidBody(candidate.error.issues);
-        parsed = candidate;
+      const key = idempotencyKeyFromRequest(request);
+      if (!key) return missingIdempotencyKey();
+      const parsedJson = await readJson(request);
+      if (!parsedJson.ok) return parsedJson.response;
+      const parsed = opts.schema.safeParse(parsedJson.data);
+      if (!parsed.success) return invalidBody(parsed.error.issues);
+      if (opts.obscureBillId) {
+        await requireBillInDeviceBranch(
+          ctx.db,
+          opts.obscureBillId(parsed.data),
+          ctx.device.branchId
+        );
       }
 
-      const actor = buildMoneyActor(operator.staffProfileId, ctx.device.id, key!);
+      const actor = buildMoneyActor(operator.staffProfileId, ctx.device.id, key);
       const out = await opts.run({ ctx, data: parsed.data, actor, now });
       if (out instanceof Response) return out;
       return NextResponse.json(out as Record<string, unknown>, {
