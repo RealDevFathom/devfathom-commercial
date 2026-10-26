@@ -126,6 +126,27 @@ describe('platform command failure auditing', () => {
     }
   );
 
+  it('allows a super administrator past the CRM conversion capability boundary', async () => {
+    await expect(
+      executePlatformCommand(
+        actor('SUPER_ADMIN'),
+        'crm.opportunity.convert',
+        { opportunityId: 'opp_1' },
+        request()
+      )
+    ).rejects.not.toMatchObject({ status: 403 });
+
+    // The command transaction is reached before the incomplete fixture is
+    // rejected, then a second transaction records that validation failure.
+    expect(state.transactionCalls).toBe(2);
+    expect(state.audits).toHaveLength(1);
+    expect(state.audits[0]).toMatchObject({
+      action: 'crm.opportunity.convert',
+      reason: 'Platform command validation failed.',
+      metadata: { outcomeCategory: 'validation_failed' },
+    });
+  });
+
   it('persists validation failure without copying raw input', async () => {
     const secret = 'password=validation-secret';
     await expect(
