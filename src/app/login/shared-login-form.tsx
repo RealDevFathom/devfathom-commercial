@@ -19,7 +19,7 @@ type Organization = {
 type Stage = 'credentials' | 'select' | 'sso-only';
 
 const inputClass =
-  'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-2 aria-[invalid=true]:ring-destructive/20';
+  'flex h-12 w-full rounded-sm border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-2 aria-[invalid=true]:ring-destructive/20';
 
 const GENERIC_ERROR = 'Invalid email or password. Please try again.';
 
@@ -230,7 +230,7 @@ export function SharedLoginForm({
     <div
       id={errorId}
       role="alert"
-      className="mb-5 rounded-[3px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+      className="mb-5 rounded-sm border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
     >
       {error}
     </div>
@@ -276,7 +276,7 @@ export function SharedLoginForm({
               </label>
               <a
                 href="/forgot-password"
-                className="rounded-[3px] text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="rounded-sm text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               >
                 Forgot password?
               </a>
@@ -297,7 +297,7 @@ export function SharedLoginForm({
                 type="button"
                 onClick={() => setShowPassword((visible) => !visible)}
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
-                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-[3px] text-text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-sm text-text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                 tabIndex={-1}
               >
                 {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -308,7 +308,7 @@ export function SharedLoginForm({
           <button
             type="submit"
             disabled={isSubmitting}
-            className="group flex h-12 w-full items-center justify-center rounded-[3px] bg-primary text-sm font-semibold text-primary-foreground shadow-[0_10px_22px_-14px_rgba(12,29,48,0.86)] transition-all hover:-translate-y-px hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 active:translate-y-0 disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none motion-reduce:hover:translate-y-0"
+            className="group flex h-12 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground shadow-md transition-all hover:-translate-y-px hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 active:translate-y-0 disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none motion-reduce:hover:translate-y-0"
           >
             {isSubmitting ? (
               <>
@@ -359,7 +359,7 @@ export function SharedLoginForm({
                 onClick={() => continueInto(organization.id)}
                 disabled={Boolean(pendingOrganizationId)}
                 aria-describedby={error ? errorId : undefined}
-                className="group flex w-full items-center justify-between gap-4 rounded-[3px] border border-border-default bg-card px-4 py-4 text-left transition-colors hover:border-primary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-60"
+                className="group flex w-full items-center justify-between gap-4 rounded-sm border border-border-default bg-card px-4 py-4 text-left transition-colors hover:border-primary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-60"
               >
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-semibold text-foreground">
@@ -405,7 +405,7 @@ export function SharedLoginForm({
           <button
             type="submit"
             disabled={isSubmitting}
-            className="flex h-12 w-full items-center justify-center rounded-[3px] bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none"
+            className="flex h-12 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none"
           >
             {isSubmitting ? (
               <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
@@ -446,7 +446,7 @@ function SsoEntry({ organization }: { organization: Organization }) {
   return (
     <div
       aria-labelledby={labelId}
-      className="flex items-center justify-between gap-4 rounded-[3px] border border-border-subtle bg-surface-sunken px-4 py-4"
+      className="flex items-center justify-between gap-4 rounded-sm border border-border-subtle bg-surface-sunken px-4 py-4"
     >
       <span className="min-w-0">
         <span id={labelId} className="block truncate text-sm font-semibold text-text-muted">
@@ -460,7 +460,7 @@ function SsoEntry({ organization }: { organization: Organization }) {
       {organization.ssoUrl ? (
         <a
           href={organization.ssoUrl}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-[3px] border border-border-default bg-card px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:border-primary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-sm border border-border-default bg-card px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:border-primary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         >
           <Building2 className="h-3.5 w-3.5 text-accent-brand" aria-hidden="true" />
           Sign in with SSO
@@ -480,7 +480,7 @@ function BackToCredentials({ onBack }: { onBack: () => void }) {
     <button
       type="button"
       onClick={onBack}
-      className="mt-6 rounded-[3px] text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="mt-6 rounded-sm text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
     >
       Use a different account
     </button>

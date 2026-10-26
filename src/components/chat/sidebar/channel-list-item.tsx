@@ -79,7 +79,7 @@ export function ChannelListItem({
       <span className="flex shrink-0 items-center gap-1">
         {channel.muted && <BellOff className="size-3 opacity-50" />}
         {hasMention && (
-          <span className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-brass px-1 text-[10px] font-semibold leading-none text-[#161a19]">
+          <span className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent-brand px-1 text-[10px] font-semibold leading-none text-[#161a19]">
             {channel.mentionCount}
           </span>
         )}

@@ -8,7 +8,7 @@ import { LOGIN_ERROR_MESSAGES, type LoginErrorKey } from './login-errors';
 import { useHydrated } from './use-hydrated';
 
 const inputClass =
-  'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
+  'flex h-12 w-full rounded-sm border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
 
 export function LoginForm({
   connections,
@@ -100,7 +100,7 @@ export function LoginForm({
       {error && (
         <div
           role="alert"
-          className="mb-5 rounded-[3px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+          className="mb-5 rounded-sm border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
         >
           {error}
         </div>
@@ -112,7 +112,7 @@ export function LoginForm({
             <a
               key={connection.id}
               href={`/api/sso/${connection.protocol.toLowerCase()}/${connection.id}/start`}
-              className="flex h-12 w-full items-center justify-center gap-2 rounded-[3px] border border-border-default bg-card text-sm font-semibold text-foreground transition hover:border-primary hover:bg-muted"
+              className="flex h-12 w-full items-center justify-center gap-2 rounded-sm border border-border-default bg-card text-sm font-semibold text-foreground transition hover:border-primary hover:bg-muted"
             >
               <Building2 className="h-4 w-4 text-accent-brand" />
               Continue with {connection.name}
@@ -216,7 +216,7 @@ export function LoginForm({
           <button
             type="submit"
             disabled={isSubmitting}
-            className="group flex h-12 w-full items-center justify-center rounded-[3px] bg-primary text-sm font-semibold text-primary-foreground shadow-[0_10px_22px_-14px_rgba(12,29,48,0.86)] transition-all hover:-translate-y-px hover:bg-primary-hover active:translate-y-0 disabled:pointer-events-none disabled:opacity-50"
+            className="group flex h-12 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground shadow-md transition-all hover:-translate-y-px hover:bg-primary-hover active:translate-y-0 disabled:pointer-events-none disabled:opacity-50"
           >
             {isSubmitting ? (
               <>
