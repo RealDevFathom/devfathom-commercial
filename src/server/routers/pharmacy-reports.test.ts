@@ -293,7 +293,10 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     });
     expect(mocks.reportUpdateManyAndReturn).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ state: 'UNDER_REVIEW' }),
+        where: expect.objectContaining({
+          state: 'UNDER_REVIEW',
+          externalSubmissionState: 'NOT_SUBMITTED',
+        }),
         data: expect.not.objectContaining({ externalSubmissionState: expect.anything() }),
       })
     );
