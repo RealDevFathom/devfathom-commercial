@@ -69,14 +69,23 @@ describe('finance.updateInvoiceStatus', () => {
     expect(mocks.logActivity).not.toHaveBeenCalled();
   });
 
-  it('clears sentAt using a status compare-and-set', async () => {
+  it('preserves sentAt using a status compare-and-set', async () => {
     mocks.findUnique.mockResolvedValue({ status: 'SENT' });
 
     await caller().updateInvoiceStatus({ id: 'invoice-1', status: 'CANCELLED' });
 
     expect(mocks.updateMany).toHaveBeenCalledWith({
       where: { id: 'invoice-1', status: 'SENT' },
-      data: { status: 'CANCELLED', sentAt: null },
+      data: { status: 'CANCELLED' },
+    });
+  });
+
+  it('preserves sentAt when bulk marking past-due invoices overdue', async () => {
+    await caller().markOverdueInvoices();
+
+    expect(mocks.updateMany).toHaveBeenCalledWith({
+      where: { status: 'SENT', dueDate: { lt: expect.any(Date) } },
+      data: { status: 'OVERDUE' },
     });
   });
 
