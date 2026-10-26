@@ -2,8 +2,11 @@ import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
-const { applyTenderInTransaction } = vi.hoisted(() => ({ applyTenderInTransaction: vi.fn() }));
-vi.mock('@/lib/restaurant/tenders', () => ({ applyTenderInTransaction }));
+const { applyTenderInTransaction, quoteOpenBillSettlement } = vi.hoisted(() => ({
+  applyTenderInTransaction: vi.fn(),
+  quoteOpenBillSettlement: vi.fn(),
+}));
+vi.mock('@/lib/restaurant/tenders', () => ({ applyTenderInTransaction, quoteOpenBillSettlement }));
 
 import {
   processTerminalEvent,
@@ -54,6 +57,8 @@ function makeDb(overrides: Record<string, unknown> = {}) {
 describe('provider-neutral terminal payments', () => {
   beforeEach(() => {
     applyTenderInTransaction.mockReset();
+    quoteOpenBillSettlement.mockReset();
+    quoteOpenBillSettlement.mockResolvedValue({ remainingDue: '12.50' });
     applyTenderInTransaction.mockResolvedValue({
       tenderId: 'tender-1',
       paymentId: 'payment-1',
@@ -128,6 +133,27 @@ describe('provider-neutral terminal payments', () => {
       })
     );
     expect(result.reconciliation).toMatchObject({ outcome: 'APPLIED' });
+  });
+
+  it('validates an approval against the live tax-inclusive CARD settlement quote', async () => {
+    const { db, created } = makeDb();
+    db.restaurantBill.findFirst.mockResolvedValueOnce({
+      id: 'bill-1',
+      grandTotal: '10.00',
+      tenders: [],
+    } as never);
+    quoteOpenBillSettlement.mockResolvedValueOnce({ remainingDue: '10.80' });
+
+    await processTerminalEvent(db as never, {
+      source: 'provider-neutral',
+      externalEventId: 'event-tax-inclusive',
+      event: { ...baseEvent, amount: '10.80' },
+      requiredMode: 'WEBHOOK',
+    });
+
+    expect(quoteOpenBillSettlement).toHaveBeenCalledWith(db, 'bill-1', expect.any(Date), 'CARD');
+    expect(applyTenderInTransaction).toHaveBeenCalledOnce();
+    expect(created).toEqual([]);
   });
 
   it('records an amount mismatch and never tenders', async () => {
