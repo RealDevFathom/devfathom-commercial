@@ -335,6 +335,20 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     }));
     expect(persisted.state?.copyCount).toBe(8);
     expect(persisted.dispatches.map((row) => row.copyNumber)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(persisted.dispatches).toEqual(
+      expect.arrayContaining(
+        Array.from({ length: 8 }, (_, index) =>
+          expect.objectContaining({
+            organizationId: ids.orgA,
+            branchId: ids.branchA,
+            saleId: ids.printableSale,
+            copyNumber: index + 1,
+            actorId: ids.dispenser,
+            locale: 'en',
+          })
+        )
+      )
+    );
     expect(persisted.dispatches).toHaveLength(results.length);
   });
 
