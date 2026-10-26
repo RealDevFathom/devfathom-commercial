@@ -1138,7 +1138,14 @@ describe('restaurantShifts.reviewSwap', () => {
       staffProfileId: 'staff_emp',
       clockedInAt: at('2026-09-20T09:02:00Z'),
     });
+    expect(state.decisions).toContainEqual(
+      expect.objectContaining({
+        requestId: request!.id,
+        decision: 'REJECTED',
+      })
+    );
     expect(eventsOf('SWAP_REJECTED')).toHaveLength(1);
+    expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
   });
 
   it('denies employees, other-branch managers, and replacements with an overlapping shift', async () => {
