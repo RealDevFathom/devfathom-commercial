@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
+
 import { buildCounterBrowserReceipt, printCounterBrowserReceipt } from './counter-browser-print';
 import type { CounterReceipt, CounterReceiptLocale } from './counter-receipt';
 import { buildPharmacyReceiptPrintDocument } from './receipt-print';
-import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 
 const receipt: CounterReceipt = {
   saleId: 'sale-1',
@@ -56,17 +57,30 @@ describe('isolated Pharmacy browser receipt', () => {
     const html = buildCounterBrowserReceipt(settled, locale, format);
     expect(html).toContain('NTN: NTN-HISTORICAL');
     expect(html).toContain('STRN: STRN-HISTORICAL');
+  });
 
-    if (locale === 'en') {
-      const thermal = buildPharmacyReceiptPrintDocument(settled, locale, {
-        layout: DEFAULT_RECEIPT_LAYOUT,
-        taxIdentity: settled.taxIdentity,
-        reprint: false,
-      });
-      expect(thermal.receiptSnapshot?.facts.taxLines).toEqual(
-        expect.arrayContaining(['NTN: NTN-HISTORICAL', 'STRN: STRN-HISTORICAL'])
-      );
-    }
+  it('matches the settled-sale tax identity in raw thermal output', () => {
+    const taxIdentity = { ntn: 'NTN-HISTORICAL', strn: 'STRN-HISTORICAL' };
+    const thermal = buildPharmacyReceiptPrintDocument(
+      { ...receipt, taxIdentity },
+      'en',
+      { layout: DEFAULT_RECEIPT_LAYOUT, taxIdentity, reprint: false }
+    );
+    expect(thermal.receiptSnapshot?.facts.taxLines).toEqual(
+      expect.arrayContaining(['NTN: NTN-HISTORICAL', 'STRN: STRN-HISTORICAL'])
+    );
+  });
+
+  it('omits blank identifiers and escapes regulatory identity in browser output', () => {
+    const html = buildCounterBrowserReceipt(
+      { ...receipt, taxIdentity: { ntn: '   ', strn: '<STRN & historical>' } },
+      'en',
+      'A4'
+    );
+    const parsed = new DOMParser().parseFromString(html, 'text/html');
+    expect(parsed.body.textContent).not.toContain('NTN:');
+    expect(parsed.body.textContent).toContain('STRN: <STRN & historical>');
+    expect(parsed.querySelector('strn')).toBeNull();
   });
 
   it.each([
