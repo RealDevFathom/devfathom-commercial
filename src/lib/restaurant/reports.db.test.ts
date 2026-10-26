@@ -72,11 +72,11 @@ describeIfDatabase('restaurant report timezone boundaries', () => {
       const id = `${branchId}-${occurredAt}`;
       await db!.$executeRaw`
         INSERT INTO "restaurant_stock_movements"
-        VALUES (${id}, 'item', ${locationId}, 'WASTAGE', ${-quantity}, 1, ${occurredAt})
+        VALUES (${id}, 'item', ${locationId}, 'WASTAGE', ${-quantity}, 1, ${occurredAt}::timestamp)
       `;
       await db!.$executeRaw`
         INSERT INTO "restaurant_purchase_orders"
-        VALUES (${`order-${id}`}, 'supplier', ${branchId}, 'DRAFT', ${occurredAt})
+        VALUES (${`order-${id}`}, 'supplier', ${branchId}, 'DRAFT', ${occurredAt}::timestamp)
       `;
       await db!.$executeRaw`
         INSERT INTO "restaurant_purchase_order_lines"
@@ -84,7 +84,7 @@ describeIfDatabase('restaurant report timezone boundaries', () => {
       `;
       await db!.$executeRaw`
         INSERT INTO "restaurant_purchase_receipts"
-        VALUES (${`receipt-${id}`}, 'supplier', ${branchId}, ${occurredAt})
+        VALUES (${`receipt-${id}`}, 'supplier', ${branchId}, ${occurredAt}::timestamp)
       `;
       await db!.$executeRaw`
         INSERT INTO "restaurant_purchase_receipt_lines"
