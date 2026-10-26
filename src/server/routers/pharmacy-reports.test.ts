@@ -414,6 +414,38 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     expect(row).toMatchObject({ state: 'READY', externalSubmissionState: 'SUBMITTED' });
   });
 
+  it('rejects a lifecycle regression after an external submission completes', async () => {
+    const report = {
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'NOT_SUBMITTED',
+      externalReference: null as string | null,
+      externalFailureReason: null as string | null,
+    };
+    mocks.reportFindFirst.mockImplementation(async () => ({ ...report }));
+    mocks.reportUpdateManyAndReturn.mockImplementation(async ({ data }) => {
+      Object.assign(report, data);
+      return [{ ...report }];
+    });
+
+    await pvCaller().recordPharmacovigilanceSubmission({
+      id: 'pv_1',
+      branchId: 'branch_1',
+      state: 'SUBMITTED',
+      externalReference: 'DRAP-1',
+    });
+
+    await expect(
+      pvCaller().transitionPharmacovigilanceReport({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'UNDER_REVIEW',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.reportUpdateManyAndReturn).toHaveBeenCalledOnce();
+    expect(report).toMatchObject({ state: 'READY', externalSubmissionState: 'SUBMITTED' });
+  });
+
   it('does not allow external submission state to regress after submission', async () => {
     mocks.reportFindFirst.mockResolvedValue({
       id: 'pv_1',

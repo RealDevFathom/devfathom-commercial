@@ -246,6 +246,11 @@ export const pharmacyReportsRouter = router({
           code: 'BAD_REQUEST',
           message: 'Invalid report lifecycle transition.',
         });
+      if (report.externalSubmissionState === 'SUBMITTED' && input.state === 'UNDER_REVIEW')
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'A submitted report cannot return to review.',
+        });
       const [updated] = await ctx.db.pharmacyPharmacovigilanceReport.updateManyAndReturn({
         where: {
           id: report.id,
