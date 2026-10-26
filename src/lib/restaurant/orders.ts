@@ -190,8 +190,8 @@ async function beginIdempotent(
   if (existing) {
     if (
       existing.commandType !== commandType ||
-      (existing.canonicalPayloadHash !== null &&
-        existing.canonicalPayloadHash !== canonicalPayloadHash)
+      existing.canonicalPayloadHash === null ||
+      existing.canonicalPayloadHash !== canonicalPayloadHash
     ) {
       throw new OrderCommandError(
         'This idempotency key is already bound to a different order command payload.',

@@ -909,6 +909,42 @@ describeIfDatabase('orders command layer (real DB)', () => {
     ).resolves.toBe(0);
   });
 
+  it('fails closed when a legacy idempotency key has no payload hash', async () => {
+    const first = await openWithItem();
+    const second = await deps.orders.openOrder(first.db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.orders.monthly': 1000000 },
+      branchId: ids.branch,
+      channel: 'DINE_IN',
+      publicationId: ids.publication,
+      actor: actor(),
+      now: AT,
+    });
+    const legacyKey = key();
+    await read((tx) =>
+      tx.restaurantOrderIdempotencyKey.create({
+        data: {
+          deviceId,
+          key: legacyKey,
+          commandType: 'item.add',
+          resultRef: first.itemId,
+          canonicalPayloadHash: null,
+        },
+      })
+    );
+
+    await expect(
+      deps.orders.addItem(first.db, {
+        orderId: second.orderId,
+        menuItemId: ids.menuItem,
+        actor: actor(legacyKey),
+      })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    await expect(
+      read((tx) => tx.restaurantOrderItem.count({ where: { orderId: second.orderId } }))
+    ).resolves.toBe(0);
+  });
+
   it('keeps the ledger + outbox in lock-step, one monotonic sequence per order (C2)', async () => {
     const { orderId, itemId, db } = await openWithItem();
     await deps.orders.sendOrder(db, { orderId, actor: actor() });
