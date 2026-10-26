@@ -55,6 +55,13 @@ describeIfDatabase('meeting time constraint migration against PostgreSQL', () =>
       ]);
       await expect(
         client.query(`
+          UPDATE "meetings"
+          SET "startTime" = "endTime"
+          WHERE "id" = 'valid'
+        `)
+      ).rejects.toMatchObject({ code: '23514' });
+      await expect(
+        client.query(`
           INSERT INTO "meetings" ("id", "startTime", "endTime")
           VALUES ('new-invalid', '2026-10-26 10:00:00+00', '2026-10-26 10:00:00+00')
         `)
