@@ -817,7 +817,7 @@ export const financeRouter = router({
       yearlyIncomeG,
       yearlyExpenseG,
       paidInvoicesG,
-      outstandingInvoicesG,
+      outstandingInvoices,
       recurring,
     ] = await Promise.all([
       // FIN-04: cap each "this period" window at `now` so future-dated rows can't
@@ -832,11 +832,13 @@ export const financeRouter = router({
         _count: true,
         where: { status: 'PAID' },
       }),
-      ctx.db.invoice.groupBy({
-        by: ['currency'],
-        _sum: { total: true },
-        _count: true,
+      ctx.db.invoice.findMany({
         where: { status: { in: ['SENT', 'OVERDUE'] } },
+        select: {
+          total: true,
+          currency: true,
+          payments: { select: { amount: true } },
+        },
       }),
       ctx.db.recurringExpense.findMany({
         where: { active: true },
@@ -846,6 +848,18 @@ export const financeRouter = router({
 
     const monthlyIncome = fromCurrencyGroups(monthlyIncomeG, 'amount');
     const yearlyIncome = fromCurrencyGroups(yearlyIncomeG, 'amount');
+    const totalOutstanding = sumByCurrency(
+      outstandingInvoices.map((invoice) => {
+        const amountPaid = invoice.payments.reduce(
+          (sum, payment) => sum + Number(payment.amount),
+          0
+        );
+        return {
+          currency: invoice.currency,
+          amount: round2(Number(invoice.total) - amountPaid),
+        };
+      })
+    );
 
     // FIN-05: recurring expenses are never posted as transactions, so burn and
     // profit silently omitted them. Fold each active subscription's monthly-
@@ -888,8 +902,8 @@ export const financeRouter = router({
       yearlyProfit: diffByCurrency(yearlyIncome, yearlyExpense),
       totalPaid: fromCurrencyGroups(paidInvoicesG, 'total'),
       paidCount: paidInvoicesG.reduce((s, g) => s + g._count, 0),
-      totalOutstanding: fromCurrencyGroups(outstandingInvoicesG, 'total'),
-      outstandingCount: outstandingInvoicesG.reduce((s, g) => s + g._count, 0),
+      totalOutstanding,
+      outstandingCount: outstandingInvoices.length,
     };
   }),
 
