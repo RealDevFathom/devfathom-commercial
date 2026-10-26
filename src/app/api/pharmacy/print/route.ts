@@ -40,12 +40,13 @@ export function GET() {
 function isSameOriginJson(request: Request): boolean {
   const origin = request.headers.get('origin');
   const fetchSite = request.headers.get('sec-fetch-site');
+  const mediaType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
   try {
     return (
       origin !== null &&
       new URL(origin).origin.toLowerCase() === publicRequestOrigin(request) &&
       (!fetchSite || fetchSite === 'same-origin' || fetchSite === 'none') &&
-      (request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')
+      mediaType === 'application/json'
     );
   } catch {
     return false;

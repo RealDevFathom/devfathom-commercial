@@ -68,13 +68,19 @@ describe('/api/pharmacy/print', () => {
     await expect(response.json()).resolves.toEqual({ error: 'Branch is outside your scope.' });
   });
 
-  it('rejects cross-site and non-JSON POSTs before allocating a copy', async () => {
+  it('rejects cross-site, non-JSON, and caller-controlled copy-status POSTs', async () => {
     const crossSite = request();
     crossSite.headers.set('origin', 'https://attacker.example');
     expect((await POST(crossSite)).status).toBe(403);
     const nonJson = request();
     nonJson.headers.set('content-type', 'text/plain');
     expect((await POST(nonJson)).status).toBe(403);
+    const jsonPrefix = request();
+    jsonPrefix.headers.set('content-type', 'application/json-patch+json');
+    expect((await POST(jsonPrefix)).status).toBe(403);
+    expect(
+      (await POST(request({ branchId: 'branch-a', saleId: 'sale-a', reprint: false }))).status
+    ).toBe(400);
     expect(printJob).not.toHaveBeenCalled();
   });
 });
