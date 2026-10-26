@@ -14,8 +14,6 @@ import {
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { lockProjectMembershipChanges } from '../project-membership';
 
-export { lockProjectMembershipChanges } from '../project-membership';
-
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM".
 function formatDue(date: Date): string {
   return date.toLocaleString('en-US', {

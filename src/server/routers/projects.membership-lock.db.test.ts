@@ -29,7 +29,7 @@ describeIfDatabase('project membership lock', () => {
   it('serializes concurrent membership mutation critical sections for one project', async () => {
     const [{ db }, { lockProjectMembershipChanges }] = await Promise.all([
       import('@/lib/db'),
-      import('./projects'),
+      import('../project-membership'),
     ]);
     let releaseFirst!: () => void;
     let firstLocked!: () => void;
