@@ -87,6 +87,13 @@ describe('#357 UI receipt identity', () => {
     expect(receiveInput(next).lines).toEqual([{ lineId: 'line_1', receivedUnits: 6 }]);
     expect(receiveInput(next).variance).toBeUndefined();
   });
+  it('does not submit incomplete variance evidence for an ordinary partial delivery', () => {
+    const partial = receiptData('0b16eeaf-5236-42cd-a4d6-333333333333');
+    partial.set('varianceReason', 'Remaining stock has not arrived');
+    partial.set('witnessId', 'witness_1');
+
+    expect(receiveInput(partial).variance).toBeUndefined();
+  });
   it.each(['', 'invalid', '0b16eeaf-5236-12cd-a4d6-111111111111'])(
     'requires a valid server-rendered receipt identity (%s)',
     (key) => {
