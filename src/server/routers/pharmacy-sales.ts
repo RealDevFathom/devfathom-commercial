@@ -448,6 +448,19 @@ async function requireCounterReceiptAccess(
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
 }
 
+async function requireControlledReturnAccess(ctx: TRPCContext, branch: string) {
+  const scope = await requireCounterReceiptAccess(ctx, branch);
+  if (
+    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }))
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Dispense permission is required.' });
+  }
+  return scope;
+}
+
 const closeDate = z
   .date()
   .refine(
@@ -1352,7 +1365,7 @@ export const pharmacySalesRouter = router({
   controlledReturnWitnesses: protectedProcedure
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      const scope = await requireControlledReturnAccess(ctx, input.branchId);
       return listControlledPinWitnesses(ctx.db, scope.organizationId, scope.actorId);
     }),
   returnLine: protectedProcedure
@@ -1380,7 +1393,11 @@ export const pharmacySalesRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           try {
-            return await returnSaleLine(txDb(tx), await scopeFor(ctx, input.branchId), input);
+            return await returnSaleLine(
+              txDb(tx),
+              await requireCounterReceiptAccess(ctx, input.branchId),
+              input
+            );
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
               return { blocked: error.message };

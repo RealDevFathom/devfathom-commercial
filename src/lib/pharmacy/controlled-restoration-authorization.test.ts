@@ -37,8 +37,15 @@ function fixture() {
     pharmacySaleLine: {
       findFirst: vi
         .fn()
-        .mockResolvedValue({ sale: { status: 'COMPLETED' }, medicine: { controlled: true } }),
+        .mockResolvedValue({
+          sale: { status: 'COMPLETED' },
+          medicine: { controlled: true },
+          allocations: [],
+          returnLines: [],
+          unidentifiedReturnHolds: [],
+        }),
     },
+    pharmacySaleEvent: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyStockMovement: { create: vi.fn() },
   };
   return { db, witness };

@@ -41,6 +41,10 @@ vi.mock('@/lib/pharmacy/settlement', async (original) => ({
 vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),
 }));
+vi.mock('@/lib/pharmacy/controlled-register', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/controlled-register')>()),
+  listControlledPinWitnesses: vi.fn(async () => [{ id: 'witness-a', name: 'Dr Witness' }]),
+}));
 vi.mock('@/lib/pharmacy/receipt-print', () => ({
   PharmacyReceiptPrintError: class PharmacyReceiptPrintError extends Error {
     constructor(reason: string) {
@@ -215,6 +219,22 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it('does not expose the controlled witness directory to receipt-only staff', async () => {
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().controlledReturnWitnesses({ branchId: 'branch-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('exposes the controlled witness directory to an assigned dispenser', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().controlledReturnWitnesses({ branchId: 'branch-a' })
+    ).resolves.toEqual([{ id: 'witness-a', name: 'Dr Witness' }]);
+  });
+
   it('rejects status-only completion before opening a transaction', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);

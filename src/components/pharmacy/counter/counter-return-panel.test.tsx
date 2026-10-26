@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   refetch: vi.fn(),
   history: {} as Record<string, unknown>,
   lookup: {} as Record<string, unknown>,
+  witnesses: {} as Record<string, unknown>,
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -16,7 +17,7 @@ vi.mock('@/lib/trpc', () => ({
       counterReceipt: { useQuery: () => ({}) },
       returnLine: { useMutation: () => ({ mutateAsync: mocks.returnLine }) },
       controlledReturnWitnesses: {
-        useQuery: () => ({ isSuccess: true, data: [{ id: 'witness', name: 'Dr Witness' }] }),
+        useQuery: () => mocks.witnesses,
       },
       refundTender: { useMutation: () => ({ mutateAsync: mocks.refund }) },
     },
@@ -43,6 +44,11 @@ beforeEach(() => {
     data: [
       { id: 'sale', receiptNumber: 12, businessDate: new Date('2026-09-29'), receiptDeviceId: 'd' },
     ],
+  };
+  mocks.witnesses = {
+    isSuccess: true,
+    data: [{ id: 'witness', name: 'Dr Witness' }],
+    refetch: vi.fn(),
   };
   mocks.history = {
     refetch: mocks.refetch,
@@ -233,6 +239,33 @@ describe('counter returns', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('fresh witness PIN');
     expect(localStorage.getItem('pharmacy-return:o:a:b')).toContain('same-key');
     expect(screen.getByRole('button', { name: 'Retry saved return' })).toBeDisabled();
+  });
+  it('explains a recovery witness lookup failure and offers retry', () => {
+    localStorage.setItem(
+      'pharmacy-return:o:a:b',
+      JSON.stringify({
+        kind: 'return',
+        saleId: 'sale',
+        requiresControlledWitness: true,
+        input: {
+          branchId: 'b',
+          saleLineId: 'line',
+          canonicalUnits: 1,
+          disposition: 'QUARANTINE',
+          reason: 'WRONG_ITEM',
+          integrityDecision: 'sealed',
+          idempotencyKey: 'same-key',
+        },
+      })
+    );
+    const refetch = vi.fn();
+    mocks.witnesses = { isError: true, error: new Error('Witness directory unavailable'), refetch };
+    render(<ReturnForm {...props} />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Witness directory unavailable');
+    const recovery = screen.getByRole('button', { name: 'Retry saved return' });
+    expect(recovery).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry witness lookup' }));
+    expect(refetch).toHaveBeenCalledOnce();
   });
   it('caps refunds at returned value and requires explicit cash fallback for card', () => {
     render(<ReturnForm {...props} />);

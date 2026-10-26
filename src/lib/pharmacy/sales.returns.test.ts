@@ -11,6 +11,9 @@ vi.mock('./finance-postings', () => ({
 
 import { returnedLineValue, returnSaleLine, readReturnHistory } from './sales';
 import { postUnidentifiedSaleReturnEntry } from './finance-postings';
+import { can } from '@/lib/abac';
+
+vi.mock('@/lib/abac', () => ({ can: vi.fn() }));
 
 const scope = { organizationId: 'o', branchId: 'b', actorId: 'a' };
 const input = {
@@ -23,6 +26,7 @@ const input = {
   idempotencyKey: 'key',
 };
 function fixture() {
+  vi.mocked(can).mockResolvedValue(true);
   const line = {
     id: 'line',
     saleId: 'sale',
@@ -38,6 +42,7 @@ function fixture() {
   };
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
+    user: { findFirst: vi.fn().mockResolvedValue({ id: 'a', status: 'ACTIVE' }) },
     pharmacySaleLine: { findFirst: vi.fn().mockResolvedValue(line) },
     pharmacySaleEvent: {
       findFirst: vi.fn().mockResolvedValue(null),
@@ -147,6 +152,19 @@ describe('counter return boundaries', () => {
       returnId: 'return',
       replayed: true,
     });
+  });
+  it('denies a controlled return replay to an actor without dispense permission', async () => {
+    const { db, line } = fixture();
+    line.medicine.controlled = true;
+    vi.mocked(can).mockResolvedValue(false);
+    const fingerprint = JSON.stringify({ ...input, disposition: 'RESTOCK' });
+    db.pharmacySaleEvent.findFirst.mockResolvedValue({
+      payload: { returnId: 'return', fingerprint },
+    });
+    await expect(returnSaleLine(db as never, scope, input)).rejects.toMatchObject({
+      forbidden: true,
+    });
+    expect(db.pharmacySaleEvent.findFirst).not.toHaveBeenCalled();
   });
   it('rounds cumulative partial value to the exact discounted total', () => {
     const line = { quantity: 1, unitPriceMinor: 100, discountMinor: 2, canonicalUnits: 3 };

@@ -22,18 +22,22 @@ export class ControlledRestorationDenied extends Error {
   }
 }
 
-/** Called inside the sale transaction, before any stock or status mutation. */
-export async function authorizeControlledRestoration(
-  db: ScopedDb,
-  scope: LedgerScope,
-  input?: ControlledRestorationPin
-): Promise<ControlledRestorationWitness> {
+export async function authorizeControlledRestorationActor(db: ScopedDb, scope: LedgerScope) {
   const actor = await db.user.findFirst({
     where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
   });
   if (!actor || !(await can(actor, 'pharmacy:dispense', undefined, { db }))) {
     throw new ControlledRestorationDenied(true);
   }
+}
+
+/** Called inside the sale transaction, before any stock or status mutation. */
+export async function authorizeControlledRestoration(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input?: ControlledRestorationPin
+): Promise<ControlledRestorationWitness> {
+  await authorizeControlledRestorationActor(db, scope);
   if (!input) throw new ControlledRestorationDenied();
   await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
   const credential = await db.restaurantOperatorCredential.findFirst({

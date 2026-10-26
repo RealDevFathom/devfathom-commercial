@@ -316,6 +316,19 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                   </option>
                 ))}
               </select>
+              {witnesses.isError && (
+                <div className="space-y-2">
+                  <p role="alert">{counterErrorMessage(witnesses.error)}</p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={witnesses.isFetching}
+                    onClick={() => void witnesses.refetch()}
+                  >
+                    Retry witness lookup
+                  </Button>
+                </div>
+              )}
               <Label htmlFor="recovery-return-witness-pin">Witness PIN</Label>
               <Input
                 id="recovery-return-witness-pin"

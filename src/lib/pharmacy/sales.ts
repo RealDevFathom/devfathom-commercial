@@ -10,6 +10,7 @@ import type { OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
 import { checkSafetyLease } from './offline-safety-lease';
 import { SNAPSHOT_SIGNING_KEY_ID, verifySnapshotSignature } from './offline-snapshots';
 import {
+  authorizeControlledRestorationActor,
   authorizeControlledRestoration,
   type ControlledRestorationPin,
 } from './controlled-restoration-authorization';
@@ -616,6 +617,9 @@ export async function returnSaleLine(
   const { controlledWitness: _pin, ...fingerprintInput } = input;
   void _pin;
   const fingerprint = JSON.stringify({ ...fingerprintInput, disposition: requestedDisposition });
+  // Idempotency keys identify operations; they do not authorize callers to read their results.
+  // Re-check the regulated actor before resolving even an already committed controlled return.
+  if (line.medicine.controlled) await authorizeControlledRestorationActor(db, scope);
   const prior = await db.pharmacySaleEvent.findFirst({
     where: {
       organizationId: scope.organizationId,
