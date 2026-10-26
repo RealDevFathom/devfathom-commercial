@@ -183,7 +183,7 @@ it('requires current review evidence even with persisted draft', async () => {
   });
   expect(write).not.toHaveBeenCalled();
 });
-it.each([' stop ', 'STOP', 'ＳＴＯＰ', ' بند '])(
+it.each([' stop ', 'STOP', '\nStOp\t', 'ＳＴＯＰ', ' بند '])(
   'withdraws consent for %j and confirms in English and Urdu',
   async (text) => {
     const result = await stopRestaurantGrowthSandbox(
