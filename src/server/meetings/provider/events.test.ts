@@ -79,10 +79,16 @@ describe('provider event ingestion', () => {
 
     await recordAndApplyProviderEvent(occurrence, joined);
 
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { occurrenceId: 'occ-1', userId: 'user-1' },
+      select: { id: true, userId: true },
+    });
     expect(executeRaw.mock.calls[0][0].values.slice(3, 5)).toEqual([null, 'user-1']);
   });
 
   it('resolves a namespaced guest identity to its occurrence participant', async () => {
+    findFirst.mockResolvedValue({ id: 'guest-grant-1', userId: null });
+
     await recordAndApplyProviderEvent(occurrence, {
       ...joined,
       participantIdentity: 'gst:guest-grant-1',
@@ -92,7 +98,7 @@ describe('provider event ingestion', () => {
       where: { occurrenceId: 'occ-1', id: 'guest-grant-1' },
       select: { id: true, userId: true },
     });
-    expect(executeRaw.mock.calls[0][0].values.slice(3, 5)).toEqual(['grant-1', 'user-1']);
+    expect(executeRaw.mock.calls[0][0].values.slice(3, 5)).toEqual(['guest-grant-1', null]);
   });
 
   it('preserves colons within the namespaced identity value', async () => {
