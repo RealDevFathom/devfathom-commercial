@@ -44,6 +44,7 @@ import { NotesContent } from '@/app/(app)/notes/notes-content';
 import { uploadAttachment } from '@/lib/chat/upload-client';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
+import { moneyListLabel, sumByCurrency, type CurrencyAmount } from '@/lib/finance/currency';
 
 type ClientDetail = NonNullable<inferRouterOutputs<AppRouter>['clients']['getById']>;
 type ContractItem = ClientDetail['contracts'][number];
@@ -179,10 +180,12 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
   const config = statusConfig[client.status] || statusConfig.ACTIVE;
   const totalRevenue = client.invoices
     .filter((i) => i.status === 'PAID')
-    .reduce((sum, i) => sum + Number(i.total), 0);
+    .map((i) => [{ currency: i.currency, amount: Number(i.total) }])
+    .reduce<CurrencyAmount[]>((totals, invoice) => sumByCurrency(totals, invoice), []);
   const outstandingAmount = client.invoices
     .filter((i) => ['SENT', 'OVERDUE'].includes(i.status))
-    .reduce((sum, i) => sum + Number(i.total), 0);
+    .map((i) => [{ currency: i.currency, amount: Number(i.total) }])
+    .reduce<CurrencyAmount[]>((totals, invoice) => sumByCurrency(totals, invoice), []);
 
   return (
     <div className="space-y-6">
@@ -492,7 +495,7 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
                           Total Revenue
                         </p>
                         <p className="text-sm font-bold text-emerald-500">
-                          ${totalRevenue.toLocaleString()}
+                          {moneyListLabel(totalRevenue)}
                         </p>
                       </div>
                       <div>
@@ -502,10 +505,12 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
                         <p
                           className={cn(
                             'text-sm font-bold',
-                            outstandingAmount > 0 ? 'text-amber-500' : 'text-muted-foreground'
+                            outstandingAmount.some(({ amount }) => amount > 0)
+                              ? 'text-amber-500'
+                              : 'text-muted-foreground'
                           )}
                         >
-                          ${outstandingAmount.toLocaleString()}
+                          {moneyListLabel(outstandingAmount)}
                         </p>
                       </div>
                     </>
