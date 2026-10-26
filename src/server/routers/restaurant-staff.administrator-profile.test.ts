@@ -330,7 +330,46 @@ describe('administrator repair authorization before writes', () => {
     expect(mocks.staffFindUnique).not.toHaveBeenCalled();
     expectNoWrites();
   });
-  it('setStaffAccess denies a branch manager from delegating access at their own branch', async () => {
+  it.each<[string, () => Promise<unknown>]>([
+    [
+      'setStaffJobRoles',
+      () =>
+        caller('EMPLOYEE').setStaffJobRoles({
+          branchId: 'branch_default',
+          staffProfileId: 'staff_actor',
+          jobRoleIds: ['role_with_refunds'],
+        }),
+    ],
+    [
+      'setStaffAccess',
+      () =>
+        caller('EMPLOYEE').setStaffAccess({
+          branchId: 'branch_default',
+          staffProfileId: 'staff_actor',
+          jobRoleIds: ['role_with_refunds'],
+          overrides: [{ capability: 'payments:refund', effect: 'ALLOW' }],
+        }),
+    ],
+    [
+      'setStaffCapabilityOverride',
+      () =>
+        caller('EMPLOYEE').setStaffCapabilityOverride({
+          branchId: 'branch_default',
+          staffProfileId: 'staff_actor',
+          capability: 'payments:refund',
+          effect: 'ALLOW',
+        }),
+    ],
+    [
+      'clearStaffCapabilityOverride',
+      () =>
+        caller('EMPLOYEE').clearStaffCapabilityOverride({
+          branchId: 'branch_default',
+          staffProfileId: 'staff_actor',
+          capability: 'payments:refund',
+        }),
+    ],
+  ])('%s denies a branch manager from delegating access at their own branch', async (_name, run) => {
     mocks.can.mockImplementation(
       async (_subject, capability) => capability !== 'restaurant:configure'
     );
@@ -344,14 +383,7 @@ describe('administrator repair authorization before writes', () => {
     ]);
     mocks.staffFindUnique.mockResolvedValue({ id: 'staff_actor' });
 
-    await expect(
-      caller('EMPLOYEE').setStaffAccess({
-        branchId: 'branch_default',
-        staffProfileId: 'staff_actor',
-        jobRoleIds: ['role_with_refunds'],
-        overrides: [{ capability: 'payments:refund', effect: 'ALLOW' }],
-      })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(run()).rejects.toMatchObject({ code: 'FORBIDDEN' });
 
     expect(mocks.resolveStaffCapabilities).toHaveBeenCalledWith(
       db,
