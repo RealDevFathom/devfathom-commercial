@@ -269,6 +269,11 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
       approvalPolicy: 'PHARMACY_MANAGER',
     });
     expect(input).not.toHaveProperty('discountAuthorization');
+    expect(f.db.restaurantOperatorCredential.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ staffProfileId: 'manager-profile' }),
+      })
+    );
     expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
   });
 
