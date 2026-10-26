@@ -237,6 +237,59 @@ vi.mock('@/lib/rate-limit', () => ({
   clientIp: () => '127.0.0.1',
 }));
 
+describeIfDatabase('offline quota stock reservation', () => {
+  it('preserves granted stock from online movements until the quota is consumed', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'reserved-stock', { units: 10 });
+    await inOrg(ORG_A, (db) =>
+      deps.quotas.grantDeviceLotQuota(db, scopeOf(fixture), {
+        deviceId: fixture.deviceId,
+        ...bucketOf(fixture),
+        units: 10,
+      })
+    );
+
+    const decrement = {
+      organizationId: ORG_A,
+      branchId: BRANCH_A,
+      inventoryLotId: fixture.lotId,
+      stockLocationId: fixture.locationId,
+      kind: 'ADJUSTMENT' as const,
+      disposition: 'AVAILABLE' as const,
+      quantityUnits: -10,
+      sealedPackDelta: -1,
+      looseUnitDelta: 0,
+      actorId: ACTOR,
+      occurredAt: NOW,
+    };
+
+    await expect(
+      inOrg(ORG_A, (db) =>
+        db.pharmacyStockMovement.create({
+          data: { ...decrement, idempotencyKey: `online-${tag('reserved-stock')}` },
+        })
+      )
+    ).rejects.toThrow('OFFLINE_QUOTA_RESERVES_STOCK');
+
+    await inOrg(ORG_A, async (db) => {
+      await deps.quotas.consumeDeviceLotQuota(db, scopeOf(fixture), {
+        deviceId: fixture.deviceId,
+        ...bucketOf(fixture),
+        units: 10,
+      });
+      await db.pharmacyStockMovement.create({
+        data: { ...decrement, idempotencyKey: `offline-${tag('reserved-stock')}` },
+      });
+    });
+
+    const balance = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockBalance.findFirstOrThrow({
+        where: { organizationId: ORG_A, ...bucketOf(fixture), disposition: 'AVAILABLE' },
+      })
+    );
+    expect(balance.onHandUnits).toBe(0);
+  });
+});
+
 async function setup() {
   const fixture = await scenario(ORG_A, BRANCH_A, 'transport');
   // A UNIT sale requires loose stock; sales never implicitly break a sealed pack.
