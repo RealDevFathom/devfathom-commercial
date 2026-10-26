@@ -857,11 +857,58 @@ async function createOrganizationRecord(
   }
 }
 
+type ClaimedConversionOpportunity = {
+  id: string;
+  accountId: string;
+  fromStage: 'DISCOVERY' | 'QUALIFIED' | 'PROPOSAL' | 'NEGOTIATION';
+};
+
+/**
+ * Reserve an eligible opportunity before provisioning starts. The conditional
+ * update is the concurrency guard: after PostgreSQL waits on a competing
+ * conversion, it rechecks this predicate and only one transaction can win.
+ * Because the reservation and provisioning share the platform transaction, a
+ * later provisioning failure restores the opportunity to its original stage.
+ */
+async function claimOpportunityForConversion(
+  db: PrismaClient,
+  opportunityId: string
+): Promise<ClaimedConversionOpportunity> {
+  const opportunity = await db.platformOpportunity.findUnique({
+    where: { id: opportunityId },
+    select: { id: true, accountId: true, stage: true, convertedOrganizationId: true },
+  });
+  const eligibleStages = ['DISCOVERY', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION'] as const;
+  if (
+    !opportunity ||
+    opportunity.convertedOrganizationId !== null ||
+    !eligibleStages.includes(opportunity.stage as (typeof eligibleStages)[number])
+  ) {
+    throw new PlatformSecurityError('Opportunity is not eligible for conversion.', 409);
+  }
+
+  const fromStage = opportunity.stage as ClaimedConversionOpportunity['fromStage'];
+  const wonAt = new Date();
+  const claimed = await db.platformOpportunity.updateMany({
+    where: {
+      id: opportunity.id,
+      stage: fromStage,
+      convertedOrganizationId: null,
+    },
+    data: { stage: 'WON', wonAt },
+  });
+  if (claimed.count !== 1) {
+    throw new PlatformSecurityError('Opportunity is not eligible for conversion.', 409);
+  }
+  return { id: opportunity.id, accountId: opportunity.accountId, fromStage };
+}
+
 async function bootstrapOrganization(
   db: PrismaClient,
   actor: PlatformIdentity | null,
   input: z.infer<typeof organizationInput>,
-  demo?: DemoOrganizationBootstrap
+  demo?: DemoOrganizationBootstrap,
+  conversionOpportunity?: ClaimedConversionOpportunity
 ) {
   if (input.deploymentMode === 'DEDICATED' && !isDedicatedProvisioningConfigured()) {
     throw new PlatformSecurityError(
@@ -1199,34 +1246,24 @@ async function bootstrapOrganization(
       ...(demo ? { createdAt: demo.now } : {}),
     },
   });
-  if (input.opportunityId && actor) {
-    const opportunity = await db.platformOpportunity.findUnique({
-      where: { id: input.opportunityId },
-      select: { id: true, accountId: true, stage: true },
+  if (conversionOpportunity && actor) {
+    await db.platformOpportunity.update({
+      where: { id: conversionOpportunity.id },
+      data: { convertedOrganizationId: organization.id },
     });
-    if (opportunity) {
-      await db.platformOpportunity.update({
-        where: { id: opportunity.id },
-        data: {
-          stage: 'WON',
-          wonAt: new Date(),
-          convertedOrganizationId: organization.id,
-        },
-      });
-      await db.platformOpportunityStageEvent.create({
-        data: {
-          opportunityId: opportunity.id,
-          fromStage: opportunity.stage,
-          toStage: 'WON',
-          changedById: actor.id,
-          reason: 'Converted into an organization',
-        },
-      });
-      await db.platformAccount.update({
-        where: { id: opportunity.accountId },
-        data: { organizationId: organization.id, status: 'CUSTOMER' },
-      });
-    }
+    await db.platformOpportunityStageEvent.create({
+      data: {
+        opportunityId: conversionOpportunity.id,
+        fromStage: conversionOpportunity.fromStage,
+        toStage: 'WON',
+        changedById: actor.id,
+        reason: 'Converted into an organization',
+      },
+    });
+    await db.platformAccount.update({
+      where: { id: conversionOpportunity.accountId },
+      data: { organizationId: organization.id, status: 'CUSTOMER' },
+    });
   }
   return organization;
 }
@@ -1751,7 +1788,10 @@ async function runCommand(
     }
     case 'organization.create': {
       const input = organizationInput.parse(payload);
-      const organization = await bootstrapOrganization(db, actor, input);
+      const opportunity = input.opportunityId
+        ? await claimOpportunityForConversion(db, input.opportunityId)
+        : undefined;
+      const organization = await bootstrapOrganization(db, actor, input, undefined, opportunity);
       return {
         targetType: 'Organization',
         targetId: organization.id,
@@ -3058,7 +3098,8 @@ async function runCommand(
       if (!input.opportunityId) {
         throw new PlatformSecurityError('An opportunity is required for conversion.', 400);
       }
-      const organization = await bootstrapOrganization(db, actor, input);
+      const opportunity = await claimOpportunityForConversion(db, input.opportunityId);
+      const organization = await bootstrapOrganization(db, actor, input, undefined, opportunity);
       return {
         targetType: 'Organization',
         targetId: organization.id,

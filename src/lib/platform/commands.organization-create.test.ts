@@ -7,7 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 
-const mocks = vi.hoisted(() => ({ userFindFirst: vi.fn(), userCreate: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  userFindFirst: vi.fn(),
+  userCreate: vi.fn(),
+  opportunityFindUnique: vi.fn(),
+  opportunityUpdateMany: vi.fn(),
+}));
 
 vi.mock('server-only', () => ({}));
 vi.mock('bcryptjs', () => ({ hash: vi.fn(async () => 'hashed'), compare: vi.fn() }));
@@ -44,6 +49,13 @@ const platformDb = {
   organizationDeployment: { create: record('deployment') },
   platformJob: { create: record('job') },
   organizationLifecycleEvent: { create: record('lifecycle') },
+  platformOpportunity: {
+    findUnique: mocks.opportunityFindUnique,
+    updateMany: mocks.opportunityUpdateMany,
+    update: record('opportunityUpdate'),
+  },
+  platformOpportunityStageEvent: { create: record('opportunityStageEvent') },
+  platformAccount: { update: record('accountUpdate') },
   platformAuditLog: { create: record('audit') },
 };
 
@@ -113,6 +125,84 @@ describe('organization.create admin email', () => {
         data: expect.objectContaining({ email: 'admin@acme.com', mustChangePassword: true }),
       })
     );
+  });
+});
+
+describe('crm.opportunity.convert eligibility', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.userCreate.mockResolvedValue({ id: 'user_new' });
+  });
+
+  it.each([
+    ['WON', null],
+    ['LOST', null],
+    ['QUALIFIED', 'org_existing'],
+  ])('rejects an ineligible opportunity before provisioning', async (stage, convertedOrganizationId) => {
+    mocks.opportunityFindUnique.mockResolvedValue({
+      id: 'opp_1', accountId: 'account_1', stage, convertedOrganizationId,
+    });
+
+    const error = await executePlatformCommand(actor, 'crm.opportunity.convert',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_1' }, request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'Opportunity is not eligible for conversion.',
+    });
+    expect(mocks.opportunityUpdateMany).not.toHaveBeenCalled();
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+  });
+
+  it('loses a concurrent conversion claim before provisioning', async () => {
+    mocks.opportunityFindUnique.mockResolvedValue({
+      id: 'opp_1', accountId: 'account_1', stage: 'PROPOSAL', convertedOrganizationId: null,
+    });
+    mocks.opportunityUpdateMany.mockResolvedValue({ count: 0 });
+
+    const error = await executePlatformCommand(actor, 'crm.opportunity.convert',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_1' }, request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ status: 409 });
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+  });
+
+  it('applies the same replay guard to opportunity-linked organization onboarding', async () => {
+    mocks.opportunityFindUnique.mockResolvedValue({
+      id: 'opp_1', accountId: 'account_1', stage: 'WON', convertedOrganizationId: 'org_existing',
+    });
+
+    const error = await executePlatformCommand(actor, 'organization.create',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_1' }, request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ status: 409 });
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+  });
+
+  it('claims an eligible opportunity and preserves its original stage in the event', async () => {
+    mocks.opportunityFindUnique.mockResolvedValue({
+      id: 'opp_1', accountId: 'account_1', stage: 'NEGOTIATION', convertedOrganizationId: null,
+    });
+    mocks.opportunityUpdateMany.mockResolvedValue({ count: 1 });
+
+    await executePlatformCommand(actor, 'crm.opportunity.convert',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_1' }, request);
+
+    expect(mocks.opportunityUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'opp_1', stage: 'NEGOTIATION', convertedOrganizationId: null },
+      data: { stage: 'WON', wonAt: expect.any(Date) },
+    });
+    expect(created.opportunityUpdate).toContainEqual({ convertedOrganizationId: 'org_new' });
+    expect(created.opportunityStageEvent).toContainEqual(expect.objectContaining({
+      opportunityId: 'opp_1', fromStage: 'NEGOTIATION', toStage: 'WON',
+    }));
+    expect(created.accountUpdate).toContainEqual({
+      organizationId: 'org_new', status: 'CUSTOMER',
+    });
   });
 });
 
