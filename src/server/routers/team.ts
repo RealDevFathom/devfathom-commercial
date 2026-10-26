@@ -500,8 +500,9 @@ export const teamRouter = router({
       // (a) decide your OWN leave, or (b) re-decide anything not still PENDING —
       // mirroring the resignation:review flow. The coarse leave:approve capability
       // alone carried no owner/state conditions.
-      const existing = await ctx.db.leaveRequest.findUnique({
-        where: { id: input.id },
+      const organizationId = ctx.entitlements.organizationId;
+      const existing = await ctx.db.leaveRequest.findFirst({
+        where: { id: input.id, organizationId },
         select: { userId: true, status: true },
       });
       if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Leave request not found' });
@@ -520,7 +521,7 @@ export const teamRouter = router({
 
       const leave = await ctx.db.$transaction(async (tx) => {
         const transitioned = await tx.leaveRequest.updateMany({
-          where: { id: input.id, status: 'PENDING' },
+          where: { id: input.id, organizationId, status: 'PENDING' },
           data: { status: input.status, approvedById: ctx.session.user.id },
         });
         if (transitioned.count === 0) {
@@ -530,7 +531,7 @@ export const teamRouter = router({
           });
         }
 
-        return tx.leaveRequest.findUniqueOrThrow({ where: { id: input.id } });
+        return tx.leaveRequest.findFirstOrThrow({ where: { id: input.id, organizationId } });
       });
 
       // Let the requester know the decision.

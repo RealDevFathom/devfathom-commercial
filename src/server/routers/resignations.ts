@@ -164,36 +164,44 @@ export const resignationsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const resignation = await ctx.db.resignation.findUnique({
-        where: { id: input.id },
-        include: { user: { select: { id: true, role: true, name: true, email: true } } },
-      });
-      if (!resignation) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Resignation not found.' });
-      }
-
-      const allowed = await can(
-        subjectFromSession(ctx.session.user),
-        'resignation:review',
-        {
-          type: 'Resignation',
-          userId: resignation.userId,
-          status: resignation.status,
-          targetRole: resignation.user.role,
-        },
-        { source: 'TRPC', db: ctx.db }
-      );
-      if (!allowed) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'You do not have permission to review this resignation.',
-        });
-      }
-
       const approved = input.decision === 'APPROVED';
-      const updated = await ctx.db.$transaction(async (tx) => {
+      const organizationId = ctx.entitlements.organizationId;
+      const { resignation, updated } = await ctx.db.$transaction(async (tx) => {
+        // The target's role is part of the authorization decision. Lock both it
+        // and the resignation before re-reading either so a concurrent promotion
+        // cannot make that decision stale before the transition commits.
+        await tx.$queryRaw`SELECT r.id FROM "resignations" r
+          JOIN "users" u ON u.id = r."userId" AND u."organizationId" = r."organizationId"
+          WHERE r.id = ${input.id} AND r."organizationId" = ${organizationId}
+          FOR UPDATE OF r, u`;
+        const resignation = await tx.resignation.findFirst({
+          where: { id: input.id, organizationId },
+          include: { user: { select: { id: true, role: true, name: true, email: true } } },
+        });
+        if (!resignation) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Resignation not found.' });
+        }
+
+        const allowed = await can(
+          subjectFromSession(ctx.session.user),
+          'resignation:review',
+          {
+            type: 'Resignation',
+            userId: resignation.userId,
+            status: resignation.status,
+            targetRole: resignation.user.role,
+          },
+          { source: 'TRPC', db: tx }
+        );
+        if (!allowed) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have permission to review this resignation.',
+          });
+        }
+
         const transitioned = await tx.resignation.updateMany({
-          where: { id: input.id, status: 'PENDING' },
+          where: { id: input.id, organizationId, status: 'PENDING' },
           data: {
             status: input.decision,
             reviewedById: ctx.session.user.id,
@@ -209,18 +217,20 @@ export const resignationsRouter = router({
           });
         }
 
-        const decided = await tx.resignation.findUniqueOrThrow({ where: { id: input.id } });
+        const decided = await tx.resignation.findFirstOrThrow({
+          where: { id: input.id, organizationId },
+        });
 
         // IMP-HR-02: off-boarding automation. Keep deactivation atomic with the
         // winning decision so a failed off-boarding cannot leave a partial review.
         if (approved && decided.lastWorkingDay && decided.lastWorkingDay <= new Date()) {
           await tx.user.update({
-            where: { id: resignation.userId },
+            where: { organizationId_id: { organizationId, id: resignation.userId } },
             data: { status: 'INACTIVE' },
           });
         }
 
-        return decided;
+        return { resignation, updated: decided };
       });
 
       annotateAudit(ctx, {

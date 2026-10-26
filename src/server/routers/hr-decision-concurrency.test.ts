@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  can: vi.fn(async () => true),
+  can: vi.fn(async (..._args: unknown[]) => true),
   notify: vi.fn(),
   annotateAudit: vi.fn(),
 }));
@@ -60,16 +60,16 @@ describe('atomic HR decisions', () => {
   });
 
   it('uses a pending compare-and-swap for leave and emits no effect when it loses', async () => {
-    const findUnique = vi.fn().mockResolvedValue({
+    const findFirst = vi.fn().mockResolvedValue({
       userId: 'employee-1',
       status: 'PENDING',
     });
     const updateMany = vi.fn().mockResolvedValue({ count: 0 });
-    const findUniqueOrThrow = vi.fn();
-    const tx = { leaveRequest: { updateMany, findUniqueOrThrow } };
+    const findFirstOrThrow = vi.fn();
+    const tx = { leaveRequest: { updateMany, findFirstOrThrow } };
     const transaction = vi.fn(async (work: (transaction: typeof tx) => unknown) => work(tx));
     const caller = teamRouter.createCaller(
-      context({ leaveRequest: { findUnique }, $transaction: transaction })
+      context({ leaveRequest: { findFirst }, $transaction: transaction })
     );
 
     await expect(
@@ -77,10 +77,13 @@ describe('atomic HR decisions', () => {
     ).rejects.toMatchObject({ code: 'CONFLICT' });
 
     expect(updateMany).toHaveBeenCalledWith({
-      where: { id: 'leave-1', status: 'PENDING' },
+      where: { id: 'leave-1', organizationId: 'org-1', status: 'PENDING' },
       data: { status: 'APPROVED', approvedById: reviewer.id },
     });
-    expect(findUniqueOrThrow).not.toHaveBeenCalled();
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'leave-1', organizationId: 'org-1' } })
+    );
+    expect(findFirstOrThrow).not.toHaveBeenCalled();
     expect(transaction).toHaveBeenCalledOnce();
     expect(mocks.notify).not.toHaveBeenCalled();
   });
@@ -94,26 +97,32 @@ describe('atomic HR decisions', () => {
       user: { id: 'employee-1', role: 'EMPLOYEE', name: 'Employee', email: 'e@example.test' },
     };
     const updateMany = vi.fn().mockResolvedValue({ count: 0 });
-    const findUniqueOrThrow = vi.fn();
+    const findFirstOrThrow = vi.fn();
     const updateUser = vi.fn();
     const tx = {
-      resignation: { updateMany, findUniqueOrThrow },
+      $queryRaw: vi.fn().mockResolvedValue([{ id: resignation.id }]),
+      resignation: {
+        findFirst: vi.fn().mockResolvedValue(resignation),
+        updateMany,
+        findFirstOrThrow,
+      },
       user: { update: updateUser },
     };
     const db = {
-      resignation: { findUnique: vi.fn().mockResolvedValue(resignation) },
       $transaction: vi.fn(async (work: (transaction: typeof tx) => unknown) => work(tx)),
     };
     const caller = resignationsRouter.createCaller(context(db));
 
-    await expect(
-      caller.review({ id: resignation.id, decision: 'DECLINED' })
-    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(caller.review({ id: resignation.id, decision: 'DECLINED' })).rejects.toMatchObject(
+      { code: 'CONFLICT' }
+    );
 
     expect(updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: resignation.id, status: 'PENDING' } })
+      expect.objectContaining({
+        where: { id: resignation.id, organizationId: 'org-1', status: 'PENDING' },
+      })
     );
-    expect(findUniqueOrThrow).not.toHaveBeenCalled();
+    expect(findFirstOrThrow).not.toHaveBeenCalled();
     expect(updateUser).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).not.toHaveBeenCalled();
     expect(mocks.notify).not.toHaveBeenCalled();
@@ -130,16 +139,17 @@ describe('atomic HR decisions', () => {
     };
     const decided = { ...resignation, status: 'APPROVED', lastWorkingDay, reviewNote: null };
     const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: resignation.id }]),
       resignation: {
+        findFirst: vi.fn().mockResolvedValue(resignation),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
-        findUniqueOrThrow: vi.fn().mockResolvedValue(decided),
+        findFirstOrThrow: vi.fn().mockResolvedValue(decided),
       },
       user: { update: vi.fn().mockResolvedValue({}) },
     };
     const transaction = vi.fn(async (work: (transaction: typeof tx) => unknown) => work(tx));
     const caller = resignationsRouter.createCaller(
       context({
-        resignation: { findUnique: vi.fn().mockResolvedValue(resignation) },
         $transaction: transaction,
       })
     );
@@ -149,10 +159,59 @@ describe('atomic HR decisions', () => {
     );
     expect(transaction).toHaveBeenCalledOnce();
     expect(tx.user.update).toHaveBeenCalledWith({
-      where: { id: resignation.userId },
+      where: { organizationId_id: { organizationId: 'org-1', id: resignation.userId } },
       data: { status: 'INACTIVE' },
     });
     expect(mocks.annotateAudit).toHaveBeenCalledOnce();
     expect(mocks.notify).toHaveBeenCalledOnce();
+  });
+
+  it('rechecks authorization after locking when the target role changed', async () => {
+    let targetRole = 'EMPLOYEE';
+    const resignation = {
+      id: 'resignation-1',
+      userId: 'employee-1',
+      status: 'PENDING',
+      proposedLastDay: new Date('2026-01-01'),
+      user: { id: 'employee-1', name: 'Employee', email: 'e@example.test' },
+    };
+    mocks.can.mockImplementation(async (...args: unknown[]) => {
+      const resource = args[2] as { targetRole?: string };
+      return resource.targetRole !== 'ADMIN';
+    });
+    const tx = {
+      $queryRaw: vi.fn().mockImplementation(async () => {
+        // Model a promotion which committed while the review was waiting for its lock.
+        targetRole = 'ADMIN';
+        return [{ id: resignation.id }];
+      }),
+      resignation: {
+        findFirst: vi.fn().mockImplementation(async () => ({
+          ...resignation,
+          user: { ...resignation.user, role: targetRole },
+        })),
+        updateMany: vi.fn(),
+        findFirstOrThrow: vi.fn(),
+      },
+      user: { update: vi.fn() },
+    };
+    const caller = resignationsRouter.createCaller(
+      context({
+        $transaction: vi.fn(async (work: (transaction: typeof tx) => unknown) => work(tx)),
+      })
+    );
+
+    await expect(caller.review({ id: resignation.id, decision: 'APPROVED' })).rejects.toMatchObject(
+      { code: 'FORBIDDEN' }
+    );
+
+    expect(tx.$queryRaw).toHaveBeenCalledOnce();
+    expect(tx.resignation.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: resignation.id, organizationId: 'org-1' } })
+    );
+    expect(tx.resignation.updateMany).not.toHaveBeenCalled();
+    expect(tx.user.update).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+    expect(mocks.notify).not.toHaveBeenCalled();
   });
 });
