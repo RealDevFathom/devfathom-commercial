@@ -695,24 +695,23 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     const activeOrder = order;
     if (!activeOrder || pending || closeInFlight.current) return;
     const finalizingDeliveredOrder = canCloseDeliveredOrder(activeOrder);
-    if (activeOrder.status === 'PAYMENT_PENDING') {
-      if (finalizingDeliveredOrder) {
-        closeInFlight.current = true;
-        try {
-          if (await mutate('close', { orderId: activeOrder.id }, 'Order closed.', false)) {
-            startFreshDraft();
-          }
-        } finally {
-          closeInFlight.current = false;
+    if (finalizingDeliveredOrder) {
+      closeInFlight.current = true;
+      try {
+        if (await mutate('close', { orderId: activeOrder.id }, 'Order closed.', false)) {
+          startFreshDraft();
         }
-        return;
+      } finally {
+        closeInFlight.current = false;
       }
+      return;
+    }
+    if (activeOrder.status === 'PAYMENT_PENDING') {
       setCheckoutOrderId(activeOrder.id);
       return;
     }
     if (await mutate('close', { orderId: activeOrder.id }, 'Order ready for payment.')) {
-      if (finalizingDeliveredOrder) startFreshDraft();
-      else setCheckoutOrderId(activeOrder.id);
+      setCheckoutOrderId(activeOrder.id);
     }
   }
 

@@ -798,35 +798,38 @@ describe('OrderPad transport', () => {
     expect(fetch).toHaveBeenCalledTimes(callsBeforeTap);
   });
 
-  it('finalizes a paid and delivered delivery order without reopening checkout', async () => {
-    const fetch = transport({
-      detailResponse: {
-        ...detail,
-        channel: 'DELIVERY',
-        status: 'PAYMENT_PENDING',
-        deliveryStatus: 'DELIVERED',
-        settled: true,
-      },
-    });
-    await unlock(fetch);
-    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
-    await screen.findByText('Order 42');
+  it.each(['PAYMENT_PENDING', 'SERVED'])(
+    'finalizes a paid and delivered %s delivery order without reopening checkout',
+    async (status) => {
+      const fetch = transport({
+        detailResponse: {
+          ...detail,
+          channel: 'DELIVERY',
+          status,
+          deliveryStatus: 'DELIVERED',
+          settled: true,
+        },
+      });
+      await unlock(fetch);
+      fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+      await screen.findByText('Order 42');
 
-    const closeOrder = screen.getByRole('button', { name: 'Close order' });
-    fireEvent.click(closeOrder);
-    fireEvent.click(closeOrder);
+      const closeOrder = screen.getByRole('button', { name: 'Close order' });
+      fireEvent.click(closeOrder);
+      fireEvent.click(closeOrder);
 
-    await waitFor(() =>
+      await waitFor(() =>
+        expect(
+          fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/close'))
+        ).toHaveLength(1)
+      );
       expect(
-        fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/close'))
-      ).toHaveLength(1)
-    );
-    expect(
-      fetch.mock.calls.filter(([input]) => String(input).includes('/checkout/'))
-    ).toHaveLength(0);
-    expect(screen.queryByRole('heading', { name: 'Collect payment' })).not.toBeInTheDocument();
-    expect(await screen.findByRole('heading', { name: 'No active order' })).toBeVisible();
-  });
+        fetch.mock.calls.filter(([input]) => String(input).includes('/checkout/'))
+      ).toHaveLength(0);
+      expect(screen.queryByRole('heading', { name: 'Collect payment' })).not.toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'No active order' })).toBeVisible();
+    }
+  );
 
   it('keeps a delivered delivery order active when finalization fails', async () => {
     const fetch = transport({
