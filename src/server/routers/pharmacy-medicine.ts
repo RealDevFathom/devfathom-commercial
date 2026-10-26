@@ -31,6 +31,27 @@ import {
 } from '../trpc';
 
 const family = z.enum(['PHARMACEUTICAL', 'BIOLOGICAL', 'DEVICE', 'ALTERNATIVE', 'FRONT_SHOP']);
+
+type BoundedJsonValue = string | number | boolean | null | BoundedJsonValue[] | BoundedJsonObject;
+type BoundedJsonObject = { [key: string]: BoundedJsonValue };
+
+const jsonScalar = z.union([z.string().max(2_000), z.number(), z.boolean(), z.null()]);
+
+function boundedJsonValue(depth: number): z.ZodType<BoundedJsonValue> {
+  if (depth === 0) return jsonScalar;
+
+  const child = boundedJsonValue(depth - 1);
+  return z.union([
+    jsonScalar,
+    z.array(child).max(20),
+    z
+      .record(z.string().min(1).max(100), child)
+      .refine((value) => Object.keys(value).length <= 20, 'Must contain at most 20 properties'),
+  ]);
+}
+
+const assertedValue = boundedJsonValue(4);
+
 const provenance = z
   .object({
     field: z.string().min(1).max(100),
@@ -40,7 +61,7 @@ const provenance = z
     confidence: z.number().min(0).max(1).optional(),
     reviewer: z.string().max(200).optional(),
     status: z.enum(['UNREVIEWED', 'ACCEPTED', 'CORRECTED', 'REJECTED']),
-    assertedValue: z.unknown().optional(),
+    assertedValue: assertedValue.optional(),
   })
   .strict();
 

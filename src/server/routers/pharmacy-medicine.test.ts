@@ -139,6 +139,32 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
     expect(db.medicine.create).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ['string', 'x'.repeat(2_001)],
+    ['array', Array.from({ length: 21 }, () => 'value')],
+    ['object', Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`key_${index}`, index]))],
+    ['nesting', [[[[['too deep']]]]]],
+  ])('rejects an oversized provenance assertedValue %s before database work', async (_, value) => {
+    await expect(
+      caller().createMedicine({
+        productName: 'Medicine',
+        productFamily: 'PHARMACEUTICAL',
+        provenance: [
+          {
+            field: 'productName',
+            source: 'manual',
+            sourceType: 'USER',
+            retrievedAt: new Date('2026-01-01'),
+            status: 'UNREVIEWED',
+            assertedValue: value,
+          },
+        ],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(db.medicine.create).not.toHaveBeenCalled();
+  });
+
   it('rejects an oversized ingredient ID before database work', async () => {
     await expect(
       caller().createMedicine({
