@@ -97,11 +97,18 @@ test('Notes is licensed and a created note persists', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Edit' })).toBeVisible();
   await expect(page.getByDisplayValue(title)).toBeVisible();
 
+  const notePath = new URL(page.url()).pathname;
   await page.reload();
   await expect(page.getByDisplayValue(title)).toBeVisible();
   await expect(page.locator('.ProseMirror')).toContainText(
     'Persisted by the Agency A7 acceptance flow.'
   );
+
+  await page.goto('/notes');
+  const savedNote = page.locator(`a[href="${notePath}"]`);
+  await expect(savedNote).toContainText(title);
+  await savedNote.click();
+  await expect(page.getByDisplayValue(title)).toBeVisible();
 });
 
 test('finance exposes the owned transaction and invoice surface', async ({ page }) => {
