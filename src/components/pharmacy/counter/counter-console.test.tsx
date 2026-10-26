@@ -367,6 +367,36 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
   });
 });
 
+describe('PharmacyCounterConsole customer linking', () => {
+  it('identifies missing loyalty consent without referring to dispensing', async () => {
+    mocks.queries.counterPatientPanel = query({
+      patientId: 'patient-a',
+      displayName: 'Synthetic patient',
+      phone: '+1 555 010 1234',
+      address: null,
+      prescriptions: [],
+    });
+    mocks.mutations.linkCustomer!.mockRejectedValue(
+      refused('FORBIDDEN', 'LOYALTY_CONSENT_REQUIRED')
+    );
+
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Link selected patient' }));
+
+    const notice = await screen.findByText(
+      'Loyalty consent is required before linking this customer or redeeming loyalty points.'
+    );
+    expect(notice).not.toHaveTextContent(/dispensing/i);
+    expect(mocks.mutations.linkCustomer).toHaveBeenCalledWith({
+      branchId: 'branch-a',
+      saleId: 'sale-a',
+      patientId: 'patient-a',
+      displayName: 'Synthetic patient',
+      phoneLast4: '1234',
+    });
+  });
+});
+
 describe('PharmacyCounterConsole tender recovery', () => {
   it.each([
     ['BAD_REQUEST', 'DRAWER_NOT_OPEN', 'CASH'],
