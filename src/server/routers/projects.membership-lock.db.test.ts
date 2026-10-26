@@ -33,8 +33,10 @@ describeIfDatabase('project membership lock', () => {
     ]);
     let releaseFirst!: () => void;
     let firstLocked!: () => void;
+    let secondAttempted!: () => void;
     const release = new Promise<void>((resolve) => (releaseFirst = resolve));
     const locked = new Promise<void>((resolve) => (firstLocked = resolve));
+    const attempted = new Promise<void>((resolve) => (secondAttempted = resolve));
     const order: string[] = [];
 
     const first = db.$transaction(async (tx) => {
@@ -47,9 +49,11 @@ describeIfDatabase('project membership lock', () => {
     await locked;
 
     const second = db.$transaction(async (tx) => {
+      secondAttempted();
       await lockProjectMembershipChanges(tx, projectId);
       order.push('second locked');
     });
+    await attempted;
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(order).toEqual(['first locked']);
 
