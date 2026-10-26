@@ -694,7 +694,7 @@ describe('restaurantShifts.update', () => {
 });
 
 describe('restaurantShifts.cancel', () => {
-  it('records a CANCELLED event carrying the reason, and maps ALREADY_CANCELLED to CONFLICT', async () => {
+  it('records a CANCELLED event and maps cancellation conflicts', async () => {
     mocks.cancelShift.mockImplementation(async (_tx, id, { now, reason }) => ({
       ...state.shifts.find((s) => s.id === id)!,
       status: 'CANCELLED',
@@ -719,6 +719,14 @@ describe('restaurantShifts.cancel', () => {
     await expect(
       caller('OWNER').cancel({ id: 'shift_cancelled', expectedVersion: 1 })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
+
+    mocks.cancelShift.mockRejectedValueOnce(
+      new ShiftError('The employee is clocked in.', 'ACTIVE_ATTENDANCE')
+    );
+    await expect(
+      caller('OWNER').cancel({ id: 'shift_emp', expectedVersion: 1 })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: 'The employee is clocked in.' });
+
     await expect(
       caller('EMPLOYEE').cancel({ id: 'shift_emp', expectedVersion: 1 })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
