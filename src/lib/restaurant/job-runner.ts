@@ -16,6 +16,7 @@ import {
   type Clock,
   type DrainResult,
 } from '@/lib/restaurant/scheduler';
+import { enqueueDueSopEscalations } from '@/lib/restaurant/sop-late-missed';
 import {
   createTenantDb,
   withPlatformDb,
@@ -73,7 +74,9 @@ export type RunRestaurantWorkerTickOptions = {
   /** Per-org bound on outbox rows dispatched this tick (default {@link DEFAULT_MAX_OUTBOX_PER_ORG}). */
   maxOutboxPerOrg?: number;
   /** Seam: which orgs have due work (default = privileged cross-org read scan). */
-  discoverOrganizations?: () => Promise<string[]>;
+  discoverOrganizations?: (now: Date) => Promise<string[]>;
+  /** Seam: materialize occurrence-driven jobs before draining the queue. */
+  produceDueJobs?: (db: ScopedDb, now: Date) => Promise<number>;
   /** Seam: run work inside an org's RLS transaction (default = `withTenantDb`). */
   runInOrg?: RunInOrg;
   /** Seam: a per-op tenant client for outbox dispatch (default = `createTenantDb`). */
@@ -118,7 +121,7 @@ function addOutbox(into: OutboxDispatchSummary, from: OutboxDispatchSummary): vo
 /** The privileged cross-org discovery scan. Reads only — never mutates a tenant
  * row outside its RLS context (D13 §5). Returns orgs with ordinary pending
  * scheduler or outbox work; per-org due-ness is filtered later. */
-async function defaultDiscoverOrganizations(): Promise<string[]> {
+async function defaultDiscoverOrganizations(now: Date): Promise<string[]> {
   return withPlatformDb(async (db) => {
     const rows = await db.$queryRaw<Array<{ organizationId: string }>>(Prisma.sql`
       SELECT DISTINCT "organizationId"
@@ -128,6 +131,26 @@ async function defaultDiscoverOrganizations(): Promise<string[]> {
         WHERE "status" IN ('QUEUED', 'RUNNING') AND "type" <> ${DEMO_RESET_JOB_TYPE}
         UNION
         SELECT "organizationId" FROM "restaurant_event_outbox" WHERE "status" = 'PENDING'
+        UNION
+        SELECT occ."organizationId"
+        FROM "restaurant_sop_occurrences" occ
+        WHERE occ."windowEndsAt" <= ${now}
+          AND occ."status" IN ('SCHEDULED', 'IN_PROGRESS', 'SUBMITTED', 'LATE', 'MISSED')
+          AND EXISTS (
+            SELECT 1
+            FROM "restaurant_sop_escalation_policies" policy
+            JOIN "restaurant_sop_escalation_steps" step ON step."policyId" = policy.id
+            WHERE policy."organizationId" = occ."organizationId"
+              AND policy.active = true
+              AND (policy.scope = 'ORG' OR policy."branchId" = occ."branchId")
+              AND NOT EXISTS (
+                SELECT 1
+                FROM "restaurant_sop_escalation_events" event
+                WHERE event."occurrenceId" = occ.id
+                  AND event."escalationStepId" = step.id
+                  AND event.kind = 'FIRED'
+              )
+          )
       ) AS pending
       WHERE "organizationId" <> ''
       ORDER BY "organizationId" ASC
@@ -167,10 +190,19 @@ export async function runRestaurantWorkerTick(
     outbox: emptyOutbox(),
   };
 
-  const organizationIds = await discover();
+  const organizationIds = await discover(now);
   for (const organizationId of organizationIds) {
     if (options.signal?.aborted) break;
     result.organizations += 1;
+
+    // Materialize time-driven escalation work before draining. Discovery includes
+    // organizations with eligible SOP occurrences, so this runs even when their
+    // queue is completely empty; no separately seeded sweep job is required.
+    await runInOrg(organizationId, (db) =>
+      (options.produceDueJobs ?? enqueueDueSopEscalations)(db, now)
+    );
+
+    if (options.signal?.aborted) break;
 
     // 1. Requeue jobs abandoned by a crashed worker (in this org's RLS scope).
     result.recovered += await runInOrg(organizationId, (db) =>

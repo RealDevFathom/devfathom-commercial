@@ -67,6 +67,18 @@ function createJobDb(seed: Row[] = []) {
   for (const row of seed) jobs.set(row.id as string, { ...row });
 
   const restaurantJob = {
+    findFirst: async ({ where }: { where: { idempotencyKey: string } }) => {
+      const row = [...jobs.values()].find(
+        (candidate) => candidate.idempotencyKey === where.idempotencyKey
+      );
+      return row ? { ...row } : null;
+    },
+    create: async ({ data }: { data: Row }) => {
+      const id = `job_${(seq += 1)}`;
+      const row = { id, createdAt: T0, ...data };
+      jobs.set(id, row);
+      return { ...row };
+    },
     findUnique: async ({ where }: { where: { id: string } }) => {
       const row = jobs.get(where.id);
       return row ? { ...row } : null;
@@ -235,6 +247,7 @@ describe('runRestaurantWorkerTick', () => {
       now: T0,
       outboxConsumers: registry,
       discoverOrganizations: async () => ['org_a', 'org_b'],
+      produceDueJobs: async () => 0,
       runInOrg: (orgId, work) => work(jobDbs[orgId]!.db),
       outboxClient: (orgId) => outboxDbs[orgId]!.db,
     });
@@ -258,6 +271,7 @@ describe('runRestaurantWorkerTick', () => {
       workerId: 'worker-1',
       now: T0,
       discoverOrganizations: async () => ['org_a'],
+      produceDueJobs: async () => 0,
       runInOrg: (_orgId, work) => work(org.db),
       outboxClient: () => createOutboxDb().db,
     });
@@ -288,6 +302,7 @@ describe('runRestaurantWorkerTick', () => {
       workerId: 'worker-1',
       now: T0,
       discoverOrganizations: async () => ['org_a'],
+      produceDueJobs: async () => 0,
       runInOrg: (_orgId, work) => work(org.db),
       outboxClient: () => createOutboxDb().db,
     });
@@ -313,6 +328,7 @@ describe('runRestaurantWorkerTick', () => {
       workerId: 'worker-1',
       now: T0,
       discoverOrganizations: async () => ['org_a'],
+      produceDueJobs: async () => 0,
       runInOrg: (_orgId, work) => work(org.db),
       outboxClient: () => createOutboxDb().db,
     });
@@ -335,12 +351,63 @@ describe('runRestaurantWorkerTick', () => {
       now: T0,
       signal: controller.signal,
       discoverOrganizations: discover,
+      produceDueJobs: async () => 0,
       runInOrg: runInOrg as never,
       outboxClient: () => createOutboxDb().db,
     });
 
     expect(result.organizations).toBe(0);
     expect(runInOrg).not.toHaveBeenCalled();
+  });
+
+  it('produces and drains an escalation job when the tenant queue starts empty', async () => {
+    const org = createJobDb();
+    Object.assign(org.db, {
+      restaurantSopEscalationPolicy: {
+        findMany: async () => [
+          {
+            id: 'policy_1',
+            scope: 'BRANCH',
+            branchId: 'branch_1',
+            quietHoursStartMinutes: null,
+            quietHoursEndMinutes: null,
+            steps: [{ id: 'step_1', delayMinutes: 0 }],
+          },
+        ],
+      },
+      restaurantSopOccurrence: {
+        findMany: async () => [
+          {
+            id: 'occ_1',
+            branchId: 'branch_1',
+            windowEndsAt: T0,
+            branch: { timezone: 'UTC' },
+            escalationEvents: [],
+          },
+        ],
+      },
+    });
+
+    expect(org.jobs.size).toBe(0);
+    const result = await runRestaurantWorkerTick({
+      workerId: 'worker-1',
+      now: T0,
+      discoverOrganizations: async () => ['org_with_due_occurrence'],
+      runInOrg: (_orgId, work) => work(org.db),
+      outboxClient: () => createOutboxDb().db,
+    });
+
+    expect(result.jobs).toMatchObject({ claimed: 1, succeeded: 1 });
+    expect(mocks.runRestaurantJob).toHaveBeenCalledWith(
+      expect.objectContaining({ job: expect.objectContaining({ type: 'sop.runEscalation' }) })
+    );
+    expect([...org.jobs.values()]).toEqual([
+      expect.objectContaining({
+        type: 'sop.runEscalation',
+        idempotencyKey: 'sop-escalation:occ_1:policy_1:step_1',
+        status: 'SUCCEEDED',
+      }),
+    ]);
   });
 });
 
@@ -355,6 +422,7 @@ describe('runRestaurantWorker (daemon loop)', () => {
       maxTicks: 3,
       sleep,
       discoverOrganizations: async () => [],
+      produceDueJobs: async () => 0,
       onTick: (tick) => ticks.push(tick),
     });
 
@@ -375,6 +443,7 @@ describe('runRestaurantWorker (daemon loop)', () => {
       signal: controller.signal,
       sleep,
       discoverOrganizations: async () => [],
+      produceDueJobs: async () => 0,
       onTick: () => controller.abort(),
     });
 
