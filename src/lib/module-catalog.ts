@@ -256,6 +256,9 @@ export const ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES = [
   'team.markNotificationRead',
   'team.markAllNotificationsRead',
 ] as const;
+const entitlementIndependentTeamNotificationProcedures = new Set<string>(
+  ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES
+);
 
 /**
  * Procedures that act only on the caller's own account: profile, password,
@@ -275,13 +278,17 @@ export const ACCOUNT_PROCEDURES: ReadonlySet<string> = new Set([
   'team.mySignIns',
   'team.getNotificationPrefs',
   'team.updateNotificationPrefs',
-  ...ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES,
 ]);
 
 export function moduleForProcedure(path: string): string | null {
   // Inviting workspace users is baseline administration in every vertical.
   if (path === 'team.inviteMember') return 'admin';
-  if (ACCOUNT_PROCEDURES.has(path)) return null;
+  if (
+    ACCOUNT_PROCEDURES.has(path) ||
+    entitlementIndependentTeamNotificationProcedures.has(path)
+  ) {
+    return null;
+  }
   if (
     /^pharmacyFinance\.(perpetualValuation|grossMargin|leakageReport|marginComparison|financialStatements)$/.test(
       path

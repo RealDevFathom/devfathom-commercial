@@ -88,6 +88,7 @@ describe('module catalog', () => {
     for (const path of ACCOUNT_PROCEDURES) expect(moduleForProcedure(path)).toBeNull();
     expect(ACCOUNT_PROCEDURES.has('team.getById')).toBe(true);
     expect(ACCOUNT_PROCEDURES.has('team.updateProfile')).toBe(true);
+    expect(ACCOUNT_PROCEDURES.has('team.getNotifications')).toBe(false);
     expect(moduleForProcedure('team.getAll')).toBe('hr');
     expect(moduleForProcedure('team.updateRole')).toBe('hr');
     expect(moduleForProcedure('team.getNotifications')).toBeNull();

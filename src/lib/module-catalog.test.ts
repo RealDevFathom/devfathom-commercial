@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ACCOUNT_PROCEDURES,
   MODULE_CATALOG,
   ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES,
   PROCEDURE_MODULES,
@@ -79,6 +80,7 @@ describe('module catalog routing', () => {
       'team.markNotificationRead',
       'team.markAllNotificationsRead',
     ]);
+    expect(ACCOUNT_PROCEDURES.has('team.getNotifications')).toBe(false);
     expect(moduleForProcedure('team.getNotifications.future')).toBe('hr');
     expect(moduleForProcedure('team.deleteNotification')).toBe('hr');
   });
