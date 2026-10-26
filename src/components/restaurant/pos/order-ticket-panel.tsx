@@ -33,6 +33,8 @@ export type OrderDetail = {
   orderNumber: number;
   status: string;
   channel: string;
+  deliveryStatus?: string | null;
+  settled?: boolean;
   publicationId: string | null;
   coverCount: number | null;
   items: OrderItem[];
@@ -169,6 +171,11 @@ export function OrderTicketPanel({
       !activeTables.includes(table.id) &&
       (!table.occupied || table.activeOrderIds.includes(order.id))
   );
+  const canCloseDeliveredOrder =
+    order.channel === 'DELIVERY' && order.deliveryStatus === 'DELIVERED' && order.settled === true;
+  const shouldCollectPayment =
+    !canCloseDeliveredOrder &&
+    (order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY');
 
   return (
     <>
@@ -441,22 +448,12 @@ export function OrderTicketPanel({
             <Button
               type="button"
               data-pos-pay
-              variant={
-                order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY'
-                  ? 'default'
-                  : 'outline'
-              }
-              onClick={
-                order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY'
-                  ? onCollectPayment
-                  : onClose
-              }
+              variant={shouldCollectPayment ? 'default' : 'outline'}
+              onClick={shouldCollectPayment ? onCollectPayment : onClose}
               disabled={pending}
               className="h-11 shrink-0 shadow-none hover:translate-y-0 active:translate-y-0"
             >
-              {order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY'
-                ? 'Collect payment'
-                : 'Close order'}
+              {shouldCollectPayment ? 'Collect payment' : 'Close order'}
             </Button>
           </div>
         </div>

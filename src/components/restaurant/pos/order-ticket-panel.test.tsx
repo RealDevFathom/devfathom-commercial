@@ -244,4 +244,27 @@ describe('OrderTicketPanel', () => {
     expect(actions.onCollectPayment).toHaveBeenCalledOnce();
     expect(actions.onClose).not.toHaveBeenCalled();
   });
+
+  it('closes a delivered and paid delivery order instead of collecting payment again', () => {
+    const actions = handlers();
+    render(
+      <OrderTicketPanel
+        order={{
+          ...order,
+          channel: 'DELIVERY',
+          status: 'PAYMENT_PENDING',
+          deliveryStatus: 'DELIVERED',
+          settled: true,
+          tables: [],
+        }}
+        actingOperatorId="staff-1"
+        pending={false}
+        {...actions}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close order' }));
+    expect(actions.onClose).toHaveBeenCalledOnce();
+    expect(actions.onCollectPayment).not.toHaveBeenCalled();
+  });
 });

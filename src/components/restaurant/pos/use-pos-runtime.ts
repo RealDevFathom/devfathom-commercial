@@ -688,12 +688,23 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
   async function closeForPayment() {
     const activeOrder = order;
     if (!activeOrder || pending) return;
+    const finalizingDeliveredOrder =
+      activeOrder.channel === 'DELIVERY' &&
+      activeOrder.deliveryStatus === 'DELIVERED' &&
+      activeOrder.settled === true;
     if (activeOrder.status === 'PAYMENT_PENDING') {
+      if (finalizingDeliveredOrder) {
+        if (await mutate('close', { orderId: activeOrder.id }, 'Order closed.', false)) {
+          startFreshDraft();
+        }
+        return;
+      }
       setCheckoutOrderId(activeOrder.id);
       return;
     }
     if (await mutate('close', { orderId: activeOrder.id }, 'Order ready for payment.')) {
-      setCheckoutOrderId(activeOrder.id);
+      if (finalizingDeliveredOrder) startFreshDraft();
+      else setCheckoutOrderId(activeOrder.id);
     }
   }
 

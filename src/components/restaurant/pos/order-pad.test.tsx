@@ -795,6 +795,31 @@ describe('OrderPad transport', () => {
     expect(fetch).toHaveBeenCalledTimes(callsBeforeTap);
   });
 
+  it('finalizes a paid and delivered delivery order without reopening checkout', async () => {
+    const fetch = transport({
+      detailResponse: {
+        ...detail,
+        channel: 'DELIVERY',
+        status: 'PAYMENT_PENDING',
+        deliveryStatus: 'DELIVERED',
+        settled: true,
+      },
+    });
+    await unlock(fetch);
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Order 42');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close order' }));
+
+    await waitFor(() =>
+      expect(
+        fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/close'))
+      ).toHaveLength(1)
+    );
+    expect(screen.queryByRole('heading', { name: 'Collect payment' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'No active order' })).toBeVisible();
+  });
+
   it('keeps an unsettled check active when checkout closes', async () => {
     const fetch = transport({ detailResponse: { ...detail, status: 'PAYMENT_PENDING' } });
     await unlock(fetch);
