@@ -490,10 +490,13 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(mocks.reportUpdateManyAndReturn).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({
+        where: {
+          id: 'pv_1',
+          branchId: 'branch_1',
+          organizationId: 'org_1',
           state: 'READY',
           externalSubmissionState: 'PENDING',
-        }),
+        },
       })
     );
   });
