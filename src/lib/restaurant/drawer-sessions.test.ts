@@ -223,6 +223,52 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
   });
 
+  it('serializes opening a drawer against closing the same business day', async () => {
+    const branchId = `branch_close_race_${suffix}`;
+    await read((tx) =>
+      tx.restaurantBranch.create({
+        data: { id: branchId, name: 'Close race', timezone: 'UTC', businessDayCutoff: '00:00' },
+      })
+    );
+    const deviceId = await newDevice('POS-close-race', branchId);
+
+    const [opening, closing] = await Promise.allSettled([
+      deps.drawer.openDrawerSession(deps.createTenantDb(orgId), {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
+        branchId,
+        openingFloat: '25.00',
+        actor: actor(deviceId),
+        now: AT,
+      }),
+      deps.dailyClose.cutClose(deps.createTenantDb(orgId), {
+        branchId,
+        businessDate: '2026-08-19',
+        actor: actor(deviceId),
+      }),
+    ]);
+
+    expect([opening.status, closing.status].sort()).toEqual(['fulfilled', 'rejected']);
+    if (opening.status === 'rejected') {
+      expect(opening.reason).toMatchObject({ reason: 'CLOSE_EXISTS' });
+    } else {
+      expect(closing).toMatchObject({
+        status: 'rejected',
+        reason: { reason: 'OPEN_DRAWER' },
+      });
+    }
+
+    const persisted = await read(async (tx) => ({
+      openDrawers: await tx.restaurantDrawerSession.count({
+        where: { branchId, businessDate: new Date('2026-08-19T00:00:00.000Z'), status: 'OPEN' },
+      }),
+      closes: await tx.restaurantDailyClose.count({
+        where: { branchId, businessDate: new Date('2026-08-19T00:00:00.000Z') },
+      }),
+    }));
+    expect(persisted.openDrawers + persisted.closes).toBe(1);
+  });
+
   it('rejects a second OPEN drawer on the same register', async () => {
     const deviceId = await newDevice('POS-dupe');
     const db = deps.createTenantDb(orgId);
