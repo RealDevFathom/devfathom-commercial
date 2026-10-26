@@ -59,4 +59,36 @@ describe('logActivity', () => {
     );
     consoleError.mockRestore();
   });
+
+  it('waits for every activity insert without scheduling an outbox drain', async () => {
+    const finishWrites: Array<() => void> = [];
+    const create = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishWrites.push(resolve);
+        })
+    );
+    const db = { activity: { create } } as never;
+
+    await bindSideEffects(async (scope) => {
+      logActivity(db, 'user-1', { type: 'project_created', message: 'created Alpha' });
+      logActivity(db, 'user-1', { type: 'project_updated', message: 'updated Alpha' });
+
+      expect(scope.enqueued).toBe(false);
+      expect(scope.pending).toHaveLength(2);
+
+      let flushed = false;
+      const flush = scope.flush().then(() => {
+        flushed = true;
+      });
+
+      finishWrites[0]();
+      await Promise.resolve();
+      expect(flushed).toBe(false);
+
+      finishWrites[1]();
+      await flush;
+      expect(flushed).toBe(true);
+    });
+  });
 });
