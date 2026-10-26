@@ -6,6 +6,25 @@ import {
   createCounterQueue,
 } from './counter-command-queue';
 
+const envelope = {
+  organizationId: 'org',
+  branchId: 'branch',
+  deviceId: 'counter-test',
+  kind: 'RULES' as const,
+  version: 1,
+  payloadHash: 'a'.repeat(64),
+  issuedAt: '2026-09-08T00:00:00.000Z',
+  expiresAt: '2026-09-09T00:00:00.000Z',
+  safetyLease: {
+    issuedAt: '2026-09-08T00:00:00.000Z',
+    expiresAt: '2026-09-09T00:00:00.000Z',
+    recallVersion: 1,
+    licenceVersion: 1,
+    ruleVersion: 1,
+  },
+  signingKeyId: 'key',
+};
+
 afterEach(() => vi.unstubAllGlobals());
 
 it('composes on HTTP LAN and preserves the command key across persisted replay and retry', () => {
@@ -16,9 +35,26 @@ it('composes on HTTP LAN and preserves the command key across persisted replay a
     sequence: 1,
     action: 'CASH_OTC_SALE' as const,
     payload: {
-      leasedReceipt: {},
+      leasedReceipt: {
+        leaseId: 'lease',
+        receiptNumber: 1,
+        originalSaleAt: '2026-09-08T00:00:00.000Z',
+        envelope,
+        signature: 'snapshot-mac',
+      },
       snapshots: [],
-      lines: [],
+      lines: [
+        {
+          medicineId: 'medicine',
+          presentationId: 'presentation',
+          packLevelId: 'pack',
+          saleUnit: 'UNIT' as const,
+          quantity: 1,
+          canonicalUnitsPerSaleUnit: 1,
+          inventoryLotId: 'lot',
+          stockLocationId: 'location',
+        },
+      ],
       amountMinor: 100,
       cashReceivedMinor: 100,
     },
@@ -30,6 +66,11 @@ it('composes on HTTP LAN and preserves the command key across persisted replay a
     serverRef: null,
     rejection: null,
   };
+  Object.assign(command.payload, {
+    sequence: 999,
+    idempotencyKey: 'payload-controlled',
+    action: 'CONTROLLED_MEDICINE_SALE',
+  });
   snapshot.commands.push(command);
   const first = buildCounterReplayRequest(snapshot, command);
   expect(first).toMatchObject({

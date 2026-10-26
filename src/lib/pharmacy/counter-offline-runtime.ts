@@ -46,6 +46,7 @@ import {
   buildCounterReplayRequest,
   createCounterQueue,
   enqueueCounterCommand,
+  isValidQueuedCounterCommand,
   nextCounterReplay,
   purgeCounterQueue,
   resumeCounterAfterReauth,
@@ -161,7 +162,11 @@ export class PharmacyCounterRuntime {
     );
     if (result.status === 'unrecoverable') return 'unrecoverable';
     if (result.status === 'ok') {
-      if (result.state.queue && result.state.queue.deviceId !== this.scope.deviceId) {
+      if (
+        result.state.queue &&
+        (result.state.queue.deviceId !== this.scope.deviceId ||
+          !result.state.queue.commands.every(isValidQueuedCounterCommand))
+      ) {
         return 'unrecoverable';
       }
       this.state = {
@@ -353,7 +358,10 @@ export class PharmacyCounterRuntime {
         await this.commit(nextState);
       }
     }
-    const batchId = input.bucket?.inventoryLotId ?? null;
+    const batchId =
+      input.action === 'CASH_OTC_SALE' || input.action === 'CONTROLLED_MEDICINE_SALE'
+        ? (input.payload.lines[0]?.inventoryLotId ?? null)
+        : (input.bucket?.inventoryLotId ?? null);
     const result = enqueueCounterCommand(this.queue(), input, {
       ...matrix,
       snapshots: this.cachedSnapshotStates(),

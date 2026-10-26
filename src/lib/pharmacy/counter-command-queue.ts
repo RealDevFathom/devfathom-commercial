@@ -35,7 +35,7 @@
  */
 import { browserUuid } from '@/lib/browser-uuid';
 import type { TerminalReplayOutcome } from '@/lib/retail-terminal/replay-outcome';
-import type { CounterReplay } from '@/server/routers/pharmacy-offline';
+import { counterReplaySchema, type CounterReplay } from './counter-replay-contract';
 
 import { decideOfflineAction } from './offline-action-matrix';
 import type {
@@ -135,7 +135,7 @@ export function remainingReceiptNumbers(snapshot: CounterQueueSnapshot): number 
  */
 export function issueReceiptNumber(
   leases: readonly CounterLeaseCursor[]
-): { receiptNumber: number; leases: CounterLeaseCursor[] } | null {
+): { receiptNumber: number; leaseId: string; leases: CounterLeaseCursor[] } | null {
   let chosen: CounterLeaseCursor | null = null;
   for (const lease of leases) {
     if (lease.nextNumber > lease.blockEnd) continue;
@@ -145,6 +145,7 @@ export function issueReceiptNumber(
   const receiptNumber = chosen.nextNumber;
   return {
     receiptNumber,
+    leaseId: chosen.leaseId,
     leases: leases.map((lease) =>
       lease.leaseId === chosen.leaseId ? { ...lease, nextNumber: receiptNumber + 1 } : lease
     ),
@@ -296,10 +297,8 @@ export function enqueueCounterCommand(
       decision: null,
     };
   }
-  if (
-    isSaleReplayAction(input.action) &&
-    (!input.authentication?.commandSignature || !input.authentication.receiptSignature)
-  ) {
+  const sale = isSaleReplayAction(input.action);
+  if (sale && (!input.authentication?.commandSignature || !input.authentication.receiptSignature)) {
     return {
       ok: false,
       reason: 'INVALID_REPLAY_CONTRACT',
@@ -308,12 +307,60 @@ export function enqueueCounterCommand(
     };
   }
 
-  const requestedUnits = input.requestedUnits ?? 0;
+  const commandId = input.commandId ?? newId();
+  const issued = sale ? issueReceiptNumber(snapshot.leases) : null;
+  let bucket = input.bucket ?? null;
+  let requestedUnits = input.requestedUnits ?? 0;
+  if (sale) {
+    const parsed = counterReplaySchema.safeParse(
+      counterReplayBody(snapshot.nextSequence, commandId, input.action, input.payload)
+    );
+    const firstLine = parsed.success ? parsed.data.lines[0] : null;
+    const sameBucket =
+      parsed.success &&
+      parsed.data.lines.every(
+        (line) =>
+          line.inventoryLotId === firstLine?.inventoryLotId &&
+          line.stockLocationId === firstLine.stockLocationId
+      );
+    const derivedBucket = firstLine
+      ? { inventoryLotId: firstLine.inventoryLotId, stockLocationId: firstLine.stockLocationId }
+      : null;
+    const derivedUnits = parsed.success
+      ? parsed.data.lines.reduce(
+          (total, line) => total + line.quantity * line.canonicalUnitsPerSaleUnit,
+          0
+        )
+      : 0;
+    const suppliedBucketMatches =
+      !input.bucket ||
+      (input.bucket.inventoryLotId === derivedBucket?.inventoryLotId &&
+        input.bucket.stockLocationId === derivedBucket.stockLocationId);
+    if (
+      !parsed.success ||
+      !sameBucket ||
+      !issued ||
+      parsed.data.leasedReceipt.receiptNumber !== issued.receiptNumber ||
+      parsed.data.leasedReceipt.leaseId !== issued.leaseId ||
+      !suppliedBucketMatches ||
+      (input.requestedUnits !== undefined && input.requestedUnits !== derivedUnits)
+    ) {
+      return {
+        ok: false,
+        reason: 'INVALID_REPLAY_CONTRACT',
+        message: 'The signed sale must match its issued receipt and exact stock quota debit.',
+        decision: null,
+      };
+    }
+    bucket = derivedBucket;
+    requestedUnits = derivedUnits;
+  }
+
   const decision = decideOfflineAction(input.action, {
     nowMs: matrix.nowMs,
     snapshots: matrix.snapshots,
     receiptNumbersRemaining: remainingReceiptNumbers(snapshot),
-    quotaUnitsAvailable: quotaUnitsAvailable(snapshot, input.bucket ?? null),
+    quotaUnitsAvailable: quotaUnitsAvailable(snapshot, bucket),
     requestedUnits,
     requestedCreditMinor: input.requestedCreditMinor ?? 0,
     cachedCreditRemainingMinor: matrix.cachedCreditRemainingMinor,
@@ -347,11 +394,10 @@ export function enqueueCounterCommand(
   }
 
   const quotas =
-    decision.rule.requires.includes('STOCK_QUOTA') && input.bucket && requestedUnits > 0
-      ? consumeQuota(snapshot.quotas, input.bucket, requestedUnits)
+    decision.rule.requires.includes('STOCK_QUOTA') && bucket && requestedUnits > 0
+      ? consumeQuota(snapshot.quotas, bucket, requestedUnits)
       : snapshot.quotas;
 
-  const commandId = input.commandId ?? newId();
   const command: CounterQueuedCommand = {
     commandId,
     idempotencyKey: commandId,
@@ -427,7 +473,7 @@ export function counterReplayBody(
   action: SaleReplayAction,
   payload: CounterReplayPayload
 ): CounterReplay {
-  return { sequence, idempotencyKey, action, ...payload };
+  return counterReplaySchema.parse({ ...payload, sequence, idempotencyKey, action });
 }
 
 export function buildCounterReplayRequest(
@@ -452,6 +498,25 @@ export function buildCounterReplayRequest(
       command.payload as CounterReplayPayload
     ),
   };
+}
+
+/** Fail closed when persisted sale data can no longer produce its issued request. */
+export function isValidQueuedCounterCommand(command: CounterQueuedCommand): boolean {
+  if (!isSaleReplayAction(command.action)) return true;
+  if (!command.authentication?.commandSignature || !command.authentication.receiptSignature) {
+    return false;
+  }
+  const parsed = counterReplaySchema.safeParse({
+    ...command.payload,
+    sequence: command.sequence,
+    idempotencyKey: command.idempotencyKey,
+    action: command.action,
+  });
+  return (
+    parsed.success &&
+    command.idempotencyKey === command.commandId &&
+    parsed.data.leasedReceipt.receiptNumber === command.receiptNumber
+  );
 }
 
 // ── Applying an outcome ──────────────────────────────────────────────────────

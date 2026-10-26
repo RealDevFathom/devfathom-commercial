@@ -423,6 +423,59 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
 });
 
 describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => {
+  it.each([
+    ['receipt number', { receiptNumber: 901 }],
+    ['lease id', { leaseId: 'another_lease' }],
+  ])('rejects a mismatched signed %s without consuming receipt or quota', async (_, change) => {
+    const counter = await readyCounter(createMemoryDriver());
+    const input = cashSale();
+    input.payload.leasedReceipt = { ...input.payload.leasedReceipt, ...change };
+
+    expect(await counter.enqueue(input, MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'INVALID_REPLAY_CONTRACT',
+    });
+    expect(counter.snapshot().queue).toMatchObject({
+      leases: [{ nextNumber: 900 }],
+      quotas: [{ consumedUnits: 0 }],
+      commands: [],
+    });
+  });
+
+  it.each([
+    ['understated units', (input: ReturnType<typeof cashSale>) => (input.requestedUnits = 1)],
+    [
+      'mismatched lot',
+      (input: ReturnType<typeof cashSale>) => (input.bucket!.inventoryLotId = 'another_lot'),
+    ],
+    [
+      'mismatched location',
+      (input: ReturnType<typeof cashSale>) => (input.bucket!.stockLocationId = 'another_location'),
+    ],
+    [
+      'multiple quota buckets',
+      (input: ReturnType<typeof cashSale>) =>
+        input.payload.lines.push({
+          ...input.payload.lines[0]!,
+          inventoryLotId: 'another_lot',
+        }),
+    ],
+  ])('rejects %s without consuming receipt or quota', async (_, mutate) => {
+    const counter = await readyCounter(createMemoryDriver());
+    const input = cashSale(2);
+    mutate(input);
+
+    expect(await counter.enqueue(input, MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'INVALID_REPLAY_CONTRACT',
+    });
+    expect(counter.snapshot().queue).toMatchObject({
+      leases: [{ nextNumber: 900 }],
+      quotas: [{ consumedUnits: 0 }],
+      commands: [],
+    });
+  });
+
   it('replays the number printed offline, across a reload and a lost response', async () => {
     const driver = createMemoryDriver();
     const offline = await readyCounter(driver);
