@@ -161,17 +161,9 @@ describe('Khata router trust and recovery boundary', () => {
     );
   });
 
-  it('lets a finance operator use server tenant, CREDIT settlement and an atomic member charge', async () => {
+  it('uses server tenant, CREDIT settlement and an atomic member charge', async () => {
     const f = fixture();
-    vi.mocked(can).mockImplementation(async (_subject, action) =>
-      capabilityMatches('reports:financial', action)
-    );
-
     await f.caller().tender(input);
-    expect(vi.mocked(can).mock.calls.map(([, action]) => action)).toEqual([
-      'pharmacy:counter',
-      'reports:financial',
-    ]);
     expect(applyPharmacyTender).toHaveBeenCalledWith(
       f.db,
       { organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' },
@@ -187,6 +179,33 @@ describe('Khata router trust and recovery boundary', () => {
         amountMinor: 100,
       }),
     });
+  });
+  it('does not let a finance-only operator create or refund Khata tenders', async () => {
+    const f = fixture();
+    vi.mocked(can).mockImplementation(async (_subject, action) =>
+      capabilityMatches('reports:financial', action)
+    );
+    const refund = {
+      branchId: 'branch-a',
+      originalTenderId: 'tender-a',
+      deviceId: 'device-a',
+      businessDate: input.businessDate,
+      amountMinor: 50,
+      reason: 'Return',
+      idempotencyKey: 'refund-a',
+    };
+
+    await expect(f.caller().tender(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy counter permission required.',
+    });
+    await expect(f.caller().refundTender(refund)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy counter permission required.',
+    });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
   });
   it('hands only the fresh server-session claim to the audited owner gate', async () => {
     const f = fixture();
