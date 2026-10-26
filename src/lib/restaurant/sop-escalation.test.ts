@@ -64,6 +64,7 @@ interface DbMocks {
   eventCreate: ReturnType<typeof vi.fn>;
   outboxCreateMany: ReturnType<typeof vi.fn>;
   queryRaw: ReturnType<typeof vi.fn>;
+  jobUpdate: ReturnType<typeof vi.fn>;
 }
 
 function makeDb(opts: {
@@ -102,6 +103,7 @@ function makeDb(opts: {
     }));
   const outboxCreateMany = vi.fn().mockResolvedValue({ count: 1 });
   const queryRaw = vi.fn().mockResolvedValue([{ id: 'occ_1' }]);
+  const jobUpdate = vi.fn().mockResolvedValue({ id: 'job_1' });
 
   const dbObj = {
     restaurantSopOccurrence: {
@@ -125,6 +127,7 @@ function makeDb(opts: {
     restaurantEventOutbox: {
       createMany: outboxCreateMany,
     },
+    restaurantJob: { update: jobUpdate },
     $queryRaw: queryRaw,
   };
   (dbObj as Record<string, unknown>).$transaction = vi.fn(async (fn: (tx: unknown) => unknown) =>
@@ -142,6 +145,7 @@ function makeDb(opts: {
       eventCreate,
       outboxCreateMany,
       queryRaw,
+      jobUpdate,
     },
   };
 }
@@ -233,7 +237,7 @@ describe('sopEscalationHandler', () => {
     expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
   });
 
-  it('does nothing during quiet hours', async () => {
+  it('releases the queue identity during quiet hours so a later sweep can retry', async () => {
     // 14:00 UTC = 840 min. Quiet window 13:00–15:00 (780–900).
     const { db, mocks } = makeDb({
       policy: { ...BASE_POLICY, quietHoursStartMinutes: 780, quietHoursEndMinutes: 900 },
@@ -242,6 +246,10 @@ describe('sopEscalationHandler', () => {
 
     expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
     expect(mocks.eventCreate).not.toHaveBeenCalled();
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: 'job_1' },
+      data: { idempotencyKey: null },
+    });
   });
 
   it('defers step 2 when 30-min delay has not elapsed since last FIRED', async () => {

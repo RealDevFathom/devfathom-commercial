@@ -28,8 +28,9 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * Quiet hours (branch-local):
  *   policy.quietHoursStartMinutes / quietHoursEndMinutes — minutes-of-day in the
  *   branch timezone. When the current wall-clock minute falls inside the quiet
- *   window, delivery is DEFERRED (a FIRED event is NOT written; the job re-runs on
- *   the next opportunity). Deferral is not a failure — the handler returns normally.
+ *   window, delivery is DEFERRED (a FIRED event is NOT written). The completed
+ *   job releases its idempotency key so the next overdue sweep can enqueue the
+ *   step again after quiet hours.
  *
  * Idempotency: each step fires AT MOST ONCE per policy × occurrence combination.
  * The FIRED event for a step is the logical guard, but a guard that is only read
@@ -257,7 +258,13 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
         const branchTz = occ.branch?.timezone ?? 'UTC';
         const localMin = localMinutesOfDay(branchTz, now);
         if (isQuietHour(localMin, policy.quietHoursStartMinutes, policy.quietHoursEndMinutes)) {
-          // Quiet hours — defer without recording an event
+          // The worker will complete this job normally, so release the stable
+          // occurrence/policy/step key. Otherwise enqueue() would forever
+          // deduplicate later sweeps against this event-free SUCCEEDED job.
+          await tx.restaurantJob.update({
+            where: { id: job.id },
+            data: { idempotencyKey: null },
+          });
           return;
         }
       }

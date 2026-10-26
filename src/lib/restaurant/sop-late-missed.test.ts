@@ -24,6 +24,7 @@ import {
 import type { RestaurantJobContext } from '@/lib/restaurant/job-handlers';
 import { enqueue } from '@/lib/restaurant/scheduler';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { sopEscalationHandler } from './sop-escalation';
 
 const WINDOW_ENDS = new Date('2026-08-20T12:00:00.000Z');
 
@@ -155,6 +156,118 @@ describe('sopLateMissedHandler', () => {
 });
 
 describe('enqueueDueSopEscalations', () => {
+  it('re-enqueues after a queued job reaches quiet hours, then fires exactly once', async () => {
+    const policy = {
+      id: 'policy_1',
+      active: true,
+      scope: 'BRANCH',
+      branchId: 'branch_1',
+      stopOnAcknowledged: true,
+      stopOnVerified: true,
+      quietHoursStartMinutes: 780,
+      quietHoursEndMinutes: 900,
+      steps: [
+        {
+          id: 'step_1',
+          stepOrder: 1,
+          delayMinutes: 0,
+          target: 'staff_mgr',
+          channel: 'IN_APP',
+          maxAttempts: 1,
+        },
+      ],
+    };
+    const occurrence = {
+      id: 'occ_1',
+      status: 'MISSED',
+      branchId: 'branch_1',
+      windowEndsAt: WINDOW_ENDS,
+      branch: { timezone: 'UTC' },
+      assignment: { template: { name: 'Open Check' } },
+      escalationEvents: [],
+    };
+    const eventCreate = vi.fn().mockResolvedValue({ id: 'event_1' });
+    const outboxCreateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const jobUpdate = vi.fn().mockResolvedValue({ id: 'job_1' });
+    const dbObject = {
+      restaurantSopEscalationPolicy: {
+        findMany: vi.fn().mockResolvedValue([policy]),
+        findUnique: vi.fn().mockResolvedValue(policy),
+      },
+      restaurantSopOccurrence: {
+        findMany: vi.fn().mockResolvedValue([occurrence]),
+        findUnique: vi.fn().mockResolvedValue(occurrence),
+      },
+      restaurantSopEscalationEvent: {
+        findMany: vi.fn().mockResolvedValue([]),
+        create: eventCreate,
+      },
+      restaurantEventOutbox: { createMany: outboxCreateMany },
+      restaurantJob: { update: jobUpdate },
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'occ_1' }]),
+    };
+    Object.assign(dbObject, {
+      $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(dbObject)),
+    });
+    const db = dbObject as unknown as ScopedDb;
+    vi.mocked(enqueue).mockResolvedValue({
+      job: {} as Awaited<ReturnType<typeof enqueue>>['job'],
+      deduplicated: false,
+    });
+
+    // Enqueued just before quiet hours, but not claimed until they have begun.
+    await expect(
+      enqueueDueSopEscalations(db, new Date('2026-08-20T12:59:00.000Z'))
+    ).resolves.toBe(1);
+    await sopEscalationHandler({
+      db,
+      job: {
+        id: 'job_1',
+        organizationId: 'org_1',
+        type: 'sop.runEscalation',
+        payload: {
+          occurrenceId: 'occ_1',
+          policyId: 'policy_1',
+          now: '2026-08-20T14:00:00.000Z',
+        },
+        attempts: 1,
+        maxAttempts: 5,
+        claimedBy: 'worker_1',
+        startedAt: new Date('2026-08-20T14:00:00.000Z'),
+      },
+    });
+
+    await expect(
+      enqueueDueSopEscalations(db, new Date('2026-08-20T15:00:00.000Z'))
+    ).resolves.toBe(1);
+    await sopEscalationHandler({
+      db,
+      job: {
+        id: 'job_2',
+        organizationId: 'org_1',
+        type: 'sop.runEscalation',
+        payload: {
+          occurrenceId: 'occ_1',
+          policyId: 'policy_1',
+          now: '2026-08-20T15:00:00.000Z',
+        },
+        attempts: 1,
+        maxAttempts: 5,
+        claimedBy: 'worker_1',
+        startedAt: new Date('2026-08-20T15:00:00.000Z'),
+      },
+    });
+
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(jobUpdate).toHaveBeenCalledWith({
+      where: { id: 'job_1' },
+      data: { idempotencyKey: null },
+    });
+    expect(outboxCreateMany).toHaveBeenCalledOnce();
+    expect(eventCreate).toHaveBeenCalledOnce();
+    expect(eventCreate.mock.calls[0][0].data.kind).toBe('FIRED');
+  });
+
   it('queues the next elapsed step with a deterministic occurrence/policy/step key', async () => {
     const now = new Date('2026-08-20T12:30:00.000Z');
     const db = {
