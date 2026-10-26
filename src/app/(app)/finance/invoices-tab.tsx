@@ -169,7 +169,7 @@ export function InvoicesTab() {
 /* ============================================
    Invoice Row (memoized; owns its own status-menu open state)
    ============================================ */
-const InvoiceRow = memo(function InvoiceRow({
+export const InvoiceRow = memo(function InvoiceRow({
   inv,
   onUpdateStatus,
 }: {
