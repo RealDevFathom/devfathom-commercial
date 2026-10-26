@@ -330,6 +330,37 @@ describe('administrator repair authorization before writes', () => {
     expect(mocks.staffFindUnique).not.toHaveBeenCalled();
     expectNoWrites();
   });
+  it('setStaffAccess denies a branch manager from delegating access at their own branch', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'restaurant:configure'
+    );
+    mocks.staffFindMany.mockResolvedValue([
+      {
+        id: 'staff_actor',
+        primaryBranchId: 'branch_default',
+        jobRoles: [{ branchId: 'branch_default' }],
+        directCapabilityGrants: [],
+      },
+    ]);
+    mocks.staffFindUnique.mockResolvedValue({ id: 'staff_actor' });
+
+    await expect(
+      caller('EMPLOYEE').setStaffAccess({
+        branchId: 'branch_default',
+        staffProfileId: 'staff_actor',
+        jobRoleIds: ['role_with_refunds'],
+        overrides: [{ capability: 'payments:refund', effect: 'ALLOW' }],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.resolveStaffCapabilities).toHaveBeenCalledWith(
+      db,
+      'staff_actor',
+      'branch_default'
+    );
+    expect(mocks.staffFindUnique).not.toHaveBeenCalled();
+    expectNoWrites();
+  });
   it.each(['staff_other_tenant', 'staff_missing'])(
     'setStaffAccess denies invisible target %s on an authorized branch without writes',
     async (staffProfileId) => {
