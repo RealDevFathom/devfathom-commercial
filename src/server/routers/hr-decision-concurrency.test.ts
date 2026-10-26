@@ -171,6 +171,10 @@ describe('atomic HR decisions', () => {
       { code: 'CONFLICT' }
     );
 
+    expect(tx.$queryRaw).toHaveBeenCalledWith(expect.any(Array), resignation.id, 'org-1');
+    expect(tx.resignation.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: resignation.id, organizationId: 'org-1' } })
+    );
     expect(updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: resignation.id, organizationId: 'org-1', status: 'PENDING' },
