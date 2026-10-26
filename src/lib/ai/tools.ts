@@ -169,6 +169,10 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
   const h = createAssistantHelpers(ctx);
   const granted = (key: string) => assistantModuleGranted(ctx, key);
   const agency = assistantVertical(ctx.vertical) === 'AGENCY';
+  // Notes can resolve and link both project and client records, so the whole
+  // family must fail closed unless every data source it can reach is licensed.
+  const notesEnabled =
+    agency && ['notes', 'projects', 'clients'].every((module) => granted(module));
   // Mixed-domain insights read finance, projects, HR, notes and activity. Until
   // those builders can scope individual reads, require the complete dependency set.
   const insightsEnabled =
@@ -184,10 +188,7 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
     clients: agency && granted('clients') ? buildClientsTools(h) : {},
     finance: agency && granted('finance') ? buildFinanceTools(h) : {},
     chat: granted('chat') ? buildChatTools(h) : {},
-    notes:
-      agency && granted('notes') && granted('projects') && granted('clients')
-        ? buildNotesTools(h)
-        : {},
+    notes: notesEnabled ? buildNotesTools(h) : {},
     meetings: agency && granted('meetings') && granted('projects') ? buildMeetingsTools(h) : {},
     pharmacyReports:
       assistantVertical(ctx.vertical) === 'PHARMACY' && granted('pharmacy-reports')
