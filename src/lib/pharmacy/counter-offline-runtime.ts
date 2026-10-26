@@ -382,6 +382,16 @@ export class PharmacyCounterRuntime {
       };
       this.persistedState = durable.state;
     } else {
+      // A missing document may mean another tab confirmed revocation and
+      // purged this scope. Discard every hydrated lease, snapshot and quota so
+      // this tab cannot recreate the revoked counter from stale live state.
+      const snapshotPublicKey = this.cache().snapshotPublicKey;
+      this.state = emptyTerminalState<CounterQueueSnapshot, CounterCache>(
+        this.scope,
+        COUNTER_STORE_SCHEMA_VERSION
+      );
+      this.state.queue = createCounterQueue(this.scope.deviceId);
+      this.state.catalog = { snapshotPublicKey, snapshots: [] };
       this.persistedState = undefined;
     }
     const leaseState = this.safetyLeaseState();

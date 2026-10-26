@@ -357,6 +357,22 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
     expect(reloaded.snapshot().queue?.commands).toHaveLength(2);
   });
 
+  it('does not recreate a counter purged by another hydrated runtime', async () => {
+    const driver = createMemoryDriver();
+    const revoking = await readyCounter(driver);
+    const stale = runtime(driver);
+    expect(await stale.hydrate()).toBe('ready');
+
+    expect(await revoking.revoke()).toEqual({ commands: 0 });
+    expect(await stale.enqueue(cashSale(1), MATRIX)).toMatchObject({ ok: false });
+
+    expect(await driver.read('org_a::branch_a::counter_1')).toBeUndefined();
+    expect(stale.snapshot().queue?.commands).toEqual([]);
+    expect(stale.snapshot().queue?.leases).toEqual([]);
+    expect(stale.snapshot().queue?.quotas).toEqual([]);
+    expect(stale.cachedSnapshotStates()).toEqual([]);
+  });
+
   it('refuses a denied action and queues nothing', async () => {
     const counter = await readyCounter(createMemoryDriver());
     const result = await counter.enqueue(
