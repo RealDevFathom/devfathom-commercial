@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   invitationUpsert: vi.fn(),
   departmentFindFirst: vi.fn(),
   roleFindFirst: vi.fn(),
+  queryRaw: vi.fn(),
+  count: vi.fn(),
   sendEmail: vi.fn(),
   can: vi.fn(async () => true),
 }));
@@ -50,7 +52,8 @@ const db = {
   invitation: { upsert: mocks.invitationUpsert },
   $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
     run({
-      user: { create: mocks.create, update: mocks.update },
+      $queryRaw: mocks.queryRaw,
+      user: { create: mocks.create, update: mocks.update, count: mocks.count },
       invitation: { upsert: mocks.invitationUpsert },
     }),
 };
@@ -82,6 +85,8 @@ describe('team.inviteMember duplicate guard', () => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_engineering' });
+    mocks.queryRaw.mockResolvedValue([{ id: 'org_test' }]);
+    mocks.count.mockResolvedValue(1);
   });
 
   it.each([['ALEX@COMPANY.COM'], ['Alex@Company.com'], ['  alex@company.com  ']])(
@@ -113,6 +118,20 @@ describe('team.inviteMember duplicate guard', () => {
         data: expect.objectContaining({ email: 'new.person@company.com' }),
       })
     );
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.count).toHaveBeenCalledOnce();
+  });
+
+  it('does not consume another seat when refreshing a pending invitation', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_1', status: 'INVITED' });
+    mocks.update.mockResolvedValue({ id: 'user_1', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+
+    await caller().inviteMember({ ...invite, email: 'alex@company.com' });
+
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
+    expect(mocks.count).not.toHaveBeenCalled();
+    expect(mocks.update).toHaveBeenCalled();
   });
 
   it('stores a restaurant role template on the invited member', async () => {
@@ -157,6 +176,7 @@ describe('team.inviteMember duplicate guard', () => {
 
   it('retains seat limits without HR', async () => {
     mocks.findFirst.mockResolvedValue(null);
+    mocks.count.mockResolvedValue(50);
     await expect(
       caller(50).inviteMember({ ...invite, email: 'cashier@example.com' })
     ).rejects.toMatchObject({
@@ -164,6 +184,13 @@ describe('team.inviteMember duplicate guard', () => {
       message: expect.stringContaining('Seat limit reached'),
     });
     expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.count).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_test',
+        status: { in: ['ACTIVE', 'ON_LEAVE', 'INVITED'] },
+      },
+    });
   });
 
   it('rejects a department outside the tenant catalog', async () => {

@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { passwordSchema } from '@/lib/password-policy';
+import { lockAndAssertSeatAvailable } from '@/lib/seat-capacity';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { ianaTimezone } from '@/lib/timezone';
@@ -50,16 +51,12 @@ async function lockOrganizationSeat(
   organizationId: string,
   seatLimit: number
 ): Promise<void> {
-  await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
-  const activeSeats = await tx.user.count({
-    where: { organizationId, status: { in: [...OCCUPIED_SEAT_STATUSES] } },
-  });
-  if (activeSeats >= seatLimit) {
-    throw new TRPCError({
-      code: 'PRECONDITION_FAILED',
-      message: `Seat limit reached (${activeSeats}/${seatLimit}).`,
-    });
-  }
+  await lockAndAssertSeatAvailable(
+    tx,
+    organizationId,
+    seatLimit,
+    (message) => new TRPCError({ code: 'PRECONDITION_FAILED', message })
+  );
 }
 
 function inputJson(value: unknown): Prisma.InputJsonValue {

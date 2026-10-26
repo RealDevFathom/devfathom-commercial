@@ -20,6 +20,7 @@ import { emailSchema } from '@/lib/email-address';
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
 import { generateInviteToken } from '@/lib/invite-token';
+import { lockAndAssertSeatAvailable } from '@/lib/seat-capacity';
 
 // IMP-AUTH-04: per-category × per-channel notification opt-outs. Sparse —
 // anything unset means "opted in" (notify() defaults to ON). Keys mirror
@@ -174,13 +175,6 @@ export const teamRouter = router({
       if (existing && existing.status !== 'INVITED') {
         throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists' });
       }
-      if (!existing && ctx.entitlements.activeSeats >= ctx.entitlements.seatLimit) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: `Seat limit reached (${ctx.entitlements.activeSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
-        });
-      }
-
       const { token, tokenHash } = generateInviteToken();
       const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
       const profile = {
@@ -195,6 +189,17 @@ export const teamRouter = router({
       };
 
       const user = await ctx.db.$transaction(async (tx) => {
+        // All occupied-seat creation paths lock the organization row before
+        // recounting, so concurrent UI and assistant invites cannot both take
+        // the final licensed seat.
+        if (!existing) {
+          await lockAndAssertSeatAvailable(
+            tx,
+            workspaceId(ctx),
+            ctx.entitlements.seatLimit,
+            (message) => new TRPCError({ code: 'FORBIDDEN', message })
+          );
+        }
         // Upsert the user (re-invite refreshes the seeded details), then replace
         // any prior invitation with a fresh single-use token.
         const u = existing
