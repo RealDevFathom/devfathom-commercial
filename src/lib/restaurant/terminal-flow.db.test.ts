@@ -30,6 +30,7 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const orgId = `org_wha22_term_${suffix}`;
 const branchId = `branch_${suffix}`;
+const otherBranchId = `branch_other_${suffix}`;
 const otherOrgId = `org_wha149_other_${suffix}`;
 const OTHER_BRANCH_STAFF = { id: `staff_other_branch_${suffix}`, pin: '333333' };
 const FOREIGN_STAFF = { id: `staff_foreign_${suffix}`, pin: '444444' };
@@ -195,7 +196,6 @@ beforeAll(async () => {
         },
       });
     }
-    const otherBranchId = `branch_other_${suffix}`;
     await tx.restaurantBranch.create({ data: { id: otherBranchId, name: 'Other branch' } });
     await tx.restaurantStaffProfile.createMany({
       data: [
@@ -262,6 +262,15 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
   it('returns only active, credentialed operators from the device branch', async () => {
     const { secret } = await enroll('directory');
     const { token } = await establish(secret);
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantStaffCapabilityGrant.create({
+        data: {
+          staffProfileId: STAFF.A.id,
+          branchId: otherBranchId,
+          capability: 'orders:complimentary',
+        },
+      })
+    );
     const request = new Request('https://tenant.test/api/restaurant/terminal/operators', {
       headers: { authorization: `Bearer ${secret}`, 'x-terminal-session': token },
     });
