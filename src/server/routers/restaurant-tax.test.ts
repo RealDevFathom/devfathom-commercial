@@ -180,6 +180,25 @@ describe('restaurant tax activation router', () => {
     expect(db.restaurantTaxProfileVersion.create).toHaveBeenCalled();
   });
 
+  it('keeps replacement opt-in when preset activation omits the option', async () => {
+    db.restaurantTaxProfileVersion.findFirst.mockResolvedValueOnce({
+      id: 'profile_open',
+      rules: [],
+    });
+
+    await expect(
+      caller().activate({
+        ...base,
+        profileId: 'PK-ICT-RESTAURANT',
+        eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+
+    expect(db.restaurantTaxRuleVersion.updateMany).not.toHaveBeenCalled();
+    expect(db.restaurantTaxProfileVersion.update).not.toHaveBeenCalled();
+    expect(db.restaurantTaxProfileVersion.create).not.toHaveBeenCalled();
+  });
+
   it('returns the original profile for a matching idempotent replay', async () => {
     db.restaurantTaxProfileVersion.findUnique.mockResolvedValue({
       id: 'profile_1',
