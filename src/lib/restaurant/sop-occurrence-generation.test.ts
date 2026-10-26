@@ -138,6 +138,45 @@ describe('generateDueSopOccurrences', () => {
     expect(raw.restaurantSopOccurrence.create).toHaveBeenCalledTimes(3);
   });
 
+  it('switches from a bounded predecessor to its future-effective successor', async () => {
+    const predecessor = assignment({
+      id: 'a1',
+      startDate: utcDate(2026, 5, 1),
+      endDate: utcDate(2026, 5, 31),
+    });
+    const successor = assignment({
+      id: 'a2',
+      startDate: utcDate(2026, 6, 1),
+      dueTimeMinutes: 9 * 60,
+    });
+    const { db, store } = makeDb({ assignments: [predecessor, successor] });
+
+    await generateDueSopOccurrences(db, {
+      now: at('2026-06-01T12:00:00.000Z'),
+      lookbackDays: 1,
+      horizonDays: 0,
+    });
+
+    expect(
+      store.map((row) => ({
+        assignmentId: row.assignmentId,
+        businessDate: row.businessDate.toISOString(),
+        dueAt: row.dueAt.toISOString(),
+      }))
+    ).toEqual([
+      {
+        assignmentId: 'a1',
+        businessDate: '2026-05-31T00:00:00.000Z',
+        dueAt: '2026-05-31T10:00:00.000Z',
+      },
+      {
+        assignmentId: 'a2',
+        businessDate: '2026-06-01T00:00:00.000Z',
+        dueAt: '2026-06-01T13:00:00.000Z',
+      },
+    ]);
+  });
+
   it('pins the latest published version and seeds occurrence steps', async () => {
     const { db, store } = makeDb({
       assignments: [assignment()],
