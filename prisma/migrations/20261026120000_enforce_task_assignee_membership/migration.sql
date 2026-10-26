@@ -1,5 +1,18 @@
 -- Keep task assignment and project membership consistent even when the two
 -- records are changed concurrently or through a writer other than the REST API.
+-- Remove invalid rows created before this invariant existed.
+DELETE FROM task_assignees ta
+ WHERE NOT EXISTS (
+   SELECT 1
+     FROM tasks t
+     JOIN columns c ON c.id = t."columnId"
+     JOIN boards b ON b.id = c."boardId"
+     JOIN project_members pm
+       ON pm."projectId" = b."projectId"
+      AND pm."userId" = ta."userId"
+    WHERE t.id = ta."taskId"
+ );
+
 CREATE OR REPLACE FUNCTION enforce_task_assignee_project_membership()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -7,9 +20,9 @@ AS $$
 DECLARE
   membership_id text;
 BEGIN
-  -- The row lock coordinates with deletion of the membership. If assignment
-  -- wins the race, removal waits and its trigger removes the new assignment. If
-  -- removal wins, this lookup resumes without a row and rejects the assignment.
+  -- The task lock coordinates with moves, and the membership lock coordinates
+  -- with deletion or identity changes. In either case the later operation sees
+  -- and repairs/rejects the assignment using the final project membership.
   SELECT pm.id
     INTO membership_id
     FROM project_members pm
@@ -19,6 +32,7 @@ BEGIN
     JOIN tasks t ON t."columnId" = c.id
    WHERE t.id = NEW."taskId"
      AND pm."userId" = NEW."userId"
+   FOR SHARE OF t
    FOR KEY SHARE OF pm;
 
   IF membership_id IS NULL THEN
@@ -53,6 +67,32 @@ END;
 $$;
 
 CREATE TRIGGER project_member_assignment_cleanup
-AFTER DELETE ON project_members
+AFTER DELETE OR UPDATE OF "projectId", "userId" ON project_members
 FOR EACH ROW
 EXECUTE FUNCTION remove_assignments_for_departing_project_member();
+
+CREATE OR REPLACE FUNCTION remove_invalid_assignments_after_task_move()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  DELETE FROM task_assignees ta
+   WHERE ta."taskId" = NEW.id
+     AND NOT EXISTS (
+       SELECT 1
+         FROM columns c
+         JOIN boards b ON b.id = c."boardId"
+         JOIN project_members pm
+           ON pm."projectId" = b."projectId"
+          AND pm."userId" = ta."userId"
+        WHERE c.id = NEW."columnId"
+     );
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER task_move_assignment_cleanup
+AFTER UPDATE OF "columnId" ON tasks
+FOR EACH ROW
+WHEN (OLD."columnId" IS DISTINCT FROM NEW."columnId")
+EXECUTE FUNCTION remove_invalid_assignments_after_task_move();

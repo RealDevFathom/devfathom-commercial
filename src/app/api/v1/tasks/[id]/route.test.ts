@@ -66,20 +66,28 @@ beforeEach(() => {
 });
 
 describe('PATCH /api/v1/tasks/:id cross-project moves', () => {
-  it('drops destination non-members and only applies authorized column defaults', async () => {
+  it('moves before assigning a destination-only member and filters column defaults', async () => {
     const response = await PATCH(
       new Request('https://example.test/api/v1/tasks/task-1', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           columnId: 'target-column',
-          addAssigneeIds: ['source-project-only-user'],
+          addAssigneeIds: ['destination-member'],
         }),
       }),
       { params: Promise.resolve({ id: 'task-1' }) }
     );
 
     expect(response.status).toBe(200);
+    expect(mocks.db.task.update).toHaveBeenCalled();
+    expect(mocks.taskAssignee.createMany).toHaveBeenNthCalledWith(1, {
+      data: [{ taskId: 'task-1', userId: 'destination-member' }],
+      skipDuplicates: true,
+    });
+    expect(mocks.db.task.update.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.taskAssignee.createMany.mock.invocationCallOrder[0]
+    );
     expect(mocks.taskAssignee.deleteMany).toHaveBeenCalledWith({
       where: {
         taskId: 'task-1',

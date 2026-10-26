@@ -145,28 +145,6 @@ export const PATCH = withApiAuth(
 
     // Do the mutation in a transaction so reorder + update + defaults are atomic.
     const updated = await authCtx.db.$transaction(async (tx) => {
-      // Assignee operations — process in order: full replace, then partial add, then partial remove.
-      // Mutual exclusivity between full-replace and partials is enforced at schema level.
-      if (assigneeIds) {
-        await tx.taskAssignee.deleteMany({ where: { taskId: id } });
-        if (assigneeIds.length > 0) {
-          await tx.taskAssignee.createMany({
-            data: assigneeIds.map((userId) => ({ taskId: id, userId })),
-          });
-        }
-      }
-      if (addAssigneeIds && addAssigneeIds.length > 0) {
-        await tx.taskAssignee.createMany({
-          data: addAssigneeIds.map((userId) => ({ taskId: id, userId })),
-          skipDuplicates: true, // no-op if already assigned
-        });
-      }
-      if (removeAssigneeIds && removeAssigneeIds.length > 0) {
-        await tx.taskAssignee.deleteMany({
-          where: { taskId: id, userId: { in: removeAssigneeIds } },
-        });
-      }
-
       // Column move: reorder source + target, then move the task to end of target
       let newOrder = existing.order;
       if (isColumnMove && targetColumn) {
@@ -192,6 +170,28 @@ export const PATCH = withApiAuth(
           ...(isColumnMove && columnId && { columnId, order: newOrder }),
         },
       });
+
+      // Apply assignee edits after the move so the database invariant validates
+      // destination-only members against the task's new project.
+      if (assigneeIds) {
+        await tx.taskAssignee.deleteMany({ where: { taskId: id } });
+        if (assigneeIds.length > 0) {
+          await tx.taskAssignee.createMany({
+            data: assigneeIds.map((userId) => ({ taskId: id, userId })),
+          });
+        }
+      }
+      if (addAssigneeIds && addAssigneeIds.length > 0) {
+        await tx.taskAssignee.createMany({
+          data: addAssigneeIds.map((userId) => ({ taskId: id, userId })),
+          skipDuplicates: true,
+        });
+      }
+      if (removeAssigneeIds && removeAssigneeIds.length > 0) {
+        await tx.taskAssignee.deleteMany({
+          where: { taskId: id, userId: { in: removeAssigneeIds } },
+        });
+      }
 
       // A task moved to another project must not remain assigned to users who
       // cannot access that project. Do this after all requested assignee edits
