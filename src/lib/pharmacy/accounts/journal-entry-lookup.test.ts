@@ -130,6 +130,42 @@ describe('exact posted-journal lookup', () => {
   });
 
   it.each([
+    ['blank header', { sourceKind: '' }],
+    ['invalid timestamp', { occurredAt: new Date(Number.NaN) }],
+    ['empty branch slice', { lines: [] }],
+    [
+      'duplicate line ID',
+      {
+        lines: [
+          { id: 'same', accountCode: 'CASH', side: 'DEBIT', amountMinor: 1 },
+          { id: 'same', accountCode: 'SALES', side: 'CREDIT', amountMinor: 1 },
+        ],
+      },
+    ],
+    [
+      'out-of-range amount',
+      {
+        lines: [
+          { id: 'line-1', accountCode: 'CASH', side: 'DEBIT', amountMinor: 2_147_483_648 },
+        ],
+      },
+    ],
+  ])('returns no source detail for an invalid %s', async (_name, override) => {
+    mocks.journal.mockResolvedValue({
+      id: '.',
+      sourceKind: 'SALE',
+      sourceId: 'sale-1',
+      currency: 'PKR',
+      occurredAt: new Date(input.from),
+      reversesEntryId: null,
+      lines: [{ id: 'line-1', accountCode: 'CASH', side: 'DEBIT', amountMinor: 1 }],
+      ...override,
+    });
+
+    await expect(caller().lookup(input)).resolves.toEqual({ status: 'INVALID_SOURCE' });
+  });
+
+  it.each([
     ['admin deny', () => mocks.can.mockResolvedValueOnce(false), {}],
     ['module deny', () => vi.mocked(hasModule).mockReturnValue(false), {}],
     [
