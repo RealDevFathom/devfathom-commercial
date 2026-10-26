@@ -549,6 +549,79 @@ describeIfDatabase('FIN-01 / FIN-03 — sale line', () => {
     expect(totalFor(entry, 'SALES_CLEARING', 'DEBIT')).toBe(400);
   });
 
+  it.each(['cheap-first', 'dear-first'] as const)(
+    'refunds each priced allocation exactly in %s order, including discount',
+    async (order) => {
+      const f = await fixture(ORG_A, branch(`weighted-return-${order}`), `weighted-return-${order}`);
+      const entries = await inOrg(ORG_A, async (db) => {
+        const cheap = await stockLot(db, f, {
+          label: `return-cheap-${order}`,
+          units: 2,
+          unitCostMinor: 60,
+          printedMrpMinor: 100,
+          expiresAt: EXPIRY_SOON,
+          unitsPerPack: 1,
+        });
+        const dear = await stockLot(db, f, {
+          label: `return-dear-${order}`,
+          units: 1,
+          unitCostMinor: 80,
+          printedMrpMinor: 200,
+          expiresAt: EXPIRY_LATER,
+          unitsPerPack: 1,
+        });
+        const sold = await completedSaleLine(db, f, {
+          label: `weighted-return-${order}`,
+          quantity: 3,
+          discountKind: 'DISCOUNT',
+          discountMinor: 40,
+        });
+        const requests =
+          order === 'cheap-first'
+            ? [
+                { lotId: cheap.lot.id, canonicalUnits: 1 },
+                { lotId: cheap.lot.id, canonicalUnits: 1 },
+                { lotId: dear.lot.id, canonicalUnits: 1 },
+              ]
+            : [
+                { lotId: dear.lot.id, canonicalUnits: 1 },
+                { lotId: cheap.lot.id, canonicalUnits: 1 },
+                { lotId: cheap.lot.id, canonicalUnits: 1 },
+              ];
+        const posted = [];
+        for (const [index, request] of requests.entries()) {
+          const returned = await deps.sales.returnSaleLine(db, scopeOf(f), {
+            saleLineId: sold.line.id,
+            ...request,
+            quarantineLocationId: f.quarantineId,
+            reason: 'Customer return',
+            integrityDecision: 'QUARANTINE',
+            idempotencyKey: `weighted-return-${order}-${index}-${tag(order)}`,
+          });
+          if (!returned.returnLine) throw new Error('Expected identified return');
+          posted.push(
+            await deps.postings.postSaleReturnEntry(db, scopeOf(f), {
+              saleReturnLineId: returned.returnLine.id,
+              at: LATER,
+            })
+          );
+        }
+        return posted;
+      });
+
+      entries.forEach(expectBalanced);
+      expect(entries.map((entry) => totalFor(entry, 'SALES_REVENUE', 'DEBIT'))).toEqual(
+        order === 'cheap-first' ? [100, 100, 200] : [200, 100, 100]
+      );
+      expect(entries.reduce((sum, entry) => sum + totalFor(entry, 'SALES_DISCOUNT', 'CREDIT'), 0)).toBe(
+        40
+      );
+      expect(entries.reduce((sum, entry) => sum + totalFor(entry, 'SALES_CLEARING', 'CREDIT'), 0)).toBe(
+        400
+      );
+    }
+  );
+
   it('posts revenue and COGS at the EXACT allocated lot cost across two lots', async () => {
     const f = await fixture(ORG_A, branch('cogs'), 'cogs');
     const result = await inOrg(ORG_A, async (db) => {

@@ -312,6 +312,24 @@ export function allocationWeightedPrice(input: {
   };
 }
 
+/** Assign every minor unit deterministically, with any rounding remainder on the last row. */
+export function apportionMinor(totalMinor: number, weights: readonly number[]): number[] {
+  if (
+    !Number.isSafeInteger(totalMinor) ||
+    totalMinor < 0 ||
+    weights.some((weight) => !Number.isSafeInteger(weight) || weight < 0)
+  )
+    throw new PharmacySaleError('INVALID_QUANTITY');
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  if (!Number.isSafeInteger(totalWeight)) throw new PharmacySaleError('INVALID_QUANTITY');
+  if (totalWeight === 0 || weights.length === 0) return weights.map(() => 0);
+  const shares = weights.map((weight) =>
+    Number((BigInt(totalMinor) * BigInt(weight)) / BigInt(totalWeight))
+  );
+  shares[shares.length - 1]! += totalMinor - shares.reduce((sum, share) => sum + share, 0);
+  return shares;
+}
+
 export async function addSaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
   return addSaleLineWithAllocation(db, scope, input);
 }
@@ -443,6 +461,11 @@ async function addSaleLineWithAllocation(
       idempotencyKey: input.idempotencyKey,
     },
   });
+  const priceWeights = allocationPrices.map(
+    (price) => price.unitPriceMinor * price.canonicalUnits
+  );
+  const allocationGross = apportionMinor(grossMinor, priceWeights);
+  const allocationDiscount = apportionMinor(discountMinor, allocationGross);
   await Promise.all(
     allocation.allocations.map((part, index) =>
       db.pharmacySaleLineAllocation.create({
@@ -453,6 +476,8 @@ async function addSaleLineWithAllocation(
           inventoryLotId: part.inventoryLotId,
           stockLocationId: part.stockLocationId,
           canonicalUnits: part.units,
+          grossMinor: allocationGross[index]!,
+          discountMinor: allocationDiscount[index]!,
           stockMovementId: allocation.movementIds[index]!,
         },
       })
@@ -620,7 +645,13 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       returnedUnits,
       unidentifiedUnits,
       lots,
-      returnedMinor: returnedLineValue(line, returnedUnits),
+      returnedMinor:
+        unidentifiedUnits === 0
+          ? line.returnLines.reduce(
+              (sum, row) => sum + row.grossMinor - row.discountMinor,
+              0
+            )
+          : returnedLineValue(line, returnedUnits),
       netMinor: line.grossMinor - line.discountMinor,
     };
   });
@@ -924,6 +955,12 @@ export async function returnSaleLine(
         inventoryLotId: allocation.inventoryLotId,
         stockLocationId,
         canonicalUnits: units,
+        grossMinor:
+          Math.floor((allocation.grossMinor * (used + units)) / allocation.canonicalUnits) -
+          Math.floor((allocation.grossMinor * used) / allocation.canonicalUnits),
+        discountMinor:
+          Math.floor((allocation.discountMinor * (used + units)) / allocation.canonicalUnits) -
+          Math.floor((allocation.discountMinor * used) / allocation.canonicalUnits),
         integrityDecision: `${disposition}: ${input.integrityDecision}`,
         stockMovementId: movement.id,
       },

@@ -200,13 +200,8 @@ export async function postSaleLineEntry(
     line.allocations.map((allocation) => allocation.inventoryLotId)
   );
 
-  const grossMinor = line.grossMinor;
-  const units = line.allocations.map((allocation) => allocation.canonicalUnits);
-  const grossShares = apportion(grossMinor, units);
-  const discountShares = apportion(line.discountMinor, units);
-
   const lines: JournalLineInput[] = [];
-  for (const [index, allocation] of line.allocations.entries()) {
+  for (const allocation of line.allocations) {
     const lot = lots.get(allocation.inventoryLotId);
     if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
@@ -217,8 +212,8 @@ export async function postSaleLineEntry(
       locationId: allocation.stockLocationId,
       sourceLineId: line.id,
     };
-    const gross = grossShares[index] ?? 0;
-    const discount = discountShares[index] ?? 0;
+    const gross = allocation.grossMinor;
+    const discount = allocation.discountMinor;
     // FIN-03: the exact landed cost of the lot this part of the line came from.
     const cost = lot.unitCostMinor * allocation.canonicalUnits;
 
@@ -295,29 +290,12 @@ export async function postSaleReturnEntry(
   const lot = lots.get(returnLine.inventoryLotId);
   if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
-  const grossMinor = saleLine.grossMinor;
   const returned = returnLine.canonicalUnits;
-  const sold = saleLine.canonicalUnits;
-  // returnSaleLine holds the sold-line lock and posts each newly inserted
-  // allocation before inserting the next. Reverse cumulative deltas, so split
-  // returns recover the final rounding minor unit instead of flooring it away.
-  const cumulative = await db.pharmacySaleReturnLine.aggregate({
-    where: { organizationId: scope.organizationId, saleLineId: saleLine.id },
-    _sum: { canonicalUnits: true },
-  });
-  const unidentified = await db.pharmacyUnidentifiedReturnHold.aggregate({
-    where: { organizationId: scope.organizationId, saleLineId: saleLine.id },
-    _sum: { canonicalUnits: true },
-  });
-  const through = (cumulative._sum.canonicalUnits ?? 0) + (unidentified._sum.canonicalUnits ?? 0);
-  const before = through - returned;
-  if (before < 0 || through > sold) throw new PharmacyFinanceError('INVALID_STATE');
-  const delta = (amount: number) =>
-    Math.floor((amount * through) / sold) - Math.floor((amount * before) / sold);
-  const discount = delta(saleLine.discountMinor);
-  // Refund authorization rounds cumulative NET. Derive gross from that same
-  // net plus discount, so every partial reversal clears its authorized refund.
-  const gross = delta(grossMinor - saleLine.discountMinor) + discount;
+  if (returned <= 0) throw new PharmacyFinanceError('INVALID_STATE');
+  // The return writer fixes the amount against the exact allocation before it
+  // posts. Return order can therefore never change a cheap or expensive lot's refund.
+  const gross = returnLine.grossMinor;
+  const discount = returnLine.discountMinor;
   const cost = lot.unitCostMinor * returned;
 
   const dimensions = {

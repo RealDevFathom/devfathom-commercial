@@ -1497,6 +1497,8 @@ model PharmacySaleLineAllocation {
   inventoryLotId  String
   stockLocationId String
   canonicalUnits  Int
+  grossMinor      Int                  @default(0)
+  discountMinor   Int                  @default(0)
   stockMovementId String
   createdAt       DateTime             @default(now())
   saleLine        PharmacySaleLine     @relation(fields: [organizationId, saleLineId], references: [organizationId, id], onDelete: Restrict)
@@ -1552,6 +1554,8 @@ model PharmacySaleReturnLine {
   inventoryLotId    String
   stockLocationId   String
   canonicalUnits    Int
+  grossMinor        Int                  @default(0)
+  discountMinor     Int                  @default(0)
   integrityDecision String
   stockMovementId   String
   createdAt         DateTime             @default(now())

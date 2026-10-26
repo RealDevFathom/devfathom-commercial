@@ -11,6 +11,7 @@ vi.mock('./stock-ledger', async () => ({
 
 import {
   addSaleLine,
+  apportionMinor,
   allocationWeightedPrice,
   assertSaleUnitConversion,
   addRestockInterest,
@@ -267,6 +268,11 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
     });
 
     expect(price).toEqual({ unitPriceMinor: 133, proRataCeilingMinor: 133, grossMinor: 400 });
+  });
+
+  it('assigns gross and discount remainders without losing a minor unit', () => {
+    expect(apportionMinor(400, [200, 200])).toEqual([200, 200]);
+    expect(apportionMinor(41, [200, 200])).toEqual([20, 21]);
   });
 
   it.each<{
