@@ -527,9 +527,17 @@ describe('restaurantInventoryRouter', () => {
     expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
   });
 
-  it('rejects missing low-stock rules before attempting an update or delete', async () => {
+  it('rejects missing low-stock locations and rules before attempting a mutation', async () => {
+    mocks.findStockLocation.mockResolvedValueOnce(null);
     mocks.findLowStockRule.mockResolvedValue(null);
 
+    await expect(
+      caller().createLowStockRule({
+        stockItemId: 'item_1',
+        locationId: 'loc_missing',
+        threshold: '5',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
     await expect(
       caller().updateLowStockRule({ id: 'rule_missing', threshold: '6' })
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
@@ -537,6 +545,7 @@ describe('restaurantInventoryRouter', () => {
       code: 'NOT_FOUND',
     });
 
+    expect(mocks.createLowStockRule).not.toHaveBeenCalled();
     expect(mocks.updateLowStockRule).not.toHaveBeenCalled();
     expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
   });
