@@ -128,7 +128,8 @@ async function loadPublication(db: ScopedDb, publicationId: string): Promise<Pub
 
 /**
  * Resolve the publication + price-list-version references to stamp on an order at
- * open (C4). Validates the publication exists and publishes the order's channel.
+ * open (C4). Validates the publication belongs to the requested branch before
+ * checking whether it publishes the order's channel.
  */
 export async function resolveOrderPricingRefs(
   db: ScopedDb,
