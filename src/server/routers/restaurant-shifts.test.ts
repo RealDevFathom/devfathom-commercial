@@ -1069,6 +1069,34 @@ describe('restaurantShifts.reviewSwap', () => {
     expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
   });
 
+  it('refuses to reassign a shift with a historical break record', async () => {
+    const request = await pendingSwap();
+    state.breaks.push({
+      id: 'break_historical',
+      shiftId: 'shift_emp',
+      startedAt: at('2026-09-20T12:00:00Z'),
+      endedAt: at('2026-09-20T12:30:00Z'),
+    });
+
+    await expect(
+      caller('MANAGER').reviewSwap({
+        requestId: request!.id,
+        branchId: 'branch_1',
+        decision: 'APPROVED',
+        idempotencyKey: 'rv-historical-break',
+      })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: expect.stringContaining('recorded attendance'),
+    });
+
+    expect(state.shifts.find((shift) => shift.id === 'shift_emp')!.staffProfileId).toBe(
+      'staff_emp'
+    );
+    expect(state.decisions).toHaveLength(0);
+    expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
+  });
+
   it('denies employees, other-branch managers, and replacements with an overlapping shift', async () => {
     const request = await pendingSwap();
     const review = {
