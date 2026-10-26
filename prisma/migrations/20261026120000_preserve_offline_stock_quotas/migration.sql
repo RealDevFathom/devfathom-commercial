@@ -4,6 +4,54 @@
 -- re-evaluates an UPDATE against the latest tuple after a lock wait. This avoids
 -- relying on a quota-table aggregate taken from the movement statement's older
 -- READ COMMITTED snapshot.
+--
+-- Take both tables out of circulation while checking legacy data and deriving
+-- the projection. A database affected by the old race needs an operator to
+-- reconcile the disconnected counter's promise; silently shrinking or
+-- releasing an auditable quota here could permit an already completed offline
+-- sale to be allocated twice.
+LOCK TABLE "pharmacy_stock_balances" IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE "pharmacy_device_lot_quotas" IN SHARE ROW EXCLUSIVE MODE;
+
+DO $$
+DECLARE
+  violation record;
+BEGIN
+  SELECT quota."organizationId", quota."branchId", quota."inventoryLotId",
+         quota."stockLocationId", quota.outstanding,
+         COALESCE(balance."onHandUnits", 0) AS on_hand
+  INTO violation
+  FROM (
+    SELECT "organizationId", "branchId", "inventoryLotId", "stockLocationId",
+           SUM("quotaUnits" - "consumedUnits")::integer AS outstanding
+    FROM "pharmacy_device_lot_quotas"
+    WHERE "releasedAt" IS NULL
+    GROUP BY "organizationId", "branchId", "inventoryLotId", "stockLocationId"
+  ) quota
+  LEFT JOIN "pharmacy_stock_balances" balance
+    ON balance."organizationId" = quota."organizationId"
+   AND balance."branchId" = quota."branchId"
+   AND balance."inventoryLotId" = quota."inventoryLotId"
+   AND balance."stockLocationId" = quota."stockLocationId"
+   AND balance."disposition" = 'AVAILABLE'
+  WHERE quota.outstanding > COALESCE(balance."onHandUnits", 0)
+  ORDER BY quota."organizationId", quota."branchId", quota."inventoryLotId",
+           quota."stockLocationId"
+  LIMIT 1;
+
+  IF FOUND THEN
+    RAISE EXCEPTION 'OFFLINE_QUOTA_BACKFILL_REQUIRES_RECONCILIATION'
+      USING ERRCODE = '55000',
+            DETAIL = format(
+              'organizationId=%s branchId=%s inventoryLotId=%s stockLocationId=%s outstanding=%s onHand=%s',
+              violation."organizationId", violation."branchId", violation."inventoryLotId",
+              violation."stockLocationId", violation.outstanding, violation.on_hand
+            ),
+            HINT = 'Reconcile physical stock, then release excess open quotas through the pharmacy counter administration flow and rerun the migration; outstanding quota units must not exceed AVAILABLE on-hand units.';
+  END IF;
+END;
+$$;
+
 ALTER TABLE "pharmacy_stock_balances"
   ADD COLUMN "offlineReservedUnits" INTEGER NOT NULL DEFAULT 0;
 
