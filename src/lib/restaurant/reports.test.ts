@@ -245,7 +245,17 @@ describe('restaurant catering report', () => {
       ])
     );
     expect(findMany).toHaveBeenCalledTimes(2);
-    expect(findMany.mock.calls[0][0]).toMatchObject({ take: 500 });
+    expect(findMany.mock.calls[0][0]).toMatchObject({
+      where: {
+        branchId: { in: boundedRange.branchIds },
+        eventDate: {
+          gte: new Date('2026-01-01T00:00:00.000Z'),
+          lte: new Date('2026-01-31T00:00:00.000Z'),
+        },
+      },
+      orderBy: [{ eventDate: 'asc' }, { id: 'asc' }],
+      take: 500,
+    });
     expect(findMany.mock.calls[0][0]).not.toHaveProperty('cursor');
     expect(findMany.mock.calls[1][0]).toMatchObject({
       take: 500,
