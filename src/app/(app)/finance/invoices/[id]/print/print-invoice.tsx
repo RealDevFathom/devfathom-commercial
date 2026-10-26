@@ -119,6 +119,7 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
                   the app's self-only image CSP and browser print-to-PDF. */}
               {showLogo && (
                 <Image
+                  key={logoUrl}
                   src="/api/finance/issuer-logo"
                   alt={`${invoice.issuer.displayName} logo`}
                   width={48}
