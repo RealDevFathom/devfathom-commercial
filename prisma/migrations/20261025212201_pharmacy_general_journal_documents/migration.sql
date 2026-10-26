@@ -15,6 +15,7 @@ CREATE TABLE "pharmacy_general_journal_documents" (
   "reason" TEXT NOT NULL,
   "version" INTEGER NOT NULL DEFAULT 1,
   "createKey" TEXT NOT NULL,
+  "createPayloadHash" TEXT NOT NULL,
   "postKey" TEXT,
   "postPayloadHash" TEXT,
   "reverseKey" TEXT,
@@ -29,6 +30,7 @@ CREATE TABLE "pharmacy_general_journal_documents" (
   "updatedAt" TIMESTAMP(3) NOT NULL,
   CONSTRAINT "pharmacy_general_journal_documents_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "pharmacy_general_journal_documents_amount_check" CHECK ("amountMinor" > 0),
+  CONSTRAINT "pharmacy_general_journal_documents_occurred_at_check" CHECK ("occurredAt" >= TIMESTAMP '2000-01-01 00:00:00' AND "occurredAt" < TIMESTAMP '2100-01-01 00:00:00'),
   CONSTRAINT "pharmacy_general_journal_documents_evidence_check" CHECK (length(btrim("evidence")) > 0),
   CONSTRAINT "pharmacy_general_journal_documents_reason_check" CHECK (length(btrim("reason")) > 0),
   CONSTRAINT "pharmacy_general_journal_documents_visibility_fkey" FOREIGN KEY ("organizationId", "branchId") REFERENCES "pharmacy_branches"("organizationId", "id") ON DELETE RESTRICT ON UPDATE RESTRICT

@@ -3,17 +3,19 @@ import type { Currency } from '@/generated/prisma/client';
 import { postJournalEntry, reverseJournalEntry } from '@/lib/finance/journal';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { lockPharmacyAccountingScope } from '@/lib/pharmacy/bookkeeping';
+import { GENERAL_JOURNAL_MAX_DATE, GENERAL_JOURNAL_MIN_DATE } from './general-journal-schema';
 
 export type GeneralJournalScope = { organizationId: string; branchId: string; actorId: string };
 export type DraftInput = { reference: string; purpose: 'NONTRADE_OPERATING_ACCRUAL'; amountMinor: number; currency: Currency; occurredAt: Date; evidence: string; reason: string; idempotencyKey: string };
 
 export class PharmacyGeneralJournalError extends Error {
-  constructor(readonly reason: 'INVALID_AMOUNT'|'MISSING_EVIDENCE'|'MISSING_REASON'|'NOT_FOUND'|'STALE_VERSION'|'INVALID_STATE'|'PERIOD_CLOSED'|'REPLAY_MISMATCH') { super(reason); this.name = 'PharmacyGeneralJournalError'; }
+  constructor(readonly reason: 'INVALID_AMOUNT'|'INVALID_DATE'|'MISSING_EVIDENCE'|'MISSING_REASON'|'NOT_FOUND'|'STALE_VERSION'|'INVALID_STATE'|'PERIOD_CLOSED'|'REPLAY_MISMATCH') { super(reason); this.name = 'PharmacyGeneralJournalError'; }
 }
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const present = (value: string, reason: 'MISSING_EVIDENCE'|'MISSING_REASON') => { if (!value.trim()) throw new PharmacyGeneralJournalError(reason); };
 const amount = (value: number) => { if (!Number.isSafeInteger(value) || value <= 0 || value > 2_147_483_647) throw new PharmacyGeneralJournalError('INVALID_AMOUNT'); };
+const date = (value: Date) => { if (!Number.isFinite(value.getTime()) || value < GENERAL_JOURNAL_MIN_DATE || value >= GENERAL_JOURNAL_MAX_DATE) throw new PharmacyGeneralJournalError('INVALID_DATE'); };
 
 export async function lockGeneralJournalScope(db: ScopedDb, scope: GeneralJournalScope) {
   await lockPharmacyAccountingScope(db, scope);
@@ -25,15 +27,22 @@ async function assertOpen(db: ScopedDb, scope: GeneralJournalScope, at: Date) {
 }
 
 export async function createGeneralJournalDraft(db: ScopedDb, scope: GeneralJournalScope, input: DraftInput) {
-  amount(input.amountMinor); present(input.evidence, 'MISSING_EVIDENCE'); present(input.reason, 'MISSING_REASON');
+  amount(input.amountMinor); date(input.occurredAt); present(input.evidence, 'MISSING_EVIDENCE'); present(input.reason, 'MISSING_REASON');
   await lockGeneralJournalScope(db, scope);
-  const replay = await db.pharmacyGeneralJournalDocument.findFirst({ where: { organizationId: scope.organizationId, createKey: input.idempotencyKey } });
-  if (replay) return replay;
-  return db.pharmacyGeneralJournalDocument.create({ data: { organizationId: scope.organizationId, branchId: scope.branchId, reference: input.reference, purpose: input.purpose, amountMinor: input.amountMinor, currency: input.currency, occurredAt: input.occurredAt, evidence: input.evidence.trim(), reason: input.reason.trim(), createKey: input.idempotencyKey, createdByUserId: scope.actorId } });
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${scope.organizationId}:${input.idempotencyKey}:pharmacy-jv-create`}, 0))`;
+  const payloadHash = digest({ branchId: scope.branchId, reference: input.reference, purpose: input.purpose, amountMinor: input.amountMinor, currency: input.currency, occurredAt: input.occurredAt.toISOString(), evidence: input.evidence.trim(), reason: input.reason.trim() });
+  const replay = await db.pharmacyGeneralJournalDocument.findFirst({ where: { organizationId: scope.organizationId, branchId: scope.branchId, createKey: input.idempotencyKey } });
+  if (replay) {
+    if (replay.createPayloadHash !== payloadHash) throw new PharmacyGeneralJournalError('REPLAY_MISMATCH');
+    return replay;
+  }
+  const keyUsedOutsideBranch = await db.pharmacyGeneralJournalDocument.findFirst({ where: { organizationId: scope.organizationId, createKey: input.idempotencyKey }, select: { id: true } });
+  if (keyUsedOutsideBranch) throw new PharmacyGeneralJournalError('REPLAY_MISMATCH');
+  return db.pharmacyGeneralJournalDocument.create({ data: { organizationId: scope.organizationId, branchId: scope.branchId, reference: input.reference, purpose: input.purpose, amountMinor: input.amountMinor, currency: input.currency, occurredAt: input.occurredAt, evidence: input.evidence.trim(), reason: input.reason.trim(), createKey: input.idempotencyKey, createPayloadHash: payloadHash, createdByUserId: scope.actorId } });
 }
 
 export async function updateGeneralJournalDraft(db: ScopedDb, scope: GeneralJournalScope, input: Omit<DraftInput, 'idempotencyKey'|'reference'> & { documentId: string; reference: string; version: number }) {
-  amount(input.amountMinor); present(input.evidence, 'MISSING_EVIDENCE'); present(input.reason, 'MISSING_REASON');
+  amount(input.amountMinor); date(input.occurredAt); present(input.evidence, 'MISSING_EVIDENCE'); present(input.reason, 'MISSING_REASON');
   await lockGeneralJournalScope(db, scope);
   const result = await db.pharmacyGeneralJournalDocument.updateMany({
     where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.documentId, version: input.version, status: 'DRAFT' },
@@ -54,6 +63,7 @@ export async function postGeneralJournal(db: ScopedDb, scope: GeneralJournalScop
   }
   if (document.version !== input.version) throw new PharmacyGeneralJournalError('STALE_VERSION');
   if (document.status !== 'DRAFT') throw new PharmacyGeneralJournalError('INVALID_STATE');
+  date(document.occurredAt);
   await assertOpen(db, scope, document.occurredAt);
   const entry = await postJournalEntry(db, scope, { sourceKind: 'PHARMACY_JOURNAL_VOUCHER', sourceId: document.id, description: `${document.reference}: ${document.reason}`, occurredAt: document.occurredAt, idempotencyKey: `pharmacy-jv:${document.id}`, branchId: scope.branchId, currency: document.currency, lines: [ { accountCode: 'OPERATING_EXPENSE', side: 'DEBIT', amountMinor: document.amountMinor, branchId: scope.branchId, memo: document.evidence }, { accountCode: 'MANUAL_NONTRADE_ACCRUAL', side: 'CREDIT', amountMinor: document.amountMinor, branchId: scope.branchId, memo: document.reason } ] });
   const posted = await db.pharmacyGeneralJournalDocument.update({ where: { organizationId_id: { organizationId: scope.organizationId, id: document.id } }, data: { status: 'POSTED', postedAt: new Date(), journalEntryId: entry.id, postKey: input.idempotencyKey, postPayloadHash: payloadHash, version: { increment: 1 } } });
@@ -69,7 +79,7 @@ export async function cancelGeneralJournal(db: ScopedDb, scope: GeneralJournalSc
 }
 
 export async function reverseGeneralJournal(db: ScopedDb, scope: GeneralJournalScope, input: { documentId: string; version: number; idempotencyKey: string; at: Date; reason: string }) {
-  present(input.reason, 'MISSING_REASON'); await lockGeneralJournalScope(db, scope);
+  date(input.at); present(input.reason, 'MISSING_REASON'); await lockGeneralJournalScope(db, scope);
   const document = await db.pharmacyGeneralJournalDocument.findFirst({ where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.documentId } });
   if (!document?.journalEntryId) throw new PharmacyGeneralJournalError('NOT_FOUND');
   const payloadHash = digest({ documentId: input.documentId, version: input.version, at: input.at.toISOString(), reason: input.reason.trim() });

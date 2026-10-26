@@ -16,5 +16,19 @@ export async function authorizePharmacyGeneralJournal(ctx: TRPCContext, branchId
   }
   const branch = await ctx.db.pharmacyBranch.findFirst({ where: { organizationId, id: branchId, active: true }, select: { id: true } });
   if (!branch) throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  await ctx.db.auditLog.create({
+    data: {
+      organizationId,
+      actorId,
+      source: 'TRPC',
+      category: 'FINANCE',
+      operation: 'OTHER',
+      action: 'pharmacyGeneralJournal.admission',
+      targetType: 'PharmacyBranch',
+      targetId: branch.id,
+      result: { decision: 'ADMITTED' },
+      outcome: 'SUCCESS',
+    },
+  });
   return { organizationId, branchId: branch.id, actorId };
 }

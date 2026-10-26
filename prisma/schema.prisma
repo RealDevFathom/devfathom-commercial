@@ -3662,6 +3662,7 @@ model PharmacyGeneralJournalDocument {
   reason            String
   version           Int                            @default(1)
   createKey         String
+  createPayloadHash String
   postKey            String?
   postPayloadHash    String?
   reverseKey         String?
