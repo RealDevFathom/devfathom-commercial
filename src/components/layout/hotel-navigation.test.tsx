@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   queryOptions: vi.fn(),
   queryInput: vi.fn(),
 }));
+const MENU_IMPORT = '/restaurant/menu-import';
 vi.mock('next-auth/react', () => ({ useSession: () => ({ data: h.session }) }));
 vi.mock('next/navigation', () => ({ usePathname: () => '/hotel/settings/property' }));
 vi.mock('@/components/preferences-provider', () => ({
@@ -85,7 +86,7 @@ const priorHrefs = [
   '/restaurant/integrations/cameras',
   '/restaurant/catalog',
   '/restaurant/menus',
-  '/restaurant/menu-import',
+  MENU_IMPORT,
   '/restaurant/promotions',
   '/restaurant/notifications',
   '/restaurant/loyalty',
@@ -166,6 +167,9 @@ describe('Hotel navigation composition', () => {
     const hrefs = navigation.map((n) => n.href);
     expect(new Set(hrefs).size).toBe(64);
     expect(new Set(hrefs)).toEqual(new Set([...priorHrefs, ...hospitalityHrefs]));
+    expect(visibleNavigation(everyHotelModule, 'ADMIN', EVERY_RAIL_CAPABILITY)).not.toContainEqual(
+      expect.objectContaining({ href: MENU_IMPORT })
+    );
     expect(navigation.filter((n) => n.group === 'Hospitality').map((n) => n.href)).toEqual(
       hospitalityHrefs
     );
