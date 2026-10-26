@@ -189,11 +189,17 @@ function auditMiddleware(opts: { auditReads: boolean }) {
     if (!wantAudit) return next();
 
     const start = Date.now();
+    // Credential-bearing inputs must be suppressed before any later middleware,
+    // including input validation and authorization, can reject the request.
+    // Resolver-level `skipInput` annotations are too late for those failures.
+    const skipRawInput = path === 'restaurantSopExecution.waive';
     let rawInput: unknown;
-    try {
-      rawInput = await getRawInput();
-    } catch {
-      rawInput = undefined;
+    if (!skipRawInput) {
+      try {
+        rawInput = await getRawInput();
+      } catch {
+        rawInput = undefined;
+      }
     }
 
     // tRPC middleware does not throw on resolver errors — it returns a result
@@ -204,7 +210,7 @@ function auditMiddleware(opts: { auditReads: boolean }) {
       ctx,
       path,
       type,
-      input: rawInput,
+      input: skipRawInput ? undefined : rawInput,
       outcome: result.ok ? 'SUCCESS' : 'FAILURE',
       error: result.ok ? undefined : result.error,
       durationMs: Date.now() - start,

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
     return true;
   }),
   annotateAudit: vi.fn(),
+  recordTrpcAudit: vi.fn(),
   authenticateOperator: vi.fn(),
   staffHasCapability: vi.fn(async () => true),
 }));
@@ -25,8 +26,8 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
-  isAuditExcludedPath: vi.fn(() => true),
-  recordTrpcAudit: vi.fn(),
+  isAuditExcludedPath: vi.fn(() => false),
+  recordTrpcAudit: mocks.recordTrpcAudit,
   annotateAudit: mocks.annotateAudit,
   diffChanges: vi.fn(() => ({})),
 }));
@@ -43,6 +44,7 @@ vi.mock('@/lib/restaurant/job-roles', () => ({
 
 import { restaurantSopExecutionRouter } from './restaurant-sop-execution';
 import { packageByKey } from '@/lib/vertical-catalog';
+import { router } from '../trpc';
 
 type Delegate = Record<string, ReturnType<typeof vi.fn>>;
 
@@ -169,6 +171,41 @@ describe('strict-zod boundary', () => {
         extra: true,
       } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('suppresses a waiver credential before malformed input can be audited', async () => {
+    const context = {
+      db: db as never,
+      entitlements: { organizationId: 'org_1', ...FULL_ENTITLEMENTS },
+      session: {
+        expires: 'later',
+        user: { id: 'user_1', role: 'EMPLOYEE', department: 'OPERATIONS', status: 'ACTIVE' },
+      },
+      organization: null,
+      support: null,
+      requestMeta: { ip: null, userAgent: null },
+      audit: { detail: {} },
+    } as never;
+    const app = router({ restaurantSopExecution: restaurantSopExecutionRouter });
+    const recognizableSecret = 'PIN-DO-NOT-AUDIT-819';
+
+    await expect(
+      app.createCaller(context).restaurantSopExecution.waive({
+        occurrenceId: OCC_ID,
+        approving: { staffProfileId: 'b', type: 'PIN', secret: recognizableSecret },
+        reason: 'r',
+        extra: true,
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: 'restaurantSopExecution.waive',
+        input: undefined,
+        outcome: 'FAILURE',
+      })
+    );
+    expect(JSON.stringify(mocks.recordTrpcAudit.mock.calls)).not.toContain(recognizableSecret);
   });
 
   it('rejects unknown key on listOccurrences', async () => {
