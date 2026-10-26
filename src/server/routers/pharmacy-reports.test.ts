@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   branchFindFirst: vi.fn(),
   reportFindFirst: vi.fn(),
   reportFindMany: vi.fn(),
+  reportCreate: vi.fn(),
   reportUpdate: vi.fn(),
   stockDashboard: vi.fn(),
   stockDigest: vi.fn(),
@@ -75,6 +76,7 @@ function caller(role = 'ADMIN') {
       pharmacyPharmacovigilanceReport: {
         findFirst: mocks.reportFindFirst,
         findMany: mocks.reportFindMany,
+        create: mocks.reportCreate,
         update: mocks.reportUpdate,
       },
       pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
@@ -329,6 +331,7 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
       expect(mocks.branchFindFirst).not.toHaveBeenCalled();
       expect(mocks.reportFindFirst).not.toHaveBeenCalled();
       expect(mocks.reportFindMany).not.toHaveBeenCalled();
+      expect(mocks.reportCreate).not.toHaveBeenCalled();
       expect(mocks.reportUpdate).not.toHaveBeenCalled();
     }
   );
