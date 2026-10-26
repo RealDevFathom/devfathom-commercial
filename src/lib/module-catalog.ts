@@ -272,14 +272,16 @@ const PROCEDURE_MODULE_ALTERNATIVES: Readonly<Record<string, readonly string[]>>
 };
 
 export function alternativeModulesForProcedure(path: string): readonly string[] {
-  return PROCEDURE_MODULE_ALTERNATIVES[path] ?? [];
+  return Object.hasOwn(PROCEDURE_MODULE_ALTERNATIVES, path)
+    ? PROCEDURE_MODULE_ALTERNATIVES[path]
+    : [];
 }
 
 export function moduleForProcedure(path: string): string | null {
   // Inviting workspace users is baseline administration in every vertical.
   if (path === 'team.inviteMember') return 'admin';
   if (ACCOUNT_PROCEDURES.has(path)) return null;
-  if (path in PROCEDURE_MODULE_ALTERNATIVES) return 'pharmacy-counter';
+  if (Object.hasOwn(PROCEDURE_MODULE_ALTERNATIVES, path)) return 'pharmacy-counter';
   if (
     /^pharmacyFinance\.(perpetualValuation|grossMargin|leakageReport|marginComparison|financialStatements)$/.test(
       path
