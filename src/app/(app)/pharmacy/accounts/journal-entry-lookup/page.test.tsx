@@ -36,6 +36,8 @@ describe('journal lookup page', () => {
     expect(initial).toContain('Branch ID');
     expect(initial).toContain('Back to finance');
     await html({ ...valid, entryId: ['one', 'two'] });
+    await html({ ...valid, unexpected: 'value' });
+    expect(mocks.actor).not.toHaveBeenCalled();
     expect(mocks.context).not.toHaveBeenCalled();
     expect(mocks.lookup).not.toHaveBeenCalled();
   });
