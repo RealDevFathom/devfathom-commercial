@@ -3,6 +3,15 @@ import { moneyListLabel } from './currency';
 import { clientInvoiceTotals } from './client-invoice-totals';
 
 describe('clientInvoiceTotals', () => {
+  it('does not add equal invoice amounts denominated in different currencies', () => {
+    const totals = clientInvoiceTotals([
+      { status: 'PAID', currency: 'USD', total: '100.00' },
+      { status: 'PAID', currency: 'PKR', total: '100.00' },
+    ]);
+
+    expect(moneyListLabel(totals.revenue)).toBe('$100 · Rs 100');
+  });
+
   it('keeps paid revenue and outstanding balances separate by currency and status', () => {
     const totals = clientInvoiceTotals([
       { status: 'PAID', currency: 'PKR', total: '100.10' },
