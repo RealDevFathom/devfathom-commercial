@@ -1796,7 +1796,11 @@ function ScopedPharmacyCounterConsole({
             }`}
           >
             <StatusPill status={notice.tone} tone={notice.tone} />
-            <div className="min-w-0 space-y-2 text-sm text-text-body">
+            <div
+              className={`min-w-0 space-y-2 text-sm ${
+                notice.tone === 'success' ? 'text-success' : 'text-text-body'
+              }`}
+            >
               <p>{notice.message}</p>
               {notice.inventoryBranchId ? (
                 <Link

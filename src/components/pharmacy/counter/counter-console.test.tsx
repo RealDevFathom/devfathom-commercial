@@ -1171,6 +1171,9 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
         expect.objectContaining({ medicineId: 'med-barcode', quantity: 1 })
       )
     );
+    const successMessage = await screen.findByText('1 × Paracetamol added.');
+    expect(successMessage.parentElement).toHaveClass('text-success');
+    expect(successMessage.parentElement).not.toHaveClass('text-text-body');
 
     mocks.mutations.addLine!.mockClear();
     mocks.queries.counterSearch = query({ rows: [row, { ...row, medicineId: 'med-other' }] });
