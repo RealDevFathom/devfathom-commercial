@@ -25,7 +25,7 @@ export class DailyCloseError extends Error {
 
 /** Serialize a close chain at the organization + branch + business-date grain.
  * The transaction-scoped advisory lock releases automatically on commit/rollback. */
-async function lockDailyClose(
+export async function lockDailyClose(
   tx: ScopedDb,
   branchId: string,
   businessDate: string

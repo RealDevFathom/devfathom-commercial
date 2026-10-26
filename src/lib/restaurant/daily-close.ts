@@ -15,7 +15,7 @@ import {
   type FoldableMovement,
   type MoneyActor,
 } from './drawer-sessions';
-import { DailyCloseError } from './money-day-guard';
+import { DailyCloseError, lockDailyClose } from './money-day-guard';
 import { enqueueInsightRollup } from './insight-rollups';
 import { sub, sum, ZERO } from './money';
 
