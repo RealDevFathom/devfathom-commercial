@@ -42,6 +42,7 @@ const line = {
   saleUnit: 'STRIP' as const,
   quantity: 1,
   canonicalUnitsPerSaleUnit: 10,
+  expectedUnitPriceMinor: 100,
   idempotencyKey: 'counter:sale-1:medicine-1',
 };
 const override = {

@@ -138,6 +138,7 @@ export class PharmacySaleError extends Error {
       | 'NOT_FOUND'
       | 'INVALID_STATE'
       | 'INVALID_QUANTITY'
+      | 'PRICE_CHANGED'
       | 'PRICE_ABOVE_MRP'
       | 'MARGIN_GUARDRAIL'
       | 'APPROVAL_REQUIRED'
@@ -221,6 +222,7 @@ type AddSaleLineInput = {
   saleUnit: 'PACK' | 'STRIP' | 'UNIT';
   quantity: number;
   canonicalUnitsPerSaleUnit: number;
+  expectedUnitPriceMinor?: number;
   discountKind?: 'DISCOUNT' | 'PROMOTION' | 'COMPLIMENTARY';
   discountMinor?: number;
   approvedByUserId?: string;
@@ -327,6 +329,11 @@ async function addSaleLineWithAllocation(
       roundingIncrementMinor:
         roundingByPackAndBatch.get(`${lot.packLevelId}\0${lot.batch.batchNumber}`) ?? 1,
     });
+    if (
+      input.expectedUnitPriceMinor !== undefined &&
+      price.unitPriceMinor !== input.expectedUnitPriceMinor
+    )
+      throw new PharmacySaleError('PRICE_CHANGED');
     unitPriceMinor = Math.max(unitPriceMinor, price.unitPriceMinor);
     ceiling = Math.max(ceiling, price.proRataCeilingMinor);
     costMinor += lot.unitCostMinor * part.units;

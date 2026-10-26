@@ -941,6 +941,7 @@ export const pharmacySalesRouter = router({
           saleUnit,
           quantity: z.number().int().positive(),
           canonicalUnitsPerSaleUnit: z.number().int().positive(),
+          expectedUnitPriceMinor: z.number().int().nonnegative(),
           discountKind: z.enum(['DISCOUNT', 'PROMOTION', 'COMPLIMENTARY']).optional(),
           discountMinor: z.number().int().nonnegative().optional(),
           approvedByUserId: z.string().min(1).optional(),

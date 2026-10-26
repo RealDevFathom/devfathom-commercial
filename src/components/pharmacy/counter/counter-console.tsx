@@ -919,6 +919,7 @@ function ScopedPharmacyCounterConsole({
         saleUnit: selectedOption.kind,
         quantity,
         canonicalUnitsPerSaleUnit: selectedOption.canonicalUnitsPerSaleUnit,
+        expectedUnitPriceMinor: preview.unitPriceMinor,
         // A stable key per (sale, medicine, unit, quantity) so a double-press of
         // the add chord cannot post the same line twice.
         idempotencyKey: `counter:${activeSaleId}:${activeRow.medicineId}:${selectedOption.packLevelId}:${selectedOption.kind}:${quantity}${overrideLotId ? `:${overrideLotId}` : ''}`,

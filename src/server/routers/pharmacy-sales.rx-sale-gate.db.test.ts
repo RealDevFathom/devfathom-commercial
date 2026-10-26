@@ -104,6 +104,7 @@ const rxLine = (saleId: string, quantity = 1) => ({
   saleUnit: 'STRIP',
   quantity,
   canonicalUnitsPerSaleUnit: 10,
+  expectedUnitPriceMinor: 2000,
   idempotencyKey: key(),
 });
 

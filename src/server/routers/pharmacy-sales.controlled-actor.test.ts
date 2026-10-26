@@ -33,6 +33,7 @@ const line = {
   saleUnit: 'UNIT' as const,
   quantity: 2,
   canonicalUnitsPerSaleUnit: 1,
+  expectedUnitPriceMinor: 100,
   idempotencyKey: 'counter:sale-1:controlled',
   controlledAuthorization: {
     patientId: 'patient-1',
