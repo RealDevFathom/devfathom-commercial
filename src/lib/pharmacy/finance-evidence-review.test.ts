@@ -377,7 +377,7 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
 });
 
 describe('financial statements (financial-statements.ts financialStatements)', () => {
-  it('derives closing and net cashflow as exact bigint strings and pages by 25', async () => {
+  it('preserves balanced debit and credit totals, derives exact bigint strings, and pages by 25', async () => {
     const raw = [
       [
         {
@@ -391,8 +391,8 @@ describe('financial statements (financial-statements.ts financialStatements)', (
           accountCode: 'SALES_REVENUE',
           currency: 'PKR',
           opening: BigInt(0),
-          debit: BigInt(700),
-          credit: BigInt(700),
+          debit: BigInt(0),
+          credit: BigInt(300),
         },
       ],
       [
@@ -430,9 +430,9 @@ describe('financial statements (financial-statements.ts financialStatements)', (
         accountCode: 'SALES_REVENUE',
         currency: 'PKR',
         openingMinor: '0',
-        debitMinor: '700',
-        creditMinor: '700',
-        closingMinor: '0',
+        debitMinor: '0',
+        creditMinor: '300',
+        closingMinor: '-300',
       },
     ]);
     expect(result.cashflow).toEqual([
@@ -444,6 +444,9 @@ describe('financial statements (financial-statements.ts financialStatements)', (
         netMinor: '300',
       },
     ]);
+    expect(result.accounts.reduce((sum, account) => sum + BigInt(account.debitMinor), 0n)).toBe(
+      result.accounts.reduce((sum, account) => sum + BigInt(account.creditMinor), 0n)
+    );
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 25, skip: 25 }));
   });
 });
