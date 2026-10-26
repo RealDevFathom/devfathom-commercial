@@ -31,7 +31,7 @@ export function invoiceStatusUpdate(
     status: next,
   };
   if (next === 'SENT') data.sentAt = changedAt;
-  else if (prior === 'SENT') data.sentAt = null;
+  else if (next === 'DRAFT') data.sentAt = null;
   if (prior === 'PAID' || next === 'DRAFT') data.paidAt = null;
   return data;
 }
