@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
     return true;
   }),
   annotateAudit: vi.fn(),
+  authenticateOperator: vi.fn(),
+  staffHasCapability: vi.fn(async () => true),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -32,6 +34,12 @@ vi.mock('@/lib/abac', async () => {
   const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
   return { ...actual, can: mocks.can };
 });
+vi.mock('@/lib/restaurant/terminal-auth', () => ({
+  authenticateOperator: mocks.authenticateOperator,
+}));
+vi.mock('@/lib/restaurant/job-roles', () => ({
+  staffHasCapability: mocks.staffHasCapability,
+}));
 
 import { restaurantSopExecutionRouter } from './restaurant-sop-execution';
 import { packageByKey } from '@/lib/vertical-catalog';
@@ -87,8 +95,15 @@ let db: ReturnType<typeof makeDb>;
 
 beforeEach(() => {
   db = makeDb();
+  db.restaurantStaffProfile.findMany.mockResolvedValue([{ id: 'staff_a' }]);
   mocks.can.mockResolvedValue(true);
   mocks.annotateAudit.mockReset();
+  mocks.authenticateOperator.mockResolvedValue({
+    ok: true,
+    credentialId: 'credential_1',
+    staffProfileId: 'staff_b',
+  });
+  mocks.staffHasCapability.mockResolvedValue(true);
 });
 
 /**
@@ -148,8 +163,7 @@ describe('strict-zod boundary', () => {
     await expect(
       caller().waive({
         occurrenceId: OCC_ID,
-        actorStaffProfileId: 'a',
-        approvingStaffProfileId: 'b',
+        approving: { staffProfileId: 'b', type: 'PIN', secret: '1234' },
         reason: 'r',
         extra: true,
       } as never)
@@ -370,31 +384,43 @@ describe('verify', () => {
 // ── waive command ──────────────────────────────────────────────────────────────
 
 describe('waive', () => {
-  it('maps CO_AUTH_REQUIRED → FORBIDDEN when actor equals approver', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'SUBMITTED' });
+  it('rejects an invented second identity without an authenticated credential', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'SUBMITTED',
+      branchId: 'branch_1',
+    });
+    mocks.authenticateOperator.mockResolvedValue({ ok: false, reason: 'INVALID' });
 
     await expect(
       caller().waive({
         occurrenceId: OCC_ID,
-        actorStaffProfileId: 'same_person',
-        approvingStaffProfileId: 'same_person',
+        approving: { staffProfileId: 'invented_staff', type: 'PIN', secret: '1234' },
         reason: 'test',
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), { skipInput: true });
   });
 
   it('waives with valid co-authorization', async () => {
-    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'MISSED' });
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'MISSED',
+      branchId: 'branch_1',
+    });
     db.restaurantCoAuthorization.create.mockResolvedValue({ id: 'coauth_1' });
     db.restaurantSopVerification.create.mockResolvedValue({ id: 'ver_1', createdAt: new Date() });
 
     const result = await caller().waive({
       occurrenceId: OCC_ID,
-      actorStaffProfileId: 'staff_a',
-      approvingStaffProfileId: 'staff_b',
+      approving: { staffProfileId: 'staff_b', type: 'PIN', secret: '1234' },
       reason: 'Emergency',
     });
     expect(result.action).toBe('WAIVE');
+    expect(db.restaurantSopVerification.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ actorStaffProfileId: 'staff_a' }) })
+    );
   });
 });
 
@@ -444,8 +470,7 @@ describe('SOP depth entitlement gating', () => {
   };
   const WAIVE_INPUT = {
     occurrenceId: OCC_ID,
-    actorStaffProfileId: 'staff_a',
-    approvingStaffProfileId: 'staff_b',
+    approving: { staffProfileId: 'staff_b', type: 'PIN' as const, secret: '1234' },
     reason: 'Emergency',
   };
 

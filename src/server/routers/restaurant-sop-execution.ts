@@ -27,6 +27,8 @@ import {
 import { summarizeSopReport } from '@/lib/restaurant/sop-reporting';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { can, subjectFromSession } from '@/lib/abac';
+import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import { staffHasCapability } from '@/lib/restaurant/job-roles';
 
 /**
  * M7-L4 — the SOP execution router (branch-board reads + operator/verifier commands).
@@ -583,16 +585,62 @@ export const restaurantSopExecutionRouter = router({
       z
         .object({
           occurrenceId: OCCURRENCE_ID,
-          actorStaffProfileId: z.string().min(1),
-          approvingStaffProfileId: z.string().min(1),
+          approving: z
+            .object({
+              staffProfileId: z.string().min(1),
+              type: z.enum(['PIN', 'BADGE']),
+              secret: z.string().min(1),
+            })
+            .strict(),
           reason: z.string().min(1).max(2_000),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      // The approving credential is plaintext transport input and must never be audited.
+      annotateAudit(ctx, { skipInput: true });
       assertSopDepth(ctx.entitlements, 'sop.waiver');
       try {
-        const result = await waiveOccurrence(ctx.db, input);
+        const [actors, occurrence] = await Promise.all([
+          ctx.db.restaurantStaffProfile.findMany({
+            where: { userId: ctx.session!.user.id, status: 'ACTIVE' },
+            select: { id: true },
+            orderBy: { id: 'asc' },
+            take: 2,
+          }),
+          ctx.db.restaurantSopOccurrence.findUnique({
+            where: { id: input.occurrenceId },
+            select: { branchId: true },
+          }),
+        ]);
+        if (actors.length !== 1 || !occurrence) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Waiver authorization failed.' });
+        }
+
+        const actorStaffProfileId = actors[0]!.id;
+        const approval = await authenticateOperator(ctx.db, {
+          ...input.approving,
+          now: new Date(),
+        });
+        if (
+          !approval.ok ||
+          approval.staffProfileId === actorStaffProfileId ||
+          !(await staffHasCapability(
+            ctx.db,
+            approval.staffProfileId,
+            occurrence.branchId,
+            'sop:verify'
+          ))
+        ) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Waiver authorization failed.' });
+        }
+
+        const result = await waiveOccurrence(ctx.db, {
+          occurrenceId: input.occurrenceId,
+          actorStaffProfileId,
+          approvingStaffProfileId: approval.staffProfileId,
+          reason: input.reason,
+        });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
           targetId: input.occurrenceId,
