@@ -1490,6 +1490,7 @@ describeIfDatabase('frozen service-charge settlement (real DB)', () => {
     const quote = await read((tx) =>
       deps.tenders.quoteOpenBillSettlement(tx, billId, new Date('2026-08-20T18:00:00.000Z'))
     );
+    expect(quote?.serviceChargePayable.toFixed(2)).toBe('1.25');
     expect(quote?.grandTotal.toFixed(2)).toBe('13.75');
     expect(quote?.remainingDue.toFixed(2)).toBe('13.75');
 
