@@ -38,6 +38,7 @@ export async function assertKeyboardFocusWalk(page: Page, route: string, testInf
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
   const visited = new Set<number>();
+  let previousIndex = -1;
   for (let step = 0; step <= candidateCount; step += 1) {
     await page.keyboard.press('Tab');
     const index = await page.evaluate(
@@ -49,7 +50,9 @@ export async function assertKeyboardFocusWalk(page: Page, route: string, testInf
     expect(index, `${route}: Tab must move to a declared interactive control`).toBeGreaterThanOrEqual(
       0
     );
+    expect(index, `${route}: Tab stops follow document order`).toBeGreaterThan(previousIndex);
     visited.add(index);
+    previousIndex = index;
     const control = candidates.nth(index);
     await expect(control, `${route}: tab stop ${step + 1} follows sequential order`).toBeFocused();
     await expect(control, `${route}: tab stop ${step + 1} remains visible`).toBeVisible();
