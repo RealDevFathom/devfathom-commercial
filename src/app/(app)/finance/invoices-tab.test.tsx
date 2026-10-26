@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { INVOICE_STATUS_VALUES } from '@/lib/finance/invoice-status';
 
 const mocks = vi.hoisted(() => ({ toastError: vi.fn() }));
 
@@ -13,7 +14,7 @@ describe('InvoiceRow status menu', () => {
     vi.clearAllMocks();
   });
 
-  it.each(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED'] as const)(
+  it.each(INVOICE_STATUS_VALUES)(
     'explains that a payment is required instead of submitting a %s → PAID transition',
     (status) => {
       const onUpdateStatus = vi.fn();
