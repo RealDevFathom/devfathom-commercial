@@ -116,4 +116,17 @@ describe('finance.getFinancialSummary', () => {
       { currency: 'PKR', amount: 1_000 },
     ]);
   });
+
+  it('keeps earlier yearly invoice receipts out of monthly revenue', async () => {
+    mocks.paymentGroupBy
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ currency: 'USD', _sum: { amount: 40 } }]);
+
+    const summary = await caller().getFinancialSummary();
+
+    expect(summary.monthlyIncome).toEqual([]);
+    expect(summary.monthlyProfit).toEqual([]);
+    expect(summary.yearlyIncome).toEqual([{ currency: 'USD', amount: 40 }]);
+    expect(summary.yearlyProfit).toEqual([{ currency: 'USD', amount: 40 }]);
+  });
 });
