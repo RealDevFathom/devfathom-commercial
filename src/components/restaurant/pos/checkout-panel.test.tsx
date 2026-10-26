@@ -45,13 +45,28 @@ const billed = {
 };
 
 describe('CheckoutPanel', () => {
-  it('uses a customer-facing label instead of the raw NONE split kind', async () => {
-    const request: TerminalRequest = async <T,>() => billed as T;
+  it.each([
+    ['NONE', 'Single bill'],
+    ['BY_ITEM', 'By item'],
+    ['BY_SEAT', 'By seat'],
+    ['FRACTIONAL', 'Fractional'],
+  ])('uses the customer-facing label for the %s split kind', async (splitKind, label) => {
+    const request: TerminalRequest = async <T,>() =>
+      ({ ...billed, bills: [{ ...billed.bills[0], splitKind }] }) as T;
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
-    expect(await screen.findByText('Single bill')).toBeVisible();
+    expect(await screen.findByText(label)).toBeVisible();
     expect(screen.getByText('Bill 1')).toBeVisible();
-    expect(screen.queryByText('NONE')).not.toBeInTheDocument();
+    expect(screen.queryByText(splitKind)).not.toBeInTheDocument();
+  });
+
+  it('does not expose an unexpected split kind', async () => {
+    const request: TerminalRequest = async <T,>() =>
+      ({ ...billed, bills: [{ ...billed.bills[0], splitKind: 'UNRECOGNIZED' }] }) as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText('Bill details')).toBeVisible();
+    expect(screen.queryByText('UNRECOGNIZED')).not.toBeInTheDocument();
   });
 
   it.each(['3860.00', '2860.25', '0.00'])(
