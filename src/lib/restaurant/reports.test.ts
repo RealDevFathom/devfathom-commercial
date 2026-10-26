@@ -216,17 +216,17 @@ describe('restaurant catering report', () => {
     });
   });
 
-  it('aggregates across cursor pages while retaining only the bounded detail rows', async () => {
-    const orders = Array.from({ length: 501 }, (_, index) => ({
+  it('aggregates across every cursor page while retaining only the bounded detail rows', async () => {
+    const orders = Array.from({ length: 1001 }, (_, index) => ({
       id: `o${String(index + 1).padStart(3, '0')}`,
       organizationId: 'org1',
       eventName: `Event ${index + 1}`,
       eventDate: new Date('2026-01-10T00:00:00Z'),
-      status: index === 500 ? 'DELIVERED' : 'DRAFT',
+      status: index === 1000 ? 'DELIVERED' : 'DRAFT',
       quotedTotal: new Prisma.Decimal(100),
       branch: { id: 'b1', name: 'Main' },
       lines:
-        index === 500
+        index === 1000
           ? [
               {
                 recipeId: 'later-page-recipe',
@@ -238,7 +238,7 @@ describe('restaurant catering report', () => {
           : [],
       extraCosts: [],
       delivery:
-        index === 500
+        index === 1000
           ? {
               scheduledAt: new Date('2026-01-10T12:00:00Z'),
               deliveredAt: new Date('2026-01-10T12:05:00Z'),
@@ -266,8 +266,8 @@ describe('restaurant catering report', () => {
     expect(report.orders).toHaveLength(200);
     expect(report.truncated).toBe(true);
     expect(report.totals).toMatchObject({
-      orderCount: 501,
-      revenue: '50100',
+      orderCount: 1001,
+      revenue: '100100',
       knownIngredientCost: '6',
       deliveredCount: 1,
       deliveredOnTimeCount: 0,
@@ -275,11 +275,11 @@ describe('restaurant catering report', () => {
     });
     expect(report.byStatus).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ status: 'DRAFT', orderCount: 500, revenue: '50000' }),
+        expect.objectContaining({ status: 'DRAFT', orderCount: 1000, revenue: '100000' }),
         expect.objectContaining({ status: 'DELIVERED', orderCount: 1, revenue: '100' }),
       ])
     );
-    expect(findMany).toHaveBeenCalledTimes(2);
+    expect(findMany).toHaveBeenCalledTimes(3);
     expect(findMany.mock.calls[0][0]).toMatchObject({
       where: {
         branchId: { in: boundedRange.branchIds },
@@ -295,6 +295,11 @@ describe('restaurant catering report', () => {
     expect(findMany.mock.calls[1][0]).toMatchObject({
       take: 500,
       cursor: { id: 'o500' },
+      skip: 1,
+    });
+    expect(findMany.mock.calls[2][0]).toMatchObject({
+      take: 500,
+      cursor: { id: 'o1000' },
       skip: 1,
     });
     expect(recipeMocks.computeRecipeCostInDb).toHaveBeenCalledWith(db, {
