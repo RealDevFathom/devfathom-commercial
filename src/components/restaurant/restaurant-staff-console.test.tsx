@@ -312,6 +312,7 @@ describe('Restaurant staff credential UI', () => {
       email: 'mina@example.com',
       staffRole: 'MANAGER',
       primaryBranchId: 'branch_1',
+      idempotencyKey: expect.any(String),
     });
     expect(mocks.noopMutate).not.toHaveBeenCalled();
   });

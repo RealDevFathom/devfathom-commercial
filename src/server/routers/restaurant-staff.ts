@@ -9,12 +9,9 @@ import { resolveDemoDirectoryScope } from '@/lib/restaurant/staff-branch-authori
 import { provisionRestaurantOrganization } from '@/lib/restaurant/organization-provisioning';
 import { appUrl, sendEmail, templates } from '@/lib/email';
 import { emailSchema } from '@/lib/email-address';
-import { generateInviteToken } from '@/lib/invite-token';
+import { generateIdempotentInviteToken } from '@/lib/invite-token';
 import { Prisma } from '@/generated/prisma/client';
-import {
-  RESTAURANT_OPERATORS_LIMIT,
-  resolveEntitlementLimit,
-} from '@/lib/entitlement-limits';
+import { RESTAURANT_OPERATORS_LIMIT, resolveEntitlementLimit } from '@/lib/entitlement-limits';
 import {
   CommercialLimitError,
   createStaffProfileWithinCommercialLimit,
@@ -286,6 +283,7 @@ export const restaurantStaffRouter = router({
         email: emailSchema,
         staffRole: z.enum(['WAITER', 'MANAGER']),
         primaryBranchId: z.string().min(1),
+        idempotencyKey: z.string().trim().min(8).max(200),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -310,7 +308,10 @@ export const restaurantStaffRouter = router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'No active department is available.' });
       }
 
-      const { token, tokenHash } = generateInviteToken();
+      const { token, tokenHash } = generateIdempotentInviteToken(
+        organizationId,
+        input.idempotencyKey
+      );
       const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
       const title = input.staffRole === 'MANAGER' ? 'Restaurant Manager' : 'Waiter';
       const result = await ctx.db
@@ -398,7 +399,7 @@ export const restaurantStaffRouter = router({
             );
           }
           const activeOperators = await tx.restaurantStaffProfile.count({
-            where: { status: 'ACTIVE' },
+            where: { organizationId, status: 'ACTIVE' },
           });
           if (activeOperators >= operatorLimit.value) {
             throw new CommercialLimitError(

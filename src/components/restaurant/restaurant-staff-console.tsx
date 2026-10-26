@@ -244,6 +244,7 @@ export function RestaurantStaffConsole() {
         email: formText(data, 'email'),
         staffRole: formText(data, 'staffRole') as 'WAITER' | 'MANAGER',
         primaryBranchId,
+        idempotencyKey: crypto.randomUUID(),
       });
     } else createStaff.mutate(payload);
   };

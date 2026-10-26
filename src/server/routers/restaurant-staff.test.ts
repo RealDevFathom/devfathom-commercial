@@ -133,6 +133,7 @@ function caller() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv('AUTH_SECRET', 'restaurant-staff-invite-test-secret');
   mocks.can.mockResolvedValue(true);
   mocks.resolveStaffCapabilities.mockResolvedValue(new Set(['staff:manage']));
   mocks.staffFindMany.mockResolvedValue([]);
@@ -238,6 +239,7 @@ describe('staff CRUD', () => {
       email: 'MINA@EXAMPLE.COM',
       staffRole: 'MANAGER',
       primaryBranchId: 'branch_1',
+      idempotencyKey: 'manager-invite-1',
     });
 
     expect(mocks.userCreate).toHaveBeenCalledWith({
@@ -258,6 +260,9 @@ describe('staff CRUD', () => {
       }),
     });
     expect(mocks.staffJobRoleAuditCreate).toHaveBeenCalledOnce();
+    expect(mocks.staffCount).toHaveBeenCalledWith({
+      where: { organizationId: 'org_workspace', status: 'ACTIVE' },
+    });
     expect(mocks.userUpdate).toHaveBeenCalledWith({
       where: { id: 'user_invited' },
       data: { status: 'INVITED' },
@@ -277,6 +282,7 @@ describe('staff CRUD', () => {
       email: 'waleed@example.com',
       staffRole: 'WAITER',
       primaryBranchId: 'branch_1',
+      idempotencyKey: 'waiter-invite-1',
     });
 
     expect(mocks.jobRoleFindFirst).toHaveBeenCalledWith({
@@ -297,6 +303,7 @@ describe('staff CRUD', () => {
       email: 'mina@example.com',
       staffRole: 'MANAGER',
       primaryBranchId: 'branch_1',
+      idempotencyKey: 'manager-invite-2',
     });
 
     expect(result).toMatchObject({
@@ -326,6 +333,7 @@ describe('staff CRUD', () => {
       email: 'mina@example.com',
       staffRole: 'MANAGER',
       primaryBranchId: 'branch_1',
+      idempotencyKey: 'manager-resend-1',
     });
 
     expect(mocks.invitationUpsert).toHaveBeenCalledWith({
@@ -340,6 +348,59 @@ describe('staff CRUD', () => {
     expect(mocks.staffJobRoleCreate).not.toHaveBeenCalled();
     expect(mocks.sendEmail).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ emailDelivered: true, resent: true });
+  });
+
+  it('keeps concurrent retries on the same idempotency key usable', async () => {
+    let existingUser: Record<string, unknown> | null = null;
+    let transactionTail = Promise.resolve();
+    const originalTransaction = db.$transaction;
+    db.$transaction = async (run: (tx: unknown) => Promise<unknown>) => {
+      const previous = transactionTail;
+      let release!: () => void;
+      transactionTail = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await previous;
+      try {
+        return await run(db);
+      } finally {
+        release();
+      }
+    };
+    mocks.userFindFirst.mockImplementation(async () => existingUser);
+    mocks.userCreate.mockImplementation(async () => {
+      existingUser = {
+        id: 'user_invited',
+        name: 'Mina Shah',
+        status: 'INVITED',
+        restaurantStaffProfiles: [
+          {
+            id: 'staff_new',
+            displayName: 'Mina Shah',
+            primaryBranchId: 'branch_1',
+            jobRoles: [{ jobRole: { key: 'manager' } }],
+          },
+        ],
+      };
+      return { id: 'user_invited', name: 'Mina Shah' };
+    });
+
+    const input = {
+      name: 'Mina Shah',
+      email: 'mina@example.com',
+      staffRole: 'MANAGER' as const,
+      primaryBranchId: 'branch_1',
+      idempotencyKey: 'same-logical-request',
+    };
+    try {
+      const [first, retry] = await Promise.all([caller().invite(input), caller().invite(input)]);
+      expect(first.inviteUrl).toBe(retry.inviteUrl);
+      expect(mocks.invitationCreate.mock.calls[0]![0].data.tokenHash).toBe(
+        mocks.invitationUpsert.mock.calls[0]![0].update.tokenHash
+      );
+    } finally {
+      db.$transaction = originalTransaction;
+    }
   });
 
   it('rejects changing the restaurant role on a pending invitation', async () => {
@@ -363,6 +424,7 @@ describe('staff CRUD', () => {
         email: 'mina@example.com',
         staffRole: 'MANAGER',
         primaryBranchId: 'branch_1',
+        idempotencyKey: 'manager-role-change-1',
       })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
 
@@ -380,6 +442,7 @@ describe('staff CRUD', () => {
         email: 'noseat@example.com',
         staffRole: 'WAITER',
         primaryBranchId: 'branch_1',
+        idempotencyKey: 'no-seat-invite-1',
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
 
@@ -406,6 +469,7 @@ describe('staff CRUD', () => {
         email: 'blocked@example.com',
         staffRole: 'WAITER',
         primaryBranchId: 'branch_2',
+        idempotencyKey: 'blocked-invite-1',
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.userCreate).not.toHaveBeenCalled();
