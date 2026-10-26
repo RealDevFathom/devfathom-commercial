@@ -221,6 +221,24 @@ describe('queued availability', () => {
 });
 
 describe('retention survives failed deletion', () => {
+  it('purges an eligible import only within its snapshotted organization', async () => {
+    const { db, record, table, runtime } = fake();
+    table.findMany.mockResolvedValueOnce([record]).mockResolvedValueOnce([]);
+
+    await expect(purgeStaleMenuImports(db, { runtime })).resolves.toEqual({
+      purgedDrafts: 1,
+      deletedSources: 1,
+    });
+
+    expect(runtime.deleteSource).toHaveBeenCalledWith(
+      record.organizationId,
+      record.storageObjectName
+    );
+    expect(table.delete).toHaveBeenCalledWith({
+      where: { id: record.id, organizationId: record.organizationId },
+    });
+  });
+
   it('rechecks a stale import under the commit lock before deleting it', async () => {
     const { db, record, table, runtime } = fake();
     table.findMany.mockResolvedValueOnce([record]).mockResolvedValueOnce([]);
