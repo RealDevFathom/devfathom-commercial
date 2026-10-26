@@ -508,7 +508,7 @@ export const restaurantDevicesRouter = router({
       ) {
         throw new TRPCError({
           code: 'FORBIDDEN',
-          message: 'The approving manager lacks co-authorization approval permission.',
+          message: 'The approving staff member lacks co-authorization approval permission.',
         });
       }
 
@@ -625,7 +625,7 @@ export const restaurantDevicesRouter = router({
       ) {
         throw new TRPCError({
           code: 'FORBIDDEN',
-          message: 'The approving manager lacks co-authorization approval permission.',
+          message: 'The approving staff member lacks co-authorization approval permission.',
         });
       }
 
