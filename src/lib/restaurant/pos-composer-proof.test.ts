@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { mintPosComposerProof, verifyPosComposerProof } from './pos-composer-proof';
+import {
+  mintPosComposerProof,
+  verifyPosComposerProof,
+  verifyPosComposerProofForRenewal,
+} from './pos-composer-proof';
 
 const claims = {
   organizationId: 'org-1',
@@ -20,9 +24,9 @@ describe('POS composer proofs', () => {
     const proof = mintPosComposerProof(claims, now);
 
     expect(verifyPosComposerProof(proof, claims, now)).toBe(true);
-    expect(
-      verifyPosComposerProof(proof, { ...claims, staffProfileId: 'staff-b' }, now)
-    ).toBe(false);
+    expect(verifyPosComposerProof(proof, { ...claims, staffProfileId: 'staff-b' }, now)).toBe(
+      false
+    );
     expect(verifyPosComposerProof(proof, { ...claims, deviceId: 'device-2' }, now)).toBe(false);
   });
 
@@ -38,9 +42,9 @@ describe('POS composer proofs', () => {
       })
     ).toString('base64url');
 
-    expect(verifyPosComposerProof(`${parts[0]}.${changedPayload}.${parts[2]}`, claims, issued)).toBe(
-      false
-    );
+    expect(
+      verifyPosComposerProof(`${parts[0]}.${changedPayload}.${parts[2]}`, claims, issued)
+    ).toBe(false);
     expect(verifyPosComposerProof(proof, claims, new Date('2026-10-28T12:00:00.000Z'))).toBe(false);
   });
 
@@ -55,9 +59,22 @@ describe('POS composer proofs', () => {
     const issued = new Date('2026-10-26T12:00:00.000Z');
     const proof = mintPosComposerProof(claims, issued);
 
-    expect(verifyPosComposerProof(proof, claims, new Date(issued.getTime() + 86_400_000))).toBe(true);
+    expect(verifyPosComposerProof(proof, claims, new Date(issued.getTime() + 86_400_000))).toBe(
+      true
+    );
     expect(verifyPosComposerProof(proof, claims, new Date(issued.getTime() + 86_400_001))).toBe(
       false
     );
+  });
+
+  it('allows an expired proof only to renew the same signed composer', () => {
+    const issued = new Date('2026-10-26T12:00:00.000Z');
+    const expired = new Date(issued.getTime() + 86_400_001);
+    const proof = mintPosComposerProof(claims, issued);
+
+    expect(verifyPosComposerProofForRenewal(proof, claims, expired)).toBe(true);
+    expect(
+      verifyPosComposerProofForRenewal(proof, { ...claims, staffProfileId: 'staff-b' }, expired)
+    ).toBe(false);
   });
 });

@@ -271,7 +271,20 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       if (!local || !navigator.onLine || activeRuntime.state !== 'UNLOCKED') return;
       const staffProfileId = activeRuntime.operator?.staffProfileId;
       if (!staffProfileId || !activeRuntime.composerProof) return;
-      await local.renewComposerProof(staffProfileId, activeRuntime.composerProof);
+      await local.renewComposerProof(staffProfileId, async (originalProof) => {
+        const response = await fetch('/api/restaurant/terminal/renew-composer-proof', {
+          method: 'POST',
+          cache: 'no-store',
+          credentials: 'include',
+          headers: { ...authHeaders(activeRuntime, true), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ originalProof }),
+        });
+        if (!response.ok) return null;
+        const body = (await response.json().catch(() => null)) as {
+          composerProof?: unknown;
+        } | null;
+        return typeof body?.composerProof === 'string' ? body.composerProof : null;
+      });
       const result = await local.replay(staffProfileId, async (queued) => {
         try {
           const response = await fetch(queued.path, {

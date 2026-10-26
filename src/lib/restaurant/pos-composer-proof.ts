@@ -39,6 +39,24 @@ export function verifyPosComposerProof(
   expected: Omit<PosComposerClaims, 'expiresAt'>,
   now = new Date()
 ): boolean {
+  return verifyProof(proof, expected, now, true);
+}
+
+/** Verify composer continuity for reauthentication, even when the old proof expired. */
+export function verifyPosComposerProofForRenewal(
+  proof: string,
+  expected: Omit<PosComposerClaims, 'expiresAt'>,
+  now = new Date()
+): boolean {
+  return verifyProof(proof, expected, now, false);
+}
+
+function verifyProof(
+  proof: string,
+  expected: Omit<PosComposerClaims, 'expiresAt'>,
+  now: Date,
+  enforceExpiry: boolean
+): boolean {
   const parts = proof.split('.');
   if (parts.length !== 3) return false;
   const [version, payload, supplied] = parts;
@@ -56,7 +74,7 @@ export function verifyPosComposerProof(
     actual.length === wanted.length &&
     timingSafeEqual(actual, wanted) &&
     Number.isFinite(claims.expiresAt) &&
-    claims.expiresAt >= now.getTime() &&
+    (!enforceExpiry || claims.expiresAt >= now.getTime()) &&
     claims.organizationId === expected.organizationId &&
     claims.branchId === expected.branchId &&
     claims.deviceId === expected.deviceId &&

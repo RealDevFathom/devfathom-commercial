@@ -40,14 +40,30 @@ describe('PosOfflineRuntime', () => {
     const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
     await runtime.enqueue(input);
 
-    await runtime.renewComposerProof('staff-2', 'wrong-operator-proof');
+    await runtime.renewComposerProof('staff-2', async () => 'wrong-operator-proof');
     expect(runtime.snapshot().queue?.drafts[0]?.composerProof).toBe('signed-composer-proof');
 
-    await runtime.renewComposerProof('staff-1', 'renewed-proof');
+    await runtime.renewComposerProof('staff-1', async () => 'renewed-proof');
     await runtime.replay('staff-1', async (request) => {
       expect(request.headers['X-POS-Composer-Proof']).toBe('renewed-proof');
       return { status: 201, serverRef: 'server-ref' };
     });
+  });
+
+  it('cannot renew after tampering the unsigned composer id', async () => {
+    const runtime = new PosOfflineRuntime(scope, createMemoryDriver());
+    await runtime.enqueue(input);
+    const draft = runtime.snapshot().queue?.drafts[0];
+    if (!draft) throw new Error('Expected queued draft');
+    draft.composerStaffProfileId = 'staff-2';
+
+    await runtime.renewComposerProof('staff-2', async (originalProof) => {
+      expect(originalProof).toBe('signed-composer-proof');
+      return null; // The server rejects A's signed proof while B is active.
+    });
+
+    expect(draft.composerProof).toBe('signed-composer-proof');
+    expect((await runtime.replay('staff-2', async () => ({ status: 403 }))).state).toBe('PAUSED');
   });
 
   it('hydrates an atomically persisted draft and resumes at the first unacknowledged command', async () => {

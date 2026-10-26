@@ -95,19 +95,29 @@ export class PosOfflineRuntime {
    * Replace an expired composer proof only after the same operator has authenticated
    * again. The server still verifies the replacement proof on every replay request.
    */
-  async renewComposerProof(staffProfileId: string, composerProof: string): Promise<void> {
-    this.state = {
-      ...this.state,
-      queue: {
-        ...this.queue(),
-        drafts: this.queue().drafts.map((draft) =>
-          draft.status !== 'COMPLETED' && draft.composerStaffProfileId === staffProfileId
-            ? { ...draft, composerProof }
-            : draft
-        ),
-      },
-    };
-    await this.persist();
+  async renewComposerProof(
+    staffProfileId: string,
+    renew: (originalProof: string) => Promise<string | null>
+  ): Promise<void> {
+    const candidates = this.queue().drafts.filter(
+      (draft) => draft.status !== 'COMPLETED' && draft.composerStaffProfileId === staffProfileId
+    );
+    for (const candidate of candidates) {
+      const composerProof = await renew(candidate.composerProof);
+      if (!composerProof) continue;
+      this.state = {
+        ...this.state,
+        queue: {
+          ...this.queue(),
+          drafts: this.queue().drafts.map((draft) =>
+            draft.draftId === candidate.draftId && draft.composerProof === candidate.composerProof
+              ? { ...draft, composerProof }
+              : draft
+          ),
+        },
+      };
+      await this.persist();
+    }
   }
 
   async resolveReview(draftId: string, decision: 'REPLAY' | 'DISCARD'): Promise<void> {
