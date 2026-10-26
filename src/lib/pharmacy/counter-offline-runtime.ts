@@ -129,6 +129,12 @@ type ReplayResult = {
 export class PharmacyCounterRuntime {
   private state: CounterRuntimeState;
   private activeReplay: Promise<ReplayResult> | null = null;
+  /**
+   * Enqueue is a read-modify-write of the one persisted counter document. Keep
+   * those transitions in invocation order so two UI events cannot allocate
+   * from the same lease/quota snapshot while the first write is in flight.
+   */
+  private enqueueTail: Promise<void> = Promise.resolve();
 
   constructor(
     readonly scope: TerminalScope,
@@ -324,6 +330,20 @@ export class PharmacyCounterRuntime {
    * cannot talk the matrix into accepting a snapshot the runtime never verified.
    */
   async enqueue(
+    input: CounterCommandInput,
+    matrix: Omit<CounterMatrixInputs, 'snapshots'>
+  ): Promise<CounterEnqueueResult> {
+    const result = this.enqueueTail.then(() => this.enqueueTransition(input, matrix));
+    // A failed persistence attempt must reject its caller without poisoning the
+    // queue: a later attempt still gets to evaluate the last published state.
+    this.enqueueTail = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  }
+
+  private async enqueueTransition(
     input: CounterCommandInput,
     matrix: Omit<CounterMatrixInputs, 'snapshots'>
   ): Promise<CounterEnqueueResult> {

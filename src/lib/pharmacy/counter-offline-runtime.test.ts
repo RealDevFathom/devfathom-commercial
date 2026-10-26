@@ -277,6 +277,58 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
     expect(counter.snapshot().queue?.quotas[0]).toMatchObject({ consumedUnits: 2 });
   });
 
+  it('serializes concurrent enqueues before allocating receipts, sequence and quota', async () => {
+    const driver = createMemoryDriver();
+    const counter = await readyCounter(driver);
+    const durableWrite = driver.write;
+    let releaseFirstWrite: (() => void) | undefined;
+    let firstWriteStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      firstWriteStarted = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
+    let writes = 0;
+    driver.write = async (scopeKey, value) => {
+      writes += 1;
+      if (writes === 1) {
+        firstWriteStarted?.();
+        await release;
+      }
+      await durableWrite(scopeKey, value);
+    };
+
+    const first = counter.enqueue(cashSale(1), MATRIX);
+    await started;
+    const second = counter.enqueue(cashSale(1), MATRIX);
+
+    // The second transition must not even persist until the first has become
+    // durable and published its newly consumed receipt, sequence and quota.
+    await Promise.resolve();
+    expect(writes).toBe(1);
+    releaseFirstWrite?.();
+    const results = await Promise.all([first, second]);
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(results.map((result) => (result.ok ? result.command.receiptNumber : null))).toEqual([
+      900, 901,
+    ]);
+    expect(results.map((result) => (result.ok ? result.command.sequence : null))).toEqual([1, 2]);
+    expect(counter.snapshot().queue).toMatchObject({
+      nextSequence: 3,
+      quotas: [{ consumedUnits: 2 }],
+    });
+    expect(counter.snapshot().queue?.commands).toHaveLength(2);
+
+    const reloaded = runtime(driver);
+    expect(await reloaded.hydrate()).toBe('ready');
+    expect(reloaded.snapshot().queue?.commands).toHaveLength(2);
+    expect(reloaded.snapshot().queue?.commands.map((command) => command.receiptNumber)).toEqual([
+      900, 901,
+    ]);
+  });
+
   it('refuses a denied action and queues nothing', async () => {
     const counter = await readyCounter(createMemoryDriver());
     const result = await counter.enqueue(
