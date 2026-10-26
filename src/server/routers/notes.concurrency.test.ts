@@ -99,6 +99,9 @@ describe('notes.update concurrency', () => {
       { contentText: 'B', editedById: 'editor_c' },
     ]);
     expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
-    expect(tx.$queryRaw.mock.calls[0]?.[0].join('?')).toContain('FOR UPDATE');
+    const lockQuery = tx.$queryRaw.mock.calls[0]?.[0].join('?');
+    expect(lockQuery).toContain('"organizationId" = ?');
+    expect(lockQuery).toContain('FOR UPDATE');
+    expect(tx.$queryRaw.mock.calls[0]?.slice(1)).toEqual([note.id, 'org_1']);
   });
 });

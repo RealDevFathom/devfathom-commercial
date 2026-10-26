@@ -537,7 +537,11 @@ export const notesRouter = router({
         // Serialize the full read/snapshot/write sequence for this note. Without
         // this lock, two editors can both snapshot the same old value and one of
         // their edits is then absent from both the live note and its history.
-        await tx.$queryRaw`SELECT "id" FROM "notes" WHERE "id" = ${input.id} FOR UPDATE`;
+        await tx.$queryRaw`
+          SELECT "id" FROM "notes"
+          WHERE "id" = ${input.id} AND "organizationId" = ${orgId}
+          FOR UPDATE
+        `;
 
         const existing = await tx.note.findUnique({
           where: { id: input.id },
