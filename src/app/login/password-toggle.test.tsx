@@ -39,6 +39,11 @@ describe('login password visibility controls', () => {
 
     expect(screen.getByRole('button', { name: 'Hide password' })).toBe(toggle);
     expect(password).toHaveProperty('type', 'text');
+
+    fireEvent.click(toggle);
+
+    expect(screen.getByRole('button', { name: 'Show password' })).toBe(toggle);
+    expect(password).toHaveProperty('type', 'password');
     expect(mocks.signIn).not.toHaveBeenCalled();
   });
 });
