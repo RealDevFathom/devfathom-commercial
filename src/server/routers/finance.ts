@@ -816,6 +816,8 @@ export const financeRouter = router({
       monthlyExpenseG,
       yearlyIncomeG,
       yearlyExpenseG,
+      monthlyInvoicePaymentsG,
+      yearlyInvoicePaymentsG,
       paidInvoicesG,
       outstandingInvoicesG,
       recurring,
@@ -826,6 +828,16 @@ export const financeRouter = router({
       txGroup({ type: 'EXPENSE', date: { gte: startOfMonth, lte: now } }),
       txGroup({ type: 'INCOME', date: { gte: startOfYear, lte: now } }),
       txGroup({ type: 'EXPENSE', date: { gte: startOfYear, lte: now } }),
+      ctx.db.payment.groupBy({
+        by: ['currency'],
+        _sum: { amount: true },
+        where: { paidAt: { gte: startOfMonth, lte: now } },
+      }),
+      ctx.db.payment.groupBy({
+        by: ['currency'],
+        _sum: { amount: true },
+        where: { paidAt: { gte: startOfYear, lte: now } },
+      }),
       ctx.db.invoice.groupBy({
         by: ['currency'],
         _sum: { total: true },
@@ -844,8 +856,17 @@ export const financeRouter = router({
       }),
     ]);
 
-    const monthlyIncome = fromCurrencyGroups(monthlyIncomeG, 'amount');
-    const yearlyIncome = fromCurrencyGroups(yearlyIncomeG, 'amount');
+    // Invoice payments are receipts too. They are stored separately from manually
+    // entered income transactions, so omitting them left Monthly Revenue at zero
+    // immediately after an invoice was paid.
+    const monthlyIncome = sumByCurrency(
+      fromCurrencyGroups(monthlyIncomeG, 'amount'),
+      fromCurrencyGroups(monthlyInvoicePaymentsG, 'amount')
+    );
+    const yearlyIncome = sumByCurrency(
+      fromCurrencyGroups(yearlyIncomeG, 'amount'),
+      fromCurrencyGroups(yearlyInvoicePaymentsG, 'amount')
+    );
 
     // FIN-05: recurring expenses are never posted as transactions, so burn and
     // profit silently omitted them. Fold each active subscription's monthly-
