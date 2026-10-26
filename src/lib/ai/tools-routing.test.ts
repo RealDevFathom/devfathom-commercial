@@ -90,6 +90,29 @@ describe('assistant tool routing', () => {
     );
   });
 
+  it('requires the clients entitlement for the client-aware Notes tool family', () => {
+    const withoutClients = { ...ctx, enabledModules: ['notes', 'projects'] };
+    const noteToolNames = [
+      'searchNotes',
+      'getNote',
+      'createNote',
+      'updateNote',
+      'deleteNote',
+      'setNoteShares',
+    ];
+
+    for (const hint of ['', 'find the Acme note']) {
+      const tools = buildAssistantTools(withoutClients, { hint });
+      for (const name of noteToolNames) expect(tools).not.toHaveProperty(name);
+    }
+
+    const entitledTools = buildAssistantTools(
+      { ...withoutClients, enabledModules: ['notes', 'projects', 'clients'] },
+      { hint: 'find the Acme note' }
+    );
+    for (const name of noteToolNames) expect(entitledTools).toHaveProperty(name);
+  });
+
   it('retains execute authorization on pharmacy reports', async () => {
     const tools = buildAssistantTools({
       ...ctx,

@@ -184,7 +184,10 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
     clients: agency && granted('clients') ? buildClientsTools(h) : {},
     finance: agency && granted('finance') ? buildFinanceTools(h) : {},
     chat: granted('chat') ? buildChatTools(h) : {},
-    notes: agency && granted('notes') && granted('projects') ? buildNotesTools(h) : {},
+    notes:
+      agency && granted('notes') && granted('projects') && granted('clients')
+        ? buildNotesTools(h)
+        : {},
     meetings: agency && granted('meetings') && granted('projects') ? buildMeetingsTools(h) : {},
     pharmacyReports:
       assistantVertical(ctx.vertical) === 'PHARMACY' && granted('pharmacy-reports')
