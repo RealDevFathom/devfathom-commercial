@@ -1171,10 +1171,10 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
         expect.objectContaining({ medicineId: 'med-barcode', quantity: 1 })
       )
     );
-    const successMessage = await screen.findByText('1 × Paracetamol added.');
-    const successNoticeText = successMessage.closest('.text-sm');
-    expect(successNoticeText).toHaveClass('text-success');
-    expect(successNoticeText).not.toHaveClass('text-text-body');
+    const successNotice = await screen.findByRole('status');
+    expect(successNotice).toHaveTextContent('1 × Paracetamol added.');
+    expect(successNotice).toHaveClass('text-success');
+    expect(successNotice).not.toHaveClass('text-text-body');
 
     mocks.mutations.addLine!.mockClear();
     mocks.queries.counterSearch = query({ rows: [row, { ...row, medicineId: 'med-other' }] });
