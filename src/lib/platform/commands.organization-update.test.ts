@@ -92,6 +92,7 @@ describe('organization.update deployment mode', () => {
     expect(platformDb.organization.update).not.toHaveBeenCalled();
     expect(platformDb.organizationDeployment.upsert).not.toHaveBeenCalled();
     expect(platformDb.platformJob.create).not.toHaveBeenCalled();
+    expect(platformDb.platformAuditLog.create).not.toHaveBeenCalled();
   });
 
   it('preserves the dedicated provisioning flow when it is configured', async () => {
