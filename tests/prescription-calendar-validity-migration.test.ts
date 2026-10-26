@@ -31,12 +31,26 @@ const sql = readFileSync(
 
       await client.query(sql);
 
-      const result = await client.query<{ validFrom: string; validUntil: string }>(`
-        SELECT "validFrom"::text AS "validFrom", "validUntil"::text AS "validUntil"
+      const result = await client.query<{
+        validFrom: string;
+        validUntil: string;
+        validFromType: string;
+        validUntilType: string;
+      }>(`
+        SELECT
+          "validFrom"::text AS "validFrom",
+          "validUntil"::text AS "validUntil",
+          pg_typeof("validFrom")::text AS "validFromType",
+          pg_typeof("validUntil")::text AS "validUntilType"
         FROM pharmacy_prescriptions
       `);
       expect(result.rows).toEqual([
-        { validFrom: '2026-10-22', validUntil: '2026-10-31' },
+        {
+          validFrom: '2026-10-22',
+          validUntil: '2026-10-31',
+          validFromType: 'date',
+          validUntilType: 'date',
+        },
       ]);
     } finally {
       await client.query('ROLLBACK');
