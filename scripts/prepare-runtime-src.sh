@@ -13,4 +13,8 @@ cp -R "$source_dir"/. "$destination_dir"/
 # rather than copying src directly into the runtime image.
 find "$destination_dir" -type f \( -name '*.test.*' -o -name '*.spec.*' \) -delete
 find "$destination_dir" -type d \( -name '__tests__' -o -name '__snapshots__' \) -prune -exec rm -rf {} +
-rm -rf "$destination_dir/lib/testing"
+rm -rf \
+  "$destination_dir/lib/testing" \
+  "$destination_dir/lib/test-support" \
+  "$destination_dir/lib/pharmacy/migration/fixtures"
+rm -f "$destination_dir/lib/pharmacy/repeat-purchasing.fixture.sql"
