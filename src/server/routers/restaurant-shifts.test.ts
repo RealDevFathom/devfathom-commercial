@@ -451,10 +451,16 @@ function makeDb() {
       findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
         const request = state.swapRequests.find((r) => r.id === where.id);
         if (!request) return null;
+        const shift = state.shifts.find((s) => s.id === request.shiftId)!;
         return {
           ...request,
           decision: state.decisions.find((d) => d.requestId === request.id) ?? null,
-          shift: state.shifts.find((s) => s.id === request.shiftId)!,
+          shift: {
+            ...shift,
+            breaks: state.breaks
+              .filter((row) => row.shiftId === shift.id)
+              .map(({ id }) => ({ id })),
+          },
           replacement: state.profiles.find((p) => p.id === request.replacementStaffProfileId)!,
         };
       }),
@@ -1037,6 +1043,30 @@ describe('restaurantShifts.reviewSwap', () => {
       })
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(state.decisions).toHaveLength(1);
+  });
+
+  it('refuses to reassign a shift after attendance has been recorded', async () => {
+    const request = await pendingSwap();
+    await caller('EMPLOYEE').clockIn({ shiftId: 'shift_emp', idempotencyKey: 'ci-before-swap' });
+
+    await expect(
+      caller('MANAGER').reviewSwap({
+        requestId: request!.id,
+        branchId: 'branch_1',
+        decision: 'APPROVED',
+        idempotencyKey: 'rv-attendance',
+      })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: expect.stringContaining('recorded attendance'),
+    });
+
+    expect(state.shifts.find((shift) => shift.id === 'shift_emp')).toMatchObject({
+      staffProfileId: 'staff_emp',
+      clockedInAt: at('2026-09-20T09:02:00Z'),
+    });
+    expect(state.decisions).toHaveLength(0);
+    expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
   });
 
   it('denies employees, other-branch managers, and replacements with an overlapping shift', async () => {
