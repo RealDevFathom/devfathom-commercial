@@ -32,18 +32,19 @@ vi.mock('@/lib/entitlements', async (importOriginal) => {
 import { buildPeopleTools } from './people';
 import type { AssistantHelpers } from '@/lib/ai/context';
 
+const transactionClient = {
+  $queryRaw: mocks.queryRaw,
+  user: { create: mocks.create, update: mocks.update, count: mocks.count },
+  invitation: { upsert: mocks.invitationUpsert },
+};
+
 const db = {
   user: { findFirst: mocks.findFirst, create: mocks.create, update: mocks.update },
   // WHA-278: the invite path validates the department against the tenant's own
   // configured catalog before writing.
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
   invitation: { upsert: mocks.invitationUpsert },
-  $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
-    run({
-      $queryRaw: mocks.queryRaw,
-      user: { create: mocks.create, update: mocks.update, count: mocks.count },
-      invitation: { upsert: mocks.invitationUpsert },
-    }),
+  $transaction: async (run: (tx: unknown) => Promise<unknown>) => run(transactionClient),
 };
 
 function inviteTool() {
@@ -131,7 +132,7 @@ describe('assistant inviteMember duplicate guard', () => {
       inviteTool().execute({ ...base, email: 'new.person@company.com' })
     ).rejects.toThrow('Seat limit reached (10/10).');
 
-    expect(mocks.resolveEntitlements).toHaveBeenCalledWith('org_1', db);
+    expect(mocks.resolveEntitlements).toHaveBeenCalledWith('org_1', transactionClient);
     expect(mocks.queryRaw).toHaveBeenCalledOnce();
     expect(mocks.count).toHaveBeenCalledWith({
       where: {

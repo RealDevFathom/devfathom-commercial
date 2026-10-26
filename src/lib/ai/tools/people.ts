@@ -785,10 +785,6 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         if (existing && existing.status !== 'INVITED') {
           return { error: 'A user with this email already exists.' };
         }
-        const seatLimit = existing
-          ? null
-          : (await resolveOrganizationEntitlements(ctx.organizationId, h.db)).seatLimit;
-
         const { token, tokenHash } = generateInviteToken();
         const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
         const profile = {
@@ -802,7 +798,8 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         };
 
         const user = await h.db.$transaction(async (tx) => {
-          if (seatLimit !== null) {
+          if (!existing) {
+            const { seatLimit } = await resolveOrganizationEntitlements(ctx.organizationId, tx);
             await lockAndAssertSeatAvailable(tx, ctx.organizationId, seatLimit);
           }
           const u = existing
