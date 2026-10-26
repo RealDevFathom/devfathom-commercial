@@ -207,7 +207,50 @@ export class PharmacyCounterRuntime {
     payloadHash: string;
     nowMs: number;
   }): Promise<InstallSnapshotResult> {
-    const cache = this.cache();
+    try {
+      return await this.installSnapshotOnce(input);
+    } catch (error) {
+      if (error instanceof CounterStorageConflictError) {
+        // Verification may take long enough for another context to publish a
+        // newer snapshot. Re-read and repeat every check rather than applying
+        // a replacement derived from the stale document.
+        return this.installSnapshot(input);
+      }
+      throw error;
+    }
+  }
+
+  private async installSnapshotOnce(input: {
+    envelope: OfflineSnapshotEnvelope;
+    signature: string;
+    payload: unknown;
+    payloadHash: string;
+    nowMs: number;
+  }): Promise<InstallSnapshotResult> {
+    const durable = await readTerminalState<CounterQueueSnapshot, CounterCache>(
+      this.driver,
+      this.scope,
+      COUNTER_STORE_SCHEMA_VERSION
+    );
+    if (durable.status === 'unrecoverable') throw new Error(durable.message);
+
+    const expectedState = durable.status === 'ok' ? durable.state : undefined;
+    const sourceState: CounterRuntimeState =
+      durable.status === 'ok'
+        ? {
+            ...durable.state,
+            queue: durable.state.queue ?? createCounterQueue(this.scope.deviceId),
+            catalog: durable.state.catalog ?? this.cache(),
+          }
+        : {
+            ...emptyTerminalState<CounterQueueSnapshot, CounterCache>(
+              this.scope,
+              COUNTER_STORE_SCHEMA_VERSION
+            ),
+            queue: createCounterQueue(this.scope.deviceId),
+            catalog: { snapshotPublicKey: this.cache().snapshotPublicKey, snapshots: [] },
+          };
+    const cache = sourceState.catalog ?? { snapshotPublicKey: '', snapshots: [] };
     const held = cache.snapshots.find((stored) => stored.envelope.kind === input.envelope.kind);
     const envelopeCheck = checkEnvelope({
       envelope: input.envelope,
@@ -239,10 +282,13 @@ export class PharmacyCounterRuntime {
       payload: input.payload,
       verified: true,
     };
-    const previousLease = this.safetyLeaseState().lease;
+    const queue = sourceState.queue ?? createCounterQueue(this.scope.deviceId);
+    const leases = cache.snapshots.map((snapshot) => snapshot.envelope.safetyLease);
+    const previousLease =
+      leases.sort((a, b) => Date.parse(b.issuedAt) - Date.parse(a.issuedAt))[0] ?? null;
     const eventType = previousLease ? 'RENEWED' : 'ISSUED';
     const nextState: CounterRuntimeState = {
-      ...this.state,
+      ...sourceState,
       catalog: {
         ...cache,
         snapshots: [
@@ -251,9 +297,9 @@ export class PharmacyCounterRuntime {
         ],
       },
       queue: {
-        ...this.queue(),
+        ...queue,
         safetyLeaseEvents: [
-          ...this.queue().safetyLeaseEvents,
+          ...queue.safetyLeaseEvents,
           {
             type: eventType,
             occurredAt: input.envelope.safetyLease.issuedAt,
@@ -264,7 +310,7 @@ export class PharmacyCounterRuntime {
         ],
       },
     };
-    await this.commit(nextState);
+    await this.commit(nextState, expectedState);
     return { ok: true, snapshot: stored };
   }
 
@@ -315,7 +361,7 @@ export class PharmacyCounterRuntime {
         ],
       },
     };
-    await this.commit(nextState);
+    await this.commit(nextState, this.persistedState);
     return true;
   }
 
@@ -331,12 +377,18 @@ export class PharmacyCounterRuntime {
 
   /** Record the receipt-number blocks this counter reserved before going offline. */
   async adoptLeases(leases: readonly CounterLeaseCursor[]): Promise<void> {
-    await this.commit({ ...this.state, queue: { ...this.queue(), leases: [...leases] } });
+    await this.commit(
+      { ...this.state, queue: { ...this.queue(), leases: [...leases] } },
+      this.persistedState
+    );
   }
 
   /** Record the OFF-03 quotas this counter was granted before going offline. */
   async adoptQuotas(quotas: readonly CounterQuota[]): Promise<void> {
-    await this.commit({ ...this.state, queue: { ...this.queue(), quotas: [...quotas] } });
+    await this.commit(
+      { ...this.state, queue: { ...this.queue(), quotas: [...quotas] } },
+      this.persistedState
+    );
   }
 
   /**
@@ -429,7 +481,7 @@ export class PharmacyCounterRuntime {
             ],
           },
         };
-        await this.commit(nextState);
+        await this.commit(nextState, this.persistedState);
       }
     }
     const batchId = input.bucket?.inventoryLotId ?? null;
@@ -440,12 +492,15 @@ export class PharmacyCounterRuntime {
       batchRecalled: batchId !== null && leaseState.recalledBatchIds.includes(batchId),
     });
     if (!result.ok) return result;
-    await this.commit({ ...this.state, queue: result.snapshot });
+    await this.commit({ ...this.state, queue: result.snapshot }, this.persistedState);
     return result;
   }
 
   async resume(): Promise<void> {
-    await this.commit({ ...this.state, queue: resumeCounterAfterReauth(this.queue()) });
+    await this.commit(
+      { ...this.state, queue: resumeCounterAfterReauth(this.queue()) },
+      this.persistedState
+    );
   }
 
   replay(
@@ -469,10 +524,13 @@ export class PharmacyCounterRuntime {
       if (next.status !== 'READY') return { state: next.status, discarded: null };
 
       const request = buildCounterReplayRequest(this.queue(), next.command);
-      await this.commit({
-        ...this.state,
-        queue: beginCounterReplay(this.queue(), next.command.commandId),
-      });
+      await this.commit(
+        {
+          ...this.state,
+          queue: beginCounterReplay(this.queue(), next.command.commandId),
+        },
+        this.persistedState
+      );
 
       let response: CounterReplayResponse;
       try {
@@ -493,7 +551,7 @@ export class PharmacyCounterRuntime {
         await purgeTerminalScope(this.driver, this.scope);
         return { state: 'STOPPED', discarded: applied.discarded };
       }
-      await this.commit(nextState);
+      await this.commit(nextState, this.persistedState);
       if (outcome.action !== 'ACK') return { state: 'PAUSED', discarded: applied.discarded };
     }
   }
@@ -519,7 +577,10 @@ export class PharmacyCounterRuntime {
   }
 
   /** Publish a state transition only after its whole-document write succeeds. */
-  private async commit(nextState: CounterRuntimeState): Promise<void> {
+  private async commit(
+    nextState: CounterRuntimeState,
+    expectedState: CounterRuntimeState | undefined
+  ): Promise<void> {
     // Keep the storage seam's fail-closed validation, but use a transaction CAS
     // to prevent a stale tab overwriting a newer whole document.
     if (nextState.schemaVersion !== COUNTER_STORE_SCHEMA_VERSION) {
@@ -528,7 +589,7 @@ export class PharmacyCounterRuntime {
     assertPersistSafe(nextState);
     const written = await this.driver.compareAndSwap(
       terminalScopeKey(this.scope),
-      this.persistedState,
+      expectedState,
       nextState
     );
     if (!written) throw new CounterStorageConflictError();

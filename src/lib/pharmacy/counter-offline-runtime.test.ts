@@ -257,6 +257,41 @@ describe('PH-OFF OFF-01 — signed snapshots', () => {
     expect(counter.payloadFor('PRICES')).toEqual({ priceMinor: 200 });
   });
 
+  it('cannot commit an older snapshot after a newer verification finishes first', async () => {
+    const releases = new Map<number, (valid: boolean) => void>();
+    const verificationStarted = new Map<number, Promise<void>>();
+    const markStarted = new Map<number, () => void>();
+    for (const version of [2, 3]) {
+      verificationStarted.set(
+        version,
+        new Promise<void>((resolve) => markStarted.set(version, resolve))
+      );
+    }
+    const verifier: SnapshotVerifier = {
+      verify: ({ envelope, signature, publicKey: key }) => {
+        markStarted.get(envelope.version)?.();
+        return new Promise<boolean>((resolve) => {
+          releases.set(envelope.version, (valid) => {
+            resolve(valid && signing.verifySnapshotSignature(envelope, signature, key));
+          });
+        });
+      },
+    };
+    const counter = runtime(createMemoryDriver(), verifier);
+    await counter.hydrate();
+
+    const older = install(counter, 'PRICES', { priceMinor: 200 }, { version: 2 });
+    await verificationStarted.get(2);
+    const newer = install(counter, 'PRICES', { priceMinor: 300 }, { version: 3 });
+    await verificationStarted.get(3);
+
+    releases.get(3)?.(true);
+    expect(await newer).toMatchObject({ ok: true });
+    releases.get(2)?.(true);
+    expect(await older).toMatchObject({ ok: false, reason: 'STALE_VERSION' });
+    expect(counter.payloadFor('PRICES')).toEqual({ priceMinor: 300 });
+  });
+
   it('survives a reload: an installed snapshot is read back from storage', async () => {
     const driver = createMemoryDriver();
     const first = runtime(driver);
