@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   staffJobRoleAuditCreate: vi.fn(),
   departmentFindFirst: vi.fn(),
   invitationCreate: vi.fn(),
+  invitationUpsert: vi.fn(),
   sendEmail: vi.fn(),
   credFindMany: vi.fn(),
   credFindFirst: vi.fn(),
@@ -98,7 +99,7 @@ const db = {
   restaurantStaffJobRole: { create: mocks.staffJobRoleCreate },
   restaurantStaffJobRoleAudit: { create: mocks.staffJobRoleAuditCreate },
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
-  invitation: { create: mocks.invitationCreate },
+  invitation: { create: mocks.invitationCreate, upsert: mocks.invitationUpsert },
   restaurantOperatorCredential: {
     findMany: mocks.credFindMany,
     findFirst: mocks.credFindFirst,
@@ -158,6 +159,7 @@ beforeEach(() => {
   mocks.staffJobRoleAuditCreate.mockResolvedValue({});
   mocks.departmentFindFirst.mockResolvedValue({ key: 'OPERATIONS' });
   mocks.invitationCreate.mockResolvedValue({});
+  mocks.invitationUpsert.mockResolvedValue({});
   mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', status: 'ACTIVE' });
   mocks.staffCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
     id: 'staff_new',
@@ -284,6 +286,52 @@ describe('staff CRUD', () => {
     expect(mocks.staffJobRoleCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({ jobRoleId: 'role_server' }),
     });
+  });
+
+  it('returns a shareable link when email delivery fails', async () => {
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.sendEmail.mockRejectedValueOnce(new Error('SMTP unavailable'));
+
+    const result = await caller().invite({
+      name: 'Mina Shah',
+      email: 'mina@example.com',
+      staffRole: 'MANAGER',
+      primaryBranchId: 'branch_1',
+    });
+
+    expect(result).toMatchObject({
+      inviteUrl: expect.stringMatching(/^https:\/\/devfathom\.test\/invite\//),
+      emailDelivered: false,
+      resent: false,
+    });
+  });
+
+  it('rotates and resends the invitation for an already-invited restaurant staff user', async () => {
+    mocks.userFindFirst.mockResolvedValue({
+      id: 'user_invited',
+      name: 'Mina Shah',
+      status: 'INVITED',
+      restaurantStaffProfiles: [
+        { id: 'staff_new', displayName: 'Mina Shah', primaryBranchId: 'branch_1' },
+      ],
+    });
+
+    const result = await caller().invite({
+      name: 'Mina Shah',
+      email: 'mina@example.com',
+      staffRole: 'MANAGER',
+      primaryBranchId: 'branch_1',
+    });
+
+    expect(mocks.invitationUpsert).toHaveBeenCalledWith({
+      where: { userId: 'user_invited' },
+      create: expect.objectContaining({ userId: 'user_invited', email: 'mina@example.com' }),
+      update: expect.objectContaining({ email: 'mina@example.com', acceptedAt: null }),
+    });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+    expect(mocks.userCount).not.toHaveBeenCalled();
+    expect(mocks.sendEmail).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ emailDelivered: true, resent: true });
   });
 
   it('re-counts occupied seats after taking the organization lock', async () => {

@@ -13,6 +13,10 @@ type MutationOptions = {
   }) => void | Promise<void>;
   onError?: (error: { message: string }) => void;
 };
+type InviteOptions = {
+  onSuccess?: (result: { inviteUrl: string; emailDelivered: boolean; resent: boolean }) => void;
+  onError?: (error: { message: string }) => void;
+};
 
 const mocks = vi.hoisted(() => ({
   staff: {
@@ -44,6 +48,7 @@ const mocks = vi.hoisted(() => ({
   issueReset: vi.fn(),
   noopMutate: vi.fn(),
   inviteMutate: vi.fn(),
+  inviteOptions: undefined as InviteOptions | undefined,
   noopReset: vi.fn(),
   invalidate: vi.fn(),
   roleSave: vi.fn(),
@@ -147,12 +152,15 @@ vi.mock('@/lib/trpc', () => ({
         }),
       },
       invite: {
-        useMutation: () => ({
-          mutate: mocks.inviteMutate,
-          reset: mocks.noopReset,
-          isPending: false,
-          error: null,
-        }),
+        useMutation: (options: InviteOptions) => {
+          mocks.inviteOptions = options;
+          return {
+            mutate: mocks.inviteMutate,
+            reset: mocks.noopReset,
+            isPending: false,
+            error: null,
+          };
+        },
       },
       update: {
         useMutation: () => ({
@@ -306,6 +314,30 @@ describe('Restaurant staff credential UI', () => {
       primaryBranchId: 'branch_1',
     });
     expect(mocks.noopMutate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the shareable link visible when invitation email delivery is unconfirmed', () => {
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
+
+    act(() => {
+      mocks.inviteOptions?.onSuccess?.({
+        inviteUrl: 'https://devfathom.test/invite/retry-token',
+        emailDelivered: false,
+        resent: false,
+      });
+    });
+
+    expect(screen.getByRole('dialog', { name: 'Add staff member' })).toBeVisible();
+    expect(screen.getByText('Email delivery could not be confirmed.')).toBeVisible();
+    expect(screen.getByRole('link', { name: /retry-token/ })).toHaveAttribute(
+      'href',
+      'https://devfathom.test/invite/retry-token'
+    );
   });
   beforeEach(() => {
     vi.clearAllMocks();

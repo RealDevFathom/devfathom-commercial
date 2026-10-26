@@ -322,6 +322,47 @@ export const restaurantStaffRouter = router({
           await tx.$queryRaw(
             Prisma.sql`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`
           );
+          const existing = await tx.user.findFirst({
+            where: { organizationId, email: input.email },
+            select: {
+              id: true,
+              name: true,
+              status: true,
+              restaurantStaffProfiles: {
+                where: { primaryBranchId: input.primaryBranchId },
+                select: { id: true, displayName: true, primaryBranchId: true },
+                take: 1,
+              },
+            },
+          });
+          if (existing) {
+            const staff = existing.restaurantStaffProfiles[0];
+            if (existing.status === 'INVITED' && staff) {
+              await tx.invitation.upsert({
+                where: { userId: existing.id },
+                create: {
+                  userId: existing.id,
+                  email: input.email,
+                  tokenHash,
+                  invitedById: ctx.session!.user.id,
+                  expiresAt,
+                },
+                update: {
+                  email: input.email,
+                  tokenHash,
+                  invitedById: ctx.session!.user.id,
+                  expiresAt,
+                  acceptedAt: null,
+                },
+              });
+              return { user: existing, staff, resent: true };
+            }
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message:
+                'A user with this email already exists. Link them from the existing user list.',
+            });
+          }
           const activeSeats = await tx.user.count({
             where: { organizationId, status: { in: [...OCCUPIED_SEAT_STATUSES] } },
           });
@@ -329,17 +370,6 @@ export const restaurantStaffRouter = router({
             throw new TRPCError({
               code: 'FORBIDDEN',
               message: `Seat limit reached (${activeSeats}/${ctx.entitlements.seatLimit}).`,
-            });
-          }
-          const existing = await tx.user.findFirst({
-            where: { organizationId, email: input.email },
-            select: { id: true },
-          });
-          if (existing) {
-            throw new TRPCError({
-              code: 'CONFLICT',
-              message:
-                'A user with this email already exists. Link them from the existing user list.',
             });
           }
           const operatorLimit = resolveEntitlementLimit(
@@ -424,7 +454,7 @@ export const restaurantStaffRouter = router({
               expiresAt,
             },
           });
-          return { user, staff };
+          return { user, staff, resent: false };
         })
         .catch(mapStaffError);
 
@@ -432,8 +462,12 @@ export const restaurantStaffRouter = router({
         targetType: 'RestaurantStaffProfile',
         targetId: result.staff.id,
         targetLabel: result.staff.displayName,
-        description: `Invited restaurant ${input.staffRole.toLowerCase()} "${result.staff.displayName}"`,
-        metadata: { primaryBranchId: result.staff.primaryBranchId, userId: result.user.id },
+        description: `${result.resent ? 'Resent invitation to' : 'Invited'} restaurant ${input.staffRole.toLowerCase()} "${result.staff.displayName}"`,
+        metadata: {
+          primaryBranchId: result.staff.primaryBranchId,
+          userId: result.user.id,
+          resent: result.resent,
+        },
       });
       const inviteUrl = `${appUrl()}/invite/${token}`;
       const mail = templates.inviteMember({
@@ -444,6 +478,7 @@ export const restaurantStaffRouter = router({
         acceptUrl: inviteUrl,
         expiresLabel: 'in 7 days',
       });
+      let emailDelivered = true;
       try {
         await sendEmail({
           to: { email: input.email, name: result.user.name },
@@ -452,12 +487,13 @@ export const restaurantStaffRouter = router({
           text: mail.text,
         });
       } catch (error) {
+        emailDelivered = false;
         console.error(
           '[restaurantStaff.invite] invite email failed',
           error instanceof Error ? error.name : 'unknown error'
         );
       }
-      return { id: result.staff.id, inviteUrl };
+      return { id: result.staff.id, inviteUrl, emailDelivered, resent: result.resent };
     }),
 
   // ── Staff profiles ────────────────────────────────────────────────────────

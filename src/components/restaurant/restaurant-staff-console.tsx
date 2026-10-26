@@ -83,6 +83,10 @@ export function RestaurantStaffConsole() {
   const [statusFilter, setStatusFilter] = useState<'ALL' | StaffStatus>('ALL');
   const [branchFilter, setBranchFilter] = useState('');
   const [staffFormOpen, setStaffFormOpen] = useState(false);
+  const [inviteResult, setInviteResult] = useState<{
+    inviteUrl: string;
+    emailDelivered: boolean;
+  } | null>(null);
   const [createMode, setCreateMode] = useState<'INVITE' | 'LINK'>('INVITE');
   const [editingStaff, setEditingStaff] = useState<StaffProfile | null>(null);
   const [selectedStaff, setSelectedStaff] = useState<StaffProfile | null>(null);
@@ -121,11 +125,15 @@ export function RestaurantStaffConsole() {
     onError: mutationFailure,
   });
   const inviteStaff = trpc.restaurantStaff.invite.useMutation({
-    onSuccess: () => {
+    onSuccess: (result) => {
       refreshStaff();
       void utils.restaurantStaff.listEligibleUsers.invalidate();
-      setStaffFormOpen(false);
-      toast.success('Staff invitation sent.');
+      setInviteResult(result);
+      toast.success(
+        result.emailDelivered
+          ? 'Invitation created and email send accepted.'
+          : 'Invitation created, but email delivery could not be confirmed.'
+      );
     },
     onError: mutationFailure,
   });
@@ -200,6 +208,7 @@ export function RestaurantStaffConsole() {
 
   const openCreate = () => {
     setEditingStaff(null);
+    setInviteResult(null);
     setCreateMode('INVITE');
     createStaff.reset();
     updateStaff.reset();
@@ -482,6 +491,22 @@ export function RestaurantStaffConsole() {
             </DialogDescription>
           </DialogHeader>
           <form key={editingStaff?.id ?? 'new-staff'} className="space-y-4" onSubmit={submitStaff}>
+            {inviteResult ? (
+              <div role="status" className="rounded-md border border-border bg-surface p-3 text-sm">
+                <p className="font-medium text-text-strong">
+                  {inviteResult.emailDelivered
+                    ? 'The email send was accepted, but delivery is not guaranteed.'
+                    : 'Email delivery could not be confirmed.'}
+                </p>
+                <p className="mt-1 text-text-muted">Copy and share this invitation link:</p>
+                <a
+                  className="mt-1 block break-all text-primary underline underline-offset-4"
+                  href={inviteResult.inviteUrl}
+                >
+                  {inviteResult.inviteUrl}
+                </a>
+              </div>
+            ) : null}
             {(createStaff.error || inviteStaff.error || updateStaff.error) && (
               <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
                 {(createStaff.error ?? inviteStaff.error ?? updateStaff.error)?.message}
