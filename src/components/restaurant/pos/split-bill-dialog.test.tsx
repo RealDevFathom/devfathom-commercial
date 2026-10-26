@@ -69,12 +69,31 @@ describe('SplitBillDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Split bill' }));
 
     expect(screen.getByText('1 × Burger')).toBeVisible();
-    expect(screen.getByText('Seat 2 · No onions')).toBeVisible();
+    expect(screen.getByText('Order line 1 · Seat 2 · No onions')).toBeVisible();
     expect(screen.getByText('2 × Soup')).toBeVisible();
-    expect(screen.getByText('No seat')).toBeVisible();
+    expect(screen.getByText('Order line 2 · No seat')).toBeVisible();
     expect(screen.queryByText(/item-1|item-2/)).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Guest bill for Burger')).toHaveValue('1');
-    expect(screen.getByLabelText('Guest bill for Soup')).toHaveValue('2');
+    expect(screen.getByLabelText('Guest bill for Burger, order line 1')).toHaveValue('1');
+    expect(screen.getByLabelText('Guest bill for Soup, order line 2')).toHaveValue('2');
+  });
+
+  it('distinguishes otherwise identical order lines', () => {
+    render(
+      <SplitBillDialog
+        items={[
+          { id: 'item-1', name: 'Tea', quantity: 1, seatNumber: null, modifiers: ['Iced'] },
+          { id: 'item-2', name: 'Tea', quantity: 1, seatNumber: null, modifiers: ['Iced'] },
+        ]}
+        onSplit={vi.fn().mockResolvedValue(true)}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Split bill' }));
+
+    expect(screen.getByText('Order line 1 · No seat · Iced')).toBeVisible();
+    expect(screen.getByText('Order line 2 · No seat · Iced')).toBeVisible();
+    expect(screen.getByLabelText('Guest bill for Tea, order line 1')).toHaveValue('1');
+    expect(screen.getByLabelText('Guest bill for Tea, order line 2')).toHaveValue('2');
   });
 
   it('groups selected dishes while submitting only their internal IDs', async () => {
@@ -90,7 +109,9 @@ describe('SplitBillDialog', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Split bill' }));
-    fireEvent.change(screen.getByLabelText('Guest bill for Tea'), { target: { value: '1' } });
+    fireEvent.change(screen.getByLabelText('Guest bill for Tea, order line 3'), {
+      target: { value: '1' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Create split bills' }));
 
     await waitFor(() =>
@@ -109,7 +130,7 @@ describe('SplitBillDialog', () => {
     const { rerender } = render(<SplitBillDialog items={items} onSplit={onSplit} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Split bill' }));
-    fireEvent.change(screen.getByLabelText('Guest bill for Burger'), {
+    fireEvent.change(screen.getByLabelText('Guest bill for Burger, order line 1'), {
       target: { value: '2' },
     });
 
@@ -120,9 +141,9 @@ describe('SplitBillDialog', () => {
     ];
     rerender(<SplitBillDialog items={refreshedItems} onSplit={onSplit} />);
 
-    expect(screen.getByLabelText('Guest bill for Burger')).toHaveValue('1');
-    expect(screen.getByLabelText('Guest bill for Tea')).toHaveValue('2');
-    expect(screen.getByLabelText('Guest bill for Cake')).toHaveValue('3');
+    expect(screen.getByLabelText('Guest bill for Burger, order line 1')).toHaveValue('1');
+    expect(screen.getByLabelText('Guest bill for Tea, order line 2')).toHaveValue('2');
+    expect(screen.getByLabelText('Guest bill for Cake, order line 3')).toHaveValue('3');
 
     fireEvent.click(screen.getByRole('button', { name: 'Create split bills' }));
 

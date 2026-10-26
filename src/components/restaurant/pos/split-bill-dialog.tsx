@@ -150,7 +150,7 @@ export function SplitBillDialog({ items, disabled = false, onSplit }: SplitBillD
                   className="max-h-72 space-y-2 overflow-y-auto"
                   aria-describedby="split-groups-help"
                 >
-                  {items.map((item) => (
+                  {items.map((item, index) => (
                     <div
                       key={item.id}
                       className="flex items-start justify-between gap-3 rounded-lg border border-border-subtle bg-surface-sunken p-3"
@@ -161,6 +161,7 @@ export function SplitBillDialog({ items, disabled = false, onSplit }: SplitBillD
                         </p>
                         <p className="text-xs text-text-muted">
                           {[
+                            `Order line ${index + 1}`,
                             item.seatNumber === null ? 'No seat' : `Seat ${item.seatNumber}`,
                             ...item.modifiers,
                           ].join(' · ')}
@@ -172,7 +173,7 @@ export function SplitBillDialog({ items, disabled = false, onSplit }: SplitBillD
                         </Label>
                         <select
                           id={`split-item-${item.id}`}
-                          aria-label={`Guest bill for ${item.name}`}
+                          aria-label={`Guest bill for ${item.name}, order line ${index + 1}`}
                           value={assignments[item.id]}
                           disabled={pending}
                           onChange={(event) => {
