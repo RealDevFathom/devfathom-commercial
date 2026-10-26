@@ -4,36 +4,37 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ThemeProvider, useTheme } from './theme-provider';
 
-function luminance(hex: string) {
-  const channels = hex
+type Rgb = [number, number, number];
+
+function channels(color: string | Rgb): Rgb {
+  if (typeof color !== 'string') return color;
+
+  return color
     .slice(1)
     .match(/.{2}/g)!
-    .map((channel) => Number.parseInt(channel, 16) / 255)
-    .map((channel) => (channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4));
-
-  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    .map((channel) => Number.parseInt(channel, 16)) as Rgb;
 }
 
-function contrast(foreground: string, background: string) {
+function luminance(color: string | Rgb) {
+  const linearChannels = channels(color)
+    .map((channel) => channel / 255)
+    .map((channel) => (channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4));
+
+  return 0.2126 * linearChannels[0] + 0.7152 * linearChannels[1] + 0.0722 * linearChannels[2];
+}
+
+function contrast(foreground: string | Rgb, background: string | Rgb) {
   const values = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
   return (values[0] + 0.05) / (values[1] + 0.05);
 }
 
 function tint(foreground: string, background: string, opacity: number) {
-  const channels = [foreground, background].map((hex) =>
-    hex
-      .slice(1)
-      .match(/.{2}/g)!
-      .map((channel) => Number.parseInt(channel, 16))
-  );
+  const foregroundChannels = channels(foreground);
+  const backgroundChannels = channels(background);
 
-  return `#${channels[0]
-    .map((channel, index) =>
-      Math.round(channel * opacity + channels[1][index] * (1 - opacity))
-        .toString(16)
-        .padStart(2, '0')
-    )
-    .join('')}`;
+  return foregroundChannels.map(
+    (channel, index) => channel * opacity + backgroundChannels[index] * (1 - opacity)
+  ) as Rgb;
 }
 
 function studioTokens(theme: 'light' | 'dark') {

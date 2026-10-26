@@ -88,7 +88,7 @@ brand logo mark keeps its original `#ff684f` because it is a graphic, not text.
 | `--destructive` via `--red-600` (light)      | `#904039` | `destructive/20` over sunken           | 4.63  |
 | `--success` (dark)                           | `#a3c8a6` | `success/20` over muted `#30302d`      | 4.65  |
 | `--destructive` (dark)                       | `#f0a89f` | `destructive/20` over raised `#2c2c29` | 4.71  |
-| `--info` (dark)                              | `#adc9df` | `info/10` over secondary `#30302d`     | 6.18  |
+| `--info` (dark)                              | `#adc9df` | `info/10` over secondary `#30302d`     | 6.15  |
 
 Do not dim a text token with an opacity modifier (`text-muted-foreground/60`); it drops below AA
 on both themes. Use a semantic token (`text-success`) instead of a raw palette utility
