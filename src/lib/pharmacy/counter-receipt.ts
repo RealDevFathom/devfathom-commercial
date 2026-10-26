@@ -163,13 +163,28 @@ export const COUNTER_RECEIPT_DIRECTION: Readonly<Record<CounterReceiptLocale, 'l
  * Never divides by 100 in floating point: `Math.round(x / 100 * 100)` is how a
  * receipt total starts disagreeing with the ledger by a paisa.
  */
-export function formatMinor(amountMinor: number): string {
-  if (!Number.isSafeInteger(amountMinor)) return '0.00';
+export function formatMinor(amountMinor: number, locale: CounterReceiptLocale = 'en'): string {
+  if (!Number.isSafeInteger(amountMinor)) amountMinor = 0;
   const negative = amountMinor < 0;
   const absolute = Math.abs(amountMinor);
   const major = Math.floor(absolute / 100);
   const fraction = absolute % 100;
-  return `${negative ? '-' : ''}${major}.${String(fraction).padStart(2, '0')}`;
+  const numberLocale = locale === 'ur' ? 'ur-PK-u-nu-arabext' : 'en-PK';
+  const integerFormatter = new Intl.NumberFormat(numberLocale, { useGrouping: false });
+  const fractionFormatter = new Intl.NumberFormat(numberLocale, {
+    useGrouping: false,
+    minimumIntegerDigits: 2,
+  });
+  const decimal =
+    new Intl.NumberFormat(numberLocale, {
+      minimumFractionDigits: 1,
+    })
+      .formatToParts(0.1)
+      .find((part) => part.type === 'decimal')?.value ?? '.';
+  const minusSign =
+    new Intl.NumberFormat(numberLocale).formatToParts(-1).find((part) => part.type === 'minusSign')
+      ?.value ?? '-';
+  return `${negative ? minusSign : ''}${integerFormatter.format(major)}${decimal}${fractionFormatter.format(fraction)}`;
 }
 
 /** ISO timestamp reduced to the date a receipt prints. */
@@ -201,7 +216,7 @@ export function receiptLineLabel(line: CounterReceiptLine, locale: CounterReceip
     `${strings.batch} ${line.batchNumber}`,
     `${strings.expiry} ${formatReceiptDate(line.expiresAt)}`,
     `${line.quantity} ${strings.saleUnit[line.saleUnit]}`,
-    formatMinor(line.lineTotalMinor),
+    formatMinor(line.lineTotalMinor, locale),
   ].join(' · ');
 
   const full = `${identity} (${line.presentation}) · ${tail}`;
@@ -225,11 +240,11 @@ function footerFor(
 ): string {
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   const parts = [
-    `${strings.gross} ${formatMinor(receipt.totals.grossMinor)}`,
-    `${strings.discount} ${formatMinor(receipt.totals.discountMinor)}`,
-    `${strings.net} ${formatMinor(receipt.totals.netMinor)}`,
-    `${strings.tendered} ${formatMinor(receipt.totals.tenderedMinor)}`,
-    `${strings.change} ${formatMinor(receipt.totals.changeMinor)}`,
+    `${strings.gross} ${formatMinor(receipt.totals.grossMinor, locale)}`,
+    `${strings.discount} ${formatMinor(receipt.totals.discountMinor, locale)}`,
+    `${strings.net} ${formatMinor(receipt.totals.netMinor, locale)}`,
+    `${strings.tendered} ${formatMinor(receipt.totals.tenderedMinor, locale)}`,
+    `${strings.change} ${formatMinor(receipt.totals.changeMinor, locale)}`,
   ];
   if (receipt.receiptNumber === null) parts.push(strings.noReceiptNumber);
   if (reprint) parts.push(strings.reprint);

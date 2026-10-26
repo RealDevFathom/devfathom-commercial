@@ -154,6 +154,17 @@ it.each(['UNAVAILABLE', undefined] as const)(
   }
 );
 
+it('formats Urdu receipt amounts with Urdu digits', () => {
+  const input = props({ locale: 'ur' });
+  input.receipt!.tenders = [
+    { tenderId: 'tender-1', type: 'CASH', amountMinor: 100, changeGivenMinor: null },
+  ];
+  render(<CounterReceiptView {...input} />);
+  const region = within(screen.getByRole('region', { name: 'رسید 12' }));
+  expect(region.getAllByText('۱٫۰۰').length).toBeGreaterThan(0);
+  expect(region.queryByText('1.00')).toBeNull();
+});
+
 it('disables printing when shared semantic validation rejects the receipt', () => {
   const input = props();
   input.receipt!.branchName = 'Bad\u001b';

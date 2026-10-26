@@ -64,6 +64,11 @@ describe('formatMinor', () => {
     const total = Array.from({ length: 1_000 }, () => 1).reduce((sum, value) => sum + value, 0);
     expect(formatMinor(total)).toBe('10.00');
   });
+
+  it('uses Urdu digits when formatting an Urdu receipt', () => {
+    expect(formatMinor(123_456, 'ur')).toBe('۱۲۳۴٫۵۶');
+    expect(formatMinor(-250, 'ur')).toBe('-۲٫۵۰');
+  });
 });
 
 describe('counterReceiptTotals', () => {
@@ -108,6 +113,7 @@ describe('receiptLineLabel (POS-08 label fields)', () => {
     expect(label).toContain(COUNTER_RECEIPT_STRINGS.ur.batch);
     expect(label).toContain(COUNTER_RECEIPT_STRINGS.ur.expiry);
     expect(label).toContain('B-2201');
+    expect(label).toContain('۵۰٫۰۰');
   });
 });
 

@@ -504,12 +504,12 @@ export function CounterReceiptView({
                     {counterLinePresentation(line, locale).identity}
                   </span>
                   <span className="shrink-0 tabular-nums text-text-strong">
-                    {formatMinor(line.lineTotalMinor)}
+                    {formatMinor(line.lineTotalMinor, locale)}
                   </span>
                 </div>
                 <p className="text-text-muted">
                   {line.quantity} {strings.saleUnit[line.saleUnit]} ×{' '}
-                  {formatMinor(line.unitPriceMinor)}
+                  {formatMinor(line.unitPriceMinor, locale)}
                 </p>
                 {counterLinePresentation(line, locale).allocations.map((allocation, index) => (
                   <p
@@ -568,7 +568,7 @@ export function CounterReceiptView({
           ).map(([label, value]) => (
             <div key={label} className="flex justify-between gap-3">
               <dt className="text-text-muted">{label}</dt>
-              <dd className="tabular-nums text-text-strong">{formatMinor(value)}</dd>
+              <dd className="tabular-nums text-text-strong">{formatMinor(value, locale)}</dd>
             </div>
           ))}
         </dl>
@@ -580,7 +580,7 @@ export function CounterReceiptView({
               <div key={tender.tenderId} className="flex justify-between gap-3">
                 <span className="text-text-strong">{tender.type}</span>
                 <span className="tabular-nums text-text-strong">
-                  {formatMinor(tender.amountMinor)}
+                  {formatMinor(tender.amountMinor, locale)}
                 </span>
               </div>
             ))}
