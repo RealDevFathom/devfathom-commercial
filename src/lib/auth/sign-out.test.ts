@@ -32,4 +32,12 @@ describe('signOutEverything', () => {
 
     expect(mocks.signOut).toHaveBeenCalledWith({ callbackUrl: '/login' });
   });
+
+  it('still ends the session when login-intent cleanup returns an error response', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status: 500 }));
+
+    await expect(signOutEverything()).resolves.toBeUndefined();
+
+    expect(mocks.signOut).toHaveBeenCalledWith({ callbackUrl: '/login' });
+  });
 });
