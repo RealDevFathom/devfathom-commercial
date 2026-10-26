@@ -1025,42 +1025,66 @@ describeIfDatabase('bills command layer (real DB)', () => {
     ).toBe(1);
   });
 
-  it('serializes a bill cut against daily close', async () => {
+  it('waits for the branch-day close lock before cutting a bill', async () => {
     const businessDate = '2026-08-21';
     const opened = await openWithItems([{}], new Date(`${businessDate}T18:00:00.000Z`));
 
-    const [closeOutcome, cutOutcome] = await Promise.allSettled([
-      deps.close.cutClose(opened.db, {
-        branchId: ids.branch,
-        businessDate,
-        actor: actor(),
-      }),
-      deps.bills.cutBills(opened.db, {
-        orderId: opened.orderId,
-        branchId: ids.branch,
-        split: { kind: 'NONE' },
-        actor: actor(),
-      }),
-    ]);
-
-    expect(closeOutcome).toMatchObject({
-      status: 'rejected',
-      reason: expect.objectContaining({ reason: 'UNSETTLED_BILL' }),
+    let releaseLock!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseLock = resolve;
     });
-    expect(cutOutcome).toMatchObject({ status: 'fulfilled' });
-    expect(
-      await read((tx) =>
-        tx.restaurantDailyClose.count({
-          where: {
-            branchId: ids.branch,
-            businessDate: new Date(`${businessDate}T00:00:00.000Z`),
-          },
-        })
-      )
-    ).toBe(0);
-    expect(
-      await read((tx) => tx.restaurantBill.count({ where: { orderId: opened.orderId } }))
-    ).toBe(1);
+    let reportLockHeld!: (backendPid: number) => void;
+    const lockHeld = new Promise<number>((resolve) => {
+      reportLockHeld = resolve;
+    });
+    const lockKey = `${orgId}:${ids.branch}:${businessDate}`;
+    const holder = deps.withTenantDb(
+      orgId,
+      async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+        const [backend] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+        reportLockHeld(backend!.pid);
+        await release;
+      },
+      { skipDrain: true }
+    );
+    const blockerPid = await lockHeld;
+    const cut = deps.bills.cutBills(opened.db, {
+      orderId: opened.orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: actor(),
+    });
+
+    try {
+      let waiting = false;
+      for (let attempt = 0; attempt < 100 && !waiting; attempt += 1) {
+        waiting = await deps.withPlatformDb(async (tx) => {
+          const [row] = await tx.$queryRaw<Array<{ waiting: boolean }>>`
+            SELECT EXISTS (
+              SELECT 1
+              FROM pg_stat_activity
+              WHERE ${blockerPid} = ANY(pg_blocking_pids(pid))
+                AND wait_event = 'advisory'
+            ) AS waiting
+          `;
+          return row!.waiting;
+        });
+        if (!waiting) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(waiting).toBe(true);
+      expect(
+        await read((tx) => tx.restaurantBill.count({ where: { orderId: opened.orderId } }))
+      ).toBe(0);
+    } finally {
+      releaseLock();
+      await holder;
+    }
+
+    await expect(cut).resolves.toMatchObject({ orderId: opened.orderId, replayed: false });
+    expect(await read((tx) => tx.restaurantBill.count({ where: { orderId: opened.orderId } }))).toBe(
+      1
+    );
   });
 
   it('BY_SEAT groups items into per-seat bills that reconcile to the order total', async () => {
