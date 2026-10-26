@@ -96,6 +96,30 @@ describe('RefundPanel', () => {
     });
   });
 
+  it('rejects a refund when both principal and tip are zero', async () => {
+    const request = await open();
+    fireEvent.change(screen.getByLabelText('Settled receipt'), {
+      target: { value: tender.tenderId },
+    });
+    fireEvent.change(screen.getByLabelText('Refund amount'), { target: { value: '0.00' } });
+    fireEvent.change(screen.getByLabelText('Tip refund'), { target: { value: '0.00' } });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'No value selected' } });
+    fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
+    fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Enter a principal or tip amount to refund.'
+    );
+    expect(
+      screen.queryByRole('heading', { name: 'Confirm destructive refund' })
+    ).not.toBeInTheDocument();
+    expect(vi.mocked(request).mock.calls.some(([, options]) => options?.method === 'POST')).toBe(
+      false
+    );
+  });
+
   it('submits one terminal refund and renders the durable server-authored tax receipt', async () => {
     const request = mockRequest(async (_path, options) =>
       options?.method === 'POST'
