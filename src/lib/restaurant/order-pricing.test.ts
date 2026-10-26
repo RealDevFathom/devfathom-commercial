@@ -373,6 +373,24 @@ describe('resolveModifierSnapshots', () => {
     });
   });
 
+  it('rejects omitting a required group when another attached group is selected', async () => {
+    const db = makeDb({
+      modifierOptions: [
+        { id: 'opt_cheese', name: 'Cheese', priceDelta: D('1.00'), modifierGroupId: 'grp_extra' },
+      ],
+      productGroups: {
+        prod_1: [
+          { id: 'grp_cooking', name: 'Cooking', minSelect: 1 },
+          { id: 'grp_extra', name: 'Extras', maxSelect: 1 },
+        ],
+      },
+    });
+
+    await expect(resolveModifierSnapshots(db, 'prod_1', ['opt_cheese'])).rejects.toMatchObject({
+      reason: 'MODIFIER_SELECTION_COUNT',
+    });
+  });
+
   it('rejects a non-empty selection below an attached group minimum', async () => {
     const db = makeDb({
       modifierOptions: [
