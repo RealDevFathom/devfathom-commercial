@@ -95,16 +95,23 @@ describe('finance.getFinancialSummary', () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
-    mocks.paymentGroupBy.mockResolvedValueOnce([
+    const invoiceReceipts = [
       { currency: 'USD', _sum: { amount: 100 } },
       { currency: 'PKR', _sum: { amount: 1_000 } },
-    ]);
+    ];
+    mocks.paymentGroupBy
+      .mockResolvedValueOnce(invoiceReceipts)
+      .mockResolvedValueOnce(invoiceReceipts);
 
     const summary = await caller().getFinancialSummary();
 
     expect(summary.monthlyIncome).toEqual([
       { currency: 'USD', amount: 125 },
       { currency: 'PKR', amount: 1_500 },
+    ]);
+    expect(summary.yearlyIncome).toEqual([
+      { currency: 'USD', amount: 100 },
+      { currency: 'PKR', amount: 1_000 },
     ]);
   });
 });
