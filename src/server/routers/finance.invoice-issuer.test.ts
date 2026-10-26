@@ -106,4 +106,13 @@ describe('finance.getInvoiceById issuer', () => {
       },
     });
   });
+
+  it('fails instead of substituting a platform identity when the tenant is missing', async () => {
+    mocks.findOrganization.mockResolvedValue(null);
+
+    await expect(caller().getInvoiceById({ id: 'invoice-1' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'Workspace not found.',
+    });
+  });
 });
