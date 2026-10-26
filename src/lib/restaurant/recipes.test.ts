@@ -162,6 +162,9 @@ describe('upsertConversion', () => {
     await upsertConversion(scoped(), 'A', 'B', '1000');
 
     expect(db.$transaction).toHaveBeenCalledTimes(1);
+    expect(db.$transaction.mock.invocationCallOrder[0]).toBeLessThan(
+      db.$queryRaw.mock.invocationCallOrder[0]
+    );
     const lockCall = db.$queryRaw.mock.calls.find(([query]) =>
       query?.strings?.join('?').includes('pg_advisory_xact_lock')
     );
@@ -438,6 +441,9 @@ describe('createRecipeLine — recipe cycle detection', () => {
     });
 
     expect(db.$transaction).toHaveBeenCalledTimes(1);
+    expect(db.$transaction.mock.invocationCallOrder[0]).toBeLessThan(
+      db.$queryRaw.mock.invocationCallOrder[0]
+    );
     const lockCall = db.$queryRaw.mock.calls.find(([query]) =>
       query?.strings?.join('?').includes('pg_advisory_xact_lock')
     );

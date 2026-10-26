@@ -140,12 +140,12 @@ export async function upsertConversion(
   toUnitId: string,
   factor: string
 ) {
-  const organizationId = await catalogOrganizationId(db);
   if (fromUnitId === toUnitId) {
     throw new RecipeError('A unit cannot convert to itself.', 'CONVERSION_CYCLE');
   }
   return db.$transaction(async (tx) => {
     const scopedTx = tx as ScopedDb;
+    const organizationId = await catalogOrganizationId(scopedTx);
     await lockDependencyGraph(scopedTx, organizationId, 'unit-conversions');
     await requireUnit(scopedTx, fromUnitId);
     await requireUnit(scopedTx, toUnitId);
@@ -505,12 +505,12 @@ export type CreateRecipeLineInput =
  * may not reference itself directly or transitively.
  */
 export async function createRecipeLine(db: ScopedDb, input: CreateRecipeLineInput) {
-  const organizationId = await catalogOrganizationId(db);
   if ((!input.ingredientId && !input.subRecipeId) || (input.ingredientId && input.subRecipeId)) {
     throw new RecipeError('Exactly one of ingredientId or subRecipeId must be set.', 'INVALID');
   }
   return db.$transaction(async (tx) => {
     const scopedTx = tx as ScopedDb;
+    const organizationId = await catalogOrganizationId(scopedTx);
     if (input.subRecipeId) await lockDependencyGraph(scopedTx, organizationId, 'recipes');
 
     const version = await requireRecipeVersion(scopedTx, input.recipeVersionId);
