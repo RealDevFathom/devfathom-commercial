@@ -423,6 +423,23 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
 });
 
 describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => {
+  it('refuses a malformed sale payload without throwing or mutating the queue', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    const input = cashSale();
+    input.payload.lines = [];
+    input.payload.amountMinor = 0;
+
+    await expect(counter.enqueue(input, MATRIX)).resolves.toMatchObject({
+      ok: false,
+      reason: 'INVALID_REPLAY_CONTRACT',
+    });
+    expect(counter.snapshot().queue).toMatchObject({
+      leases: [{ nextNumber: 900 }],
+      quotas: [{ consumedUnits: 0 }],
+      commands: [],
+    });
+  });
+
   it.each([
     ['receipt number', { receiptNumber: 901 }],
     ['lease id', { leaseId: 'another_lease' }],

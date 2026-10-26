@@ -312,9 +312,12 @@ export function enqueueCounterCommand(
   let bucket = input.bucket ?? null;
   let requestedUnits = input.requestedUnits ?? 0;
   if (sale) {
-    const parsed = counterReplaySchema.safeParse(
-      counterReplayBody(snapshot.nextSequence, commandId, input.action, input.payload)
-    );
+    const parsed = counterReplaySchema.safeParse({
+      ...input.payload,
+      sequence: snapshot.nextSequence,
+      idempotencyKey: commandId,
+      action: input.action,
+    });
     const firstLine = parsed.success ? parsed.data.lines[0] : null;
     const sameBucket =
       parsed.success &&
