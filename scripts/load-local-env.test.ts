@@ -51,7 +51,8 @@ describe('loadLocalEnvironment', () => {
   it('never shadows variables supplied by the process environment', () => {
     const directory = mkdtempSync(join(tmpdir(), 'devfathom-env-'));
     directories.push(directory);
-    writeFileSync(join(directory, '.env.local'), 'DATABASE_URL=from-file\n');
+    writeFileSync(join(directory, '.env'), 'DATABASE_URL=from-dot-env\n');
+    writeFileSync(join(directory, '.env.local'), 'DATABASE_URL=from-dot-env-local\n');
 
     const environment = { DATABASE_URL: 'from-platform' };
     loadLocalEnvironment(environment, directory);
