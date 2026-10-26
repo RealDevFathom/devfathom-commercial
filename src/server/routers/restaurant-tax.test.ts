@@ -180,24 +180,28 @@ describe('restaurant tax activation router', () => {
     expect(db.restaurantTaxProfileVersion.create).toHaveBeenCalled();
   });
 
-  it('keeps replacement opt-in when preset activation omits the option', async () => {
-    db.restaurantTaxProfileVersion.findFirst.mockResolvedValueOnce({
-      id: 'profile_open',
-      rules: [],
-    });
+  it.each([undefined, false])(
+    'keeps replacement opt-in when preset activation uses %s',
+    async (replaceOpenProfile) => {
+      db.restaurantTaxProfileVersion.findFirst.mockResolvedValueOnce({
+        id: 'profile_open',
+        rules: [],
+      });
 
-    await expect(
-      caller().activate({
-        ...base,
-        profileId: 'PK-ICT-RESTAURANT',
-        eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
-      })
-    ).rejects.toMatchObject({ code: 'CONFLICT' });
+      await expect(
+        caller().activate({
+          ...base,
+          profileId: 'PK-ICT-RESTAURANT',
+          eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
+          ...(replaceOpenProfile === undefined ? {} : { replaceOpenProfile }),
+        })
+      ).rejects.toMatchObject({ code: 'CONFLICT' });
 
-    expect(db.restaurantTaxRuleVersion.updateMany).not.toHaveBeenCalled();
-    expect(db.restaurantTaxProfileVersion.update).not.toHaveBeenCalled();
-    expect(db.restaurantTaxProfileVersion.create).not.toHaveBeenCalled();
-  });
+      expect(db.restaurantTaxRuleVersion.updateMany).not.toHaveBeenCalled();
+      expect(db.restaurantTaxProfileVersion.update).not.toHaveBeenCalled();
+      expect(db.restaurantTaxProfileVersion.create).not.toHaveBeenCalled();
+    }
+  );
 
   it('does not close the open profile when another profile still overlaps the successor', async () => {
     db.restaurantTaxProfileVersion.findFirst
