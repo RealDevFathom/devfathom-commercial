@@ -327,8 +327,32 @@ describe('counter receipt authorization', () => {
         expect.objectContaining({ branchId: 'branch-a' }),
         expect.objectContaining({ manualCashFallback: true })
       );
+      expect(f.db.user.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { organizationId_id: { id: 'user-a', organizationId: 'org-a' } },
+        })
+      );
     }
   );
+
+  it.each([
+    ['refundTender', (caller: Caller) => caller.refundTender(refundInput)],
+    ['returnLine', (caller: Caller) => caller.returnLine(returnInput)],
+  ])('%s revalidates branch assignment inside the mutation transaction', async (_name, run) => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    f.db.pharmacyBranchAssignment.findMany
+      .mockResolvedValueOnce([{ branchId: 'branch-a' }])
+      .mockResolvedValueOnce([]);
+
+    await expect(run(f.caller())).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(f.db.$transaction).toHaveBeenCalledOnce();
+    expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalledTimes(2);
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(returnSaleLine).not.toHaveBeenCalled();
+  });
 
   it('rejects status-only completion before opening a transaction', async () => {
     const f = fixture(dispense);

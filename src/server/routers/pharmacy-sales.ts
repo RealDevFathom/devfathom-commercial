@@ -338,9 +338,17 @@ function counterCapabilityDecision(
  * explicit assignment elsewhere. That exception is recorded on the audit.
  */
 /** A branch outside the session organization is a scope denial, not a bad request. */
-async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+async function branchScopeOrForbidden(
+  ctx: TRPCContext,
+  branch: string,
+  db: ScopedDb = ctx.db
+): Promise<LedgerScope> {
   try {
-    return await scopeFor(ctx, branch);
+    const organizationId = ctx.entitlements?.organizationId;
+    const actorId = ctx.session?.user?.id;
+    if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    await assertInOrganization(db.pharmacyBranch, organizationId, [branch], { active: true });
+    return { organizationId, branchId: branch, actorId };
   } catch (error) {
     if (error instanceof TRPCError && error.code === 'BAD_REQUEST') {
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
@@ -353,9 +361,10 @@ async function requireCounterReceiptAccess(
   ctx: TRPCContext,
   branch: string,
   requireCanonicalCounter = false,
-  requireAssignedBranch = false
+  requireAssignedBranch = false,
+  db: ScopedDb = ctx.db
 ): Promise<LedgerScope> {
-  const scope = await branchScopeOrForbidden(ctx, branch);
+  const scope = await branchScopeOrForbidden(ctx, branch, db);
   const user = ctx.session!.user;
   if (!user.organizationId || user.organizationId !== scope.organizationId) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
@@ -363,7 +372,7 @@ async function requireCounterReceiptAccess(
 
   if (
     requireCanonicalCounter &&
-    !(await can(subjectFromSession(user), 'pharmacy:counter', undefined, { db: ctx.db }))
+    !(await can(subjectFromSession(user), 'pharmacy:counter', undefined, { db }))
   ) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -371,8 +380,8 @@ async function requireCounterReceiptAccess(
     });
   }
 
-  const member = await ctx.db.user.findUnique({
-    where: { id: user.id },
+  const member = await db.user.findUnique({
+    where: { organizationId_id: { id: user.id, organizationId: scope.organizationId } },
     select: {
       status: true,
       organizationId: true,
@@ -408,7 +417,7 @@ async function requireCounterReceiptAccess(
     });
   }
 
-  const available = await ctx.db.pharmacyBranch.findFirst({
+  const available = await db.pharmacyBranch.findFirst({
     where: { id: branch, organizationId: scope.organizationId, active: true },
     select: { id: true },
   });
@@ -416,7 +425,7 @@ async function requireCounterReceiptAccess(
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const rows = await ctx.db.pharmacyBranchAssignment.findMany({
+  const rows = await db.pharmacyBranchAssignment.findMany({
     where: {
       organizationId: scope.organizationId,
       userId: user.id,
@@ -844,10 +853,12 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const authorizedScope = await requireCounterReceiptAccess(ctx, input.branchId, true, true);
+        await requireCounterReceiptAccess(ctx, input.branchId, true, true);
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = authorizedScope;
+          // Re-read authorization on the transaction client immediately before
+          // moving money so a revocation cannot be missed between admission and use.
+          const scope = await requireCounterReceiptAccess(ctx, input.branchId, true, true, db);
           const tender = await db.pharmacyTender.findFirst({
             where: {
               id: input.originalTenderId,
@@ -1379,10 +1390,14 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true, true);
+        await requireCounterReceiptAccess(ctx, input.branchId, true, true);
         return await ctx.db.$transaction(async (tx) => {
           try {
-            return await returnSaleLine(txDb(tx), scope, input);
+            const db = txDb(tx);
+            // Re-read authorization on the transaction client immediately before
+            // moving stock so a revocation cannot be missed between admission and use.
+            const scope = await requireCounterReceiptAccess(ctx, input.branchId, true, true, db);
+            return await returnSaleLine(db, scope, input);
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
               return { blocked: error.message };
