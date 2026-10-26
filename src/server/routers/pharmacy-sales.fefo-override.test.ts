@@ -275,6 +275,10 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
       })
     );
     expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
+    expect(f.db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'credential-1' },
+      data: { failedAttempts: 0, lockedUntil: null },
+    });
   });
 
   it('rejects a real manager who did not authenticate the approval', async () => {
