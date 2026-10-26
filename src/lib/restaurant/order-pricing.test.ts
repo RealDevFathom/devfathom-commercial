@@ -374,9 +374,9 @@ describe('resolveOrderPricingRefs', () => {
     expect(refs.priceListVersionId).toBeNull();
   });
 
-  it('rejects a publication belonging to another branch', async () => {
+  it('does not disclose channel availability for a publication belonging to another branch', async () => {
     const db = makeDb({
-      publication: { ...basePublication, branchId: 'branch_2' },
+      publication: { ...basePublication, branchId: 'branch_2', channels: ['TAKEAWAY'] },
     });
 
     await expect(
@@ -387,5 +387,20 @@ describe('resolveOrderPricingRefs', () => {
         at: AT,
       })
     ).rejects.toMatchObject({ reason: 'PUBLICATION_NOT_FOUND' });
+  });
+
+  it('rejects an unpublished channel for a publication belonging to the requested branch', async () => {
+    const db = makeDb({
+      publication: { ...basePublication, channels: ['TAKEAWAY'] },
+    });
+
+    await expect(
+      resolveOrderPricingRefs(db, {
+        publicationId: 'pub_1',
+        branchId: 'branch_1',
+        channel: 'DINE_IN',
+        at: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'CHANNEL_NOT_PUBLISHED' });
   });
 });
