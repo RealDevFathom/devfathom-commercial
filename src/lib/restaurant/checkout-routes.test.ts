@@ -65,6 +65,16 @@ describe('checkout money serialization', () => {
 
     const summary = await getOrderSettlementForBranch(db, 'order-1', 'branch-1');
 
+    expect(db.restaurantOrderItem.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['item-2', 'item-1'] }, orderId: 'order-1' },
+      select: {
+        id: true,
+        name: true,
+        quantity: true,
+        seatNumber: true,
+        modifiers: { select: { name: true }, orderBy: { createdAt: 'asc' } },
+      },
+    });
     expect(summary?.unbilledItems).toEqual([
       { id: 'item-2', name: 'Soup', quantity: 2, seatNumber: null, modifiers: [] },
       { id: 'item-1', name: 'Burger', quantity: 1, seatNumber: 3, modifiers: ['No onions'] },
