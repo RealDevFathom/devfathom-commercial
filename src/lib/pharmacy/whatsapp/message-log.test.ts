@@ -95,25 +95,28 @@ describe('outbound evidence and safe replay', () => {
     expect(send).not.toHaveBeenCalled();
     expect(mocks.update).not.toHaveBeenCalled();
   });
-  it('re-checks opt-in after claiming and suppresses a reminder opted out before send', async () => {
-    mocks.queryRaw.mockResolvedValue([]);
-    const send = vi.fn();
+  it.each(['REFILL_REMINDER', 'KHATA_REMINDER'] as const)(
+    're-checks opt-in after claiming and suppresses an opted-out %s',
+    async (kind) => {
+      mocks.queryRaw.mockResolvedValue([]);
+      const send = vi.fn();
 
-    await expect(sendAndLog(reminderEntry, send)).resolves.toBe('PREPARED');
+      await expect(sendAndLog({ ...reminderEntry, kind }, send)).resolves.toBe('PREPARED');
 
-    const query = mocks.queryRaw.mock.calls[0][0];
-    expect(query.sql).toContain('"organizationId" = ?');
-    expect(query.sql).toContain('id = ?');
-    expect(query.sql).toContain('active = true');
-    expect(query.sql).toContain('"whatsappOptIn" = true');
-    expect(query.sql).toContain('FOR UPDATE');
-    expect(query.values).toEqual(['org-a', 'customer-a']);
-    expect(send).not.toHaveBeenCalled();
-    expect(mocks.update).toHaveBeenCalledWith({
-      where: { id: 'log-a' },
-      data: { status: 'IGNORED', error: 'OPTED_OUT_BEFORE_SEND' },
-    });
-  });
+      const query = mocks.queryRaw.mock.calls[0][0];
+      expect(query.sql).toContain('"organizationId" = ?');
+      expect(query.sql).toContain('id = ?');
+      expect(query.sql).toContain('active = true');
+      expect(query.sql).toContain('"whatsappOptIn" = true');
+      expect(query.sql).toContain('FOR UPDATE');
+      expect(query.values).toEqual(['org-a', 'customer-a']);
+      expect(send).not.toHaveBeenCalled();
+      expect(mocks.update).toHaveBeenCalledWith({
+        where: { id: 'log-a' },
+        data: { status: 'IGNORED', error: 'OPTED_OUT_BEFORE_SEND' },
+      });
+    }
+  );
   it('suppresses a reminder that has no customer to prove explicit consent', async () => {
     const send = vi.fn();
 
