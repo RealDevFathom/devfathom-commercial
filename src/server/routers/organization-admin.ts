@@ -31,6 +31,7 @@ const departmentKey = z
   .max(80)
   .regex(/^[A-Z0-9_]+$/, 'Use uppercase letters, numbers, and underscores only.');
 const OCCUPIED_SEAT_STATUSES = ['ACTIVE', 'ON_LEAVE', 'INVITED'] as const;
+const GOODS_IN_CAPABILITY = 'pharmacy:procurement';
 
 function occupiesSeat(status: string): boolean {
   return (OCCUPIED_SEAT_STATUSES as readonly string[]).includes(status);
@@ -264,7 +265,7 @@ export const organizationAdminRouter = router({
             organizationRoleId: true,
             lastActiveAt: true,
             permissionOverrides: {
-              where: { capability: 'pharmacy.procurement', effect: 'ALLOW' },
+              where: { capability: GOODS_IN_CAPABILITY, effect: 'ALLOW' },
               select: { id: true },
             },
           },
@@ -576,13 +577,13 @@ export const organizationAdminRouter = router({
       if (input.granted) {
         await ctx.db.userPermissionOverride.upsert({
           where: {
-            userId_capability: { userId: user.id, capability: 'pharmacy.procurement' },
+            userId_capability: { userId: user.id, capability: GOODS_IN_CAPABILITY },
           },
           update: { effect: 'ALLOW', reason: 'Goods-in access granted by workspace administrator' },
           create: {
             organizationId: id,
             userId: user.id,
-            capability: 'pharmacy.procurement',
+            capability: GOODS_IN_CAPABILITY,
             effect: 'ALLOW',
             reason: 'Goods-in access granted by workspace administrator',
             createdById: ctx.session.user.id,
@@ -590,7 +591,7 @@ export const organizationAdminRouter = router({
         });
       } else {
         await ctx.db.userPermissionOverride.deleteMany({
-          where: { organizationId: id, userId: user.id, capability: 'pharmacy.procurement' },
+          where: { organizationId: id, userId: user.id, capability: GOODS_IN_CAPABILITY },
         });
       }
       annotateAudit(ctx, {
@@ -598,7 +599,7 @@ export const organizationAdminRouter = router({
         targetId: user.id,
         targetLabel: user.email,
         description: `${input.granted ? 'Granted' : 'Removed'} Goods-in access`,
-        metadata: { capability: 'pharmacy.procurement', granted: input.granted },
+        metadata: { capability: GOODS_IN_CAPABILITY, granted: input.granted },
       });
       return { granted: input.granted };
     }),

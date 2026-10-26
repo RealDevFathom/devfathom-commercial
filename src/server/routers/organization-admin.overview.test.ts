@@ -82,6 +82,10 @@ describe('organization overview assigned package', () => {
       })
     );
     expect(mocks.organization.mock.calls[0][0].select).not.toHaveProperty('package');
+    expect(mocks.organization.mock.calls[0][0].select.users.select.permissionOverrides).toEqual({
+      where: { capability: 'pharmacy:procurement', effect: 'ALLOW' },
+      select: { id: true },
+    });
     expect(mocks.package).toHaveBeenCalledExactlyOnceWith({
       where: { id: 'pkg_ph' },
       select: { name: true },
