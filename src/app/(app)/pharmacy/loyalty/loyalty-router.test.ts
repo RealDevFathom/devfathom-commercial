@@ -137,4 +137,29 @@ describe('ordinary loyalty router visibility', () => {
       } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
+
+  it('does not update a customer when the requested branch is inactive or unavailable', async () => {
+    mocks.branch.mockResolvedValue(null);
+
+    await expect(
+      caller().setReminderLanguage({
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        preferredLanguage: 'ur',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mocks.updateCustomers).not.toHaveBeenCalled();
+  });
+
+  it('reports an inactive or unavailable customer without claiming the preference was saved', async () => {
+    mocks.updateCustomers.mockResolvedValue({ count: 0 });
+
+    await expect(
+      caller().setReminderLanguage({
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        preferredLanguage: 'ur',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
 });
