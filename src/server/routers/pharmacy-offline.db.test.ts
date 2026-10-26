@@ -398,6 +398,13 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
     expect(gap.status).toBe(409);
     expect(await gap.json()).toEqual({ error: 'SEQUENCE_OUT_OF_ORDER' });
     expect((await f.counts()).commands).toBe(0);
+    const cursorAfterGap = await inOrg(ORG_A, (db) =>
+      db.pharmacyRegisteredDevice.findFirstOrThrow({
+        where: { id: f.fixture.deviceId },
+        select: { nextOfflineCommandSequence: true },
+      })
+    );
+    expect(cursorAfterGap.nextOfflineCommandSequence).toBe(1);
 
     expect((await f.replay()).status).toBe(200);
     expect((await f.replay(second)).status).toBe(200);
