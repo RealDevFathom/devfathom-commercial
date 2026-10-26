@@ -567,9 +567,13 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       const incoming = final.movements.filter(
         (m) => m.kind === 'TRANSFER_IN' && m.branchId === destinationBranch
       );
+      const outgoing = final.movements.filter(
+        (m) => m.kind === 'TRANSFER_OUT' && m.branchId === BRANCH_A
+      );
       expect(incoming).toHaveLength(2);
       expect(new Set(incoming.map((m) => m.inventoryLotId)).size).toBe(2);
       expect(incoming.reduce((n, m) => n + m.quantityUnits, 0)).toBe(sent);
+      expect(outgoing.reduce((n, m) => n + m.quantityUnits, 0)).toBe(-sent);
       expect(final.destination.reduce((n, lot) => n + lot.onHandUnits, 0)).toBe(sent);
       expect(final.transit?.onHandUnits).toBe(0);
       expect(final.line.receivedUnits).toBe(sent);
