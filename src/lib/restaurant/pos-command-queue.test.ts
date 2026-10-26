@@ -390,6 +390,18 @@ describe('the visible 50-draft ceiling and device binding (criterion 3)', () => 
     const replay = nextReplayCommand(snapshot, 'device-2', OPERATOR);
     expect(replay).toEqual({ status: 'REFUSED', reason: 'DEVICE_MISMATCH' });
   });
+
+  it('refuses to adopt a legacy persisted draft with no composing operator', () => {
+    const snapshot = seeded([draftInput()]);
+    const legacyDraft = snapshot.drafts[0] as Partial<PosQueuedDraft>;
+    delete legacyDraft.composerStaffProfileId;
+    delete legacyDraft.composerProof;
+
+    expect(nextReplayCommand(snapshot, DEVICE, OPERATOR)).toEqual({
+      status: 'REFUSED',
+      reason: 'OPERATOR_MISMATCH',
+    });
+  });
 });
 
 // ── The replay classifier ────────────────────────────────────────────────────
