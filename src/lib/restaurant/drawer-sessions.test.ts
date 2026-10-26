@@ -71,6 +71,7 @@ type Deps = {
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
   drawer: typeof import('./drawer-sessions');
   dailyClose: typeof import('./daily-close');
+  moneyDayGuard: typeof import('./money-day-guard');
 };
 
 let deps: Deps;
@@ -95,11 +96,12 @@ async function newDevice(label: string, branchId = ids.branch): Promise<string> 
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, drawer, dailyClose] = await Promise.all([
+  const [scopedDb, devices, drawer, dailyClose, moneyDayGuard] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('@/lib/restaurant/devices'),
     import('./drawer-sessions'),
     import('./daily-close'),
+    import('./money-day-guard'),
   ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
@@ -108,6 +110,7 @@ beforeAll(async () => {
     enrollDevice: devices.enrollDevice,
     drawer,
     dailyClose,
+    moneyDayGuard,
   };
 
   await deps.withPlatformDb((tx) =>
@@ -346,6 +349,87 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
       }),
     }));
     expect(persisted).toEqual({ movements: 1, closes: 0 });
+  });
+
+  it('uses the same lock order when a drawer close races a movement writer', async () => {
+    const deviceId = await newDevice('POS-drawer-close-race');
+    const db = deps.createTenantDb(orgId);
+    const opened = await deps.drawer.openDrawerSession(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
+      branchId: ids.branch,
+      openingFloat: '40.00',
+      actor: actor(deviceId),
+      now: AT,
+    });
+
+    let releaseWriter!: () => void;
+    let writerHasDayLock!: () => void;
+    let writerPid = 0;
+    const writerReady = new Promise<void>((resolve) => (writerHasDayLock = resolve));
+    const writerRelease = new Promise<void>((resolve) => (releaseWriter = resolve));
+    const writing = deps.withTenantDb(orgId, async (tx) => {
+      const [backend] = await tx.$queryRaw<
+        Array<{ pid: number }>
+      >`SELECT pg_backend_pid() AS pid`;
+      writerPid = backend.pid;
+      await deps.moneyDayGuard.assertMoneyDayOpen(tx, ids.branch, opened.businessDate);
+      writerHasDayLock();
+      await writerRelease;
+      return deps.drawer.appendMovement(tx, {
+        drawerSessionId: opened.drawerSessionId,
+        kind: 'CASH_SALE',
+        amount: '5.00',
+        staffProfileId: ids.operator,
+        deviceId,
+      });
+    });
+    await writerReady;
+
+    const closing = deps.drawer.closeDrawerSession(db, {
+      drawerSessionId: opened.drawerSessionId,
+      countedCash: '45.00',
+      actor: actor(deviceId),
+    });
+
+    // Wait until close is definitely contending for the advisory lock, then
+    // prove it has not already taken the drawer row. The former inverted order
+    // fails this NOWAIT probe because close held the row while waiting here.
+    let closeIsWaiting = false;
+    for (let attempt = 0; attempt < 100 && !closeIsWaiting; attempt += 1) {
+      const [locks] = await read((tx) =>
+        tx.$queryRaw<Array<{ count: bigint }>>`
+          SELECT count(*)::bigint AS count
+          FROM pg_locks waiting
+          JOIN pg_locks held
+            ON held.locktype = waiting.locktype
+            AND held.database IS NOT DISTINCT FROM waiting.database
+            AND held.classid IS NOT DISTINCT FROM waiting.classid
+            AND held.objid IS NOT DISTINCT FROM waiting.objid
+            AND held.objsubid IS NOT DISTINCT FROM waiting.objsubid
+          WHERE waiting.locktype = 'advisory'
+            AND NOT waiting.granted
+            AND held.granted
+            AND held.pid = ${writerPid}
+        `
+      );
+      closeIsWaiting = locks.count > 0n;
+      if (!closeIsWaiting) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    try {
+      expect(closeIsWaiting).toBe(true);
+      await read(
+        (tx) =>
+          tx.$queryRaw`SELECT id FROM restaurant_drawer_sessions WHERE id = ${opened.drawerSessionId} FOR UPDATE NOWAIT`
+      );
+    } finally {
+      releaseWriter();
+    }
+
+    const [movement, closed] = await Promise.all([writing, closing]);
+    expect(movement.movementId).toEqual(expect.any(String));
+    expect(closed.expectedCash.toString()).toBe('45');
+    expect(closed.variance.toString()).toBe('0');
   });
 
   it('rejects a second OPEN drawer on the same register', async () => {

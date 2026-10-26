@@ -606,6 +606,23 @@ export async function closeDrawerSession(
       };
     }
 
+    // Resolve the branch/date without locking the drawer, then take locks in the
+    // same order as appendMovement: business day first, drawer row second.
+    // Keeping this order prevents a close and a movement writer from each
+    // holding one lock while waiting for the other.
+    const grain = await tx.restaurantDrawerSession.findFirst({
+      where: { id: input.drawerSessionId, deviceId: input.actor.deviceId },
+      select: {
+        branchId: true,
+        businessDate: true,
+        device: { select: { branchId: true } },
+      },
+    });
+    if (!grain || grain.branchId !== grain.device.branchId) {
+      throw new DrawerSessionError('The drawer session does not exist.', 'DRAWER_NOT_FOUND');
+    }
+    await assertMoneyDayOpen(tx, grain.branchId, grain.businessDate);
+
     // Read the ledger only after all earlier movement writers have committed.
     await tx.$queryRaw`SELECT id FROM restaurant_drawer_sessions WHERE id = ${input.drawerSessionId} FOR UPDATE`;
     const session = await tx.restaurantDrawerSession.findFirst({
