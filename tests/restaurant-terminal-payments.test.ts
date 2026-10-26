@@ -152,7 +152,16 @@ describe('provider-neutral terminal payments', () => {
     });
 
     expect(quoteOpenBillSettlement).toHaveBeenCalledWith(db, 'bill-1', expect.any(Date), 'CARD');
-    expect(applyTenderInTransaction).toHaveBeenCalledOnce();
+    const quotedAt = quoteOpenBillSettlement.mock.calls[0]![2];
+    expect(applyTenderInTransaction).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        now: quotedAt,
+        tender: expect.objectContaining({ type: 'CARD', amount: expect.anything() }),
+      })
+    );
+    const appliedAmount = applyTenderInTransaction.mock.calls[0]![1].tender.amount;
+    expect(appliedAmount.toFixed(2)).toBe('10.80');
     expect(created).toEqual([]);
   });
 

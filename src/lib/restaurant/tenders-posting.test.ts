@@ -50,6 +50,8 @@ type Tender = {
 function fixture() {
   let taxRate = D('0');
   const tenders: Tender[] = [];
+  const payments: Record<string, unknown>[] = [];
+  const paymentEvents: Record<string, unknown>[] = [];
   const movements = [{ kind: 'OPENING_FLOAT' as const, amount: D('100') }] as Array<{
     kind: Parameters<typeof foldExpectedCash>[0][number]['kind'];
     amount: Prisma.Decimal;
@@ -269,8 +271,18 @@ function fixture() {
     restaurantTaxTenderAllocationSnapshot: { findMany: vi.fn(async () => []) },
     restaurantTaxTransactionSnapshot: { findMany: vi.fn(async () => []) },
     restaurantCoAuthorization: { create: vi.fn(async () => ({ id: 'approval' })) },
-    restaurantPayment: { create: vi.fn(async () => ({ id: 'payment' })) },
-    restaurantPaymentEvent: { create: vi.fn(async () => ({ id: 'event' })) },
+    restaurantPayment: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        payments.push(data);
+        return { id: 'payment' };
+      }),
+    },
+    restaurantPaymentEvent: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        paymentEvents.push(data);
+        return { id: 'event' };
+      }),
+    },
   };
   const db = raw as unknown as ScopedDb;
   vi.mocked(finalizeBillSettlement).mockImplementation(async (_tx, input) => {
@@ -293,6 +305,8 @@ function fixture() {
     bill,
     drawer,
     tenders,
+    payments,
+    paymentEvents,
     movements,
     collect,
     closedDays,
@@ -342,6 +356,8 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     expect(result.remainingDue.toFixed(2)).toBe('0.00');
     expect(f.tenders).toHaveLength(1);
     expect(f.tenders[0]!.amount.toFixed(2)).toBe('10.80');
+    expect((f.payments[0]!.amount as Prisma.Decimal).toFixed(2)).toBe('10.80');
+    expect((f.paymentEvents[0]!.amount as Prisma.Decimal).toFixed(2)).toBe('10.80');
   });
 
   it('rejects a terminal approval when the locked CARD quote was repriced', async () => {
