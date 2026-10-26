@@ -41,6 +41,7 @@ type Tender = {
   tipAmount: Prisma.Decimal;
   businessDate: Date;
   createdAt: Date;
+  paymentId?: string | null;
 };
 
 function fixture() {
@@ -174,7 +175,7 @@ function fixture() {
       findFirst: vi.fn(async ({ where }: { where: { id: string; bill: { branchId: string } } }) => {
         const row = tenders.find((tender) => tender.id === where.id);
         return row && where.bill.branchId === bill.branchId
-          ? { ...row, paymentId: null, bill }
+          ? { ...row, paymentId: row.paymentId ?? null, bill }
           : null;
       }),
       findMany: vi.fn(async ({ where }: { where: Where & { bill?: { branchId: string } } }) => {
@@ -264,8 +265,17 @@ function fixture() {
     restaurantTaxTenderAllocationSnapshot: { findMany: vi.fn(async () => []) },
     restaurantTaxTransactionSnapshot: { findMany: vi.fn(async () => []) },
     restaurantCoAuthorization: { create: vi.fn(async () => ({ id: 'approval' })) },
-    restaurantPayment: { create: vi.fn(async () => ({ id: 'payment' })) },
+    restaurantPayment: {
+      create: vi.fn(async () => ({ id: 'payment' })),
+      findUnique: vi.fn(async () => ({
+        id: 'payment',
+        provider: 'TERMINAL',
+        providerRef: 'terminal-payment',
+      })),
+      update: vi.fn(),
+    },
     restaurantPaymentEvent: { create: vi.fn(async () => ({ id: 'event' })) },
+    restaurantTerminalReconciliation: { create: vi.fn(async () => ({ id: 'reconciliation' })) },
   };
   const db = raw as unknown as ScopedDb;
   vi.mocked(finalizeBillSettlement).mockImplementation(async (_tx, input) => {
@@ -472,6 +482,38 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     expect(f.raw.restaurantCoAuthorization.create).not.toHaveBeenCalled();
     expect(f.raw.restaurantRefund.create).not.toHaveBeenCalled();
     expect(f.movements).toHaveLength(2);
+  });
+
+  it('rejects a terminal card refund instead of recording a MOCK reversal', async () => {
+    const f = fixture();
+    const collected = await f.collect({
+      tender: {
+        type: 'CARD',
+        amount: '3860',
+        terminalConfirmation: {
+          configId: 'terminal-config',
+          branchId: 'branch',
+          externalEventId: 'terminal-event',
+          source: 'WEBHOOK',
+          externalReference: 'terminal-payment',
+          providerRef: 'terminal-provider-ref',
+        },
+      },
+    });
+
+    await expect(
+      refundTender(f.db, {
+        originalTenderId: collected.tenderId,
+        amount: '3860',
+        reason: 'Terminal refund regression',
+        approvingStaffProfileId: 'manager',
+        actor: { ...actor, idempotencyKey: 'terminal-refund' },
+        now: NOW,
+      })
+    ).rejects.toMatchObject({ reason: 'UNSUPPORTED_PAYMENT_PROVIDER' });
+
+    expect(f.raw.restaurantPaymentEvent.create).toHaveBeenCalledTimes(1);
+    expect(f.raw.restaurantPayment.update).not.toHaveBeenCalled();
   });
 
   it.each([D1, D2])(

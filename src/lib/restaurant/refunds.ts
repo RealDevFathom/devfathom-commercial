@@ -64,6 +64,7 @@ export type RefundKind = 'REFUND' | 'VOID_REVERSAL';
 export type RefundErrorReason =
   | 'TENDER_NOT_FOUND'
   | 'PAYMENT_NOT_FOUND'
+  | 'UNSUPPORTED_PAYMENT_PROVIDER'
   | 'INVALID_AMOUNT'
   | 'REFUND_EXCEEDS_TENDER'
   | 'TIP_REFUND_EXCEEDS_TENDER'
@@ -494,7 +495,7 @@ async function requireOpenDrawer(
   return drawer.id;
 }
 
-/** Run the MOCK adapter REFUND/VOID against the card payment, append the event, and
+/** Run the payment's adapter REFUND/VOID against the card payment, append the event, and
  * transition the payment's normalized status. Returns the resulting status. */
 async function applyCardRefund(
   tx: ScopedDb,
@@ -511,14 +512,23 @@ async function applyCardRefund(
 ): Promise<PaymentStatus> {
   const payment = await tx.restaurantPayment.findUnique({
     where: { id: input.paymentId },
-    select: { id: true, providerRef: true },
+    select: { id: true, provider: true, providerRef: true },
   });
   if (!payment) {
     throw new RefundError('The card payment no longer exists.', 'PAYMENT_NOT_FOUND');
   }
 
+  // TERMINAL payments have no authoritative reversal adapter yet. Never substitute
+  // the local MOCK adapter: doing so would report success without moving external funds.
+  if (payment.provider !== 'MOCK') {
+    throw new RefundError(
+      `Refunds are not supported for the ${payment.provider} payment provider.`,
+      'UNSUPPORTED_PAYMENT_PROVIDER'
+    );
+  }
+
   const capability: PaymentCapability = input.kind === 'VOID_REVERSAL' ? 'VOID' : 'REFUND';
-  const provider = getPaymentProvider('MOCK');
+  const provider = getPaymentProvider(payment.provider);
   const operationRef = `${input.originalTenderId}:${input.actor.deviceId}:${input.actor.idempotencyKey}`;
   const outcome = provider.execute({
     capability,
