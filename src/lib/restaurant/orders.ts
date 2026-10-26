@@ -220,7 +220,9 @@ function canonicalOrderPayload(value: unknown): string {
       .sort(([left], [right]) => left.localeCompare(right));
     return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalOrderPayload(item)}`).join(',')}}`;
   }
-  return JSON.stringify(value);
+  // Match JSON array semantics for an undefined element while keeping the
+  // function total for every value accepted by its `unknown` input.
+  return JSON.stringify(value) ?? 'null';
 }
 
 /** Record what a first-run command produced, so a later replay can return it. */
