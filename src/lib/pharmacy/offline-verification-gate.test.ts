@@ -153,6 +153,13 @@ describe('PH-OFF OFF-05 — offline verification gate', () => {
         }
         return backing.write(key, value);
       },
+      compareAndSwap: (key, expected, value) => {
+        if (failNextWrite) {
+          failNextWrite = false;
+          return Promise.reject(new Error('power lost during atomic write'));
+        }
+        return backing.compareAndSwap(key, expected, value);
+      },
       remove: (key) => backing.remove(key),
       close: () => backing.close(),
     };

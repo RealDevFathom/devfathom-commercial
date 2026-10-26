@@ -280,7 +280,7 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
   it('serializes concurrent enqueues before allocating receipts, sequence and quota', async () => {
     const driver = createMemoryDriver();
     const counter = await readyCounter(driver);
-    const durableWrite = driver.write;
+    const durableCompareAndSwap = driver.compareAndSwap;
     let releaseFirstWrite: (() => void) | undefined;
     let firstWriteStarted: (() => void) | undefined;
     const started = new Promise<void>((resolve) => {
@@ -290,13 +290,13 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
       releaseFirstWrite = resolve;
     });
     let writes = 0;
-    driver.write = async (scopeKey, value) => {
+    driver.compareAndSwap = async (scopeKey, expected, value) => {
       writes += 1;
       if (writes === 1) {
         firstWriteStarted?.();
         await release;
       }
-      await durableWrite(scopeKey, value);
+      return durableCompareAndSwap(scopeKey, expected, value);
     };
 
     const first = counter.enqueue(cashSale(1), MATRIX);
@@ -327,6 +327,34 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
     expect(reloaded.snapshot().queue?.commands.map((command) => command.receiptNumber)).toEqual([
       900, 901,
     ]);
+  });
+
+  it('preserves concurrent sales from separately hydrated runtimes', async () => {
+    const driver = createMemoryDriver();
+    const first = await readyCounter(driver);
+    const second = runtime(driver);
+    expect(await second.hydrate()).toBe('ready');
+
+    const results = await Promise.all([
+      first.enqueue(cashSale(1), MATRIX),
+      second.enqueue(cashSale(1), MATRIX),
+    ]);
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(
+      results.map((result) => (result.ok ? result.command.receiptNumber : null)).sort()
+    ).toEqual([900, 901]);
+    expect(results.map((result) => (result.ok ? result.command.sequence : null)).sort()).toEqual([
+      1, 2,
+    ]);
+
+    const reloaded = runtime(driver);
+    expect(await reloaded.hydrate()).toBe('ready');
+    expect(reloaded.snapshot().queue).toMatchObject({
+      nextSequence: 3,
+      quotas: [{ consumedUnits: 2 }],
+    });
+    expect(reloaded.snapshot().queue?.commands).toHaveLength(2);
   });
 
   it('refuses a denied action and queues nothing', async () => {

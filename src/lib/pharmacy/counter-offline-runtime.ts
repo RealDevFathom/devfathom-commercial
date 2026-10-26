@@ -25,12 +25,13 @@
  * enforcement is the guard on every write, not a promise in a comment.
  */
 import {
+  assertPersistSafe,
   createMemoryDriver,
   createTerminalIndexedDbDriver,
   emptyTerminalState,
   purgeTerminalScope,
   readTerminalState,
-  writeTerminalState,
+  terminalScopeKey,
 } from '@/lib/retail-terminal/local-store';
 import type {
   PersistedTerminalState,
@@ -128,6 +129,7 @@ type ReplayResult = {
 
 export class PharmacyCounterRuntime {
   private state: CounterRuntimeState;
+  private persistedState: CounterRuntimeState | undefined;
   private activeReplay: Promise<ReplayResult> | null = null;
   /**
    * Enqueue is a read-modify-write of the one persisted counter document. Keep
@@ -175,6 +177,7 @@ export class PharmacyCounterRuntime {
         queue: result.state.queue ?? createCounterQueue(this.scope.deviceId),
         catalog: result.state.catalog ?? this.cache(),
       };
+      this.persistedState = result.state;
     }
     return 'ready';
   }
@@ -347,6 +350,40 @@ export class PharmacyCounterRuntime {
     input: CounterCommandInput,
     matrix: Omit<CounterMatrixInputs, 'snapshots'>
   ): Promise<CounterEnqueueResult> {
+    try {
+      return await this.enqueueTransitionOnce(input, matrix);
+    } catch (error) {
+      if (error instanceof CounterStorageConflictError) {
+        return this.enqueueTransition(input, matrix);
+      }
+      throw error;
+    }
+  }
+
+  private async enqueueTransitionOnce(
+    input: CounterCommandInput,
+    matrix: Omit<CounterMatrixInputs, 'snapshots'>
+  ): Promise<CounterEnqueueResult> {
+    // Refresh before deriving identifiers. The compare-and-swap in commit then
+    // closes the gap between this read and the write across tabs/processes.
+    const durable = await readTerminalState<CounterQueueSnapshot, CounterCache>(
+      this.driver,
+      this.scope,
+      COUNTER_STORE_SCHEMA_VERSION
+    );
+    if (durable.status === 'unrecoverable') {
+      throw new Error(durable.message);
+    }
+    if (durable.status === 'ok') {
+      this.state = {
+        ...durable.state,
+        queue: durable.state.queue ?? createCounterQueue(this.scope.deviceId),
+        catalog: durable.state.catalog ?? this.cache(),
+      };
+      this.persistedState = durable.state;
+    } else {
+      this.persistedState = undefined;
+    }
     const leaseState = this.safetyLeaseState();
     const leaseCheck = checkSafetyLease(leaseState, matrix.nowMs);
     if (!leaseCheck.ok && leaseCheck.reason === 'EXPIRED') {
@@ -461,7 +498,26 @@ export class PharmacyCounterRuntime {
 
   /** Publish a state transition only after its whole-document write succeeds. */
   private async commit(nextState: CounterRuntimeState): Promise<void> {
-    await writeTerminalState(this.driver, nextState, COUNTER_STORE_SCHEMA_VERSION);
+    // Keep the storage seam's fail-closed validation, but use a transaction CAS
+    // to prevent a stale tab overwriting a newer whole document.
+    if (nextState.schemaVersion !== COUNTER_STORE_SCHEMA_VERSION) {
+      throw new CounterStorageConflictError();
+    }
+    assertPersistSafe(nextState);
+    const written = await this.driver.compareAndSwap(
+      terminalScopeKey(this.scope),
+      this.persistedState,
+      nextState
+    );
+    if (!written) throw new CounterStorageConflictError();
     this.state = nextState;
+    this.persistedState = nextState;
+  }
+}
+
+class CounterStorageConflictError extends Error {
+  constructor() {
+    super('Counter state changed in another browser context. Retry the operation.');
+    this.name = 'CounterStorageConflictError';
   }
 }
