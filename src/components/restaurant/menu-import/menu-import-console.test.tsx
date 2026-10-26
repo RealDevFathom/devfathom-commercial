@@ -348,6 +348,7 @@ describe('Restaurant menu-import console', () => {
           decision: 'ACCEPTED',
           productName: 'Grilled Chicken',
           priceAmount: '1250.00',
+          variants: [],
         })
       );
     });
