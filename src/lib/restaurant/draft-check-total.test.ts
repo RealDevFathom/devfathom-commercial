@@ -124,7 +124,15 @@ describe('quoteDraftCheckTotal', () => {
     ).toEqual({ tax: '0.02', serviceCharge: '0.00', total: '0.12' });
   });
 
-  it.each([0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
+  it.each([
+    0,
+    -1,
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    Number.MAX_SAFE_INTEGER + 1,
+  ])(
     'rejects invalid quantity %s before expanding units',
     (quantity) => {
       expect(() =>
