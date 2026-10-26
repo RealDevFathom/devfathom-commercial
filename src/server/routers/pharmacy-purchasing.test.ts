@@ -392,6 +392,30 @@ describe('PUR-02 approval', () => {
     expect(db.pharmacyPurchaseOrder.update.mock.calls[0]![0].data).toEqual({ status: 'DRAFT' });
   });
 
+  it('does not record an event when another decision wins the conditional update', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      status: 'SUBMITTED',
+      supplierId: 'supplier_a',
+      createdByUserId: 'user_a',
+      requisition: null,
+    });
+    db.pharmacyPurchaseOrder.update.mockRejectedValue(
+      Object.assign(new Error('Record to update not found.'), { code: 'P2025' })
+    );
+
+    await expect(
+      caller('user_c').approvePurchaseOrder({ purchaseOrderId: 'po_a', decision: 'APPROVED' })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'Purchase order has already been reviewed.',
+    });
+    expect(db.pharmacyPurchaseOrder.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'po_a', status: 'SUBMITTED' } })
+    );
+    expect(db.pharmacyPurchaseOrderApproval.create).not.toHaveBeenCalled();
+  });
+
   it('refuses to approve an order that was never submitted', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
       id: 'po_a',
