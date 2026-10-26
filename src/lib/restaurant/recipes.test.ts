@@ -152,6 +152,27 @@ describe('upsertConversion', () => {
     await upsertConversion(scoped(), 'A', 'B', '1000');
     expect(db.restaurantUnitConversion.upsert).toHaveBeenCalled();
   });
+
+  it('locks the organization conversion graph before checking and writing the edge', async () => {
+    db.restaurantUnit.findUnique.mockImplementation(
+      async ({ where }: { where: { id: string } }) => ({ id: where.id })
+    );
+    db.restaurantUnitConversion.findMany.mockResolvedValue([]);
+
+    await upsertConversion(scoped(), 'A', 'B', '1000');
+
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
+    const lockCall = db.$queryRaw.mock.calls.find(([query]) =>
+      query?.strings?.join('?').includes('pg_advisory_xact_lock')
+    );
+    expect(lockCall?.[0].values).toEqual(['restaurant:org_1:unit-conversions']);
+    expect(db.$queryRaw.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      db.restaurantUnitConversion.findMany.mock.invocationCallOrder[0]
+    );
+    expect(db.restaurantUnitConversion.findMany.mock.invocationCallOrder[0]).toBeLessThan(
+      db.restaurantUnitConversion.upsert.mock.invocationCallOrder[0]
+    );
+  });
 });
 
 describe('deleteConversion', () => {
@@ -399,6 +420,36 @@ describe('listRecipeVersions', () => {
 // ── Recipe-line cycle detection ───────────────────────────────────────────────
 
 describe('createRecipeLine — recipe cycle detection', () => {
+  it('locks the organization recipe graph before checking and writing a sub-recipe edge', async () => {
+    db.restaurantRecipeVersion.findUnique.mockResolvedValue({
+      id: 'v1',
+      status: 'DRAFT',
+      recipeId: 'r1',
+    });
+    db.restaurantUnit.findUnique.mockResolvedValue({ id: 'u1' });
+    db.restaurantRecipe.findUnique.mockResolvedValue({ id: 'r2' });
+    db.restaurantRecipeLine.findMany.mockResolvedValue([]);
+
+    await createRecipeLine(scoped(), {
+      recipeVersionId: 'v1',
+      subRecipeId: 'r2',
+      quantity: '1',
+      unitId: 'u1',
+    });
+
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
+    const lockCall = db.$queryRaw.mock.calls.find(([query]) =>
+      query?.strings?.join('?').includes('pg_advisory_xact_lock')
+    );
+    expect(lockCall?.[0].values).toEqual(['restaurant:org_1:recipes']);
+    expect(db.$queryRaw.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      db.restaurantRecipeLine.findMany.mock.invocationCallOrder[0]
+    );
+    expect(db.restaurantRecipeLine.findMany.mock.invocationCallOrder[0]).toBeLessThan(
+      db.restaurantRecipeLine.create.mock.invocationCallOrder[0]
+    );
+  });
+
   it('rejects a direct self-referencing sub-recipe line', async () => {
     db.restaurantRecipeVersion.findUnique.mockResolvedValue({
       id: 'v1',

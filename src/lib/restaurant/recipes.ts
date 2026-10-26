@@ -62,6 +62,23 @@ function localizedWrite(
   return value as Prisma.InputJsonValue;
 }
 
+/**
+ * Serialize mutations to one of the organization's directed dependency graphs.
+ *
+ * Cycle detection is only sound when the path read and the edge write happen
+ * while competing writers are excluded. Transaction-scoped advisory locks give
+ * us that property without locking unrelated organizations (or the other graph).
+ */
+async function lockDependencyGraph(
+  db: ScopedDb,
+  organizationId: string,
+  graph: 'unit-conversions' | 'recipes'
+) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`restaurant:${organizationId}:${graph}`}, 0))`
+  );
+}
+
 // ── Units ────────────────────────────────────────────────────────────────────
 
 export type CreateUnitInput = {
@@ -124,16 +141,20 @@ export async function upsertConversion(
   factor: string
 ) {
   const organizationId = await catalogOrganizationId(db);
-  await requireUnit(db, fromUnitId);
-  await requireUnit(db, toUnitId);
   if (fromUnitId === toUnitId) {
     throw new RecipeError('A unit cannot convert to itself.', 'CONVERSION_CYCLE');
   }
-  await assertNoConversionCycle(db, fromUnitId, toUnitId);
-  return db.restaurantUnitConversion.upsert({
-    where: { organizationId, fromUnitId_toUnitId: { fromUnitId, toUnitId } },
-    create: { organizationId, fromUnitId, toUnitId, factor: decimal(factor) },
-    update: { factor: decimal(factor) },
+  return db.$transaction(async (tx) => {
+    const scopedTx = tx as ScopedDb;
+    await lockDependencyGraph(scopedTx, organizationId, 'unit-conversions');
+    await requireUnit(scopedTx, fromUnitId);
+    await requireUnit(scopedTx, toUnitId);
+    await assertNoConversionCycle(scopedTx, fromUnitId, toUnitId);
+    return scopedTx.restaurantUnitConversion.upsert({
+      where: { organizationId, fromUnitId_toUnitId: { fromUnitId, toUnitId } },
+      create: { organizationId, fromUnitId, toUnitId, factor: decimal(factor) },
+      update: { factor: decimal(factor) },
+    });
   });
 }
 
@@ -488,36 +509,41 @@ export async function createRecipeLine(db: ScopedDb, input: CreateRecipeLineInpu
   if ((!input.ingredientId && !input.subRecipeId) || (input.ingredientId && input.subRecipeId)) {
     throw new RecipeError('Exactly one of ingredientId or subRecipeId must be set.', 'INVALID');
   }
-  const version = await requireRecipeVersion(db, input.recipeVersionId);
-  assertVersionMutable(version);
-  await requireUnit(db, input.unitId);
+  return db.$transaction(async (tx) => {
+    const scopedTx = tx as ScopedDb;
+    if (input.subRecipeId) await lockDependencyGraph(scopedTx, organizationId, 'recipes');
 
-  let ingredientId: string | null = null;
-  let subRecipeId: string | null = null;
+    const version = await requireRecipeVersion(scopedTx, input.recipeVersionId);
+    assertVersionMutable(version);
+    await requireUnit(scopedTx, input.unitId);
 
-  if (input.ingredientId) {
-    await requireIngredient(db, input.ingredientId);
-    ingredientId = input.ingredientId;
-  } else {
-    const subRecipe = await db.restaurantRecipe.findUnique({
-      where: { organizationId, id: input.subRecipeId! },
-      select: { id: true },
+    let ingredientId: string | null = null;
+    let subRecipeId: string | null = null;
+
+    if (input.ingredientId) {
+      await requireIngredient(scopedTx, input.ingredientId);
+      ingredientId = input.ingredientId;
+    } else {
+      const subRecipe = await scopedTx.restaurantRecipe.findUnique({
+        where: { organizationId, id: input.subRecipeId! },
+        select: { id: true },
+      });
+      if (!subRecipe) throw new RecipeError('Sub-recipe not found.', 'NOT_FOUND');
+      await assertNoRecipeCycle(scopedTx, version.recipeId, input.subRecipeId!);
+      subRecipeId = input.subRecipeId!;
+    }
+
+    return scopedTx.restaurantRecipeLine.create({
+      data: {
+        organizationId,
+        recipeVersionId: input.recipeVersionId,
+        ingredientId,
+        subRecipeId,
+        quantity: decimal(input.quantity),
+        unitId: input.unitId,
+        sortOrder: input.sortOrder ?? 0,
+      },
     });
-    if (!subRecipe) throw new RecipeError('Sub-recipe not found.', 'NOT_FOUND');
-    await assertNoRecipeCycle(db, version.recipeId, input.subRecipeId!);
-    subRecipeId = input.subRecipeId!;
-  }
-
-  return db.restaurantRecipeLine.create({
-    data: {
-      organizationId,
-      recipeVersionId: input.recipeVersionId,
-      ingredientId,
-      subRecipeId,
-      quantity: decimal(input.quantity),
-      unitId: input.unitId,
-      sortOrder: input.sortOrder ?? 0,
-    },
   });
 }
 
