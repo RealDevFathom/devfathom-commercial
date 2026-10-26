@@ -86,16 +86,30 @@ describe('counterReceiptTotals', () => {
     expect(totals.tenderedMinor - totals.changeMinor).toBe(totals.netMinor);
   });
 
-  it('uses applied amounts for non-cash and legacy cash tenders', () => {
+  it.each([null, undefined])(
+    'uses the applied amount for legacy cash tenders with cash received set to %s',
+    (cashReceivedMinor) => {
+      const totals = counterReceiptTotals({
+        lines: [],
+        tenders: [
+          { type: 'CASH', amountMinor: 4_800, cashReceivedMinor, changeGivenMinor: null },
+        ],
+      });
+
+      expect(totals.tenderedMinor).toBe(4_800);
+      expect(totals.changeMinor).toBe(0);
+    }
+  );
+
+  it('ignores cash received on non-cash tenders', () => {
     const totals = counterReceiptTotals({
       lines: [],
       tenders: [
         { type: 'CARD', amountMinor: 3_000, cashReceivedMinor: 9_000, changeGivenMinor: null },
-        { type: 'CASH', amountMinor: 4_800, cashReceivedMinor: null, changeGivenMinor: null },
       ],
     });
 
-    expect(totals.tenderedMinor).toBe(7_800);
+    expect(totals.tenderedMinor).toBe(3_000);
     expect(totals.changeMinor).toBe(0);
   });
 
