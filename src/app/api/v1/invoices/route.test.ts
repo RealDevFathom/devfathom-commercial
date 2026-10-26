@@ -66,4 +66,38 @@ describe('POST /api/v1/invoices money calculation', () => {
       })
     );
   });
+
+  it.each([
+    ['line amount', [{ description: 'Too large', quantity: 2, rate: 9_999_999_999.99 }], 0],
+    [
+      'subtotal',
+      [
+        { description: 'First', quantity: 1, rate: 5_000_000_000 },
+        { description: 'Second', quantity: 1, rate: 5_000_000_000 },
+      ],
+      0,
+    ],
+    ['total', [{ description: 'At limit', quantity: 1, rate: 9_999_999_999.99 }], 0.01],
+  ])('rejects a derived %s overflow before persistence', async (_kind, items, tax) => {
+    const authCtx = {
+      userId: 'user-1',
+      db: { invoice: { count: vi.fn(), create: mocks.create } },
+    };
+    const handler = POST as unknown as (authCtx: unknown, request: Request) => Promise<Response>;
+    const response = await handler(
+      authCtx,
+      new Request('https://example.test/api/v1/invoices', {
+        method: 'POST',
+        body: JSON.stringify({
+          clientId: 'client-1',
+          items,
+          tax,
+          dueDate: '2026-11-30T00:00:00.000Z',
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
 });

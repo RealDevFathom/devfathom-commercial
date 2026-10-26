@@ -15,7 +15,13 @@ import {
   type CurrencyAmount,
 } from '@/lib/finance/currency';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
-import { multiplyMoney, roundMoney, sumMoney } from '@/lib/finance/money';
+import {
+  isPersistableMoney,
+  MAX_MONEY,
+  multiplyMoney,
+  roundMoney,
+  sumMoney,
+} from '@/lib/finance/money';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -28,10 +34,26 @@ const RECURRING_MONTHLY_FACTOR: Record<string, number> = {
 // Money columns (transaction.amount, invoice totals, etc.) are Decimal(12,2), so the
 // largest value Postgres will accept is 9,999,999,999.99. Bound amounts here so an
 // oversized input fails as a clean validation error instead of a raw DB 500.
-const MAX_MONEY = 9_999_999_999.99;
 const MONEY_MAX_MESSAGE = 'Amount must be 9,999,999,999.99 or less';
 const positiveMoney = () => z.number().positive().max(MAX_MONEY, MONEY_MAX_MESSAGE);
 const nonNegativeMoney = () => z.number().nonnegative().max(MAX_MONEY, MONEY_MAX_MESSAGE);
+
+function assertDerivedInvoiceMoney(
+  items: Array<{ amount: number }>,
+  subtotal: number,
+  total: number
+): void {
+  if (
+    items.some((item) => !isPersistableMoney(item.amount)) ||
+    !isPersistableMoney(subtotal) ||
+    !isPersistableMoney(total)
+  ) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Derived invoice amount exceeds the allowed range',
+    });
+  }
+}
 
 export const createInvoiceInputSchema = z.object({
   clientId: z.string(),
@@ -40,12 +62,13 @@ export const createInvoiceInputSchema = z.object({
     .array(
       z.object({
         description: z.string(),
-        quantity: z.number().positive(),
+        quantity: z.number().positive().max(1_000_000),
         rate: positiveMoney(),
         amount: nonNegativeMoney(),
       })
     )
-    .min(1, 'Invoice must have at least one line item'),
+    .min(1, 'Invoice must have at least one line item')
+    .max(1_000, 'Invoice must have 1,000 line items or fewer'),
   subtotal: nonNegativeMoney(),
   tax: nonNegativeMoney().default(0),
   total: nonNegativeMoney(),
@@ -262,6 +285,7 @@ export const financeRouter = router({
     const subtotal = sumMoney(lineItems.map((it) => it.amount));
     const tax = round2(input.tax ?? 0);
     const total = sumMoney([subtotal, tax]);
+    assertDerivedInvoiceMoney(lineItems, subtotal, total);
 
     // Generate invoice number. FIN-09: scope the count to THIS year's invoices
     // so the sequence resets to -001 each January (was a global count that never
@@ -312,11 +336,12 @@ export const financeRouter = router({
           .array(
             z.object({
               description: z.string().min(1),
-              quantity: z.number().positive(),
+              quantity: z.number().positive().max(1_000_000),
               rate: positiveMoney(),
             })
           )
-          .min(1),
+          .min(1)
+          .max(1_000),
         tax: nonNegativeMoney().optional(),
         dueDate: z.date().optional(),
         notes: z.string().optional(),
@@ -346,6 +371,7 @@ export const financeRouter = router({
       const subtotal = sumMoney(lineItems.map((it) => it.amount));
       const tax = round2(input.tax ?? 0);
       const total = sumMoney([subtotal, tax]);
+      assertDerivedInvoiceMoney(lineItems, subtotal, total);
 
       const data: Record<string, unknown> = { items: lineItems, subtotal, tax, total };
       if (input.dueDate) data.dueDate = input.dueDate;

@@ -84,4 +84,30 @@ describe('finance.createInvoice money calculation', () => {
       })
     );
   });
+
+  it.each([
+    ['line amount', [{ description: 'Too large', quantity: 2, rate: 9_999_999_999.99 }], 0],
+    [
+      'subtotal',
+      [
+        { description: 'First', quantity: 1, rate: 5_000_000_000 },
+        { description: 'Second', quantity: 1, rate: 5_000_000_000 },
+      ],
+      0,
+    ],
+    ['total', [{ description: 'At limit', quantity: 1, rate: 9_999_999_999.99 }], 0.01],
+  ])('rejects a derived %s overflow before persistence', async (_kind, items, tax) => {
+    await expect(
+      caller().createInvoice({
+        clientId: 'client-1',
+        items: items.map((item) => ({ ...item, amount: 0 })),
+        subtotal: 0,
+        tax,
+        total: 0,
+        currency: 'USD',
+        dueDate: new Date('2026-11-30T00:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
 });
