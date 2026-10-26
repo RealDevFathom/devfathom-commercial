@@ -21,6 +21,7 @@ vi.mock('@/server/audit', () => ({
   recordTrpcAudit: vi.fn(),
 }));
 
+import { notify } from '@/lib/notifications';
 import { notesRouter } from './notes';
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -177,4 +178,90 @@ suite('notes.update PostgreSQL concurrency', () => {
       await Promise.all([sql.end(), blocker.end()]);
     }
   }, 15_000);
+
+  it('rejects a foreign-tenant note before reading or mutating related data', async () => {
+    vi.mocked(notify).mockClear();
+    const sql = new Client({ connectionString: databaseUrl });
+    const suffix = randomUUID();
+    const attackerOrgId = `notes_attacker_${suffix}`;
+    const victimOrgId = `notes_victim_${suffix}`;
+    const attackerDepartmentId = `attacker_department_${suffix}`;
+    const victimDepartmentId = `victim_department_${suffix}`;
+    const attackerId = `attacker_${suffix}`;
+    const victimId = `victim_${suffix}`;
+    const victimNoteId = `victim_note_${suffix}`;
+    const victimLinkedNoteId = `victim_linked_note_${suffix}`;
+
+    await sql.connect();
+    try {
+      for (const [organizationId, departmentId, label] of [
+        [attackerOrgId, attackerDepartmentId, 'Attacker'],
+        [victimOrgId, victimDepartmentId, 'Victim'],
+      ]) {
+        await sql.query(
+          `INSERT INTO organizations (id, slug, "legalName", "displayName", "updatedAt")
+           VALUES ($1, $1, $2, $2, now())`,
+          [organizationId, label]
+        );
+        await sql.query(
+          `INSERT INTO organization_departments
+             (id, "organizationId", key, name, "updatedAt")
+           VALUES ($1, $2, 'ENGINEERING', 'Engineering', now())`,
+          [departmentId, organizationId]
+        );
+      }
+      for (const [id, organizationId, name] of [
+        [attackerId, attackerOrgId, 'Attacker'],
+        [victimId, victimOrgId, 'Victim'],
+      ]) {
+        await sql.query(
+          `INSERT INTO users
+             (id, "organizationId", name, email, department, "updatedAt")
+           VALUES ($1, $2, $3, $4, 'ENGINEERING', now())`,
+          [id, organizationId, name, `${id}@example.test`]
+        );
+      }
+      for (const [id, title] of [
+        [victimNoteId, 'Victim note'],
+        [victimLinkedNoteId, 'Victim linked note'],
+      ]) {
+        await sql.query(
+          `INSERT INTO notes
+             (id, "organizationId", title, "contentJson", "contentText", "authorId", visibility, "updatedAt")
+           VALUES ($1, $2, $3, $4::jsonb, 'original', $5, 'TEAM', now())`,
+          [id, victimOrgId, title, JSON.stringify(doc('original')), victimId]
+        );
+      }
+
+      await expect(
+        caller(attackerId, attackerOrgId).update({
+          id: victimNoteId,
+          title: 'compromised',
+          contentJson: doc(`@Victim [[${victimLinkedNoteId}]]`),
+        })
+      ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+
+      const note = await sql.query<{ title: string; contentText: string }>(
+        `SELECT title, "contentText" FROM notes WHERE id = $1`,
+        [victimNoteId]
+      );
+      const links = await sql.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM note_links WHERE "fromNoteId" = $1`,
+        [victimNoteId]
+      );
+      const mentions = await sql.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM note_mentions WHERE "noteId" = $1`,
+        [victimNoteId]
+      );
+      expect(note.rows).toEqual([{ title: 'Victim note', contentText: 'original' }]);
+      expect(links.rows[0]!.count).toBe(0);
+      expect(mentions.rows[0]!.count).toBe(0);
+      expect(vi.mocked(notify)).not.toHaveBeenCalled();
+    } finally {
+      await sql.query('DELETE FROM organizations WHERE id = ANY($1)', [
+        [attackerOrgId, victimOrgId],
+      ]);
+      await sql.end();
+    }
+  });
 });

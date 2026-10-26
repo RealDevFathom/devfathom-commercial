@@ -33,7 +33,7 @@ describe('notes.update concurrency', () => {
     const tx = {
       $queryRaw: vi.fn(async () => [{ id: note.id }]),
       note: {
-        findUnique: vi.fn(async () => structuredClone(note)),
+        findFirst: vi.fn(async () => structuredClone(note)),
         findMany: vi.fn(async () => []),
         update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
           note = { ...note, ...data } as typeof note;
@@ -103,5 +103,51 @@ describe('notes.update concurrency', () => {
     expect(lockQuery).toContain('"organizationId" = ?');
     expect(lockQuery).toContain('FOR UPDATE');
     expect(tx.$queryRaw.mock.calls[0]?.slice(1)).toEqual([note.id, 'org_1']);
+    expect(tx.note.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: note.id, organizationId: 'org_1' } })
+    );
+    expect(tx.note.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: note.id, organizationId: 'org_1' } })
+    );
+    expect(tx.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org_1' } })
+    );
+  });
+
+  it('stops when the tenant-qualified lock finds no note', async () => {
+    const tx = {
+      $queryRaw: vi.fn(async () => []),
+      note: { findFirst: vi.fn(), update: vi.fn() },
+    };
+    const db = {
+      project: { findMany: vi.fn() },
+      client: { findMany: vi.fn() },
+      $transaction: vi.fn((callback: (client: typeof tx) => Promise<unknown>) => callback(tx)),
+    };
+    const caller = notesRouter.createCaller({
+      db,
+      session: {
+        expires: 'later',
+        user: {
+          id: 'attacker',
+          name: 'Attacker',
+          role: 'EMPLOYEE',
+          department: 'ENGINEERING',
+          status: 'ACTIVE',
+          organizationId: 'attacker_org',
+        },
+      },
+      organization: { id: 'attacker_org' },
+      entitlements: { organizationId: 'attacker_org', enabledModules: [], modules: [], limits: {} },
+      support: null,
+      requestMeta: { ip: null, userAgent: null },
+      audit: { detail: {} },
+    } as never);
+
+    await expect(caller.update({ id: 'victim_note', title: 'compromised' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(tx.note.findFirst).not.toHaveBeenCalled();
+    expect(tx.note.update).not.toHaveBeenCalled();
   });
 });

@@ -537,14 +537,15 @@ export const notesRouter = router({
         // Serialize the full read/snapshot/write sequence for this note. Without
         // this lock, two editors can both snapshot the same old value and one of
         // their edits is then absent from both the live note and its history.
-        await tx.$queryRaw`
+        const lockedRows = await tx.$queryRaw<Array<{ id: string }>>`
           SELECT "id" FROM "notes"
           WHERE "id" = ${input.id} AND "organizationId" = ${orgId}
           FOR UPDATE
         `;
+        if (lockedRows.length === 0) throw new TRPCError({ code: 'NOT_FOUND' });
 
-        const existing = await tx.note.findUnique({
-          where: { id: input.id },
+        const existing = await tx.note.findFirst({
+          where: { id: input.id, organizationId: orgId },
           include: { shares: true, mentions: true },
         });
         if (!existing) throw new TRPCError({ code: 'NOT_FOUND' });
@@ -582,7 +583,10 @@ export const notesRouter = router({
           linkedIds = extractLinkedNoteIds(input.contentJson);
         }
 
-        const team = await tx.user.findMany({ select: { id: true, name: true, email: true } });
+        const team = await tx.user.findMany({
+          where: { organizationId: orgId },
+          select: { id: true, name: true, email: true },
+        });
         const effectiveText =
           input.contentJson !== undefined
             ? extractPlainText(input.contentJson)
@@ -615,14 +619,20 @@ export const notesRouter = router({
           await snapshotAndPrune(tx, existing, userId);
         }
 
-        const note = await tx.note.update({ where: { id: input.id }, data });
+        const note = await tx.note.update({
+          where: { id: input.id, organizationId: orgId },
+          data,
+        });
 
         if (linkedIds !== null) {
           await tx.noteLink.deleteMany({ where: { fromNoteId: note.id } });
           if (linkedIds.length > 0) {
             // Filter out self-links and any IDs that don't exist
             const validIds = await tx.note.findMany({
-              where: { id: { in: linkedIds.filter((id) => id !== note.id) } },
+              where: {
+                id: { in: linkedIds.filter((id) => id !== note.id) },
+                organizationId: orgId,
+              },
               select: { id: true },
             });
             if (validIds.length > 0) {
