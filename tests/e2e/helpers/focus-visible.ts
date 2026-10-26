@@ -16,7 +16,9 @@ const tabbableSelector = [
 export async function useFocusTheme(page: Page, theme: (typeof focusThemes)[number]) {
   await page.emulateMedia({ colorScheme: theme });
   await page.evaluate((value) => {
-    localStorage.setItem('theme', value);
+    if (location.protocol === 'http:' || location.protocol === 'https:') {
+      localStorage.setItem('theme', value);
+    }
     document.documentElement.dataset.theme = value;
     document.documentElement.style.colorScheme = value;
   }, theme);
