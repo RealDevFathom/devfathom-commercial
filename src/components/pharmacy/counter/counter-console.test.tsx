@@ -79,6 +79,7 @@ vi.mock('@/lib/trpc', () => {
       },
     },
     pharmacySales: {
+      counterSearch: { setData: vi.fn() },
       counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
       counterReceipt: { invalidate: mocks.receiptInvalidate },
       counterEvidence: { reset: vi.fn() },

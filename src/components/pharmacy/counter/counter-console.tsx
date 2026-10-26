@@ -978,7 +978,7 @@ function ScopedPharmacyCounterConsole({
           ? await clientSearch.query(input)
           : cached?.rows.length === 1 && cached.rows[0]?.matchedOn === 'BARCODE'
             ? cached
-            : { rows: [] };
+            : { rows: [], truncated: false };
         utils.pharmacySales.counterSearch.setData(input, result);
         if (barcodeAdd.current !== trimmed) return;
         barcodeAdd.current = null;

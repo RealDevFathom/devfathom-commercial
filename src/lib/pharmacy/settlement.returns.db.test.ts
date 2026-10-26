@@ -21,6 +21,17 @@ const inTenant = <T>(work: Parameters<typeof withTenantDb<T>>[1]) =>
 
 async function ensureVisibilityParents() {
   await inTenant(async (db) => {
+    await db.organization.upsert({
+      where: { id: scope.organizationId },
+      update: {},
+      create: {
+        id: scope.organizationId,
+        slug: `returns-${scope.organizationId}`,
+        legalName: 'Settlement returns fixture',
+        displayName: 'Settlement returns fixture',
+        vertical: 'PHARMACY',
+      },
+    });
     await db.pharmacyBranch.upsert({
       where: { id: scope.branchId },
       update: {},
@@ -146,6 +157,31 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
           },
         });
       }
+      const expiry = new Date('2027-12-31');
+      const batch = await db.pharmacyManufacturingBatch.create({
+        data: {
+          organizationId: scope.organizationId,
+          medicineId: fixture.medicines.otc.id,
+          batchNumber: `RETURNS-${key()}`,
+          expiresAt: expiry,
+          expiryPrecision: 'DAY',
+        },
+      });
+      await receiveLot(db, scope, {
+        manufacturingBatchId: batch.id,
+        packLevelId: fixture.medicines.otc.packLevelIds.unit,
+        stockLocationId: fixture.stockLocationId,
+        unitsPerPack: 1,
+        supplierName: 'Settlement returns fixture',
+        supplierInvoiceRef: key(),
+        unitCostMinor: 100,
+        printedMrpMinor: 250,
+        receivedExpiresAt: expiry,
+        receivedExpiryPrecision: 'DAY',
+        quantityUnits: 20,
+        idempotencyKey: key(),
+        receivedAt: new Date('2026-09-01'),
+      });
       await openPharmacyDrawer(db, scope, {
         deviceId,
         businessDate: day,

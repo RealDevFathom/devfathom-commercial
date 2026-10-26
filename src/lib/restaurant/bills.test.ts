@@ -1169,13 +1169,10 @@ describeIfDatabase('bills command layer (real DB)', () => {
       tx.restaurantServiceChargePolicyVersion.updateMany({
         where: {
           branchId: ids.branch,
-          effectiveFrom: { lt: new Date('2026-08-18T00:00:00.000Z') },
-          OR: [
-            { effectiveTo: null },
-            { effectiveTo: { gt: new Date('2026-08-18T00:00:00.000Z') } },
-          ],
+          effectiveFrom: { lt: AT },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: AT } }],
         },
-        data: { effectiveTo: new Date('2026-08-18T00:00:00.000Z') },
+        data: { effectiveTo: AT },
       })
     );
     const policy = await read((tx) =>
@@ -1183,8 +1180,8 @@ describeIfDatabase('bills command layer (real DB)', () => {
         data: {
           branchId: ids.branch,
           rate: '0.100000',
-          effectiveFrom: new Date('2026-08-18T00:00:00.000Z'),
-          effectiveTo: AT,
+          effectiveFrom: AT,
+          effectiveTo: new Date('2026-08-20T00:00:00.000Z'),
           acknowledgedAt: AT,
           acknowledgementRef: 'zero-allocation-regression',
           idempotencyKey: `service_zero_${suffix}`,

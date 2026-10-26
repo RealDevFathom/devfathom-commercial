@@ -558,7 +558,7 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
   return withTerminalAuth(
     async (ctx, request) => {
       const operator = requireActingOperator(ctx);
-      if (!operator.ok) return forbidden('An unlocked operator is required.');
+      if (!operator.ok) return operator.response;
       if (opts.deviceKind && ctx.device.kind !== opts.deviceKind) {
         return forbidden(`A ${opts.deviceKind} register is required.`);
       }
@@ -616,7 +616,7 @@ export function moneyReadRoute(opts: {
   return withTerminalAuth(
     async (ctx, request) => {
       const operator = requireActingOperator(ctx);
-      if (!operator.ok) return forbidden('An unlocked operator is required.');
+      if (!operator.ok) return operator.response;
       if (opts.deviceKind && ctx.device.kind !== opts.deviceKind) {
         return forbidden(`A ${opts.deviceKind} register is required.`);
       }

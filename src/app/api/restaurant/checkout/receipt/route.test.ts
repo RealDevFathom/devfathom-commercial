@@ -391,7 +391,7 @@ describe('Restaurant receipt dispatch', () => {
     expect(mocks.event).not.toHaveBeenCalled();
   });
   it('rejects cross-branch and missing/unsettled bills before queue access', async () => {
-    mocks.ctx.device.branchId = 'other-branch';
+    receipt!.branchId = 'other-branch';
     expect((await post()).status).toBe(404);
     receipt = null;
     expect((await post()).status).toBe(404);
@@ -408,9 +408,8 @@ describe('Restaurant receipt dispatch', () => {
     expect(findBill).not.toHaveBeenCalled();
   });
   it('returns the same not-found response for foreign and nonexistent bills after authorization', async () => {
-    mocks.ctx.device.branchId = 'other-branch';
+    receipt!.branchId = 'other-branch';
     const foreign = await post({ billId: 'bill-1', action: 'print' });
-    mocks.ctx.device.branchId = 'branch-1';
     const missing = await post({ billId: 'missing-bill', action: 'print' }, 'missing-key');
     expect(foreign.status).toBe(404);
     expect(missing.status).toBe(404);

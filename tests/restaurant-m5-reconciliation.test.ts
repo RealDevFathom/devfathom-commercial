@@ -450,7 +450,12 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
       }),
       refunds: await tx.restaurantRefund.findMany({
         where: { businessDate: utcDate(businessDate), bill: { branchId: ids.branch } },
-        select: { amount: true },
+        select: {
+          amount: true,
+          taxRefundAmount: true,
+          serviceChargeRefundAmount: true,
+          deliveryFeeRefundAmount: true,
+        },
       }),
       drawers: await tx.restaurantDrawerSession.findMany({
         where: { branchId: ids.branch, businessDate: utcDate(businessDate) },
@@ -527,15 +532,25 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
       taxTotal: sum(settledBills.map((bill) => bill.taxTotal)),
       serviceChargeTotal: sum(settledBills.map((bill) => bill.serviceChargeTotal)),
       tipTotal: sum(raw.tenders.map((tenderRow) => tenderRow.tipAmount)),
-      refundTotal: sum(raw.refunds.map((refundRow) => refundRow.amount)),
+      refundTotal: sum(
+        raw.refunds.map((refundRow) => refundRow.amount.minus(refundRow.deliveryFeeRefundAmount))
+      ),
       voidTotal: sum(voidBills.map((bill) => bill.grandTotal)),
       cashExpected: movementFold,
       cashCounted: sum(raw.drawers.map((drawer) => D(drawer.countedCash ?? '0'))),
     };
+    const refundedSales = sum(
+      raw.refunds.map((refundRow) =>
+        refundRow.amount
+          .minus(refundRow.taxRefundAmount)
+          .minus(refundRow.serviceChargeRefundAmount)
+          .minus(refundRow.deliveryFeeRefundAmount)
+      )
+    );
     const netSales = expected.grossSales
       .minus(expected.compTotal)
       .minus(expected.discountTotal)
-      .minus(expected.refundTotal);
+      .minus(refundedSales);
     const cashVariance = expected.cashCounted.minus(expected.cashExpected);
     expect(raw.close).not.toBeNull();
     eqMoney(raw.close!.grossSales, expected.grossSales);
