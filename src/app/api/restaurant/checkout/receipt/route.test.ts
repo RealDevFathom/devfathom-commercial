@@ -273,6 +273,15 @@ describe('Restaurant receipt dispatch', () => {
     expect(facts.lines).toEqual(['Fractional share 1/3: 26.05']);
     expect(facts.totals).toContain('Split FRACTIONAL 1/3');
     expect(facts.payments).toEqual(['CASH 26.05 / Tip 1.50 / Change 3.95 / Cash received 30.00']);
+
+    const replay = await (await post()).json();
+    expect(replay).toMatchObject({ latestJob: { status: 'PENDING' }, replayed: true });
+    expect(replay.preview).toMatchObject({
+      source: 'queued',
+      text: expect.stringContaining('Fractional share 1/3: 26.05'),
+      validation: null,
+    });
+    expect(jobs).toHaveLength(1);
   });
   it('preserves persisted lines on a fractional bill', async () => {
     Object.assign(receipt!, {
