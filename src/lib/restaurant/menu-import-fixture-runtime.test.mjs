@@ -389,6 +389,40 @@ test('commit rejects a reviewed foreign-currency amount without an explicit loca
   );
 });
 
+test('commit accepts an explicitly reviewed local conversion when extracted currency is unknown', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  f.record.status = 'AWAITING_REVIEW';
+  f.record.fileName = 'unknown-currency-menu.png';
+  f.record.defaultCurrency = 'PKR';
+  f.lines.push({
+    id: 'line_1',
+    reviewStatus: 'ACCEPTED',
+    sortOrder: 1,
+    extractedCategoryName: null,
+    extractedProductName: 'Reviewed conversion',
+    extractedDescription: null,
+    extractedPriceAmount: new (f.load('@/generated/prisma/client').Prisma.Decimal)('12.50'),
+    extractedCurrency: null,
+    extractedVariants: [],
+    reviewedCategoryName: null,
+    reviewedProductName: null,
+    reviewedDescription: null,
+    reviewedPriceAmount: new (f.load('@/generated/prisma/client').Prisma.Decimal)('3500'),
+    reviewedCurrency: 'pkr',
+    mergeProductId: null,
+    mergeVariantId: null,
+  });
+
+  await menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' });
+  assert.ok(
+    f.events.some(
+      (event) =>
+        Array.isArray(event) && event[0] === 'addPriceListEntry' && event[2]?.price === '3500'
+    )
+  );
+});
+
 test('commit accepts priced variants in the current organization currency', async () => {
   const f = setup('production', 'disabled');
   const menu = f.load('@/lib/restaurant/menu-import');
