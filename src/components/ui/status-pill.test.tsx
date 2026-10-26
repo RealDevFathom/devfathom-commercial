@@ -14,4 +14,10 @@ describe('StatusPill', () => {
     expect(pill).not.toHaveClass('bg-primary/10', 'text-primary');
     expect(pill.querySelector('[aria-hidden="true"]')).toHaveClass('bg-current');
   });
+
+  it('maps information statuses to the theme-safe info token', () => {
+    render(<StatusPill status="Info" />);
+
+    expect(screen.getByText('Info')).toHaveClass('bg-info/10', 'text-info');
+  });
 });
