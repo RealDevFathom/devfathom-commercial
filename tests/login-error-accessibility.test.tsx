@@ -100,6 +100,31 @@ describe('login credential error accessibility', () => {
     expectCredentialError(email, password, alert, 'login-sign-in-error');
   });
 
+  it.each(['2fa_required', '2fa_invalid'])(
+    'associates a tenant %s failure only with the authentication code',
+    async (code) => {
+      mocks.signIn.mockResolvedValue({ error: 'CredentialsSignin', code });
+      render(<LoginForm connections={[]} ssoEnforced={false} callbackUrl="/dashboard" />);
+
+      fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
+
+      const alert = await screen.findByRole('alert');
+      const email = screen.getByLabelText('Email');
+      const password = screen.getByLabelText('Password');
+      const authenticationCode = screen.getByLabelText('Authentication code');
+      expect(alert).toHaveAttribute('id', 'login-sign-in-error');
+      expect(authenticationCode).toHaveAttribute('aria-invalid', 'true');
+      expect(authenticationCode).toHaveAttribute('aria-describedby', 'login-sign-in-error');
+      expect(authenticationCode).toHaveFocus();
+      expect(email).not.toHaveAttribute('aria-invalid');
+      expect(password).not.toHaveAttribute('aria-invalid');
+
+      fireEvent.change(authenticationCode, { target: { value: '123456' } });
+      expect(authenticationCode).not.toHaveAttribute('aria-invalid');
+      expect(authenticationCode).not.toHaveAttribute('aria-describedby');
+    }
+  );
+
   it('associates a platform network failure with both credential fields', async () => {
     vi.stubGlobal(
       'fetch',
@@ -118,5 +143,41 @@ describe('login credential error accessibility', () => {
 
     const alert = await screen.findByRole('alert');
     expectCredentialError(email, password, alert, 'platform-sign-in-error');
+  });
+
+  it('associates a platform MFA failure with every implicated field', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) })
+        .mockResolvedValueOnce({
+          ok: false,
+          json: async () => ({
+            error: 'Email, password, or authentication code is incorrect.',
+          }),
+        })
+    );
+    render(<PlatformLoginForm />);
+
+    fireEvent.submit(screen.getByRole('button', { name: 'Continue to control desk' }));
+
+    const alert = await screen.findByRole('alert');
+    const email = screen.getByLabelText('Work email');
+    const password = screen.getByLabelText('Password');
+    const authenticationCode = screen.getByLabelText('Authentication code');
+    expect(alert).toHaveAttribute('id', 'platform-sign-in-error');
+    expect(email).toHaveAttribute('aria-invalid', 'true');
+    expect(password).toHaveAttribute('aria-invalid', 'true');
+    expect(email).toHaveAttribute('aria-describedby', 'platform-sign-in-error');
+    expect(password).toHaveAttribute('aria-describedby', 'platform-sign-in-error');
+    expect(authenticationCode).toHaveAttribute('aria-invalid', 'true');
+    expect(authenticationCode).toHaveAttribute('aria-describedby', 'platform-sign-in-error');
+    expect(authenticationCode).toHaveFocus();
+
+    fireEvent.change(authenticationCode, { target: { value: '123456' } });
+    expect(email).not.toHaveAttribute('aria-invalid');
+    expect(password).not.toHaveAttribute('aria-invalid');
+    expect(authenticationCode).not.toHaveAttribute('aria-invalid');
   });
 });

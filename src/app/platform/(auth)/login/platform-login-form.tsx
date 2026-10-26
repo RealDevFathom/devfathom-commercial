@@ -12,9 +12,10 @@ const signInErrorId = 'platform-sign-in-error';
 export function PlatformLoginForm() {
   const router = useRouter();
   const [error, setError] = useState('');
-  const [credentialsInvalid, setCredentialsInvalid] = useState(false);
+  const [invalidFields, setInvalidFields] = useState<'credentials' | 'all' | null>(null);
   const [pending, setPending] = useState(false);
   const emailRef = useRef<HTMLInputElement>(null);
+  const authenticationCodeRef = useRef<HTMLInputElement>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [enrollment, setEnrollment] = useState(false);
   const [secret, setSecret] = useState('');
@@ -88,7 +89,7 @@ export function PlatformLoginForm() {
     event.preventDefault();
     setPending(true);
     setError('');
-    setCredentialsInvalid(false);
+    setInvalidFields(null);
     const data = new FormData(event.currentTarget);
     try {
       const response = await fetch('/api/platform/session', {
@@ -103,8 +104,10 @@ export function PlatformLoginForm() {
       const body = (await response.json()) as { error?: string; enrollmentRequired?: boolean };
       if (!response.ok) {
         setError(body.error ?? 'Sign in failed.');
-        setCredentialsInvalid(true);
-        emailRef.current?.focus();
+        const includesAuthenticationCode = body.error?.includes('authentication code') ?? false;
+        setInvalidFields(includesAuthenticationCode ? 'all' : 'credentials');
+        if (includesAuthenticationCode) authenticationCodeRef.current?.focus();
+        else emailRef.current?.focus();
         return;
       }
       if (body.enrollmentRequired) {
@@ -115,7 +118,7 @@ export function PlatformLoginForm() {
       router.refresh();
     } catch {
       setError('The control desk could not be reached. Check the connection and try again.');
-      setCredentialsInvalid(true);
+      setInvalidFields('credentials');
       emailRef.current?.focus();
     } finally {
       setPending(false);
@@ -222,9 +225,9 @@ export function PlatformLoginForm() {
           autoFocus
           required
           maxLength={254}
-          aria-invalid={credentialsInvalid || undefined}
-          aria-describedby={credentialsInvalid ? signInErrorId : undefined}
-          onChange={() => setCredentialsInvalid(false)}
+          aria-invalid={Boolean(invalidFields) || undefined}
+          aria-describedby={invalidFields ? signInErrorId : undefined}
+          onChange={() => setInvalidFields(null)}
           className={inputClass}
           placeholder="operator@devfathom.com"
         />
@@ -243,9 +246,9 @@ export function PlatformLoginForm() {
             required
             minLength={8}
             maxLength={256}
-            aria-invalid={credentialsInvalid || undefined}
-            aria-describedby={credentialsInvalid ? signInErrorId : undefined}
-            onChange={() => setCredentialsInvalid(false)}
+            aria-invalid={Boolean(invalidFields) || undefined}
+            aria-describedby={invalidFields ? signInErrorId : undefined}
+            onChange={() => setInvalidFields(null)}
             className={`${inputClass} pr-10`}
             placeholder="Enter your password"
           />
@@ -272,12 +275,16 @@ export function PlatformLoginForm() {
           <span className="text-xs text-text-muted">If enrolled</span>
         </div>
         <input
+          ref={authenticationCodeRef}
           id="platform-auth-code"
           name="authenticationCode"
           type="text"
           inputMode="numeric"
           autoComplete="one-time-code"
           maxLength={32}
+          aria-invalid={invalidFields === 'all' || undefined}
+          aria-describedby={invalidFields === 'all' ? signInErrorId : undefined}
+          onChange={() => setInvalidFields(null)}
           className={`${inputClass} font-mono tracking-[0.16em]`}
           placeholder="6-digit or recovery code"
         />
