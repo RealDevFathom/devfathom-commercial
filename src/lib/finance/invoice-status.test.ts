@@ -27,7 +27,12 @@ describe('invoice status contract shared by REST, tRPC, and AI', () => {
   });
 
   it.each(['OVERDUE', 'CANCELLED'] as const)('preserves sentAt when SENT becomes %s', (next) => {
-    expect(invoiceStatusUpdate('SENT', next, new Date(0))).toEqual({ status: next });
+    const sentAt = new Date('2026-10-20T00:00:00Z');
+    const storedInvoice = { status: 'SENT' as const, sentAt };
+    const update = invoiceStatusUpdate('SENT', next, new Date('2026-10-21T00:00:00Z'));
+
+    expect(update).toEqual({ status: next });
+    expect({ ...storedInvoice, ...update }).toEqual({ status: next, sentAt });
   });
 
   it.each(['SENT', 'CANCELLED'] as const)(
