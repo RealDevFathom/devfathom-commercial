@@ -43,6 +43,7 @@ describe('RefundPanel', () => {
     fireEvent.change(screen.getByLabelText('Settled receipt'), {
       target: { value: tender.tenderId },
     });
+    expect(screen.getByLabelText('Tip refund')).toHaveValue('2.00');
     fireEvent.change(screen.getByLabelText('Refund amount'), { target: { value: '20.01' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Guest complaint' } });
     fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
@@ -53,6 +54,22 @@ describe('RefundPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
     expect(screen.getByRole('heading', { name: 'Confirm destructive refund' })).toBeVisible();
     expect(screen.getByRole('button', { name: 'Confirm refund' })).toBeVisible();
+  });
+
+  it('allows a tip-only refund when the principal is exhausted', async () => {
+    const tipOnly = { ...tender, refundedAmount: '24.00', remainingAmount: '0.00' };
+    const request = mockRequest(async () => ({ tenders: [tipOnly] }));
+    await open(request);
+    fireEvent.change(screen.getByLabelText('Settled receipt'), {
+      target: { value: tipOnly.tenderId },
+    });
+    expect(screen.getByLabelText('Refund amount')).toHaveValue('0.00');
+    expect(screen.getByLabelText('Tip refund')).toHaveValue('2.00');
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Return remaining tip' } });
+    fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
+    fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
+    expect(screen.getByRole('heading', { name: 'Confirm destructive refund' })).toBeVisible();
   });
 
   it('submits one terminal refund and renders the durable server-authored tax receipt', async () => {
@@ -141,6 +158,7 @@ describe('RefundPanel', () => {
     expect(submission?.[1]?.body).toEqual({
       originalTenderId: tender.tenderId,
       amount: '20.00',
+      tipRefundAmount: '2.00',
       reason: 'Demo walkthrough',
       approving: { staffProfileId: 'manager', type: 'DEMO' },
     });

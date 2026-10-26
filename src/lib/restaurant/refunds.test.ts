@@ -590,6 +590,37 @@ describeIfDatabase('card refunds (real DB)', () => {
     ).rejects.toMatchObject({ reason: 'REFUND_EXCEEDS_TENDER' });
   });
 
+  it('keeps a card partial until its tip is refunded and permits a tip-only refund', async () => {
+    const { tenderId, paymentId } = await cardTender('2.00');
+
+    const principal = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '12.50',
+      tipRefundAmount: '0.00',
+      reason: 'return principal first',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+      now: AT,
+    });
+    expect(principal.paymentStatus).toBe('PARTIALLY_REFUNDED');
+
+    const tip = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '0.00',
+      tipRefundAmount: '2.00',
+      reason: 'return remaining tip',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+      now: AT,
+    });
+    expect(tip.paymentStatus).toBe('REFUNDED');
+    expect(
+      await read((tx) =>
+        tx.restaurantPayment.findUnique({ where: { id: paymentId }, select: { status: true } })
+      )
+    ).toMatchObject({ status: 'REFUNDED' });
+  });
+
   it('a same-day full VOID_REVERSAL voids the payment via the adapter VOID', async () => {
     const { tenderId, paymentId } = await cardTender();
     const reversal = await deps.refunds.refundTender(deps.createTenantDb(orgId), {

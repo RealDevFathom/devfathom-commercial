@@ -85,7 +85,7 @@ export class RefundError extends Error {
 export type RefundTenderInput = {
   originalTenderId: string;
   amount: Prisma.Decimal | string;
-  /** Optional tip refunded alongside the principal (≤ the tender's tip). */
+  /** Optional tip refund (≤ the tender's tip); it may be refunded without principal. */
   tipRefundAmount?: Prisma.Decimal | string;
   /** Defaults to REFUND. VOID_REVERSAL is only valid for a same-day FULL reversal. */
   kind?: RefundKind;
@@ -154,13 +154,13 @@ export async function refundTender(
   return runMoneyTransaction(db, async (tx) => {
     const reason = requireReason(input.reason);
     const amount = money(input.amount);
-    if (isZero(amount) || isNegative(amount)) {
-      throw new RefundError('A refund amount must be positive.', 'INVALID_AMOUNT');
-    }
     const tipRefundAmount =
       input.tipRefundAmount === undefined ? ZERO : money(input.tipRefundAmount);
-    if (isNegative(tipRefundAmount)) {
-      throw new RefundError('A tip refund must not be negative.', 'INVALID_AMOUNT');
+    if (isNegative(amount) || isNegative(tipRefundAmount)) {
+      throw new RefundError('Refund amounts must not be negative.', 'INVALID_AMOUNT');
+    }
+    if (isZero(amount) && isZero(tipRefundAmount)) {
+      throw new RefundError('A principal or tip refund amount must be positive.', 'INVALID_AMOUNT');
     }
 
     // This branch-scoped read MUST precede the idempotency-key insert and every other
@@ -403,7 +403,9 @@ export async function refundTender(
         amount,
         tipRefundAmount,
         tenderAmount: tender.amount,
+        tenderTipAmount: tender.tipAmount,
         refundedSoFar,
+        tipRefundedSoFar,
         actor: input.actor,
         originalTenderId: tender.id,
       });
@@ -504,7 +506,9 @@ async function applyCardRefund(
     amount: Prisma.Decimal;
     tipRefundAmount: Prisma.Decimal;
     tenderAmount: Prisma.Decimal;
+    tenderTipAmount: Prisma.Decimal;
     refundedSoFar: Prisma.Decimal;
+    tipRefundedSoFar: Prisma.Decimal;
     actor: MoneyActor;
     originalTenderId: string;
   }
@@ -529,12 +533,13 @@ async function applyCardRefund(
   });
 
   // The normalized payment status: a void → VOIDED; a refund → REFUNDED once the
-  // whole captured amount is returned, else PARTIALLY_REFUNDED.
+  // whole captured principal and tip are returned, else PARTIALLY_REFUNDED.
   const nowRefunded = input.refundedSoFar.plus(input.amount);
+  const tipNowRefunded = input.tipRefundedSoFar.plus(input.tipRefundAmount);
   const status: PaymentStatus =
     input.kind === 'VOID_REVERSAL'
       ? 'VOIDED'
-      : equals(nowRefunded, input.tenderAmount)
+      : equals(nowRefunded, input.tenderAmount) && equals(tipNowRefunded, input.tenderTipAmount)
         ? 'REFUNDED'
         : 'PARTIALLY_REFUNDED';
 
