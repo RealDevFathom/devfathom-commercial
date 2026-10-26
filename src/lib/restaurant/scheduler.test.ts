@@ -337,9 +337,14 @@ describe('fail', () => {
     ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
   });
 
-  it.each(['complete', 'fail'] as const)(
-    'rejects a stale worker attempting to %s a newer claim',
-    async (operation) => {
+  it.each([
+    ['complete', 'worker-a', 2],
+    ['complete', 'worker-b', 1],
+    ['fail', 'worker-a', 2],
+    ['fail', 'worker-b', 1],
+  ] as const)(
+    'rejects a stale claim attempting to %s with worker %s at attempt %i',
+    async (operation, workerId, attempt) => {
       const { db, jobs, executions } = createFakeDb([
         {
           id: 'j1',
@@ -353,10 +358,10 @@ describe('fail', () => {
 
       const settlement =
         operation === 'complete'
-          ? complete(db, 'j1', { workerId: 'worker-a', attempt: 1, now: T0 })
+          ? complete(db, 'j1', { workerId, attempt, now: T0 })
           : fail(db, 'j1', new Error('late failure'), {
-              workerId: 'worker-a',
-              attempt: 1,
+              workerId,
+              attempt,
               now: T0,
             });
 
