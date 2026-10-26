@@ -753,6 +753,20 @@ describe('drainDueJobs (single worker)', () => {
     expect(executions.filter((execution) => execution.outcome === 'SUCCEEDED')).toHaveLength(3);
   });
 
+  it('settles jobs with the canonical claimed owner when the worker ID is padded', async () => {
+    const { db, jobs } = seededQueue();
+    const result = await drainDueJobs({
+      runScoped: runScoped(db),
+      workerId: ' w1 ',
+      clock: () => T0,
+      maxJobs: 1,
+      handler: async () => undefined,
+    });
+
+    expect(result.succeeded).toBe(1);
+    expect(jobs.get('a')).toMatchObject({ status: 'SUCCEEDED', claimedBy: 'w1' });
+  });
+
   it('settles a throwing handler through the retry path', async () => {
     const { db, executions } = seededQueue();
     const result = await drainDueJobs({
@@ -768,6 +782,22 @@ describe('drainDueJobs (single worker)', () => {
     expect(result.retried).toBe(3);
     expect(result.succeeded).toBe(0);
     expect(executions.every((execution) => execution.outcome === 'FAILED')).toBe(true);
+  });
+
+  it('retries with the canonical claimed owner when the worker ID is padded', async () => {
+    const { db, jobs } = seededQueue();
+    const result = await drainDueJobs({
+      runScoped: runScoped(db),
+      workerId: ' w1 ',
+      clock: () => T0,
+      maxJobs: 1,
+      handler: async () => {
+        throw new Error('handler exploded');
+      },
+    });
+
+    expect(result.retried).toBe(1);
+    expect(jobs.get('a')).toMatchObject({ status: 'QUEUED', claimedBy: null });
   });
 
   it('stops claiming when the abort signal is already set', async () => {

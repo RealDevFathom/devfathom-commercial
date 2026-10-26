@@ -515,7 +515,7 @@ export async function drainDueJobs(options: DrainOptions): Promise<DrainResult> 
       await options.handler(job);
       await options.runScoped((db) =>
         complete(db, job.id, {
-          workerId: options.workerId,
+          workerId: job.claimedBy,
           attempt: job.attempts,
           claimToken: job.claimToken,
           now: clock(),
@@ -525,7 +525,7 @@ export async function drainDueJobs(options: DrainOptions): Promise<DrainResult> 
     } catch (error) {
       const outcome = await options.runScoped((db) =>
         fail(db, job.id, error, {
-          workerId: options.workerId,
+          workerId: job.claimedBy,
           attempt: job.attempts,
           claimToken: job.claimToken,
           now: clock(),
