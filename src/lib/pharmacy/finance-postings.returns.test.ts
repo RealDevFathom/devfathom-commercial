@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { postJournalEntry } from '@/lib/finance/journal';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
@@ -6,6 +6,10 @@ import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-
 vi.mock('@/lib/finance/journal', () => ({
   postJournalEntry: vi.fn(async (_db, _scope, input) => input),
 }));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe('return postings match authorized cumulative net', () => {
   it.each([
@@ -147,7 +151,6 @@ it('reverses revenue but not inventory for an unidentified return hold', async (
 });
 
 it('rejects an unidentified return from another branch before posting', async () => {
-  const postingCalls = vi.mocked(postJournalEntry).mock.calls.length;
   const db = {
     pharmacyUnidentifiedReturnHold: {
       findFirst: vi.fn().mockResolvedValue({ id: 'hold', branchId: 'other-branch' }),
@@ -161,7 +164,7 @@ it('rejects an unidentified return from another branch before posting', async ()
       { holdingId: 'hold', at: new Date('2026-10-21') }
     )
   ).rejects.toThrow('CROSS_BRANCH_REFERENCE');
-  expect(vi.mocked(postJournalEntry).mock.calls).toHaveLength(postingCalls);
+  expect(postJournalEntry).not.toHaveBeenCalled();
 });
 
 it('records a zero-minor-unit slice and assigns the rounding remainder to a later hold', async () => {
