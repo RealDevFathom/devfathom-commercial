@@ -527,6 +527,20 @@ describe('restaurantInventoryRouter', () => {
     expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
   });
 
+  it('rejects missing low-stock rules before attempting an update or delete', async () => {
+    mocks.findLowStockRule.mockResolvedValue(null);
+
+    await expect(
+      caller().updateLowStockRule({ id: 'rule_missing', threshold: '6' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(caller().deleteLowStockRule({ id: 'rule_missing' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+
+    expect(mocks.updateLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
+  });
+
   it('denies line injection into unauthorized count and transfer branches before mutation', async () => {
     mocks.findStockCount.mockResolvedValue({ location: { branchId: 'branch_2' } });
     mocks.findStockTransfer.mockResolvedValue({
