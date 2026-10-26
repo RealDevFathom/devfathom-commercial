@@ -104,4 +104,10 @@ it('composes on HTTP LAN and preserves the command key across persisted replay a
       authentication: { ...command.authentication, receiptSignature: '' },
     })
   ).toThrow('INVALID_REPLAY_CONTRACT');
+  expect(() =>
+    buildCounterReplayRequest(snapshot, { ...command, action: 'PROVISIONAL_CLOSE' })
+  ).toThrow('INVALID_REPLAY_CONTRACT');
+  expect(() => buildCounterReplayRequest(snapshot, { ...command, payload: {} })).toThrow(
+    'INVALID_REPLAY_CONTRACT'
+  );
 });
