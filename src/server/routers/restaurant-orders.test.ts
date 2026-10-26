@@ -280,6 +280,15 @@ describe('capability gating + strict inputs', () => {
     expect(mocks.can.mock.calls.some((call) => call[1] === 'orders:manage')).toBe(false);
   });
 
+  it('does not allow orders:manage to substitute for orders:void when cancelling', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'orders:manage');
+
+    await expect(
+      caller().cancel({ orderId: 'o1', reason: 'Guest request', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+  });
+
   it('rejects unknown input fields (strict)', async () => {
     await expect(
       // @ts-expect-error — surplus field must be rejected, never stripped
