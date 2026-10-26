@@ -88,6 +88,9 @@ describe('finance.getInvoiceById issuer', () => {
     mocks.findInvoice.mockResolvedValue(null);
 
     await expect(caller('org-other').getInvoiceById({ id: 'invoice-1' })).resolves.toBeNull();
+    expect(mocks.findInvoice).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'invoice-1', organizationId: 'org-other' } })
+    );
     expect(mocks.findOrganization).not.toHaveBeenCalled();
   });
 
