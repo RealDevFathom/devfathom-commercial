@@ -247,7 +247,26 @@ describe('Decimal-as-string serialization (D07)', () => {
   });
 });
 
-describe('actor + idempotency plumbing', () => {
+describe('branch authorization', () => {
+  it('allows assigned-branch and configured cross-branch purchase-order lists', async () => {
+    mocks.listPurchaseOrders.mockResolvedValue({ orders: [], nextCursor: null });
+
+    await expect(caller().listPurchaseOrders({ branchId: 'b1' })).resolves.toEqual({
+      orders: [],
+      nextCursor: null,
+    });
+    await expect(caller().listPurchaseOrders({})).resolves.toEqual({
+      orders: [],
+      nextCursor: null,
+    });
+
+    expect(mocks.listPurchaseOrders).toHaveBeenNthCalledWith(1, expect.anything(), {
+      branchId: 'b1',
+    });
+    expect(mocks.listPurchaseOrders).toHaveBeenNthCalledWith(2, expect.anything(), {});
+    expect(usedActions()).toContain('restaurant:configure');
+  });
+
   it('denies branch-limited staff access to purchase orders and receipts from another branch', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
     mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b2', locationId: 'loc2' });
@@ -292,7 +311,9 @@ describe('actor + idempotency plumbing', () => {
     expect(mocks.closePurchaseOrder).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).not.toHaveBeenCalled();
   });
+});
 
+describe('actor + idempotency plumbing', () => {
   it('rejects a create location outside the authorized branch before mutation', async () => {
     mocks.findStockLocation.mockResolvedValue({ branchId: 'b2' });
 
