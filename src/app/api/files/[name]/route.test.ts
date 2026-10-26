@@ -127,6 +127,13 @@ describe('private attachment delivery', () => {
     );
 
     expect((await read('shared-name.pdf')).status).toBe(200);
+    expect(db.branchRegulatoryProfile.findFirst).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        organizationId: 'org_a',
+        licenceEvidenceFileRef: '/api/files/shared-name.pdf',
+      },
+      select: { id: true },
+    });
     expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'shared-name.pdf');
   });
 

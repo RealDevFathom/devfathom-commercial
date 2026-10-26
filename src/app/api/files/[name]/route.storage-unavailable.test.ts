@@ -59,6 +59,13 @@ test('licence evidence denial hides resource even when storage is disabled', asy
   m.licence.mockResolvedValue({ id: 'regulatory-profile' });
   expect((await read()).status).toBe(404);
   expect(m.tenant).toHaveBeenCalledExactlyOnceWith('org-a', expect.any(Function));
+  expect(m.licence).toHaveBeenCalledExactlyOnceWith({
+    where: {
+      organizationId: 'org-a',
+      licenceEvidenceFileRef: '/api/files/proof.png',
+    },
+    select: { id: true },
+  });
   expect(m.attachment).not.toHaveBeenCalled();
   expect(m.get).not.toHaveBeenCalled();
 });
