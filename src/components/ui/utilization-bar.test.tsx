@@ -35,10 +35,11 @@ describe('UtilizationBar', () => {
   });
 
   it.each(['', '   '])('provides a default accessible name for an empty label', (label) => {
-    render(<UtilizationBar label={label} value={40} />);
+    const { container } = render(<UtilizationBar label={label} value={40} />);
 
     const progressbar = screen.getByRole('progressbar', { name: 'Utilization' });
 
+    expect(container.querySelector('.eyebrow')).not.toBeInTheDocument();
     expect(progressbar).toHaveAttribute('aria-label', 'Utilization');
     expect(progressbar).not.toHaveAttribute('aria-labelledby');
     expect(progressbar).toHaveValue(40);
