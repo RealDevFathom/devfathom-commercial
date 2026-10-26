@@ -61,6 +61,7 @@ export type ShiftErrorReason =
   | 'STAFF_WRONG_BRANCH'
   | 'OVERLAP'
   | 'VERSION_CONFLICT'
+  | 'ACTIVE_ATTENDANCE'
   | 'ALREADY_CANCELLED';
 
 export class ShiftError extends Error {
@@ -346,13 +347,19 @@ export async function cancelShift(
 ) {
   const existing = await db.restaurantShift.findUnique({
     where: { id },
-    select: { id: true, status: true },
+    select: { id: true, status: true, clockedInAt: true, clockedOutAt: true },
   });
   if (!existing) {
     throw new ShiftError('Shift not found.', 'SHIFT_NOT_FOUND');
   }
   if (existing.status === 'CANCELLED') {
     throw new ShiftError('This shift is already cancelled.', 'ALREADY_CANCELLED');
+  }
+  if (existing.clockedInAt && !existing.clockedOutAt) {
+    throw new ShiftError(
+      'This shift cannot be cancelled while the employee is clocked in.',
+      'ACTIVE_ATTENDANCE'
+    );
   }
   const data = {
     status: 'CANCELLED' as const,

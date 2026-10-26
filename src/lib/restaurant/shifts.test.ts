@@ -37,6 +37,8 @@ type Row = {
   status: 'SCHEDULED' | 'CANCELLED';
   cancelledAt: Date | null;
   cancelReason: string | null;
+  clockedInAt: Date | null;
+  clockedOutAt: Date | null;
   version: number;
   createdAt: Date;
   updatedAt: Date;
@@ -140,6 +142,8 @@ const db = {
         status: 'SCHEDULED',
         cancelledAt: null,
         cancelReason: null,
+        clockedInAt: null,
+        clockedOutAt: null,
         version: 1,
         createdAt: new Date('2026-08-01T00:00:00Z'),
         updatedAt: new Date('2026-08-01T00:00:00Z'),
@@ -470,6 +474,24 @@ describe('cancelShift', () => {
       cancelReason: 'Storm closure',
     });
     expect(shifts).toHaveLength(1);
+  });
+
+  it('rejects cancellation while the employee has active attendance', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    await db.restaurantShift.update({
+      where: { id: shift.id },
+      data: { clockedInAt: new Date('2026-08-20T09:05:00Z') },
+    });
+
+    await expect(cancelShift(db, shift.id, { now: NOON })).rejects.toMatchObject({
+      reason: 'ACTIVE_ATTENDANCE',
+    });
+    expect(shifts[0]).toMatchObject({ status: 'SCHEDULED', cancelledAt: null });
   });
 
   it('refuses a second cancellation and an unknown shift', async () => {

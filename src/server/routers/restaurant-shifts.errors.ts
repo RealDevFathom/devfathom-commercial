@@ -22,6 +22,7 @@ export function mapShiftError(err: unknown): never {
     const code =
       err.reason === 'OVERLAP' ||
       err.reason === 'VERSION_CONFLICT' ||
+      err.reason === 'ACTIVE_ATTENDANCE' ||
       err.reason === 'ALREADY_CANCELLED'
         ? 'CONFLICT'
         : err.reason === 'SHIFT_NOT_FOUND' ||
