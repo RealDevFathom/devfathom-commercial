@@ -13,6 +13,55 @@ const migration = readFileSync(
 const describeIfDatabase = databaseUrl ? describe : describe.skip;
 
 describeIfDatabase('task-assignee project membership database invariant', () => {
+  it('does not let a pre-trigger writer escape the migration cleanup', async () => {
+    const schema = `task_membership_${randomUUID().replaceAll('-', '')}`;
+    const setup = new pg.Client({ connectionString: databaseUrl });
+    const writer = new pg.Client({ connectionString: databaseUrl });
+    const migrator = new pg.Client({ connectionString: databaseUrl });
+    await Promise.all([setup.connect(), writer.connect(), migrator.connect()]);
+
+    try {
+      await setup.query(`CREATE SCHEMA "${schema}"; SET search_path TO "${schema}"`);
+      await setup.query(`
+        CREATE TABLE projects (id text PRIMARY KEY);
+        CREATE TABLE boards (id text PRIMARY KEY, "projectId" text NOT NULL);
+        CREATE TABLE columns (id text PRIMARY KEY, "boardId" text NOT NULL);
+        CREATE TABLE tasks (id text PRIMARY KEY, "columnId" text NOT NULL);
+        CREATE TABLE project_members (id text PRIMARY KEY, "projectId" text NOT NULL, "userId" text NOT NULL);
+        CREATE TABLE task_assignees (id text PRIMARY KEY, "taskId" text NOT NULL, "userId" text NOT NULL);
+        INSERT INTO projects VALUES ('project');
+        INSERT INTO boards VALUES ('board', 'project');
+        INSERT INTO columns VALUES ('column', 'board');
+        INSERT INTO tasks VALUES ('task', 'column');
+      `);
+      await Promise.all([
+        writer.query(`SET search_path TO "${schema}"`),
+        migrator.query(`SET search_path TO "${schema}"`),
+      ]);
+
+      // This transaction represents a writer which began before trigger
+      // installation. The migration must wait for it before taking its cleanup
+      // snapshot, rather than allowing its invalid row to commit in a gap.
+      await writer.query('BEGIN');
+      await writer.query(`INSERT INTO task_assignees VALUES ('invalid', 'task', 'outsider')`);
+      const deployment = migrator.query(migration);
+      const beforeCommit = await Promise.race([
+        deployment.then(() => 'migrated'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('blocked'), 100)),
+      ]);
+      expect(beforeCommit).toBe('blocked');
+
+      await writer.query('COMMIT');
+      await expect(deployment).resolves.toBeDefined();
+      expect((await setup.query(`SELECT * FROM task_assignees`)).rows).toEqual([]);
+    } finally {
+      await writer.query('ROLLBACK').catch(() => undefined);
+      await migrator.query('ROLLBACK').catch(() => undefined);
+      await setup.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).catch(() => undefined);
+      await Promise.all([setup.end(), writer.end(), migrator.end()]);
+    }
+  });
+
   it('removes pre-existing invalid assignments when the migration is applied', async () => {
     const schema = `task_membership_${randomUUID().replaceAll('-', '')}`;
     const client = new pg.Client({ connectionString: databaseUrl });

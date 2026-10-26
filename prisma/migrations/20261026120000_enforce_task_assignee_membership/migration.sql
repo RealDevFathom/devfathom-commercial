@@ -1,5 +1,11 @@
 -- Keep task assignment and project membership consistent even when the two
 -- records are changed concurrently or through a writer other than the REST API.
+-- Exclude writes to every participant before taking the cleanup snapshot. This
+-- prevents a pre-trigger writer from committing an invalid row after cleanup
+-- but before the triggers below are installed. Keep this order stable for any
+-- future migration which needs to lock the same invariant participants.
+LOCK TABLE task_assignees, project_members, tasks IN SHARE ROW EXCLUSIVE MODE;
+
 -- Remove invalid rows created before this invariant existed.
 DELETE FROM task_assignees ta
  WHERE NOT EXISTS (
