@@ -113,23 +113,33 @@ beforeEach(() => {
 });
 describe('Khata router trust and recovery boundary', () => {
   it.each([
-    ['bootstrap admin wildcard', '*'],
-    ['counter operator', 'pharmacy:counter'],
-    ['finance operator', 'reports:financial'],
-  ])('admits a %s without requiring clinical dispense permission', async (_name, grant) => {
-    const f = fixture();
-    vi.mocked(can).mockImplementation(async (_subject, action) => capabilityMatches(grant, action));
+    ['bootstrap admin wildcard', '*', ['pharmacy:counter']],
+    ['counter operator', 'pharmacy:counter', ['pharmacy:counter']],
+    [
+      'finance operator',
+      'reports:financial',
+      ['pharmacy:counter', 'reports:financial'],
+    ],
+  ])(
+    'admits a %s without requiring clinical dispense permission',
+    async (_name, grant, actions) => {
+      const f = fixture();
+      vi.mocked(can).mockImplementation(async (_subject, action) =>
+        capabilityMatches(grant, action)
+      );
 
-    await expect(
-      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
-    ).resolves.toEqual([expect.objectContaining({ id: 'family-a' })]);
-    expect(can).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'pharmacy:dispense',
-      expect.anything(),
-      expect.anything()
-    );
-  });
+      await expect(
+        f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+      ).resolves.toEqual([expect.objectContaining({ id: 'family-a' })]);
+      expect(vi.mocked(can).mock.calls.map(([, action]) => action)).toEqual(actions);
+      expect(can).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'pharmacy:dispense',
+        expect.anything(),
+        expect.anything()
+      );
+    }
+  );
 
   it('does not treat clinical dispense permission as Khata access', async () => {
     const f = fixture();
