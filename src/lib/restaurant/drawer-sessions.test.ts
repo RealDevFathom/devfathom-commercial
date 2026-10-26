@@ -269,6 +269,67 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     expect(persisted.openDrawers + persisted.closes).toBe(1);
   });
 
+  it('serializes a manual adjustment against closing the same business day', async () => {
+    const branchId = `branch_adjust_close_race_${suffix}`;
+    await read((tx) =>
+      tx.restaurantBranch.create({
+        data: {
+          id: branchId,
+          name: 'Adjustment close race',
+          timezone: 'UTC',
+          businessDayCutoff: '00:00',
+        },
+      })
+    );
+    const deviceId = await newDevice('POS-adjust-close-race', branchId);
+    const drawerSessionId = await read(async (tx) => {
+      const session = await tx.restaurantDrawerSession.create({
+        data: {
+          branchId,
+          deviceId,
+          staffProfileId: ids.operator,
+          businessDate: new Date('2026-08-19T00:00:00.000Z'),
+          status: 'OPEN',
+          openedAt: AT,
+          openingFloat: '0.00',
+        },
+        select: { id: true },
+      });
+      return session.id;
+    });
+
+    const [adjusting, closing] = await Promise.allSettled([
+      deps.drawer.recordDrawerAdjustment(deps.createTenantDb(orgId), {
+        drawerSessionId,
+        kind: 'PAID_IN',
+        amount: '10.00',
+        reason: 'concurrent top-up',
+        actor: actor(deviceId),
+      }),
+      deps.dailyClose.cutClose(deps.createTenantDb(orgId), {
+        branchId,
+        businessDate: '2026-08-19',
+        actor: actor(deviceId),
+      }),
+    ]);
+
+    expect(adjusting.status).toBe('fulfilled');
+    expect(closing).toMatchObject({
+      status: 'rejected',
+      reason: { reason: 'OPEN_DRAWER' },
+    });
+
+    const persisted = await read(async (tx) => ({
+      movements: await tx.restaurantDrawerMovement.count({
+        where: { drawerSessionId, kind: 'PAID_IN' },
+      }),
+      closes: await tx.restaurantDailyClose.count({
+        where: { branchId, businessDate: new Date('2026-08-19T00:00:00.000Z') },
+      }),
+    }));
+    expect(persisted).toEqual({ movements: 1, closes: 0 });
+  });
+
   it('rejects a second OPEN drawer on the same register', async () => {
     const deviceId = await newDevice('POS-dupe');
     const db = deps.createTenantDb(orgId);
