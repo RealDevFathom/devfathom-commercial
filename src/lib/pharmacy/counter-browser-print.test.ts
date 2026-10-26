@@ -43,7 +43,10 @@ const receipt: CounterReceipt = {
 afterEach(() => vi.restoreAllMocks());
 
 describe('isolated Pharmacy browser receipt', () => {
-  it('renders the organization currency on a Z-report', () => {
+  it.each([
+    ['en', 'Expected cash: 100.00'],
+    ['ur', 'متوقع نقد: 100.00'],
+  ] as const)('renders the organization currency on a %s Z-report', (locale, expectedCash) => {
     const html = buildCounterBrowserZReport(
       {
         id: 'close-1',
@@ -60,11 +63,11 @@ describe('isolated Pharmacy browser receipt', () => {
         reason: null,
         isFinal: true,
       },
-      'en'
+      locale
     );
     const text = new DOMParser().parseFromString(html, 'text/html').body.textContent;
     expect(text).toContain('USD');
-    expect(text).toContain('Expected cash: 100.00');
+    expect(text).toContain(expectedCash);
     expect(text).not.toContain('PKR');
   });
 
