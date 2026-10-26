@@ -776,6 +776,26 @@ describeIfDatabase('PH-OFF OFF-01 — the append-only command log', () => {
     expect(staleRecovery).toBe('SEQUENCE_OUT_OF_ORDER');
   });
 
+  it('does not advance the recovery cursor for a revoked counter', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'log-recovery-revoked');
+    await inOrg(ORG_A, (db) =>
+      deps.devices.revokePharmacyCounter(db, scopeOf(fixture), fixture.deviceId, NOW)
+    );
+
+    const message = await refusal(ORG_A, (db) =>
+      deps.log.skipOfflineCommandSequences(db, scopeOf(fixture), fixture.deviceId, 1, 2)
+    );
+    expect(message).toBe('SEQUENCE_OUT_OF_ORDER');
+
+    const cursor = await inOrg(ORG_A, (db) =>
+      db.pharmacyRegisteredDevice.findFirstOrThrow({
+        where: { id: fixture.deviceId },
+        select: { nextOfflineCommandSequence: true },
+      })
+    );
+    expect(cursor.nextOfflineCommandSequence).toBe(1);
+  });
+
   it('reserves the PostgreSQL INTEGER maximum for the terminal cursor', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'log-sequence-ceiling');
     const maximumCommandSequence = deps.log.MAX_OFFLINE_COMMAND_SEQUENCE;
