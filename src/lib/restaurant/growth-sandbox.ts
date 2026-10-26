@@ -39,15 +39,6 @@ const attemptSchema = z.object({
   fingerprint: z.string(),
   state: z.enum(['CAPTURED', 'UNKNOWN']),
 });
-
-const GROWTH_OPT_OUT_CONFIRMATION =
-  'You will no longer receive WhatsApp growth messages. Reply START to opt back in.\n' +
-  'آپ کو اب واٹس ایپ پر گروتھ پیغامات نہیں ملیں گے۔ دوبارہ شروع کرنے کے لیے START لکھیں۔';
-
-function isGrowthStop(text: string) {
-  const normalized = text.normalize('NFKC').trim().toLowerCase();
-  return normalized === 'stop' || normalized === 'بند';
-}
 async function admit(db: ScopedDb, raw: GrowthSandboxAdmission) {
   const admission = admissionSchema.parse(raw);
   const rows = await db.$queryRawUnsafe<
@@ -253,7 +244,7 @@ export async function stopRestaurantGrowthSandbox(
     })
     .strict()
     .parse(raw);
-  if (!isGrowthStop(input.text)) throw new GrowthReviewError('INVALID');
+  if (input.text.trim().toUpperCase() !== 'STOP') throw new GrowthReviewError('INVALID');
   return h.db.$transaction(async (tx) => {
     const actor = { ...h, db: tx as ScopedDb };
     const policy = await admit(actor.db, admission);
@@ -270,7 +261,7 @@ export async function stopRestaurantGrowthSandbox(
       h.ctx.organizationId,
       input.customerId
     );
-    const consent = await appendCustomerConsent(actor.db, {
+    return appendCustomerConsent(actor.db, {
       customerId: input.customerId,
       channel: 'WHATSAPP',
       granted: false,
@@ -279,7 +270,6 @@ export async function stopRestaurantGrowthSandbox(
       policyVersion: policy.policyVersion,
       idempotencyKey: 'restaurant-growth-stop:' + input.eventId,
     });
-    return { ...consent, confirmation: GROWTH_OPT_OUT_CONFIRMATION };
   });
 }
 /** Bounded, internal operational receipt diagnostic. No attribution write or money guess. */
