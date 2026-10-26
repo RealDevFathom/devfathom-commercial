@@ -117,21 +117,24 @@ describe('outbound evidence and safe replay', () => {
       });
     }
   );
-  it('sends an eligible reminder after locking its opted-in customer', async () => {
-    const send = vi.fn().mockResolvedValue({
-      providerMessageId: 'reminder-1',
-      acceptedByProvider: true,
-    });
+  it.each(['REFILL_REMINDER', 'KHATA_REMINDER'] as const)(
+    'sends an eligible %s after locking its opted-in customer',
+    async (kind) => {
+      const send = vi.fn().mockResolvedValue({
+        providerMessageId: 'reminder-1',
+        acceptedByProvider: true,
+      });
 
-    await expect(sendAndLog(reminderEntry, send)).resolves.toBe('SENT');
+      await expect(sendAndLog({ ...reminderEntry, kind }, send)).resolves.toBe('SENT');
 
-    expect(mocks.queryRaw).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledOnce();
-    expect(mocks.update).toHaveBeenCalledWith({
-      where: { id: 'log-a' },
-      data: { status: 'SENT', providerMessageId: 'reminder-1' },
-    });
-  });
+      expect(mocks.queryRaw).toHaveBeenCalledOnce();
+      expect(send).toHaveBeenCalledOnce();
+      expect(mocks.update).toHaveBeenCalledWith({
+        where: { id: 'log-a' },
+        data: { status: 'SENT', providerMessageId: 'reminder-1' },
+      });
+    }
+  );
   it('suppresses a reminder that has no customer to prove explicit consent', async () => {
     const send = vi.fn();
 
