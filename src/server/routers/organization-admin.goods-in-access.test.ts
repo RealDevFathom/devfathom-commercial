@@ -118,19 +118,22 @@ describe('organization member Goods-in access', () => {
     );
   });
 
-  it('does not mutate or audit a member outside the current organization', async () => {
-    mocks.userFindFirst.mockResolvedValue(null);
+  it.each([true, false])(
+    'does not mutate or audit a member outside the current organization when granted is %s',
+    async (granted) => {
+      mocks.userFindFirst.mockResolvedValue(null);
 
-    await expect(
-      caller().setMemberGoodsInAccess({ id: 'member_b', granted: false })
-    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Member not found.' });
+      await expect(
+        caller().setMemberGoodsInAccess({ id: 'member_b', granted })
+      ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Member not found.' });
 
-    expect(mocks.userFindFirst).toHaveBeenCalledWith({
-      where: { id: 'member_b', organizationId: 'org_a' },
-      select: { id: true, email: true },
-    });
-    expect(mocks.overrideUpsert).not.toHaveBeenCalled();
-    expect(mocks.overrideDeleteMany).not.toHaveBeenCalled();
-    expect(mocks.annotateAudit).not.toHaveBeenCalled();
-  });
+      expect(mocks.userFindFirst).toHaveBeenCalledWith({
+        where: { id: 'member_b', organizationId: 'org_a' },
+        select: { id: true, email: true },
+      });
+      expect(mocks.overrideUpsert).not.toHaveBeenCalled();
+      expect(mocks.overrideDeleteMany).not.toHaveBeenCalled();
+      expect(mocks.annotateAudit).not.toHaveBeenCalled();
+    }
+  );
 });
