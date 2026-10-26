@@ -6,7 +6,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /** Real PostgreSQL regression coverage for reciprocal graph writes. */
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
