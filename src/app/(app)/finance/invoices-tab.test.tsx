@@ -7,6 +7,7 @@ describe('InvoiceRow', () => {
   it.each([
     { currency: 'PKR', total: 125000, expected: 'Rs 125,000' },
     { currency: 'USD', total: 125000, expected: '$125,000' },
+    { currency: 'PKR', total: '125000.5', expected: 'Rs 125,000.5' },
     { currency: 'PKR', total: -125000, expected: '-Rs 125,000' },
     { currency: 'USD', total: 0, expected: '$0' },
   ])(
