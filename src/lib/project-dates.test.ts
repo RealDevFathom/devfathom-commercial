@@ -19,7 +19,7 @@ describe('REST project date ranges', () => {
     );
   });
 
-  it('accepts equal dates and omitted bounds', () => {
+  it('accepts equal dates and either omitted bound', () => {
     expect(
       createProjectSchema.safeParse({
         name: 'One day',
@@ -31,5 +31,19 @@ describe('REST project date ranges', () => {
     expect(createProjectSchema.safeParse({ name: 'No schedule', type: 'INTERNAL' }).success).toBe(
       true
     );
+    expect(
+      createProjectSchema.safeParse({
+        name: 'Start only',
+        type: 'INTERNAL',
+        startDate: '2026-10-22T00:00:00.000Z',
+      }).success
+    ).toBe(true);
+    expect(
+      createProjectSchema.safeParse({
+        name: 'End only',
+        type: 'INTERNAL',
+        endDate: '2026-10-22T00:00:00.000Z',
+      }).success
+    ).toBe(true);
   });
 });
