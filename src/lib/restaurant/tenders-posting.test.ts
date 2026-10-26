@@ -546,6 +546,40 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     }
   );
 
+  it.each(['missing payment link', 'deleted payment'] as const)(
+    'rejects a card refund with a %s before claiming idempotency or writing refund records',
+    async (failure) => {
+      const f = fixture();
+      const collected = await f.collect({ tender: { type: 'CARD', amount: '3860' } });
+      if (failure === 'missing payment link') {
+        f.tenders[0].paymentId = null;
+      } else {
+        f.raw.restaurantPayment.findUnique.mockResolvedValueOnce(null);
+      }
+      const idempotencyClaimsBeforeRefund =
+        f.raw.restaurantMoneyIdempotencyKey.create.mock.calls.length;
+
+      await expect(
+        refundTender(f.db, {
+          originalTenderId: collected.tenderId,
+          amount: '1000',
+          reason: 'Missing payment regression',
+          approvingStaffProfileId: 'manager',
+          actor: { ...actor, idempotencyKey: 'missing-payment-refund' },
+          now: NOW,
+        })
+      ).rejects.toMatchObject({ reason: 'PAYMENT_NOT_FOUND' });
+
+      expect(f.raw.restaurantMoneyIdempotencyKey.create).toHaveBeenCalledTimes(
+        idempotencyClaimsBeforeRefund
+      );
+      expect(f.raw.restaurantRefund.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+      expect(reverseLoyaltyForRefund).not.toHaveBeenCalled();
+      expect(f.raw.restaurantPayment.update).not.toHaveBeenCalled();
+    }
+  );
+
   it.each([D1, D2])(
     'rejects a closed bill or collection day %s before tender writes',
     async (day) => {
