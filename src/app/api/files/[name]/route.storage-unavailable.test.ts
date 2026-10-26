@@ -24,7 +24,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   m.actor.mockResolvedValue({
     organization: { id: 'org-a' },
-    session: { user: { id: 'user-a', role: 'STAFF' } },
+    session: { user: { id: 'user-a', role: 'EMPLOYEE' } },
   });
   m.tenant.mockImplementation(async (_org, callback) =>
     callback({
