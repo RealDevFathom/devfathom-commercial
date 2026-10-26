@@ -4,7 +4,10 @@ import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 
 import { buildCounterBrowserReceipt, printCounterBrowserReceipt } from './counter-browser-print';
 import type { CounterReceipt, CounterReceiptLocale } from './counter-receipt';
-import { buildPharmacyReceiptPrintDocument } from './receipt-print';
+import {
+  buildPharmacyReceiptPrintDocument,
+  readPharmacyReceiptTaxIdentity,
+} from './receipt-print';
 
 const receipt: CounterReceipt = {
   saleId: 'sale-1',
@@ -42,6 +45,29 @@ const receipt: CounterReceipt = {
 afterEach(() => vi.restoreAllMocks());
 
 describe('isolated Pharmacy browser receipt', () => {
+  it('reads and normalizes the profile in force at completion', async () => {
+    const at = new Date('2026-09-05T10:00:00Z');
+    const findFirst = vi.fn(async () => ({ ntn: ' NTN-HISTORICAL ', strn: '   ' }));
+
+    await expect(
+      readPharmacyReceiptTaxIdentity(
+        { branchRegulatoryProfile: { findFirst } } as never,
+        { organizationId: 'org-1', branchId: 'branch-1' },
+        at
+      )
+    ).resolves.toEqual({ ntn: 'NTN-HISTORICAL', strn: null });
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        effectiveFrom: { lte: at },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+      },
+      orderBy: { effectiveFrom: 'desc' },
+      select: { ntn: true, strn: true },
+    });
+  });
+
   it.each([
     ['en', 'THERMAL_58'],
     ['en', 'THERMAL'],
