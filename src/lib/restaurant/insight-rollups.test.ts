@@ -175,7 +175,12 @@ describe('pure rollup calculations', () => {
   });
 });
 
-function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?: boolean }) {
+function rollupDb(input?: {
+  correction?: boolean;
+  mismatch?: boolean;
+  legacyNet?: boolean;
+  componentizedRefund?: boolean;
+}) {
   const close = {
     id: 'close_1',
     createdAt: new Date('2026-08-21T02:00:00.000Z'),
@@ -184,12 +189,12 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
     deliveryFeeSales: D('2'),
     deliveryFeeRefunds: D('1'),
     netSales: D(input?.legacyNet ? '7' : '5'),
-    taxTotal: D('0'),
-    serviceChargeTotal: D('0'),
+    taxTotal: D(input?.componentizedRefund ? '2' : '0'),
+    serviceChargeTotal: D(input?.componentizedRefund ? '1' : '0'),
     tipTotal: D('0'),
     compTotal: D('2'),
     discountTotal: D('1'),
-    refundTotal: D('2'),
+    refundTotal: D(input?.componentizedRefund ? '5' : '2'),
     voidTotal: D('4'),
     cashExpected: D('0'),
     cashCounted: D('0'),
@@ -211,8 +216,8 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
           status: 'SETTLED',
           subtotal: D('10'),
           deliveryFeeTotal: D('2'),
-          taxTotal: D('0'),
-          serviceChargeTotal: D('0'),
+          taxTotal: D(input?.componentizedRefund ? '4' : '0'),
+          serviceChargeTotal: D(input?.componentizedRefund ? '2' : '0'),
           compTotal: D('2'),
           discountTotal: D('1'),
           grandTotal: D('7'),
@@ -233,9 +238,9 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
     restaurantRefund: {
       findMany: vi.fn(async () => [
         {
-          amount: D('3'),
-          taxRefundAmount: D('0'),
-          serviceChargeRefundAmount: D('0'),
+          amount: D(input?.componentizedRefund ? '6' : '3'),
+          taxRefundAmount: D(input?.componentizedRefund ? '2' : '0'),
+          serviceChargeRefundAmount: D(input?.componentizedRefund ? '1' : '0'),
           deliveryFeeRefundAmount: D('1'),
         },
       ]),
@@ -336,6 +341,23 @@ describe('rollupDay handler idempotency and correction', () => {
     expect(result.replayed).toBe(false);
     expect(db.insightDailyRollup.upsert).toHaveBeenCalledOnce();
     expect(db.insightLoyaltyLiability.upsert).toHaveBeenCalledOnce();
+  });
+
+  it('reconciles and projects a refund with sales, tax, service, and delivery components', async () => {
+    const db = rollupDb({ componentizedRefund: true });
+
+    const result = await rollupDay(db as unknown as ScopedDb, {
+      branchId: 'branch_1',
+      businessDate: '2026-08-20',
+      force: true,
+    });
+
+    expect(result.replayed).toBe(false);
+    expect(db.insightDailyRollup.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({ netSales: D('5'), refundTotal: D('5') }),
+      })
+    );
   });
 
   it.each(['ADJUSTMENT', 'EXPIRY', 'REVERSAL'] as const)(
