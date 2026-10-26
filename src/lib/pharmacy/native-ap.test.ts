@@ -59,6 +59,36 @@ describe('native non-stock AP', () => {
     expect(postJournalEntry).not.toHaveBeenCalled();
   });
 
+  it('rejects an invoice replay from another branch without disclosing it', async () => {
+    const db = invoiceDb();
+    db.pharmacySupplierExpenseInvoice.findFirst.mockResolvedValue({
+      branchId: 'branch-b', supplierId: 'supplier-a', supplierInvoiceRef: 'UTIL-42', description: 'Electricity',
+      issuedAt: new Date('2026-10-01T00:00:00Z'), dueAt: new Date('2026-10-31T00:00:00Z'),
+      amountMinor: 12_500, lines: [{ description: 'Electricity', amountMinor: 12_500 }],
+    });
+    await expect(createSupplierExpenseInvoice(db, scope, {
+      supplierId: 'supplier-a', supplierInvoiceRef: 'UTIL-42', description: 'Electricity',
+      issuedAt: new Date('2026-10-01T00:00:00Z'), dueAt: new Date('2026-10-31T00:00:00Z'),
+      amountMinor: 12_500, idempotencyKey: 'create-a', lines: [{ description: 'Electricity', amountMinor: 12_500 }],
+    })).rejects.toThrow('INVALID_STATE');
+    expect(postJournalEntry).not.toHaveBeenCalled();
+  });
+
+  it('binds invoice replays to all durable request fields and lines', async () => {
+    const db = invoiceDb();
+    db.pharmacySupplierExpenseInvoice.findFirst.mockResolvedValue({
+      branchId: 'branch-a', supplierId: 'supplier-a', supplierInvoiceRef: 'UTIL-42', description: 'Electricity',
+      issuedAt: new Date('2026-10-01T00:00:00Z'), dueAt: new Date('2026-10-31T00:00:00Z'),
+      amountMinor: 12_500, lines: [{ description: 'Electricity', amountMinor: 12_500 }],
+    });
+    await expect(createSupplierExpenseInvoice(db, scope, {
+      supplierId: 'supplier-a', supplierInvoiceRef: 'UTIL-42', description: 'Electricity and gas',
+      issuedAt: new Date('2026-10-01T00:00:00Z'), dueAt: new Date('2026-10-31T00:00:00Z'),
+      amountMinor: 12_500, idempotencyKey: 'create-a', lines: [{ description: 'Electricity and gas', amountMinor: 12_500 }],
+    })).rejects.toThrow('INVALID_STATE');
+    expect(postJournalEntry).not.toHaveBeenCalled();
+  });
+
   it('bounds historical aging by database time, window and result count', async () => {
     const now = new Date('2026-10-26T12:00:00Z');
     const db = { $queryRaw: vi.fn().mockResolvedValueOnce([{ now }]) } as any;
@@ -95,6 +125,25 @@ describe('native non-stock AP', () => {
   it('rejects reversal before settlement and leaves the canonical payment untouched', async () => {
     const db = { pharmacySupplierExpenseSettlement: { findFirst: vi.fn().mockResolvedValue({ id: 'settlement-a', invoiceId: 'invoice-a', invoice: { branchId: 'branch-a' }, status: 'POSTED', occurredAt: new Date('2026-10-03Z') }) } } as any;
     await expect(reverseSupplierExpenseSettlement(db, scope, { settlementId: 'settlement-a', reason: 'mistake', at: new Date('2026-10-02Z'), idempotencyKey: 'reverse-a' })).rejects.toThrow('INVALID_STATE');
+    expect(reverseBookkeepingTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { reason: 'different reason', at: new Date('2026-10-04Z') },
+    { reason: 'mistake', at: new Date('2026-10-05Z') },
+  ])('rejects reversal replays with conflicting audit evidence', async ({ reason, at }) => {
+    const db = {
+      pharmacySupplierExpenseSettlement: { findFirst: vi.fn().mockResolvedValue({
+        id: 'settlement-a', invoiceId: 'invoice-a', invoice: { branchId: 'branch-a' }, status: 'REVERSED',
+        occurredAt: new Date('2026-10-03Z'), bookkeepingTransactionId: 'transaction-a',
+      }) },
+      pharmacySupplierExpenseSettlementReversal: { findFirst: vi.fn().mockResolvedValue({
+        settlementId: 'settlement-a', reason: 'mistake', reversedAt: new Date('2026-10-04Z'),
+      }) },
+    } as any;
+    await expect(reverseSupplierExpenseSettlement(db, scope, {
+      settlementId: 'settlement-a', reason, at, idempotencyKey: 'reverse-a',
+    })).rejects.toThrow('INVALID_STATE');
     expect(reverseBookkeepingTransaction).not.toHaveBeenCalled();
   });
 

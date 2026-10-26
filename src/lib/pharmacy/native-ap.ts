@@ -50,7 +50,27 @@ export async function createSupplierExpenseInvoice(
     where: { organizationId: scope.organizationId, idempotencyKey: input.idempotencyKey },
     include: { lines: true },
   });
-  if (replay) return replay;
+  if (replay) {
+    const requestedLines = input.lines
+      .map(({ description, amountMinor }) => ({ description, amountMinor }))
+      .sort((a, b) => a.description.localeCompare(b.description) || a.amountMinor - b.amountMinor);
+    const replayLines = replay.lines
+      .map(({ description, amountMinor }: { description: string; amountMinor: number }) => ({ description, amountMinor }))
+      .sort((a: { description: string; amountMinor: number }, b: { description: string; amountMinor: number }) =>
+        a.description.localeCompare(b.description) || a.amountMinor - b.amountMinor
+      );
+    if (
+      replay.branchId !== scope.branchId ||
+      replay.supplierId !== input.supplierId ||
+      replay.supplierInvoiceRef !== input.supplierInvoiceRef ||
+      replay.description !== input.description ||
+      new Date(replay.issuedAt).getTime() !== input.issuedAt.getTime() ||
+      new Date(replay.dueAt).getTime() !== input.dueAt.getTime() ||
+      replay.amountMinor !== input.amountMinor ||
+      JSON.stringify(replayLines) !== JSON.stringify(requestedLines)
+    ) throw new PharmacyBookkeepingError('INVALID_STATE');
+    return replay;
+  }
   const supplier = await db.pharmacySupplier.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -182,13 +202,16 @@ export async function reverseSupplierExpenseSettlement(
   if (input.at < new Date(settlement.occurredAt))
     throw new PharmacyBookkeepingError('INVALID_STATE');
   const replay = await db.pharmacySupplierExpenseSettlementReversal.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      settlementId: settlement.id,
-      idempotencyKey: input.idempotencyKey,
-    },
+    where: { organizationId: scope.organizationId, idempotencyKey: input.idempotencyKey },
   });
-  if (replay) return replay;
+  if (replay) {
+    if (
+      replay.settlementId !== settlement.id ||
+      replay.reason !== input.reason ||
+      new Date(replay.reversedAt).getTime() !== input.at.getTime()
+    ) throw new PharmacyBookkeepingError('INVALID_STATE');
+    return replay;
+  }
   if (settlement.status !== 'POSTED') throw new PharmacyBookkeepingError('INVALID_STATE');
   await reverseBookkeepingTransaction(database, scope, {
     transactionId: settlement.bookkeepingTransactionId,
