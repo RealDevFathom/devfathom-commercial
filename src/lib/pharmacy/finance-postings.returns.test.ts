@@ -167,6 +167,26 @@ it('rejects an unidentified return from another branch before posting', async ()
   expect(postJournalEntry).not.toHaveBeenCalled();
 });
 
+it('does not post an unidentified return outside the organization scope', async () => {
+  const db = {
+    pharmacyUnidentifiedReturnHold: { findFirst: vi.fn().mockResolvedValue(null) },
+    financeJournalEntry: { findFirst: vi.fn() },
+  };
+
+  await expect(
+    postUnidentifiedSaleReturnEntry(
+      db as unknown as ScopedDb,
+      { organizationId: 'org', branchId: 'branch', actorId: 'actor' },
+      { holdingId: 'other-org-hold', at: new Date('2026-10-21') }
+    )
+  ).rejects.toThrow('NOT_FOUND');
+  expect(db.pharmacyUnidentifiedReturnHold.findFirst).toHaveBeenCalledWith(
+    expect.objectContaining({ where: { id: 'other-org-hold', organizationId: 'org' } })
+  );
+  expect(db.financeJournalEntry.findFirst).not.toHaveBeenCalled();
+  expect(postJournalEntry).not.toHaveBeenCalled();
+});
+
 it('records a zero-minor-unit slice and assigns the rounding remainder to a later hold', async () => {
   const saleLine = {
     id: 'line',
