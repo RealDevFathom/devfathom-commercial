@@ -122,6 +122,14 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
         `
       )
     ).resolves.toBe(1);
+
+    await expect(
+      withTenantDb(org, (db) =>
+        db.$queryRaw<{ action: string }[]>`
+          SELECT action FROM audit_logs WHERE id = ${insertedId}
+        `
+      )
+    ).resolves.toEqual([{ action }]);
   });
 
   const filters = { org, actor, action, from: '2026-09-20', through: '2026-09-20' };
