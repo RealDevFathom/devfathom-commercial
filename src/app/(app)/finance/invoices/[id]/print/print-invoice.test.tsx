@@ -65,6 +65,25 @@ describe('InvoicePrintView branding', () => {
     expect(screen.getByRole('button', { name: 'Print / Save as PDF' })).toBeEnabled();
   });
 
+  it('allows printing immediately when the tenant has no configured logo', () => {
+    mocks.useQuery.mockReturnValue({
+      data: {
+        ...invoice,
+        issuer: {
+          ...invoice.issuer,
+          brand: { ...invoice.issuer.brand, logoUrl: null },
+        },
+      },
+      isLoading: false,
+    });
+
+    render(<InvoicePrintView invoiceId="invoice-1" />);
+
+    expect(screen.queryByRole('img', { name: 'Acme logo' })).not.toBeInTheDocument();
+    expect(screen.getByText('Acme')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Print / Save as PDF' })).toBeEnabled();
+  });
+
   it('reloads branding when the configured tenant logo changes', () => {
     const { rerender } = render(<InvoicePrintView invoiceId="invoice-1" />);
     const originalLogo = screen.getByRole('img', { name: 'Acme logo' });
