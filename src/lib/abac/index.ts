@@ -29,7 +29,7 @@ export type CanOptions = {
 async function customDecision(
   db: AuthzDb,
   userId: string,
-  action: string,
+  actions: readonly string[],
   now: Date
 ): Promise<boolean | null> {
   const user = await db.user.findUnique({
@@ -49,7 +49,9 @@ async function customDecision(
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),
   ].filter((rule) =>
-    capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
+    actions.some((action) =>
+      capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
+    )
   );
   if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
   if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
@@ -63,6 +65,20 @@ export async function can(
   resource?: ResourceAttributes,
   opts: CanOptions = {}
 ): Promise<boolean> {
+  return canAny(subject, [action], resource, opts);
+}
+
+/**
+ * Authorize one workspace represented by capability aliases. A DENY matching
+ * any alias wins before an ALLOW or static policy for another alias. This is
+ * intentionally different from independently OR-ing multiple `can()` calls.
+ */
+export async function canAny(
+  subject: Subject,
+  actions: readonly Action[],
+  resource?: ResourceAttributes,
+  opts: CanOptions = {}
+): Promise<boolean> {
   const env: Environment = {
     now: opts.now ?? new Date(),
     source: opts.source,
@@ -70,22 +86,24 @@ export async function can(
   };
   const db = opts.db;
   if (!db) {
-    console.error(`[abac] no tenant-scoped database supplied for "${action}"`);
+    console.error(`[abac] no tenant-scoped database supplied for "${actions.join(' | ')}"`);
     return false;
   }
   try {
-    const decision = await customDecision(db, subject.id, action, env.now);
+    const decision = await customDecision(db, subject.id, actions, env.now);
     if (decision !== null) return decision;
   } catch (err) {
-    console.error(`[abac] custom permission lookup for "${action}" threw:`, err);
+    console.error(`[abac] custom permission lookup for "${actions.join(' | ')}" threw:`, err);
     return false;
   }
-  for (const policy of POLICIES[action] ?? []) {
-    try {
-      if (await policy({ subject, resource, env, db })) return true;
-    } catch (err) {
-      // A policy that throws denies (fail-closed) but never crashes the request.
-      console.error(`[abac] policy for "${action}" threw:`, err);
+  for (const action of actions) {
+    for (const policy of POLICIES[action] ?? []) {
+      try {
+        if (await policy({ subject, resource, env, db })) return true;
+      } catch (err) {
+        // A policy that throws denies (fail-closed) but never crashes the request.
+        console.error(`[abac] policy for "${action}" threw:`, err);
+      }
     }
   }
   return false;

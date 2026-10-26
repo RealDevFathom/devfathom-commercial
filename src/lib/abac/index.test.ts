@@ -4,7 +4,7 @@ import type { AuthzDb } from '@/lib/authz';
 import { isAdmin } from '@/lib/authz';
 import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
 
-import { can, subjectFromSession } from '.';
+import { can, canAny, subjectFromSession } from '.';
 import { ALL_ACTIONS, POLICIES, type Action } from './policies';
 
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
@@ -130,6 +130,41 @@ describe('opt-in pharmacy Owner / Operator access', () => {
         }),
       })
     ).resolves.toBe(false);
+  });
+
+  describe('prescription workspace authorization', () => {
+    const workspaceActions = ['pharmacy:prescriptions', 'pharmacy:dispense'] as const;
+
+    it('lets a tenant Admin/Owner capture prescriptions without granting dispensing', async () => {
+      const db = authorizationDb({});
+      await expect(canAny(proprietor, workspaceActions, undefined, { db })).resolves.toBe(true);
+      await expect(can(proprietor, 'pharmacy:dispense', undefined, { db })).resolves.toBe(false);
+    });
+
+    it('lets a pharmacist with the exact dispense grant use the workspace', async () => {
+      const db = authorizationDb({
+        rolePermissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+      });
+      await expect(canAny(employee, workspaceActions, undefined, { db })).resolves.toBe(true);
+    });
+
+    it('does not let a cashier orders grant into the workspace', async () => {
+      const db = authorizationDb({
+        rolePermissions: [{ capability: 'pharmacy:orders', effect: 'ALLOW' }],
+      });
+      await expect(canAny(employee, workspaceActions, undefined, { db })).resolves.toBe(false);
+    });
+
+    it.each(['pharmacy:prescriptions', 'pharmacy:*', '*'])(
+      'lets a %s DENY override Admin access and a dispense ALLOW',
+      async (capability) => {
+        const db = authorizationDb({
+          rolePermissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+          overrides: [{ capability, effect: 'DENY' }],
+        });
+        await expect(canAny(proprietor, workspaceActions, undefined, { db })).resolves.toBe(false);
+      }
+    );
   });
 
   it('does not grant unrelated capabilities through wildcard or platform authority', async () => {

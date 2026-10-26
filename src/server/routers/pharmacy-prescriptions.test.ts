@@ -4,6 +4,7 @@ import sharp from 'sharp';
 
 const mocks = vi.hoisted(() => ({
   can: vi.fn(),
+  canAny: vi.fn(),
   hasModule: vi.fn(),
   patient: vi.fn(),
   prescriber: vi.fn(),
@@ -22,6 +23,7 @@ vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }
 vi.mock('@/lib/abac', async () => ({
   ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
   can: mocks.can,
+  canAny: mocks.canAny,
 }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.hasModule,
@@ -98,6 +100,7 @@ describe('prescription capture and private delivery', () => {
     vi.resetAllMocks();
     mocks.objects.clear();
     mocks.can.mockResolvedValue(true);
+    mocks.canAny.mockResolvedValue(true);
     mocks.hasModule.mockReturnValue(true);
     mocks.patient.mockResolvedValue({ id: 'patient-a' });
     mocks.prescriber.mockResolvedValue({ id: 'prescriber-a' });
@@ -176,22 +179,22 @@ describe('prescription capture and private delivery', () => {
       where: { id: 'prescriber-a', organizationId: 'org-a' },
       select: { id: true },
     });
-    expect(mocks.can).toHaveBeenCalledWith(
+    expect(mocks.canAny).toHaveBeenCalledWith(
       expect.anything(),
-      'pharmacy:dispense',
+      ['pharmacy:prescriptions', 'pharmacy:dispense'],
       undefined,
       expect.objectContaining({ source: 'TRPC' })
     );
   });
 
   it('allows pharmacists with dispensing capability', async () => {
-    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:dispense');
+    mocks.canAny.mockResolvedValue(true);
     await expect(upload()).resolves.toHaveProperty('url');
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
-  it('allows tenant administrators only when central ABAC finds an explicit dispense grant', async () => {
-    mocks.can.mockResolvedValue(true);
+  it('allows tenant administrators to upload without granting controlled dispensing', async () => {
+    mocks.canAny.mockResolvedValue(true);
     const admin = context();
     admin.session!.user.role = 'ADMIN';
     await expect(
@@ -205,23 +208,23 @@ describe('prescription capture and private delivery', () => {
         ).toString('base64'),
       })
     ).resolves.toHaveProperty('url');
-    expect(mocks.can).toHaveBeenCalledWith(
+    expect(mocks.canAny).toHaveBeenCalledWith(
       expect.objectContaining({ role: 'ADMIN' }),
-      'pharmacy:dispense',
+      ['pharmacy:prescriptions', 'pharmacy:dispense'],
       undefined,
       expect.objectContaining({ source: 'TRPC' })
     );
   });
 
-  it('refuses a tenant administrator when central ABAC finds no exact dispense grant', async () => {
-    mocks.can.mockResolvedValue(false);
+  it('refuses a tenant administrator when central ABAC finds a prescription-workspace denial', async () => {
+    mocks.canAny.mockResolvedValue(false);
     const admin = context();
     admin.session!.user.role = 'ADMIN';
 
     await expect(caller(admin).workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(mocks.can).toHaveBeenCalledWith(
+    expect(mocks.canAny).toHaveBeenCalledWith(
       expect.objectContaining({ role: 'ADMIN' }),
-      'pharmacy:dispense',
+      ['pharmacy:prescriptions', 'pharmacy:dispense'],
       undefined,
       expect.objectContaining({ source: 'TRPC' })
     );
@@ -251,10 +254,14 @@ describe('prescription capture and private delivery', () => {
   });
 
   it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
-    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:orders');
+    mocks.canAny.mockResolvedValue(false);
     await expect(caller().workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(upload()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().capture(captureInput('/api/pharmacy/prescription-files?id=rx'))
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.putUpload).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 
   it.each(['capture://rx.png', '/api/files/foreign.png', 'https://foreign.test/image.png'])(

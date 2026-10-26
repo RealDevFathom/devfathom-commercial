@@ -73,6 +73,7 @@ export const ALL_ACTIONS = [
   'pharmacy:manage',
   'pharmacy:procurement',
   'pharmacy:inventory',
+  'pharmacy:prescriptions', // RX capture/workspace; tenant admins or dispensing pharmacists
   'pharmacy:dispense', // RX-03/04: pharmacist decisions and substitution evidence
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
@@ -237,6 +238,9 @@ export const POLICIES: Record<Action, Policy[]> = {
   // still resolved first by `can()` and therefore takes precedence.
   'pharmacy:procurement': [isAdmin],
   'pharmacy:inventory': [],
+  // Prescription intake is narrower than dispensing: tenant administrators may
+  // capture source evidence without gaining authority to dispense medication.
+  'pharmacy:prescriptions': [isAdmin],
   // Dispensing is an exact-grant-only action: tenant administration alone is
   // insufficient, and wildcard ALLOW rules cannot opt a user in. Wildcard DENY
   // rules are still resolved by `can()` before this default-deny policy.
