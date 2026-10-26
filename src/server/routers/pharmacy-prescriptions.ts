@@ -112,6 +112,27 @@ async function readableSourceFile(
   return file;
 }
 
+/** Load an intake image without granting access to another operator's capture. */
+async function uploaderSourceFile(
+  ctx: {
+    db: ScopedDb;
+    entitlements: { organizationId: string };
+    session: { user: { id: string } };
+  },
+  sourceFileRef: string
+) {
+  const organizationId = ctx.entitlements.organizationId;
+  const file = await loadPrescriptionFile(organizationId, sourceFileRef);
+  const patient = await ctx.db.pharmacyPatient.findFirst({
+    where: { id: file.patientId, organizationId },
+    select: { id: true },
+  });
+  if (!patient || file.uploadedByUserId !== ctx.session.user.id) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription image unavailable.' });
+  }
+  return file;
+}
+
 export const pharmacyPrescriptionsRouter = router({
   workspace: dispensingFileProcedure
     .input(
@@ -269,7 +290,9 @@ export const pharmacyPrescriptionsRouter = router({
           message: 'Prescription reading is not enabled for this workspace.',
         });
       }
-      const file = await readableSourceFile(ctx, input.sourceFileRef);
+      // Intake OCR is available only to the uploader. A captured image becomes
+      // a historical record, but that must not widen capture-only access.
+      const file = await uploaderSourceFile(ctx, input.sourceFileRef);
       let extraction;
       try {
         extraction = await resolveRxOcrAdapter(adapterName).extract({

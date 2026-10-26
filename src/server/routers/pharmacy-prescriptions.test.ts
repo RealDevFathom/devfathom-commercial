@@ -539,6 +539,17 @@ describe('PH-A3 prescription OCR prefill', () => {
     expect(mocks.medicines).not.toHaveBeenCalled();
   });
 
+  it("does not OCR another uploader's retained prescription for a capture-only user", async () => {
+    vi.stubEnv('PHARMACY_RX_OCR_ADAPTER', 'FIXTURE');
+    const receipt = await upload();
+    mocks.find.mockResolvedValue({ id: 'captured-prescription' });
+
+    await expect(
+      caller(context('capture-only-user')).extractSource({ sourceFileRef: receipt.url })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mocks.medicines).not.toHaveBeenCalled();
+  });
+
   it('VISION without a configured provider fails with an operator sentence, not provider detail', async () => {
     vi.stubEnv('PHARMACY_RX_OCR_ADAPTER', 'VISION');
     vi.stubEnv('AI_PROVIDER', 'not-a-provider');
