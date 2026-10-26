@@ -76,6 +76,17 @@ describe('finance.getFinancialSummary', () => {
     });
   });
 
+  it('reports only the unpaid balance of a partially paid invoice', async () => {
+    mocks.invoiceFindMany.mockResolvedValue([
+      { total: 1_000, currency: 'USD', payments: [{ amount: 600 }] },
+    ]);
+
+    const summary = await caller().getFinancialSummary();
+
+    expect(summary.totalOutstanding).toEqual([{ currency: 'USD', amount: 400 }]);
+    expect(summary.outstandingCount).toBe(1);
+  });
+
   it('subtracts multiple payments and rounds each invoice balance to cents', async () => {
     mocks.invoiceFindMany.mockResolvedValue([
       { total: 1_000, currency: 'USD', payments: [{ amount: 333.33 }, { amount: 266.67 }] },
