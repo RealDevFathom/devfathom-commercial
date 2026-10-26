@@ -115,8 +115,68 @@ const ORDER_LINE = {
 beforeEach(() => {
   db = makeDb();
   mocks.can.mockReset().mockResolvedValue(true);
+  db.user.findUnique.mockResolvedValue({
+    organizationRole: {
+      permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+    },
+    permissionOverrides: [],
+  });
   db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
+});
+
+describe('procurement write authorization', () => {
+  it.each([
+    {
+      procedure: 'createSupplier',
+      act: () => caller('counter_user').createSupplier({ name: 'Unapproved supplier' }),
+    },
+    {
+      procedure: 'setSupplierAuthorization',
+      act: () =>
+        caller('counter_user').setSupplierAuthorization({
+          supplierId: 'supplier_a',
+          authorized: true,
+        }),
+    },
+    {
+      procedure: 'createPurchaseOrder',
+      act: () =>
+        caller('counter_user').createPurchaseOrder({
+          reference: 'PO-NO-PERMISSION',
+          supplierId: 'supplier_a',
+          lines: [ORDER_LINE],
+        }),
+    },
+    {
+      procedure: 'approvePurchaseOrder',
+      act: () =>
+        caller('counter_user').approvePurchaseOrder({
+          purchaseOrderId: 'po_a',
+          decision: 'APPROVED',
+        }),
+    },
+  ])(
+    'denies $procedure to a same-tenant member with only an unrelated capability',
+    async ({ act }) => {
+      db.user.findUnique.mockResolvedValue({
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      });
+
+      await expect(act()).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+      expect(db.pharmacySupplier.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
+      expect(db.pharmacySupplier.update).not.toHaveBeenCalled();
+      expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+      expect(db.$transaction).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe.each(['purchaseReturns', 'supplierCredits'] as const)(

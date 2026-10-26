@@ -381,7 +381,10 @@ const purchasingRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) => ctx.db.pharmacySupplier.create({ data: input })),
+    .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
+      return ctx.db.pharmacySupplier.create({ data: input });
+    }),
 
   /** Licence evidence is append-only; a correction supersedes the earlier filing. */
   recordSupplierLicence: protectedProcedure
@@ -420,6 +423,7 @@ const purchasingRouter = router({
   setSupplierAuthorization: protectedProcedure
     .input(z.object({ supplierId: z.string().min(1), authorized: z.boolean() }).strict())
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       if (!(await ctx.db.pharmacySupplier.findFirst({ where: { id: input.supplierId } })))
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Supplier is outside this workspace.' });
       return ctx.db.pharmacySupplier.update({
@@ -654,6 +658,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       try {
         // PUR-01: refuse an unauthorized or licence-expired supplier before anything is written.
         assertOrderableSupplier(
@@ -745,6 +750,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       try {
         return await ctx.db.$transaction(async (tx) => {
           const order = await tx.pharmacyPurchaseOrder.findFirst({
