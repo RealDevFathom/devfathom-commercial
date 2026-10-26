@@ -15,4 +15,10 @@ describe('UtilizationBar', () => {
 
     expect(screen.getByRole('progressbar', { name: 'Utilization' })).toHaveValue(40);
   });
+
+  it.each(['', '   '])('provides a default accessible name for an empty label', (label) => {
+    render(<UtilizationBar label={label} value={40} />);
+
+    expect(screen.getByRole('progressbar', { name: 'Utilization' })).toHaveValue(40);
+  });
 });
