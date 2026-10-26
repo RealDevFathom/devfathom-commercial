@@ -43,7 +43,9 @@ describe('#357 UI receipt identity', () => {
       );
     const first = form().match(/name="receiptKey"[^>]*value="([^"]+)"/);
     const second = form().match(/name="receiptKey"[^>]*value="([^"]+)"/);
-    expect(first?.[1]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(first?.[1]).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
     expect(first?.[1]).not.toBe(second?.[1]);
   });
   it('keeps the same key on network retry but differs for the next receipt', () => {
