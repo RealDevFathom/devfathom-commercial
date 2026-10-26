@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ replace: vi.fn(), refresh: vi.fn(), signIn: vi.fn() }));
 
@@ -18,6 +18,10 @@ describe('login password visibility controls', () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it.each([
     [
       'tenant login',
@@ -31,19 +35,24 @@ describe('login password visibility controls', () => {
     const password = screen.getByLabelText('Password');
     const toggle = screen.getByRole('button', { name: 'Show password' });
 
+    fireEvent.change(password, { target: { value: 'correct horse battery staple' } });
+
     expect(toggle).toHaveProperty('tabIndex', 0);
     expect(toggle).toHaveProperty('type', 'button');
     expect(password).toHaveProperty('type', 'password');
+    expect(password).toHaveProperty('value', 'correct horse battery staple');
 
     fireEvent.click(toggle);
 
     expect(screen.getByRole('button', { name: 'Hide password' })).toBe(toggle);
     expect(password).toHaveProperty('type', 'text');
+    expect(password).toHaveProperty('value', 'correct horse battery staple');
 
     fireEvent.click(toggle);
 
     expect(screen.getByRole('button', { name: 'Show password' })).toBe(toggle);
     expect(password).toHaveProperty('type', 'password');
+    expect(password).toHaveProperty('value', 'correct horse battery staple');
     expect(mocks.signIn).not.toHaveBeenCalled();
   });
 });
