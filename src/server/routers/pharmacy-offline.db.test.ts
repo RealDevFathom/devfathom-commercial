@@ -512,6 +512,41 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
     ).toBe(0);
   });
 
+  it('rejects replay when the command lot was quarantined after snapshot issuance', async () => {
+    const f = await setup();
+    await inOrg(ORG_A, async (db) => {
+      const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+        where: { id: f.fixture.lotId },
+        select: { manufacturingBatchId: true },
+      });
+      await db.pharmacyManufacturingBatch.update({
+        where: { id: lot.manufacturingBatchId },
+        data: {
+          state: 'QUARANTINED',
+          stateReason: 'Test quarantine',
+          stateChangedAt: new Date(),
+        },
+      });
+    });
+
+    const response = await f.replay();
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'BATCH_RECALLED' });
+    expect(await f.counts()).toEqual({
+      commands: 0,
+      sales: 0,
+      consumed: 0,
+      nextNumber: f.lease.blockStart,
+    });
+    expect(
+      await inOrg(ORG_A, (db) =>
+        db.pharmacyStockMovement.count({
+          where: { inventoryLotId: f.fixture.lotId, kind: 'SALE' },
+        })
+      )
+    ).toBe(0);
+  });
+
   it('serializes a concurrent recall on the batch locked by replay', async () => {
     const f = await setup();
     const { lockReplayLotBatchStates } = await import('./pharmacy-offline');

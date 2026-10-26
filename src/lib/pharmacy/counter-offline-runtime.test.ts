@@ -112,7 +112,7 @@ async function readyCounter(driver: TerminalStorageDriver) {
       counter,
       kind,
       kind === 'PRICES'
-        ? [{ id: 'lot_1', manufacturingBatch: { state: 'RELEASED' } }]
+        ? [{ id: 'lot_1', manufacturingBatch: { state: 'ACTIVE' } }]
         : { kind }
     );
   await counter.adoptLeases([
@@ -326,9 +326,29 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
       counter,
       'PRICES',
       [
-        { id: 'lot_2', manufacturingBatch: { state: 'RELEASED' } },
+        { id: 'lot_2', manufacturingBatch: { state: 'ACTIVE' } },
         { id: 'lot_1', manufacturingBatch: { state: 'RECALLED' } },
       ],
+      { version: 2 }
+    );
+
+    expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'BATCH_RECALLED',
+    });
+    expect(counter.snapshot().queue).toMatchObject({
+      commands: [],
+      leases: [{ nextNumber: 900 }],
+      quotas: [{ consumedUnits: 0 }],
+    });
+  });
+
+  it('blocks a lot marked quarantined by the signed prices snapshot', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await install(
+      counter,
+      'PRICES',
+      [{ id: 'lot_1', manufacturingBatch: { state: 'QUARANTINED' } }],
       { version: 2 }
     );
 
@@ -359,7 +379,7 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
     await install(
       counter,
       'PRICES',
-      [{ id: 'lot_1', manufacturingBatch: { state: 'RELEASED' } }],
+      [{ id: 'lot_1', manufacturingBatch: { state: 'ACTIVE' } }],
       { version: 3, safetyLease: { ...SAFETY_LEASE, recallVersion: 2 } }
     );
     expect(counter.safetyLeaseState()).toMatchObject({
@@ -390,7 +410,7 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
     await install(
       counter,
       'PRICES',
-      [{ id: 'another_lot', manufacturingBatch: { state: 'RELEASED' } }],
+      [{ id: 'another_lot', manufacturingBatch: { state: 'ACTIVE' } }],
       { version: 2 }
     );
     expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({

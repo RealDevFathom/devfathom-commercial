@@ -477,8 +477,8 @@ export class PharmacyCounterRuntime {
   }
 }
 
-/** Recall state travels inside the signed PRICES payload so a disconnected
- * counter can reject a recalled lot before its command reaches replay. */
+/** Batch state travels inside the signed PRICES payload so a disconnected
+ * counter can reject any lot that is not explicitly active before replay. */
 function recalledLotIdsFromSnapshot(kind: PharmacyOfflineSnapshotKind, payload: unknown): string[] {
   if (kind !== 'PRICES' || !Array.isArray(payload)) return [];
   return payload.flatMap((lot) => {
@@ -486,7 +486,7 @@ function recalledLotIdsFromSnapshot(kind: PharmacyOfflineSnapshotKind, payload: 
       typeof lot === 'object' &&
       lot !== null &&
       typeof (lot as { id?: unknown }).id === 'string' &&
-      (lot as { manufacturingBatch?: { state?: unknown } }).manufacturingBatch?.state === 'RECALLED'
+      (lot as { manufacturingBatch?: { state?: unknown } }).manufacturingBatch?.state !== 'ACTIVE'
     )
       return [(lot as { id: string }).id];
     return [];

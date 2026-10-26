@@ -266,7 +266,7 @@ export async function replayCounterCommand(
   const replayLots = await lockReplayLotBatchStates(db, scope, requestedLotIds);
   const batchRecalled =
     replayLots.length !== requestedLotIds.length ||
-    replayLots.some((lot) => lot.batchState === 'RECALLED');
+    replayLots.some((lot) => lot.batchState !== 'ACTIVE');
   authorizeReplayedCommand(command.action, {
     nowMs: originalMs,
     snapshots,
