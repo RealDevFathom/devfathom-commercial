@@ -1,5 +1,6 @@
 import { add, formatMoney, multiply, roundMoney, sum } from '@/lib/restaurant/money-arithmetic';
 import { quoteTaxSettlement, type TaxProfile, type TaxRule } from '@/lib/restaurant/tax-calculator';
+import { isValidOrderItemQuantity, MAX_ORDER_ITEM_QUANTITY } from './order-quantity';
 
 export type DraftCheckLine = {
   id: string;
@@ -39,6 +40,13 @@ export type DraftCheckBreakdown = {
 export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftCheckBreakdown {
   const at = input.at ?? new Date();
   const fallback = input.profiles ? null : zeroTax(at);
+  for (const line of input.lines) {
+    if (!isValidOrderItemQuantity(line.quantity)) {
+      throw new RangeError(
+        `Draft check line quantity must be a safe integer between 1 and ${MAX_ORDER_ITEM_QUANTITY}.`
+      );
+    }
+  }
   // Settlement taxes each physical unit independently. Expand draft lines the
   // same way so per-line tax rounding cannot make a preview disagree with the
   // amount required at tender time.

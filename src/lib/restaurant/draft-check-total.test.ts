@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { quoteDraftCheckBreakdown, quoteDraftCheckTotal } from './draft-check-total';
 import type { TaxProfile, TaxRule } from './tax-calculator';
+import { MAX_ORDER_ITEM_QUANTITY } from './order-quantity';
 
 const at = new Date('2030-06-01T00:00:00Z');
 
@@ -106,4 +107,16 @@ describe('quoteDraftCheckTotal', () => {
       })
     ).toEqual({ tax: '0.02', serviceCharge: '0.00', total: '0.12' });
   });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1, MAX_ORDER_ITEM_QUANTITY + 1])(
+    'rejects invalid quantity %s before expanding units',
+    (quantity) => {
+      expect(() =>
+        quoteDraftCheckBreakdown({
+          at,
+          lines: [{ id: 'invalid', unitPrice: '1.00', quantity }],
+        })
+      ).toThrow(RangeError);
+    }
+  );
 });
