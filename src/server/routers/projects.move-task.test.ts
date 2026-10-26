@@ -116,12 +116,19 @@ describe('projects.moveTask', () => {
     });
   });
 
-  it('does not change assignees when moving between boards in the same project', async () => {
+  it('does not remove assignees when moving between boards in the same project', async () => {
     tx.column.findUnique.mockResolvedValueOnce({ board: { projectId: 'source-project' } });
 
     await caller().moveTask({ taskId: 'task-1', targetColumnId: 'target-column', newOrder: 0 });
 
     expect(assigneeDeleteMany).not.toHaveBeenCalled();
+    expect(assigneeCreateMany).toHaveBeenCalledWith({
+      data: [
+        { taskId: 'task-1', userId: 'admin-default' },
+        { taskId: 'task-1', userId: 'destination-member' },
+      ],
+      skipDuplicates: true,
+    });
   });
 
   it('removes unauthorized assignees from every cross-project bulk move', async () => {
