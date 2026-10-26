@@ -312,7 +312,7 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
     );
     expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
     expect(f.db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
-      where: { id: 'credential-1' },
+      where: { id: 'credential-1', organizationId: 'org-1' },
       data: { failedAttempts: 0, lockedUntil: null },
     });
   });
@@ -331,7 +331,7 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
       blocked: 'An active manager must independently approve this discount with their PIN.',
     });
     expect(f.db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
-      where: { id: 'credential-1' },
+      where: { id: 'credential-1', organizationId: 'org-1' },
       data: { failedAttempts: 1, lockedUntil: null },
     });
     expect(addSaleLine).not.toHaveBeenCalled();

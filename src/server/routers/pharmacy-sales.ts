@@ -205,13 +205,13 @@ async function authorizedSaleLineApprover(
     return null;
   if (!(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))) {
     await db.restaurantOperatorCredential.update({
-      where: { id: credential.id },
+      where: { id: credential.id, organizationId: scope.organizationId },
       data: registerFailedAttempt(credential, now),
     });
     return null;
   }
   await db.restaurantOperatorCredential.update({
-    where: { id: credential.id },
+    where: { id: credential.id, organizationId: scope.organizationId },
     data: clearLockout(),
   });
   return approver.id;
