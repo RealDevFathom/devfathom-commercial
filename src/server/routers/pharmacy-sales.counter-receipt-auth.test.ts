@@ -89,7 +89,7 @@ function fixture(
 ) {
   const db = {
     user: {
-      findUnique: vi.fn(async () => ({
+      findUnique: vi.fn(async (_args?: unknown) => ({
         status: 'ACTIVE',
         organizationId: 'org-a',
         organizationRole: { permissions },
@@ -337,11 +337,14 @@ describe('counter receipt authorization', () => {
       expect(lockSql[0]).toContain('FROM pharmacy_branches');
       expect(lockSql[0]).toContain('active=true');
       expect(lockSql[0]).toContain('FOR SHARE');
-      expect(f.db.user.findUnique).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { organizationId_id: { id: 'user-a', organizationId: 'org-a' } },
-        })
-      );
+      expect(f.db.user.findUnique).toHaveBeenCalled();
+      for (const [query] of f.db.user.findUnique.mock.calls) {
+        expect(query).toEqual(
+          expect.objectContaining({
+            where: { organizationId_id: { id: 'user-a', organizationId: 'org-a' } },
+          })
+        );
+      }
     }
   );
 
