@@ -60,12 +60,12 @@ describe('clients.getAll revenue totals', () => {
       },
     ]);
     mocks.groupBy.mockResolvedValue([
-      { clientId: 'client-1', currency: 'USD', _sum: { total: 100 } },
       { clientId: 'client-1', currency: 'PKR', _sum: { total: 100 } },
+      { clientId: 'client-1', currency: 'USD', _sum: { total: 100 } },
     ]);
   });
 
-  it('groups and returns paid revenue separately for each currency', async () => {
+  it('groups and returns paid revenue separately in deterministic currency order', async () => {
     const result = await caller().getAll();
 
     expect(mocks.groupBy).toHaveBeenCalledWith({

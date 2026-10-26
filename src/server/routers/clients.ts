@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { sortCurrencies } from '@/lib/finance/currency';
 import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import { router, protectedProcedure, adminProcedure } from '../trpc';
@@ -67,7 +68,7 @@ export const clientsRouter = router({
         ...c._count,
         invoices: isAdmin ? c._count.invoices : 0,
       },
-      totalRevenue: isAdmin ? (revenueMap.get(c.id) ?? []) : [],
+      totalRevenue: isAdmin ? sortCurrencies(revenueMap.get(c.id) ?? []) : [],
     }));
   }),
 
