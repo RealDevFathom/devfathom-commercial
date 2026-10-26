@@ -210,6 +210,10 @@ describe('restaurant catering report', () => {
     expect(report.totals.orderCount).toBe(500);
     expect(report.truncated).toBe(false);
     expect(findMany).toHaveBeenCalledTimes(2);
+    expect(findMany.mock.calls[1][0]).toMatchObject({
+      cursor: { id: 'o500' },
+      skip: 1,
+    });
   });
 
   it('aggregates across cursor pages while retaining only the bounded detail rows', async () => {
