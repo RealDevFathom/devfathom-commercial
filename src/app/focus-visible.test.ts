@@ -12,5 +12,9 @@ describe('global keyboard focus indicator', () => {
 
     expect(focusRule).not.toBeNull();
     expect(focusRule!.index).toBeGreaterThan(globals.lastIndexOf('@layer'));
+    expect(globals.match(/^:focus-visible\s*\{/gm)).toHaveLength(1);
+    expect(globals.slice(focusRule!.index! + focusRule![0].length)).not.toMatch(
+      /outline(?:-style)?:\s*(?:0|none)/
+    );
   });
 });
