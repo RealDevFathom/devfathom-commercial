@@ -2,7 +2,7 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { PharmacyInventoryError, planBreakPack } from './inventory';
+import { PharmacyInventoryError, planRemovalArrangement } from './inventory';
 import type { LedgerScope } from './stock-ledger';
 
 function assertPositive(units: number) {
@@ -372,21 +372,12 @@ export async function dispatchTransfer(
       throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
     if (balance.state !== 'ACTIVE' || balance.expiresAt <= new Date())
       throw new PharmacyInventoryError('BLOCKED_STOCK');
-    const remainder = line.quantityUnits % balance.unitsPerPack;
-    const breakPlan = planBreakPack({
+    const arrangement = planRemovalArrangement({
       sealedPacks: balance.sealedPacks,
       looseUnits: balance.looseUnits,
       unitsPerPack: balance.unitsPerPack,
-      requiredLooseUnits: remainder,
+      quantityUnits: line.quantityUnits,
     });
-    const looseAfterBreak = balance.looseUnits + breakPlan.looseUnitDelta;
-    const maxLoose = Math.min(looseAfterBreak, line.quantityUnits);
-    const looseUnits =
-      remainder + Math.floor((maxLoose - remainder) / balance.unitsPerPack) * balance.unitsPerPack;
-    const a = {
-      sealedPacks: (line.quantityUnits - looseUnits) / balance.unitsPerPack,
-      looseUnits,
-    };
     const common = {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
@@ -394,15 +385,15 @@ export async function dispatchTransfer(
       stockLocationId: line.sourceStockLocationId,
       actorId: scope.actorId,
     };
-    if (breakPlan.packsToBreak > 0) {
+    if (arrangement.breakPack.packsToBreak > 0) {
       await db.pharmacyStockMovement.create({
         data: {
           ...common,
           kind: 'BREAK_PACK',
           disposition: 'AVAILABLE',
           quantityUnits: 0,
-          sealedPackDelta: breakPlan.sealedPackDelta,
-          looseUnitDelta: breakPlan.looseUnitDelta,
+          sealedPackDelta: arrangement.breakPack.sealedPackDelta,
+          looseUnitDelta: arrangement.breakPack.looseUnitDelta,
           idempotencyKey: `${key}:${i}:break-pack`,
         },
       });
@@ -413,8 +404,8 @@ export async function dispatchTransfer(
         kind: 'TRANSFER_OUT',
         disposition: 'AVAILABLE',
         quantityUnits: -line.quantityUnits,
-        sealedPackDelta: -a.sealedPacks,
-        looseUnitDelta: -a.looseUnits,
+        sealedPackDelta: -arrangement.sealedPacks,
+        looseUnitDelta: -arrangement.looseUnits,
         idempotencyKey: `${key}:${i}:out`,
       },
     });
@@ -424,8 +415,8 @@ export async function dispatchTransfer(
         kind: 'TRANSFER_IN',
         disposition: 'IN_TRANSIT',
         quantityUnits: line.quantityUnits,
-        sealedPackDelta: a.sealedPacks,
-        looseUnitDelta: a.looseUnits,
+        sealedPackDelta: arrangement.sealedPacks,
+        looseUnitDelta: arrangement.looseUnits,
         idempotencyKey: `${key}:${i}:transit`,
       },
     });
