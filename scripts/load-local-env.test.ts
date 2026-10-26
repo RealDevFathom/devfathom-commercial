@@ -71,4 +71,10 @@ describe('loadLocalEnvironment', () => {
       'Missing required environment variable: DATABASE_URL'
     );
   });
+
+  it('trims a required variable before returning it', () => {
+    expect(requireEnvironment('DATABASE_URL', { DATABASE_URL: '  postgres://localhost/db  ' })).toBe(
+      'postgres://localhost/db'
+    );
+  });
 });
