@@ -74,12 +74,14 @@ describe('counterReceiptTotals', () => {
     ];
     const totals = counterReceiptTotals({
       lines,
-      tenders: [{ amountMinor: 7_800, changeGivenMinor: 200 }],
+      tenders: [
+        { type: 'CASH', amountMinor: 7_800, cashReceivedMinor: 8_000, changeGivenMinor: 200 },
+      ],
     });
     expect(totals.grossMinor).toBe(8_000);
     expect(totals.discountMinor).toBe(200);
     expect(totals.netMinor).toBe(7_800);
-    expect(totals.tenderedMinor).toBe(7_800);
+    expect(totals.tenderedMinor).toBe(8_000);
     expect(totals.changeMinor).toBe(200);
   });
 });
