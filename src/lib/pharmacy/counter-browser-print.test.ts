@@ -57,6 +57,11 @@ describe('isolated Pharmacy browser receipt', () => {
     const html = buildCounterBrowserReceipt(settled, locale, format);
     expect(html).toContain('NTN: NTN-HISTORICAL');
     expect(html).toContain('STRN: STRN-HISTORICAL');
+    expect(html).toContain(
+      locale === 'ur'
+        ? 'رسید کے ماخذ میں ٹیکس کی تفصیل دستیاب نہیں'
+        : 'Tax breakdown unavailable in receipt source'
+    );
   });
 
   it('matches the settled-sale tax identity in raw thermal output', () => {
@@ -67,7 +72,11 @@ describe('isolated Pharmacy browser receipt', () => {
       { layout: DEFAULT_RECEIPT_LAYOUT, taxIdentity, reprint: false }
     );
     expect(thermal.receiptSnapshot?.facts.taxLines).toEqual(
-      expect.arrayContaining(['NTN: NTN-HISTORICAL', 'STRN: STRN-HISTORICAL'])
+      expect.arrayContaining([
+        'NTN: NTN-HISTORICAL',
+        'STRN: STRN-HISTORICAL',
+        'Tax breakdown unavailable in receipt source',
+      ])
     );
   });
 
