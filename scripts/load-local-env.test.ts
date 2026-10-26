@@ -73,6 +73,20 @@ describe('loadLocalEnvironment', () => {
     );
   });
 
+  it('does not replace a blank .env.local value with the .env fallback', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'devfathom-env-'));
+    directories.push(directory);
+    writeFileSync(join(directory, '.env'), 'DATABASE_URL=from-dot-env\n');
+    writeFileSync(join(directory, '.env.local'), 'DATABASE_URL=   \n');
+
+    const environment: NodeJS.ProcessEnv = {};
+    loadLocalEnvironment(environment, directory);
+
+    expect(() => requireEnvironment('DATABASE_URL', environment)).toThrow(
+      'Missing required environment variable: DATABASE_URL'
+    );
+  });
+
   it('names the missing variable and both searched files', () => {
     expect(() => requireEnvironment('DATABASE_URL', {})).toThrow(
       'Missing required environment variable: DATABASE_URL. Searched .env.local and .env'
