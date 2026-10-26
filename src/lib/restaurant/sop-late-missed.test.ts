@@ -319,14 +319,14 @@ describe('enqueueDueSopEscalations', () => {
     );
   });
 
-  it('does not let another policy event delay the first step', async () => {
+  it('queues an org-wide first step without letting another policy event delay it', async () => {
     const now = new Date('2026-08-20T12:06:00.000Z');
     const db = {
       restaurantSopEscalationPolicy: {
         findMany: vi.fn().mockResolvedValue([
           {
             id: 'policy_1',
-            scope: 'ORGANIZATION',
+            scope: 'ORG',
             branchId: null,
             quietHoursStartMinutes: null,
             quietHoursEndMinutes: null,
