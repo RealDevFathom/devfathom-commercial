@@ -348,6 +348,7 @@ describe('resolveItemSnapshot', () => {
       priceLists: { pl_pub: [{ productId: 'prod_1', variantId: null, price: D('12.50') }] },
       productGroups: { prod_1: [{ id: 'grp_required', name: 'Cooking', minSelect: 1 }] },
     });
+    const attachmentLookup = vi.spyOn(db.restaurantProductModifierGroup, 'findMany');
 
     await expect(
       resolveItemSnapshot(db, {
@@ -357,6 +358,7 @@ describe('resolveItemSnapshot', () => {
         at: AT,
       })
     ).rejects.toMatchObject({ reason: 'MODIFIER_SELECTION_COUNT' });
+    expect(attachmentLookup).toHaveBeenCalledOnce();
   });
 });
 
