@@ -38,7 +38,7 @@ describe('InvoicePrintView', () => {
   it('prints the server-computed amount paid and balance after a partial payment', () => {
     mocks.useQuery.mockReturnValue({
       isLoading: false,
-      data: invoice(),
+      data: invoice({ amountPaid: '400.00', balance: '600.00' }),
     });
 
     render(<InvoicePrintView invoiceId="invoice-497" />);
