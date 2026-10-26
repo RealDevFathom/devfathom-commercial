@@ -77,7 +77,9 @@ describe('projectTrialBalanceControl', () => {
     [row({ openingMinor: '+1' })],
     [row({ openingMinor: '-0' })],
     [row({ closingMinor: '-0' })],
+    [row({ closingMinor: '1'.repeat(129) })],
     [row({ accountCode: '' })],
+    [row({ accountCode: '¢'.repeat(65) })],
     [row({ currency: 'x'.repeat(33) })],
   ])('rejects negative movements and malformed or over-bound fields', (accounts: unknown[]) => {
     expect(() => projectTrialBalanceControl(accounts)).toThrow(InvalidTrialBalanceError);
