@@ -56,6 +56,7 @@ export const createInvoiceInputSchema = z.object({
 // Round to 2 decimal places (cents). Used to derive invoice money server-side so
 // caller-supplied subtotal/total are never trusted (FIN-01).
 const round2 = (n: number) => Math.round(n * 100) / 100;
+const toCents = (amount: unknown) => Math.round(Number(amount) * 100);
 
 // IMP-FIN-04: money is Decimal(12,2), so a partial payment can legitimately pay an
 // invoice off to the exact cent. Compare paid-vs-total with a half-cent tolerance
@@ -853,12 +854,12 @@ export const financeRouter = router({
         // Both columns are Decimal(12,2). Do the subtraction in integer cents so
         // multiple payments cannot introduce binary floating-point drift.
         const amountPaidCents = invoice.payments.reduce(
-          (sum, payment) => sum + Math.round(Number(payment.amount) * 100),
+          (sum, payment) => sum + toCents(payment.amount),
           0
         );
         return {
           currency: invoice.currency,
-          amount: (Math.round(Number(invoice.total) * 100) - amountPaidCents) / 100,
+          amount: (toCents(invoice.total) - amountPaidCents) / 100,
         };
       })
     );

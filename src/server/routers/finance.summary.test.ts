@@ -98,4 +98,14 @@ describe('finance.getFinancialSummary', () => {
     expect(summary.totalOutstanding).toEqual([{ currency: 'USD', amount: 400.1 }]);
     expect(summary.outstandingCount).toBe(2);
   });
+
+  it('keeps cent arithmetic exact at the Decimal(12,2) upper bound', async () => {
+    mocks.invoiceFindMany.mockResolvedValue([
+      { total: 9_999_999_999.99, currency: 'USD', payments: [{ amount: 0.01 }] },
+    ]);
+
+    const summary = await caller().getFinancialSummary();
+
+    expect(summary.totalOutstanding).toEqual([{ currency: 'USD', amount: 9_999_999_999.98 }]);
+  });
 });
