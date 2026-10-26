@@ -507,6 +507,27 @@ describe('cancelShift', () => {
     expect(shifts[0]).toMatchObject({ status: 'SCHEDULED', cancelledAt: null });
   });
 
+  it('allows cancellation after the employee has clocked out', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    await db.restaurantShift.update({
+      where: { id: shift.id },
+      data: {
+        clockedInAt: new Date('2026-08-20T09:05:00Z'),
+        clockedOutAt: new Date('2026-08-20T11:05:00Z'),
+      },
+    });
+
+    await expect(cancelShift(db, shift.id, { now: NOON })).resolves.toMatchObject({
+      status: 'CANCELLED',
+      cancelledAt: NOON,
+    });
+  });
+
   it.each([
     ['without CAS', undefined],
     ['with CAS', { organizationId: 'org_1', expectedVersion: 1 }],
