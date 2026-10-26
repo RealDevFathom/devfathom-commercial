@@ -87,6 +87,11 @@ describe('finance.addPayment', () => {
 
       await caller().addPayment({ invoiceId: 'invoice-1', amount: 60 });
 
+      expect(mocks.invoiceFindUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: expect.objectContaining({ invoiceNumber: true }),
+        })
+      );
       expect(mocks.invoiceUpdate).toHaveBeenCalledOnce();
       expect(mocks.logActivity).toHaveBeenCalledOnce();
       expect(mocks.logActivity).toHaveBeenCalledWith(expect.anything(), 'admin-1', {
