@@ -15,7 +15,6 @@ import {
   RESTAURANT_OPERATORS_LIMIT,
   resolveEntitlementLimit,
 } from '@/lib/entitlement-limits';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   CommercialLimitError,
   createStaffProfileWithinCommercialLimit,
@@ -330,7 +329,15 @@ export const restaurantStaffRouter = router({
               status: true,
               restaurantStaffProfiles: {
                 where: { primaryBranchId: input.primaryBranchId },
-                select: { id: true, displayName: true, primaryBranchId: true },
+                select: {
+                  id: true,
+                  displayName: true,
+                  primaryBranchId: true,
+                  jobRoles: {
+                    where: { branchId: input.primaryBranchId },
+                    select: { jobRole: { select: { key: true } } },
+                  },
+                },
                 take: 1,
               },
             },
@@ -338,6 +345,14 @@ export const restaurantStaffRouter = router({
           if (existing) {
             const staff = existing.restaurantStaffProfiles[0];
             if (existing.status === 'INVITED' && staff) {
+              const expectedRoleKey = input.staffRole === 'MANAGER' ? 'manager' : 'server';
+              if (!staff.jobRoles.some(({ jobRole }) => jobRole.key === expectedRoleKey)) {
+                throw new TRPCError({
+                  code: 'CONFLICT',
+                  message:
+                    'This pending invitation has a different restaurant role. Cancel it before inviting the user with a new role.',
+                });
+              }
               await tx.invitation.upsert({
                 where: { userId: existing.id },
                 create: {

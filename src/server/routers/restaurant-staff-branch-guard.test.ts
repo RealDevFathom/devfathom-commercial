@@ -29,15 +29,12 @@ describe('Restaurant staff branch guard coverage', () => {
     'resolveStaffCapabilities',
     'listRoleHolders',
   ])('%s invokes the shared guard', (procedure) => {
-    const start = source.indexOf(`  ${procedure}:`);
+    const start = source.search(new RegExp(`^  ${procedure}:`, 'm'));
     expect(start).toBeGreaterThan(-1);
-    const remainder = source.slice(start + procedure.length + 3);
-    const nextProcedure = remainder.search(/\n  [A-Za-z][A-Za-z0-9]*:/);
+    const remainder = source.slice(start + 1);
+    const nextProcedure = remainder.search(/^  [A-Za-z][A-Za-z0-9]*:/m);
     expect(
-      source.slice(
-        start,
-        nextProcedure === -1 ? undefined : start + procedure.length + 3 + nextProcedure
-      )
+      source.slice(start, nextProcedure === -1 ? undefined : start + 1 + nextProcedure)
     ).toContain('resolveStaffBranchAuthorization');
   });
 });

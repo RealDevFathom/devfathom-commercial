@@ -312,7 +312,12 @@ describe('staff CRUD', () => {
       name: 'Mina Shah',
       status: 'INVITED',
       restaurantStaffProfiles: [
-        { id: 'staff_new', displayName: 'Mina Shah', primaryBranchId: 'branch_1' },
+        {
+          id: 'staff_new',
+          displayName: 'Mina Shah',
+          primaryBranchId: 'branch_1',
+          jobRoles: [{ jobRole: { key: 'manager' } }],
+        },
       ],
     });
 
@@ -332,6 +337,34 @@ describe('staff CRUD', () => {
     expect(mocks.userCount).not.toHaveBeenCalled();
     expect(mocks.sendEmail).toHaveBeenCalledOnce();
     expect(result).toMatchObject({ emailDelivered: true, resent: true });
+  });
+
+  it('rejects changing the restaurant role on a pending invitation', async () => {
+    mocks.userFindFirst.mockResolvedValue({
+      id: 'user_invited',
+      name: 'Mina Shah',
+      status: 'INVITED',
+      restaurantStaffProfiles: [
+        {
+          id: 'staff_new',
+          displayName: 'Mina Shah',
+          primaryBranchId: 'branch_1',
+          jobRoles: [{ jobRole: { key: 'server' } }],
+        },
+      ],
+    });
+
+    await expect(
+      caller().invite({
+        name: 'Mina Shah',
+        email: 'mina@example.com',
+        staffRole: 'MANAGER',
+        primaryBranchId: 'branch_1',
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
   });
 
   it('re-counts occupied seats after taking the organization lock', async () => {
