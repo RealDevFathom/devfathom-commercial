@@ -556,6 +556,7 @@ describe('cancelShift', () => {
       cancelledAt: null,
       clockedInAt,
       clockedOutAt: null,
+      version: 1,
     });
   });
 
