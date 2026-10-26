@@ -321,7 +321,7 @@ export default async function PlatformAuditPage({
                         <p className="mt-0.5 text-[10px] text-text-body">{actor.email}</p>
                       </>
                     ) : actorId ? (
-                      <p className="text-xs text-text-body">
+                      <p className="text-xs text-text-body" title={`Actor ID: ${actorId}`}>
                         {actorId}
                       </p>
                     ) : (

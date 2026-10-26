@@ -241,7 +241,7 @@ describe('PlatformAuditPage', () => {
 
     render(await PlatformAuditPage({ searchParams: Promise.resolve({}) }));
 
-    expect(screen.getByText(actorId)).toBeInTheDocument();
+    expect(screen.getByTitle(`Actor ID: ${actorId}`)).toHaveTextContent(actorId);
     expect(screen.queryByText('Anonymous')).not.toBeInTheDocument();
   });
 
