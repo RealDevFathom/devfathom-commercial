@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const overviewData = vi.hoisted(() => ({ current: null as unknown }));
 const invalidateOverview = vi.hoisted(() => vi.fn());
+const showError = vi.hoisted(() => vi.fn());
 const mutations = vi.hoisted(() => ({
   map: new Map<
     string,
@@ -11,6 +12,7 @@ const mutations = vi.hoisted(() => ({
       isPending: boolean;
       reset: () => void;
       onSuccess?: () => void;
+      onError?: (error: { message: string }) => void;
     }
   >(),
 }));
@@ -27,7 +29,7 @@ function mutationFor(key: string) {
 vi.mock('next-auth/react', () => ({
   useSession: () => ({ status: 'unauthenticated', data: null }),
 }));
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: showError } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({ organizationAdmin: { overview: { invalidate: invalidateOverview } } }),
@@ -41,9 +43,13 @@ vi.mock('@/lib/trpc', () => ({
             };
           }
           return {
-            useMutation: (options?: { onSuccess?: () => void }) => {
+            useMutation: (options?: {
+              onSuccess?: () => void;
+              onError?: (error: { message: string }) => void;
+            }) => {
               const mutation = mutationFor(key);
               mutation.onSuccess = options?.onSuccess;
+              mutation.onError = options?.onError;
               return mutation;
             },
           };
@@ -63,6 +69,7 @@ const PHARMACY_DEPARTMENTS = [
 
 beforeEach(() => {
   mutations.map.clear();
+  showError.mockReset();
   invalidateOverview.mockReset();
   invalidateOverview.mockResolvedValue(undefined);
   overviewData.current = {
@@ -205,6 +212,11 @@ describe('organization people and access — staff onboarding', () => {
       id: 'owner_1',
       granted: true,
     });
+    expect(control).not.toBeChecked();
+
+    mutationFor('setMemberGoodsInAccess').onError?.({ message: 'Grant refused.' });
+    expect(showError).toHaveBeenCalledWith('Grant refused.');
+    expect(invalidateOverview).not.toHaveBeenCalled();
     expect(control).not.toBeChecked();
 
     mutationFor('setMemberGoodsInAccess').onSuccess?.();
