@@ -45,7 +45,9 @@ const line = {
   },
 };
 
-function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'DENY' }>) {
+type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
+
+function callerFor(permissions: Permission[], permissionOverrides: Permission[] = []) {
   const credential = vi.fn();
   const register = vi.fn();
   const db = {
@@ -58,7 +60,7 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
       findUnique: async () => ({
         status: 'ACTIVE',
         organizationRole: { permissions },
-        permissionOverrides: [],
+        permissionOverrides,
       }),
     },
     restaurantOperatorCredential: { findFirst: credential },
@@ -99,10 +101,10 @@ describe('pharmacySales.addLine controlled actor', () => {
   });
 
   it('honors an explicit ABAC deny even when the role grants dispense', async () => {
-    const { caller, credential, register } = callerFor([
-      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
-      { capability: 'pharmacy:dispense', effect: 'DENY' },
-    ]);
+    const { caller, credential, register } = callerFor(
+      [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+      [{ capability: 'pharmacy:dispense', effect: 'DENY' }],
+    );
     await expect(caller.addLine(line)).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'You do not have permission to dispense a controlled medicine.',
