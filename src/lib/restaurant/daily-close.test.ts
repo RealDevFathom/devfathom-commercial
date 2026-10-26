@@ -429,24 +429,61 @@ beforeAll(async () => {
 });
 
 describeIfDatabase('daily close (real DB)', () => {
-  it('rejects a future date using the branch business calendar before creating a close', async () => {
-    const date = '9999-12-31';
+  it('honors the branch timezone and cutoff when rejecting future dates', async () => {
+    const currentBusinessDate = '2026-01-14';
+    const nextLocalDate = '2026-01-15';
     const db = deps.createTenantDb(orgId);
 
-    await expect(
-      deps.close.cutClose(db, {
-        branchId: ids.branch,
-        businessDate: date,
-        actor: mActor(ids.seedDevice),
-      })
-    ).rejects.toMatchObject({ reason: 'INVALID' });
-
-    const closeCount = await read((tx) =>
-      tx.restaurantDailyClose.count({
-        where: { branchId: ids.branch, businessDate: utcDate(date) },
+    await read((tx) =>
+      tx.restaurantBranch.update({
+        where: { id: ids.branch },
+        data: { timezone: 'America/Los_Angeles', businessDayCutoff: '04:00' },
       })
     );
-    expect(closeCount).toBe(0);
+
+    const beforeCutoff = new Date('2026-01-15T11:59:59.000Z'); // 03:59:59 in Los Angeles
+    await expect(
+      deps.close.cutClose(
+        db,
+        {
+          branchId: ids.branch,
+          businessDate: currentBusinessDate,
+          actor: mActor(ids.seedDevice),
+        },
+        beforeCutoff
+      )
+    ).resolves.toMatchObject({ replayed: false });
+
+    await expect(
+      deps.close.cutClose(
+        db,
+        {
+          branchId: ids.branch,
+          businessDate: nextLocalDate,
+          actor: mActor(ids.seedDevice),
+        },
+        beforeCutoff
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+
+    const closeCountBeforeCutoff = await read((tx) =>
+      tx.restaurantDailyClose.count({
+        where: { branchId: ids.branch, businessDate: utcDate(nextLocalDate) },
+      })
+    );
+    expect(closeCountBeforeCutoff).toBe(0);
+
+    await expect(
+      deps.close.cutClose(
+        db,
+        {
+          branchId: ids.branch,
+          businessDate: nextLocalDate,
+          actor: mActor(ids.seedDevice),
+        },
+        new Date('2026-01-15T12:00:00.000Z') // 04:00:00 in Los Angeles
+      )
+    ).resolves.toMatchObject({ replayed: false });
   });
 
   it('cross-business-date: a D2 refund of a D1 tender lands on D2, leaving D1 unchanged', async () => {

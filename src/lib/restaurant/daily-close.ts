@@ -435,13 +435,17 @@ export type CutCloseResult = {
  * the date (a correction supersedes an existing close instead). Snapshot + tender
  * children are written in ONE transaction; idempotent (`cash:close`).
  */
-export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutCloseResult> {
+export async function cutClose(
+  db: ScopedDb,
+  input: CutCloseInput,
+  now: Date = new Date()
+): Promise<CutCloseResult> {
   const businessDate = businessDateToUtcDate(input.businessDate);
   return runMoneyTransaction(db, async (tx) => {
     const branch = await lockDailyClose(tx, input.branchId, input.businessDate);
     if (
       input.businessDate >
-      resolveBusinessDate(new Date(), branch.timezone, branch.businessDayCutoff)
+      resolveBusinessDate(now, branch.timezone, branch.businessDayCutoff)
     ) {
       throw new DailyCloseError('A future business day cannot be closed.', 'INVALID');
     }
