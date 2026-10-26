@@ -144,6 +144,7 @@ describe('organization.update deployment mode', () => {
       request
     );
 
+    expect(provisioningConfigured).not.toHaveBeenCalled();
     expect(platformDb.organization.update).toHaveBeenCalledOnce();
     expect(platformDb.organizationDeployment.upsert).not.toHaveBeenCalled();
     expect(platformDb.platformJob.create).not.toHaveBeenCalled();
