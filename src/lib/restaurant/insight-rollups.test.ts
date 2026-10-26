@@ -53,18 +53,24 @@ describe('pure rollup calculations', () => {
           serviceChargeRefundAmount: D('0.25'),
           deliveryFeeRefundAmount: D('1.25'),
         },
+        {
+          amount: D('3.00'),
+          taxRefundAmount: D('0.40'),
+          serviceChargeRefundAmount: D('0.30'),
+          deliveryFeeRefundAmount: D('0.80'),
+        },
       ],
       drawers: [],
     });
     expect(total.grossSales.toString()).toBe('100');
     expect(total.deliveryFeeSales.toString()).toBe('12');
-    expect(total.deliveryFeeRefunds.toString()).toBe('1.25');
+    expect(total.deliveryFeeRefunds.toString()).toBe('2.05');
     expect(total.discountTotal.toString()).toBe('5');
-    expect(total.netSales.toString()).toBe('84.5');
-    expect(total.taxTotal.toString()).toBe('6.5');
-    expect(total.serviceChargeTotal.toString()).toBe('2.75');
+    expect(total.netSales.toString()).toBe('83');
+    expect(total.taxTotal.toString()).toBe('6.1');
+    expect(total.serviceChargeTotal.toString()).toBe('2.45');
     expect(total.tipTotal.toString()).toBe('6');
-    expect(total.refundTotal.toString()).toBe('1.25');
+    expect(total.refundTotal.toString()).toBe('3.45');
     expect(total.voidTotal.toString()).toBe('9.99');
   });
 
