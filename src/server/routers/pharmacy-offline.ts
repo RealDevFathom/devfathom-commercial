@@ -259,15 +259,14 @@ export async function replayCounterCommand(
   // Recall is a live, organization-wide batch property. A signed offline
   // snapshot helps the counter refuse the sale while disconnected, but replay
   // must still re-read the authoritative state in this transaction.
-  const replayLots = await db.pharmacyInventoryLot.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      id: { in: [...new Set(command.lines.map((line) => line.inventoryLotId))] },
-    },
-    select: { id: true, manufacturingBatch: { select: { state: true } } },
-  });
-  const batchRecalled = replayLots.some((lot) => lot.manufacturingBatch.state === 'RECALLED');
+  const requestedLotIds = [...new Set(command.lines.map((line) => line.inventoryLotId))];
+  // The share lock is deliberately held to transaction end. Recall paths update
+  // these same batch rows, so a replay and a recall have one serial order rather
+  // than a check/use window between this read and sale settlement.
+  const replayLots = await lockReplayLotBatchStates(db, scope, requestedLotIds);
+  const batchRecalled =
+    replayLots.length !== requestedLotIds.length ||
+    replayLots.some((lot) => lot.batchState === 'RECALLED');
   authorizeReplayedCommand(command.action, {
     nowMs: originalMs,
     snapshots,
@@ -450,6 +449,24 @@ function verifyToken(token: string, ctx: PharmacyCounterContext) {
 }
 export type CounterOperation = 'establish' | 'snapshot' | 'replay' | 'lease' | 'quota';
 
+export async function lockReplayLotBatchStates(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  requestedLotIds: string[]
+) {
+  return db.$queryRaw<Array<{ id: string; batchState: string }>>(Prisma.sql`
+    SELECT lot.id, batch.state::text AS "batchState"
+    FROM pharmacy_inventory_lots lot
+    JOIN pharmacy_manufacturing_batches batch
+      ON batch.id = lot."manufacturingBatchId"
+     AND batch."organizationId" = lot."organizationId"
+    WHERE lot."organizationId" = ${scope.organizationId}
+      AND lot."branchId" = ${scope.branchId}
+      AND lot.id IN (${Prisma.join(requestedLotIds)})
+    ORDER BY batch.id
+    FOR SHARE OF batch`);
+}
+
 /** Live web actor plus enrolled device, with an actor/device-bound terminal
  * token after establishment. Errors are mapped only outside the transaction. */
 export function pharmacyCounterRoute(operation: CounterOperation) {
@@ -540,8 +557,29 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           await db.$queryRaw(
             Prisma.sql`SELECT id FROM pharmacy_registered_devices WHERE id=${device.id} AND "organizationId"=${ctx.scope.organizationId} FOR UPDATE`
           );
+          const quotas = await db.pharmacyDeviceLotQuota.findMany({
+            where: {
+              organizationId: ctx.scope.organizationId,
+              branchId: device.branchId,
+              deviceId: device.id,
+              releasedAt: null,
+            },
+            select: {
+              inventoryLotId: true,
+              stockLocationId: true,
+              quotaUnits: true,
+              consumedUnits: true,
+            },
+          });
+          // PRICES is authoritative only for lots this device can actually sell.
+          // Scoping it to active quotas keeps the signed snapshot bounded by the
+          // counter's delegated stock rather than branch inventory history.
           const lots = await db.pharmacyInventoryLot.findMany({
-            where: { organizationId: ctx.scope.organizationId, branchId: device.branchId },
+            where: {
+              organizationId: ctx.scope.organizationId,
+              branchId: device.branchId,
+              id: { in: [...new Set(quotas.map((quota) => quota.inventoryLotId))] },
+            },
             select: {
               id: true,
               manufacturingBatchId: true,
@@ -568,20 +606,6 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             },
             take: 1000,
             orderBy: { id: 'asc' },
-          });
-          const quotas = await db.pharmacyDeviceLotQuota.findMany({
-            where: {
-              organizationId: ctx.scope.organizationId,
-              branchId: device.branchId,
-              deviceId: device.id,
-              releasedAt: null,
-            },
-            select: {
-              inventoryLotId: true,
-              stockLocationId: true,
-              quotaUnits: true,
-              consumedUnits: true,
-            },
           });
           const taxes = await db.pharmacyTaxProfileVersion.findMany({
             where: {

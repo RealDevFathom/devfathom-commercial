@@ -503,9 +503,57 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
       consumed: 0,
       nextNumber: f.lease.blockStart,
     });
+    expect(
+      await inOrg(ORG_A, (db) =>
+        db.pharmacyStockMovement.count({
+          where: { inventoryLotId: f.fixture.lotId, kind: 'SALE' },
+        })
+      )
+    ).toBe(0);
   });
 
-  it('includes a recalled quota-bearing lot beyond the first 1000 branch lots', async () => {
+  it('serializes a concurrent recall on the batch locked by replay', async () => {
+    const f = await setup();
+    const { lockReplayLotBatchStates } = await import('./pharmacy-offline');
+    let releaseLock!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    let locked!: () => void;
+    const lockAcquired = new Promise<void>((resolve) => {
+      locked = resolve;
+    });
+
+    const replayTransaction = inOrg(ORG_A, async (db) => {
+      const rows = await lockReplayLotBatchStates(db, scopeOf(f.fixture), [f.fixture.lotId]);
+      expect(rows).toEqual([{ id: f.fixture.lotId, batchState: 'ACTIVE' }]);
+      locked();
+      await release;
+    });
+    await lockAcquired;
+
+    let recallCommitted = false;
+    const recallTransaction = inOrg(ORG_A, async (db) => {
+      const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+        where: { id: f.fixture.lotId },
+        select: { manufacturingBatchId: true },
+      });
+      await db.pharmacyManufacturingBatch.update({
+        where: { id: lot.manufacturingBatchId },
+        data: { state: 'RECALLED', stateReason: 'Concurrent recall', stateChangedAt: new Date() },
+      });
+      recallCommitted = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(recallCommitted).toBe(false);
+
+    releaseLock();
+    await replayTransaction;
+    await recallTransaction;
+    expect(recallCommitted).toBe(true);
+  });
+
+  it('includes a recalled quota-bearing lot without serializing unrelated branch lots', async () => {
     const f = await setup();
     await inOrg(ORG_A, async (db) => {
       const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
@@ -541,7 +589,7 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
     const prices = body.snapshots.find(
       (snapshot: { envelope: { kind: string } }) => snapshot.envelope.kind === 'PRICES'
     );
-    expect(prices.payload).toHaveLength(1001);
+    expect(prices.payload).toHaveLength(1);
     expect(prices.payload).toContainEqual(
       expect.objectContaining({
         id: f.fixture.lotId,
