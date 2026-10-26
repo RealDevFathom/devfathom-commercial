@@ -574,6 +574,14 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
         })
       ).rejects.toMatchObject({ reason: 'PAYMENT_NOT_FOUND' });
 
+      if (failure === 'missing payment link') {
+        expect(f.raw.restaurantPayment.findUnique).not.toHaveBeenCalled();
+      } else {
+        expect(f.raw.restaurantPayment.findUnique).toHaveBeenCalledWith({
+          where: { id: 'payment' },
+          select: { id: true, provider: true, providerRef: true },
+        });
+      }
       expect(f.raw.restaurantMoneyIdempotencyKey.create).toHaveBeenCalledTimes(
         idempotencyClaimsBeforeRefund
       );
