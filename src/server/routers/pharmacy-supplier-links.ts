@@ -17,6 +17,13 @@ import {
 } from '@/lib/auth/anonymous-inputs';
 
 const id = z.string().trim().min(1).max(200);
+const kind = z.enum([
+  'ACKNOWLEDGEMENT',
+  'REJECTION',
+  'PARTIAL_ACCEPTANCE',
+  'ETA',
+  'SUBSTITUTION_PROPOSAL',
+]);
 const genericLinkError = () =>
   new TRPCError({
     code: 'NOT_FOUND',
