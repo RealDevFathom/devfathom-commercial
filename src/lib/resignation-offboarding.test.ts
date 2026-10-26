@@ -14,7 +14,7 @@ import { processDueResignationOffboarding } from './resignation-offboarding';
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.withPlatformDb.mockImplementation(async (run: (db: unknown) => Promise<unknown>) =>
-    run({ $queryRawUnsafe: mocks.query })
+    run({ $queryRaw: mocks.query })
   );
   mocks.query.mockResolvedValue([]);
 });
@@ -30,8 +30,11 @@ describe('processDueResignationOffboarding', () => {
     await expect(processDueResignationOffboarding(now)).resolves.toEqual({ offboarded: 2 });
 
     expect(mocks.withPlatformDb).toHaveBeenCalledOnce();
-    const [sql, cutoff] = mocks.query.mock.calls[0] as [string, Date];
-    expect(cutoff).toBe(now);
+    const [query] = mocks.query.mock.calls[0] as [
+      { strings: readonly string[]; values: unknown[] },
+    ];
+    const sql = query.strings.join('$1');
+    expect(query.values).toEqual([now]);
     expect(sql).toContain(`r."status" = 'APPROVED'`);
     expect(sql).toContain('r."lastWorkingDay" IS NOT NULL');
     expect(sql).toContain('r."lastWorkingDay" <= $1');
@@ -42,7 +45,8 @@ describe('processDueResignationOffboarding', () => {
   it('requires the resignation and user to belong to the same organization', async () => {
     await processDueResignationOffboarding();
 
-    const [sql] = mocks.query.mock.calls[0] as [string];
+    const [query] = mocks.query.mock.calls[0] as [{ strings: readonly string[] }];
+    const sql = query.strings.join('$1');
     expect(sql).toContain('r."organizationId" = u."organizationId"');
   });
 

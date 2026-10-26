@@ -1,3 +1,4 @@
+import { Prisma } from '@/generated/prisma/client';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 
 type OffboardedUser = { id: string; organizationId: string };
@@ -16,8 +17,8 @@ export async function processDueResignationOffboarding(
   now = new Date()
 ): Promise<{ offboarded: number }> {
   return withPlatformDb(async (db) => {
-    const users = await db.$queryRawUnsafe<OffboardedUser[]>(
-      `UPDATE "users" AS u
+    const users = await db.$queryRaw<OffboardedUser[]>(Prisma.sql`
+       UPDATE "users" AS u
        SET "status" = 'INACTIVE',
            "tokenVersion" = u."tokenVersion" + 1,
            "updatedAt" = NOW()
@@ -29,11 +30,10 @@ export async function processDueResignationOffboarding(
              AND r."organizationId" = u."organizationId"
              AND r."status" = 'APPROVED'
              AND r."lastWorkingDay" IS NOT NULL
-             AND r."lastWorkingDay" <= $1
+             AND r."lastWorkingDay" <= ${now}
          )
-       RETURNING u."id", u."organizationId"`,
-      now
-    );
+       RETURNING u."id", u."organizationId"
+    `);
 
     return { offboarded: users.length };
   });
