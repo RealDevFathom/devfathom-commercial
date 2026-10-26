@@ -804,6 +804,13 @@ function ScopedPharmacyCounterConsole({
     searchRef.current?.select();
   }, []);
 
+  const stageRow = useCallback((row: CounterSearchRow) => {
+    setActiveRow(row);
+    setQuantity(1);
+    setSaleUnit(row.saleUnits[0]?.kind ?? null);
+    setLotOverride(null);
+  }, []);
+
   const runSearch = useCallback(async () => {
     if (!branchAuthorized) return;
     const trimmed = query.trim();
@@ -811,9 +818,27 @@ function ScopedPharmacyCounterConsole({
       setNotice({ tone: 'warning', message: 'Type at least two characters to search.' });
       return;
     }
+    const stageBarcodeResult = async (search: string) => {
+      setSubmittedSearch({ text: trimmed, query: search, branchId });
+      if (barcodeAdd.current !== trimmed) return;
+      const input = { branchId, query: search };
+      const result = await utils.client.pharmacySales.counterSearch.query(input);
+      utils.pharmacySales.counterSearch.setData(input, result);
+      if (barcodeAdd.current !== trimmed) return;
+      if (result.rows.length !== 1) {
+        barcodeAdd.current = null;
+        return;
+      }
+      stageRow(result.rows[0]!);
+    };
     const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
     if (!looksLikeGs1) {
-      setSubmittedSearch({ text: trimmed, query: trimmed, branchId });
+      try {
+        await stageBarcodeResult(trimmed);
+      } catch (error) {
+        barcodeAdd.current = null;
+        setNotice({ tone: 'danger', message: messageFrom(error) });
+      }
       return;
     }
     const revision = ++scannerRevision.current;
@@ -821,7 +846,7 @@ function ScopedPharmacyCounterConsole({
     try {
       const verdict = await authenticatePack.mutateAsync({ branchId, payload: trimmed });
       if (revision !== scannerRevision.current) return;
-      setSubmittedSearch({ text: trimmed, query: verdict.parsed?.gtin ?? trimmed, branchId });
+      await stageBarcodeResult(verdict.parsed?.gtin ?? trimmed);
       setNotice({
         tone:
           verdict.status === 'VERIFIED'
@@ -833,18 +858,12 @@ function ScopedPharmacyCounterConsole({
       });
     } catch (error) {
       if (revision !== scannerRevision.current) return;
+      barcodeAdd.current = null;
       setNotice({ tone: 'danger', message: messageFrom(error) });
     } finally {
       setPending(null);
     }
-  }, [authenticatePack, branchAuthorized, branchId, query]);
-
-  const stageRow = useCallback((row: CounterSearchRow) => {
-    setActiveRow(row);
-    setQuantity(1);
-    setSaleUnit(row.saleUnits[0]?.kind ?? null);
-    setLotOverride(null);
-  }, []);
+  }, [authenticatePack, branchAuthorized, branchId, query, stageRow, utils]);
 
   const ensureSale = useCallback(async () => {
     if (saleId) return saleId;
@@ -983,21 +1002,10 @@ function ScopedPharmacyCounterConsole({
     if (!token || token !== trimmedQuery || !searchCurrent) return;
     if (searchQuery.isFetching || searchQuery.isPlaceholderData || searchQuery.isError) return;
     const found = searchQuery.data?.rows ?? [];
-    if (found.length !== 1) {
-      barcodeAdd.current = null;
-      return;
-    }
+    if (found.length !== 1) return;
     const row = found[0]!;
     const nextUnit = row.saleUnits[0]?.kind ?? null;
-    if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
-      let cancelled = false;
-      queueMicrotask(() => {
-        if (!cancelled) stageRow(row);
-      });
-      return () => {
-        cancelled = true;
-      };
-    }
+    if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) return;
     barcodeAdd.current = null;
     if (!preview?.sufficient || busy) return;
     void addToCart();
@@ -1012,7 +1020,6 @@ function ScopedPharmacyCounterConsole({
     searchQuery.isError,
     searchQuery.isFetching,
     searchQuery.isPlaceholderData,
-    stageRow,
     trimmedQuery,
   ]);
 

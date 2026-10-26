@@ -12,6 +12,7 @@ import {
   AGENCY_DEPARTMENTS,
   HOSPITALITY_PACKAGES,
   PHARMACY_PACKAGES,
+  packageDefaultSeats,
   RESTAURANT_MODULES,
   RESTAURANT_DEPARTMENTS,
   RESTAURANT_ROLE_TEMPLATES,
@@ -284,7 +285,7 @@ describe('production bootstrap', () => {
           key: restaurantPackage.key,
           name: restaurantPackage.name,
           vertical: 'RESTAURANT',
-          defaultSeats: restaurantPackage.defaultLimits['users.max'],
+          defaultSeats: packageDefaultSeats(restaurantPackage),
         },
       });
       for (const moduleKey of restaurantPackage.moduleKeys) {

@@ -1123,6 +1123,7 @@ const VALID_PROFILE = {
   licenceCategory: 'PHARMACY',
   licenceValidFrom: new Date('2026-01-01'),
   licenceValidTo: new Date('2027-01-01'),
+  licenceEvidenceFileRef: 'evidence://pharmacy-licence',
   permittedSchedules: ['RX'],
   qualifiedPersonRegistration: 'QP-1',
   qualifiedPersonValidFrom: new Date('2026-01-01'),
