@@ -764,6 +764,18 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
+  it('allows another receipt while the purchase order is receiving', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      branchId: 'branch_a',
+      status: 'RECEIVING',
+    });
+
+    await expect(caller().createGoodsReceipt(RECEIPT)).resolves.toBeDefined();
+    expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses a receipt when the purchase order belongs to another supplier', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue(null);
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({

@@ -135,6 +135,20 @@ describe('postGoodsReceipt expiry', () => {
     expect(receiveLot).not.toHaveBeenCalled();
   });
 
+  it('allows a subsequent receipt while the linked order is receiving', async () => {
+    const { db } = receiptDb({
+      accepted: 10,
+      rejected: 0,
+      expiry: '2027-12-31',
+      purchaseOrderStatus: 'RECEIVING',
+    });
+
+    await expect(
+      postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT })
+    ).resolves.toMatchObject({ goodsReceiptId: 'gr' });
+    expect(db.pharmacyPurchaseOrder.updateMany).not.toHaveBeenCalled();
+  });
+
   it("refuses to post an existing draft against another branch's order", async () => {
     const { db, batchFind } = receiptDb({
       accepted: 10,
