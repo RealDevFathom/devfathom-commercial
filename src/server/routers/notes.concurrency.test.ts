@@ -112,6 +112,12 @@ describe('notes.update concurrency', () => {
     expect(tx.user.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { organizationId: 'org_1' } })
     );
+    expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.note.findFirst.mock.invocationCallOrder[0]!
+    );
+    expect(tx.noteRevision.create.mock.invocationCallOrder[0]).toBeLessThan(
+      tx.note.update.mock.invocationCallOrder[0]!
+    );
   });
 
   it('stops when the tenant-qualified lock finds no note', async () => {
