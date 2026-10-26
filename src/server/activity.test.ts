@@ -1,10 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { bindSideEffects } from '@/lib/side-effects/scope';
 
 import { logActivity } from './activity';
 
 describe('logActivity', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('remains fire-and-forget outside a tenant transaction', () => {
     const create = vi.fn(() => new Promise<void>(() => undefined));
     const db = { activity: { create } } as never;
@@ -79,7 +83,6 @@ describe('logActivity', () => {
       'project_created',
       error
     );
-    consoleError.mockRestore();
   });
 
   it('waits for every activity insert without scheduling an outbox drain', async () => {
