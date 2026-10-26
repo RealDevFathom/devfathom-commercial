@@ -4,6 +4,19 @@ const mocks = vi.hoisted(() => ({
   lockOpportunity: vi.fn(),
   packageFindUnique: vi.fn(),
   organizationCreate: vi.fn(),
+  roleCreate: vi.fn(),
+  departmentCreateMany: vi.fn(),
+  userFindFirst: vi.fn(),
+  userCreate: vi.fn(),
+  brandCreate: vi.fn(),
+  emailSettingsCreate: vi.fn(),
+  deploymentCreate: vi.fn(),
+  jobCreate: vi.fn(),
+  lifecycleCreate: vi.fn(),
+  opportunityFindUnique: vi.fn(),
+  opportunityUpdate: vi.fn(),
+  stageEventCreate: vi.fn(),
+  accountUpdate: vi.fn(),
   auditCreate: vi.fn(),
 }));
 
@@ -19,6 +32,20 @@ const platformDb = {
   $queryRawUnsafe: mocks.lockOpportunity,
   platformPackage: { findUnique: mocks.packageFindUnique },
   organization: { create: mocks.organizationCreate },
+  organizationRole: { create: mocks.roleCreate },
+  organizationDepartment: { createMany: mocks.departmentCreateMany },
+  user: { findFirst: mocks.userFindFirst, create: mocks.userCreate },
+  organizationBrand: { create: mocks.brandCreate },
+  organizationEmailSettings: { create: mocks.emailSettingsCreate },
+  organizationDeployment: { create: mocks.deploymentCreate },
+  platformJob: { create: mocks.jobCreate },
+  organizationLifecycleEvent: { create: mocks.lifecycleCreate },
+  platformOpportunity: {
+    findUnique: mocks.opportunityFindUnique,
+    update: mocks.opportunityUpdate,
+  },
+  platformOpportunityStageEvent: { create: mocks.stageEventCreate },
+  platformAccount: { update: mocks.accountUpdate },
   platformAuditLog: { create: mocks.auditCreate },
 };
 
@@ -63,10 +90,81 @@ describe('crm.opportunity.convert', () => {
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400, message: 'Opportunity not found.' });
     expect(mocks.lockOpportunity).toHaveBeenCalledWith(
-      'SELECT id FROM platform_opportunities WHERE id = $1 FOR UPDATE',
+      'SELECT id, "convertedOrganizationId" FROM platform_opportunities WHERE id = $1 FOR UPDATE',
       payload.opportunityId
     );
     expect(mocks.packageFindUnique).not.toHaveBeenCalled();
     expect(mocks.organizationCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a sequential retry after the opportunity was converted', async () => {
+    mocks.lockOpportunity.mockResolvedValue([
+      { id: payload.opportunityId, convertedOrganizationId: 'organization_existing' },
+    ]);
+
+    await expect(
+      executePlatformCommand(actor, 'crm.opportunity.convert', payload, request)
+    ).rejects.toMatchObject({ status: 409, message: 'Opportunity has already been converted.' });
+
+    expect(mocks.packageFindUnique).not.toHaveBeenCalled();
+    expect(mocks.organizationCreate).not.toHaveBeenCalled();
+    expect(mocks.jobCreate).not.toHaveBeenCalled();
+  });
+
+  it('serializes concurrent conversions and provisions exactly one tenant and job', async () => {
+    let convertedOrganizationId: string | null = null;
+    let lockAttempt = 0;
+    mocks.lockOpportunity.mockImplementation(async () => {
+      lockAttempt += 1;
+      if (lockAttempt > 1) {
+        await vi.waitUntil(() => convertedOrganizationId !== null);
+      }
+      return [{ id: payload.opportunityId, convertedOrganizationId }];
+    });
+    mocks.packageFindUnique.mockResolvedValue({
+      id: payload.packageId,
+      active: true,
+      vertical: 'AGENCY',
+      defaultSeats: 1,
+      moduleLinks: [],
+    });
+    mocks.organizationCreate.mockImplementation(async ({ data }) => ({
+      ...data,
+      id: `organization_${mocks.organizationCreate.mock.calls.length}`,
+    }));
+    mocks.roleCreate.mockResolvedValue({ id: 'role_admin' });
+    mocks.departmentCreateMany.mockResolvedValue({ count: 1 });
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.userCreate.mockResolvedValue({ id: 'user_admin' });
+    mocks.opportunityFindUnique.mockResolvedValue({
+      id: payload.opportunityId,
+      accountId: 'account_1',
+      stage: 'PROPOSAL',
+    });
+    mocks.opportunityUpdate.mockImplementation(async ({ data }) => {
+      convertedOrganizationId = data.convertedOrganizationId;
+      // Keep the winning transaction open until the competing request has
+      // attempted its row lock, as PostgreSQL does until commit.
+      await vi.waitUntil(() => lockAttempt >= 2);
+      return { id: payload.opportunityId, ...data };
+    });
+    mocks.auditCreate.mockResolvedValue({ id: 'audit_1' });
+
+    const first = executePlatformCommand(actor, 'crm.opportunity.convert', payload, request);
+    await vi.waitFor(() => expect(mocks.organizationCreate).toHaveBeenCalledTimes(1));
+    const second = executePlatformCommand(
+      actor,
+      'crm.opportunity.convert',
+      { ...payload, slug: 'acme-retry' },
+      request
+    );
+
+    const results = await Promise.allSettled([first, second]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+      reason: { status: 409, message: 'Opportunity has already been converted.' },
+    });
+    expect(mocks.organizationCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.jobCreate).toHaveBeenCalledTimes(1);
   });
 });
