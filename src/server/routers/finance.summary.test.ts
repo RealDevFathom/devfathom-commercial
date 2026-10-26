@@ -48,6 +48,7 @@ describe('finance.getFinancialSummary', () => {
     mocks.can.mockResolvedValue(true);
     mocks.transactionGroupBy.mockResolvedValue([]);
     mocks.invoiceGroupBy.mockResolvedValue([]);
+    mocks.invoiceFindMany.mockResolvedValue([]);
     mocks.recurringFindMany.mockResolvedValue([]);
   });
 
@@ -73,5 +74,17 @@ describe('finance.getFinancialSummary', () => {
         payments: { select: { amount: true } },
       },
     });
+  });
+
+  it('subtracts multiple payments and rounds each invoice balance to cents', async () => {
+    mocks.invoiceFindMany.mockResolvedValue([
+      { total: 1_000, currency: 'USD', payments: [{ amount: 333.33 }, { amount: 266.67 }] },
+      { total: 0.3, currency: 'USD', payments: [{ amount: 0.1 }, { amount: 0.1 }] },
+    ]);
+
+    const summary = await caller().getFinancialSummary();
+
+    expect(summary.totalOutstanding).toEqual([{ currency: 'USD', amount: 400.1 }]);
+    expect(summary.outstandingCount).toBe(2);
   });
 });
