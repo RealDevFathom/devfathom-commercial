@@ -130,4 +130,17 @@ describe('finance.getFinancialSummary', () => {
     expect(summary.yearlyIncome).toEqual([{ currency: 'USD', amount: 40 }]);
     expect(summary.yearlyProfit).toEqual([{ currency: 'USD', amount: 40 }]);
   });
+
+  it('subtracts expenses from invoice receipts when calculating profit', async () => {
+    mocks.transactionGroupBy
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ currency: 'USD', _sum: { amount: 30 } }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ currency: 'USD', _sum: { amount: 30 } }]);
+
+    const summary = await caller().getFinancialSummary();
+
+    expect(summary.monthlyProfit).toEqual([{ currency: 'USD', amount: 70 }]);
+    expect(summary.yearlyProfit).toEqual([{ currency: 'USD', amount: 70 }]);
+  });
 });
