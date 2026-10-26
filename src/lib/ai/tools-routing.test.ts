@@ -90,7 +90,10 @@ describe('assistant tool routing', () => {
     );
   });
 
-  it('requires the clients entitlement for the client-aware Notes tool family', () => {
+  it.each([
+    ['full-set routing', ''],
+    ['client-aware Notes routing', 'find the Acme note'],
+  ])('requires the clients entitlement for Notes tools through %s', (_route, hint) => {
     const withoutClients = { ...ctx, enabledModules: ['notes', 'projects'] };
     const noteToolNames = [
       'searchNotes',
@@ -101,16 +104,14 @@ describe('assistant tool routing', () => {
       'setNoteShares',
     ];
 
-    for (const hint of ['', 'find the Acme note']) {
-      const tools = buildAssistantTools(withoutClients, { hint });
-      for (const name of noteToolNames) expect(tools).not.toHaveProperty(name);
+    const tools = buildAssistantTools(withoutClients, { hint });
+    for (const name of noteToolNames) expect(tools).not.toHaveProperty(name);
 
-      const entitledTools = buildAssistantTools(
-        { ...withoutClients, enabledModules: ['notes', 'projects', 'clients'] },
-        { hint }
-      );
-      for (const name of noteToolNames) expect(entitledTools).toHaveProperty(name);
-    }
+    const entitledTools = buildAssistantTools(
+      { ...withoutClients, enabledModules: ['notes', 'projects', 'clients'] },
+      { hint }
+    );
+    for (const name of noteToolNames) expect(entitledTools).toHaveProperty(name);
   });
 
   it('retains execute authorization on pharmacy reports', async () => {
