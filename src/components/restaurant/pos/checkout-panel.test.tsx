@@ -45,6 +45,15 @@ const billed = {
 };
 
 describe('CheckoutPanel', () => {
+  it('uses a customer-facing label instead of the raw NONE split kind', async () => {
+    const request: TerminalRequest = async <T,>() => billed as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText('Single bill')).toBeVisible();
+    expect(screen.getByText('Bill 1')).toBeVisible();
+    expect(screen.queryByText('NONE')).not.toBeInTheDocument();
+  });
+
   it.each(['3860.00', '2860.25', '0.00'])(
     'prefills the authoritative initial balance %s, including partial and zero balances',
     async (remainingDue) => {

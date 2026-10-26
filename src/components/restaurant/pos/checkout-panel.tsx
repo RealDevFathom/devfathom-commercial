@@ -74,6 +74,13 @@ type CheckoutPanelProps = {
   onClose: (result: { settled: boolean }) => void;
 };
 
+const splitKindLabels: Record<string, string> = {
+  NONE: 'Single bill',
+  BY_ITEM: 'By item',
+  BY_SEAT: 'By seat',
+  FRACTIONAL: 'Fractional',
+};
+
 function CompControl({
   billId,
   lines,
@@ -926,7 +933,7 @@ export function CheckoutPanel({
                 title={
                   bill.receiptNumber !== null
                     ? `Receipt ${bill.receiptNumber}`
-                    : bill.splitKind.replaceAll('_', ' ')
+                    : (splitKindLabels[bill.splitKind] ?? 'Bill details')
                 }
                 actions={<StatusPill status={bill.status} tone={billTone(bill.status)} />}
               >
