@@ -37,6 +37,9 @@ import { INVITATION_GENERIC_MESSAGE, RESET_GENERIC_MESSAGE } from '@/lib/auth/an
 import { publicProcedure, router } from '@/server/trpc';
 
 import { anonymousFallbackRouter } from './anonymous-fallback';
+import { invitationsRouter } from './invitations';
+import { passwordResetRouter } from './password-reset';
+import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
 
 const TRPC_ENDPOINT = '/api/trpc';
 
@@ -56,6 +59,12 @@ const realRouter = router({
       throw new TRPCError({ code: 'BAD_REQUEST', message: RESET_GENERIC_MESSAGE });
     }),
   }),
+});
+
+const productionAnonymousRouter = router({
+  invitations: invitationsRouter,
+  passwordReset: passwordResetRouter,
+  pharmacySupplierLinks: pharmacySupplierLinksRouter,
 });
 
 type ServedResponse = {
@@ -93,10 +102,7 @@ function stripStacks(value: unknown): { body: unknown; hasStack: boolean } {
   return { body: walk(value), hasStack };
 }
 
-async function serve(
-  router_: typeof realRouter | typeof anonymousFallbackRouter,
-  request: Request
-): Promise<ServedResponse> {
+async function serve(router_: unknown, request: Request): Promise<ServedResponse> {
   const response = await fetchRequestHandler({
     endpoint: TRPC_ENDPOINT,
     req: request,
@@ -117,6 +123,13 @@ async function serve(
 const query = (path: string) =>
   new Request(`http://acme.example.test${TRPC_ENDPOINT}/${path}?batch=1`, { method: 'GET' });
 
+const queryWithInput = (path: string, input: unknown) => {
+  const encoded = encodeURIComponent(JSON.stringify({ '0': { json: input } }));
+  return new Request(`http://acme.example.test${TRPC_ENDPOINT}/${path}?batch=1&input=${encoded}`, {
+    method: 'GET',
+  });
+};
+
 const mutation = (path: string, input: unknown) =>
   new Request(`http://acme.example.test${TRPC_ENDPOINT}/${path}?batch=1`, {
     method: 'POST',
@@ -125,6 +138,28 @@ const mutation = (path: string, input: unknown) =>
   });
 
 describe('fallback and real routers serialize refusals identically', () => {
+  it.each([
+    ['invitations.get', 'query', { token: '' }],
+    ['invitations.accept', 'mutation', { token: '' }],
+    ['passwordReset.request', 'mutation', { email: '' }],
+    ['passwordReset.validate', 'query', { token: '' }],
+    ['passwordReset.reset', 'mutation', { token: '', newPassword: '' }],
+    ['pharmacySupplierLinks.get', 'query', { token: '' }],
+    ['pharmacySupplierLinks.submit', 'mutation', { token: '' }],
+    ['pharmacySupplierLinks.uploadDocument', 'mutation', { token: '' }],
+  ] as const)('matches production validation for malformed %s input', async (path, kind, input) => {
+    const request = () => (kind === 'query' ? queryWithInput(path, input) : mutation(path, input));
+
+    const real = await serve(productionAnonymousRouter, request());
+    const fallback = await serve(anonymousFallbackRouter, request());
+
+    expect(real.status).toBe(400);
+    expect(fallback.status).toBe(real.status);
+    expect(fallback.contentType).toBe(real.contentType);
+    expect(fallback.hasStack).toBe(real.hasStack);
+    expect(fallback.body).toEqual(real.body);
+  });
+
   it('matches on a NOT_FOUND from invitations.get', async () => {
     const request = () => query('invitations.get');
 
