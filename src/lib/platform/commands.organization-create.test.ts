@@ -260,6 +260,7 @@ describe('crm.opportunity.convert eligibility', () => {
       data: { stage: 'WON', wonAt: expect.any(Date) },
     });
     expect(mocks.accountForUpdate).toHaveBeenCalledOnce();
+    expect(mocks.accountForUpdate).toHaveBeenCalledBefore(platformDb.organization.create);
     expect(created.opportunityUpdate).toContainEqual({ convertedOrganizationId: 'org_new' });
     expect(created.opportunityStageEvent).toContainEqual(
       expect.objectContaining({
