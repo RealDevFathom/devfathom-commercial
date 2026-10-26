@@ -729,14 +729,16 @@ export async function reviewMenuImportLine(
       // product under and a price to put on the draft version. This is where a
       // blurred or price-less OCR row is forced back to a human rather than
       // becoming a product with an invented price.
-      const effectiveName = productName ?? line.extractedProductName;
+      const effectiveName =
+        productName === undefined ? line.extractedProductName : productName;
       if (!effectiveName) {
         throw new MenuImportError(
           'Accepting a line needs a product name; supply one to correct the extraction.',
           'INVALID'
         );
       }
-      const effectivePrice = priceAmount ?? line.extractedPriceAmount;
+      const effectivePrice =
+        priceAmount === undefined ? line.extractedPriceAmount : priceAmount;
       if (effectivePrice === null || effectivePrice === undefined) {
         throw new MenuImportError(
           'Accepting a line needs a price; the menu did not state one.',

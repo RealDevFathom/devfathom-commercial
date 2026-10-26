@@ -368,6 +368,42 @@ test('accepting extracted variants requires and persists explicit human review',
   );
 });
 
+test('accepting does not restore an extracted value that the reviewer explicitly cleared', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  f.record.status = 'AWAITING_REVIEW';
+  f.db.restaurantMenuImportLine.findUnique = async () => ({
+    id: 'line_1',
+    importId: 'imp_1',
+    extractedProductName: 'Synthetic item',
+    extractedPriceAmount: new (class {
+      toString() { return '10.00'; }
+    })(),
+    extractedVariants: [],
+    import: f.record,
+  });
+
+  await assert.rejects(
+    menu.reviewMenuImportLine(f.db, {
+      lineId: 'line_1',
+      decision: 'ACCEPTED',
+      reviewedById: 'user_1',
+      priceAmount: null,
+    }),
+    { reason: 'PRICE_REQUIRED' }
+  );
+  await assert.rejects(
+    menu.reviewMenuImportLine(f.db, {
+      lineId: 'line_1',
+      decision: 'ACCEPTED',
+      reviewedById: 'user_1',
+      productName: '   ',
+    }),
+    { reason: 'INVALID' }
+  );
+  assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'review'));
+});
+
 test('review rechecks import state after acquiring the commit lock', async () => {
   const f = setup('production', 'disabled');
   const menu = f.load('@/lib/restaurant/menu-import');
