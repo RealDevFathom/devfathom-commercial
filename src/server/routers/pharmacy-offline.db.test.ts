@@ -339,6 +339,44 @@ describeIfDatabase('offline quota stock reservation', () => {
     await expect(movement(-1, 'reserved')).rejects.toThrow('OFFLINE_QUOTA_RESERVES_STOCK');
   });
 
+  it('rejects a multi-row insert whose combined decrement consumes reserved stock', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'batched-reservation', { units: 8 });
+    await inOrg(ORG_A, (db) =>
+      deps.quotas.grantDeviceLotQuota(db, scopeOf(fixture), {
+        deviceId: fixture.deviceId,
+        ...bucketOf(fixture),
+        units: 3,
+      })
+    );
+
+    await expect(
+      inOrg(ORG_A, (db) =>
+        db.pharmacyStockMovement.createMany({
+          data: ['first', 'second'].map((label) => ({
+            organizationId: ORG_A,
+            branchId: BRANCH_A,
+            ...bucketOf(fixture),
+            kind: 'ADJUSTMENT' as const,
+            disposition: 'AVAILABLE' as const,
+            quantityUnits: -3,
+            sealedPackDelta: 0,
+            looseUnitDelta: -3,
+            actorId: ACTOR,
+            idempotencyKey: `batched-${tag(label)}`,
+            occurredAt: NOW,
+          })),
+        })
+      )
+    ).rejects.toThrow('OFFLINE_QUOTA_RESERVES_STOCK');
+
+    const balance = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockBalance.findFirstOrThrow({
+        where: { organizationId: ORG_A, ...bucketOf(fixture), disposition: 'AVAILABLE' },
+      })
+    );
+    expect(balance.onHandUnits).toBe(8);
+  });
+
   it('ignores released quotas, positive movements, and non-AVAILABLE stock', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'released-reservation', { units: 10 });
     const quota = await inOrg(ORG_A, (db) =>
