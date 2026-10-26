@@ -28,6 +28,12 @@ export function trackSideEffect(work: Promise<unknown>): void {
   scope.enqueued = true;
 }
 
+/** Keep transaction-local work alive without scheduling an outbox drain. */
+export function trackTransactionWork(work: Promise<unknown>): void {
+  const scope = storage.getStore();
+  if (scope) scope.pending.push(work);
+}
+
 /** Defer independent work until the owning transaction releases its connection. */
 export function afterTenantTransaction(work: () => void): void {
   const scope = storage.getStore();

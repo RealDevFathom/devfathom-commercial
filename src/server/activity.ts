@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@/generated/prisma/client';
+import { trackTransactionWork } from '@/lib/side-effects/scope';
 
 /**
  * Activity types — keep this list in sync with the dashboard's getActivityColor mapping.
@@ -51,7 +52,7 @@ export interface LogActivityArgs {
  * succeeded; failing to log shouldn't surface an error to the client).
  */
 export function logActivity(db: PrismaClient, userId: string, args: LogActivityArgs): void {
-  db.activity
+  const write = db.activity
     .create({
       data: {
         type: args.type,
@@ -65,4 +66,11 @@ export function logActivity(db: PrismaClient, userId: string, args: LogActivityA
     .catch((err) => {
       console.error('[activity] failed to log', args.type, err);
     });
+
+  // Tenant requests run on an interactive transaction. Although activity is
+  // best-effort, the insert must finish before that transaction is allowed to
+  // close; otherwise Prisma rejects the still-pending query with P2028.
+  // Outside a tenant request there is no scope, so the existing fire-and-forget
+  // behaviour is preserved.
+  trackTransactionWork(write);
 }
