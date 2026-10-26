@@ -351,6 +351,28 @@ async function setup() {
 }
 
 describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
+  it('rejects a sequence gap and accepts commands only in contiguous device order', async () => {
+    const f = await setup();
+    const second = {
+      ...f.command,
+      sequence: 2,
+      idempotencyKey: tag('command-2'),
+      leasedReceipt: {
+        ...f.command.leasedReceipt,
+        receiptNumber: f.lease.blockStart + 1,
+      },
+    };
+
+    const gap = await f.replay(second);
+    expect(gap.status).toBe(409);
+    expect(await gap.json()).toEqual({ error: 'SEQUENCE_OUT_OF_ORDER' });
+    expect((await f.counts()).commands).toBe(0);
+
+    expect((await f.replay()).status).toBe(200);
+    expect((await f.replay(second)).status).toBe(200);
+    expect((await f.counts()).commands).toBe(2);
+  });
+
   it('replays identical concurrent Idempotency-Key requests into exactly one sale', async () => {
     const f = await setup();
     const responses = await Promise.all([f.replay(), f.replay()]);

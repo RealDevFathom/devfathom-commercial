@@ -736,6 +736,23 @@ describeIfDatabase('PH-OFF OFF-01 — the append-only command log', () => {
     expect(message).toBe('SEQUENCE_CONFLICT');
   });
 
+  it('allows an operator to explicitly advance the cursor past a lost command', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'log-recovery');
+    await inOrg(ORG_A, async (db) => {
+      await deps.log.skipOfflineCommandSequences(db, scopeOf(fixture), fixture.deviceId, 1, 2);
+      await deps.log.recordOfflineCommand(
+        db,
+        scopeOf(fixture),
+        command(fixture, { sequence: 2, idempotencyKey: `key-${fixture.deviceId}-2` })
+      );
+    });
+
+    const staleRecovery = await refusal(ORG_A, (db) =>
+      deps.log.skipOfflineCommandSequences(db, scopeOf(fixture), fixture.deviceId, 1, 3)
+    );
+    expect(staleRecovery).toBe('SEQUENCE_OUT_OF_ORDER');
+  });
+
   it('the identity of a recorded command is immutable and it is never deleted', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'log-immutable');
     const recorded = await inOrg(ORG_A, (db) =>

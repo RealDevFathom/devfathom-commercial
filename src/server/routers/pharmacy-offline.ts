@@ -35,6 +35,7 @@ import {
   recordOfflineCommand,
   authorizeReplayedCommand,
   settleOfflineCommand,
+  skipOfflineCommandSequences,
 } from '@/lib/pharmacy/offline-command-log';
 import {
   authenticatePharmacyCommand,
@@ -113,6 +114,30 @@ export const pharmacyOfflineRouter = router({
       return { deviceId: device.id, status: device.status };
     })
   ),
+  recoverSequence: adminProcedure
+    .input(
+      branchInput.extend({
+        deviceId: id,
+        expectedSequence: z.number().int().positive(),
+        nextSequence: z.number().int().positive(),
+      })
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const scope = {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+        };
+        await activeBranch(tx as ScopedDb, scope.organizationId, scope.branchId);
+        return skipOfflineCommandSequences(
+          tx as ScopedDb,
+          scope,
+          input.deviceId,
+          input.expectedSequence,
+          input.nextSequence
+        );
+      })
+    ),
 });
 
 class CounterTransportError extends Error {
@@ -287,17 +312,6 @@ export async function replayCounterCommand(
     };
   if (recorded.command.status !== 'PENDING')
     throw new CounterTransportError('command_rejected', 409);
-  const earlier = await db.pharmacyOfflineCommand.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      deviceId,
-      status: 'PENDING',
-      sequence: { lt: command.sequence },
-    },
-    select: { id: true },
-  });
-  if (earlier) throw new CounterTransportError('earlier_command_pending', 409);
   const sale = await createSale(db, scope);
   for (const [index, line] of command.lines.entries()) {
     const medicine = await db.medicine.findFirst({
