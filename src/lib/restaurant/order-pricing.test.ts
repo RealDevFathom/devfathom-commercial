@@ -386,6 +386,49 @@ describe('resolveModifierSnapshots', () => {
       { reason: 'MODIFIER_SELECTION_COUNT' }
     );
   });
+
+  it('accepts selections at the exact bounds across multiple attached groups', async () => {
+    const db = makeDb({
+      modifierOptions: [
+        { id: 'opt_hot', name: 'Hot', priceDelta: D('0'), modifierGroupId: 'grp_sauce' },
+        { id: 'opt_mild', name: 'Mild', priceDelta: D('0'), modifierGroupId: 'grp_sauce' },
+        { id: 'opt_cheese', name: 'Cheese', priceDelta: D('1.00'), modifierGroupId: 'grp_extra' },
+      ],
+      productGroups: {
+        prod_1: [
+          { id: 'grp_sauce', minSelect: 2, maxSelect: 2 },
+          { id: 'grp_extra', minSelect: 1, maxSelect: 1 },
+        ],
+      },
+    });
+
+    await expect(
+      resolveModifierSnapshots(db, 'prod_1', ['opt_cheese', 'opt_hot', 'opt_mild'])
+    ).resolves.toEqual([
+      { modifierOptionId: 'opt_cheese', name: 'Cheese', priceDelta: D('1.00') },
+      { modifierOptionId: 'opt_hot', name: 'Hot', priceDelta: D('0') },
+      { modifierOptionId: 'opt_mild', name: 'Mild', priceDelta: D('0') },
+    ]);
+  });
+
+  it('accepts an empty optional group and an unbounded group', async () => {
+    const db = makeDb({
+      modifierOptions: [
+        { id: 'opt_1', name: 'Olives', priceDelta: D('0.50'), modifierGroupId: 'grp_unbounded' },
+        { id: 'opt_2', name: 'Peppers', priceDelta: D('0.50'), modifierGroupId: 'grp_unbounded' },
+      ],
+      productGroups: {
+        prod_1: [
+          { id: 'grp_optional', maxSelect: 1 },
+          { id: 'grp_unbounded', minSelect: 1 },
+        ],
+      },
+    });
+
+    await expect(
+      resolveModifierSnapshots(db, 'prod_1', ['opt_1', 'opt_2'])
+    ).resolves.toHaveLength(2);
+  });
 });
 
 describe('resolveOrderPricingRefs', () => {
