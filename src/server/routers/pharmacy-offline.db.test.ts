@@ -270,6 +270,13 @@ describeIfDatabase('offline quota stock reservation', () => {
       )
     ).rejects.toThrow('OFFLINE_QUOTA_RESERVES_STOCK');
 
+    const reservedBalance = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockBalance.findFirstOrThrow({
+        where: { organizationId: ORG_A, ...bucketOf(fixture), disposition: 'AVAILABLE' },
+      })
+    );
+    expect(reservedBalance.onHandUnits).toBe(10);
+
     await inOrg(ORG_A, async (db) => {
       await deps.quotas.consumeDeviceLotQuota(db, scopeOf(fixture), {
         deviceId: fixture.deviceId,
