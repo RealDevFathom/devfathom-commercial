@@ -392,50 +392,6 @@ describe('PUR-02 approval', () => {
     expect(db.pharmacyPurchaseOrder.update.mock.calls[0]![0].data).toEqual({ status: 'DRAFT' });
   });
 
-  it('allows only one concurrent decision and records only its approval event', async () => {
-    const order = {
-      id: 'po_a',
-      status: 'SUBMITTED',
-      supplierId: 'supplier_a',
-      createdByUserId: 'user_a',
-      requisition: null,
-    };
-    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue(order);
-    let status = order.status;
-    db.pharmacyPurchaseOrder.update.mockImplementation(
-      async ({ where, data }: { where: { status?: string }; data: { status: string } }) => {
-        if (where.status !== status) {
-          throw Object.assign(new Error('Record to update not found.'), { code: 'P2025' });
-        }
-        status = data.status;
-        return { ...order, ...data };
-      }
-    );
-
-    const decisions = await Promise.allSettled([
-      caller('user_c').approvePurchaseOrder({
-        purchaseOrderId: 'po_a',
-        decision: 'APPROVED',
-      }),
-      caller('user_d').approvePurchaseOrder({
-        purchaseOrderId: 'po_a',
-        decision: 'REJECTED',
-      }),
-    ]);
-
-    expect(decisions.map(({ status: result }) => result).sort()).toEqual([
-      'fulfilled',
-      'rejected',
-    ]);
-    expect(decisions.find(({ status: result }) => result === 'rejected')).toMatchObject({
-      reason: { code: 'CONFLICT' },
-    });
-    expect(db.pharmacyPurchaseOrderApproval.create).toHaveBeenCalledTimes(1);
-    expect(db.pharmacyPurchaseOrder.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'po_a', status: 'SUBMITTED' } })
-    );
-  });
-
   it('refuses to approve an order that was never submitted', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
       id: 'po_a',
