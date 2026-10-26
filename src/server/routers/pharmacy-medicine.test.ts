@@ -82,6 +82,44 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
     expect(db.medicine.create).not.toHaveBeenCalled();
   });
 
+  it('rejects oversized medicine collections before database work', async () => {
+    const strength = { ingredientId: 'ingredient_a', value: 500, unit: 'mg' };
+    const assertion = {
+      field: 'productName',
+      source: 'manual',
+      sourceType: 'USER' as const,
+      retrievedAt: new Date('2026-01-01'),
+      status: 'UNREVIEWED' as const,
+    };
+
+    await expect(
+      caller().createMedicine({
+        productName: 'Medicine',
+        productFamily: 'PHARMACEUTICAL',
+        strengths: Array.from({ length: 21 }, () => strength),
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().createMedicine({
+        productName: 'Medicine',
+        productFamily: 'PHARMACEUTICAL',
+        provenance: Array.from({ length: 21 }, () => assertion),
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(db.ingredient.findFirst).not.toHaveBeenCalled();
+    expect(db.medicine.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized assertion publication before opening a transaction', async () => {
+    await expect(
+      caller().publishAssertions({
+        assertionIds: Array.from({ length: 21 }, (_, index) => `assertion_${index}`),
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
   it('rejects a cross-tenant presentation ID substitution', async () => {
     await expect(
       caller().createPackLevel({

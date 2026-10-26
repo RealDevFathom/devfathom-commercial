@@ -543,8 +543,9 @@ export const pharmacyMedicineRouter = router({
                 })
                 .strict()
             )
+            .max(20)
             .default([]),
-          provenance: z.array(provenance).default([]),
+          provenance: z.array(provenance).max(20).default([]),
           saleable: z.boolean().default(false),
         })
         .strict()
@@ -956,7 +957,11 @@ export const pharmacyMedicineRouter = router({
   ),
 
   publishAssertions: adminProcedure
-    .input(z.object({ assertionIds: z.array(z.string().min(1)).min(1) }).strict())
+    .input(
+      z
+        .object({ assertionIds: z.array(z.string().min(1).max(200)).min(1).max(20) })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {
         const assertionIds = [...new Set(input.assertionIds)];

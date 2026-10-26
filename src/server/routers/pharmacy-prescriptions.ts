@@ -278,11 +278,12 @@ export const pharmacyPrescriptionsRouter = router({
                   medicineId: z.string().min(1),
                   presentationId: z.string().min(1),
                   authorizedCanonicalUnits: z.number().int().positive(),
-                  directions: z.string().trim().min(1),
+                  directions: z.string().trim().min(1).max(2_000),
                 })
                 .strict()
             )
-            .min(1),
+            .min(1)
+            .max(30),
         })
         .strict()
     )

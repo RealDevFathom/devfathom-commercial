@@ -425,6 +425,23 @@ describe('PUR-02 tenant boundaries', () => {
     expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
   });
 
+  it('rejects oversized requisitions before catalog lookups', async () => {
+    await expect(
+      caller().createRequisition({
+        reference: 'REQ-OVERSIZED',
+        lines: Array.from({ length: 101 }, () => ({
+          medicineId: 'medicine_a',
+          packLevelId: 'pack_a',
+          quantityPacks: 1,
+          canonicalUnitsPerPack: 1,
+        })),
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.medicine.findFirst).not.toHaveBeenCalled();
+    expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
+  });
+
   it('rejects a quote line pointing at another requisition’s line', async () => {
     db.pharmacySupplier.findFirst.mockResolvedValue({ id: 'supplier_a' });
     db.pharmacyRequisition.findFirst.mockResolvedValue({

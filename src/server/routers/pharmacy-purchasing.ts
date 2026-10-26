@@ -450,7 +450,8 @@ const purchasingRouter = router({
                 })
                 .strict()
             )
-            .min(1),
+            .min(1)
+            .max(100),
         })
         .strict()
     )

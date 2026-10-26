@@ -184,6 +184,24 @@ describe('prescription capture and private delivery', () => {
     );
   });
 
+  it('rejects oversized prescription lines and directions before storage work', async () => {
+    const input = captureInput('/api/pharmacy/prescription-files/test.png');
+
+    await expect(
+      caller().capture({ ...input, lines: Array.from({ length: 31 }, () => input.lines[0]) })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().capture({
+        ...input,
+        lines: [{ ...input.lines[0], directions: 'x'.repeat(2_001) }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+    expect(mocks.patient).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
   it('allows pharmacists with dispensing capability', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:dispense');
     await expect(upload()).resolves.toHaveProperty('url');
