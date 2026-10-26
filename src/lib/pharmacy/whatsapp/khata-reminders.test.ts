@@ -298,6 +298,30 @@ describe('processDueWhatsAppKhataReminders', () => {
     expect(store.logs).toEqual([]);
   });
 
+  it('fails closed when an explicit English parameter contract is invalid', async () => {
+    const invalidConfig = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sandbox-owner',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN: 'khata_due_en',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN_PARAMETERS: 'name,amount',
+    });
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(invalidConfig);
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: NOW,
+      config: invalidConfig,
+      provider,
+    });
+
+    expect(result).toMatchObject({ configured: true, scanned: 1, skippedConfiguration: 1 });
+    expect(result.configurationErrors).toContain('KHATA_TEMPLATE_EN_NOT_CONFIGURED');
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
   it('allows a fully configured Meta job to use its injected adapter and records acceptance', async () => {
     const metaConfig = readWhatsAppConfig({
       PHARMACY_WHATSAPP_PROVIDER: 'meta',
