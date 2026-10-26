@@ -2,7 +2,7 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { PharmacyInventoryError, planRemovalArrangement } from './inventory';
+import { arrangementFor, PharmacyInventoryError, planRemovalArrangement } from './inventory';
 import type { LedgerScope } from './stock-ledger';
 
 function assertPositive(units: number) {
@@ -365,7 +365,7 @@ export async function dispatchTransfer(
         expiresAt: Date;
       }>
     >(
-      Prisma.sql`SELECT (b."onHandUnits"-COALESCE((SELECT SUM(c."reservedUnits") FROM "pharmacy_supplier_claims" c WHERE c."organizationId"=b."organizationId" AND c."inventoryLotId"=b."inventoryLotId" AND c.status='RESERVED'),0))::int AS "onHandUnits",b."sealedPacks",b."looseUnits",l."unitsPerPack",mb.state::text,mb."expiresAt" FROM "pharmacy_stock_balances" b JOIN "pharmacy_inventory_lots" l ON l.id=b."inventoryLotId" JOIN "pharmacy_manufacturing_batches" mb ON mb.id=l."manufacturingBatchId" WHERE b."organizationId"=${scope.organizationId} AND b."branchId"=${scope.branchId} AND b."inventoryLotId"=${line.sourceLotId} AND b."stockLocationId"=${line.sourceStockLocationId} AND b."disposition"='AVAILABLE' FOR UPDATE OF b`
+      Prisma.sql`SELECT (b."onHandUnits"-COALESCE((SELECT SUM(c."reservedUnits") FROM "pharmacy_supplier_claims" c WHERE c."organizationId"=b."organizationId" AND c."inventoryLotId"=b."inventoryLotId" AND c.status='RESERVED'),0))::int AS "onHandUnits",b."sealedPacks",b."looseUnits",l."unitsPerPack",mb.state::text,mb."expiresAt" FROM "pharmacy_stock_balances" b JOIN "pharmacy_inventory_lots" l ON l."organizationId"=b."organizationId" AND l."branchId"=b."branchId" AND l.id=b."inventoryLotId" JOIN "pharmacy_manufacturing_batches" mb ON mb."organizationId"=l."organizationId" AND mb.id=l."manufacturingBatchId" WHERE b."organizationId"=${scope.organizationId} AND b."branchId"=${scope.branchId} AND b."inventoryLotId"=${line.sourceLotId} AND b."stockLocationId"=${line.sourceStockLocationId} AND b."disposition"='AVAILABLE' FOR UPDATE OF b`
     );
     const balance = balances[0];
     if (!balance || Number(balance.onHandUnits) < line.quantityUnits)

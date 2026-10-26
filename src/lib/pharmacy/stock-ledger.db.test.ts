@@ -517,6 +517,34 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       )
     );
     expect(received.status).toBe('EXCEPTION');
+    const receiptBalances = await inOrg(ORG_A, (db) =>
+      db.pharmacyStockBalance.findMany({
+        where: {
+          OR: [
+            { inventoryLotId: setup.lotId, disposition: 'IN_TRANSIT' },
+            { branchId: destinationBranch, disposition: 'AVAILABLE' },
+          ],
+        },
+      })
+    );
+    expect(receiptBalances).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          inventoryLotId: setup.lotId,
+          disposition: 'IN_TRANSIT',
+          onHandUnits: 10,
+          sealedPacks: 1,
+          looseUnits: 0,
+        }),
+        expect.objectContaining({
+          branchId: destinationBranch,
+          disposition: 'AVAILABLE',
+          onHandUnits: 20,
+          sealedPacks: 2,
+          looseUnits: 0,
+        }),
+      ])
+    );
     await expect(
       inOrg(ORG_A, (db) =>
         deps.operations.receiveTransferLine(
