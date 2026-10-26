@@ -107,6 +107,7 @@ describe('private attachment delivery', () => {
       },
       select: { id: true },
     });
+    expect(mocks.tenantDb).toHaveBeenCalledExactlyOnceWith('org_a', expect.any(Function));
     expect(mocks.getUpload).not.toHaveBeenCalled();
     expect(db.messageAttachment.findFirst).not.toHaveBeenCalled();
   });

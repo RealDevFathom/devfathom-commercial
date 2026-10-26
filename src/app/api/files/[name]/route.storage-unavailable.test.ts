@@ -58,6 +58,8 @@ test('SOP branch denial hides resource even when storage is disabled', async () 
 test('licence evidence denial hides resource even when storage is disabled', async () => {
   m.licence.mockResolvedValue({ id: 'regulatory-profile' });
   expect((await read()).status).toBe(404);
+  expect(m.tenant).toHaveBeenCalledExactlyOnceWith('org-a', expect.any(Function));
+  expect(m.attachment).not.toHaveBeenCalled();
   expect(m.get).not.toHaveBeenCalled();
 });
 test('chat membership denial hides resource even when storage is disabled', async () => {
