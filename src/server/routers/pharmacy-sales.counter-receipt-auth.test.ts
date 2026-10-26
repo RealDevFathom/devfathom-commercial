@@ -364,6 +364,48 @@ describe('counter receipt authorization', () => {
     expect(returnSaleLine).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['refundTender', (caller: Caller) => caller.refundTender(refundInput)],
+    ['returnLine', (caller: Caller) => caller.returnLine(returnInput)],
+  ])(
+    '%s revalidates the canonical capability inside the mutation transaction',
+    async (_name, run) => {
+      const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+      assign(f, ['branch-a']);
+      f.db.user.findUnique
+        .mockResolvedValueOnce({
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: {
+            permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        })
+        .mockResolvedValueOnce({
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: {
+            permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        })
+        .mockResolvedValueOnce({
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: { permissions: [] },
+          permissionOverrides: [],
+        });
+
+      await expect(run(f.caller())).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Counter capability is required.',
+      });
+      expect(f.db.$transaction).toHaveBeenCalledOnce();
+      expect(refundPharmacyTender).not.toHaveBeenCalled();
+      expect(returnSaleLine).not.toHaveBeenCalled();
+    }
+  );
+
   it('rejects status-only completion before opening a transaction', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
