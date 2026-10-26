@@ -20,6 +20,7 @@ describe('accountCodeReference', () => {
     expect(first.map(({ code }) => code)).toEqual([...first.map(({ code }) => code)].sort());
     expect(second).toEqual(first);
     expect(second).not.toBe(first);
+    expect(second.every((row, index) => row !== first[index])).toBe(true);
     expect(Object.isFrozen(first)).toBe(true);
     expect(first.every(Object.isFrozen)).toBe(true);
   });
