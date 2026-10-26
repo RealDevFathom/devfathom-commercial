@@ -37,6 +37,7 @@ describe('login password visibility controls', () => {
 
     fireEvent.change(password, { target: { value: 'correct horse battery staple' } });
 
+    expect(toggle).not.toHaveAttribute('tabindex');
     expect(toggle).toHaveProperty('tabIndex', 0);
     expect(toggle).toHaveProperty('type', 'button');
     expect(password).toHaveProperty('type', 'password');
