@@ -143,6 +143,31 @@ describe('verifyControlledPurchaseWitness', () => {
 });
 
 describe('listGoodsReceiptPinWitnesses', () => {
+  it.each([
+    ['has no named qualified person', null],
+    ['names the current actor', 'receiver'],
+  ])(
+    'does not enumerate profiles when the receipt %s',
+    async (_case, qualifiedPersonUserId) => {
+      const findFirst = vi.fn();
+      const db = {
+        pharmacyGoodsReceipt: {
+          findFirst: vi.fn().mockResolvedValue({ qualifiedPersonUserId }),
+        },
+        restaurantStaffProfile: { findFirst },
+      } as unknown as ScopedDb;
+
+      await expect(
+        listGoodsReceiptPinWitnesses(
+          db,
+          { organizationId: 'org', branchId: 'branch', actorId: 'receiver' },
+          'receipt'
+        )
+      ).resolves.toEqual([]);
+      expect(findFirst).not.toHaveBeenCalled();
+    }
+  );
+
   it('returns only the receipt qualified person assigned to its branch', async () => {
     const findFirst = vi.fn().mockResolvedValue({
       id: 'staff',
