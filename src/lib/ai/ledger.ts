@@ -40,7 +40,7 @@ export async function reserveAIUsage(
   const existing = await db.aiUsage.findUnique({
     where: { organizationId_requestId: { organizationId: input.organizationId, requestId: input.requestId } },
   });
-  if (existing)
+  if (existing && existing.status !== 'CANCELLED')
     return { provider: existing.provider as RoutedAIProvider, model: existing.model, isReplay: true };
 
   const aggregate = await db.aiUsage.aggregate({
@@ -48,26 +48,47 @@ export async function reserveAIUsage(
       organizationId: input.organizationId,
       provider: 'anthropic',
       occurredAt: { gte: monthStart(occurredAt), lte: occurredAt },
-      status: 'COMPLETED',
+      OR: [
+        { status: 'COMPLETED' },
+        { status: 'RESERVED', expiresAt: { gt: occurredAt } },
+      ],
     },
     _sum: { costUsd: true },
   });
   const spent = aggregate._sum.costUsd ?? new Prisma.Decimal(0);
-  // The crossover is based only on completed, persisted usage. In-flight work
-  // has a zero-valued reservation and is not treated as spend.
   const provider: RoutedAIProvider = providerForAnthropicBudget(spent, input.monthlyBudgetUsd);
   const model = DEFAULT_AI_MODELS[provider][input.tier];
-  await db.aiUsage.create({
-    data: {
-      organizationId: input.organizationId,
-      requestId: input.requestId,
-      provider,
-      model,
-      costUsd: new Prisma.Decimal(0),
-      expiresAt: new Date(occurredAt.getTime() + AI_GENERATION_LIMITS.reservationTtlMs),
-      occurredAt,
-    },
+  const price = await db.aiModelPrice.findFirst({
+    where: { provider, model, effectiveFrom: { lte: occurredAt } },
+    orderBy: { effectiveFrom: 'desc' },
   });
+  if (!price) throw new UnknownAIModelPriceError(provider, model);
+  const reservedCostUsd = calculateAIUsageCost(
+    price,
+    AI_GENERATION_LIMITS.maxInputTokensPerStep * AI_GENERATION_LIMITS.maxSteps,
+    AI_GENERATION_LIMITS.maxOutputTokensPerStep * AI_GENERATION_LIMITS.maxSteps
+  );
+  const data = {
+    provider,
+    model,
+    inputTokens: 0,
+    outputTokens: 0,
+    costUsd: reservedCostUsd,
+    status: 'RESERVED' as const,
+    expiresAt: new Date(occurredAt.getTime() + AI_GENERATION_LIMITS.reservationTtlMs),
+    occurredAt,
+    completedAt: null,
+  };
+  if (existing) {
+    await db.aiUsage.update({
+      where: { organizationId_requestId: { organizationId: input.organizationId, requestId: input.requestId } },
+      data,
+    });
+  } else {
+    await db.aiUsage.create({
+      data: { organizationId: input.organizationId, requestId: input.requestId, ...data },
+    });
+  }
   return { provider, model, isReplay: false };
 }
 

@@ -141,6 +141,34 @@ describeIfDatabase('AI ledger database integration', () => {
     });
   });
 
+  it('counts concurrent reservations toward crossover and can reacquire a cancelled attempt', async () => {
+    const [{ withTenantDb }, { cancelAIUsage, reserveAIUsage }] = await Promise.all([
+      import('@/lib/tenancy/scoped-db'),
+      import('./ledger'),
+    ]);
+    const requestIds = [`concurrent-a-${suffix}`, `concurrent-b-${suffix}`];
+    const reserve = (requestId: string) =>
+      withTenantDb(orgB, (db) =>
+        reserveAIUsage(db, {
+          organizationId: orgB,
+          requestId,
+          tier: 'standard',
+          monthlyBudgetUsd: new Prisma.Decimal('3.9'),
+        })
+      );
+
+    const reservations = await Promise.all(requestIds.map(reserve));
+    expect(reservations.map(({ provider }) => provider).sort()).toEqual(['anthropic', 'bedrock']);
+
+    const anthropicIndex = reservations.findIndex(({ provider }) => provider === 'anthropic');
+    const cancelledRequestId = requestIds[anthropicIndex]!;
+    await withTenantDb(orgB, (db) => cancelAIUsage(db, orgB, cancelledRequestId));
+    const retry = await reserve(cancelledRequestId);
+    expect(retry).toEqual(
+      expect.objectContaining({ provider: 'anthropic', isReplay: false })
+    );
+  });
+
   it('has an effective catalog price for every default provider/model pair', async () => {
     const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
     await withTenantDb(orgA, async (db) => {
