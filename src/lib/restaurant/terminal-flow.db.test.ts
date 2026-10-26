@@ -259,7 +259,7 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
     );
   });
 
-  it('returns only active, credentialed operators from the device branch', async () => {
+  it('returns only active, credentialed operators with branch-scoped comp access', async () => {
     const { secret } = await enroll('directory');
     const { token } = await establish(secret);
     await deps.withTenantDb(orgId, (tx) =>
@@ -293,7 +293,9 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
         .sort()
     );
     expect(body.operators.every((operator) => Object.keys(operator).length === 5)).toBe(true);
-    expect(body.operators.every((operator) => operator.canComp === false)).toBe(true);
+    expect(body.operators.find((operator) => operator.staffProfileId === STAFF.A.id)).toMatchObject({
+      canComp: false,
+    });
     expect(JSON.stringify(body)).not.toContain('Other Branch Operator');
     expect(JSON.stringify(body)).not.toContain('Inactive Operator');
     expect(JSON.stringify(body)).not.toContain('Foreign Operator');
