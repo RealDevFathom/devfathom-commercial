@@ -431,7 +431,10 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
     return json({ error: err.message }, 409);
   }
   if (err instanceof OrderCommandError) {
-    return json({ error: err.message }, err.reason === 'ORDER_NOT_FOUND' ? 404 : 400);
+    return json(
+      { error: err.message },
+      err.reason === 'ORDER_NOT_FOUND' ? 404 : err.reason === 'DAY_CLOSED' ? 409 : 400
+    );
   }
   if (err instanceof BillCommandError) {
     const notFound =

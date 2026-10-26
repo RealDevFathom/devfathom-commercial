@@ -680,7 +680,8 @@ async function lockDailyClose(tx: ScopedDb, branchId: string, businessDate: stri
 export async function assertMoneyDayOpen(
   tx: ScopedDb,
   branchId: string,
-  businessDate: Date
+  businessDate: Date,
+  closedError?: () => Error
 ): Promise<void> {
   await lockDailyClose(tx, branchId, businessDate.toISOString().slice(0, 10));
   const close = await tx.restaurantDailyClose.findFirst({
@@ -688,6 +689,7 @@ export async function assertMoneyDayOpen(
     select: { id: true },
   });
   if (close) {
+    if (closedError) throw closedError();
     throw new DailyCloseError(
       'This business day is closed; no money can be posted.',
       'CLOSE_EXISTS'
