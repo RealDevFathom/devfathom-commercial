@@ -225,6 +225,7 @@ describe('retention survives failed deletion', () => {
     const { db, record, table, runtime } = fake();
     table.findMany.mockResolvedValueOnce([record]).mockResolvedValueOnce([]);
     table.findUnique.mockImplementation(async () => ({
+      organizationId: record.organizationId,
       status: 'COMMITTED',
       storageObjectName: record.storageObjectName,
     }));
@@ -235,6 +236,39 @@ describe('retention survives failed deletion', () => {
     });
 
     expect(db.$queryRaw).toHaveBeenCalledOnce();
+    expect(runtime.deleteSource).not.toHaveBeenCalled();
+    expect(table.delete).not.toHaveBeenCalled();
+  });
+
+  it('does not cross the stale snapshot organization boundary', async () => {
+    const { db, record, table, runtime } = fake();
+    record.organizationId = 'org_snapshot';
+    table.findMany.mockResolvedValueOnce([record]).mockResolvedValueOnce([]);
+    table.findUnique.mockImplementation(async ({ where }) =>
+      where.organizationId === 'org_actual'
+        ? {
+            organizationId: 'org_actual',
+            status: 'PENDING_EXTRACTION',
+            storageObjectName: record.storageObjectName,
+          }
+        : null
+    );
+
+    await expect(purgeStaleMenuImports(db, { runtime })).resolves.toEqual({
+      purgedDrafts: 0,
+      deletedSources: 0,
+    });
+
+    expect(db.$queryRaw).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.stringContaining('"organizationId" = ')]),
+      record.id,
+      record.organizationId
+    );
+    expect(table.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: record.id, organizationId: record.organizationId },
+      })
+    );
     expect(runtime.deleteSource).not.toHaveBeenCalled();
     expect(table.delete).not.toHaveBeenCalled();
   });

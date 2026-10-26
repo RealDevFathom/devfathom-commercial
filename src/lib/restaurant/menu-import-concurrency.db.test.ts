@@ -74,25 +74,30 @@ describeIfDatabase('menu import retention concurrency', () => {
         );
         return decided ? result.rows.filter((row) => row.storageObjectName) : result.rows;
       }),
-      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => {
+      findUnique: vi.fn(async ({ where }: { where: { id: string; organizationId: string } }) => {
         const result = await sweepConnection.query(
-          'SELECT status, "storageObjectName" FROM restaurant_menu_imports WHERE id = $1',
-          [where.id]
+          `SELECT "organizationId", status, "storageObjectName"
+             FROM restaurant_menu_imports
+            WHERE id = $1 AND "organizationId" = $2`,
+          [where.id, where.organizationId]
         );
         return result.rows[0] ?? null;
       }),
-      delete: vi.fn(async ({ where }: { where: { id: string } }) => {
-        await sweepConnection.query('DELETE FROM restaurant_menu_imports WHERE id = $1', [
-          where.id,
-        ]);
+      delete: vi.fn(async ({ where }: { where: { id: string; organizationId: string } }) => {
+        await sweepConnection.query(
+          'DELETE FROM restaurant_menu_imports WHERE id = $1 AND "organizationId" = $2',
+          [where.id, where.organizationId]
+        );
       }),
     };
     const db = {
       restaurantMenuImport: table,
-      $queryRaw: async (_strings: TemplateStringsArray, id: string) =>
-        sweepConnection.query('SELECT id FROM restaurant_menu_imports WHERE id = $1 FOR UPDATE', [
-          id,
-        ]),
+      $queryRaw: async (_strings: TemplateStringsArray, id: string, scopedOrganizationId: string) =>
+        sweepConnection.query(
+          `SELECT id FROM restaurant_menu_imports
+            WHERE id = $1 AND "organizationId" = $2 FOR UPDATE`,
+          [id, scopedOrganizationId]
+        ),
       $transaction: async (work: (tx: ScopedDb) => Promise<unknown>) => {
         await sweepConnection.query('BEGIN');
         try {
@@ -107,9 +112,10 @@ describeIfDatabase('menu import retention concurrency', () => {
     };
 
     await commitConnection.query('BEGIN');
-    await commitConnection.query('SELECT id FROM restaurant_menu_imports WHERE id = $1 FOR UPDATE', [
-      importId,
-    ]);
+    await commitConnection.query(
+      'SELECT id FROM restaurant_menu_imports WHERE id = $1 FOR UPDATE',
+      [importId]
+    );
     await commitConnection.query(
       `UPDATE restaurant_menu_imports
           SET status = 'COMMITTED', "committedAt" = now(), "committedById" = 'reviewer'

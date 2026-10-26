@@ -1286,10 +1286,10 @@ export async function purgeStaleMenuImports(
     const deletedSource = await runImportTransaction(db, async (tx) => {
       // Serialize with commit, then recheck the lifecycle state after taking the
       // lock: the initial retention query may have raced with a reviewer.
-      await tx.$queryRaw`SELECT "id" FROM "restaurant_menu_imports" WHERE "id" = ${record.id} FOR UPDATE`;
+      await tx.$queryRaw`SELECT "id" FROM "restaurant_menu_imports" WHERE "id" = ${record.id} AND "organizationId" = ${record.organizationId} FOR UPDATE`;
       const current = await tx.restaurantMenuImport.findUnique({
-        where: { id: record.id },
-        select: { status: true, storageObjectName: true },
+        where: { id: record.id, organizationId: record.organizationId },
+        select: { organizationId: true, status: true, storageObjectName: true },
       });
       if (
         !current ||
@@ -1299,11 +1299,13 @@ export async function purgeStaleMenuImports(
       }
 
       if (current.storageObjectName) {
-        await runtime.deleteSource(record.organizationId, current.storageObjectName);
+        await runtime.deleteSource(current.organizationId, current.storageObjectName);
       }
       // An abandoned draft has no evidentiary value — it records only that
       // somebody uploaded a file and never came back. Pages and lines cascade.
-      await tx.restaurantMenuImport.delete({ where: { id: record.id } });
+      await tx.restaurantMenuImport.delete({
+        where: { id: record.id, organizationId: record.organizationId },
+      });
       purgedDrafts += 1;
       return Boolean(current.storageObjectName);
     });
