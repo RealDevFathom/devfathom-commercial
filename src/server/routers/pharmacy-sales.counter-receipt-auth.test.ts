@@ -246,7 +246,9 @@ describe('counter receipt authorization', () => {
   ])(
     '%s denies users without canonical counter capability before opening a transaction',
     async (_name, run) => {
-      const f = fixture([{ capability: 'pharmacy:orders', effect: 'ALLOW' }]);
+      // Receipt reads still recognize this legacy alias, but stock and money
+      // mutations require the canonical colon capability.
+      const f = fixture([{ capability: 'pharmacy.counter', effect: 'ALLOW' }]);
       assign(f, ['branch-a']);
 
       await expect(run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
