@@ -484,6 +484,20 @@ describeIfDatabase('daily close (real DB)', () => {
         new Date('2026-01-15T12:00:00.000Z') // 04:00:00 in Los Angeles
       )
     ).resolves.toMatchObject({ replayed: false });
+
+    const closeCountAtCutoff = await read((tx) =>
+      tx.restaurantDailyClose.count({
+        where: { branchId: ids.branch, businessDate: utcDate(nextLocalDate) },
+      })
+    );
+    expect(closeCountAtCutoff).toBe(1);
+
+    await read((tx) =>
+      tx.restaurantBranch.update({
+        where: { id: ids.branch },
+        data: { timezone: 'UTC', businessDayCutoff: '00:00' },
+      })
+    );
   });
 
   it('cross-business-date: a D2 refund of a D1 tender lands on D2, leaving D1 unchanged', async () => {
