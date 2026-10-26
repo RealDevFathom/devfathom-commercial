@@ -354,7 +354,6 @@ describe('resolveItemSnapshot', () => {
         publicationId: 'pub_1',
         channel: 'DINE_IN',
         menuItemId: 'mi_1',
-        modifierOptionIds: [],
         at: AT,
       })
     ).rejects.toMatchObject({ reason: 'MODIFIER_SELECTION_COUNT' });
