@@ -167,10 +167,27 @@ suite('owner command centre Khata aging under forced PostgreSQL RLS', () => {
       })
     );
 
+    const fullyBounced = await withTenantDb(orgA, (db) =>
+      readCommandCentre(db, {
+        branchIds: [second.branchId],
+        from: '2026-01-01',
+        to: '2026-01-01',
+      })
+    );
+    const partiallyBounced = await withTenantDb(orgA, (db) =>
+      readCommandCentre(db, {
+        branchIds: [third.branchId],
+        from: '2026-01-01',
+        to: '2026-01-01',
+      })
+    );
+
     // Includes unpaid + partially paid overdue charges and adds full and partial bounced-cheque
     // debt back in.
     // Excludes the future charge and foreign organization's charge. The total is also deliberately
     // above PostgreSQL INTEGER_MAX.
     expect(result.metrics.khataAgingMinor).toBe(2_750_001_000);
+    expect(fullyBounced.metrics.khataAgingMinor).toBe(800);
+    expect(partiallyBounced.metrics.khataAgingMinor).toBe(200);
   });
 });

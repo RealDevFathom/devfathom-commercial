@@ -45,7 +45,7 @@ describe('PH-RPT metric contract', () => {
     expect(sql).not.toContain('SUM(t."amountMinor" - COALESCE(t."changeGivenMinor",0))');
   });
 
-  it('reports overdue Khata principal net of payments and dishonours for selected branches', async () => {
+  it('reports overdue Khata principal net of payments with dishonours reinstated', async () => {
     const queryRaw = vi
       .fn()
       .mockImplementation(async (query: { strings: readonly string[] }) =>
