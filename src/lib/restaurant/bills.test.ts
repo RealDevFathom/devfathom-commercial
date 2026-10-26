@@ -610,6 +610,7 @@ type Deps = {
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
   orders: typeof import('@/lib/restaurant/orders');
   bills: typeof import('./bills');
+  close: typeof import('./daily-close');
 };
 
 let deps: Deps;
@@ -629,7 +630,8 @@ function read<T>(fn: (tx: ScopedDb) => Promise<T>): Promise<T> {
 /** Open a fresh order, add N items (each with a price + optional seat + modifier),
  * and return the order id + item ids. Items are HELD (a billable OPEN order). */
 async function openWithItems(
-  items: Array<{ seat?: number; modifier?: boolean }>
+  items: Array<{ seat?: number; modifier?: boolean }>,
+  now = AT
 ): Promise<{ orderId: string; itemIds: string[]; db: ScopedDb }> {
   const db = deps.createTenantDb(orgId);
   const opened = await deps.orders.openOrder(db, {
@@ -639,7 +641,7 @@ async function openWithItems(
     channel: 'DINE_IN',
     publicationId: ids.publication,
     actor: actor(),
-    now: AT,
+    now,
   });
   const itemIds: string[] = [];
   for (const spec of items) {
@@ -657,11 +659,12 @@ async function openWithItems(
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, orders, bills] = await Promise.all([
+  const [scopedDb, devices, orders, bills, close] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('@/lib/restaurant/devices'),
     import('@/lib/restaurant/orders'),
     import('./bills'),
+    import('./daily-close'),
   ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
@@ -670,6 +673,7 @@ beforeAll(async () => {
     enrollDevice: devices.enrollDevice,
     orders,
     bills,
+    close,
   };
 
   await deps.withPlatformDb((tx) =>
@@ -979,6 +983,46 @@ describeIfDatabase('bills command layer (real DB)', () => {
       tx.restaurantBill.count({ where: { orderId: fresh.orderId } })
     );
     expect(billCount).toBe(2); // the replay created no additional bills
+  });
+
+  it('replays a completed cut after its business day closes', async () => {
+    const businessDate = '2026-08-20';
+    const opened = await openWithItems([{}], new Date(`${businessDate}T18:00:00.000Z`));
+    const cutActor = actor();
+    const command = {
+      orderId: opened.orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' as const },
+      actor: cutActor,
+    };
+    const first = await deps.bills.cutBills(opened.db, command);
+
+    await deps.withTenantDb(orgId, async (tx) => {
+      await deps.bills.settleBill(tx, {
+        billId: first.billIds[0]!,
+        staffProfileId: ids.operator,
+        deviceId,
+        at: new Date(`${businessDate}T19:00:00.000Z`),
+      });
+      await tx.restaurantOrder.update({
+        where: { id: opened.orderId },
+        data: { status: 'CLOSED', closedAt: new Date(`${businessDate}T19:00:00.000Z`) },
+      });
+    });
+    await deps.close.cutClose(opened.db, {
+      branchId: ids.branch,
+      businessDate,
+      actor: actor(),
+    });
+
+    await expect(deps.bills.cutBills(opened.db, command)).resolves.toEqual({
+      orderId: first.orderId,
+      billIds: first.billIds,
+      replayed: true,
+    });
+    expect(
+      await read((tx) => tx.restaurantBill.count({ where: { orderId: opened.orderId } }))
+    ).toBe(1);
   });
 
   it('BY_SEAT groups items into per-seat bills that reconcile to the order total', async () => {

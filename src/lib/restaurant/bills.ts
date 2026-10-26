@@ -630,10 +630,6 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
     await tx.$queryRaw`SELECT id FROM restaurant_orders WHERE id = ${input.orderId} AND "branchId" = ${input.branchId} FOR UPDATE`;
     const order = await loadBillOrder(tx, input.orderId, input.branchId);
 
-    // Share the branch-day lock with daily close. If close wins, this cut is
-    // rejected; if this cut wins, close observes the new OPEN bill.
-    await assertMoneyDayOpen(tx, order.branchId, order.businessDate);
-
     const idem = await beginMoneyIdempotent(tx, input.actor, 'bill.cut');
     if (idem.replay) {
       const recorded = decodeCutResult(idem.resultRef, cutBillsCommand(input));
@@ -653,6 +649,11 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
       const billIds = await liveBillIds(tx, input.orderId, input.branchId);
       return { orderId: input.orderId, billIds, replayed: true };
     }
+
+    // A completed command is immutable historical evidence and remains replayable
+    // after close. Only a genuinely new cut shares the branch-day lock with daily
+    // close: if close wins it is rejected; if this cut wins, close sees its OPEN bill.
+    await assertMoneyDayOpen(tx, order.branchId, order.businessDate);
 
     // Serialize every cut of this order on a key that exists BEFORE any bill does.
     // Locking the bill ROWS is not enough, because the dangerous row is the one that is
