@@ -197,7 +197,10 @@ export default async function PharmacyReceivingPage({
     (selectedReceipt.qualifiedPersonUserId ||
       selectedReceipt.lines.some((line) => line.medicine.controlled))
   );
-  const witnesses = needsWitness ? await caller.controlledWitnesses() : [];
+  const witnesses =
+    needsWitness && selectedReceipt
+      ? await caller.controlledWitnesses({ branchId, goodsReceiptId: selectedReceipt.id })
+      : [];
 
   // ── actions ───────────────────────────────────────────────────────────────
 
@@ -1285,8 +1288,8 @@ function ReceiptDetail({
             receipt.lines.some((line) => line.medicine.controlled) ? (
               <div className="mb-3 grid gap-3 sm:grid-cols-2">
                 <SelectField
-                  emptyHint="No other active user with a dispensing PIN can witness this receipt."
-                  hint="Must be the qualified person named when the receipt was drafted, and cannot be you."
+                  emptyHint="The named qualified person is not available to witness at this branch."
+                  hint="Only the qualified person named when the receipt was drafted can be selected, and it cannot be you."
                   label="Qualified person PIN"
                   name="witnessStaffProfileId"
                   notice={notice}

@@ -12,7 +12,7 @@ vi.mock('@/lib/restaurant/operator-credentials', () => ({
 
 import { can } from '@/lib/abac';
 import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
-import { verifyControlledPurchaseWitness } from './goods-receipt';
+import { listGoodsReceiptPinWitnesses, verifyControlledPurchaseWitness } from './goods-receipt';
 
 const credential = {
   id: 'cred',
@@ -46,6 +46,9 @@ function witnessDb() {
     restaurantOperatorCredential: {
       findFirst: vi.fn(async () => credential),
       update,
+    },
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn(async () => ({ id: 'assignment' })),
     },
   } as unknown as ScopedDb;
   return { db, update };
@@ -118,5 +121,82 @@ describe('verifyControlledPurchaseWitness', () => {
         { goodsReceiptId: 'receipt', staffProfileId: 'staff', pin: '1234' }
       )
     ).resolves.toEqual({ pharmacistId: 'pharmacist' });
+  });
+
+  it('refuses the named pharmacist when they are not assigned to the receipt branch', async () => {
+    const { db, update } = witnessDb();
+    vi.mocked(db.pharmacyBranchAssignment.findFirst).mockResolvedValueOnce(null);
+    vi.mocked(verifyOperatorCredential).mockResolvedValueOnce(true);
+
+    await expect(
+      verifyControlledPurchaseWitness(
+        db,
+        { organizationId: 'org', branchId: 'branch', actorId: 'receiver' },
+        { goodsReceiptId: 'receipt', staffProfileId: 'staff', pin: '1234' }
+      )
+    ).resolves.toEqual({
+      blocked: 'A different qualified person must enter their PIN.',
+    });
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('listGoodsReceiptPinWitnesses', () => {
+  it('returns only the receipt qualified person assigned to its branch', async () => {
+    const findFirst = vi.fn().mockResolvedValue({
+      id: 'staff',
+      displayName: 'Named pharmacist',
+      user: credential.staffProfile.user,
+      credentials: [credential],
+    });
+    const db = {
+      pharmacyGoodsReceipt: {
+        findFirst: vi.fn().mockResolvedValue({ qualifiedPersonUserId: 'pharmacist' }),
+      },
+      restaurantStaffProfile: { findFirst },
+    } as unknown as ScopedDb;
+
+    await expect(
+      listGoodsReceiptPinWitnesses(
+        db,
+        { organizationId: 'org', branchId: 'branch', actorId: 'receiver' },
+        'receipt'
+      )
+    ).resolves.toEqual([{ id: 'staff', name: 'Named pharmacist' }]);
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          userId: 'pharmacist',
+          user: expect.objectContaining({
+            pharmacyBranchAssignments: {
+              some: { organizationId: 'org', branchId: 'branch', active: true },
+            },
+          }),
+        }),
+      })
+    );
+  });
+
+  it('does not enumerate profiles when the receipt belongs to another branch', async () => {
+    const findFirst = vi.fn();
+    const receiptFindFirst = vi.fn().mockResolvedValue(null);
+    const db = {
+      pharmacyGoodsReceipt: { findFirst: receiptFindFirst },
+      restaurantStaffProfile: { findFirst },
+    } as unknown as ScopedDb;
+
+    await expect(
+      listGoodsReceiptPinWitnesses(
+        db,
+        { organizationId: 'org', branchId: 'branch', actorId: 'receiver' },
+        'receipt'
+      )
+    ).resolves.toEqual([]);
+    expect(receiptFindFirst).toHaveBeenCalledWith({
+      where: { id: 'receipt', organizationId: 'org', branchId: 'branch' },
+      select: { qualifiedPersonUserId: true },
+    });
+    expect(findFirst).not.toHaveBeenCalled();
   });
 });

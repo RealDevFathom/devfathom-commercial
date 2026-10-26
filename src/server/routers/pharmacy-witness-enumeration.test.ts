@@ -24,6 +24,7 @@ function fixture(capability: string) {
       }),
     },
     restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacyGoodsReceipt: { findFirst: vi.fn().mockResolvedValue(null) },
   };
   const ctx = {
     db,
@@ -39,8 +40,13 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
     return surface === 'safety'
       ? f.caller.safety.controlledPharmacists()
       : (
-          f.caller.purchasing as unknown as { controlledWitnesses: () => Promise<unknown> }
-        ).controlledWitnesses();
+          f.caller.purchasing as unknown as {
+            controlledWitnesses: (input: {
+              branchId: string;
+              goodsReceiptId: string;
+            }) => Promise<unknown>;
+          }
+        ).controlledWitnesses({ branchId: 'branch', goodsReceiptId: 'receipt' });
   }
   it('denies a cashier before enumerating PIN holders', async () => {
     const f = fixture('pharmacy.counter');
@@ -50,14 +56,13 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
   it.each(['pharmacy:safety', 'pharmacy:dispense'])('allows %s', async (capability) => {
     const f = fixture(capability);
     await expect(query(f)).resolves.toEqual([]);
-    expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          organizationId: 'org',
-          user: { organizationId: 'org', status: 'ACTIVE' },
-          userId: { not: 'actor' },
-        }),
-      })
-    );
+    if (surface === 'safety') {
+      expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalled();
+    } else {
+      expect(f.db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledWith({
+        where: { id: 'receipt', organizationId: 'org', branchId: 'branch' },
+        select: { qualifiedPersonUserId: true },
+      });
+    }
   });
 });

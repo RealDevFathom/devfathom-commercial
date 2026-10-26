@@ -3,13 +3,13 @@ import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import {
+  listGoodsReceiptPinWitnesses,
   listReceivingExceptions,
   postGoodsReceipt,
   resolveReceivingException,
   reverseGoodsReceipt,
   verifyControlledPurchaseWitness,
 } from '@/lib/pharmacy/goods-receipt';
-import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   allocateCentralReceipt,
@@ -1168,21 +1168,27 @@ const purchasingRouter = router({
       }
     }),
 
-  /** Qualified people who can enter a PIN when a controlled receipt is posted. */
-  controlledWitnesses: protectedProcedure.query(async ({ ctx }) => {
-    const actorId = ctx.session?.user?.id;
-    if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    const actor = subjectFromSession(ctx.session!.user);
-    if (
-      !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
-      !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
-    ) {
-      throw new TRPCError({ code: 'FORBIDDEN' });
-    }
-    const organizationId = ctx.entitlements?.organizationId;
-    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    return listControlledPinWitnesses(ctx.db, organizationId, actorId);
-  }),
+  /** The named qualified person who can enter a PIN for this receipt. */
+  controlledWitnesses: protectedProcedure
+    .input(z.object({ branchId, goodsReceiptId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      const actorId = ctx.session?.user?.id;
+      if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const actor = subjectFromSession(ctx.session!.user);
+      if (
+        !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
+        !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
+      ) {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      const organizationId = ctx.entitlements?.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      return listGoodsReceiptPinWitnesses(
+        ctx.db,
+        { organizationId, branchId: input.branchId, actorId },
+        input.goodsReceiptId
+      );
+    }),
 
   /**
    * PUR-04: undo a posting with linked compensating movements. Nothing that was
