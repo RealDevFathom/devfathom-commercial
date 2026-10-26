@@ -86,9 +86,15 @@ describe('/api/pharmacy/print', () => {
   });
 
   it('rejects cross-site, non-JSON, and caller-controlled copy-status POSTs', async () => {
+    const missingOrigin = request();
+    missingOrigin.headers.delete('origin');
+    expect((await POST(missingOrigin)).status).toBe(403);
     const crossSite = request();
     crossSite.headers.set('origin', 'https://attacker.example');
     expect((await POST(crossSite)).status).toBe(403);
+    const crossSiteFetchMetadata = request();
+    crossSiteFetchMetadata.headers.set('sec-fetch-site', 'cross-site');
+    expect((await POST(crossSiteFetchMetadata)).status).toBe(403);
     const nonJson = request();
     nonJson.headers.set('content-type', 'text/plain');
     expect((await POST(nonJson)).status).toBe(403);
