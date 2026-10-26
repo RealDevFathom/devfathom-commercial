@@ -328,6 +328,10 @@ describe('team.getAll and team:view', () => {
 
 /** The lightweight roster is a directory view and must enforce the same denial. */
 describe('team.getRoster and team:view', () => {
+  const rosterQuery = {
+    select: { id: true, name: true, avatar: true, title: true },
+    orderBy: { name: 'asc' },
+  };
   const self = { id: 'user_self', name: 'Me', avatar: null, title: 'Engineer' };
   const colleague = {
     id: 'user_other',
@@ -343,9 +347,7 @@ describe('team.getRoster and team:view', () => {
     expect(mocks.permissions).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'user_self' } })
     );
-    expect(mocks.findMany).toHaveBeenCalledWith(
-      expect.not.objectContaining({ where: expect.anything() })
-    );
+    expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith(rosterQuery);
   });
 
   it.each([
@@ -368,9 +370,10 @@ describe('team.getRoster and team:view', () => {
     mocks.findMany.mockResolvedValue([self]);
 
     await expect(caller(['hr'], 'HR').getRoster()).resolves.toEqual([self]);
-    expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ where: { id: 'user_self' } })
-    );
+    expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith({
+      ...rosterQuery,
+      where: { id: 'user_self' },
+    });
   });
 });
 
