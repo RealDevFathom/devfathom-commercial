@@ -353,6 +353,29 @@ describe('CounterWhatsAppOffer', () => {
     expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).not.toBeChecked();
     expect(onError).not.toHaveBeenCalled();
   });
+
+  it('reports a failed consent save without changing the confirmed state', async () => {
+    const error = new Error('save failed');
+    mocks.mutations.setCustomerWhatsAppOptIn.mockRejectedValue(error);
+    const onSaved = vi.fn();
+    const onError = vi.fn();
+    render(
+      <CounterWhatsAppOffer
+        branchId="branch-a"
+        customerId="customer-a"
+        initialOptIn={true}
+        onSaved={onSaved}
+        onError={onError}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'WhatsApp consent' }));
+
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(error));
+    expect(screen.getByText('Current status: Opted in')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).toBeChecked();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
 });
 
 describe('PharmacyCounterConsole authoritative bill state', () => {
