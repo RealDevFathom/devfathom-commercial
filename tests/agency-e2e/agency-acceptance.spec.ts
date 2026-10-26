@@ -108,7 +108,11 @@ test('Notes is licensed and a created note persists', async ({ page }) => {
   const savedNote = page.locator(`a[href="${notePath}"]`);
   await expect(savedNote).toContainText(title);
   await savedNote.click();
+  await expect(page).toHaveURL((url) => url.pathname === notePath);
   await expect(page.getByDisplayValue(title)).toBeVisible();
+  await expect(page.locator('.ProseMirror')).toContainText(
+    'Persisted by the Agency A7 acceptance flow.'
+  );
 });
 
 test('finance exposes the owned transaction and invoice surface', async ({ page }) => {

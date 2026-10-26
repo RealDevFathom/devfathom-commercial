@@ -9,8 +9,11 @@ const fixture = readFileSync(resolve('tests/agency-e2e/agency-fixture.ts'), 'utf
 
 describe('Agency E2E owned fixture restoration', () => {
   test('licenses Notes for the agency demo package', () => {
-    expect(seed).toContain("['notes', 'Notes', 'Knowledge', '/notes']");
-    expect(seed).toContain("enabled: key !== 'api' && key !== 'webhooks'");
+    expect(seed).toContain("['notes', 'Notes', 'Knowledge', '/notes', true]");
+    expect(seed).toContain("['api', 'API access', 'Developer', '/organization/api', false]");
+    expect(seed).toContain("['webhooks', 'Webhooks', 'Developer', '/organization/webhooks', false]");
+    expect(seed).toContain('update: { enabled }');
+    expect(seed).toMatch(/create: \{[\s\S]*?enabled,[\s\S]*?\}/);
     expect(seed).toMatch(
       /platformPackageModule\.findFirst\([\s\S]*?module: \{ key: 'notes' \}[\s\S]*?if \(!notesLicense\?\.enabled\)/
     );
