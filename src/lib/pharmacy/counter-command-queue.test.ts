@@ -83,6 +83,7 @@ it('composes on HTTP LAN and preserves the command key across persisted replay a
     },
     body: { sequence: 1, idempotencyKey: 'command-1', action: 'CASH_OTC_SALE' },
   });
+  expect(counterReplaySchema.parse(first.body)).toEqual(first.body);
   expect(first.body).not.toHaveProperty('payload');
   expect(first.body).not.toHaveProperty('deviceId');
   expect(counterReplaySchema.safeParse({ ...first.body, payload: command.payload }).success).toBe(
