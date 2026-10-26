@@ -183,6 +183,39 @@ describe('staff CRUD', () => {
     );
   });
 
+  it('limits eligible users and returned profiles to the manager branch scope', async () => {
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValue(false);
+    mocks.staffFindMany.mockResolvedValueOnce([
+      {
+        id: 'staff_manager',
+        primaryBranchId: 'branch_1',
+        jobRoles: [{ branchId: 'branch_1' }],
+        directCapabilityGrants: [],
+      },
+    ]);
+
+    await caller().listEligibleUsers();
+
+    const eligibleProfileWhere = {
+      OR: [
+        { primaryBranchId: { in: ['branch_1'] } },
+        { jobRoles: { some: { branchId: { in: ['branch_1'] } } } },
+        { directCapabilityGrants: { some: { branchId: { in: ['branch_1'] } } } },
+      ],
+    };
+    expect(mocks.userFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_workspace',
+          restaurantStaffProfiles: { some: eligibleProfileWhere },
+        },
+        select: expect.objectContaining({
+          restaurantStaffProfiles: expect.objectContaining({ where: eligibleProfileWhere }),
+        }),
+      })
+    );
+  });
+
   it('creates a staff profile and audits it', async () => {
     const result = await caller().create({ displayName: 'Dana', email: 'Dana@R.com' });
     expect(result).toMatchObject({ id: 'staff_new', email: 'dana@r.com' });
