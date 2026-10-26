@@ -8,6 +8,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { buildCoAuthorizationRecord } from './co-authorization';
+import { assertMoneyDayOpen } from './daily-close';
 import { add, isNegative, money, sub, ZERO } from './money';
 
 /**
@@ -295,6 +296,14 @@ export async function appendMovement(
   tx: ScopedDb,
   input: AppendMovementInput
 ): Promise<{ movementId: string }> {
+  const grain = await tx.restaurantDrawerSession.findUnique({
+    where: { id: input.drawerSessionId },
+    select: { branchId: true, businessDate: true },
+  });
+  if (!grain) {
+    throw new DrawerSessionError('The drawer session does not exist.', 'DRAWER_NOT_FOUND');
+  }
+  await assertMoneyDayOpen(tx, grain.branchId, grain.businessDate);
   await tx.$queryRaw`SELECT id FROM restaurant_drawer_sessions WHERE id = ${input.drawerSessionId} FOR UPDATE`;
   const session = await tx.restaurantDrawerSession.findUnique({
     where: { id: input.drawerSessionId },
@@ -460,6 +469,7 @@ export async function openDrawerSession(
     const businessDate = businessDateToUtcDate(
       resolveBusinessDate(at, branch.timezone, branch.businessDayCutoff)
     );
+    await assertMoneyDayOpen(tx, branch.id, businessDate);
 
     let sessionId: string;
     try {

@@ -70,6 +70,7 @@ type Deps = {
   createTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['createTenantDb'];
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
   drawer: typeof import('./drawer-sessions');
+  dailyClose: typeof import('./daily-close');
 };
 
 let deps: Deps;
@@ -85,19 +86,20 @@ function read<T>(fn: (tx: ScopedDb) => Promise<T>): Promise<T> {
   return deps.withTenantDb(orgId, fn);
 }
 
-async function newDevice(label: string): Promise<string> {
+async function newDevice(label: string, branchId = ids.branch): Promise<string> {
   return deps.withTenantDb(orgId, async (tx) => {
-    const enrolled = await deps.enrollDevice(tx, { branchId: ids.branch, name: label });
+    const enrolled = await deps.enrollDevice(tx, { branchId, name: label });
     return enrolled.device.id;
   });
 }
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, devices, drawer] = await Promise.all([
+  const [scopedDb, devices, drawer, dailyClose] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('@/lib/restaurant/devices'),
     import('./drawer-sessions'),
+    import('./daily-close'),
   ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
@@ -105,6 +107,7 @@ beforeAll(async () => {
     createTenantDb: scopedDb.createTenantDb,
     enrollDevice: devices.enrollDevice,
     drawer,
+    dailyClose,
   };
 
   await deps.withPlatformDb((tx) =>
@@ -166,6 +169,58 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     expect(session?.staffProfileId).toBe(ids.operator);
     expect(session?.movements).toEqual([{ kind: 'OPENING_FLOAT', amount: expect.anything() }]);
     expect(session?.movements[0].amount.toString()).toBe('150');
+  });
+
+  it('rejects drawer sessions and movements on a financially closed day', async () => {
+    const branchId = `branch_closed_${suffix}`;
+    await read((tx) =>
+      tx.restaurantBranch.create({
+        data: { id: branchId, name: 'Closed day', timezone: 'UTC', businessDayCutoff: '00:00' },
+      })
+    );
+    const deviceId = await newDevice('POS-closed-day', branchId);
+    const db = deps.createTenantDb(orgId);
+    await deps.dailyClose.cutClose(db, {
+      branchId,
+      businessDate: '2026-08-19',
+      actor: actor(deviceId),
+    });
+
+    await expect(
+      deps.drawer.openDrawerSession(db, {
+        organizationId: orgId,
+        entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
+        branchId,
+        openingFloat: '50.00',
+        actor: actor(deviceId),
+        now: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
+
+    const drawerSessionId = await read(async (tx) => {
+      const session = await tx.restaurantDrawerSession.create({
+        data: {
+          branchId,
+          deviceId,
+          staffProfileId: ids.operator,
+          businessDate: new Date('2026-08-19T00:00:00.000Z'),
+          status: 'OPEN',
+          openedAt: AT,
+          openingFloat: '0.00',
+        },
+        select: { id: true },
+      });
+      return session.id;
+    });
+    await expect(
+      deps.drawer.recordDrawerAdjustment(db, {
+        drawerSessionId,
+        kind: 'PAID_IN',
+        amount: '10.00',
+        reason: 'late adjustment',
+        actor: actor(deviceId),
+      })
+    ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
   });
 
   it('rejects a second OPEN drawer on the same register', async () => {
