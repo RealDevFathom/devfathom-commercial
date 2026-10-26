@@ -231,8 +231,8 @@ export const financeRouter = router({
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
       const orgId = workspaceId(ctx);
-      const invoice = await ctx.db.invoice.findUnique({
-        where: { organizationId_id: { organizationId: orgId, id: input.id } },
+      const invoice = await ctx.db.invoice.findFirst({
+        where: { organizationId: orgId, id: input.id },
         include: {
           client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
           project: { select: { id: true, name: true } },

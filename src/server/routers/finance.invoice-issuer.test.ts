@@ -24,7 +24,7 @@ import { financeRouter } from './finance';
 function caller() {
   return financeRouter.createCaller({
     db: {
-      invoice: { findUnique: mocks.findInvoice },
+      invoice: { findFirst: mocks.findInvoice },
       organization: { findUniqueOrThrow: mocks.findOrganization },
     },
     entitlements: { organizationId: 'agency-a', enabledModules: [], modules: [] },
@@ -54,7 +54,7 @@ describe('finance.getInvoiceById issuer', () => {
     const invoice = await caller().getInvoiceById({ id: 'invoice-1' });
 
     expect(mocks.findInvoice).toHaveBeenCalledExactlyOnceWith({
-      where: { organizationId_id: { organizationId: 'agency-a', id: 'invoice-1' } },
+      where: { organizationId: 'agency-a', id: 'invoice-1' },
       include: {
         client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
         project: { select: { id: true, name: true } },
@@ -78,12 +78,7 @@ describe('finance.getInvoiceById issuer', () => {
     await expect(caller().getInvoiceById({ id: 'another-tenant-invoice' })).resolves.toBeNull();
 
     expect(mocks.findInvoice).toHaveBeenCalledWith({
-      where: {
-        organizationId_id: {
-          organizationId: 'agency-a',
-          id: 'another-tenant-invoice',
-        },
-      },
+      where: { organizationId: 'agency-a', id: 'another-tenant-invoice' },
       include: expect.any(Object),
     });
     expect(mocks.findOrganization).not.toHaveBeenCalled();
