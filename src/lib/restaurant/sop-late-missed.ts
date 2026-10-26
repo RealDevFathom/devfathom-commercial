@@ -2,6 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import type { Prisma } from '@/generated/prisma/client';
 import type { RestaurantJobContext } from '@/lib/restaurant/job-handlers-core';
 import {
   isQuietHour,
@@ -83,9 +84,11 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 export const SOP_LATE_MISSED_JOB = 'sop.sweepLateMissed';
 
 /** Hard per-tick query and CPU bounds for one tenant's producer work. */
-export const MAX_ESCALATION_POLICIES_PER_TICK = 50;
-export const MAX_ESCALATION_OCCURRENCES_PER_TICK = 100;
+export const MAX_ESCALATION_POLICIES_PER_TICK = 20;
+export const MAX_ESCALATION_OCCURRENCES_PER_TICK = 25;
 export const MAX_ESCALATION_PAIR_EVALUATIONS_PER_TICK = 500;
+
+const ESCALATION_PAGE_INTERVAL_MS = 60_000;
 
 const PayloadSchema = z
   .object({
@@ -128,6 +131,32 @@ export function sopEscalationJobKey(
  * step in the chain to be scheduled.
  */
 export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise<number> {
+  const policyWhere = {
+    active: true,
+    steps: { some: {} },
+  } satisfies Prisma.RestaurantSopEscalationPolicyWhereInput;
+  const occurrenceWhere = {
+    windowEndsAt: { lte: now },
+    status: { in: ['SCHEDULED', 'IN_PROGRESS', 'SUBMITTED', 'LATE', 'MISSED'] },
+    // STOPPED terminates every policy chain, so do not let old terminal rows
+    // consume a bounded occurrence page forever.
+    escalationEvents: { none: { kind: 'STOPPED' } },
+  } satisfies Prisma.RestaurantSopOccurrenceWhereInput;
+  const [policyCount, occurrenceCount] = await Promise.all([
+    db.restaurantSopEscalationPolicy.count({ where: policyWhere }),
+    db.restaurantSopOccurrence.count({ where: occurrenceWhere }),
+  ]);
+  if (policyCount === 0 || occurrenceCount === 0) return 0;
+
+  // Derive a persistent, deterministic odometer from wall-clock minutes rather
+  // than process memory. Occurrence pages advance first; after a complete pass,
+  // the policy page advances. Thus every policy/occurrence page combination is
+  // visited even across restarts and regardless of which worker runs the tick.
+  const tick = Math.floor(now.getTime() / ESCALATION_PAGE_INTERVAL_MS);
+  const occurrencePageCount = Math.ceil(occurrenceCount / MAX_ESCALATION_OCCURRENCES_PER_TICK);
+  const policyPageCount = Math.ceil(policyCount / MAX_ESCALATION_POLICIES_PER_TICK);
+  const occurrencePage = tick % occurrencePageCount;
+  const policyPage = Math.floor(tick / occurrencePageCount) % policyPageCount;
   const policies: Array<{
     id: string;
     scope: 'ORG' | 'BRANCH';
@@ -137,8 +166,9 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
     quietHoursEndMinutes: number | null;
     steps: Array<{ id: string; delayMinutes: number }>;
   }> = await db.restaurantSopEscalationPolicy.findMany({
-    where: { active: true },
+    where: policyWhere,
     orderBy: { id: 'asc' },
+    skip: policyPage * MAX_ESCALATION_POLICIES_PER_TICK,
     take: MAX_ESCALATION_POLICIES_PER_TICK,
     select: {
       id: true,
@@ -157,11 +187,9 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
   let enqueued = 0;
   let evaluatedPairs = 0;
   const occurrences = await db.restaurantSopOccurrence.findMany({
-    where: {
-      windowEndsAt: { lte: now },
-      status: { in: ['SCHEDULED', 'IN_PROGRESS', 'SUBMITTED', 'LATE', 'MISSED'] },
-    },
+    where: occurrenceWhere,
     orderBy: [{ windowEndsAt: 'asc' }, { id: 'asc' }],
+    skip: occurrencePage * MAX_ESCALATION_OCCURRENCES_PER_TICK,
     take: MAX_ESCALATION_OCCURRENCES_PER_TICK,
     select: {
       id: true,
