@@ -51,6 +51,19 @@ const dayFormat = new Intl.DateTimeFormat('en', { dateStyle: 'medium' });
 const day = (value: Date | string) => dayFormat.format(new Date(value));
 const isoDay = (value: Date | string) => new Date(value).toISOString().slice(0, 10);
 
+function provinceCodeForBranch(data: Regulatory, branchId: string) {
+  const branchCode = data.branches.find((branch) => branch.id === branchId)?.provinceCode;
+  if (!branchCode) return '';
+
+  return (
+    data.jurisdictions.find(
+      (jurisdiction) =>
+        jurisdiction.provinceCode === branchCode ||
+        jurisdiction.provinceCode === `PK-${branchCode}`
+    )?.provinceCode ?? ''
+  );
+}
+
 /** A labelled field that shows its own error, or its own hint when there is none. */
 function Field({
   children,
@@ -91,7 +104,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [evidenceRef, setEvidenceRef] = useState('');
   const [provinceCode, setProvinceCode] = useState<string>(
-    initial.jurisdictions[0]?.provinceCode ?? ''
+    provinceCodeForBranch(initial, initial.selectedBranchId ?? '')
   );
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -99,7 +112,10 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const refresh = (nextBranchId = branchId) => {
     void utils.pharmacyOnboarding.regulatory
       .fetch({ branchId: nextBranchId || undefined })
-      .then(setData)
+      .then((next) => {
+        setData(next);
+        setProvinceCode(provinceCodeForBranch(next, next.selectedBranchId ?? ''));
+      })
       .catch(() => setErrors({ form: 'That branch could not be loaded. Try again.' }));
   };
 
@@ -141,6 +157,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
     setBranchId(nextBranchId);
     setErrors({});
     setSaved(null);
+    setProvinceCode(provinceCodeForBranch(data, nextBranchId));
     refresh(nextBranchId);
   };
 
