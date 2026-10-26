@@ -13,6 +13,10 @@ const mocks = vi.hoisted(() => ({
   valuation: vi.fn(),
   margin: vi.fn(),
   leakage: vi.fn(),
+  statements: vi.fn(),
+}));
+vi.mock('@/lib/pharmacy/financial-statements', () => ({
+  financialStatements: mocks.statements,
 }));
 vi.mock('@/lib/pharmacy/finance-reports', async () => ({
   ...(await vi.importActual<typeof import('@/lib/pharmacy/finance-reports')>(
@@ -106,6 +110,15 @@ beforeEach(() => {
       totalMinor: -10,
     },
   ]);
+  mocks.statements.mockResolvedValue({
+    from: new Date(input.from),
+    to: new Date(input.to),
+    page: 1,
+    journal: [],
+    journalCount: 0,
+    accounts: [],
+    cashflow: [],
+  });
 });
 
 type FinanceCaller = ReturnType<typeof caller>;
@@ -278,6 +291,59 @@ describe.each(ledgerCases)(
     });
   }
 );
+
+describe('financial statements boundary', () => {
+  const statementsInput = { ...input, page: 1 };
+
+  it('uses the active server-scoped branch and complete canonical reader result', async () => {
+    const result = await caller().financialStatements(statementsInput);
+    expect(mocks.statements).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ pharmacyBranch: expect.any(Object) }),
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      { from: new Date(input.from), to: new Date(input.to), page: 1 }
+    );
+    expect(result.accounts).toBe((await mocks.statements.mock.results[0].value).accounts);
+    expect(mocks.branchFindFirst).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', id: 'branch_1', active: true },
+      select: { id: true },
+    });
+  });
+
+  it.each(['admin:access', 'reports:operational', 'reports:financial'])(
+    'denies missing %s before ledger reads',
+    async (action) => {
+      mocks.can.mockImplementation(async (_subject, requested) => requested !== action);
+      await expect(caller().financialStatements(statementsInput)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(mocks.statements).not.toHaveBeenCalled();
+    }
+  );
+
+  it('denies missing license, non-owner, mismatched tenant, and inactive branch', async () => {
+    await expect(
+      caller('ADMIN', { session: null }).financialStatements(statementsInput)
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    vi.mocked(hasModule).mockReturnValue(false);
+    await expect(caller().financialStatements(statementsInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    vi.mocked(hasModule).mockReturnValue(true);
+    await expect(caller('EMPLOYEE').financialStatements(statementsInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      caller('ADMIN', {
+        organization: { id: 'other' } as TRPCContext['organization'],
+      }).financialStatements(statementsInput)
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    mocks.branchFindFirst.mockResolvedValue(null);
+    await expect(caller().financialStatements(statementsInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.statements).not.toHaveBeenCalled();
+  });
+});
 
 describe('ledger date and dimension delegation', () => {
   it.each(['line', 'batch', 'product', 'branch'] as const)(
