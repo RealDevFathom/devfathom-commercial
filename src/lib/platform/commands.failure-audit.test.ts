@@ -152,6 +152,20 @@ describe('platform command failure auditing', () => {
     });
   });
 
+  it('keeps ordinary CRM mutations available to sales', async () => {
+    await expect(
+      executePlatformCommand(actor('SALES'), 'crm.opportunity.create', {}, request())
+    ).rejects.not.toMatchObject({ status: 403 });
+
+    expect(state.transactionCalls).toBe(2);
+    expect(state.audits).toHaveLength(1);
+    expect(state.audits[0]).toMatchObject({
+      action: 'crm.opportunity.create',
+      reason: 'Platform command validation failed.',
+      metadata: { outcomeCategory: 'validation_failed' },
+    });
+  });
+
   it('persists validation failure without copying raw input', async () => {
     const secret = 'password=validation-secret';
     await expect(
