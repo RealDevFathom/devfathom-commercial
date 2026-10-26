@@ -55,6 +55,12 @@ describe('assistant tool routing', () => {
         'getOverview',
         'globalSearch',
         'getTeamMember',
+        'searchNotes',
+        'getNote',
+        'createNote',
+        'updateNote',
+        'deleteNote',
+        'setNoteShares',
       ])
         expect(tools).not.toHaveProperty(name);
       expect(tools).toHaveProperty('requestLeave');
