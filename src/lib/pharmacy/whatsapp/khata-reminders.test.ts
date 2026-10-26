@@ -387,14 +387,17 @@ describe('processDueWhatsAppKhataReminders', () => {
     expect(store.logs).toEqual([]);
   });
 
-  it('counts a consented customer skipped during local quiet hours separately', async () => {
+  it.each([
+    ['at the 22:00 start boundary', '2026-10-21T17:00:00.000Z'],
+    ['immediately before the 08:00 end boundary', '2026-10-22T02:59:59.999Z'],
+  ])('counts a consented customer skipped %s separately', async (_label, instant) => {
     store.accounts = [account()];
     store.customers = [customer(true)];
     store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
     const provider = new MockWhatsAppProvider(config);
 
     const result = await processDueWhatsAppKhataReminders({
-      now: new Date('2026-10-21T17:00:00.000Z'), // 22:00 in Asia/Karachi
+      now: new Date(instant),
       config,
       provider,
     });
