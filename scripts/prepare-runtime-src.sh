@@ -18,3 +18,4 @@ rm -rf \
   "$destination_dir/lib/test-support" \
   "$destination_dir/lib/pharmacy/migration/fixtures"
 rm -f "$destination_dir/lib/pharmacy/repeat-purchasing.fixture.sql"
+rm -f "$destination_dir/app/api/trpc/transaction-boundary.real-http.runner.py"
