@@ -83,14 +83,14 @@ function SearchableSelectField({
             aria-invalid={Boolean(fieldError)}
             aria-describedby={fieldError ? errorId : undefined}
             className="flex h-11 w-full items-center justify-between gap-2 rounded-lg border border-border-default bg-card px-3 text-left text-sm outline-none transition hover:bg-surface-sunken focus-visible:border-accent-brand focus-visible:ring-2 focus-visible:ring-accent-brand/15 disabled:cursor-not-allowed disabled:opacity-50"
-          />
+          >
+            <span className={cn('truncate', !selected && 'text-text-muted')}>
+              {selected?.label ?? 'Choose a timezone'}
+            </span>
+            <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-text-muted" />
+          </button>
         }
-      >
-        <span className={cn('truncate', !selected && 'text-text-muted')}>
-          {selected?.label ?? 'Choose a timezone'}
-        </span>
-        <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-text-muted" />
-      </PopoverTrigger>
+      />
       <PopoverContent align="start" className="w-(--anchor-width) min-w-72 p-0">
         <Command value={value}>
           <CommandInput placeholder="Search city or IANA timezone…" autoFocus />

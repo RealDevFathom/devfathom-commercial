@@ -2,7 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor, cleanup } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { GrowthReviewPanel } from './growth-review-panel';
-import type { GrowthView, GrowthReviewInput } from '@/lib/restaurant/growth-review-contract';
+import type { GrowthView } from '@/lib/restaurant/growth-review-contract';
 afterEach(cleanup);
 const view: GrowthView = {
   status: 'READY',
@@ -40,7 +40,7 @@ it.each(['DENIED', 'UNAVAILABLE', 'INSUFFICIENT_DATA', 'INVALID', 'NOT_FOUND', '
   }
 );
 it('preserves edited priority and requires explicit confirmation', async () => {
-  const submit = vi.fn(async (_input: GrowthReviewInput) => ({ status: 'UNAVAILABLE' as const }));
+  const submit = vi.fn(async () => ({ status: 'UNAVAILABLE' as const }));
   render(<GrowthReviewPanel view={view} onReview={submit} />);
   fireEvent.change(screen.getByLabelText('Review priority'), { target: { value: 'HIGH' } });
   fireEvent.click(screen.getByRole('button', { name: 'Approve to draft' }));

@@ -990,8 +990,13 @@ function ScopedPharmacyCounterConsole({
     const row = found[0]!;
     const nextUnit = row.saleUnits[0]?.kind ?? null;
     if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
-      stageRow(row);
-      return;
+      let cancelled = false;
+      queueMicrotask(() => {
+        if (!cancelled) stageRow(row);
+      });
+      return () => {
+        cancelled = true;
+      };
     }
     barcodeAdd.current = null;
     if (!preview?.sufficient || busy) return;
