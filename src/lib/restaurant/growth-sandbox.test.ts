@@ -198,10 +198,10 @@ it.each([' stop ', 'بند'])('withdraws consent for %j and confirms in English 
       idempotencyKey: 'restaurant-growth-stop:' + input.requestId,
     })
   );
-  expect(result.confirmation).toContain(
-    'آپ کو اب واٹس ایپ پر گروتھ پیغامات نہیں ملیں گے۔'
-  );
-  expect(result.confirmation.split('\n')).toHaveLength(2);
+  expect(result.confirmation.split('\n')).toEqual([
+    'You will no longer receive WhatsApp growth messages. Reply START to opt back in.',
+    'آپ کو اب واٹس ایپ پر گروتھ پیغامات نہیں ملیں گے۔ دوبارہ شروع کرنے کے لیے START لکھیں۔',
+  ]);
 });
 it('does not accept an arbitrary inbound message', async () => {
   await expect(
