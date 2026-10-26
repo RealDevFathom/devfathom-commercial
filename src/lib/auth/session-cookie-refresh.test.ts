@@ -27,6 +27,9 @@ describe('JWT session cookie refresh window', () => {
     );
     expect(firstCookies).toContain(SESSION_COOKIE);
     expect(marker).toBeDefined();
+    expect(marker).toContain(`Max-Age=${JWT_SESSION_UPDATE_AGE_SECONDS}`);
+    expect(marker).toContain('HttpOnly');
+    expect(marker).toContain('Secure');
 
     const second = await handleAuthRequest(
       new Request('https://tenant.test/api/auth/session', {
@@ -63,6 +66,26 @@ describe('JWT session cookie refresh window', () => {
     expect(response.headers.getSetCookie()).toHaveLength(3);
   });
 
+  it('suppresses rotation until the exact end of the update window', async () => {
+    const first = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session'),
+      rotatingHandler(),
+      { secret: SECRET, now: 2_000 }
+    );
+    const marker = first.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith('__Secure-authjs.session-updated='))!;
+    const response = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session', {
+        headers: { cookie: marker.split(';', 1)[0]! },
+      }),
+      rotatingHandler(),
+      { secret: SECRET, now: 2_000 + JWT_SESSION_UPDATE_AGE_SECONDS - 1 }
+    );
+
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
   it('does not trust a forged update marker', async () => {
     const response = await handleAuthRequest(
       new Request('https://tenant.test/api/auth/session', {
@@ -73,6 +96,103 @@ describe('JWT session cookie refresh window', () => {
     );
 
     expect(response.headers.getSetCookie()).toContain(SESSION_COOKIE);
+  });
+
+  it('does not trust a marker signed with another secret', async () => {
+    const first = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session'),
+      rotatingHandler(),
+      { secret: 'another-secret', now: 3_000 }
+    );
+    const marker = first.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith('__Secure-authjs.session-updated='))!;
+    const response = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session', {
+        headers: { cookie: marker.split(';', 1)[0]! },
+      }),
+      rotatingHandler(),
+      { secret: SECRET, now: 3_001 }
+    );
+
+    expect(response.headers.getSetCookie()).toContain(SESSION_COOKIE);
+  });
+
+  it('does not suppress rotation outside the session endpoint', async () => {
+    const first = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session'),
+      rotatingHandler(),
+      { secret: SECRET, now: 3_000 }
+    );
+    const marker = first.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith('__Secure-authjs.session-updated='))!;
+    const response = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/callback', {
+        headers: { cookie: marker.split(';', 1)[0]! },
+      }),
+      rotatingHandler(),
+      { secret: SECRET, now: 3_001 }
+    );
+
+    expect(response.headers.getSetCookie()).toContain(SESSION_COOKIE);
+  });
+
+  it('leaves session cookies unchanged when no secret is configured', async () => {
+    const response = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session'),
+      rotatingHandler()
+    );
+
+    expect(response.headers.getSetCookie()).toEqual([SESSION_COOKIE]);
+  });
+
+  it('uses a non-secure marker for a non-secure session cookie', async () => {
+    const sessionCookie =
+      'authjs.session-token=rotated-token; Path=/; Max-Age=28800; HttpOnly; SameSite=Lax';
+    const response = await handleAuthRequest(
+      new Request('http://tenant.test/api/auth/session'),
+      async () => new Response('{}', { headers: { 'set-cookie': sessionCookie } }),
+      { secret: SECRET, now: 3_000 }
+    );
+    const marker = response.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith('authjs.session-updated='));
+
+    expect(marker).toBeDefined();
+    expect(marker).not.toContain('Secure');
+  });
+
+  it('suppresses every chunk of a rotated session cookie', async () => {
+    const chunkedHandler = async () => {
+      const headers = new Headers();
+      headers.append(
+        'set-cookie',
+        '__Secure-authjs.session-token.0=first; Path=/; Secure; HttpOnly; SameSite=Lax'
+      );
+      headers.append(
+        'set-cookie',
+        '__Secure-authjs.session-token.1=second; Path=/; Secure; HttpOnly; SameSite=Lax'
+      );
+      return new Response('{}', { headers });
+    };
+    const first = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session'),
+      chunkedHandler,
+      { secret: SECRET, now: 3_000 }
+    );
+    const marker = first.headers
+      .getSetCookie()
+      .find((cookie) => cookie.startsWith('__Secure-authjs.session-updated='))!;
+    const response = await handleAuthRequest(
+      new Request('https://tenant.test/api/auth/session', {
+        headers: { cookie: marker.split(';', 1)[0]! },
+      }),
+      chunkedHandler,
+      { secret: SECRET, now: 3_001 }
+    );
+
+    expect(response.headers.getSetCookie()).toEqual([]);
   });
 
   it('never suppresses session-cookie deletion', async () => {
