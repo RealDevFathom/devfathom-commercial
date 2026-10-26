@@ -199,7 +199,7 @@ describe('restaurant tax activation router', () => {
     expect(db.restaurantTaxProfileVersion.create).not.toHaveBeenCalled();
   });
 
-  it('returns the original profile for a matching idempotent replay', async () => {
+  it('preserves legacy idempotency hashes when replacement is explicitly disabled', async () => {
     db.restaurantTaxProfileVersion.findUnique.mockResolvedValue({
       id: 'profile_1',
       activationPayloadHash: 'placeholder',
@@ -209,6 +209,7 @@ describe('restaurant tax activation router', () => {
       ...base,
       profileId: 'PK-ICT-RESTAURANT',
       eligibilityConfirmations: ['ictNoRefund', 'ictNoInputTaxCreditOrAdjustment'],
+      replaceOpenProfile: false,
     };
     const payload = {
       branchId: firstInput.branchId,
