@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, memo } from 'react';
+import { useState, useMemo, useCallback, useId, memo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
@@ -489,6 +489,7 @@ const MeetingCard = memo(function MeetingCard({
     setIsEditing(true);
   };
 
+  const editTimeErrorId = useId();
   const hasCompleteEditTimeRange = Boolean(eDate && eStart && eEnd);
   const hasInvalidEditTimeRange =
     hasCompleteEditTimeRange &&
@@ -557,7 +558,7 @@ const MeetingCard = memo(function MeetingCard({
                 onChange={setEStart}
                 aria-label="Start time"
                 aria-invalid={hasInvalidEditTimeRange}
-                aria-describedby={hasInvalidEditTimeRange ? 'edit-meeting-time-error' : undefined}
+                aria-describedby={hasInvalidEditTimeRange ? editTimeErrorId : undefined}
                 className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
@@ -568,13 +569,13 @@ const MeetingCard = memo(function MeetingCard({
                 onChange={setEEnd}
                 aria-label="End time"
                 aria-invalid={hasInvalidEditTimeRange}
-                aria-describedby={hasInvalidEditTimeRange ? 'edit-meeting-time-error' : undefined}
+                aria-describedby={hasInvalidEditTimeRange ? editTimeErrorId : undefined}
                 className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
               />
             </div>
           </div>
           {hasInvalidEditTimeRange && (
-            <p id="edit-meeting-time-error" role="alert" className="text-xs text-destructive">
+            <p id={editTimeErrorId} role="alert" className="text-xs text-destructive">
               {INVALID_MEETING_TIME_MESSAGE}
             </p>
           )}

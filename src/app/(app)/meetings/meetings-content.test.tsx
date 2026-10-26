@@ -222,10 +222,12 @@ describe('MeetingsContent pagination', () => {
     fireEvent.click(screen.getByRole('option', { name: '9:00 AM' }));
 
     expect(screen.getByRole('alert')).toHaveTextContent('End time must be after start time.');
+    const timeError = screen.getByRole('alert');
     expect(screen.getByRole('button', { name: 'Start time' })).toHaveAttribute(
       'aria-describedby',
-      'edit-meeting-time-error'
+      timeError.id
     );
+    expect(timeError.id).toBeTruthy();
     const save = screen.getByRole('button', { name: 'Save' });
     expect(save).toBeDisabled();
     fireEvent.click(save);
