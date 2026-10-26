@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   processPlatformJobs: vi.fn(),
@@ -23,6 +23,10 @@ describe('platform job processor', () => {
     mocks.processPlatformJobs.mockResolvedValue({ processed: 2 });
     mocks.processDueOwnerDigests.mockResolvedValue({ sent: 1 });
     mocks.processDueResignationOffboarding.mockResolvedValue({ offboarded: 1 });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('runs resignation offboarding as part of an authenticated cron request', async () => {
