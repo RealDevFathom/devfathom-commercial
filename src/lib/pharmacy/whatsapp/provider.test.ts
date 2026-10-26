@@ -52,7 +52,7 @@ describe('readWhatsAppConfig', () => {
 
   it('selects meta only when explicitly configured', () => {
     const config = readWhatsAppConfig({ ...ENV, PHARMACY_WHATSAPP_PROVIDER: 'meta' });
-    expect(createWhatsAppProvider(config).name).toBe('meta');
+    expect(createWhatsAppProvider(config)).toBeInstanceOf(MetaWhatsAppProvider);
     expect(readWhatsAppConfig({ PHARMACY_WHATSAPP_PROVIDER: 'twilio' }).provider).toBe('mock');
   });
 
