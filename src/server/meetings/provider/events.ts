@@ -6,6 +6,18 @@ import type { NormalizedMeetingEvent } from './types';
 
 type OccurrenceRef = { id: string; organizationId: string };
 
+function participantIdentityWhere(identity: string) {
+  if (identity.startsWith('usr:')) {
+    return { userId: identity.slice('usr:'.length) };
+  }
+  if (identity.startsWith('gst:')) {
+    return { id: identity.slice('gst:'.length) };
+  }
+
+  // Preserve support for identities created before admission began namespacing them.
+  return { OR: [{ id: identity }, { userId: identity }] };
+}
+
 export async function resolveProviderRoom(roomName: string): Promise<OccurrenceRef | null> {
   return withPlatformDb((db) =>
     db.meetingOccurrence.findUnique({
@@ -48,7 +60,7 @@ async function applyEvent(db: ScopedDb, occurrence: OccurrenceRef, event: Normal
   const grant = await db.meetingOccurrenceParticipant.findFirst({
     where: {
       occurrenceId: occurrence.id,
-      OR: [{ id: event.participantIdentity }, { userId: event.participantIdentity }],
+      ...participantIdentityWhere(event.participantIdentity),
     },
     select: { id: true, userId: true },
   });

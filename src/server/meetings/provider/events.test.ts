@@ -23,7 +23,7 @@ const joined: NormalizedMeetingEvent = {
   providerType: 'participant_joined',
   roomName: 'mtg_random',
   participantId: 'PA-1',
-  participantIdentity: 'grant-1',
+  participantIdentity: 'usr:user-1',
   occurredAt: new Date('2026-08-28T04:00:00Z'),
   payload: { safe: true },
 };
@@ -63,10 +63,41 @@ describe('provider event ingestion', () => {
     await expect(recordAndApplyProviderEvent(occurrence, joined)).resolves.toBe('processed');
     expect(mocks.withTenantDb).toHaveBeenCalledWith('org-1', expect.any(Function));
     expect(createMany).toHaveBeenCalledWith(expect.objectContaining({ skipDuplicates: true }));
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { occurrenceId: 'occ-1', userId: 'user-1' },
+      select: { id: true, userId: true },
+    });
     expect(executeRaw).toHaveBeenCalledTimes(1);
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { processedAt: expect.any(Date) } })
     );
+  });
+
+  it('resolves a namespaced guest identity to its occurrence participant', async () => {
+    await recordAndApplyProviderEvent(occurrence, {
+      ...joined,
+      participantIdentity: 'gst:guest-grant-1',
+    });
+
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { occurrenceId: 'occ-1', id: 'guest-grant-1' },
+      select: { id: true, userId: true },
+    });
+  });
+
+  it('continues to resolve legacy unprefixed participant identities', async () => {
+    await recordAndApplyProviderEvent(occurrence, {
+      ...joined,
+      participantIdentity: 'grant-1',
+    });
+
+    expect(findFirst).toHaveBeenCalledWith({
+      where: {
+        occurrenceId: 'occ-1',
+        OR: [{ id: 'grant-1' }, { userId: 'grant-1' }],
+      },
+      select: { id: true, userId: true },
+    });
   });
 
   it('makes a replay a no-op before any attendance or processed-state write', async () => {
