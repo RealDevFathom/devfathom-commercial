@@ -223,8 +223,9 @@ describe('processDueWhatsAppKhataReminders', () => {
         parameters: ['Khan household', '500.00'],
       },
     ]);
-    expect(store.logs).toHaveLength(1);
-    expect(store.logs[0]).toMatchObject({
+    expect(store.logs).toHaveLength(2);
+    expect(store.logs[0]).toMatchObject({ status: 'IGNORED' });
+    expect(store.logs[1]).toMatchObject({
       kind: 'KHATA_REMINDER',
       direction: 'OUTBOUND',
       status: 'IGNORED',
@@ -254,6 +255,62 @@ describe('processDueWhatsAppKhataReminders', () => {
     expect(result).toMatchObject({ scanned: 1, sent: 0, duplicate: 1 });
     expect(provider.calls).toEqual([]);
     expect(store.logs).toHaveLength(1);
+  });
+
+  it('honors the other legacy epoch bucket overlapping a Karachi week', async () => {
+    const friday = new Date('2026-10-23T08:00:00.000Z');
+    const legacySentAt = new Date('2026-10-20T08:00:00.000Z');
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    store.logs = [
+      {
+        id: 'legacy-log',
+        organizationId: 'org_a',
+        kind: 'KHATA_REMINDER',
+        dedupeKey: `khata:family-1:w${Math.floor(legacySentAt.getTime() / (7 * 86_400_000))}`,
+        createdAt: legacySentAt,
+      },
+    ];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({ now: friday, config, provider });
+
+    expect(result).toMatchObject({ scanned: 1, sent: 0, duplicate: 1 });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toHaveLength(2);
+    expect(store.logs[1]).toMatchObject({ status: 'IGNORED' });
+  });
+
+  it('atomically shares the legacy claim with a concurrently running old worker', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+    const legacyKey = `khata:family-1:w${Math.floor(NOW.getTime() / (7 * 86_400_000))}`;
+
+    const oldWorker = async () => {
+      if (store.logs.some((log) => log.dedupeKey === legacyKey)) return;
+      store.logs.push({
+        id: 'old-worker-log',
+        organizationId: 'org_a',
+        kind: 'KHATA_REMINDER',
+        dedupeKey: legacyKey,
+      });
+      await provider.sendTemplate({
+        to: '923001234567',
+        template: 'khataReminder',
+        parameters: ['Khan household', '500.00'],
+      });
+    };
+
+    await Promise.all([
+      oldWorker(),
+      processDueWhatsAppKhataReminders({ now: NOW, config, provider }),
+    ]);
+
+    expect(provider.calls).toHaveLength(1);
+    expect(store.logs.filter((log) => log.dedupeKey === legacyKey)).toHaveLength(1);
   });
 
   it.each([
@@ -309,7 +366,7 @@ describe('processDueWhatsAppKhataReminders', () => {
       processDueWhatsAppKhataReminders({ now: NOW, config, provider })
     ).resolves.toMatchObject({ scanned: 1, prepared: 1, failed: 0 });
     expect(provider.calls).toHaveLength(1);
-    expect(store.logs[0]).toMatchObject({ customerDayKey: 'khata:customer-1:2026-10-21' });
+    expect(store.logs[1]).toMatchObject({ customerDayKey: 'khata:customer-1:2026-10-21' });
   });
 
   it('does nothing until the reminder template name is configured', async () => {
@@ -343,9 +400,11 @@ describe('reminder text and daily customer dedupe', () => {
       processDueWhatsAppKhataReminders({ now: NOW, config, provider }),
     ]);
     expect(provider.calls).toHaveLength(1);
-    expect(store.logs[0].customerDayKey).toBe('khata:customer-1:2026-10-21');
+    expect(store.logs[1].customerDayKey).toBe('khata:customer-1:2026-10-21');
+    // The compatibility claims also reserve the old worker's weekly keys, so
+    // the losing account remains suppressed until both weekly schemes advance.
     await processDueWhatsAppKhataReminders({
-      now: new Date('2026-10-22T08:00:00Z'),
+      now: new Date('2026-10-29T08:00:00Z'),
       config,
       provider,
     });

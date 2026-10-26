@@ -50,29 +50,35 @@ function karachiWeek(now: Date): string {
   return `${weekYear}-${String(week).padStart(2, '0')}`;
 }
 
-/** Legacy UTC epoch-week claims that can overlap the current Karachi ISO week. */
-function legacyWeekClaims(
+/** The key an old worker would atomically claim for this instant. */
+function legacyWeekKey(familyAccountId: string, now: Date): string {
+  return `khata:${familyAccountId}:w${Math.floor(now.getTime() / WEEK_MS)}`;
+}
+
+/** Legacy keys and UTC bounds overlapping the containing Karachi ISO week. */
+function overlappingLegacyWeek(
   familyAccountId: string,
   now: Date
-): { keys: string[]; weekStart: Date; weekEnd: Date } {
+): { keys: string[]; start: Date; end: Date } {
   const localNow = new Date(now.getTime() + KARACHI_UTC_OFFSET_MS);
   const weekday = localNow.getUTCDay() || 7;
-  const weekStart = new Date(
+  const start = new Date(
     Date.UTC(
       localNow.getUTCFullYear(),
       localNow.getUTCMonth(),
       localNow.getUTCDate() - weekday + 1
     ) - KARACHI_UTC_OFFSET_MS
   );
-  const weekEnd = new Date(weekStart.getTime() + WEEK_MS);
-  const legacyWeeks = new Set([
-    Math.floor(weekStart.getTime() / WEEK_MS),
-    Math.floor((weekEnd.getTime() - 1) / WEEK_MS),
-  ]);
+  const end = new Date(start.getTime() + WEEK_MS);
   return {
-    keys: [...legacyWeeks].map((week) => `khata:${familyAccountId}:w${week}`),
-    weekStart,
-    weekEnd,
+    keys: [
+      ...new Set([
+        Math.floor(start.getTime() / WEEK_MS),
+        Math.floor((end.getTime() - 1) / WEEK_MS),
+      ]),
+    ].map((week) => `khata:${familyAccountId}:w${week}`),
+    start,
+    end,
   };
 }
 
@@ -254,17 +260,49 @@ export async function processDueWhatsAppKhataReminders(
         month: '2-digit',
         day: '2-digit',
       }).format(now);
-      const legacyClaims = legacyWeekClaims(account.familyAccountId, now);
-      const legacyClaim = await db.pharmacyMessageLog.findFirst({
+      // Claim the exact key a pre-migration worker uses before claiming the new
+      // key. Both inserts share this transaction, so the unique constraint
+      // serializes old/new workers during rolling deployment. This temporarily
+      // preserves the legacy Thursday boundary rather than risking two sends.
+      const legacyClaimId = await claimMessageLogInTransaction(db, {
+        organizationId: account.organizationId,
+        direction: 'OUTBOUND',
+        status: 'PENDING',
+        kind: 'KHATA_REMINDER',
+        dedupeKey: legacyWeekKey(account.familyAccountId, now),
+        branchId: account.branchId,
+        customerId: customer.id,
+        patientId: customer.patientId,
+        phoneLast4: phoneLast4(to),
+        templateName: config.templates.khataReminder,
+        dueDate: plan.dueDate,
+      });
+      if (!legacyClaimId) {
+        return {
+          customerId: customer.id,
+          patientId: customer.patientId,
+          to,
+          logId: null,
+          skipReason: undefined,
+        };
+      }
+      await db.pharmacyMessageLog.update({
+        where: { id: legacyClaimId },
+        data: { status: 'IGNORED' },
+      });
+      const overlap = overlappingLegacyWeek(account.familyAccountId, now);
+      const otherLegacyClaim = await db.pharmacyMessageLog.findFirst({
         where: {
           organizationId: account.organizationId,
           kind: 'KHATA_REMINDER',
-          dedupeKey: { in: legacyClaims.keys },
-          createdAt: { gte: legacyClaims.weekStart, lt: legacyClaims.weekEnd },
+          dedupeKey: {
+            in: overlap.keys.filter((key) => key !== legacyWeekKey(account.familyAccountId, now)),
+          },
+          createdAt: { gte: overlap.start, lt: overlap.end },
         },
         select: { id: true },
       });
-      if (legacyClaim) {
+      if (otherLegacyClaim) {
         return {
           customerId: customer.id,
           patientId: customer.patientId,
