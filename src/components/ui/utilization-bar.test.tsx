@@ -7,13 +7,22 @@ describe('UtilizationBar', () => {
   it('uses the visible label as the progressbar accessible name', () => {
     render(<UtilizationBar label="Team utilization" value={72} />);
 
-    expect(screen.getByRole('progressbar', { name: 'Team utilization' })).toHaveValue(72);
+    const progressbar = screen.getByRole('progressbar', { name: 'Team utilization' });
+    const label = screen.getByText('Team utilization');
+
+    expect(progressbar).toHaveAttribute('aria-labelledby', label.id);
+    expect(progressbar).not.toHaveAttribute('aria-label');
+    expect(progressbar).toHaveValue(72);
   });
 
   it('provides a default accessible name when no label is shown', () => {
     render(<UtilizationBar value={40} hidePercent />);
 
-    expect(screen.getByRole('progressbar', { name: 'Utilization' })).toHaveValue(40);
+    const progressbar = screen.getByRole('progressbar', { name: 'Utilization' });
+
+    expect(progressbar).toHaveAttribute('aria-label', 'Utilization');
+    expect(progressbar).not.toHaveAttribute('aria-labelledby');
+    expect(progressbar).toHaveValue(40);
   });
 
   it.each(['', '   '])('provides a default accessible name for an empty label', (label) => {
