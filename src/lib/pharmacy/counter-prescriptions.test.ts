@@ -37,9 +37,11 @@ function counterDb() {
 
 describe('counter prescription organization calendar gate', () => {
   it.each([
+    ['2026-09-30T18:59:59.999Z', false],
+    ['2026-09-30T19:00:00.000Z', true],
     ['2026-10-22T18:59:59.999Z', true],
     ['2026-10-22T19:00:00.000Z', false],
-  ])('reports Pakistan valid-through boundary at %s as %s', async (at, expected) => {
+  ])('reports Pakistan calendar validity at %s as %s', async (at, expected) => {
     const { db, organization } = counterDb();
 
     const panel = await readCounterPatientPanel(db as never, 'org-1', 'patient-1', new Date(at));
