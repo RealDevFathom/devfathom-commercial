@@ -187,6 +187,12 @@ describe('Hotel navigation composition', () => {
     ).map((item) => item.href);
 
     expect(visibleHrefs).not.toContain(MENU_IMPORT);
+    expect(
+      visibleNavigation(
+        { vertical: 'RESTAURANT', enabledModules: ['restaurant-menu'] },
+        'ADMIN'
+      ).map((item) => item.href)
+    ).toContain(MENU_IMPORT);
   });
   it('licenses each entry on its module and opens it on the capability its page checks', () => {
     const entry = (href: string) => navigation.find((n) => n.href === href)!;
