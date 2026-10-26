@@ -45,6 +45,7 @@ function makeDb(overrides: Record<string, unknown> = {}) {
       findFirst: vi.fn(async () => ({ id: 'bill-1', grandTotal: '12.50', tenders: [] })),
     },
     restaurantStaffProfile: { findFirst: vi.fn(async () => ({ id: 'staff-1' })) },
+    $queryRaw: vi.fn(async () => [{ pg_advisory_xact_lock: '' }]),
     $transaction: vi.fn(async (work: (tx: unknown) => unknown) => work(db)),
     ...overrides,
   };
@@ -119,6 +120,7 @@ describe('provider-neutral terminal payments', () => {
     });
 
     expect(applyTenderInTransaction).toHaveBeenCalledOnce();
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
     expect(applyTenderInTransaction).toHaveBeenCalledWith(
       db,
       expect.objectContaining({
