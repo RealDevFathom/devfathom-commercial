@@ -284,6 +284,7 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
         .sort()
     );
     expect(body.operators.every((operator) => Object.keys(operator).length === 5)).toBe(true);
+    expect(body.operators.every((operator) => operator.canComp === false)).toBe(true);
     expect(JSON.stringify(body)).not.toContain('Other Branch Operator');
     expect(JSON.stringify(body)).not.toContain('Inactive Operator');
     expect(JSON.stringify(body)).not.toContain('Foreign Operator');
