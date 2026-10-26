@@ -1,11 +1,17 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const overviewData = vi.hoisted(() => ({ current: null as unknown }));
+const invalidateOverview = vi.hoisted(() => vi.fn());
 const mutations = vi.hoisted(() => ({
   map: new Map<
     string,
-    { mutate: ReturnType<typeof vi.fn>; isPending: boolean; reset: () => void }
+    {
+      mutate: ReturnType<typeof vi.fn>;
+      isPending: boolean;
+      reset: () => void;
+      onSuccess?: () => void;
+    }
   >(),
 }));
 
@@ -24,7 +30,7 @@ vi.mock('next-auth/react', () => ({
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
-    useUtils: () => ({ organizationAdmin: { overview: { invalidate: vi.fn() } } }),
+    useUtils: () => ({ organizationAdmin: { overview: { invalidate: invalidateOverview } } }),
     organizationAdmin: new Proxy(
       {},
       {
@@ -34,7 +40,13 @@ vi.mock('@/lib/trpc', () => ({
               useQuery: () => ({ data: overviewData.current, isLoading: false, error: null }),
             };
           }
-          return { useMutation: () => mutationFor(key) };
+          return {
+            useMutation: (options?: { onSuccess?: () => void }) => {
+              const mutation = mutationFor(key);
+              mutation.onSuccess = options?.onSuccess;
+              return mutation;
+            },
+          };
         },
       }
     ),
@@ -51,6 +63,8 @@ const PHARMACY_DEPARTMENTS = [
 
 beforeEach(() => {
   mutations.map.clear();
+  invalidateOverview.mockReset();
+  invalidateOverview.mockResolvedValue(undefined);
   overviewData.current = {
     organization: {
       id: 'org_ph',
@@ -182,7 +196,7 @@ describe('organization people and access — staff onboarding', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('reconciles Goods-in access with the confirmed grant after refusal or refresh', () => {
+  it('reconciles Goods-in access with the confirmed grant after refusal or refresh', async () => {
     const view = render(<OrganizationAdminContent />);
     const control = screen.getByRole('checkbox', { name: 'Goods-in access' });
 
@@ -192,6 +206,9 @@ describe('organization people and access — staff onboarding', () => {
       granted: true,
     });
     expect(control).not.toBeChecked();
+
+    mutationFor('setMemberGoodsInAccess').onSuccess?.();
+    await waitFor(() => expect(invalidateOverview).toHaveBeenCalledOnce());
 
     const data = overviewData.current as {
       organization: { users: Array<{ permissionOverrides: Array<{ id: string }> }> };
