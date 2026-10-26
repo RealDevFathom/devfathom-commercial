@@ -288,12 +288,9 @@ describe('resolveTerminalEffectiveMenu — POS modifier contract', () => {
         sections: [],
       },
     };
-    const findPublication = vi.fn().mockImplementation(async ({ where }) =>
-      where.OR?.some(
-        (condition: { channels?: { isEmpty?: boolean } }) => condition.channels?.isEmpty === true
-      )
-        ? publication
-        : null
+    const findPublication = vi.fn().mockImplementation(
+      async ({ where }: { where: { OR?: Array<{ channels?: { isEmpty?: boolean } }> } }) =>
+        where.OR?.some((condition) => condition.channels?.isEmpty === true) ? publication : null
     );
     const db = {
       restaurantBranchMenuPublication: { findFirst: findPublication },
