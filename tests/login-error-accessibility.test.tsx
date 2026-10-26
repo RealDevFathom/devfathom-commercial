@@ -20,7 +20,7 @@ function expectCredentialError(
   email: HTMLElement,
   password: HTMLElement,
   alert: HTMLElement,
-  errorId: string,
+  errorId: string
 ) {
   expect(email).toHaveAttribute('aria-invalid', 'true');
   expect(password).toHaveAttribute('aria-invalid', 'true');
