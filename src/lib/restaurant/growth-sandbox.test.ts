@@ -208,16 +208,19 @@ it.each([' stop ', 'STOP', 'ＳＴＯＰ', ' بند '])(
     ]);
   }
 );
-it.each(['subscribe', 'بند کریں', ''])('does not accept inbound message %j', async (text) => {
-  await expect(
-    stopRestaurantGrowthSandbox(
-      h,
-      { branchId: 'b', customerId: 'c1', eventId: input.requestId, text },
-      policy
-    )
-  ).rejects.toMatchObject({ code: 'INVALID' });
-  expect(mocks.consent).not.toHaveBeenCalled();
-});
+it.each(['subscribe', 'بند کریں', '', '   '])(
+  'does not accept inbound message %j',
+  async (text) => {
+    await expect(
+      stopRestaurantGrowthSandbox(
+        h,
+        { branchId: 'b', customerId: 'c1', eventId: input.requestId, text },
+        policy
+      )
+    ).rejects.toMatchObject({ code: 'INVALID' });
+    expect(mocks.consent).not.toHaveBeenCalled();
+  }
+);
 it('diagnostic keeps costs and money unknown and predicates exact receipt lineage', async () => {
   const result = await diagnoseRestaurantGrowthSandbox(
     h,
