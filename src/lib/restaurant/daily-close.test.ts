@@ -12,7 +12,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -429,6 +429,15 @@ beforeAll(async () => {
 });
 
 describeIfDatabase('daily close (real DB)', () => {
+  afterEach(async () => {
+    await read((tx) =>
+      tx.restaurantBranch.update({
+        where: { id: ids.branch },
+        data: { timezone: 'UTC', businessDayCutoff: '00:00' },
+      })
+    );
+  });
+
   it('honors the branch timezone and cutoff when rejecting future dates', async () => {
     const currentBusinessDate = '2026-01-14';
     const nextLocalDate = '2026-01-15';
@@ -491,13 +500,6 @@ describeIfDatabase('daily close (real DB)', () => {
       })
     );
     expect(closeCountAtCutoff).toBe(1);
-
-    await read((tx) =>
-      tx.restaurantBranch.update({
-        where: { id: ids.branch },
-        data: { timezone: 'UTC', businessDayCutoff: '00:00' },
-      })
-    );
   });
 
   it('cross-business-date: a D2 refund of a D1 tender lands on D2, leaving D1 unchanged', async () => {
