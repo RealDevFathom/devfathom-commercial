@@ -609,62 +609,62 @@ export const restaurantSopExecutionRouter = router({
       annotateAudit(ctx, { skipInput: true });
       assertSopDepth(ctx.entitlements, 'sop.waiver');
       try {
-        const [actors, occurrence] = await Promise.all([
-          ctx.db.restaurantStaffProfile.findMany({
-            where: { userId: ctx.session!.user.id, status: 'ACTIVE' },
-            select: { id: true },
-            orderBy: { id: 'asc' },
-            take: 2,
-          }),
-          ctx.db.restaurantSopOccurrence.findUnique({
-            where: { id: input.occurrenceId },
-            select: { branchId: true },
-          }),
-        ]);
-        if (actors.length !== 1 || !occurrence) {
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Waiver authorization failed.' });
-        }
+        return await ctx.db.$transaction(async (tx) => {
+          const [actors, occurrence] = await Promise.all([
+            tx.restaurantStaffProfile.findMany({
+              where: { userId: ctx.session!.user.id, status: 'ACTIVE' },
+              select: { id: true },
+              orderBy: { id: 'asc' },
+              take: 2,
+            }),
+            tx.restaurantSopOccurrence.findUnique({
+              where: { id: input.occurrenceId },
+              select: { branchId: true },
+            }),
+          ]);
+          if (actors.length !== 1 || !occurrence) {
+            throw new TRPCError({ code: 'FORBIDDEN', message: 'Waiver authorization failed.' });
+          }
 
-        const actorStaffProfileId = actors[0]!.id;
-        const validSecret =
-          input.approving.type === 'PIN'
-            ? isValidPinFormat(input.approving.secret)
-            : isValidBadgeFormat(input.approving.secret);
-        if (!validSecret) {
-          return { blocked: 'Waiver authorization failed.' } as const;
-        }
-        const approval = await authenticateOperator(ctx.db, {
-          ...input.approving,
-          now: new Date(),
-        });
-        if (
-          !approval.ok ||
-          approval.staffProfileId === actorStaffProfileId ||
-          !(await staffHasCapability(
-            ctx.db,
-            approval.staffProfileId,
-            occurrence.branchId,
-            'sop:verify'
-          ))
-        ) {
-          // Authentication failures update the durable credential lockout state.
-          // Return (rather than throw) so the request-wide tenant transaction
-          // commits that update; the caller still receives a generic refusal.
-          return { blocked: 'Waiver authorization failed.' } as const;
-        }
+          const actorStaffProfileId = actors[0]!.id;
+          const validSecret =
+            input.approving.type === 'PIN'
+              ? isValidPinFormat(input.approving.secret)
+              : isValidBadgeFormat(input.approving.secret);
+          if (!validSecret) return { blocked: 'Waiver authorization failed.' } as const;
 
-        const result = await waiveOccurrence(ctx.db, {
-          occurrenceId: input.occurrenceId,
-          actorStaffProfileId,
-          approvingStaffProfileId: approval.staffProfileId,
-          reason: input.reason,
+          const approval = await authenticateOperator(tx, {
+            ...input.approving,
+            now: new Date(),
+          });
+          if (
+            !approval.ok ||
+            approval.staffProfileId === actorStaffProfileId ||
+            !(await staffHasCapability(
+              tx,
+              approval.staffProfileId,
+              occurrence.branchId,
+              'sop:verify'
+            ))
+          ) {
+            // Return rather than throw so failed-attempt state commits while the
+            // caller still receives the same generic authorization refusal.
+            return { blocked: 'Waiver authorization failed.' } as const;
+          }
+
+          const result = await waiveOccurrence(tx, {
+            occurrenceId: input.occurrenceId,
+            actorStaffProfileId,
+            approvingStaffProfileId: approval.staffProfileId,
+            reason: input.reason,
+          });
+          annotateAudit(ctx, {
+            targetType: 'RestaurantSopOccurrence',
+            targetId: input.occurrenceId,
+            description: 'Waived SOP occurrence',
+          });
+          return result;
         });
-        annotateAudit(ctx, {
-          targetType: 'RestaurantSopOccurrence',
-          targetId: input.occurrenceId,
-          description: 'Waived SOP occurrence',
-        });
-        return result;
       } catch (err) {
         mapExecutionError(err);
       }

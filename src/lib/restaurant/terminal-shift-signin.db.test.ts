@@ -45,6 +45,7 @@ const DURING_SHIFT = new Date('2026-08-20T12:00:00.000Z');
 type RouteModule = { POST: (request: Request) => Promise<Response> };
 
 type Deps = {
+  createTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['createTenantDb'];
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
   withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
   enrollDevice: (typeof import('@/lib/restaurant/devices'))['enrollDevice'];
@@ -96,6 +97,7 @@ beforeAll(async () => {
   ]);
 
   deps = {
+    createTenantDb: scopedDb.createTenantDb,
     withTenantDb: scopedDb.withTenantDb,
     withPlatformDb: scopedDb.withPlatformDb,
     enrollDevice: devices.enrollDevice,
@@ -175,8 +177,9 @@ describeIfDatabase('shift-aware operator sign-in (real DB)', () => {
       })
     );
 
+    const requestDb = deps.createTenantDb(orgId);
     const attempt = (secret: string) =>
-      deps.withTenantDb(orgId, (tx) =>
+      requestDb.$transaction((tx) =>
         deps.authenticateOperator(tx, {
           staffProfileId: OPEN.id,
           type: 'PIN',

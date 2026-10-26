@@ -44,7 +44,6 @@ vi.mock('@/lib/restaurant/job-roles', () => ({
 
 import { restaurantSopExecutionRouter } from './restaurant-sop-execution';
 import { packageByKey } from '@/lib/vertical-catalog';
-import { router } from '../trpc';
 
 type Delegate = Record<string, ReturnType<typeof vi.fn>>;
 
@@ -173,7 +172,7 @@ describe('strict-zod boundary', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
-  it('suppresses a waiver credential before malformed input can be audited', async () => {
+  it('suppresses a waiver credential from a direct sub-router call before validation', async () => {
     const context = {
       db: db as never,
       entitlements: { organizationId: 'org_1', ...FULL_ENTITLEMENTS },
@@ -186,11 +185,10 @@ describe('strict-zod boundary', () => {
       requestMeta: { ip: null, userAgent: null },
       audit: { detail: {} },
     } as never;
-    const app = router({ restaurantSopExecution: restaurantSopExecutionRouter });
     const recognizableSecret = 'PIN-DO-NOT-AUDIT-819';
 
     await expect(
-      app.createCaller(context).restaurantSopExecution.waive({
+      restaurantSopExecutionRouter.createCaller(context).waive({
         occurrenceId: OCC_ID,
         approving: { staffProfileId: 'b', type: 'PIN', secret: recognizableSecret },
         reason: 'r',
@@ -200,7 +198,7 @@ describe('strict-zod boundary', () => {
 
     expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
       expect.objectContaining({
-        path: 'restaurantSopExecution.waive',
+        path: 'waive',
         input: undefined,
         outcome: 'FAILURE',
       })
@@ -438,6 +436,7 @@ describe('waive', () => {
       })
     ).resolves.toEqual({ blocked: 'Waiver authorization failed.' });
     expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+    expect(db.$transaction).toHaveBeenCalledOnce();
     expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), { skipInput: true });
     expect(mocks.authenticateOperator).toHaveBeenCalledWith(db, {
       staffProfileId: 'invented_staff',
@@ -476,12 +475,7 @@ describe('waive', () => {
         reason: 'test',
       })
     ).resolves.toHaveProperty('blocked');
-    expect(mocks.staffHasCapability).toHaveBeenCalledWith(
-      db,
-      'staff_b',
-      'branch_1',
-      'sop:verify'
-    );
+    expect(mocks.staffHasCapability).toHaveBeenCalledWith(db, 'staff_b', 'branch_1', 'sop:verify');
   });
 
   it.each([[], [{ id: 'staff_a' }, { id: 'staff_duplicate' }]])(
