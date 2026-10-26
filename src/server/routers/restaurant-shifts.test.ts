@@ -1069,6 +1069,31 @@ describe('restaurantShifts.reviewSwap', () => {
     expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
   });
 
+  it('refuses to reassign a shift with recorded clock-out attendance', async () => {
+    const request = await pendingSwap();
+    const shift = state.shifts.find((row) => row.id === 'shift_emp')!;
+    shift.clockedOutAt = at('2026-09-20T17:00:00Z');
+
+    await expect(
+      caller('MANAGER').reviewSwap({
+        requestId: request!.id,
+        branchId: 'branch_1',
+        decision: 'APPROVED',
+        idempotencyKey: 'rv-clock-out',
+      })
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: expect.stringContaining('recorded attendance'),
+    });
+
+    expect(shift).toMatchObject({
+      staffProfileId: 'staff_emp',
+      clockedOutAt: at('2026-09-20T17:00:00Z'),
+    });
+    expect(state.decisions).toHaveLength(0);
+    expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
+  });
+
   it('refuses to reassign a shift with a historical break record', async () => {
     const request = await pendingSwap();
     state.breaks.push({
