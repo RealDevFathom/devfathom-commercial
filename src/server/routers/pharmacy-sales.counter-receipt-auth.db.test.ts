@@ -18,6 +18,10 @@ vi.mock('@/server/audit', async () => {
   const actual = await vi.importActual<typeof import('@/server/audit')>('@/server/audit');
   return { ...actual, recordTrpcAudit: vi.fn() };
 });
+vi.mock('@/lib/pharmacy/sales', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pharmacy/sales')>();
+  return { ...actual, returnSaleLine: vi.fn(actual.returnSaleLine) };
+});
 
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
 const ids = {
@@ -54,6 +58,16 @@ type SalesCaller = {
   counterReceiptFormat: (input: { branchId: string }) => Promise<unknown>;
   counterCart: (input: { branchId: string; saleId: string }) => Promise<unknown>;
   returnHistory: (input: { branchId: string; saleId: string }) => Promise<unknown>;
+  returnLine: (input: {
+    branchId: string;
+    saleLineId: string;
+    lotId: string;
+    canonicalUnits: number;
+    disposition: 'QUARANTINE';
+    reason: string;
+    integrityDecision: string;
+    idempotencyKey: string;
+  }) => Promise<unknown>;
 };
 
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
@@ -440,6 +454,57 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
           api.lookupReceiptByNumber({ branchId: ids.closedBranch, receiptNumber: 7 })
         ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
       }
+    );
+  });
+
+  it('holds the active branch lock until an authorized stock mutation commits', async () => {
+    const { returnSaleLine } = await import('@/lib/pharmacy/sales');
+    let mutationStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      mutationStarted = resolve;
+    });
+    let finishMutation!: () => void;
+    const finish = new Promise<void>((resolve) => {
+      finishMutation = resolve;
+    });
+    vi.mocked(returnSaleLine).mockImplementationOnce(async () => {
+      mutationStarted();
+      await finish;
+      return { returnLine: { id: 'concurrent-return' } } as never;
+    });
+
+    const mutation = act(
+      ids.orgA,
+      { id: ids.cashier, role: 'EMPLOYEE', organizationId: ids.orgA },
+      (api) =>
+        api.returnLine({
+          branchId: ids.branchA,
+          saleLineId: 'line-not-read-by-mock',
+          lotId: 'lot-not-read-by-mock',
+          canonicalUnits: 1,
+          disposition: 'QUARANTINE',
+          reason: 'Concurrency test',
+          integrityDecision: 'Quarantine',
+          idempotencyKey: `branch-lock-${suffix}`,
+        })
+    );
+    await started;
+
+    let deactivationCommitted = false;
+    const deactivation = withTenantDb(ids.orgA, async (tx) => {
+      await tx.pharmacyBranch.update({ where: { id: ids.branchA }, data: { active: false } });
+      deactivationCommitted = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(deactivationCommitted).toBe(false);
+
+    finishMutation();
+    await expect(mutation).resolves.toEqual({ returnLine: { id: 'concurrent-return' } });
+    await deactivation;
+    expect(deactivationCommitted).toBe(true);
+
+    await withTenantDb(ids.orgA, (tx) =>
+      tx.pharmacyBranch.update({ where: { id: ids.branchA }, data: { active: true } })
     );
   });
 });

@@ -468,7 +468,8 @@ async function requireCounterReceiptAccess(
 
 /**
  * Stabilize every row that can revoke counter authority for the rest of the
- * transaction. The order is deliberate (member, role, grants, assignment) so
+ * transaction. The order is deliberate (branch, member, role, grants,
+ * assignment) so
  * concurrent authorization changes cannot deadlock by taking these locks in a
  * different order. PostgreSQL holds the locks until the money/stock transaction
  * commits; an administrator's revocation therefore wins before a later action,
@@ -480,6 +481,14 @@ async function lockCounterReceiptAuthorization(
   userId: string,
   branch: string
 ): Promise<void> {
+  // Branch lifecycle changes take an UPDATE lock on this row. Holding a SHARE
+  // lock makes deactivation wait for an admitted money/stock mutation, while a
+  // deactivation that wins the race is observed by the authorization re-read.
+  await db.$queryRaw(Prisma.sql`
+    SELECT id FROM pharmacy_branches
+    WHERE "organizationId"=${organizationId} AND id=${branch} AND active=true
+    FOR SHARE
+  `);
   await db.$queryRaw(Prisma.sql`
     SELECT id FROM users
     WHERE "organizationId"=${organizationId} AND id=${userId}

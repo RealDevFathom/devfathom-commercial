@@ -328,9 +328,13 @@ describe('counter receipt authorization', () => {
         expect.objectContaining({ branchId: 'branch-a' }),
         expect.objectContaining({ manualCashFallback: true })
       );
-      // Five PostgreSQL row-lock queries protect the member, role grants,
+      // Six PostgreSQL row-lock queries protect the branch, member, role grants,
       // overrides, and exact assignment for each stock/money mutation.
-      expect(f.db.$queryRaw).toHaveBeenCalledTimes(10);
+      expect(f.db.$queryRaw).toHaveBeenCalledTimes(12);
+      const lockSql = f.db.$queryRaw.mock.calls.map(([query]) => query.strings.join('?'));
+      expect(lockSql[0]).toContain('FROM pharmacy_branches');
+      expect(lockSql[0]).toContain('active=true');
+      expect(lockSql[0]).toContain('FOR SHARE');
       expect(f.db.user.findUnique).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { organizationId_id: { id: 'user-a', organizationId: 'org-a' } },
