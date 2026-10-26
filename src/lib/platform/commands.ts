@@ -1882,10 +1882,7 @@ async function runCommand(
       // a stale value, race a transition to SHARED, and silently restore
       // DEDICATED without creating its provisioning job.
       if (data.deploymentMode !== undefined) {
-        await db.$queryRawUnsafe(
-          'SELECT id FROM organizations WHERE id = $1 FOR UPDATE',
-          organizationId
-        );
+        await db.$queryRaw`SELECT id FROM organizations WHERE id = ${organizationId} FOR UPDATE`;
       }
       const before = await db.organization.findUnique({ where: { id: organizationId } });
       if (!before) throw new PlatformSecurityError('Organization not found.', 400);
