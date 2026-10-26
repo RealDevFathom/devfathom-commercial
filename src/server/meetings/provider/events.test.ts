@@ -74,6 +74,14 @@ describe('provider event ingestion', () => {
     );
   });
 
+  it('attributes a namespaced member without an occurrence participant grant', async () => {
+    findFirst.mockResolvedValue(null);
+
+    await recordAndApplyProviderEvent(occurrence, joined);
+
+    expect(executeRaw.mock.calls[0][0].values.slice(3, 5)).toEqual([null, 'user-1']);
+  });
+
   it('resolves a namespaced guest identity to its occurrence participant', async () => {
     await recordAndApplyProviderEvent(occurrence, {
       ...joined,

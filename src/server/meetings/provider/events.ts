@@ -6,21 +6,21 @@ import type { NormalizedMeetingEvent } from './types';
 
 type OccurrenceRef = { id: string; organizationId: string };
 
-function participantIdentityWhere(identity: string) {
+function participantIdentityAttribution(identity: string) {
   const separator = identity.indexOf(':');
   if (separator === -1) {
     // Preserve support for identities created before admission began namespacing them.
-    return { OR: [{ id: identity }, { userId: identity }] };
+    return { where: { OR: [{ id: identity }, { userId: identity }] }, userId: null };
   }
 
   const namespace = identity.slice(0, separator);
   const value = identity.slice(separator + 1);
   if (!value) return null;
   if (namespace === 'usr') {
-    return { userId: value };
+    return { where: { userId: value }, userId: value };
   }
   if (namespace === 'gst') {
-    return { id: value };
+    return { where: { id: value }, userId: null };
   }
 
   return null;
@@ -65,13 +65,14 @@ async function applyEvent(db: ScopedDb, occurrence: OccurrenceRef, event: Normal
     throw new Error('Normalized participant event is missing participant identity');
   }
 
-  const identityWhere = participantIdentityWhere(event.participantIdentity);
-  const grant = identityWhere
+  const attribution = participantIdentityAttribution(event.participantIdentity);
+  const grant = attribution
     ? await db.meetingOccurrenceParticipant.findFirst({
-        where: { occurrenceId: occurrence.id, ...identityWhere },
+        where: { occurrenceId: occurrence.id, ...attribution.where },
         select: { id: true, userId: true },
       })
     : null;
+  const userId = grant?.userId ?? attribution?.userId ?? null;
 
   if (event.type === 'participant.joined') {
     await db.$executeRaw(Prisma.sql`
@@ -80,7 +81,7 @@ async function applyEvent(db: ScopedDb, occurrence: OccurrenceRef, event: Normal
          "providerParticipantSid", "source", "joinedAt", "joinEventId")
       VALUES
         (${crypto.randomUUID()}, ${occurrence.organizationId}, ${occurrence.id}, ${grant?.id ?? null},
-         ${grant?.userId ?? null}, ${event.participantId}, 'WEBHOOK', ${event.occurredAt}, ${event.id})
+         ${userId}, ${event.participantId}, 'WEBHOOK', ${event.occurredAt}, ${event.id})
       ON CONFLICT ("organizationId", "providerParticipantSid") DO UPDATE SET
         "joinedAt" = LEAST("meeting_participant_sessions"."joinedAt", EXCLUDED."joinedAt"),
         "joinEventId" = EXCLUDED."joinEventId",
@@ -96,7 +97,7 @@ async function applyEvent(db: ScopedDb, occurrence: OccurrenceRef, event: Normal
        "providerParticipantSid", "source", "joinedAt", "leftAt", "leaveEventId", "disconnectReason")
     VALUES
       (${crypto.randomUUID()}, ${occurrence.organizationId}, ${occurrence.id}, ${grant?.id ?? null},
-       ${grant?.userId ?? null}, ${event.participantId}, 'WEBHOOK', ${event.occurredAt},
+       ${userId}, ${event.participantId}, 'WEBHOOK', ${event.occurredAt},
        ${event.occurredAt}, ${event.id}, 'provider')
     ON CONFLICT ("organizationId", "providerParticipantSid") DO UPDATE SET
       "leftAt" = GREATEST(COALESCE("meeting_participant_sessions"."leftAt", EXCLUDED."leftAt"), EXCLUDED."leftAt"),
