@@ -309,7 +309,7 @@ describe('restaurant catering lifecycle', () => {
   });
 
   it.each([
-    { portions: '1', unitPrice: '1.9999' },
+    { portions: '1', unitPrice: '1.999' },
     { portions: '1.2345', unitPrice: '1.99' },
   ])('rejects line decimals beyond their durable database scale', async (decimals) => {
     await expect(
@@ -321,6 +321,28 @@ describe('restaurant catering lifecycle', () => {
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(db.restaurantCateringOrderLine.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects excess precision for order totals and extra costs before persistence', async () => {
+    await expect(
+      caller().create({
+        branchId: 'branch_1',
+        eventName: 'Precision test',
+        eventDate: new Date('2026-10-08'),
+        headcount: 1,
+        quotedTotal: '1.001',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().addExtraCost({
+        orderId: 'order_1',
+        kind: 'OTHER',
+        label: 'Precision test',
+        amount: '1.001',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.restaurantCateringOrder.create).not.toHaveBeenCalled();
+    expect(db.restaurantCateringExtraCost.create).not.toHaveBeenCalled();
   });
 });
 
