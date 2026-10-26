@@ -141,6 +141,36 @@ describeIfDatabase('task-label board invariant concurrency', () => {
     await setup!.query(`UPDATE "columns" SET "boardId" = 'board_a' WHERE id = 'column_a'`);
   });
 
+  it('removes existing attachments when their board moves to another organization', async () => {
+    await setup!.query(
+      `INSERT INTO "task_labels" ("id", "organizationId", "taskId", "labelId")
+       VALUES ('board_move_org_tl', 'org', 'task', 'label')`
+    );
+    await setup!.query(
+      `UPDATE "boards" SET "organizationId" = 'other_org' WHERE id = 'board_a'`
+    );
+
+    const remaining = await setup!.query(
+      `SELECT 1 FROM "task_labels" WHERE id = 'board_move_org_tl'`
+    );
+    expect(remaining.rowCount).toBe(0);
+    await setup!.query(`UPDATE "boards" SET "organizationId" = 'org' WHERE id = 'board_a'`);
+  });
+
+  it('preserves attachments on a no-op board organization update', async () => {
+    await setup!.query(
+      `INSERT INTO "task_labels" ("id", "organizationId", "taskId", "labelId")
+       VALUES ('board_noop_tl', 'org', 'task', 'label')`
+    );
+    await setup!.query(`UPDATE "boards" SET "organizationId" = 'org' WHERE id = 'board_a'`);
+
+    const remaining = await setup!.query(
+      `SELECT 1 FROM "task_labels" WHERE id = 'board_noop_tl'`
+    );
+    expect(remaining.rowCount).toBe(1);
+    await setup!.query(`DELETE FROM "task_labels" WHERE id = 'board_noop_tl'`);
+  });
+
   it('serializes attachment with a task move and rejects the stale attachment', async () => {
     await expectRejectedAttachAfterMove(
       `UPDATE "tasks" SET "columnId" = 'column_b' WHERE id = 'task'`
@@ -174,6 +204,13 @@ describeIfDatabase('task-label board invariant concurrency', () => {
   it('serializes attachment with a column move and rejects the stale attachment', async () => {
     await expectRejectedAttachAfterMove(
       `UPDATE "columns" SET "boardId" = 'board_b' WHERE id = 'column_a'`
+    );
+  });
+
+  it('serializes attachment with a board organization move and rejects the stale attachment', async () => {
+    await setup!.query(`UPDATE "columns" SET "boardId" = 'board_a' WHERE id = 'column_a'`);
+    await expectRejectedAttachAfterMove(
+      `UPDATE "boards" SET "organizationId" = 'other_org' WHERE id = 'board_a'`
     );
   });
 });

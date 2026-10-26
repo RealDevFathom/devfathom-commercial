@@ -131,4 +131,28 @@ CREATE TRIGGER columns_task_label_board_guard
 BEFORE UPDATE OF "boardId", "organizationId" ON "columns"
 FOR EACH ROW EXECUTE FUNCTION enforce_task_labels_after_column_move();
 
+CREATE OR REPLACE FUNCTION enforce_task_labels_after_board_move()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- A board organization change invalidates every existing attachment on the
+  -- board because its tasks, columns, and labels still belong to the old
+  -- organization. Remove those links before the board update becomes visible.
+  IF NEW."organizationId" IS DISTINCT FROM OLD."organizationId" THEN
+    DELETE FROM "task_labels" tl
+    USING "tasks" t, "columns" c, "labels" l
+    WHERE t.id = tl."taskId"
+      AND c.id = t."columnId"
+      AND l.id = tl."labelId"
+      AND (c."boardId" = NEW.id OR l."boardId" = NEW.id);
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER boards_task_label_board_guard
+BEFORE UPDATE OF "organizationId" ON "boards"
+FOR EACH ROW EXECUTE FUNCTION enforce_task_labels_after_board_move();
+
 COMMIT;
