@@ -21,13 +21,14 @@ describe('CRM-L01 pharmacy loyalty', () => {
     ['revoked', { granted: true, revokedAt: new Date('2026-10-26T00:00:00.000Z') }],
   ])('refuses to link a retail customer when LOYALTY consent is %s', async (_state, consent) => {
     const lockSale = vi.fn();
+    const findConsent = vi.fn().mockResolvedValue(consent);
     const findSale = vi.fn();
     const upsertCustomer = vi.fn();
     const update = vi.fn();
     const db = {
       $queryRaw: lockSale,
       patientConsent: {
-        findFirst: vi.fn().mockResolvedValue(consent),
+        findFirst: findConsent,
       },
       pharmacySale: { findFirst: findSale, update },
       pharmacyCustomer: { upsert: upsertCustomer },
@@ -39,17 +40,15 @@ describe('CRM-L01 pharmacy loyalty', () => {
         displayName: 'Retail name',
       })
     ).rejects.toEqual(new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED'));
-    expect(db.patientConsent.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {
-          organizationId: 'org-a',
-          patientId: 'patient-a',
-          purpose: 'LOYALTY',
-        },
-        orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
-        select: { granted: true, revokedAt: true },
-      })
-    );
+    expect(findConsent).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        organizationId: 'org-a',
+        patientId: 'patient-a',
+        purpose: 'LOYALTY',
+      },
+      orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
+      select: { granted: true, revokedAt: true },
+    });
     expect(lockSale).not.toHaveBeenCalled();
     expect(findSale).not.toHaveBeenCalled();
     expect(upsertCustomer).not.toHaveBeenCalled();
