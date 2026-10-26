@@ -704,6 +704,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
         lines: [{ ...RECEIPT_LINE, purchaseOrderLineId: undefined }],
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacySupplier.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
