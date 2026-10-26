@@ -44,4 +44,20 @@ describe('UtilizationBar', () => {
     expect(progressbar).not.toHaveAttribute('aria-labelledby');
     expect(progressbar).toHaveValue(40);
   });
+
+  it.each([
+    { value: -1, expectedValue: 0, expectedWidth: '0%' },
+    { value: 72.6, expectedValue: 73, expectedWidth: '72.6%' },
+    { value: 101, expectedValue: 100, expectedWidth: '100%' },
+  ])(
+    'clamps the fill and exposes a rounded value for $value',
+    ({ value, expectedValue, expectedWidth }) => {
+      render(<UtilizationBar value={value} hidePercent />);
+
+      const progressbar = screen.getByRole('progressbar', { name: 'Utilization' });
+
+      expect(progressbar).toHaveValue(expectedValue);
+      expect(progressbar.firstElementChild).toHaveStyle({ width: expectedWidth });
+    },
+  );
 });
