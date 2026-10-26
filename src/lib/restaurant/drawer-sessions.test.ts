@@ -196,6 +196,13 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
         now: AT,
       })
     ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
+    expect(
+      await read((tx) =>
+        tx.restaurantDrawerSession.count({
+          where: { branchId, businessDate: new Date('2026-08-19T00:00:00.000Z') },
+        })
+      )
+    ).toBe(0);
 
     const drawerSessionId = await read(async (tx) => {
       const session = await tx.restaurantDrawerSession.create({
@@ -221,6 +228,9 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
         actor: actor(deviceId),
       })
     ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
+    expect(
+      await read((tx) => tx.restaurantDrawerMovement.count({ where: { drawerSessionId } }))
+    ).toBe(0);
   });
 
   it('serializes opening a drawer against closing the same business day', async () => {
