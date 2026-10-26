@@ -73,6 +73,14 @@ function tasksVisibleTo(viewerId: string): Prisma.TaskWhereInput {
   };
 }
 
+/** Restrict directory-shaped queries to the caller when `team:view` is denied. */
+function teamDirectoryScope(
+  directoryAllowed: boolean,
+  viewerId: string
+): { where?: Prisma.UserWhereInput } {
+  return directoryAllowed ? {} : { where: { id: viewerId } };
+}
+
 export const teamRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {
     const me = ctx.session.user.id;
@@ -84,7 +92,7 @@ export const teamRouter = router({
       db: ctx.db,
     });
     const rows = await ctx.db.user.findMany({
-      ...(directory ? {} : { where: { id: me } }),
+      ...teamDirectoryScope(directory, me),
       select: {
         id: true,
         name: true,
@@ -121,7 +129,7 @@ export const teamRouter = router({
       db: ctx.db,
     });
     return ctx.db.user.findMany({
-      ...(directory ? {} : { where: { id: me } }),
+      ...teamDirectoryScope(directory, me),
       select: {
         id: true,
         name: true,
