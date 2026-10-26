@@ -940,8 +940,16 @@ describeIfDatabase('orders command layer (real DB)', () => {
     await expect(
       deps.orders.openOrder(db, {
         ...input,
-        entitlementLimits: { ...input.entitlementLimits, now: 2 },
+        entitlementLimits: { now: 1, 'pos.orders.monthly': 1000000 },
         now: new Date(AT.getTime() + 1_000),
+      })
+    ).resolves.toMatchObject({ replayed: true });
+
+    await expect(
+      deps.orders.openOrder(db, {
+        ...input,
+        entitlementLimits: { ...input.entitlementLimits, now: 2 },
+        now: new Date(AT.getTime() + 2_000),
       })
     ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
   });

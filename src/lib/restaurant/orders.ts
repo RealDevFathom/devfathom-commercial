@@ -226,7 +226,9 @@ function canonicalOrderPayload(value: unknown): string {
   if (value !== null && typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>)
       .filter(([, item]) => item !== undefined)
-      .sort(([left], [right]) => left.localeCompare(right));
+      // Compare code units directly so the persisted hash cannot vary with the
+      // process locale. Object-key insertion order remains intentionally irrelevant.
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
     return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalOrderPayload(item)}`).join(',')}}`;
   }
   // Match JSON array semantics for an undefined element while keeping the
