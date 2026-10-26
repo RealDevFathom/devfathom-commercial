@@ -63,7 +63,7 @@ describe('isolated Pharmacy browser receipt', () => {
         effectiveFrom: { lte: at },
         OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
       },
-      orderBy: { effectiveFrom: 'desc' },
+      orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
       select: { ntn: true, strn: true },
     });
   });

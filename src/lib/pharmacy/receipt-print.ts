@@ -217,7 +217,7 @@ export async function readPharmacyReceiptTaxIdentity(
       effectiveFrom: { lte: at },
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
     },
-    orderBy: { effectiveFrom: 'desc' },
+    orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
     select: { ntn: true, strn: true },
   });
   return { ntn: profile?.ntn?.trim() || null, strn: profile?.strn?.trim() || null };
