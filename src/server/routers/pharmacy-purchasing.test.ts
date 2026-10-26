@@ -437,19 +437,42 @@ describe('procurement write authorization', () => {
     expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
   });
 
-  it('fails closed when the session actor is no longer active', async () => {
+  it.each([
+    () => caller('inactive_user').createSupplier({ name: 'Unapproved supplier' }),
+    () =>
+      caller('inactive_user').setSupplierAuthorization({
+        supplierId: 'supplier_a',
+        authorized: true,
+      }),
+    () =>
+      caller('inactive_user').createPurchaseOrder({
+        reference: 'PO-INACTIVE-ACTOR',
+        supplierId: 'supplier_a',
+        lines: [ORDER_LINE],
+      }),
+    () =>
+      caller('inactive_user').approvePurchaseOrder({
+        purchaseOrderId: 'po_a',
+        decision: 'APPROVED',
+      }),
+  ])('fails closed when the session actor is no longer active', async (act) => {
     db.user.findUnique.mockResolvedValue(null);
 
-    await expect(
-      caller('inactive_user').createSupplier({ name: 'Unapproved supplier' })
-    ).rejects.toMatchObject({
+    await expect(act()).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
     });
     expect(db.user.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'inactive_user', status: 'ACTIVE' } })
     );
+    expect(db.pharmacySupplier.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
+    expect(db.pharmacySupplier.update).not.toHaveBeenCalled();
+    expect(db.medicine.findFirst).not.toHaveBeenCalled();
+    expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
   });
 });
 
