@@ -153,6 +153,16 @@ describe('Khata router trust and recovery boundary', () => {
       code: 'FORBIDDEN',
       message: 'Pharmacy counter or financial reports permission required.',
     });
+    expect(vi.mocked(can).mock.calls.map(([, action]) => action)).toEqual([
+      'pharmacy:counter',
+      'reports:financial',
+    ]);
+    expect(can).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:dispense',
+      expect.anything(),
+      expect.anything()
+    );
   });
 
   it('uses server tenant, CREDIT settlement and an atomic member charge', async () => {
