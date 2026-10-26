@@ -95,10 +95,16 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
         )
       );
 
-      await expect(mutation).rejects.toThrow(
-        new RegExp(`audit_logs is append-only: ${operation} is forbidden`, 'i')
+      const error = await mutation.catch((cause: unknown) => cause);
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          message: expect.stringMatching(
+            new RegExp(`audit_logs is append-only: ${operation} is forbidden`, 'i')
+          ),
+        })
       );
-      await expect(mutation).rejects.toMatchObject({
+      expect(error).toMatchObject({
         meta: { driverAdapterError: { cause: { originalCode: '55000' } } },
       });
 
