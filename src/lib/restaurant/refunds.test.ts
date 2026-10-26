@@ -1321,15 +1321,19 @@ describeIfDatabase('WHA-333 per-original-tender refund evidence (restricted real
 
   it('serializes concurrent tip-only refunds against the captured tip balance', async () => {
     const { tenderId, paymentId } = await cardTender('2.00');
+    const contenders = ['tip race one', 'tip race two'].map((reason) => ({
+      reason,
+      actor: actor(),
+    }));
     const attempts = await Promise.allSettled(
-      ['tip race one', 'tip race two'].map((reason) =>
+      contenders.map((contender) =>
         deps.refunds.refundTender(deps.createTenantDb(orgId), {
           originalTenderId: tenderId,
           amount: '0.00',
           tipRefundAmount: '1.50',
-          reason,
+          reason: contender.reason,
           approvingStaffProfileId: ids.manager,
-          actor: actor(),
+          actor: contender.actor,
           now: AT,
         })
       )
@@ -1351,11 +1355,17 @@ describeIfDatabase('WHA-333 per-original-tender refund evidence (restricted real
         where: { id: paymentId },
         select: { status: true },
       }),
+      idempotencyKeys: await tx.restaurantMoneyIdempotencyKey.count({
+        where: {
+          key: { in: contenders.map((contender) => contender.actor.idempotencyKey) },
+        },
+      }),
     }));
     expect(evidence.refunds).toHaveLength(1);
     expect(evidence.refunds[0]!.amount.toString()).toBe('0');
     expect(evidence.refunds[0]!.tipRefundAmount.toString()).toBe('1.5');
     expect(evidence.refundEvents).toBe(1);
     expect(evidence.payment?.status).toBe('PARTIALLY_REFUNDED');
+    expect(evidence.idempotencyKeys).toBe(1);
   });
 });
