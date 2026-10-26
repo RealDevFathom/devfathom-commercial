@@ -484,37 +484,44 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     expect(f.movements).toHaveLength(2);
   });
 
-  it('rejects a terminal card refund instead of recording a MOCK reversal', async () => {
-    const f = fixture();
-    const collected = await f.collect({
-      tender: {
-        type: 'CARD',
-        amount: '3860',
-        terminalConfirmation: {
-          configId: 'terminal-config',
-          branchId: 'branch',
-          externalEventId: 'terminal-event',
-          source: 'WEBHOOK',
-          externalReference: 'terminal-payment',
-          providerRef: 'terminal-provider-ref',
+  it.each([
+    ['REFUND', '1000'],
+    ['VOID_REVERSAL', '3860'],
+  ] as const)(
+    'rejects a terminal card %s instead of recording a MOCK reversal',
+    async (kind, amount) => {
+      const f = fixture();
+      const collected = await f.collect({
+        tender: {
+          type: 'CARD',
+          amount: '3860',
+          terminalConfirmation: {
+            configId: 'terminal-config',
+            branchId: 'branch',
+            externalEventId: 'terminal-event',
+            source: 'WEBHOOK',
+            externalReference: 'terminal-payment',
+            providerRef: 'terminal-provider-ref',
+          },
         },
-      },
-    });
+      });
 
-    await expect(
-      refundTender(f.db, {
-        originalTenderId: collected.tenderId,
-        amount: '3860',
-        reason: 'Terminal refund regression',
-        approvingStaffProfileId: 'manager',
-        actor: { ...actor, idempotencyKey: 'terminal-refund' },
-        now: NOW,
-      })
-    ).rejects.toMatchObject({ reason: 'UNSUPPORTED_PAYMENT_PROVIDER' });
+      await expect(
+        refundTender(f.db, {
+          originalTenderId: collected.tenderId,
+          amount,
+          kind,
+          reason: 'Terminal refund regression',
+          approvingStaffProfileId: 'manager',
+          actor: { ...actor, idempotencyKey: 'terminal-refund' },
+          now: NOW,
+        })
+      ).rejects.toMatchObject({ reason: 'UNSUPPORTED_PAYMENT_PROVIDER' });
 
-    expect(f.raw.restaurantPaymentEvent.create).toHaveBeenCalledTimes(1);
-    expect(f.raw.restaurantPayment.update).not.toHaveBeenCalled();
-  });
+      expect(f.raw.restaurantPaymentEvent.create).toHaveBeenCalledTimes(1);
+      expect(f.raw.restaurantPayment.update).not.toHaveBeenCalled();
+    }
+  );
 
   it.each([D1, D2])(
     'rejects a closed bill or collection day %s before tender writes',
