@@ -108,4 +108,21 @@ describe('finance.getFinancialSummary', () => {
 
     expect(summary.totalOutstanding).toEqual([{ currency: 'USD', amount: 9_999_999_999.98 }]);
   });
+
+  it('does not accumulate rounding drift across a large invoice set', async () => {
+    mocks.invoiceFindMany.mockResolvedValue(
+      Array.from({ length: 10_000 }, () => ({
+        total: 9_999_999_999.99,
+        currency: 'USD',
+        payments: [],
+      }))
+    );
+
+    const summary = await caller().getFinancialSummary();
+
+    expect(summary.totalOutstanding).toEqual([
+      { currency: 'USD', amount: 99_999_999_999_900 },
+    ]);
+    expect(summary.outstandingCount).toBe(10_000);
+  });
 });

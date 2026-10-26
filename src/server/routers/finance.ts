@@ -10,6 +10,7 @@ import {
   fromCurrencyGroups,
   diffByCurrency,
   sumByCurrency,
+  sortCurrencies,
   currenciesPresent,
   moneyLabel,
   type CurrencyAmount,
@@ -57,6 +58,17 @@ export const createInvoiceInputSchema = z.object({
 // caller-supplied subtotal/total are never trusted (FIN-01).
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const toCents = (amount: unknown) => Math.round(Number(amount) * 100);
+
+// Values read from Decimal(12,2) columns have at most two fractional digits.
+// Parse those digits directly so large invoice sets can be accumulated as bigint
+// cents without crossing Number.MAX_SAFE_INTEGER before the API is serialized.
+const decimalToCents = (amount: unknown): bigint => {
+  const match = String(amount).match(/^(-?)(\d+)(?:\.(\d{1,2}))?$/);
+  if (!match) throw new Error(`Invalid stored money value: ${String(amount)}`);
+  const [, sign, whole, fraction = ''] = match;
+  const cents = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+  return sign === '-' ? -cents : cents;
+};
 
 // IMP-FIN-04: money is Decimal(12,2), so a partial payment can legitimately pay an
 // invoice off to the exact cent. Compare paid-vs-total with a half-cent tolerance
@@ -849,19 +861,26 @@ export const financeRouter = router({
 
     const monthlyIncome = fromCurrencyGroups(monthlyIncomeG, 'amount');
     const yearlyIncome = fromCurrencyGroups(yearlyIncomeG, 'amount');
-    const totalOutstanding = sumByCurrency(
-      outstandingInvoices.map((invoice) => {
-        // Both columns are Decimal(12,2). Do the subtraction in integer cents so
-        // multiple payments cannot introduce binary floating-point drift.
-        const amountPaidCents = invoice.payments.reduce(
-          (sum, payment) => sum + toCents(payment.amount),
-          0
-        );
-        return {
-          currency: invoice.currency,
-          amount: (toCents(invoice.total) - amountPaidCents) / 100,
-        };
-      })
+    const outstandingCents = new Map<string, bigint>();
+    for (const invoice of outstandingInvoices) {
+      const amountPaidCents = invoice.payments.reduce(
+        (sum, payment) => sum + decimalToCents(payment.amount),
+        0n
+      );
+      outstandingCents.set(
+        invoice.currency,
+        (outstandingCents.get(invoice.currency) ?? 0n) +
+          decimalToCents(invoice.total) -
+          amountPaidCents
+      );
+    }
+    const totalOutstanding = sortCurrencies(
+      Array.from(outstandingCents, ([currency, cents]) => ({
+        currency,
+        // CurrencyAmount is the public number-based DTO. Keep the calculation
+        // exact through aggregation, converting only at this serialization edge.
+        amount: Number(cents) / 100,
+      }))
     );
 
     // FIN-05: recurring expenses are never posted as transactions, so burn and
