@@ -74,6 +74,37 @@ describe('pure rollup calculations', () => {
     expect(total.voidTotal.toString()).toBe('9.99');
   });
 
+  it('reports a delivery-fee-only refund without reducing net sales or refundTotal', () => {
+    const total = computeReconciledFinancials({
+      bills: [
+        {
+          status: 'SETTLED',
+          subtotal: D('100.00'),
+          deliveryFeeTotal: D('12.00'),
+          taxTotal: D('7.00'),
+          serviceChargeTotal: D('3.00'),
+          compTotal: D('0'),
+          discountTotal: D('0'),
+          grandTotal: D('122.00'),
+        },
+      ],
+      tenders: [],
+      refunds: [
+        {
+          amount: D('12.00'),
+          taxRefundAmount: D('0'),
+          serviceChargeRefundAmount: D('0'),
+          deliveryFeeRefundAmount: D('12.00'),
+        },
+      ],
+      drawers: [],
+    });
+
+    expect(total.netSales.toString()).toBe('100');
+    expect(total.refundTotal.toString()).toBe('0');
+    expect(total.deliveryFeeRefunds.toString()).toBe('12');
+  });
+
   it('projects deterministic product item mix from snapshot prices and non-voided inputs', () => {
     const result = computeItemMix([
       {
