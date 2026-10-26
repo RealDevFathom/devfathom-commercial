@@ -244,7 +244,8 @@ describe('POST browser enrollment', () => {
     const response = await POST(
       request(
         'authjs.session-token.0=local-first; authjs.session-token.1=local-second; ' +
-          '__Secure-authjs.session-token.0=secure-first; authjs.session-token.1=duplicate; ' +
+          '__Secure-authjs.session-token.0=secure-first; ' +
+          '__Secure-authjs.session-token.12=secure-last; authjs.session-token.1=duplicate; ' +
           'authjs.session-token.invalid=preserved; authjs.session-token.2; ' +
           'unrelated-cookie=preserved'
       )
@@ -255,6 +256,7 @@ describe('POST browser enrollment', () => {
       'authjs.session-token.0',
       'authjs.session-token.1',
       '__Secure-authjs.session-token.0',
+      '__Secure-authjs.session-token.12',
     ]) {
       const deletion = cookies.find((cookie) => cookie.startsWith(`${name}=`));
       expect(deletion).toContain('Max-Age=0');
