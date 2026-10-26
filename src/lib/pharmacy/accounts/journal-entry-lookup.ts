@@ -47,7 +47,7 @@ export type JournalEntryLookupResult =
     };
 
 const boundedText = (value: unknown, max = 128): value is string =>
-  typeof value === 'string' && value.length > 0 && value.length <= max;
+  typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 
 export const journalEntryLookupRouter = router({
   lookup: adminProcedure.input(lookupInput).query(async ({ ctx, input }) => {

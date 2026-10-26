@@ -139,6 +139,7 @@ describe('exact posted-journal lookup', () => {
 
   it.each([
     ['blank header', { sourceKind: '' }],
+    ['whitespace-only header', { sourceKind: '   ' }],
     ['invalid timestamp', { occurredAt: new Date(Number.NaN) }],
     ['empty branch slice', { lines: [] }],
     [
