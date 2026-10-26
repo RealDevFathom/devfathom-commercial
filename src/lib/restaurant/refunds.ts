@@ -177,15 +177,11 @@ export async function refundTender(
       reason,
       approvingStaffProfileId: input.approvingStaffProfileId,
     });
-    const idem = await beginMoneyIdempotent(tx, input.actor, `refund.${kind.toLowerCase()}`, {
-      bytes: canonicalBytes,
-      hash: createHash('sha256').update(canonicalBytes, 'utf8').digest('hex'),
-    });
-    if (idem.replay) return replayRefundResult(tx, idem.resultRef, idem.resultPayload);
-
     // Serialize with settlement and concurrent refunds. Refund authority begins only
     // after settlement, when the tender can no longer be counted toward an open balance.
-    // The bill row carries a full RLS policy, so FOR UPDATE is valid.
+    // Validate this before creating the idempotency record so a refused attempt has no
+    // writes even within the transaction. The bill row carries a full RLS policy, so
+    // FOR UPDATE is valid.
     const [lockedBill] = await tx.$queryRaw<Array<{ status: string }>>`
       SELECT status FROM restaurant_bills WHERE id = ${initialTender.billId} FOR UPDATE
     `;
@@ -197,6 +193,12 @@ export async function refundTender(
     // gives each statement a fresh snapshot, so reload every settlement-dependent
     // value now rather than allocating bill-level charges from the pre-lock snapshot.
     const tender = await loadTender(tx, initialTender.id, branchId);
+
+    const idem = await beginMoneyIdempotent(tx, input.actor, `refund.${kind.toLowerCase()}`, {
+      bytes: canonicalBytes,
+      hash: createHash('sha256').update(canonicalBytes, 'utf8').digest('hex'),
+    });
+    if (idem.replay) return replayRefundResult(tx, idem.resultRef, idem.resultPayload);
 
     // Cap: Σ(refunds) ≤ tender amount; Σ(tip refunds) ≤ tender tip.
     const priorRefunds = await tx.restaurantRefund.aggregate({
