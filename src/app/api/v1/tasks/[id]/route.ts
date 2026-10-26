@@ -144,7 +144,7 @@ export const PATCH = withApiAuth(
     }
 
     // Do the mutation in a transaction so reorder + update + defaults are atomic.
-    const updated = await (async (tx) => {
+    const updated = await authCtx.db.$transaction(async (tx) => {
       // Assignee operations — process in order: full replace, then partial add, then partial remove.
       // Mutual exclusivity between full-replace and partials is enforced at schema level.
       if (assigneeIds) {
@@ -225,7 +225,7 @@ export const PATCH = withApiAuth(
       }
 
       return task;
-    })(authCtx.db);
+    });
 
     // Activity log: task_completed fires only when entering Done from a different column
     if (

@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => {
     deleteMany: vi.fn(async () => ({ count: 1 })),
     createMany: vi.fn(async () => ({ count: 1 })),
   };
-  const db = {
+  const db: Record<string, unknown> = {
     task: {
       findUnique: vi.fn(async () => ({
         id: 'task-1',
@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => {
       count: vi.fn(async () => 1),
     },
   };
+  db.$transaction = vi.fn(async (callback: (tx: typeof db) => unknown) => callback(db));
   return { db, taskAssignee };
 });
 
