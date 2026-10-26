@@ -1126,6 +1126,15 @@ describe('restaurantShifts.reviewSwap', () => {
     const request = await pendingSwap();
     await caller('EMPLOYEE').clockIn({ shiftId: 'shift_emp', idempotencyKey: 'ci-before-reject' });
 
+    await expect(
+      caller('MANAGER').reviewSwap({
+        requestId: request!.id,
+        branchId: 'branch_1',
+        decision: 'APPROVED',
+        idempotencyKey: 'rv-approve-before-reject',
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+
     const decision = await caller('MANAGER').reviewSwap({
       requestId: request!.id,
       branchId: 'branch_1',
