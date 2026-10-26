@@ -24,9 +24,9 @@ concurrency:
 jobs:
   automated-gate:
     name: WHA-1125 automated gate
-    # For more CPU/RAM, replace ubuntu-latest with a configured larger GitHub-hosted runner label.
+    # Runs on the self-hosted Linux runner in Docker on the Mac (one job at a time), not GitHub-hosted minutes.
     if: contains(github.event.pull_request.labels.*.name, 'ci-ready') || github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, mac-runner]
     services:
       postgres:
         image: postgres:16
@@ -345,8 +345,8 @@ jobs:
     name: WHA-1132 browser gate
     needs: automated-gate
     if: always() && needs.automated-gate.result == 'success'
-    # For more CPU/RAM, replace ubuntu-latest with a configured larger GitHub-hosted runner label.
-    runs-on: ubuntu-latest
+    # Runs on the self-hosted Linux runner in Docker on the Mac (one job at a time), not GitHub-hosted minutes.
+    runs-on: [self-hosted, linux, mac-runner]
     services:
       postgres:
         image: postgres:16
