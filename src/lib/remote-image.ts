@@ -5,6 +5,7 @@ import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const REQUEST_TIMEOUT_MS = 5_000;
 const ALLOWED_TYPES = new Set([
   'image/gif',
   'image/jpeg',
@@ -76,19 +77,30 @@ export async function loadRemoteImage(value: string): Promise<RemoteImage> {
   const target = addresses[0]!;
 
   return new Promise((resolve, reject) => {
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const finish = <T>(callback: (value: T) => void, value: T) => {
+      if (deadline) clearTimeout(deadline);
+      callback(value);
+    };
     const request = httpsRequest(url, {
       method: 'GET',
       servername: hostname,
       headers: { Accept: 'image/png,image/jpeg,image/gif,image/webp,image/svg+xml' },
       lookup: (_host, _options, callback) => callback(null, target.address, target.family),
     });
-    request.setTimeout(5_000, () => request.destroy(new Error('Logo request timed out.')));
-    request.on('error', reject);
+    deadline = setTimeout(
+      () => request.destroy(new Error('Logo request timed out.')),
+      REQUEST_TIMEOUT_MS
+    );
+    request.setTimeout(REQUEST_TIMEOUT_MS, () =>
+      request.destroy(new Error('Logo request timed out.'))
+    );
+    request.on('error', (error) => finish(reject, error));
     request.on('response', (response) => {
       const contentType = (response.headers['content-type'] ?? '').split(';')[0]!.toLowerCase();
       if (response.statusCode !== 200 || !ALLOWED_TYPES.has(contentType)) {
         response.resume();
-        reject(new Error('Logo server did not return a supported image.'));
+        finish(reject, new Error('Logo server did not return a supported image.'));
         return;
       }
       const chunks: Buffer[] = [];
@@ -98,8 +110,10 @@ export async function loadRemoteImage(value: string): Promise<RemoteImage> {
         if (size > MAX_IMAGE_BYTES) request.destroy(new Error('Logo exceeds the size limit.'));
         else chunks.push(chunk);
       });
-      response.on('end', () => resolve({ body: Buffer.concat(chunks), contentType }));
-      response.on('error', reject);
+      response.on('end', () =>
+        finish(resolve, { body: Buffer.concat(chunks), contentType })
+      );
+      response.on('error', (error) => finish(reject, error));
     });
     request.end();
   });
