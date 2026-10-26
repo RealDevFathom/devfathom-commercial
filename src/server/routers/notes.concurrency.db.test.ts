@@ -253,9 +253,14 @@ suite('notes.update PostgreSQL concurrency', () => {
         `SELECT count(*)::int AS count FROM note_mentions WHERE "noteId" = $1`,
         [victimNoteId]
       );
+      const revisions = await sql.query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM note_revisions WHERE "noteId" = $1`,
+        [victimNoteId]
+      );
       expect(note.rows).toEqual([{ title: 'Victim note', contentText: 'original' }]);
       expect(links.rows[0]!.count).toBe(0);
       expect(mentions.rows[0]!.count).toBe(0);
+      expect(revisions.rows[0]!.count).toBe(0);
       expect(vi.mocked(notify)).not.toHaveBeenCalled();
     } finally {
       await sql.query('DELETE FROM organizations WHERE id = ANY($1)', [
