@@ -31,6 +31,26 @@ describe('logActivity', () => {
     });
   });
 
+  it('swallows a rejected fire-and-forget insert outside a tenant transaction', async () => {
+    const error = new Error('write failed');
+    const db = { activity: { create: vi.fn().mockRejectedValue(error) } } as never;
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    expect(
+      logActivity(db, 'user-1', {
+        type: 'project_created',
+        message: 'created project Alpha',
+      })
+    ).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(consoleError).toHaveBeenCalledWith(
+        '[activity] failed to log',
+        'project_created',
+        error
+      );
+    });
+  });
+
   it('keeps a tenant transaction open until the activity insert settles', async () => {
     let finishWrite!: () => void;
     const create = vi.fn(
