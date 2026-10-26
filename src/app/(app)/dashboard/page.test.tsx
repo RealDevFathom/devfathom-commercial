@@ -41,6 +41,7 @@ vi.mock('./restaurant-dashboard-content', () => ({ RestaurantDashboardContent: (
 import DashboardPage from './page';
 import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
 import { HotelDashboardContent } from './hotel-dashboard-content';
+import { RestaurantDashboardContent } from './restaurant-dashboard-content';
 
 function helpers() {
   return {
@@ -59,26 +60,54 @@ function helpers() {
 
 describe('DashboardPage vertical dispatch', () => {
   it.each([
-    ['owner', 'ADMIN', '/restaurant'],
-    ['waiter', 'EMPLOYEE', '/pos'],
+    ['owner', 'admin:access', '/restaurant'],
+    ['waiter', 'orders:take', '/pos'],
   ])(
-    'redirects a Restaurant %s (%s) to %s before loading dashboard data',
-    async (_persona, role, target) => {
+    'redirects a Restaurant %s with %s to %s before loading dashboard data',
+    async (_persona, capability, target) => {
       const agencyHelpers = helpers();
+      const user = { id: 'restaurant-user', role: 'EMPLOYEE', status: 'ACTIVE' };
       mocks.createSSRHelpers.mockResolvedValue({
         helpers: agencyHelpers,
-        session: { user: { id: 'restaurant-user', role, status: 'ACTIVE' } },
+        session: { user },
+        organization: { id: 'restaurant-tenant' },
         entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
       });
+      mocks.can.mockImplementation(async (_subject, action) => action === capability);
 
       await expect(DashboardPage()).rejects.toThrow('redirect');
 
       expect(mocks.redirect).toHaveBeenCalledWith(target);
+      expect(mocks.withTenantDb).toHaveBeenCalledWith('restaurant-tenant', expect.any(Function));
+      expect(mocks.can).toHaveBeenCalledWith(user, capability, undefined, { db: mocks.db });
       expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
       expect(agencyHelpers.meetings.getUpcoming.prefetch).not.toHaveBeenCalled();
-      expect(mocks.withTenantDb).not.toHaveBeenCalled();
     }
   );
+
+  it('keeps a Restaurant user without order-taking access on the usable dashboard', async () => {
+    const user = { id: 'kitchen-user', role: 'EMPLOYEE', status: 'ACTIVE' };
+    mocks.createSSRHelpers.mockResolvedValue({
+      helpers: helpers(),
+      session: { user },
+      organization: { id: 'restaurant-tenant' },
+      entitlements: {
+        vertical: 'RESTAURANT',
+        enabledModules: ['restaurant-core', 'restaurant-inventory'],
+      },
+    });
+    mocks.can.mockResolvedValue(false);
+
+    const page = await DashboardPage();
+
+    expect(mocks.redirect).not.toHaveBeenCalled();
+    expect(mocks.can).toHaveBeenCalledWith(user, 'orders:take', undefined, { db: mocks.db });
+    expect(page.props.children.type).toBe(RestaurantDashboardContent);
+    expect(page.props.children.props.enabledModules).toEqual([
+      'restaurant-core',
+      'restaurant-inventory',
+    ]);
+  });
 
   it('lands a Hospitality organization on the property setup page, without Agency prefetches', async () => {
     const agencyHelpers = helpers();

@@ -24,19 +24,27 @@ export default async function DashboardPage() {
   const pharmacy = ssr?.entitlements.vertical === 'PHARMACY';
   const hospitality = ssr?.entitlements.vertical === 'HOSPITALITY';
 
-  // `/dashboard` is the safe, role-agnostic login callback. Once the tenant is
-  // known, send restaurant administrators to the management console and floor
-  // staff to the order pad instead of rendering a dashboard neither role uses.
-  if (restaurant && ssr?.session?.user) {
-    redirect(ssr.session.user.role === 'ADMIN' ? '/restaurant' : '/pos');
-  }
-
   const firstRunVertical =
     ssr?.entitlements.vertical === 'RESTAURANT' || ssr?.entitlements.vertical === 'PHARMACY'
       ? ssr.entitlements.vertical
       : null;
   const organizationId = ssr?.organization?.id;
   const user = ssr?.session?.user;
+
+  // `/dashboard` is the role-agnostic login callback. Resolve the destination
+  // through the tenant-scoped permission model rather than the coarse session
+  // role: restaurant users without order-taking access must not be sent to POS.
+  const restaurantLanding =
+    restaurant && organizationId && user
+      ? await withTenantDb(organizationId, async (db) => {
+          const subject = subjectFromSession(user);
+          if (await can(subject, 'admin:access', undefined, { db })) return '/restaurant';
+          if (await can(subject, 'orders:take', undefined, { db })) return '/pos';
+          return null;
+        })
+      : null;
+  if (restaurantLanding) redirect(restaurantLanding);
+
   const checklist =
     organizationId && firstRunVertical && user
       ? await withTenantDb(organizationId, async (db) =>
