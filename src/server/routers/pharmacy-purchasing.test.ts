@@ -639,6 +639,9 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
     // 10 paid packs + 2 free at 10 units each, and 100_000 minor over 120 units.
     expect(line).toMatchObject({
+      purchaseOrderLineId: 'poline_a',
+      medicineId: 'medicine_a',
+      packLevelId: 'pack_a',
       receivedCanonicalUnits: 100,
       bonusCanonicalUnits: 20,
       acceptedCanonicalUnits: 120,
