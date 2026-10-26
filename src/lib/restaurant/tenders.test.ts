@@ -726,7 +726,13 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
       }),
       snapshots: await tx.restaurantTaxTransactionSnapshot.findMany({
         where: { billId: { in: cut.billIds } },
-        select: { subtotal: true, taxTotal: true, grandTotal: true, evidencePayload: true },
+        select: {
+          billId: true,
+          subtotal: true,
+          taxTotal: true,
+          grandTotal: true,
+          evidencePayload: true,
+        },
       }),
     }));
     const sum = (values: Prisma.Decimal[]) =>
@@ -744,6 +750,10 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
     );
     expect(sum(frozenAccounting.snapshots.map((snapshot) => snapshot.grandTotal)).toFixed(2)).toBe(
       '12.50'
+    );
+    expect(frozenAccounting.bills).toHaveLength(cut.billIds.length);
+    expect(frozenAccounting.snapshots.map((snapshot) => snapshot.billId).sort()).toEqual(
+      [...cut.billIds].sort()
     );
     expect(
       frozenAccounting.snapshots.flatMap((snapshot) => {
