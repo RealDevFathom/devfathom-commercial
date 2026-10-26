@@ -348,6 +348,19 @@ describe('resolveModifierSnapshots', () => {
 });
 
 describe('resolveOrderPricingRefs', () => {
+  it('rejects a publication that does not exist', async () => {
+    const db = makeDb({ publication: null });
+
+    await expect(
+      resolveOrderPricingRefs(db, {
+        publicationId: 'missing',
+        branchId: 'branch_1',
+        channel: 'DINE_IN',
+        at: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'PUBLICATION_NOT_FOUND' });
+  });
+
   it('returns the effective price-list version to stamp on the order', async () => {
     const db = makeDb({
       publication: basePublication,
