@@ -1,14 +1,15 @@
 /**
  * @vitest-environment node
  *
- * Requires TEST_DATABASE_URL pointing at a disposable, migrated PostgreSQL database.
+ * Requires TEST_DATABASE_URL (or DATABASE_URL) pointing at a disposable, migrated PostgreSQL
+ * database.
  */
 import { randomBytes } from 'node:crypto';
 
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const organizationId = `project_dates_${suffix}`;
