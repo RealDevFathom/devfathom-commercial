@@ -163,16 +163,14 @@ export default async function CashFlowPage({
                       ))}
                       <td className="p-3">
                         <StatusPill
-                          status={
-                            row.canonicalControlDiscrepancyMinor === '0' ? 'Matched' : 'Discrepancy'
-                          }
-                          tone={
-                            row.canonicalControlDiscrepancyMinor === '0' ? 'success' : 'warning'
-                          }
+                          status={row.canonicalControlMatches ? 'Matched' : 'Discrepancy'}
+                          tone={row.canonicalControlMatches ? 'success' : 'warning'}
                           label={
-                            row.canonicalControlDiscrepancyMinor === '0'
+                            row.canonicalControlMatches
                               ? 'Matched'
-                              : `Discrepancy ${row.canonicalControlDiscrepancyMinor ?? 'unknown'}`
+                              : row.canonicalClosingDiscrepancyMinor === null
+                                ? 'Control unavailable'
+                                : `Opening ${row.canonicalOpeningDiscrepancyMinor}; movement ${row.canonicalMovementDiscrepancyMinor}; closing ${row.canonicalClosingDiscrepancyMinor}`
                           }
                         />
                       </td>

@@ -96,6 +96,41 @@ describe('classified cash-flow projection', () => {
     expect(result.evidence.filter((item) => item.category === 'UNCLASSIFIED')).toHaveLength(2);
   });
 
+  it('fails closed for opposing allowed counterparts and branch-partial entries', () => {
+    const result = projectCashFlow(
+      [
+        row({ entryId: 'ambiguous', sourceKind: 'PHARMACY_BOOKKEEPING_TRANSACTION' }),
+        row({
+          entryId: 'ambiguous',
+          sourceKind: 'PHARMACY_BOOKKEEPING_TRANSACTION',
+          accountCode: 'ACCOUNTS_PAYABLE',
+          side: 'DEBIT',
+          amountMinor: BigInt(40),
+        }),
+        row({
+          entryId: 'ambiguous',
+          sourceKind: 'PHARMACY_BOOKKEEPING_TRANSACTION',
+          accountCode: 'ACCOUNTS_RECEIVABLE',
+          side: 'CREDIT',
+          amountMinor: BigInt(140),
+        }),
+        // This represents the selected-branch slice of an entry whose remaining credit is on
+        // another (or null) branch. The unexplained residual must not be classified.
+        row({ entryId: 'partial', sourceKind: 'PHARMACY_BOOKKEEPING_TRANSACTION' }),
+        row({
+          entryId: 'partial',
+          sourceKind: 'PHARMACY_BOOKKEEPING_TRANSACTION',
+          accountCode: 'ACCOUNTS_PAYABLE',
+          side: 'CREDIT',
+          amountMinor: BigInt(60),
+        }),
+      ],
+      period
+    )[0]!;
+    expect(result).toMatchObject({ operatingMinor: '0', unclassifiedMinor: '200' });
+    expect(result.evidence.every((item) => item.category === 'UNCLASSIFIED')).toBe(true);
+  });
+
   it('handles opening funding, reversals, boundaries, currencies and bigint precision', () => {
     const huge = BigInt('9007199254740993000');
     const result = projectCashFlow(
@@ -146,13 +181,18 @@ describe('classified cash-flow projection', () => {
     );
   });
 
-  it('reads all scoped postings with organization and line-branch predicates, without paging', async () => {
-    const queryRaw = vi.fn().mockResolvedValue([]);
-    await loadCashFlowProjection(
+  it('reads more than one journal page with scope predicates and without paging', async () => {
+    const rows = Array.from({ length: 30 }, (_, index) => [
+      row({ entryId: `sale-${index}` }),
+      row({ entryId: `sale-${index}`, accountCode: 'SALES_CLEARING', side: 'CREDIT' }),
+    ]).flat();
+    const queryRaw = vi.fn().mockResolvedValue(rows);
+    const result = await loadCashFlowProjection(
       { $queryRaw: queryRaw } as never,
       { organizationId: 'org-a', branchId: 'branch-a' },
       period
     );
+    expect(result[0]).toMatchObject({ operatingMinor: '3000', movementMinor: '3000' });
     const query = queryRaw.mock.calls[0]![0];
     expect(query.sql).toContain('e."organizationId"=?');
     expect(query.sql).toContain('l."organizationId"=?');
@@ -161,13 +201,28 @@ describe('classified cash-flow projection', () => {
     expect(query.values).toEqual(expect.arrayContaining(['org-a', 'branch-a']));
   });
 
-  it('shows control mismatch and never claims completeness', () => {
+  it('shows independent control mismatches even when opening and movement cancel', () => {
     const result = projectCashFlow(
-      [row(), row({ accountCode: 'SALES_CLEARING', side: 'CREDIT' })],
+      [
+        row({ occurredAt: at(4), amountMinor: BigInt(10) }),
+        row({
+          occurredAt: at(4),
+          accountCode: 'SALES_CLEARING',
+          side: 'CREDIT',
+          amountMinor: BigInt(10),
+        }),
+        row({ side: 'CREDIT', amountMinor: BigInt(10) }),
+        row({ accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: BigInt(10) }),
+      ],
       period,
-      [{ currency: 'PKR', openingMinor: '0', closingMinor: '99', movementMinor: '99' }]
+      [{ currency: 'PKR', openingMinor: '0', closingMinor: '0', movementMinor: '0' }]
     )[0]!;
-    expect(result.canonicalControlDiscrepancyMinor).not.toBe('0');
+    expect(result).toMatchObject({
+      canonicalOpeningDiscrepancyMinor: '10',
+      canonicalMovementDiscrepancyMinor: '-10',
+      canonicalClosingDiscrepancyMinor: '0',
+      canonicalControlMatches: false,
+    });
     expect(result.metadata.classifiedCompleteness).toBe('unknown');
   });
 });

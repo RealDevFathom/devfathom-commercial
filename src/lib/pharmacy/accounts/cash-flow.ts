@@ -45,9 +45,23 @@ const operatingPolicy: Readonly<Record<string, ReadonlySet<string>>> = {
 export function classifyCashEntry(rows: readonly CashFlowPosting[]): CashFlowCategory {
   if (!rows.length) return 'UNCLASSIFIED';
   const sourceKind = rows[0]!.sourceKind;
-  const counterparts = new Set(
-    rows.filter((row) => !CASH.has(row.accountCode)).map((row) => row.accountCode)
-  );
+  const cashNet = rows
+    .filter((row) => CASH.has(row.accountCode))
+    .reduce((sum, row) => sum + signed(row), BigInt(0));
+  const counterpartRows = rows.filter((row) => !CASH.has(row.accountCode));
+  const counterpartNet = counterpartRows.reduce((sum, row) => sum + signed(row), BigInt(0));
+  // A branch-scoped slice can omit null-branch or other-branch legs. Fail closed unless the
+  // visible slice balances and every counterpart moves opposite to the cash movement.
+  if (
+    cashNet === BigInt(0) ||
+    cashNet + counterpartNet !== BigInt(0) ||
+    counterpartRows.some((row) => {
+      const amount = signed(row);
+      return amount === BigInt(0) || amount * cashNet > BigInt(0);
+    })
+  )
+    return 'UNCLASSIFIED';
+  const counterparts = new Set(counterpartRows.map((row) => row.accountCode));
   if (
     sourceKind === 'PHARMACY_OPENING_LEDGER' &&
     counterparts.size === 1 &&
@@ -145,9 +159,9 @@ export function projectCashFlow(
       );
       const closing = value.opening + movement;
       const control = controlMap.get(code);
-      // A single control delta compares the independently read canonical closing position.
-      // The component values remain visible above, so opening/movement differences are auditable.
-      const controlDiscrepancy = control ? closing - BigInt(control.closingMinor) : null;
+      const openingDiscrepancy = control ? value.opening - BigInt(control.openingMinor) : null;
+      const movementDiscrepancy = control ? movement - BigInt(control.movementMinor) : null;
+      const closingDiscrepancy = control ? closing - BigInt(control.closingMinor) : null;
       return {
         currency: code,
         openingMinor: value.opening.toString(),
@@ -160,7 +174,13 @@ export function projectCashFlow(
         movementMinor: movement.toString(),
         closingMinor: closing.toString(),
         equationBalances: closing === value.opening + movement,
-        canonicalControlDiscrepancyMinor: controlDiscrepancy?.toString() ?? null,
+        canonicalOpeningDiscrepancyMinor: openingDiscrepancy?.toString() ?? null,
+        canonicalMovementDiscrepancyMinor: movementDiscrepancy?.toString() ?? null,
+        canonicalClosingDiscrepancyMinor: closingDiscrepancy?.toString() ?? null,
+        canonicalControlMatches:
+          openingDiscrepancy === BigInt(0) &&
+          movementDiscrepancy === BigInt(0) &&
+          closingDiscrepancy === BigInt(0),
         evidence: value.evidence,
         metadata: {
           latestPostingAt: value.latest,
