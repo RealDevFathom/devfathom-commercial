@@ -82,7 +82,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export const SOP_LATE_MISSED_JOB = 'sop.sweepLateMissed';
 
-/** Keep one tenant's producer pass bounded so the shared worker can move on. */
+/** Page sizes keep each producer query bounded without truncating the sweep. */
 export const MAX_ESCALATION_POLICIES_PER_TICK = 50;
 export const MAX_ESCALATION_OCCURRENCES_PER_TICK = 100;
 
@@ -127,11 +127,22 @@ export function sopEscalationJobKey(
  * step in the chain to be scheduled.
  */
 export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise<number> {
-  const [policies, occurrences] = await Promise.all([
-    db.restaurantSopEscalationPolicy.findMany({
+  const policies: Array<{
+    id: string;
+    scope: 'ORG' | 'BRANCH';
+    branchId: string | null;
+    stopOnAcknowledged: boolean;
+    quietHoursStartMinutes: number | null;
+    quietHoursEndMinutes: number | null;
+    steps: Array<{ id: string; delayMinutes: number }>;
+  }> = [];
+  let policyCursor: string | undefined;
+  do {
+    const page = await db.restaurantSopEscalationPolicy.findMany({
       where: { active: true },
       orderBy: { id: 'asc' },
       take: MAX_ESCALATION_POLICIES_PER_TICK,
+      ...(policyCursor ? { cursor: { id: policyCursor }, skip: 1 } : {}),
       select: {
         id: true,
         scope: true,
@@ -144,14 +155,22 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
           select: { id: true, delayMinutes: true },
         },
       },
-    }),
-    db.restaurantSopOccurrence.findMany({
+    });
+    policies.push(...page);
+    policyCursor = page.length === MAX_ESCALATION_POLICIES_PER_TICK ? page.at(-1)?.id : undefined;
+  } while (policyCursor);
+
+  let enqueued = 0;
+  let occurrenceCursor: string | undefined;
+  do {
+    const occurrences = await db.restaurantSopOccurrence.findMany({
       where: {
         windowEndsAt: { lte: now },
         status: { in: ['SCHEDULED', 'IN_PROGRESS', 'SUBMITTED', 'LATE', 'MISSED'] },
       },
       orderBy: [{ windowEndsAt: 'asc' }, { id: 'asc' }],
       take: MAX_ESCALATION_OCCURRENCES_PER_TICK,
+      ...(occurrenceCursor ? { cursor: { id: occurrenceCursor }, skip: 1 } : {}),
       select: {
         id: true,
         branchId: true,
@@ -163,67 +182,70 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
           orderBy: { createdAt: 'asc' },
         },
       },
-    }),
-  ]);
+    });
 
-  let enqueued = 0;
-  for (const occurrence of occurrences) {
-    for (const policy of policies) {
-      if (policy.scope === 'BRANCH' && policy.branchId !== occurrence.branchId) continue;
-      if (occurrence.escalationEvents.some((event) => event.kind === 'STOPPED')) continue;
-      if (
-        policy.stopOnAcknowledged &&
-        occurrence.escalationEvents.some((event) => event.kind === 'ACKNOWLEDGED')
-      ) {
-        continue;
-      }
-      const fired = new Set(
-        occurrence.escalationEvents
-          .filter((event) => event.kind === 'FIRED')
-          .map((event) => event.escalationStepId)
-          .filter((id): id is string => id !== null)
-      );
-      const nextStep = policy.steps.find((step) => !fired.has(step.id));
-      if (!nextStep) continue;
-
-      const previous = [...occurrence.escalationEvents]
-        .reverse()
-        .find(
-          (event) =>
-            event.kind === 'FIRED' &&
-            event.escalationStepId &&
-            policy.steps.some((s) => s.id === event.escalationStepId)
+    for (const occurrence of occurrences) {
+      for (const policy of policies) {
+        if (policy.scope === 'BRANCH' && policy.branchId !== occurrence.branchId) continue;
+        if (occurrence.escalationEvents.some((event) => event.kind === 'STOPPED')) continue;
+        if (
+          policy.stopOnAcknowledged &&
+          occurrence.escalationEvents.some((event) => event.kind === 'ACKNOWLEDGED')
+        ) {
+          continue;
+        }
+        const fired = new Set(
+          occurrence.escalationEvents
+            .filter((event) => event.kind === 'FIRED')
+            .map((event) => event.escalationStepId)
+            .filter((id): id is string => id !== null)
         );
-      const anchor = previous?.createdAt ?? occurrence.windowEndsAt;
-      if (now.getTime() < anchor.getTime() + nextStep.delayMinutes * 60_000) continue;
+        const nextStep = policy.steps.find((step) => !fired.has(step.id));
+        if (!nextStep) continue;
 
-      if (
-        policy.quietHoursStartMinutes !== null &&
-        policy.quietHoursEndMinutes !== null &&
-        isQuietHour(
-          localMinutesOfDay(occurrence.branch?.timezone ?? 'UTC', now),
-          policy.quietHoursStartMinutes,
-          policy.quietHoursEndMinutes
-        )
-      ) {
-        continue;
-      }
+        const previous = [...occurrence.escalationEvents]
+          .reverse()
+          .find(
+            (event) =>
+              event.kind === 'FIRED' &&
+              event.escalationStepId &&
+              policy.steps.some((s) => s.id === event.escalationStepId)
+          );
+        const anchor = previous?.createdAt ?? occurrence.windowEndsAt;
+        if (now.getTime() < anchor.getTime() + nextStep.delayMinutes * 60_000) continue;
 
-      try {
-        const result = await enqueue(db, {
-          type: SOP_ESCALATION_JOB,
-          payload: { occurrenceId: occurrence.id, policyId: policy.id },
-          idempotencyKey: sopEscalationJobKey(occurrence.id, policy.id, nextStep.id),
-          scheduledAt: now,
-        });
-        if (!result.deduplicated) enqueued += 1;
-      } catch (error) {
-        // Two tenant-scoped sweepers may race after the pre-insert lookup. The
-        // unique key is the winner; the loser has reached the desired state.
-        if (!(error instanceof SchedulerError) || error.reason !== 'DUPLICATE_ENQUEUE') throw error;
+        if (
+          policy.quietHoursStartMinutes !== null &&
+          policy.quietHoursEndMinutes !== null &&
+          isQuietHour(
+            localMinutesOfDay(occurrence.branch?.timezone ?? 'UTC', now),
+            policy.quietHoursStartMinutes,
+            policy.quietHoursEndMinutes
+          )
+        ) {
+          continue;
+        }
+
+        try {
+          const result = await enqueue(db, {
+            type: SOP_ESCALATION_JOB,
+            payload: { occurrenceId: occurrence.id, policyId: policy.id },
+            idempotencyKey: sopEscalationJobKey(occurrence.id, policy.id, nextStep.id),
+            scheduledAt: now,
+          });
+          if (!result.deduplicated) enqueued += 1;
+        } catch (error) {
+          // Two tenant-scoped sweepers may race after the pre-insert lookup. The
+          // unique key is the winner; the loser has reached the desired state.
+          if (!(error instanceof SchedulerError) || error.reason !== 'DUPLICATE_ENQUEUE') throw error;
+        }
       }
     }
-  }
+    occurrenceCursor =
+      occurrences.length === MAX_ESCALATION_OCCURRENCES_PER_TICK
+        ? occurrences.at(-1)?.id
+        : undefined;
+  } while (occurrenceCursor);
   return enqueued;
 }
 

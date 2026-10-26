@@ -238,6 +238,17 @@ describe('sopEscalationHandler', () => {
     expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
   });
 
+  it('does not replay a queued job after the ledger has stopped the chain', async () => {
+    const { db, mocks } = makeDb({
+      events: [{ id: 'evt_stop', escalationStepId: null, kind: 'STOPPED' }],
+    });
+
+    await sopEscalationHandler(makeCtx(db));
+
+    expect(mocks.eventCreate).not.toHaveBeenCalled();
+    expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
+  });
+
   it('stops when all steps are exhausted', async () => {
     const { db, mocks } = makeDb({
       events: [

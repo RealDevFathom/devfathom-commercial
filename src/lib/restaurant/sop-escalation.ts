@@ -197,6 +197,10 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
         select: { id: true, escalationStepId: true, kind: true, createdAt: true },
       });
 
+      // A job can remain queued while acknowledgement, verification, or chain
+      // exhaustion durably stops the chain. Never replay work past that marker.
+      if (events.some((event) => event.kind === 'STOPPED')) return;
+
       // STOP: policy.stopOnVerified re-checked against live state (occ.status)
       // already done above; also check acknowledged
       if (policy.stopOnAcknowledged) {
