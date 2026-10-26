@@ -60,6 +60,11 @@ function positiveMinor(value: number) {
     throw new PharmacyBookkeepingError('INVALID_AMOUNT');
 }
 
+/** Serializes every branch accounting write, including the general-journal adapter. */
+export async function lockPharmacyAccountingScope(db: ScopedDb, scope: BookkeepingScope) {
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${scope.organizationId}:${scope.branchId}:pharmacy-journal`}, 0))`;
+}
+
 async function assertPeriodOpen(db: ScopedDb, scope: BookkeepingScope, at: Date) {
   const closed = await db.pharmacyAccountingPeriod.findFirst({
     where: {
@@ -114,6 +119,7 @@ export async function postBookkeepingTransaction(
   scope: BookkeepingScope,
   input: PostBookkeepingInput
 ) {
+  await lockPharmacyAccountingScope(db, scope);
   positiveMinor(input.amountMinor);
   await assertPeriodOpen(db, scope, input.occurredAt);
   if (input.kind === 'CHEQUE' && !input.chequeNumber?.trim())
@@ -179,6 +185,7 @@ export async function reverseBookkeepingTransaction(
   scope: BookkeepingScope,
   input: { transactionId: string; at: Date; reason: string; idempotencyKey: string }
 ) {
+  await lockPharmacyAccountingScope(db, scope);
   if (!input.reason.trim()) throw new PharmacyBookkeepingError('MISSING_REASON');
   await assertPeriodOpen(db, scope, input.at);
   const transaction = await db.pharmacyBookkeepingTransaction.findFirst({
@@ -232,6 +239,7 @@ export async function closeAccountingPeriod(
   scope: BookkeepingScope,
   input: { startsAt: Date; endsAt: Date }
 ) {
+  await lockPharmacyAccountingScope(db, scope);
   if (input.startsAt >= input.endsAt) throw new PharmacyBookkeepingError('INVALID_STATE');
   return db.pharmacyAccountingPeriod.create({
     data: {
@@ -251,6 +259,7 @@ export async function reopenAccountingPeriod(
   scope: BookkeepingScope,
   input: { periodId: string; reason: string }
 ) {
+  await lockPharmacyAccountingScope(db, scope);
   if (!input.reason.trim()) throw new PharmacyBookkeepingError('MISSING_REASON');
   const period = await db.pharmacyAccountingPeriod.findFirst({
     where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.periodId },

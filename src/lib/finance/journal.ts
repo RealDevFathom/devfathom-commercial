@@ -55,6 +55,7 @@ export const ACCOUNT_NORMAL_SIDE: Readonly<Record<FinanceAccountCode, JournalSid
   INVENTORY_WRITE_OFF: 'DEBIT',
   INVENTORY_SHRINKAGE: 'DEBIT',
   OPERATING_EXPENSE: 'DEBIT',
+  MANUAL_NONTRADE_ACCRUAL: 'CREDIT',
   SUPPLIER_CLAIM_RECEIVABLE: 'DEBIT',
   CASH: 'DEBIT',
   BANK: 'DEBIT',
@@ -119,6 +120,9 @@ export function assertBalanced(lines: readonly JournalLineInput[]): void {
     }
     if (line.side === 'DEBIT') debits += line.amountMinor;
     else credits += line.amountMinor;
+    if (!Number.isSafeInteger(debits) || !Number.isSafeInteger(credits)) {
+      throw new FinancePostingError('INVALID_AMOUNT');
+    }
   }
   if (debits === 0 || credits === 0) throw new FinancePostingError('EMPTY_ENTRY');
   if (debits !== credits) throw new FinancePostingError('UNBALANCED');
@@ -152,7 +156,18 @@ export async function postJournalEntry(
     where: { organizationId: scope.organizationId, idempotencyKey: input.idempotencyKey },
     include: { lines: true },
   });
-  if (existing) return existing;
+  if (existing) {
+    // Legacy writers historically treated the key as the whole replay identity.
+    // Tighten only the new voucher source so old valid integrations keep their
+    // established behaviour while a key cannot alias a different document.
+    if (
+      input.sourceKind === 'PHARMACY_JOURNAL_VOUCHER' &&
+      (existing.sourceKind !== input.sourceKind || existing.sourceId !== input.sourceId)
+    ) {
+      throw new FinancePostingError('MISSING_SOURCE');
+    }
+    return existing;
+  }
 
   const entry = await db.financeJournalEntry.create({
     data: {

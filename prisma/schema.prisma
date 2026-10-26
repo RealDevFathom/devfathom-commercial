@@ -228,6 +228,7 @@ model PharmacyBranch {
   pharmacovigilanceReports                 PharmacyPharmacovigilanceReport[]
   customerOrders                           PharmacyCustomerOrder[]
   visibilityPharmacyAccountingPeriod       PharmacyAccountingPeriod[]        @relation("PharmacyAccountingPeriodVisibilityAnchor")
+  visibilityPharmacyGeneralJournalDocument PharmacyGeneralJournalDocument[]  @relation("PharmacyGeneralJournalDocumentVisibilityAnchor")
   visibilityPharmacyBankStatementLine      PharmacyBankStatementLine[]       @relation("PharmacyBankStatementLineVisibilityAnchor")
   visibilityPharmacyBookkeepingTransaction PharmacyBookkeepingTransaction[]  @relation("PharmacyBookkeepingTransactionVisibilityAnchor")
   visibilityPharmacyDailyClose             PharmacyDailyClose[]              @relation("PharmacyDailyCloseVisibilityAnchor")
@@ -2366,6 +2367,8 @@ enum FinanceAccountCode {
   /// Expense (or gain, when counted stock exceeds the book). Count variance.
   INVENTORY_SHRINKAGE
   OPERATING_EXPENSE
+  /// Liability used only by the pharmacy non-trade operating-accrual voucher.
+  MANUAL_NONTRADE_ACCRUAL
   /// Asset. Value claimed back from a supplier for returned goods.
   SUPPLIER_CLAIM_RECEIVABLE
   CASH
@@ -2394,6 +2397,18 @@ enum FinanceSourceKind {
   PHARMACY_OPENING_STOCK
   PHARMACY_OPENING_LEDGER
   PHARMACY_BOOKKEEPING_TRANSACTION
+  PHARMACY_JOURNAL_VOUCHER
+}
+
+enum PharmacyGeneralJournalStatus {
+  DRAFT
+  POSTED
+  CANCELLED
+  REVERSED
+}
+
+enum PharmacyGeneralJournalPurpose {
+  NONTRADE_OPERATING_ACCRUAL
 }
 
 enum PharmacyBookkeepingKind {
@@ -3629,6 +3644,44 @@ model PharmacyAccountingPeriod {
   @@unique([organizationId, branchId, startsAt, endsAt])
   @@index([organizationId, branchId, status])
   @@map("pharmacy_accounting_periods")
+}
+
+/// A deliberately narrow, versioned pharmacy voucher. The line shape is fixed
+/// by purpose; arbitrary accounts and alternate ledger writers are not exposed.
+model PharmacyGeneralJournalDocument {
+  id                String                         @id @default(cuid())
+  organizationId    String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  reference         String
+  purpose           PharmacyGeneralJournalPurpose
+  status            PharmacyGeneralJournalStatus  @default(DRAFT)
+  amountMinor       Int
+  currency          Currency                       @default(PKR)
+  occurredAt        DateTime
+  evidence          String
+  reason            String
+  version           Int                            @default(1)
+  createKey         String
+  postKey            String?
+  postPayloadHash    String?
+  reverseKey         String?
+  reversePayloadHash String?
+  createdByUserId   String
+  postedAt           DateTime?
+  cancelledAt        DateTime?
+  reversedAt         DateTime?
+  journalEntryId     String?
+  reversalEntryId    String?
+  createdAt          DateTime                       @default(now())
+  updatedAt          DateTime                       @updatedAt
+
+  visibilityAnchor PharmacyBranch @relation("PharmacyGeneralJournalDocumentVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_general_journal_documents_visibility_fkey")
+
+  @@unique([organizationId, id], map: "pharmacy_general_journal_documents_org_id_key")
+  @@unique([organizationId, reference], map: "pharmacy_general_journal_documents_org_reference_key")
+  @@unique([organizationId, createKey], map: "pharmacy_general_journal_documents_org_create_key")
+  @@index([organizationId, branchId, status, occurredAt], map: "pharmacy_general_journal_documents_scope_idx")
+  @@map("pharmacy_general_journal_documents")
 }
 
 model PharmacySettlementBatch {
