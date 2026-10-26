@@ -96,6 +96,40 @@ describe('classified cash-flow projection', () => {
     expect(result.evidence.filter((item) => item.category === 'UNCLASSIFIED')).toHaveLength(2);
   });
 
+  it('classifies a balanced operating-expense payment as operating cash flow', () => {
+    const result = projectCashFlow(
+      [
+        row({
+          entryId: 'expense',
+          sourceKind: 'PHARMACY_BOOKKEEPING_TRANSACTION',
+          side: 'CREDIT',
+          amountMinor: BigInt(75),
+        }),
+        row({
+          entryId: 'expense',
+          sourceKind: 'PHARMACY_BOOKKEEPING_TRANSACTION',
+          accountCode: 'OPERATING_EXPENSE',
+          side: 'DEBIT',
+          amountMinor: BigInt(75),
+        }),
+      ],
+      period
+    )[0]!;
+
+    expect(result).toMatchObject({
+      operatingMinor: '-75',
+      unclassifiedMinor: '0',
+      movementMinor: '-75',
+    });
+    expect(result.evidence).toEqual([
+      expect.objectContaining({
+        category: 'OPERATING',
+        netMinor: '-75',
+        counterpartAccounts: ['OPERATING_EXPENSE'],
+      }),
+    ]);
+  });
+
   it('fails closed for opposing allowed counterparts and branch-partial entries', () => {
     const result = projectCashFlow(
       [
