@@ -24,7 +24,7 @@ export function requireEnvironment(
   const value = environment[name]?.trim();
   if (!value) {
     throw new Error(
-      `Missing required environment variable: ${name}. Searched .env.local and .env (existing process environment variables take precedence).`
+      `Missing required environment variable: ${name}. Searched ${LOCAL_ENV_FILES.join(' and ')} (existing process environment variables take precedence).`
     );
   }
   return value;
