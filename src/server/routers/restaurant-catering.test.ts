@@ -333,6 +333,23 @@ describe('restaurant catering lifecycle', () => {
     }
   );
 
+  it('preserves values at the durable database scale', async () => {
+    await caller().addLine({
+      orderId: 'order_1',
+      recipeId: 'recipe_1',
+      description: 'Precision test',
+      portions: '1.234',
+      unitPrice: '1.99',
+    });
+
+    const data = db.restaurantCateringOrderLine.create.mock.calls[0]?.[0].data as {
+      portions: Prisma.Decimal;
+      unitPrice: Prisma.Decimal;
+    };
+    expect(data.portions.toString()).toBe('1.234');
+    expect(data.unitPrice.toString()).toBe('1.99');
+  });
+
   it('rejects excess money precision on every order write before persistence', async () => {
     await expect(
       caller().create({
