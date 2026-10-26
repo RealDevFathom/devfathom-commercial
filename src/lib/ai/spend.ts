@@ -1,5 +1,5 @@
 import { Prisma } from '@/generated/prisma/client';
-import { DEFAULT_AI_MODELS, type RoutedAIProvider } from './model-defaults';
+import type { RoutedAIProvider } from './model-defaults';
 
 export type ModelPrice = {
   provider: RoutedAIProvider;
@@ -8,21 +8,6 @@ export type ModelPrice = {
   outputUsdPerMtok: Prisma.Decimal;
   effectiveFrom: Date;
 };
-
-export const SEEDED_MODEL_PRICES: readonly ModelPrice[] = [
-  ['anthropic', DEFAULT_AI_MODELS.anthropic.cheap, '1', '5'],
-  ['anthropic', DEFAULT_AI_MODELS.anthropic.standard, '3', '15'],
-  ['anthropic', DEFAULT_AI_MODELS.anthropic.deep, '15', '75'],
-  ['bedrock', DEFAULT_AI_MODELS.bedrock.cheap, '1', '5'],
-  ['bedrock', DEFAULT_AI_MODELS.bedrock.standard, '3', '15'],
-  ['bedrock', DEFAULT_AI_MODELS.bedrock.deep, '15', '75'],
-].map(([provider, model, input, output]) => ({
-  provider: provider as RoutedAIProvider,
-  model,
-  inputUsdPerMtok: new Prisma.Decimal(input),
-  outputUsdPerMtok: new Prisma.Decimal(output),
-  effectiveFrom: new Date('2026-10-23T00:00:00.000Z'),
-}));
 
 export class UnknownAIModelPriceError extends Error {
   constructor(provider: string, model: string) {

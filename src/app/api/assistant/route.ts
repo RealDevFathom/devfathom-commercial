@@ -17,11 +17,14 @@ import { assistantVertical } from '@/lib/ai/context';
 import { rateLimit } from '@/lib/rate-limit';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { createAIModel, readAIAvailability } from '@/lib/ai/provider';
+import { createRoutedAIModel } from '@/lib/ai/provider';
+import { reserveAIUsage, recordAIUsage } from '@/lib/ai/ledger';
+import { Prisma } from '@/generated/prisma/client';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { createTenantDb } from '@/lib/tenancy/scoped-db';
+import { createTenantDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 
 // Allow headroom for multi-step tool runs.
@@ -128,7 +131,8 @@ async function respond(req: Request) {
     return Response.json({ error: 'Not available in demo.' }, { status: 403 });
   }
   // Rechecked for every request, including approved tool continuations.
-  if (!readAIAvailability().available) {
+  const budgetValue = process.env.AI_ANTHROPIC_MONTHLY_BUDGET_USD?.trim();
+  if (!budgetValue && !readAIAvailability().available) {
     return Response.json({ error: UNAVAILABLE }, { status: 503 });
   }
   const entitlements = await resolveOrganizationEntitlements(organization.id, tenantDb);
@@ -177,8 +181,23 @@ async function respond(req: Request) {
     return Response.json({ error: 'Invalid assistant messages.' }, { status: 400 });
   }
   let ai: ReturnType<typeof createAIModel>;
+  let routedRequestId: string | undefined;
   try {
-    ai = createAIModel();
+    if (budgetValue) {
+      const monthlyBudgetUsd = new Prisma.Decimal(budgetValue);
+      routedRequestId = crypto.randomUUID();
+      const routed = await withTenantDb(organization.id, (tx) =>
+        reserveAIUsage(tx, {
+          organizationId: organization.id,
+          requestId: routedRequestId!,
+          tier: 'standard',
+          monthlyBudgetUsd,
+        })
+      );
+      ai = createRoutedAIModel(routed);
+    } else {
+      ai = createAIModel();
+    }
   } catch {
     console.error('ASSISTANT_PROVIDER_UNAVAILABLE');
     return Response.json(
@@ -199,6 +218,18 @@ async function respond(req: Request) {
     // capping the worst-case number of (token-heavy) model round-trips per turn.
     stopWhen: stepCountIs(6),
     providerOptions: ai.providerOptions,
+    onFinish: routedRequestId
+      ? async ({ totalUsage }) => {
+          await withTenantDb(organization.id, (tx) =>
+            recordAIUsage(tx, {
+              organizationId: organization.id,
+              requestId: routedRequestId!,
+              inputTokens: totalUsage.inputTokens ?? 0,
+              outputTokens: totalUsage.outputTokens ?? 0,
+            })
+          );
+        }
+      : undefined,
   });
 
   return result.toUIMessageStreamResponse({
