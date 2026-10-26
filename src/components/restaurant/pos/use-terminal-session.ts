@@ -20,6 +20,7 @@ export type Runtime = {
   state: 'LOCKED' | 'UNLOCKED';
   branchName: string;
   operator: OperatorOption | null;
+  composerProof?: string;
 };
 type OperatorOption = {
   staffProfileId: string;
@@ -46,6 +47,7 @@ type EstablishResponse = {
   operator?: OperatorOption;
 };
 type SessionResponse = {
+  composerProof?: string;
   session: { id: string; state: 'LOCKED' | 'UNLOCKED'; activeStaffProfileId: string | null };
 };
 export class RequestError extends Error {
@@ -104,6 +106,7 @@ export async function request<T>(path: string, init: RequestInit): Promise<T> {
 export function authHeaders(runtime: Runtime, json = false): HeadersInit {
   return {
     'X-Terminal-Session': runtime.sessionToken,
+    ...(runtime.composerProof ? { 'X-POS-Composer-Proof': runtime.composerProof } : {}),
     ...(json ? { 'Content-Type': 'application/json' } : {}),
   };
 }
@@ -369,6 +372,7 @@ export function useTerminalSession({
       const unlocked: Runtime = {
         ...runtime,
         state: data.session.state,
+        composerProof: data.composerProof,
         operator:
           operators.find(
             (operator) => operator.staffProfileId === data.session.activeStaffProfileId
@@ -398,6 +402,7 @@ export function useTerminalSession({
         headers: authHeaders(runtime),
       });
       const locked: Runtime = { ...runtime, state: data.session.state, operator: null };
+      delete locked.composerProof;
       setRuntime(locked);
       setOperatorId('');
       setOperators([]);
@@ -428,6 +433,7 @@ export function useTerminalSession({
       const switched: Runtime = {
         ...runtime,
         state: data.session.state,
+        composerProof: data.composerProof,
         operator:
           operators.find(
             (operator) => operator.staffProfileId === data.session.activeStaffProfileId

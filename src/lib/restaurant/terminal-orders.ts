@@ -26,6 +26,7 @@ import {
 } from './menu-availability';
 import { OrderCommandError, type CommandActor } from './orders';
 import { OrderPricingError } from './order-pricing';
+import { verifyPosComposerProof } from './pos-composer-proof';
 import { OrderInvariantError, OrderTransitionError } from './order-state-machine';
 import { pickEntry, resolveEffectiveEntries, type ResolvedPriceList } from './price-lists';
 import {
@@ -313,6 +314,20 @@ export function terminalCommandRoute<S extends z.ZodTypeAny>(
 
       const parsed = await parseBody(request);
       if (!parsed.ok) return parsed.response;
+
+      const composerProof = request.headers.get('x-pos-composer-proof');
+      if (
+        !composerProof ||
+        !verifyPosComposerProof(composerProof, {
+          organizationId: ctx.organizationId,
+          branchId: ctx.device.branchId,
+          deviceId: ctx.device.id,
+          sessionId: ctx.session.id,
+          staffProfileId: operator.staffProfileId,
+        })
+      ) {
+        return json({ error: 'Missing or invalid POS composer proof.' }, 403);
+      }
 
       const data = parsed.data as unknown;
       const capabilityError = await requireOrderTakingCapability(

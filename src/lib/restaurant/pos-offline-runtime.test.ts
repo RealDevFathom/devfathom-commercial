@@ -7,6 +7,7 @@ const scope = { organizationId: 'org-1', branchId: 'branch-1', deviceId: 'device
 const input = {
   deviceId: scope.deviceId,
   composerStaffProfileId: 'staff-1',
+  composerProof: 'signed-composer-proof',
   catalogVersion: 'catalog-1',
   clientOriginAt: '2026-08-31T00:00:00.000Z',
   open: { channel: 'TAKEAWAY' as const, publicationId: 'publication-1' },

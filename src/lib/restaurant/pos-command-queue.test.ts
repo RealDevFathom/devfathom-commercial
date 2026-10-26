@@ -63,6 +63,7 @@ function draftInput(overrides: Partial<PosDraftInput> = {}): PosDraftInput {
   return {
     deviceId: DEVICE,
     composerStaffProfileId: OPERATOR,
+    composerProof: 'signed-composer-proof',
     catalogVersion: 'v1:aaaa',
     clientOriginAt: '2026-08-27T10:00:00.000Z',
     open: { channel: 'DINE_IN', tableIds: ['t1'], coverCount: 2 },
@@ -315,6 +316,7 @@ describe('the crash window: committed server-side, response lost (criterion 3)',
     const built = buildReplayRequest(next.draft, next.command);
     if (!built.ok) throw new Error('expected a replay request');
     expect(built.request.headers['Idempotency-Key']).toBe(open.idempotencyKey);
+    expect(built.request.headers['X-POS-Composer-Proof']).toBe('signed-composer-proof');
 
     const serverRef = server.submit(built.request.headers['Idempotency-Key']);
     snapshot = applyReplayOutcome(snapshot, {

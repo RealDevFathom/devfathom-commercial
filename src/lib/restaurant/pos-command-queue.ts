@@ -119,6 +119,8 @@ export type PosQueuedDraft = {
   deviceId: string;
   /** The staff profile that composed it. Replay is refused for another operator. */
   composerStaffProfileId: string;
+  /** Server-signed binding of composer, tenant, branch, device, and terminal session. */
+  composerProof: string;
   /** Per-device monotonic FIFO position. Never derived from a clock. */
   sequence: number;
   /** Client-origin UTC instant, metadata only. */
@@ -163,6 +165,7 @@ export function countQueuedCommands(snapshot: PosQueueSnapshot): number {
 export type PosDraftInput = {
   deviceId: string;
   composerStaffProfileId: string;
+  composerProof: string;
   catalogVersion: string;
   /** Client-origin UTC instant, metadata only. */
   clientOriginAt: string;
@@ -255,6 +258,7 @@ export function enqueueDraft(
     draftId: newId(),
     deviceId: input.deviceId,
     composerStaffProfileId: input.composerStaffProfileId,
+    composerProof: input.composerProof,
     sequence: snapshot.nextSequence,
     clientOriginAt: input.clientOriginAt,
     catalogVersion: input.catalogVersion,
@@ -358,7 +362,10 @@ export function buildReplayRequest(
   draft: PosQueuedDraft,
   command: PosQueuedCommand
 ): BuildReplayRequestResult {
-  const headers = { 'Idempotency-Key': command.idempotencyKey } as const;
+  const headers = {
+    'Idempotency-Key': command.idempotencyKey,
+    'X-POS-Composer-Proof': draft.composerProof,
+  } as const;
 
   if (command.kind === 'OPEN_ORDER') {
     return {
