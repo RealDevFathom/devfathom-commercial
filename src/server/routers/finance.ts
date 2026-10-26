@@ -850,13 +850,15 @@ export const financeRouter = router({
     const yearlyIncome = fromCurrencyGroups(yearlyIncomeG, 'amount');
     const totalOutstanding = sumByCurrency(
       outstandingInvoices.map((invoice) => {
-        const amountPaid = invoice.payments.reduce(
-          (sum, payment) => sum + Number(payment.amount),
+        // Both columns are Decimal(12,2). Do the subtraction in integer cents so
+        // multiple payments cannot introduce binary floating-point drift.
+        const amountPaidCents = invoice.payments.reduce(
+          (sum, payment) => sum + Math.round(Number(payment.amount) * 100),
           0
         );
         return {
           currency: invoice.currency,
-          amount: round2(Number(invoice.total) - amountPaid),
+          amount: (Math.round(Number(invoice.total) * 100) - amountPaidCents) / 100,
         };
       })
     );

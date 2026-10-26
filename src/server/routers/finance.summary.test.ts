@@ -87,7 +87,7 @@ describe('finance.getFinancialSummary', () => {
     expect(summary.outstandingCount).toBe(1);
   });
 
-  it('subtracts multiple payments and rounds each invoice balance to cents', async () => {
+  it('subtracts multiple payments using exact cent arithmetic', async () => {
     mocks.invoiceFindMany.mockResolvedValue([
       { total: 1_000, currency: 'USD', payments: [{ amount: 333.33 }, { amount: 266.67 }] },
       { total: 0.3, currency: 'USD', payments: [{ amount: 0.1 }, { amount: 0.1 }] },
