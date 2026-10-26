@@ -39,12 +39,17 @@ export type DraftCheckBreakdown = {
 export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftCheckBreakdown {
   const at = input.at ?? new Date();
   const fallback = input.profiles ? null : zeroTax(at);
-  const lines = input.lines.map((line) => ({
-    id: line.id,
-    unitPrice: line.unitPrice,
-    quantity: line.quantity,
-    modifierTotal: formatMoney(sum(line.modifierDeltas ?? [])),
-  }));
+  // Settlement taxes each physical unit independently. Expand draft lines the
+  // same way so per-line tax rounding cannot make a preview disagree with the
+  // amount required at tender time.
+  const lines = input.lines.flatMap((line) =>
+    Array.from({ length: line.quantity }, (_, unitOrdinal) => ({
+      id: `${line.id}:${unitOrdinal}`,
+      unitPrice: line.unitPrice,
+      quantity: 1,
+      modifierTotal: formatMoney(sum(line.modifierDeltas ?? [])),
+    }))
+  );
   const basis = sum(
     lines.map((line) => multiply(add(line.unitPrice, line.modifierTotal), line.quantity))
   );

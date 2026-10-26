@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { quoteDraftCheckTotal } from './draft-check-total';
+import { quoteDraftCheckBreakdown, quoteDraftCheckTotal } from './draft-check-total';
 import type { TaxProfile, TaxRule } from './tax-calculator';
 
 const at = new Date('2030-06-01T00:00:00Z');
@@ -81,5 +81,29 @@ describe('quoteDraftCheckTotal', () => {
         lines: [{ id: 'coffee', unitPrice: '4.00', quantity: 1, modifierDeltas: ['0.50'] }],
       })
     ).toBe('4.50');
+  });
+
+  it('rounds tax per unit to match settlement for multi-quantity lines', () => {
+    expect(
+      quoteDraftCheckBreakdown({
+        at,
+        profiles: [profile],
+        rules: [rule('CASH', '0.10'), rule('CARD', '0.10'), rule('OTHER', '0.10')],
+        lines: [{ id: 'small-item', unitPrice: '0.05', quantity: 3 }],
+      })
+    ).toEqual({ tax: '0.03', serviceCharge: '0.00', total: '0.18' });
+  });
+
+  it('applies modifiers to every expanded unit', () => {
+    expect(
+      quoteDraftCheckBreakdown({
+        at,
+        profiles: [profile],
+        rules: [rule('CASH', '0.10'), rule('CARD', '0.10'), rule('OTHER', '0.10')],
+        lines: [
+          { id: 'small-item', unitPrice: '0.04', quantity: 2, modifierDeltas: ['0.01'] },
+        ],
+      })
+    ).toEqual({ tax: '0.02', serviceCharge: '0.00', total: '0.12' });
   });
 });
