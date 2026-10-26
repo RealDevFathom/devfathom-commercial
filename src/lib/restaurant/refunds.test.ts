@@ -509,6 +509,7 @@ describeIfDatabase('card refunds (real DB)', () => {
       actor: actor(),
       now: AT,
     });
+    const beforeRejectedRefund = await sideEffectTotals(orgId);
 
     await expect(
       deps.refunds.refundTender(db, {
@@ -521,6 +522,8 @@ describeIfDatabase('card refunds (real DB)', () => {
       })
     ).rejects.toMatchObject({ reason: 'BILL_NOT_SETTLED' });
 
+    expect(await sideEffectTotals(orgId)).toEqual(beforeRejectedRefund);
+
     const final = await deps.tenders.applyTender(db, {
       billId,
       tender: { type: 'OTHER', amount: '6.50' },
@@ -528,11 +531,26 @@ describeIfDatabase('card refunds (real DB)', () => {
       now: AT,
     });
     expect(final.settled).toBe(true);
-    expect(
-      await read((tx) =>
-        tx.restaurantRefund.count({ where: { originalTenderId: partial.tenderId } })
-      )
-    ).toBe(0);
+    const persisted = await read(async (tx) => ({
+      bill: await tx.restaurantBill.findUniqueOrThrow({
+        where: { id: billId },
+        select: { status: true },
+      }),
+      refunds: await tx.restaurantRefund.count({
+        where: { originalTenderId: partial.tenderId },
+      }),
+      tenderAmounts: await tx.restaurantTender.findMany({
+        where: { billId },
+        orderBy: { amount: 'asc' },
+        select: { amount: true },
+      }),
+    }));
+    expect(persisted.bill.status).toBe('SETTLED');
+    expect(persisted.refunds).toBe(0);
+    expect(persisted.tenderAmounts.map(({ amount }) => amount.toFixed(2))).toEqual([
+      '6.00',
+      '6.50',
+    ]);
   });
 
   it('appends a capped REVERSAL pinned to the original earn program', async () => {
