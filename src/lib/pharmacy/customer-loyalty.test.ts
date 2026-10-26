@@ -20,13 +20,17 @@ describe('CRM-L01 pharmacy loyalty', () => {
     ['denied', { granted: false, revokedAt: null }],
     ['revoked', { granted: true, revokedAt: new Date('2026-10-26T00:00:00.000Z') }],
   ])('refuses to link a retail customer when LOYALTY consent is %s', async (_state, consent) => {
+    const lockSale = vi.fn();
+    const findSale = vi.fn();
+    const upsertCustomer = vi.fn();
     const update = vi.fn();
     const db = {
+      $queryRaw: lockSale,
       patientConsent: {
         findFirst: vi.fn().mockResolvedValue(consent),
       },
-      pharmacySale: { findFirst: vi.fn(), update },
-      pharmacyCustomer: { upsert: vi.fn() },
+      pharmacySale: { findFirst: findSale, update },
+      pharmacyCustomer: { upsert: upsertCustomer },
     };
     await expect(
       linkCustomerToSale(db as never, scope, {
@@ -41,6 +45,9 @@ describe('CRM-L01 pharmacy loyalty', () => {
         orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
       })
     );
+    expect(lockSale).not.toHaveBeenCalled();
+    expect(findSale).not.toHaveBeenCalled();
+    expect(upsertCustomer).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
   });
 
