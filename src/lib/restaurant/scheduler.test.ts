@@ -357,16 +357,15 @@ describe('fail', () => {
   });
 
   it.each([
-    ['complete', 'worker-a', 1],
-    ['complete', 'worker-a', 2],
-    ['complete', 'worker-b', 1],
-    ['fail', 'worker-a', 1],
-    ['fail', 'worker-a', 2],
-    ['fail', 'worker-b', 1],
+    ['complete', 'worker-b', 2, 'claim-stale'],
+    ['complete', 'worker-b', 1, 'claim-current'],
+    ['complete', 'worker-a', 2, 'claim-current'],
+    ['fail', 'worker-b', 2, 'claim-stale'],
+    ['fail', 'worker-b', 1, 'claim-current'],
+    ['fail', 'worker-a', 2, 'claim-current'],
   ] as const)(
-    'rejects a stale claim attempting to %s with worker %s at attempt %i',
-    async (operation, workerId, attempt) => {
-      const staleClaimToken = 'claim-stale';
+    'rejects a stale claim attempting to %s with worker %s at attempt %i and token %s',
+    async (operation, workerId, attempt, claimToken) => {
       const { db, jobs, executions } = createFakeDb([
         {
           id: 'j1',
@@ -377,20 +376,19 @@ describe('fail', () => {
           claimedBy: 'worker-b',
         },
       ]);
-      expect(staleClaimToken).not.toBe(jobs.get('j1')!.claimToken);
 
       const settlement =
         operation === 'complete'
           ? complete(db, 'j1', {
               workerId,
               attempt,
-              claimToken: staleClaimToken,
+              claimToken,
               now: T0,
             })
           : fail(db, 'j1', new Error('late failure'), {
               workerId,
               attempt,
-              claimToken: staleClaimToken,
+              claimToken,
               now: T0,
             });
 
