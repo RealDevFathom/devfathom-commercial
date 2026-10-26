@@ -58,6 +58,24 @@ describe('CashFlowPage authorization and metadata', () => {
     expect(mocks.loadCashFlowProjection).not.toHaveBeenCalled();
   });
 
+  it('fails closed when the authorized projection read fails', async () => {
+    mocks.financialStatements.mockResolvedValue({
+      scope: { organizationId: 'org-a', branchId: 'branch-a' },
+      from: new Date('2026-10-01T00:00:00Z'),
+      to: new Date('2026-11-01T00:00:00Z'),
+      accounts: [],
+      cashflow: [],
+      freshness: { retrievedAt: new Date('2026-11-01T01:00:00Z') },
+    });
+    mocks.loadCashFlowProjection.mockRejectedValue(new Error('database unavailable'));
+
+    const markup = renderToStaticMarkup(await CashFlowPage({ searchParams: params }));
+
+    expect(markup).toContain('The projection could not be read');
+    expect(markup).not.toContain('Opening-to-closing reconciliation');
+    expect(markup).not.toContain('No scoped cash or bank postings before the cutoff');
+  });
+
   it('shows per-currency source freshness and completeness returned by the projection', async () => {
     mocks.financialStatements.mockResolvedValue({
       scope: { organizationId: 'org-a', branchId: 'branch-a' },

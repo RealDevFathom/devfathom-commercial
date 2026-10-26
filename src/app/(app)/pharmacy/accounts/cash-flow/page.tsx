@@ -42,21 +42,21 @@ export default async function CashFlowPage({
     });
     try {
       // This existing procedure is the sole authorization, entitlement, active-branch, and period gate.
-      report = await pharmacyFinanceRouter.createCaller(ctx).financialStatements({
+      const authorizedReport = await pharmacyFinanceRouter.createCaller(ctx).financialStatements({
         branchId: query.branch,
         from: `${from}T00:00:00Z`,
         to: `${to}T00:00:00Z`,
         page: 1,
       });
       const controlCurrencies = new Set([
-        ...report.accounts.map((a) => a.currency),
-        ...report.cashflow.map((a) => a.currency),
+        ...authorizedReport.accounts.map((a) => a.currency),
+        ...authorizedReport.cashflow.map((a) => a.currency),
       ]);
       const controls = [...controlCurrencies].map((currency) => {
-        const accounts = report!.accounts.filter(
+        const accounts = authorizedReport.accounts.filter(
           (a) => a.currency === currency && ['CASH', 'BANK'].includes(a.accountCode)
         );
-        const flows = report!.cashflow.filter((a) => a.currency === currency);
+        const flows = authorizedReport.cashflow.filter((a) => a.currency === currency);
         return {
           currency,
           openingMinor: accounts
@@ -70,10 +70,11 @@ export default async function CashFlowPage({
       });
       projection = await loadCashFlowProjection(
         ctx.db,
-        report.scope,
-        { from: report.from, to: report.to },
+        authorizedReport.scope,
+        { from: authorizedReport.from, to: authorizedReport.to },
         controls
       );
+      report = authorizedReport;
     } catch (error) {
       denied = error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code);
     }

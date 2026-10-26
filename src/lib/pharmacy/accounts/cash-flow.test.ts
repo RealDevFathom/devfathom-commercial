@@ -225,4 +225,22 @@ describe('classified cash-flow projection', () => {
     });
     expect(result.metadata.classifiedCompleteness).toBe('unknown');
   });
+
+  it('shows a discrepancy for a canonical control currency without projection postings', () => {
+    const result = projectCashFlow([], period, [
+      { currency: 'USD', openingMinor: '100', movementMinor: '25', closingMinor: '125' },
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      currency: 'USD',
+      openingMinor: '0',
+      movementMinor: '0',
+      closingMinor: '0',
+      canonicalOpeningDiscrepancyMinor: '-100',
+      canonicalMovementDiscrepancyMinor: '-25',
+      canonicalClosingDiscrepancyMinor: '-125',
+      canonicalControlMatches: false,
+    });
+  });
 });

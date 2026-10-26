@@ -149,6 +149,7 @@ export function projectCashFlow(
       if (!bucket.latest || first.createdAt > bucket.latest) bucket.latest = first.createdAt;
     }
   }
+  for (const control of controls) ensure(control.currency);
   const controlMap = new Map(controls.map((item) => [item.currency, item]));
   return [...currency.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
