@@ -123,7 +123,7 @@ describe('private attachment delivery', () => {
 
   it('does not apply another tenant\'s licence evidence restriction', async () => {
     db.branchRegulatoryProfile.findFirst.mockImplementation(async ({ where }) =>
-      where.organizationId === 'org_b' ? { id: 'foreign_profile' } : null
+      where.organizationId === 'org_a' ? null : { id: 'foreign_profile' }
     );
 
     expect((await read('shared-name.pdf')).status).toBe(200);
