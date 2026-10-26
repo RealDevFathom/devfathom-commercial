@@ -527,6 +527,24 @@ describe('restaurantInventoryRouter', () => {
     expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
   });
 
+  it('denies low-stock rule mutations when the user has no active staff profile', async () => {
+    mocks.findStaffProfiles.mockResolvedValue([]);
+
+    const api = caller();
+    const attempts = [
+      () => api.createLowStockRule({ stockItemId: 'item_1', locationId: 'loc_1', threshold: '5' }),
+      () => api.updateLowStockRule({ id: 'rule_1', threshold: '6' }),
+      () => api.deleteLowStockRule({ id: 'rule_1' }),
+    ];
+    for (const attempt of attempts) {
+      await expect(attempt()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+
+    expect(mocks.createLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.updateLowStockRule).not.toHaveBeenCalled();
+    expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
+  });
+
   it('rejects missing low-stock locations and rules before attempting a mutation', async () => {
     mocks.findStockLocation.mockResolvedValueOnce(null);
     mocks.findLowStockRule.mockResolvedValue(null);
