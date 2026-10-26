@@ -34,6 +34,7 @@ vi.mock('@/server/audit', () => ({
 }));
 
 import { INVITATION_GENERIC_MESSAGE, RESET_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
+import { anonymousTokenInput } from '@/lib/auth/anonymous-inputs';
 import { publicProcedure, router } from '@/server/trpc';
 
 import { anonymousFallbackRouter } from './anonymous-fallback';
@@ -50,7 +51,7 @@ const TRPC_ENDPOINT = '/api/trpc';
  */
 const realRouter = router({
   invitations: router({
-    get: publicProcedure.query(() => {
+    get: publicProcedure.input(anonymousTokenInput).query(() => {
       throw new TRPCError({ code: 'NOT_FOUND', message: INVITATION_GENERIC_MESSAGE });
     }),
   }),
@@ -120,11 +121,17 @@ async function serve(router_: AnyRouter, request: Request): Promise<ServedRespon
   };
 }
 
-const query = (path: string) =>
-  new Request(`http://acme.example.test${TRPC_ENDPOINT}/${path}?batch=1`, { method: 'GET' });
-
 const queryWithInput = (path: string, input: unknown) => {
   const encoded = encodeURIComponent(JSON.stringify({ '0': { json: input } }));
+  return new Request(`http://acme.example.test${TRPC_ENDPOINT}/${path}?batch=1&input=${encoded}`, {
+    method: 'GET',
+  });
+};
+
+const batchQueryWithInput = (path: string, inputs: readonly unknown[]) => {
+  const encoded = encodeURIComponent(
+    JSON.stringify(Object.fromEntries(inputs.map((input, index) => [index, { json: input }])))
+  );
   return new Request(`http://acme.example.test${TRPC_ENDPOINT}/${path}?batch=1&input=${encoded}`, {
     method: 'GET',
   });
@@ -206,7 +213,7 @@ describe('fallback and real routers serialize refusals identically', () => {
   });
 
   it('matches on a NOT_FOUND from invitations.get', async () => {
-    const request = () => query('invitations.get');
+    const request = () => queryWithInput('invitations.get', { token: 'anything' });
 
     const real = await serve(realRouter, request());
     const fallback = await serve(anonymousFallbackRouter, request());
@@ -235,7 +242,11 @@ describe('fallback and real routers serialize refusals identically', () => {
    * back, only by the errors inside it.
    */
   it('matches on the batched-response envelope', async () => {
-    const request = () => query('invitations.get,invitations.get');
+    const request = () =>
+      batchQueryWithInput('invitations.get,invitations.get', [
+        { token: 'first' },
+        { token: 'second' },
+      ]);
 
     const real = await serve(realRouter, request());
     const fallback = await serve(anonymousFallbackRouter, request());
