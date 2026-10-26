@@ -20,6 +20,8 @@ export const metadata: Metadata = { title: 'Account code reference · Pharmacy' 
 
 type SearchParams = Promise<{ branch?: string | string[] }>;
 
+const MAX_BRANCH_ID_LENGTH = 128;
+
 const header = (
   <PageHeader
     eyebrow="Pharmacy accounts"
@@ -80,12 +82,22 @@ export default async function AccountCodeReferencePage({
     orderBy: [{ name: 'asc' }, { id: 'asc' }],
     select: { id: true, name: true },
   });
-  const requestedBranch = typeof query.branch === 'string' ? query.branch : undefined;
-  const branch = requestedBranch ? branches.find(({ id }) => id === requestedBranch) : branches[0];
+  const hasRequestedBranch = Object.prototype.hasOwnProperty.call(query, 'branch');
+  const requestedBranch =
+    typeof query.branch === 'string' &&
+    query.branch.length > 0 &&
+    query.branch.length <= MAX_BRANCH_ID_LENGTH
+      ? query.branch
+      : undefined;
+  const branch = hasRequestedBranch
+    ? requestedBranch
+      ? branches.find(({ id }) => id === requestedBranch)
+      : undefined
+    : branches[0];
   if (!branch) {
     return unavailable(
-      requestedBranch ? 'Branch unavailable' : 'No active branch',
-      requestedBranch
+      hasRequestedBranch ? 'Branch unavailable' : 'No active branch',
+      hasRequestedBranch
         ? 'The requested branch is not an active branch in this workspace.'
         : 'Create an active pharmacy branch before viewing this reference.'
     );

@@ -124,4 +124,19 @@ describe('account code reference page authorization', () => {
     expect(mocks.journalWriter).not.toHaveBeenCalled();
     expect(mocks.financeDataReader).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['an empty value', ''],
+    ['repeated values', ['stale-branch', 'branch-1']],
+    ['an empty repeated value', []],
+    ['an excessively long value', 'b'.repeat(129)],
+  ])('denies an explicit malformed branch with %s', async (_condition, branch) => {
+    render(await Page({ searchParams: Promise.resolve({ branch }) }));
+
+    expect(screen.getByRole('heading', { name: 'Branch unavailable' })).toBeInTheDocument();
+    expect(screen.queryByText('CASH')).not.toBeInTheDocument();
+    expect(mocks.referenceRead).not.toHaveBeenCalled();
+    expect(mocks.journalWriter).not.toHaveBeenCalled();
+    expect(mocks.financeDataReader).not.toHaveBeenCalled();
+  });
 });
