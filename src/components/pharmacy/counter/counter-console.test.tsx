@@ -1172,8 +1172,9 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
       )
     );
     const successMessage = await screen.findByText('1 × Paracetamol added.');
-    expect(successMessage.parentElement).toHaveClass('text-success');
-    expect(successMessage.parentElement).not.toHaveClass('text-text-body');
+    const successNoticeText = successMessage.closest('.text-sm');
+    expect(successNoticeText).toHaveClass('text-success');
+    expect(successNoticeText).not.toHaveClass('text-text-body');
 
     mocks.mutations.addLine!.mockClear();
     mocks.queries.counterSearch = query({ rows: [row, { ...row, medicineId: 'med-other' }] });
