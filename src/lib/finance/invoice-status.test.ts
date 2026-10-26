@@ -30,9 +30,12 @@ describe('invoice status contract shared by REST, tRPC, and AI', () => {
     const sentAt = new Date('2026-10-20T00:00:00Z');
     const storedInvoice = { status: 'SENT' as const, sentAt };
     const update = invoiceStatusUpdate('SENT', next, new Date('2026-10-21T00:00:00Z'));
+    const updatedInvoice = { ...storedInvoice, ...update };
 
     expect(update).toEqual({ status: next });
-    expect({ ...storedInvoice, ...update }).toEqual({ status: next, sentAt });
+    expect(update).not.toHaveProperty('sentAt');
+    expect(updatedInvoice).toEqual({ status: next, sentAt });
+    expect(updatedInvoice.sentAt).toBe(sentAt);
   });
 
   it.each(['SENT', 'CANCELLED'] as const)(
