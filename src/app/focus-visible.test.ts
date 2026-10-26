@@ -7,7 +7,7 @@ const globals = readFileSync(join(__dirname, 'globals.css'), 'utf8');
 describe('global keyboard focus indicator', () => {
   it('provides an unclippable unlayered semantic outline for every focus-visible element', () => {
     const focusRule = globals.match(
-      /^:focus-visible\s*\{\s*outline:\s*2px solid var\(--ring\);\s*outline-offset:\s*-2px;\s*\}/m
+      /^:focus-visible\s*\{\s*outline:\s*2px solid var\(--ring\) !important;\s*outline-offset:\s*-2px !important;\s*\}/m
     );
 
     expect(focusRule).not.toBeNull();

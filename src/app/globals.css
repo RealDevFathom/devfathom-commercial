@@ -1588,11 +1588,11 @@
   background-color: var(--accent-quiet);
 }
 
-/* Keep this rule unlayered so it wins over legacy `outline-none` utilities.
+/* Keep this rule unlayered and important so it wins over legacy focus resets.
    Draw the outline inside the control so overflow regions cannot clip it.
    Component-specific rings can still add emphasis, but no keyboard-reachable
    element may lose the persistent Studio focus outline. */
 :focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: -2px;
+  outline: 2px solid var(--ring) !important;
+  outline-offset: -2px !important;
 }
