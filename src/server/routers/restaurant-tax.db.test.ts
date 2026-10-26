@@ -128,6 +128,7 @@ describeIfDatabase('restaurant tax activation replay against PostgreSQL', () => 
       )
     );
     expect(new Set(results.map((result) => result.id)).size).toBe(1);
+    expect(results[0].effectiveFrom).toEqual(new Date('2031-06-30T19:00:00.000Z'));
     await withTenantDb(organizationId, async (db) => {
       expect(await db.restaurantTaxProfileVersion.count({ where: { branchId } })).toBe(1);
       expect(

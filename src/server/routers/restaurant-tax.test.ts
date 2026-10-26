@@ -95,6 +95,18 @@ describe('restaurant tax activation router', () => {
     expect(db.restaurantTaxProfileVersion.create).not.toHaveBeenCalled();
   });
 
+  it('rejects timestamp activation values instead of silently changing their calendar date', async () => {
+    await expect(
+      caller().activate({
+        ...base,
+        effectiveFrom: '2026-07-01T00:00:00.000Z',
+        profileId: 'PK-ICT-RESTAURANT',
+        eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
   it('rejects the listed Sindh preset until its official evidence is pinned again', async () => {
     await expect(
       caller().activate({
