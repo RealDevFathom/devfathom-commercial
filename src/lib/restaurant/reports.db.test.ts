@@ -32,10 +32,12 @@ describeIfDatabase('restaurant report timezone boundaries', () => {
         VALUES
           ('just before lower', TIMESTAMPTZ '2026-10-20 18:59:59.999+00'),
           ('exact lower', TIMESTAMPTZ '2026-10-20 19:00:00+00'),
+          ('local 01:00', TIMESTAMPTZ '2026-10-20 20:00:00+00'),
           ('just before upper', TIMESTAMPTZ '2026-10-21 18:59:59.999+00'),
           ('exact upper', TIMESTAMPTZ '2026-10-21 19:00:00+00'),
           ('ny just before lower', TIMESTAMPTZ '2026-10-21 03:59:59.999+00'),
           ('ny exact lower', TIMESTAMPTZ '2026-10-21 04:00:00+00'),
+          ('ny local 01:00', TIMESTAMPTZ '2026-10-21 05:00:00+00'),
           ('ny just before upper', TIMESTAMPTZ '2026-10-22 03:59:59.999+00'),
           ('ny exact upper', TIMESTAMPTZ '2026-10-22 04:00:00+00')
       ), movements AS (
@@ -56,8 +58,10 @@ describeIfDatabase('restaurant report timezone boundaries', () => {
     expect(result.rows).toEqual([
       { branch: 'Karachi', occurred_at: 'exact lower', day: '2026-10-21' },
       { branch: 'Karachi', occurred_at: 'just before upper', day: '2026-10-21' },
+      { branch: 'Karachi', occurred_at: 'local 01:00', day: '2026-10-21' },
       { branch: 'New York', occurred_at: 'ny exact lower', day: '2026-10-21' },
       { branch: 'New York', occurred_at: 'ny just before upper', day: '2026-10-21' },
+      { branch: 'New York', occurred_at: 'ny local 01:00', day: '2026-10-21' },
     ]);
   });
 });
