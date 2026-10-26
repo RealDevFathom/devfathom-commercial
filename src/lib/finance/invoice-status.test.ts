@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   allowedInvoiceStatuses,
+  INVOICE_STATUS_VALUES,
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
   PAID_STATUS_ERROR,
@@ -8,6 +9,16 @@ import {
 } from './invoice-status';
 
 describe('invoice status contract shared by REST, tRPC, and AI', () => {
+  it('keeps every picker choice aligned with the transition validator', () => {
+    for (const prior of INVOICE_STATUS_VALUES) {
+      const allowed = allowedInvoiceStatuses(prior);
+
+      for (const next of INVOICE_STATUS_VALUES) {
+        expect(allowed.includes(next)).toBe(invoiceStatusTransitionError(prior, next) === null);
+      }
+    }
+  });
+
   it.each([
     ['DRAFT', ['DRAFT', 'SENT', 'CANCELLED']],
     ['SENT', ['DRAFT', 'SENT', 'OVERDUE', 'CANCELLED']],
