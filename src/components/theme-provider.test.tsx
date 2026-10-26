@@ -19,6 +19,23 @@ function contrast(foreground: string, background: string) {
   return (values[0] + 0.05) / (values[1] + 0.05);
 }
 
+function tint(foreground: string, background: string, opacity: number) {
+  const channels = [foreground, background].map((hex) =>
+    hex
+      .slice(1)
+      .match(/.{2}/g)!
+      .map((channel) => Number.parseInt(channel, 16))
+  );
+
+  return `#${channels[0]
+    .map((channel, index) =>
+      Math.round(channel * opacity + channels[1][index] * (1 - opacity))
+        .toString(16)
+        .padStart(2, '0')
+    )
+    .join('')}`;
+}
+
 function studioDarkTokens() {
   const css = readFileSync('src/app/globals.css', 'utf8');
   const blocks = [...css.matchAll(/\[data-theme='dark'\]\s*\{([^}]+)\}/g)];
@@ -73,5 +90,12 @@ describe('ThemeProvider', () => {
         ).toBeGreaterThanOrEqual(4.5);
       }
     }
+  });
+
+  it('keeps dark info status text at WCAG AA contrast on its tinted surface', () => {
+    const tokens = studioDarkTokens();
+    const infoTint = tint(tokens.info, tokens['surface-raised'], 0.1);
+
+    expect(contrast(tokens.info, infoTint)).toBeGreaterThanOrEqual(4.5);
   });
 });
