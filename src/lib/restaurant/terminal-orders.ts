@@ -399,7 +399,7 @@ type PricedItem = {
   modifiers: { priceDelta: Prisma.Decimal }[];
 };
 
-/** Derived subtotal over non-voided items (there is no stored total, C3). */
+/** Derived subtotal over the supplied priced items (there is no stored total, C3). */
 function deriveSubtotal(items: readonly PricedItem[]): Prisma.Decimal {
   return items.reduce((sum, item) => {
     const modifiers = item.modifiers.reduce(

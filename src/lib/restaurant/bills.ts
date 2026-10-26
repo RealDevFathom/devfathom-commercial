@@ -37,11 +37,11 @@ import { consumeReservations } from './promotion-caps';
  * (`restaurant_money_idempotency_keys`, C11).
  *
  * The four split kinds (C4 / §11.2):
- *   - NONE       one bill for the whole order, every non-voided item on it.
+ *   - NONE       one bill for the whole order, every billable purchased item on it.
  *   - BY_ITEM    an explicit item→bill assignment; the union is asserted to be a
- *                complete partition of the non-voided items (every item on exactly
+ *                complete partition of the billable purchased items (every item on exactly
  *                one bill, no unknown/voided/duplicated item).
- *   - BY_SEAT    group the non-voided items by the M4 `seatNumber` seam; items with
+ *   - BY_SEAT    group the billable purchased items by the M4 `seatNumber` seam; items with
  *                no seat form one designated bill.
  *   - FRACTIONAL divide the ORDER TOTAL across integer fraction weights via the
  *                pinned `money.allocate` largest-remainder rule; each bill records
@@ -434,7 +434,7 @@ function planByItem(
   if (seen.size !== items.length) {
     const missing = items.filter((i) => !seen.has(i.id)).map((i) => i.id);
     throw new BillCommandError(
-      `Every non-voided item must be assigned to exactly one bill; unassigned: ${missing.join(', ')}.`,
+      `Every billable purchased item must be assigned to exactly one bill; unassigned: ${missing.join(', ')}.`,
       'PARTITION_INCOMPLETE'
     );
   }
@@ -1657,7 +1657,7 @@ export type OrderSettlement = {
  * Evaluate whether an order is fully settled (C12). The predicate — consumed by the
  * order close guard (`orders.ts`) and the `getOrderSettlement` read — holds when:
  *   1. the order has at least one live (non-void) bill;
- *   2. for item-carrying splits, every non-voided item is on exactly one live bill
+ *   2. for item-carrying splits, every billable purchased item is on exactly one live bill
  *      line (FRACTIONAL bills own fractions, not items, so item coverage is proven
  *      by the money identity instead);
  *   3. every live bill is SETTLED (VOID bills are excluded);

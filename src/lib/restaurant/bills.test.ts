@@ -518,7 +518,7 @@ describe('planBills — NONE / BY_ITEM / BY_SEAT (pure partition, C4)', () => {
     ).toThrow(/not supported when a service charge is pinned/);
   });
 
-  it('NONE places every non-voided item on one bill; subtotal ≡ order total', () => {
+  it('NONE places every billable purchased item on one bill; subtotal ≡ order total', () => {
     const o = order([
       { id: 'a', unitPrice: '10.00' },
       { id: 'b', unitPrice: '5.00', quantity: 3 },
@@ -601,12 +601,12 @@ describe('planBills — NONE / BY_ITEM / BY_SEAT (pure partition, C4)', () => {
     expect(bills).toHaveLength(2);
     expect(bills[0]!.subtotal.toString()).toBe('16');
     expect(bills[1]!.subtotal.toString()).toBe('4');
-    // Every non-voided item is placed on exactly one bill.
+    // Every billable purchased item is placed on exactly one bill.
     const placed = bills.flatMap((b) => b.lines.map((l) => l.orderItemId)).sort();
     expect(placed).toEqual(['a', 'b', 'c']);
 
     expect(() => planBills(o, { kind: 'BY_ITEM', groups: [['a', 'b']] })).toThrowError(
-      /Every non-voided item/
+      /Every billable purchased item/
     );
     expect(() => planBills(o, { kind: 'BY_ITEM', groups: [['a', 'a', 'b', 'c']] })).toThrowError(
       /more than one bill/
