@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   ACCOUNT_PROCEDURES,
   MODULE_CATALOG,
-  ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES,
   PROCEDURE_MODULES,
   ROUTE_MODULES,
   SOP_DEPTH_REQUIREMENTS,
@@ -75,13 +74,9 @@ describe('module catalog routing', () => {
   });
 
   it('keeps the notification exception exact while the rest of team remains HR-gated', () => {
-    expect(ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES).toEqual(
-      new Set([
-        'team.getNotifications',
-        'team.markNotificationRead',
-        'team.markAllNotificationsRead',
-      ])
-    );
+    expect(moduleForProcedure('team.getNotifications')).toBeNull();
+    expect(moduleForProcedure('team.markNotificationRead')).toBeNull();
+    expect(moduleForProcedure('team.markAllNotificationsRead')).toBeNull();
     expect(ACCOUNT_PROCEDURES.has('team.getNotifications')).toBe(false);
     expect(moduleForProcedure('team.getNotifications.future')).toBe('hr');
     expect(moduleForProcedure('team.deleteNotification')).toBe('hr');

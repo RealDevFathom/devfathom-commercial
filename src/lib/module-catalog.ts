@@ -249,9 +249,10 @@ export const PROCEDURE_MODULES: Record<string, string> = {
 /**
  * Shared-shell notification access belongs to the authenticated tenant session,
  * not to HR. Exact full-path allowlist; the rest of the `team` namespace still
- * resolves to the HR module (WHA-305).
+ * resolves to the HR module (WHA-305). Keep this private so other modules cannot
+ * mutate the authorization allowlist at runtime.
  */
-export const ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES: ReadonlySet<string> = new Set([
+const ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES: ReadonlySet<string> = new Set([
   'team.getNotifications',
   'team.markNotificationRead',
   'team.markAllNotificationsRead',

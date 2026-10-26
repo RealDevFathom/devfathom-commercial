@@ -34,7 +34,6 @@ vi.mock('@/lib/abac', async () => {
   return { ...actual, can: vi.fn(async () => true) };
 });
 
-import { ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES } from '@/lib/module-catalog';
 import { router, type TRPCContext } from '../trpc';
 import { teamRouter } from './team';
 
@@ -86,9 +85,11 @@ describe('team shell notifications without HR entitlement', () => {
     const notificationProcedureNames = Object.keys(teamRouter._def.procedures).filter(
       (name) => name.includes('Notification') && !name.endsWith('NotificationPrefs')
     );
-    const exceptionNames = [...ENTITLEMENT_INDEPENDENT_TEAM_NOTIFICATION_PROCEDURES].map(
-      (path) => path.split('.')[1]
-    );
+    const exceptionNames = [
+      'getNotifications',
+      'markNotificationRead',
+      'markAllNotificationsRead',
+    ];
 
     expect(notificationProcedureNames.sort()).toEqual(exceptionNames.sort());
   });
