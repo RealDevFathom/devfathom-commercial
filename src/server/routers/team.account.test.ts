@@ -388,6 +388,17 @@ describe('team.getRoster and team:view', () => {
     });
     error.mockRestore();
   });
+
+  it('fails closed when the permission lookup finds no viewer', async () => {
+    mocks.permissions.mockResolvedValue(null);
+    mocks.findMany.mockResolvedValue([self]);
+
+    await expect(caller(['hr']).getRoster()).resolves.toEqual([self]);
+    expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith({
+      ...rosterQuery,
+      where: { id: 'user_self' },
+    });
+  });
 });
 
 describe('team.updateProfile', () => {
