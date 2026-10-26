@@ -383,6 +383,10 @@ describe('team.getRoster and team:view', () => {
     mocks.findMany.mockResolvedValue([self]);
 
     await expect(caller(['hr']).getRoster()).resolves.toEqual([self]);
+    expect(error).toHaveBeenCalledWith(
+      '[abac] custom permission lookup for "team:view" threw:',
+      expect.any(Error)
+    );
     expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith({
       ...rosterQuery,
       where: { id: 'user_self' },
