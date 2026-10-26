@@ -36,9 +36,10 @@ function tint(foreground: string, background: string, opacity: number) {
     .join('')}`;
 }
 
-function studioDarkTokens() {
+function studioTokens(theme: 'light' | 'dark') {
   const css = readFileSync('src/app/globals.css', 'utf8');
-  const blocks = [...css.matchAll(/\[data-theme='dark'\]\s*\{([^}]+)\}/g)];
+  const selector = theme === 'dark' ? "\\[data-theme='dark'\\]" : ':root';
+  const blocks = [...css.matchAll(new RegExp(`${selector}\\s*\\{([^}]+)\\}`, 'g'))];
   const declarations = blocks.at(-1)?.[1] ?? '';
 
   return Object.fromEntries(
@@ -80,7 +81,7 @@ describe('ThemeProvider', () => {
   });
 
   it('keeps dark secondary text at WCAG AA contrast on Studio surfaces', () => {
-    const tokens = studioDarkTokens();
+    const tokens = studioTokens('dark');
 
     for (const foreground of ['text-muted', 'text-faint']) {
       for (const background of ['surface-page', 'surface-card', 'surface-raised', 'secondary']) {
@@ -92,10 +93,16 @@ describe('ThemeProvider', () => {
     }
   });
 
-  it('keeps dark info status text at WCAG AA contrast on its tinted surface', () => {
-    const tokens = studioDarkTokens();
-    const infoTint = tint(tokens.info, tokens['surface-raised'], 0.1);
+  it.each(['light', 'dark'] as const)(
+    'keeps %s info status text at WCAG AA contrast on Studio surfaces',
+    (theme) => {
+      const tokens = studioTokens(theme);
 
-    expect(contrast(tokens.info, infoTint)).toBeGreaterThanOrEqual(4.5);
-  });
+      for (const surface of ['surface-page', 'surface-card', 'surface-raised', 'secondary']) {
+        const infoTint = tint(tokens.info, tokens[surface], 0.1);
+
+        expect(contrast(tokens.info, infoTint), `info on ${surface}`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  );
 });
