@@ -67,6 +67,12 @@ describeIfDatabase('organization.update deployment-mode concurrency', () => {
     // The transition to SHARED must always succeed; only the stale DEDICATED
     // request may be rejected after it acquires the row lock.
     expect(results[1]).toMatchObject({ status: 'fulfilled' });
+    if (results[0].status === 'rejected') {
+      expect(results[0].reason).toMatchObject({
+        message: expect.stringContaining('Dedicated provisioning is unavailable'),
+        status: 400,
+      });
+    }
     const stored = await withPlatformDb((tx) =>
       tx.organization.findUniqueOrThrow({
         where: { id: organizationId },
