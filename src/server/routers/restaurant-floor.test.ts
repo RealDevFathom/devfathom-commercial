@@ -108,13 +108,38 @@ import { SectionError } from '@/lib/restaurant/sections';
 import { StationError } from '@/lib/restaurant/stations';
 import type { TRPCContext } from '../trpc';
 
-function caller() {
+function caller(primaryBranchId = 'branch_1') {
+  const branch = (id: string) => ({
+    branchId: id === 'branch_b_resource' ? 'branch_b' : 'branch_1',
+  });
+  type ResourceLookup = { where: { id: string } };
   return restaurantFloorRouter.createCaller({
     db: {
       restaurantBranch: {
         findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
           (where?.id?.in ?? []).map((id) => ({ id }))
         ),
+      },
+      restaurantStaffProfile: {
+        findFirst: vi.fn(async ({ where }: { where: { primaryBranchId: string } }) =>
+          where.primaryBranchId === primaryBranchId ? { id: 'staff_1' } : null
+        ),
+      },
+      restaurantBranchAssignment: { findFirst: vi.fn(async () => null) },
+      restaurantFloor: {
+        findUnique: vi.fn(async ({ where }: ResourceLookup) => branch(where.id)),
+      },
+      restaurantTable: {
+        findUnique: vi.fn(async ({ where }: ResourceLookup) => ({ floor: branch(where.id) })),
+      },
+      restaurantServerSection: {
+        findUnique: vi.fn(async ({ where }: ResourceLookup) => branch(where.id)),
+      },
+      restaurantKitchenStation: {
+        findUnique: vi.fn(async ({ where }: ResourceLookup) => branch(where.id)),
+      },
+      restaurantStationRoutingRule: {
+        findUnique: vi.fn(async ({ where }: ResourceLookup) => ({ station: branch(where.id) })),
       },
     },
     entitlements: {
@@ -165,6 +190,38 @@ describe('capability gating', () => {
       caller().createFloor({ branchId: 'branch_1', name: 'Patio' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.createFloor).not.toHaveBeenCalled();
+  });
+
+  it('denies a branch manager reads and ID-addressed mutations outside their branch', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'restaurant:configure'
+    );
+
+    await expect(caller('branch_1').listFloors({ branchId: 'branch_b' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    const outsideBranchMutations = [
+      () => caller('branch_1').updateFloor({ id: 'branch_b_resource', name: 'Nope' }),
+      () => caller('branch_1').updateTable({ id: 'branch_b_resource', code: 'Nope' }),
+      () => caller('branch_1').updateSection({ id: 'branch_b_resource', name: 'Nope' }),
+      () => caller('branch_1').updateStation({ id: 'branch_b_resource', name: 'Nope' }),
+      () => caller('branch_1').updateRoutingRule({ id: 'branch_b_resource', priority: 1 }),
+    ];
+    for (const mutation of outsideBranchMutations) {
+      await expect(mutation()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    expect(mocks.listFloors).not.toHaveBeenCalled();
+    expect(mocks.updateFloor).not.toHaveBeenCalled();
+    expect(mocks.updateTable).not.toHaveBeenCalled();
+    expect(mocks.updateSection).not.toHaveBeenCalled();
+    expect(mocks.updateStation).not.toHaveBeenCalled();
+    expect(mocks.updateRoutingRule).not.toHaveBeenCalled();
+  });
+
+  it('allows an organization-wide restaurant administrator across branches', async () => {
+    mocks.can.mockResolvedValue(true);
+    await caller('branch_1').listFloors({ branchId: 'branch_b' });
+    expect(mocks.listFloors).toHaveBeenCalled();
   });
 
   it('gates mutations on floor:manage and reads on orders:read', async () => {
