@@ -302,18 +302,20 @@ describe('restaurant catering lifecycle', () => {
       caller().addLine({
         orderId: 'order_1',
         productId: 'product_1',
+        recipeId: null,
         description: 'Unlinked item',
         portions: '1',
         unitPrice: '1.00',
-      })
-    ).rejects.toBeDefined();
+      } as Parameters<ReturnType<typeof caller>['addLine']>[0])
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     await expect(
       caller().updateLine({
         orderId: 'order_1',
         lineId: 'line_1',
+        recipeId: null,
         description: 'Still unlinked',
-      })
-    ).rejects.toBeDefined();
+      } as Parameters<ReturnType<typeof caller>['updateLine']>[0])
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(db.restaurantCateringOrderLine.create).not.toHaveBeenCalled();
     expect(db.restaurantCateringOrderLine.updateMany).not.toHaveBeenCalled();
   });
