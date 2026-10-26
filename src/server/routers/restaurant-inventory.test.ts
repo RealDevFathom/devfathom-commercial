@@ -522,6 +522,15 @@ describe('restaurantInventoryRouter', () => {
       await expect(attempt()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     }
 
+    expect(mocks.findStockLocation).toHaveBeenCalledWith({
+      where: { id: 'loc_2' },
+      select: { branchId: true },
+    });
+    expect(mocks.findLowStockRule).toHaveBeenCalledTimes(2);
+    expect(mocks.findLowStockRule).toHaveBeenCalledWith({
+      where: { id: 'rule_2' },
+      select: { location: { select: { branchId: true } } },
+    });
     expect(mocks.createLowStockRule).not.toHaveBeenCalled();
     expect(mocks.updateLowStockRule).not.toHaveBeenCalled();
     expect(mocks.deleteLowStockRule).not.toHaveBeenCalled();
