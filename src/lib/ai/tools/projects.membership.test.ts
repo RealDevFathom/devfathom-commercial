@@ -88,7 +88,12 @@ describe('assistant project membership mutations', () => {
         { project: 'Apollo', person: 'Lead', role: 'MEMBER' },
         { toolCallId: 'test', messages: [] }
       )
-    ).resolves.toEqual({ success: true });
+    ).resolves.toEqual({
+      added: 'Lead',
+      to: 'Apollo',
+      role: 'MEMBER',
+      scopeNote: undefined,
+    });
     expect(upsert).toHaveBeenCalledWith({
       where: { projectId_userId: { projectId: 'project_1', userId: 'lead_1' } },
       create: {
