@@ -12,14 +12,9 @@ import {
   assertTaskAccess,
 } from '../authz';
 import { assertInOrganization, workspaceId } from '../org-refs';
-import type { Prisma } from '@/generated/prisma/client';
+import { lockProjectMembershipChanges } from '../project-membership';
 
-export async function lockProjectMembershipChanges(
-  tx: Pick<Prisma.TransactionClient, '$queryRaw'>,
-  projectId: string
-): Promise<void> {
-  await tx.$queryRaw`SELECT "id" FROM "projects" WHERE "id" = ${projectId} FOR UPDATE`;
-}
+export { lockProjectMembershipChanges } from '../project-membership';
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM".
 function formatDue(date: Date): string {
@@ -209,15 +204,20 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const isAdmin = ctx.session.user.role === 'ADMIN';
-      await assertInOrganization(ctx.db.user, workspaceId(ctx), [input.userId]);
+      const organizationId = workspaceId(ctx);
+      await assertInOrganization(ctx.db.user, organizationId, [input.userId]);
 
       const membership = await ctx.db.$transaction(async (tx) => {
         // Serialize every membership mutation for this project. The authorization
         // and last-lead checks below must observe state after this lock is acquired.
-        await lockProjectMembershipChanges(tx, input.projectId);
+        await lockProjectMembershipChanges(tx, input.projectId, organizationId);
 
-        const callerMembership = await tx.projectMember.findUnique({
-          where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
+        const callerMembership = await tx.projectMember.findFirst({
+          where: {
+            projectId: input.projectId,
+            userId: ctx.session.user.id,
+            organizationId,
+          },
         });
         if (!isAdmin && callerMembership?.role !== 'LEAD') {
           throw new TRPCError({
@@ -229,10 +229,12 @@ export const projectsRouter = router({
         // addMember also acts as an idempotent role update for existing members.
         if (input.role === 'MEMBER') {
           const [target, leadCount] = await Promise.all([
-            tx.projectMember.findUnique({
-              where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+            tx.projectMember.findFirst({
+              where: { projectId: input.projectId, userId: input.userId, organizationId },
             }),
-            tx.projectMember.count({ where: { projectId: input.projectId, role: 'LEAD' } }),
+            tx.projectMember.count({
+              where: { projectId: input.projectId, organizationId, role: 'LEAD' },
+            }),
           ]);
           if (target?.role === 'LEAD' && leadCount <= 1) {
             throw new TRPCError({
@@ -244,13 +246,24 @@ export const projectsRouter = router({
 
         return tx.projectMember.upsert({
           where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-          create: { projectId: input.projectId, userId: input.userId, role: input.role },
+          create: {
+            projectId: input.projectId,
+            userId: input.userId,
+            organizationId,
+            role: input.role,
+          },
           update: { role: input.role },
         });
       });
       const [project, targetUser] = await Promise.all([
-        ctx.db.project.findUnique({ where: { id: input.projectId }, select: { name: true } }),
-        ctx.db.user.findUnique({ where: { id: input.userId }, select: { name: true } }),
+        ctx.db.project.findFirst({
+          where: { id: input.projectId, organizationId },
+          select: { name: true },
+        }),
+        ctx.db.user.findFirst({
+          where: { id: input.userId, organizationId },
+          select: { name: true },
+        }),
       ]);
       if (project && targetUser) {
         logActivity(ctx.db, ctx.session.user.id, {
@@ -280,19 +293,24 @@ export const projectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const isAdmin = ctx.session.user.role === 'ADMIN';
       const isSelf = input.userId === ctx.session.user.id;
+      const organizationId = workspaceId(ctx);
 
       await ctx.db.$transaction(async (tx) => {
-        await lockProjectMembershipChanges(tx, input.projectId);
+        await lockProjectMembershipChanges(tx, input.projectId, organizationId);
         const [target, callerMembership, leadCount] = await Promise.all([
-          tx.projectMember.findUnique({
-            where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+          tx.projectMember.findFirst({
+            where: { projectId: input.projectId, userId: input.userId, organizationId },
           }),
-          tx.projectMember.findUnique({
+          tx.projectMember.findFirst({
             where: {
-              projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id },
+              projectId: input.projectId,
+              userId: ctx.session.user.id,
+              organizationId,
             },
           }),
-          tx.projectMember.count({ where: { projectId: input.projectId, role: 'LEAD' } }),
+          tx.projectMember.count({
+            where: { projectId: input.projectId, organizationId, role: 'LEAD' },
+          }),
         ]);
 
         if (!target)
@@ -318,8 +336,14 @@ export const projectsRouter = router({
         });
       });
       const [project, targetUser] = await Promise.all([
-        ctx.db.project.findUnique({ where: { id: input.projectId }, select: { name: true } }),
-        ctx.db.user.findUnique({ where: { id: input.userId }, select: { name: true } }),
+        ctx.db.project.findFirst({
+          where: { id: input.projectId, organizationId },
+          select: { name: true },
+        }),
+        ctx.db.user.findFirst({
+          where: { id: input.userId, organizationId },
+          select: { name: true },
+        }),
       ]);
       if (project && targetUser) {
         logActivity(ctx.db, ctx.session.user.id, {
@@ -348,10 +372,15 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const isAdmin = ctx.session.user.role === 'ADMIN';
+      const organizationId = workspaceId(ctx);
       return ctx.db.$transaction(async (tx) => {
-        await lockProjectMembershipChanges(tx, input.projectId);
-        const callerMembership = await tx.projectMember.findUnique({
-          where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
+        await lockProjectMembershipChanges(tx, input.projectId, organizationId);
+        const callerMembership = await tx.projectMember.findFirst({
+          where: {
+            projectId: input.projectId,
+            userId: ctx.session.user.id,
+            organizationId,
+          },
         });
         if (!isAdmin && callerMembership?.role !== 'LEAD') {
           throw new TRPCError({
@@ -362,9 +391,11 @@ export const projectsRouter = router({
 
         if (input.role === 'MEMBER') {
           const [leadCount, target] = await Promise.all([
-            tx.projectMember.count({ where: { projectId: input.projectId, role: 'LEAD' } }),
-            tx.projectMember.findUnique({
-              where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+            tx.projectMember.count({
+              where: { projectId: input.projectId, organizationId, role: 'LEAD' },
+            }),
+            tx.projectMember.findFirst({
+              where: { projectId: input.projectId, userId: input.userId, organizationId },
             }),
           ]);
           if (target?.role === 'LEAD' && leadCount <= 1) {

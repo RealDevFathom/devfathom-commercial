@@ -40,7 +40,7 @@ describeIfDatabase('project membership lock', () => {
     const order: string[] = [];
 
     const first = db.$transaction(async (tx) => {
-      await lockProjectMembershipChanges(tx, projectId);
+      await lockProjectMembershipChanges(tx, projectId, organizationId);
       order.push('first locked');
       firstLocked();
       await release;
@@ -50,7 +50,7 @@ describeIfDatabase('project membership lock', () => {
 
     const second = db.$transaction(async (tx) => {
       secondAttempted();
-      await lockProjectMembershipChanges(tx, projectId);
+      await lockProjectMembershipChanges(tx, projectId, organizationId);
       order.push('second locked');
     });
     await attempted;

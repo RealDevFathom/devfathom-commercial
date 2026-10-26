@@ -11,7 +11,7 @@ vi.mock('../activity', () => ({ logActivity: vi.fn() }));
 
 import { projectsRouter } from './projects';
 
-const projectMemberFindUnique = vi.fn();
+const projectMemberFindFirst = vi.fn();
 const projectMemberCount = vi.fn();
 const projectMemberUpsert = vi.fn();
 const userFindMany = vi.fn();
@@ -20,25 +20,25 @@ const db = {
   $queryRaw: vi.fn(async () => [{ id: 'project_1' }]),
   $transaction: vi.fn(async (callback: (tx: never) => Promise<unknown>) => callback(db as never)),
   projectMember: {
-    findUnique: projectMemberFindUnique,
+    findFirst: projectMemberFindFirst,
     count: projectMemberCount,
     upsert: projectMemberUpsert,
   },
   user: {
     findMany: userFindMany,
-    findUnique: vi.fn(async () => null),
+    findFirst: vi.fn(async () => null),
   },
-  project: { findUnique: vi.fn(async () => null) },
+  project: { findFirst: vi.fn(async () => null) },
 };
 
-function caller() {
+function caller(role = 'EMPLOYEE') {
   return projectsRouter.createCaller({
     db,
     session: {
       expires: 'later',
       user: {
         id: 'lead_1',
-        role: 'EMPLOYEE',
+        role,
         department: 'ENGINEERING',
         status: 'ACTIVE',
         organizationId: 'org_1',
@@ -64,8 +64,18 @@ describe('projects.addMember role invariants', () => {
     });
   });
 
+  it('rejects an admin project ID from another organization before membership reads', async () => {
+    db.$queryRaw.mockResolvedValueOnce([]);
+
+    await expect(
+      caller('ADMIN').addMember({ projectId: 'other_org_project', userId: 'lead_1', role: 'MEMBER' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Project not found.' });
+    expect(projectMemberFindFirst).not.toHaveBeenCalled();
+    expect(projectMemberUpsert).not.toHaveBeenCalled();
+  });
+
   it('rejects demoting the last lead through the existing-member upsert path', async () => {
-    projectMemberFindUnique.mockResolvedValue({
+    projectMemberFindFirst.mockResolvedValue({
       projectId: 'project_1',
       userId: 'lead_1',
       role: 'LEAD',
@@ -82,7 +92,7 @@ describe('projects.addMember role invariants', () => {
   });
 
   it('preserves role updates when another project lead remains', async () => {
-    projectMemberFindUnique.mockResolvedValue({
+    projectMemberFindFirst.mockResolvedValue({
       projectId: 'project_1',
       userId: 'lead_1',
       role: 'LEAD',
@@ -94,7 +104,12 @@ describe('projects.addMember role invariants', () => {
     ).resolves.toMatchObject({ role: 'MEMBER' });
     expect(projectMemberUpsert).toHaveBeenCalledWith({
       where: { projectId_userId: { projectId: 'project_1', userId: 'lead_1' } },
-      create: { projectId: 'project_1', userId: 'lead_1', role: 'MEMBER' },
+      create: {
+        projectId: 'project_1',
+        userId: 'lead_1',
+        organizationId: 'org_1',
+        role: 'MEMBER',
+      },
       update: { role: 'MEMBER' },
     });
     expect(db.$transaction).toHaveBeenCalledOnce();
