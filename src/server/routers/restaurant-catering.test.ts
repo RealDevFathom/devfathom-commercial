@@ -297,15 +297,25 @@ describe('restaurant catering lifecycle', () => {
     );
   });
 
-  it('requires a product or recipe for every new line', async () => {
+  it('requires a recipe when adding or updating a line', async () => {
     await expect(
       caller().addLine({
         orderId: 'order_1',
+        productId: 'product_1',
         description: 'Unlinked item',
         portions: '1',
         unitPrice: '1.00',
       })
     ).rejects.toBeDefined();
+    await expect(
+      caller().updateLine({
+        orderId: 'order_1',
+        lineId: 'line_1',
+        description: 'Still unlinked',
+      })
+    ).rejects.toBeDefined();
+    expect(db.restaurantCateringOrderLine.create).not.toHaveBeenCalled();
+    expect(db.restaurantCateringOrderLine.updateMany).not.toHaveBeenCalled();
   });
 });
 

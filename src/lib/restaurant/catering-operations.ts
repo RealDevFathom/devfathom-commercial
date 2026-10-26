@@ -193,6 +193,8 @@ export async function publishQuote(
   if (!order) throw new TRPCError({ code: 'NOT_FOUND' });
   if (!['DRAFT', 'QUOTED'].includes(order.status)) fail('Only editable orders can publish quotes.');
   if (!order.quotedTotal || order.lines.length === 0) fail('Quote total and menu are required.');
+  if (order.lines.some((line) => !line.recipeId))
+    fail('A recipe is required for every quoted line.');
   const state = await bookingState(tx, org, orderId);
   const existing = await tx.$queryRaw<Quote[]>(
     Prisma.sql`SELECT id,revision,snapshot,"contentHash" FROM restaurant_catering_quote_revisions WHERE "organizationId"=${org} AND "orderId"=${orderId} AND revision=${state.revision}`
@@ -222,7 +224,6 @@ export async function publishQuote(
   };
   const grouped = new Map<string, FrozenRequirement>();
   for (const line of order.lines) {
-    if (!line.recipeId) fail('A recipe is required for every quoted line.');
     // Pin the root before costing: the helper's quantities and denominators must
     // describe that same version even if another transaction activates a recipe.
     const version = resolveActiveVersion(

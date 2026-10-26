@@ -242,7 +242,6 @@ export function CateringConsole({ currency }: { currency: string | null }) {
     { orderId: selectedId },
     { enabled: enabled && Boolean(selectedId) }
   );
-  const products = trpc.restaurantCatalog.listProducts.useQuery({ status: 'ACTIVE' }, { enabled });
   const recipes = trpc.restaurantCatalog.listRecipes.useQuery(undefined, {
     enabled,
   });
@@ -437,12 +436,11 @@ export function CateringConsole({ currency }: { currency: string | null }) {
     if (!orderId) return;
     const data = new FormData(form);
     const source = value(data, 'source');
-    const [kind, id] = source.split(':');
+    const recipeId = source.slice('recipe:'.length);
     addLine.mutate(
       {
         orderId,
-        productId: kind === 'product' ? id : null,
-        recipeId: kind === 'recipe' ? id : null,
+        recipeId,
         description: value(data, 'description'),
         portions: value(data, 'portions'),
         unitPrice: value(data, 'unitPrice'),
@@ -1152,19 +1150,14 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                       disabled={actionsDisabled || !editable}
                       className="grid min-w-0 gap-3 sm:grid-cols-2"
                     >
-                      <Field label="Product or recipe">
+                      <Field label="Recipe">
                         <select
                           required
                           name="source"
-                          aria-label="Product or recipe"
+                          aria-label="Recipe"
                           className={inputClass}
                         >
-                          <option value="">Select an item</option>
-                          {products.data?.map((item) => (
-                            <option key={item.id} value={`product:${item.id}`}>
-                              {item.name}
-                            </option>
-                          ))}
+                          <option value="">Select a recipe</option>
                           {recipes.data
                             ?.filter((item) => item.activeVersionId)
                             .map((item) => {
@@ -1247,7 +1240,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                       ))
                     ) : (
                       <p className="text-sm text-text-muted">
-                        No items yet. Add products or active recipes.
+                        No items yet. Add an active recipe.
                       </p>
                     )}
                   </div>

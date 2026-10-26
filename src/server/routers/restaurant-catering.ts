@@ -203,23 +203,17 @@ const editableOrder = z
 const lineShape = z
   .object({
     productId: id.nullable().optional(),
-    recipeId: id.nullable().optional(),
+    recipeId: id,
     description: z.string().trim().min(1).max(500),
     portions: money,
     unitPrice: money,
     sortOrder: z.number().int().min(0).optional(),
   })
   .strict();
-const lineFields = lineShape.refine((value) => Boolean(value.productId || value.recipeId), {
-  message: 'A productId or recipeId is required.',
-});
 const addLineInput = z
   .object({ orderId: id, ...actor })
-  .extend(lineFields.shape)
-  .strict()
-  .refine((value) => Boolean(value.productId || value.recipeId), {
-    message: 'A productId or recipeId is required.',
-  });
+  .extend(lineShape.shape)
+  .strict();
 
 const transitions: Record<z.infer<typeof status>, z.infer<typeof status> | null> = {
   DRAFT: 'QUOTED',
@@ -382,6 +376,7 @@ export const restaurantCateringRouter = router({
       z
         .object({ orderId: id, lineId: id, ...actor })
         .extend(lineShape.partial().shape)
+        .extend({ recipeId: id })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {

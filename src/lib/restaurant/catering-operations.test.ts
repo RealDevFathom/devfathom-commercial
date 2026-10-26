@@ -214,12 +214,8 @@ describe('frozen quote and costing', () => {
       recipeVersionId: 'version-original',
     });
   });
-  it('rejects a product-only line before publishing an unusable quote', async () => {
+  it('rejects a legacy product-only line even when replaying a quote revision', async () => {
     const f = fixture();
-    const raw = f.db.$queryRaw.getMockImplementation()!;
-    f.db.$queryRaw.mockImplementation(async (q) =>
-      q.strings.join('?').includes('FROM restaurant_catering_quote_revisions') ? [] : raw(q)
-    );
     const line = f.order.lines[0]! as {
       productId: string | null;
       recipeId: string | null;
