@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   invitationUpsert: vi.fn(),
   departmentFindFirst: vi.fn(),
   resolveEntitlements: vi.fn(),
+  queryRaw: vi.fn(),
+  count: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -38,7 +40,8 @@ const db = {
   invitation: { upsert: mocks.invitationUpsert },
   $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
     run({
-      user: { create: mocks.create, update: mocks.update },
+      $queryRaw: mocks.queryRaw,
+      user: { create: mocks.create, update: mocks.update, count: mocks.count },
       invitation: { upsert: mocks.invitationUpsert },
     }),
 };
@@ -72,6 +75,8 @@ describe('assistant inviteMember duplicate guard', () => {
     mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
     mocks.invitationUpsert.mockResolvedValue({});
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_1' });
+    mocks.queryRaw.mockResolvedValue([{ id: 'org_1' }]);
+    mocks.count.mockResolvedValue(9);
     mocks.resolveEntitlements.mockResolvedValue({
       organizationId: 'org_1',
       seatLimit: 10,
@@ -112,6 +117,7 @@ describe('assistant inviteMember duplicate guard', () => {
 
   it('refuses a new member when the workspace has no available seats', async () => {
     mocks.findFirst.mockResolvedValue(null);
+    mocks.count.mockResolvedValue(10);
     mocks.resolveEntitlements.mockResolvedValue({
       organizationId: 'org_1',
       seatLimit: 10,
@@ -126,6 +132,13 @@ describe('assistant inviteMember duplicate guard', () => {
     ).rejects.toThrow('Seat limit reached (10/10).');
 
     expect(mocks.resolveEntitlements).toHaveBeenCalledWith('org_1', db);
+    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.count).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_1',
+        status: { in: ['ACTIVE', 'ON_LEAVE', 'INVITED'] },
+      },
+    });
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.invitationUpsert).not.toHaveBeenCalled();
   });
@@ -137,6 +150,7 @@ describe('assistant inviteMember duplicate guard', () => {
     await inviteTool().execute({ ...base, email: 'alex@company.com' });
 
     expect(mocks.resolveEntitlements).not.toHaveBeenCalled();
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
     expect(mocks.update).toHaveBeenCalled();
   });
 

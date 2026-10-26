@@ -17,9 +17,10 @@ import { Prisma } from '@/generated/prisma/client';
 import { matchScore, type AssistantHelpers, type ToolSet } from '@/lib/ai/context';
 import { appUrl, templates, sendEmail } from '@/lib/email';
 import { normalizeEmail } from '@/lib/email-address';
-import { assertSeatAvailable, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { generateInviteToken } from '@/lib/invite-token';
 import { passwordMeetsPolicy } from '@/lib/password-policy';
+import { lockAndAssertSeatAvailable } from '@/lib/seat-capacity';
 
 // "LEADERSHIP" → "Leadership", "ADMIN" → "Admin"; the acronym role stays as-is.
 const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).toLowerCase());
@@ -784,9 +785,9 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         if (existing && existing.status !== 'INVITED') {
           return { error: 'A user with this email already exists.' };
         }
-        if (!existing) {
-          assertSeatAvailable(await resolveOrganizationEntitlements(ctx.organizationId, h.db));
-        }
+        const seatLimit = existing
+          ? null
+          : (await resolveOrganizationEntitlements(ctx.organizationId, h.db)).seatLimit;
 
         const { token, tokenHash } = generateInviteToken();
         const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
@@ -801,6 +802,9 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         };
 
         const user = await h.db.$transaction(async (tx) => {
+          if (seatLimit !== null) {
+            await lockAndAssertSeatAvailable(tx, ctx.organizationId, seatLimit);
+          }
           const u = existing
             ? await tx.user.update({
                 where: { id: existing.id },
