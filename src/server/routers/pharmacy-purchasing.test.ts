@@ -662,6 +662,9 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]!
     );
     expect(db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacySupplier.findFirst.mock.invocationCallOrder[0]!
+    );
+    expect(db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
       db.pharmacyGoodsReceipt.create.mock.invocationCallOrder[0]!
     );
   });

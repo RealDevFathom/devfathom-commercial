@@ -964,6 +964,14 @@ const purchasingRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
+          if (input.purchaseOrderId) {
+            // Lock the referenced order before validating any mutable data so
+            // cancellation cannot commit while the receipt is being checked.
+            await lockReceivablePurchaseOrder(db, scope, {
+              purchaseOrderId: input.purchaseOrderId,
+              supplierId: input.supplierId,
+            });
+          }
           // PUR-01: an unauthorized or licence-expired supplier cannot be
           // received from, checked here and again when the receipt posts.
           assertOrderableSupplier(
@@ -980,16 +988,6 @@ const purchasingRouter = router({
               receivedByUserId: scope.actorId,
             });
           }
-          if (input.purchaseOrderId) {
-            // Keep the order stable from validation through receipt creation. In
-            // particular, cancellation and branch reassignment must not commit
-            // in the gap between this check and the nested receipt write.
-            await lockReceivablePurchaseOrder(db, scope, {
-              purchaseOrderId: input.purchaseOrderId,
-              supplierId: input.supplierId,
-            });
-          }
-
           const ownOrderLines = input.purchaseOrderId
             ? new Set(
                 (
