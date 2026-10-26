@@ -41,11 +41,7 @@ function isPublicPath(pathname: string): boolean {
 export async function proxy(request: Request) {
   const url = new URL(request.url);
   const pathname = url.pathname;
-  // The browser-facing authority is the routing boundary. Local Next.js may
-  // synthesize x-forwarded-host from its bind address (127.0.0.1), even when
-  // Chromium requested admin.localhost; preferring it misroutes the platform
-  // login to the tenant dashboard and leaves the control-plane form unreachable.
-  const forwardedHost = request.headers.get('host') ?? request.headers.get('x-forwarded-host');
+  const forwardedHost = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
   const hostWithPort = forwardedHost?.split(',')[0]?.trim().toLowerCase() ?? '';
   const host = hostWithPort.replace(/:\d+$/, '').replace(/\.$/, '');
   const requestHeaders = new Headers(request.headers);

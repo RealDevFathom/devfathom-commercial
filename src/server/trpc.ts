@@ -290,7 +290,10 @@ function requireCapability(action: Action) {
     if (!allowed) {
       throw new TRPCError({
         code: 'FORBIDDEN',
-        message: 'You do not have permission for this action.',
+        message:
+          action === 'pharmacy:dispense'
+            ? 'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.'
+            : 'You do not have permission for this action.',
       });
     }
     return next({ ctx: { ...ctx, session: ctx.session } });

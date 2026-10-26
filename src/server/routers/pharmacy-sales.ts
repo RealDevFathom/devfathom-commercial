@@ -630,9 +630,9 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  // The domain gate below owns the Rx refusal so add-line, loyalty completion,
-  // and cash completion expose the same typed FORBIDDEN contract.
-  redeemPoints: protectedProcedure
+  // Loyalty redemption can complete any sale, including an all-OTC sale, so it
+  // always requires the exact dispense capability before entering the domain.
+  redeemPoints: capabilityProcedure('pharmacy:dispense')
     .input(
       z
         .object({

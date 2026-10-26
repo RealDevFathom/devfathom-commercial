@@ -42,6 +42,9 @@ describe.runIf(Boolean(baseURL))('platform login Studio accessibility', () => {
           const context = await browser.newContext({
             viewport: { width, height: 900 },
             reducedMotion,
+            // Next.js derives x-forwarded-host from its listening address in
+            // this local lane. Model the admin-facing proxy authority explicitly.
+            extraHTTPHeaders: { 'x-forwarded-host': platformLoginURL!.host },
           });
           try {
             await context.addInitScript((value) => localStorage.setItem('theme', value), theme);

@@ -62,7 +62,11 @@ export default defineConfig({
   webServer: process.env.PLAYWRIGHT_BASE_URL
     ? undefined
     : {
-        command: process.env.CI ? `bunx next start --port ${port}` : `bun run dev --port ${port}`,
+        // Bind to the same authority Chromium uses so Next.js synthesizes a
+        // matching x-forwarded-host instead of its default 127.0.0.1 address.
+        command: process.env.CI
+          ? `bunx next start --hostname admin.localhost --port ${port}`
+          : `bun run dev --hostname admin.localhost --port ${port}`,
         cwd: path.resolve(__dirname, '../..'),
         url: baseURL,
         reuseExistingServer: !process.env.CI,
