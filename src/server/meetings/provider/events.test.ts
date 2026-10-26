@@ -68,6 +68,7 @@ describe('provider event ingestion', () => {
       select: { id: true, userId: true },
     });
     expect(executeRaw).toHaveBeenCalledTimes(1);
+    expect(executeRaw.mock.calls[0][0].values.slice(3, 5)).toEqual(['grant-1', 'user-1']);
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { processedAt: expect.any(Date) } })
     );
@@ -83,6 +84,7 @@ describe('provider event ingestion', () => {
       where: { occurrenceId: 'occ-1', id: 'guest-grant-1' },
       select: { id: true, userId: true },
     });
+    expect(executeRaw.mock.calls[0][0].values.slice(3, 5)).toEqual(['grant-1', 'user-1']);
   });
 
   it('continues to resolve legacy unprefixed participant identities', async () => {
