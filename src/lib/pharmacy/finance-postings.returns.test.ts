@@ -84,7 +84,7 @@ it('reverses revenue but not inventory for an unidentified return hold', async (
         id: 'hold',
         branchId: 'branch',
         quarantineLocationId: 'quarantine',
-        canonicalUnits: 1,
+        canonicalUnits: 2,
         saleLine: {
           id: 'line',
           medicineId: 'medicine',
@@ -93,7 +93,7 @@ it('reverses revenue but not inventory for an unidentified return hold', async (
           discountMinor: 2,
           canonicalUnits: 3,
           returnLines: [],
-          unidentifiedReturnHolds: [{ canonicalUnits: 1 }],
+          unidentifiedReturnHolds: [{ canonicalUnits: 2 }],
         },
       }),
     },
@@ -110,8 +110,10 @@ it('reverses revenue but not inventory for an unidentified return hold', async (
     sourceId: 'hold',
   });
   expect(posted.lines).toEqual([
-    expect.objectContaining({ accountCode: 'SALES_REVENUE', side: 'DEBIT', amountMinor: 33 }),
-    expect.objectContaining({ accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 33 }),
+    expect.objectContaining({ accountCode: 'SALES_REVENUE', side: 'DEBIT', amountMinor: 67 }),
+    expect.objectContaining({ accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 67 }),
+    expect.objectContaining({ accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: 1 }),
+    expect.objectContaining({ accountCode: 'SALES_DISCOUNT', side: 'CREDIT', amountMinor: 1 }),
   ]);
   expect(posted.lines.some((line) => line.accountCode === 'INVENTORY')).toBe(false);
   expect(posted.lines.some((line) => line.accountCode === 'COST_OF_GOODS_SOLD')).toBe(false);
