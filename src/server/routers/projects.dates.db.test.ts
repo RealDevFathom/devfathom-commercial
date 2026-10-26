@@ -6,7 +6,7 @@
 import { randomBytes } from 'node:crypto';
 
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
@@ -32,6 +32,13 @@ describeIfDatabase('project date range database constraint', () => {
     );
   });
 
+  beforeEach(async () => {
+    await client.query(
+      `UPDATE projects SET "startDate" = '2026-10-10', "endDate" = '2026-10-20' WHERE id = $1`,
+      [projectId]
+    );
+  });
+
   afterAll(async () => {
     if (!client) return;
     await client.query('DELETE FROM projects WHERE id = $1', [projectId]);
@@ -52,5 +59,23 @@ describeIfDatabase('project date range database constraint', () => {
     );
     expect(result.rows[0]?.startDate.toISOString()).toBe('2026-10-15T00:00:00.000Z');
     expect(result.rows[0]?.endDate.toISOString()).toBe('2026-10-20T00:00:00.000Z');
+  });
+
+  it('allows equal dates and either nullable bound', async () => {
+    await expect(
+      client.query(
+        `UPDATE projects SET "startDate" = '2026-10-20', "endDate" = '2026-10-20' WHERE id = $1`,
+        [projectId]
+      )
+    ).resolves.toMatchObject({ rowCount: 1 });
+    await expect(
+      client.query(`UPDATE projects SET "startDate" = NULL WHERE id = $1`, [projectId])
+    ).resolves.toMatchObject({ rowCount: 1 });
+    await expect(
+      client.query(
+        `UPDATE projects SET "startDate" = '2026-10-21', "endDate" = NULL WHERE id = $1`,
+        [projectId]
+      )
+    ).resolves.toMatchObject({ rowCount: 1 });
   });
 });
