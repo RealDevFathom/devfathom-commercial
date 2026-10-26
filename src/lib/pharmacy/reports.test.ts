@@ -45,7 +45,7 @@ describe('PH-RPT metric contract', () => {
     expect(sql).not.toContain('SUM(t."amountMinor" - COALESCE(t."changeGivenMinor",0))');
   });
 
-  it('reports overdue Khata principal net of payments for the selected branches', async () => {
+  it('reports overdue Khata principal net of payments and dishonours for selected branches', async () => {
     const queryRaw = vi
       .fn()
       .mockImplementation(async (query: { strings: readonly string[] }) =>
@@ -72,7 +72,9 @@ describe('PH-RPT metric contract', () => {
         .includes('FROM "pharmacy_khata_events" charge')
     )?.[0] as { strings: readonly string[]; values: unknown[] };
     const sql = khataQuery.strings.join('?');
-    expect(sql).toContain('charge."amountMinor"::bigint-COALESCE(payments.paid,0)');
+    expect(sql).toContain('charge."amountMinor"::bigint-COALESCE(settlements.paid,0)');
+    expect(sql).toContain(`CASE WHEN "kind"='PAYMENT' THEN "amountMinor" ELSE -"amountMinor" END`);
+    expect(sql).toContain(`"kind" IN ('PAYMENT','DISHONOURED_CHEQUE')`);
     expect(sql).toContain(')::bigint AS value');
     expect(sql).toContain(`charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`);
     expect(khataQuery.values).toEqual(['branch_1', 'branch_1']);

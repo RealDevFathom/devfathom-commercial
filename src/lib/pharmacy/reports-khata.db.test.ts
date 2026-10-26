@@ -16,7 +16,11 @@ type KhataFixture = { organizationId: string; branchId: string };
 async function createFixture(
   organizationId: string,
   label: string,
-  amounts: { overdue: number[]; partial?: { amount: number; paid: number }; future?: number }
+  amounts: {
+    overdue: number[];
+    partial?: { amount: number; paid: number; dishonoured?: number };
+    future?: number;
+  }
 ): Promise<KhataFixture> {
   return withTenantDb(organizationId, async (db: ScopedDb) => {
     await db.organization.upsert({
@@ -95,6 +99,19 @@ async function createFixture(
           actorId: 'owner',
         },
       });
+      if (amounts.partial.dishonoured) {
+        await db.pharmacyKhataEvent.create({
+          data: {
+            organizationId,
+            branchId: branch.id,
+            familyAccountId: family.id,
+            kind: 'DISHONOURED_CHEQUE',
+            amountMinor: amounts.partial.dishonoured,
+            settlesChargeId: item.id,
+            actorId: 'owner',
+          },
+        });
+      }
     }
     if (amounts.future) await charge(amounts.future, future);
     return { organizationId, branchId: branch.id };
@@ -116,7 +133,7 @@ suite('owner command centre Khata aging under forced PostgreSQL RLS', () => {
     });
     const second = await createFixture(orgA, `report-a2-${suffix}`, {
       overdue: [100],
-      partial: { amount: 400, paid: 400 },
+      partial: { amount: 400, paid: 400, dishonoured: 400 },
     });
     const foreign = await createFixture(orgB, `report-b-${suffix}`, {
       overdue: [2_000_000_000],
@@ -130,9 +147,9 @@ suite('owner command centre Khata aging under forced PostgreSQL RLS', () => {
       })
     );
 
-    // Includes unpaid + partially paid overdue charges in both tenant branches. Excludes the
-    // fully paid charge, future charge, and foreign organization's charge. The total is also
-    // deliberately above PostgreSQL INTEGER_MAX.
-    expect(result.metrics.khataAgingMinor).toBe(2_750_000_100);
+    // Includes unpaid + partially paid overdue charges and adds bounced-cheque debt back in.
+    // Excludes the future charge and foreign organization's charge. The total is also deliberately
+    // above PostgreSQL INTEGER_MAX.
+    expect(result.metrics.khataAgingMinor).toBe(2_750_000_500);
   });
 });
