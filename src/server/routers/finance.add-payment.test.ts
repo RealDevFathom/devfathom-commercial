@@ -1,0 +1,80 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  can: vi.fn(async () => true),
+  logActivity: vi.fn(),
+  emitEvent: vi.fn(),
+  invoiceFindUnique: vi.fn(),
+  invoiceUpdate: vi.fn(),
+  paymentAggregate: vi.fn(),
+  paymentCreate: vi.fn(),
+}));
+
+vi.mock('server-only', () => ({}));
+vi.mock('@/lib/abac', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
+  can: mocks.can,
+}));
+vi.mock('@/lib/entitlements', () => ({ hasModule: vi.fn(() => true) }));
+vi.mock('../activity', () => ({ logActivity: mocks.logActivity }));
+vi.mock('@/lib/webhooks', () => ({ emitEvent: mocks.emitEvent }));
+vi.mock('../audit', () => ({
+  ipFromHeaders: vi.fn(() => null),
+  isAuditExcludedPath: vi.fn(() => true),
+  recordTrpcAudit: vi.fn(),
+}));
+
+import type { TRPCContext } from '../trpc';
+import { financeRouter } from './finance';
+
+function caller() {
+  const tx = {
+    invoice: { findUnique: mocks.invoiceFindUnique, update: mocks.invoiceUpdate },
+    payment: { aggregate: mocks.paymentAggregate, create: mocks.paymentCreate },
+  };
+
+  return financeRouter.createCaller({
+    db: {
+      $transaction: vi.fn(async (callback: (transaction: typeof tx) => unknown) => callback(tx)),
+    },
+    entitlements: { organizationId: 'org-1', enabledModules: [], modules: [] },
+    session: {
+      expires: 'later',
+      user: { id: 'admin-1', role: 'ADMIN', status: 'ACTIVE', organizationId: 'org-1' },
+    },
+    organization: { id: 'org-1' },
+    support: null,
+    requestMeta: { ip: null, userAgent: null },
+    audit: { detail: {} },
+  } as unknown as TRPCContext);
+}
+
+describe('finance.addPayment', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.invoiceFindUnique.mockResolvedValue({
+      id: 'invoice-1',
+      invoiceNumber: 'INV-1',
+      status: 'SENT',
+      total: 100,
+      currency: 'USD',
+      clientId: 'client-1',
+    });
+    mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 40 } });
+    mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 60 });
+    mocks.invoiceUpdate.mockResolvedValue({});
+  });
+
+  it('logs invoice_paid when a payment covers the outstanding balance', async () => {
+    await caller().addPayment({ invoiceId: 'invoice-1', amount: 60 });
+
+    expect(mocks.logActivity).toHaveBeenCalledOnce();
+    expect(mocks.logActivity).toHaveBeenCalledWith(expect.anything(), 'admin-1', {
+      type: 'invoice_paid',
+      message: 'marked invoice INV-1 as paid ($100)',
+      entityType: 'Invoice',
+      entityId: 'invoice-1',
+    });
+  });
+});

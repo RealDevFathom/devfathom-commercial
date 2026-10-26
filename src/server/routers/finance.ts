@@ -525,6 +525,7 @@ export const financeRouter = router({
       // IMP-REST-03: captured inside the tx, fired only AFTER it commits.
       let paidEvent: {
         invoiceId: string;
+        invoiceNumber: string;
         total: number;
         currency: string;
         clientId: string;
@@ -533,7 +534,14 @@ export const financeRouter = router({
       const result = await ctx.db.$transaction(async (tx) => {
         const invoice = await tx.invoice.findUnique({
           where: { id: input.invoiceId },
-          select: { id: true, status: true, total: true, currency: true, clientId: true },
+          select: {
+            id: true,
+            invoiceNumber: true,
+            status: true,
+            total: true,
+            currency: true,
+            clientId: true,
+          },
         });
         if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
 
@@ -596,6 +604,7 @@ export const financeRouter = router({
           });
           paidEvent = {
             invoiceId: invoice.id,
+            invoiceNumber: invoice.invoiceNumber,
             total,
             currency: invoice.currency,
             clientId: invoice.clientId,
@@ -613,7 +622,16 @@ export const financeRouter = router({
       // IMP-REST-03: fan out invoice.paid once the invoice has truly flipped to
       // PAID and the transaction has committed. Fire-and-forget — emitEvent
       // never throws, so it can't affect the recorded payment.
-      if (paidEvent) emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', paidEvent);
+      if (paidEvent) {
+        const { invoiceNumber, ...webhookEvent } = paidEvent;
+        logActivity(ctx.db, ctx.session.user.id, {
+          type: 'invoice_paid',
+          message: `marked invoice ${invoiceNumber} as paid ($${paidEvent.total.toLocaleString()})`,
+          entityType: 'Invoice',
+          entityId: paidEvent.invoiceId,
+        });
+        emitEvent(ctx.db, ctx.entitlements, 'invoice.paid', webhookEvent);
+      }
 
       return result;
     }),
