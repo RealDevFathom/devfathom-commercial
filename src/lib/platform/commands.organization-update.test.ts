@@ -120,4 +120,52 @@ describe('organization.update deployment mode', () => {
       }),
     });
   });
+
+  it('allows an unchanged dedicated mode when provisioning is unavailable', async () => {
+    platformDb.organization.findUnique.mockResolvedValue({
+      ...before,
+      deploymentMode: 'DEDICATED',
+    });
+
+    await executePlatformCommand(
+      actor,
+      'organization.update',
+      { id: 'org_1', deploymentMode: 'DEDICATED' },
+      request
+    );
+
+    expect(platformDb.organization.update).toHaveBeenCalledOnce();
+    expect(platformDb.organizationDeployment.upsert).not.toHaveBeenCalled();
+    expect(platformDb.platformJob.create).not.toHaveBeenCalled();
+  });
+
+  it('allows switching from dedicated to shared when provisioning is unavailable', async () => {
+    platformDb.organization.findUnique.mockResolvedValue({
+      ...before,
+      deploymentMode: 'DEDICATED',
+    });
+
+    await executePlatformCommand(
+      actor,
+      'organization.update',
+      { id: 'org_1', deploymentMode: 'SHARED' },
+      request
+    );
+
+    expect(platformDb.organization.update).toHaveBeenCalledWith({
+      where: { id: 'org_1' },
+      data: expect.objectContaining({ deploymentMode: 'SHARED' }),
+    });
+    expect(platformDb.organizationDeployment.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: { mode: 'SHARED', status: 'PENDING' },
+      })
+    );
+    expect(platformDb.platformJob.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org_1',
+        type: 'PROVISION_SHARED',
+      }),
+    });
+  });
 });
