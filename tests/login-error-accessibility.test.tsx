@@ -85,4 +85,38 @@ describe('login credential error accessibility', () => {
     expect(email).not.toHaveAttribute('aria-describedby');
     expect(password).not.toHaveAttribute('aria-describedby');
   });
+
+  it('associates a tenant network failure with both credential fields', async () => {
+    mocks.signIn.mockRejectedValue(new Error('network unavailable'));
+    render(<LoginForm connections={[]} ssoEnforced={false} callbackUrl="/dashboard" />);
+
+    const email = screen.getByLabelText('Email');
+    const password = screen.getByLabelText('Password');
+    fireEvent.change(email, { target: { value: 'nobody@example.invalid' } });
+    fireEvent.change(password, { target: { value: 'incorrect-password' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
+
+    const alert = await screen.findByRole('alert');
+    expectCredentialError(email, password, alert, 'login-sign-in-error');
+  });
+
+  it('associates a platform network failure with both credential fields', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) })
+        .mockRejectedValueOnce(new Error('network unavailable'))
+    );
+    render(<PlatformLoginForm />);
+
+    const email = screen.getByLabelText('Work email');
+    const password = screen.getByLabelText('Password');
+    fireEvent.change(email, { target: { value: 'operator@example.invalid' } });
+    fireEvent.change(password, { target: { value: 'incorrect-password' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Continue to control desk' }));
+
+    const alert = await screen.findByRole('alert');
+    expectCredentialError(email, password, alert, 'platform-sign-in-error');
+  });
 });
