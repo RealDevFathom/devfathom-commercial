@@ -252,6 +252,7 @@ export const pharmacyReportsRouter = router({
           branchId: input.branchId,
           organizationId,
           state: report.state,
+          externalSubmissionState: report.externalSubmissionState,
         },
         data: { state: input.state, reviewedByUserId: ctx.session.user.id },
       });

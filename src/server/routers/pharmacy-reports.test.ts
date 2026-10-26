@@ -274,7 +274,11 @@ describe('pharmacy owner digest capability boundary', () => {
 
 describe('RX-08 pharmacovigilance state boundaries', () => {
   it('completing internal review does not mark the report externally submitted', async () => {
-    mocks.reportFindFirst.mockResolvedValue({ id: 'pv_1', state: 'UNDER_REVIEW' });
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'UNDER_REVIEW',
+      externalSubmissionState: 'NOT_SUBMITTED',
+    });
     mocks.reportUpdateManyAndReturn.mockResolvedValue([
       {
         id: 'pv_1',
@@ -329,7 +333,11 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
   });
 
   it('rejects a lifecycle transition when a concurrent writer changed the source state', async () => {
-    mocks.reportFindFirst.mockResolvedValue({ id: 'pv_1', state: 'READY' });
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'NOT_SUBMITTED',
+    });
     mocks.reportUpdateManyAndReturn.mockResolvedValue([]);
 
     await expect(
@@ -341,9 +349,66 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(mocks.reportUpdateManyAndReturn).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'pv_1', branchId: 'branch_1', organizationId: 'org_1', state: 'READY' },
+        where: {
+          id: 'pv_1',
+          branchId: 'branch_1',
+          organizationId: 'org_1',
+          state: 'READY',
+          externalSubmissionState: 'NOT_SUBMITTED',
+        },
       })
     );
+  });
+
+  it('rejects a stale lifecycle regression when submission wins the cross-state race', async () => {
+    const row = {
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'PENDING',
+      externalReference: null as string | null,
+      externalFailureReason: null as string | null,
+    };
+    let lifecycleUpdateStarted!: () => void;
+    const lifecycleStarted = new Promise<void>((resolve) => {
+      lifecycleUpdateStarted = resolve;
+    });
+    let finishLifecycle!: () => void;
+    const submissionFinished = new Promise<void>((resolve) => {
+      finishLifecycle = resolve;
+    });
+
+    mocks.reportFindFirst.mockImplementation(async () => ({ ...row }));
+    mocks.reportUpdateManyAndReturn.mockImplementation(async ({ where, data }) => {
+      if (data.state === 'UNDER_REVIEW') {
+        lifecycleUpdateStarted();
+        await submissionFinished;
+      }
+      if (
+        where.state !== row.state ||
+        where.externalSubmissionState !== row.externalSubmissionState
+      )
+        return [];
+      Object.assign(row, data);
+      if (data.externalSubmissionState === 'SUBMITTED') finishLifecycle();
+      return [{ ...row }];
+    });
+
+    const lifecycle = pvCaller().transitionPharmacovigilanceReport({
+      id: 'pv_1',
+      branchId: 'branch_1',
+      state: 'UNDER_REVIEW',
+    });
+    const lifecycleResult = expect(lifecycle).rejects.toMatchObject({ code: 'CONFLICT' });
+    await lifecycleStarted;
+    await pvCaller().recordPharmacovigilanceSubmission({
+      id: 'pv_1',
+      branchId: 'branch_1',
+      state: 'SUBMITTED',
+      externalReference: 'DRAP-1',
+    });
+
+    await lifecycleResult;
+    expect(row).toMatchObject({ state: 'READY', externalSubmissionState: 'SUBMITTED' });
   });
 
   it('does not allow external submission state to regress after submission', async () => {
