@@ -394,6 +394,9 @@ describe('team.getRoster and team:view', () => {
     mocks.findMany.mockResolvedValue([self]);
 
     await expect(caller(['hr']).getRoster()).resolves.toEqual([self]);
+    expect(mocks.permissions).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ where: { id: 'user_self' } })
+    );
     expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith({
       ...rosterQuery,
       where: { id: 'user_self' },
