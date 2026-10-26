@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   can: vi.fn(async () => true),
@@ -70,6 +70,8 @@ describe('createInvoiceInputSchema', () => {
 
 describe('finance.getFinancialSummary', () => {
   it('counts a posted recurring expense only once', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-26T12:34:56.000Z'));
     mocks.transactionGroupBy.mockImplementation(
       ({ where }: { where: { type: 'INCOME' | 'EXPENSE' } }) =>
         Promise.resolve([
@@ -87,6 +89,44 @@ describe('finance.getFinancialSummary', () => {
     expect(summary.yearlyExpense).toEqual([{ currency: 'USD', amount: 100 }]);
     expect(summary.yearlyProfit).toEqual([{ currency: 'USD', amount: 200 }]);
     expect(mocks.transactionGroupBy).toHaveBeenCalledTimes(4);
+    expect(mocks.transactionGroupBy.mock.calls.map(([query]) => query)).toEqual([
+      {
+        by: ['currency'],
+        _sum: { amount: true },
+        where: {
+          type: 'INCOME',
+          date: { gte: new Date('2026-10-01T00:00:00.000Z'), lte: new Date() },
+        },
+      },
+      {
+        by: ['currency'],
+        _sum: { amount: true },
+        where: {
+          type: 'EXPENSE',
+          date: { gte: new Date('2026-10-01T00:00:00.000Z'), lte: new Date() },
+        },
+      },
+      {
+        by: ['currency'],
+        _sum: { amount: true },
+        where: {
+          type: 'INCOME',
+          date: { gte: new Date('2026-01-01T00:00:00.000Z'), lte: new Date() },
+        },
+      },
+      {
+        by: ['currency'],
+        _sum: { amount: true },
+        where: {
+          type: 'EXPENSE',
+          date: { gte: new Date('2026-01-01T00:00:00.000Z'), lte: new Date() },
+        },
+      },
+    ]);
     expect(mocks.recurringFindMany).not.toHaveBeenCalled();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 });
