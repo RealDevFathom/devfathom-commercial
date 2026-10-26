@@ -84,6 +84,9 @@ describe('DashboardPage vertical dispatch', () => {
         capabilities.includes('admin:access') ? ['admin:access'] : ['admin:access', 'orders:take']
       );
       expect(mocks.can).toHaveBeenCalledWith(user, 'admin:access', undefined, { db: mocks.db });
+      if (target === '/pos') {
+        expect(mocks.can).toHaveBeenCalledWith(user, 'orders:take', undefined, { db: mocks.db });
+      }
       expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
       expect(agencyHelpers.meetings.getUpcoming.prefetch).not.toHaveBeenCalled();
     }
