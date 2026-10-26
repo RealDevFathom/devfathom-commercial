@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ signOut: vi.fn() }));
 
@@ -10,6 +10,10 @@ describe('signOutEverything', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('clears the login intent before ending the session', async () => {
@@ -30,6 +34,10 @@ describe('signOutEverything', () => {
 
     await expect(signOutEverything()).resolves.toBeUndefined();
 
+    expect(fetch).toHaveBeenCalledWith('/api/login', {
+      method: 'DELETE',
+      credentials: 'include',
+    });
     expect(mocks.signOut).toHaveBeenCalledWith({ callbackUrl: '/login' });
   });
 
@@ -38,6 +46,10 @@ describe('signOutEverything', () => {
 
     await expect(signOutEverything()).resolves.toBeUndefined();
 
+    expect(fetch).toHaveBeenCalledWith('/api/login', {
+      method: 'DELETE',
+      credentials: 'include',
+    });
     expect(mocks.signOut).toHaveBeenCalledWith({ callbackUrl: '/login' });
   });
 });
