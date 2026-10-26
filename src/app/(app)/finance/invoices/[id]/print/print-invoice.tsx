@@ -105,9 +105,10 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
               <p className="font-display text-2xl font-bold tracking-tight text-[#0C2E2C]">
                 {invoice.issuer.displayName}
               </p>
-              {invoice.issuer.legalName !== invoice.issuer.displayName && (
-                <p className="mt-1 text-xs text-slate-500">{invoice.issuer.legalName}</p>
-              )}
+              {invoice.issuer.legalName &&
+                invoice.issuer.legalName !== invoice.issuer.displayName && (
+                  <p className="mt-1 text-xs text-slate-500">{invoice.issuer.legalName}</p>
+                )}
               {invoice.issuer.primaryContactEmail && (
                 <p className="text-xs text-slate-500">{invoice.issuer.primaryContactEmail}</p>
               )}

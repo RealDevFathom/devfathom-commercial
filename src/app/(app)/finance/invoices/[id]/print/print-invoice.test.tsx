@@ -96,4 +96,20 @@ describe('InvoicePrintView issuer', () => {
     expect(screen.getByText('Northwind Studio LLC')).toBeInTheDocument();
     expect(screen.queryByText('accounts@northwind.example')).not.toBeInTheDocument();
   });
+
+  it('does not render an empty legal-name line', () => {
+    const result = mocks.useQuery();
+    mocks.useQuery.mockReturnValue({
+      ...result,
+      data: {
+        ...result.data,
+        issuer: { ...result.data.issuer, legalName: '' },
+      },
+    });
+
+    const { container } = render(<InvoicePrintView invoiceId="invoice-1" />);
+
+    expect(screen.getByText('Northwind Studio')).toBeInTheDocument();
+    expect(container.querySelectorAll('#invoice-print p:empty')).toHaveLength(0);
+  });
 });
