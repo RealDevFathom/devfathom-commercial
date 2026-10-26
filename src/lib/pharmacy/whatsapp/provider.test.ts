@@ -73,7 +73,7 @@ describe('readWhatsAppConfig', () => {
       PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR_PARAMETERS: 'name,amount',
     });
 
-    expect(config.templates.khataReminder).toEqual({ en: 'khata_due_en', ur: 'khata_due_ur' });
+    expect(config.khataTemplates).toEqual({ en: 'khata_due_en', ur: 'khata_due_ur' });
     expect(config.khataParameterOrder).toEqual({ en: ['amount', 'name'], ur: null });
   });
 
