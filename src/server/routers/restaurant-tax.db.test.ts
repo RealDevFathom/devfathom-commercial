@@ -147,6 +147,39 @@ describeIfDatabase('restaurant tax activation replay against PostgreSQL', () => 
     ).rejects.toMatchObject({ code: 'CONFLICT' });
   });
 
+  it('atomically replaces an open profile through preset activation', async () => {
+    const replacementFrom = '2032-01-01T00:00:00.000Z';
+    const successor = await withTenantDb(organizationId, (db) =>
+      caller(db).activate({
+        ...input,
+        effectiveFrom: replacementFrom,
+        replaceOpenProfile: true,
+        idempotencyKey: `activation-successor-${suffix}`,
+      })
+    );
+
+    await withTenantDb(organizationId, async (db) => {
+      const profiles = await db.restaurantTaxProfileVersion.findMany({
+        where: { branchId },
+        include: { rules: true },
+        orderBy: { effectiveFrom: 'asc' },
+      });
+      expect(profiles).toHaveLength(2);
+      expect(profiles[0].effectiveTo).toEqual(successor.effectiveFrom);
+      expect(profiles[0].rules).toHaveLength(3);
+      expect(profiles[0].rules.map((rule) => rule.effectiveTo)).toEqual(
+        Array(3).fill(successor.effectiveFrom)
+      );
+      expect(profiles[1]).toMatchObject({
+        id: successor.id,
+        presetId: input.profileId,
+        effectiveFrom: new Date(replacementFrom),
+        effectiveTo: null,
+      });
+      expect(profiles[1].rules.every((rule) => rule.effectiveTo === null)).toBe(true);
+    });
+  });
+
   it('publishes one customer-supplied profile with canonical evidence at Karachi midnight', async () => {
     const customInput = {
       branchId: customBranchId,
