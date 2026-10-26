@@ -259,6 +259,14 @@ describe('staff CRUD', () => {
 
     await caller().listEligibleUsers();
 
+    expect(mocks.branchFindMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_workspace',
+        active: true,
+        id: { in: ['branch_inactive', 'branch_active'] },
+      },
+      select: { id: true },
+    });
     const eligibleProfileWhere = {
       OR: [
         { primaryBranchId: { in: ['branch_active'] } },
