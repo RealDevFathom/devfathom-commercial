@@ -15,7 +15,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createMemoryDriver } from '@/lib/retail-terminal/local-store';
 import type { TerminalStorageDriver } from '@/lib/retail-terminal/local-store';
@@ -568,6 +568,58 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
 });
 
 describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
+  it('quarantines a non-sale action instead of rejecting replay', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    expect(
+      await counter.enqueue(
+        {
+          deviceId: SCOPE.deviceId,
+          action: 'SEARCH_CATALOG',
+          payload: { query: 'aspirin' },
+          clientOriginAt: '2026-09-02T12:05:00.000Z',
+          medicineSale: false,
+        },
+        MATRIX
+      )
+    ).toMatchObject({ ok: true });
+
+    const send = vi.fn(async () => ({ status: 200 }));
+    await expect(counter.replay(send)).resolves.toMatchObject({ state: 'IDLE' });
+    expect(send).not.toHaveBeenCalled();
+    expect(counter.snapshot().queue?.commands[0]).toMatchObject({
+      status: 'QUARANTINED',
+      rejection: 'This queued action has no pharmacy counter replay contract.',
+    });
+  });
+
+  it('quarantines a non-sale action ahead of a sale and continues replay', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await counter.enqueue(
+      {
+        deviceId: SCOPE.deviceId,
+        action: 'SEARCH_CATALOG',
+        payload: { query: 'aspirin' },
+        clientOriginAt: '2026-09-02T12:05:00.000Z',
+        medicineSale: false,
+      },
+      MATRIX
+    );
+    await counter.enqueue(cashSale(1), MATRIX);
+
+    const sentSequences: number[] = [];
+    const outcome = await counter.replay(async (request) => {
+      sentSequences.push(request.body.sequence);
+      return { status: 200, serverRef: 'sale_900' };
+    });
+
+    expect(outcome.state).toBe('IDLE');
+    expect(sentSequences).toEqual([2]);
+    expect(counter.snapshot().queue?.commands).toMatchObject([
+      { action: 'SEARCH_CATALOG', status: 'QUARANTINED' },
+      { action: 'CASH_OTC_SALE', status: 'ACKNOWLEDGED' },
+    ]);
+  });
+
   it('pauses and keeps the queue on a generic 401', async () => {
     const counter = await readyCounter(createMemoryDriver());
     await counter.enqueue(cashSale(1), MATRIX);

@@ -397,7 +397,23 @@ export class PharmacyCounterRuntime {
       const next = nextCounterReplay(this.queue(), this.scope.deviceId);
       if (next.status !== 'READY') return { state: next.status, discarded: null };
 
-      const request = buildCounterReplayRequest(this.queue(), next.command);
+      let request: CounterReplayRequest;
+      try {
+        request = buildCounterReplayRequest(this.queue(), next.command);
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== 'INVALID_REPLAY_CONTRACT') throw error;
+
+        const applied = applyCounterReplayOutcome(this.queue(), {
+          commandId: next.command.commandId,
+          outcome: {
+            action: 'QUARANTINE',
+            reason: 'REJECTED',
+            message: 'This queued action has no pharmacy counter replay contract.',
+          },
+        });
+        await this.commit({ ...this.state, queue: applied.snapshot });
+        continue;
+      }
       await this.commit({
         ...this.state,
         queue: beginCounterReplay(this.queue(), next.command.commandId),
