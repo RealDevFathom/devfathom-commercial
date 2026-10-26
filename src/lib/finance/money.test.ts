@@ -5,6 +5,7 @@ describe('money arithmetic', () => {
   it('rounds exact half-cents up', () => {
     expect(roundMoney(1.005)).toBe(1.01);
     expect(multiplyMoney(1, 1.005)).toBe(1.01);
+    expect(multiplyMoney(3, 0.335)).toBe(1.01);
   });
 
   it('keeps ordinary cent rounding and decimal addition behavior', () => {
