@@ -117,4 +117,39 @@ describe('projects.addMember role invariants', () => {
     });
     expect(db.$transaction).toHaveBeenCalledOnce();
   });
+
+  it('keeps re-adding an existing member idempotent', async () => {
+    projectMemberFindFirst
+      .mockResolvedValueOnce({ projectId: 'project_1', userId: 'lead_1', role: 'LEAD' })
+      .mockResolvedValueOnce({ projectId: 'project_1', userId: 'member_1', role: 'MEMBER' });
+    projectMemberUpsert.mockResolvedValueOnce({
+      projectId: 'project_1',
+      userId: 'member_1',
+      role: 'MEMBER',
+    });
+
+    await expect(
+      caller().addMember({ projectId: 'project_1', userId: 'member_1', role: 'MEMBER' })
+    ).resolves.toMatchObject({ role: 'MEMBER' });
+    expect(projectMemberUpsert).toHaveBeenCalledOnce();
+  });
+
+  it('allows promoting an existing member', async () => {
+    projectMemberFindFirst.mockResolvedValueOnce({
+      projectId: 'project_1',
+      userId: 'lead_1',
+      role: 'LEAD',
+    });
+    projectMemberUpsert.mockResolvedValueOnce({
+      projectId: 'project_1',
+      userId: 'member_1',
+      role: 'LEAD',
+    });
+
+    await expect(
+      caller().addMember({ projectId: 'project_1', userId: 'member_1', role: 'LEAD' })
+    ).resolves.toMatchObject({ role: 'LEAD' });
+    expect(projectMemberCount).not.toHaveBeenCalled();
+    expect(projectMemberUpsert).toHaveBeenCalledOnce();
+  });
 });
