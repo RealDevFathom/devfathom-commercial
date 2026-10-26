@@ -105,6 +105,16 @@ describe('pharmacySales.addLine controlled actor', () => {
     expect(register).not.toHaveBeenCalled();
   });
 
+  it('does not treat the legacy dotted capability as a dispense grant', async () => {
+    const { caller, credential, register } = callerFor([
+      { capability: 'pharmacy.dispense', effect: 'ALLOW' },
+    ]);
+    await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(credential).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+  });
+
   it('lets a pharmacist past the actor check', async () => {
     const { caller, credential } = callerFor([
       { capability: 'pharmacy:dispense', effect: 'ALLOW' },
