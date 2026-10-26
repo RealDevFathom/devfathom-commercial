@@ -60,6 +60,19 @@ describe('loadLocalEnvironment', () => {
     expect(environment.DATABASE_URL).toBe('from-platform');
   });
 
+  it('does not replace an invalid process value with a value from a local file', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'devfathom-env-'));
+    directories.push(directory);
+    writeFileSync(join(directory, '.env.local'), 'DATABASE_URL=from-dot-env-local\n');
+
+    const environment = { DATABASE_URL: '   ' };
+    loadLocalEnvironment(environment, directory);
+
+    expect(() => requireEnvironment('DATABASE_URL', environment)).toThrow(
+      'Missing required environment variable: DATABASE_URL'
+    );
+  });
+
   it('names the missing variable and both searched files', () => {
     expect(() => requireEnvironment('DATABASE_URL', {})).toThrow(
       'Missing required environment variable: DATABASE_URL. Searched .env.local and .env'
