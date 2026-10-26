@@ -255,6 +255,10 @@ describe('branch authorization', () => {
       orders: [],
       nextCursor: null,
     });
+    await expect(caller().listPurchaseOrders({ branchId: 'b2' })).resolves.toEqual({
+      orders: [],
+      nextCursor: null,
+    });
     await expect(caller().listPurchaseOrders({})).resolves.toEqual({
       orders: [],
       nextCursor: null,
@@ -263,7 +267,10 @@ describe('branch authorization', () => {
     expect(mocks.listPurchaseOrders).toHaveBeenNthCalledWith(1, expect.anything(), {
       branchId: 'b1',
     });
-    expect(mocks.listPurchaseOrders).toHaveBeenNthCalledWith(2, expect.anything(), {});
+    expect(mocks.listPurchaseOrders).toHaveBeenNthCalledWith(2, expect.anything(), {
+      branchId: 'b2',
+    });
+    expect(mocks.listPurchaseOrders).toHaveBeenNthCalledWith(3, expect.anything(), {});
     expect(usedActions()).toContain('restaurant:configure');
   });
 
