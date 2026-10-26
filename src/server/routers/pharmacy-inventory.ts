@@ -782,8 +782,9 @@ export const pharmacyInventoryRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const { organizationId } = actorFor(ctx);
       const batch = await ctx.db.pharmacyManufacturingBatch.findFirst({
-        where: { id: input.manufacturingBatchId },
+        where: { id: input.manufacturingBatchId, organizationId },
       });
       if (!batch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Batch not found.' });
       if (!input.reason) {
@@ -793,7 +794,7 @@ export const pharmacyInventoryRouter = router({
         });
       }
       return ctx.db.pharmacyManufacturingBatch.update({
-        where: { id: batch.id },
+        where: { id: batch.id, organizationId },
         data: {
           state: input.state,
           stateReason: input.reason,

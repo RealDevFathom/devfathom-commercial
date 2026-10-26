@@ -215,6 +215,36 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
   });
 
+  it('cannot change a batch state outside the session organization', async () => {
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValue(null);
+
+    await expect(
+      caller().setBatchState({
+        manufacturingBatchId: 'batch_from_org_b',
+        state: 'QUARANTINED',
+        reason: 'Temperature excursion',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(db.pharmacyManufacturingBatch.findFirst).toHaveBeenCalledWith({
+      where: { id: 'batch_from_org_b', organizationId: 'org_a' },
+    });
+    expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
+  });
+
+  it('tenant-scopes both the batch-state read and write', async () => {
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({ id: 'batch_1' });
+
+    await caller().setBatchState({
+      manufacturingBatchId: 'batch_1',
+      state: 'RECALLED',
+      reason: 'Manufacturer recall',
+    });
+
+    expect(db.pharmacyManufacturingBatch.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'batch_1', organizationId: 'org_a' } })
+    );
+  });
+
   it('cannot reactivate a recalled or quarantined batch outside the reviewed reversal flow', async () => {
     db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
       id: 'batch_1',
