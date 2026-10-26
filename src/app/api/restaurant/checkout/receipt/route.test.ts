@@ -257,6 +257,8 @@ describe('Restaurant receipt dispatch', () => {
     );
     expect(previewResponse.status).toBe(200);
     const preview = await previewResponse.json();
+    expect(preview.lines).toEqual([]);
+    expect(preview.totals.grandTotal).toBe('26.05');
     expect(preview.printing.preview).toMatchObject({
       source: 'saved',
       text: expect.stringContaining('Fractional share 1/3: 26.05'),
