@@ -65,7 +65,7 @@ describe('finance.getFinancialSummary', () => {
     expect(summary.yearlyIncome).toEqual([{ currency: 'USD', amount: 100 }]);
     expect(summary.yearlyProfit).toEqual([{ currency: 'USD', amount: 100 }]);
     expect(mocks.paymentGroupBy).toHaveBeenCalledTimes(2);
-    expect(mocks.paymentGroupBy).toHaveBeenCalledWith({
+    expect(mocks.paymentGroupBy).toHaveBeenNthCalledWith(1, {
       by: ['currency'],
       _sum: { amount: true },
       where: {
@@ -76,7 +76,7 @@ describe('finance.getFinancialSummary', () => {
         },
       },
     });
-    expect(mocks.paymentGroupBy).toHaveBeenCalledWith({
+    expect(mocks.paymentGroupBy).toHaveBeenNthCalledWith(2, {
       by: ['currency'],
       _sum: { amount: true },
       where: {
