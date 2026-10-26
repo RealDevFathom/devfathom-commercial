@@ -93,6 +93,7 @@ describe('assistant tool routing', () => {
   it.each([
     ['full-set routing', ''],
     ['client-aware Notes routing', 'find the Acme note'],
+    ['core-tool routing', 'show my tasks'],
   ])('requires every Notes dependency through %s', (_route, hint) => {
     const noteDependencies = ['notes', 'projects', 'clients'];
     const noteToolNames = [
