@@ -44,6 +44,7 @@ import { annotateAudit } from '../audit';
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
 
 const manageDevicesProcedure = capabilityProcedure('devices:manage');
+const coAuthorizationApprovalCapability = 'coauth:approve';
 
 /**
  * M2-L3 / §5 / C7 — back-office device administration.
@@ -317,7 +318,12 @@ export const restaurantDevicesRouter = router({
       const eligibility = await Promise.all(
         candidates.map(async (profile) => ({
           profile,
-          eligible: await staffHasCapability(ctx.db, profile.id, device.branchId, 'coauth:approve'),
+          eligible: await staffHasCapability(
+            ctx.db,
+            profile.id,
+            device.branchId,
+            coAuthorizationApprovalCapability
+          ),
         }))
       );
 
@@ -497,7 +503,7 @@ export const restaurantDevicesRouter = router({
           ctx.db,
           input.approvingStaffProfileId,
           device.branchId,
-          'coauth:approve'
+          coAuthorizationApprovalCapability
         ))
       ) {
         throw new TRPCError({
@@ -614,7 +620,7 @@ export const restaurantDevicesRouter = router({
           ctx.db,
           input.approvingStaffProfileId,
           device.branchId,
-          'coauth:approve'
+          coAuthorizationApprovalCapability
         ))
       ) {
         throw new TRPCError({
