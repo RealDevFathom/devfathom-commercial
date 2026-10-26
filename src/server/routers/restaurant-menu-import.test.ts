@@ -209,6 +209,7 @@ describe('error mapping', () => {
     ['REVIEW_INCOMPLETE', 'BAD_REQUEST'],
     ['NOTHING_TO_IMPORT', 'BAD_REQUEST'],
     ['PRICE_REQUIRED', 'BAD_REQUEST'],
+    ['CURRENCY_MISMATCH', 'BAD_REQUEST'],
     ['INVALID', 'BAD_REQUEST'],
   ];
 
