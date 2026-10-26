@@ -13,7 +13,7 @@
  * byte for byte so the drift is caught here rather than by someone diffing
  * responses in the wild.
  */
-import { TRPCError } from '@trpc/server';
+import { TRPCError, type AnyRouter } from '@trpc/server';
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -102,7 +102,7 @@ function stripStacks(value: unknown): { body: unknown; hasStack: boolean } {
   return { body: walk(value), hasStack };
 }
 
-async function serve(router_: unknown, request: Request): Promise<ServedResponse> {
+async function serve(router_: AnyRouter, request: Request): Promise<ServedResponse> {
   const response = await fetchRequestHandler({
     endpoint: TRPC_ENDPOINT,
     req: request,
