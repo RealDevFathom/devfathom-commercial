@@ -397,6 +397,19 @@ describe('prescription capture and private delivery', () => {
     await expect(
       caller().capture({ ...input, lines: [input.lines[0], { ...input.lines[0] }] })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().capture({
+        ...input,
+        lines: [
+          input.lines[0],
+          {
+            ...input.lines[0],
+            medicineId: 'medicine-b',
+            presentationId: 'presentation-b',
+          },
+        ],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.medicines).toHaveBeenCalledWith({
       where: { organizationId: 'org-a', saleable: true, id: { in: ['medicine-a'] } },
@@ -505,6 +518,28 @@ describe('prescription capture and private delivery', () => {
     expect(mocks.create).toHaveBeenCalledOnce();
   });
 
+  it('matches every stored line when an exact retry sends lines in a different order', async () => {
+    const receipt = await upload();
+    const input = captureInput(receipt.url);
+    input.lines.push({
+      ...input.lines[0],
+      lineNumber: 2,
+      medicineId: 'medicine-b',
+      presentationId: 'presentation-b',
+    });
+    mocks.medicines.mockResolvedValue([
+      { id: 'medicine-a', presentations: [{ id: 'presentation-a' }] },
+      { id: 'medicine-b', presentations: [{ id: 'presentation-b' }] },
+    ]);
+    const saved = await caller().capture(input);
+    mocks.find.mockResolvedValue({ ...saved, lines: input.lines });
+
+    await expect(
+      caller().capture({ ...input, lines: [...input.lines].reverse() })
+    ).resolves.toHaveProperty('id', saved.id);
+    expect(mocks.create).toHaveBeenCalledOnce();
+  });
+
   it('competing captures use the same primary key; uniqueness failure escapes, retry recovers', async () => {
     const receipt = await upload();
     const input = captureInput(receipt.url);
@@ -520,21 +555,6 @@ describe('prescription capture and private delivery', () => {
     expect(new Set(mocks.create.mock.calls.map(([arg]) => arg.data.id)).size).toBe(1);
     mocks.find.mockResolvedValue(saved);
     await expect(caller().capture(input)).resolves.toHaveProperty('id', saved!.id);
-  });
-
-  it('rejects replay that duplicates one line instead of matching every stored line', async () => {
-    const receipt = await upload();
-    const input = captureInput(receipt.url);
-    input.lines.push({ ...input.lines[0], lineNumber: 2 });
-    const saved = await caller().capture(input);
-    mocks.find.mockResolvedValue({ ...saved, lines: input.lines });
-    await expect(
-      caller().capture({ ...input, lines: [input.lines[0], input.lines[0]] })
-    ).rejects.toMatchObject({ code: 'CONFLICT' });
-    await expect(
-      caller().capture({ ...input, lines: [...input.lines].reverse() })
-    ).resolves.toHaveProperty('id', saved.id);
-    expect(mocks.create).toHaveBeenCalledOnce();
   });
 
   it('allows capture-only uploaders to retrieve the saved photo but not another uploader', async () => {
