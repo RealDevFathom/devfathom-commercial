@@ -382,8 +382,10 @@ describe('updateAssignment — effective-dated successor', () => {
     });
   });
 
-  it('deactivates a same-day predecessor without creating an invalid date range', async () => {
-    db.restaurantSopAssignment.findUnique.mockResolvedValue(assignment());
+  it('deactivates a same-day predecessor without replacing its valid end date', async () => {
+    db.restaurantSopAssignment.findUnique.mockResolvedValue(
+      assignment({ endDate: new Date('2026-05-20T00:00:00.000Z') })
+    );
 
     await caller().updateAssignment({ id: 'assignment_1', effectiveDate: '2026-05-01' });
 
@@ -391,7 +393,7 @@ describe('updateAssignment — effective-dated successor', () => {
       where: { id: 'assignment_1' },
       data: {
         active: false,
-        endDate: null,
+        endDate: new Date('2026-05-20T00:00:00.000Z'),
         supersededAt: expect.any(Date),
       },
     });
