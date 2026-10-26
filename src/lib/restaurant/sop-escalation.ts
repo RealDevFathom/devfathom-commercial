@@ -166,6 +166,8 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
         select: {
           id: true,
           active: true,
+          scope: true,
+          branchId: true,
           stopOnAcknowledged: true,
           stopOnVerified: true,
           quietHoursStartMinutes: true,
@@ -184,6 +186,9 @@ export async function sopEscalationHandler({ db, job }: RestaurantJobContext): P
         },
       });
       if (!policy || !policy.active) return; // policy removed or deactivated
+      // Jobs are durable input. Revalidate branch applicability here rather than
+      // trusting that every producer (or replay) paired the records correctly.
+      if (policy.scope === 'BRANCH' && policy.branchId !== occ.branchId) return;
 
       // ── Fold event ledger ─────────────────────────────────────────────────
       const events: EscalationEvent[] = await tx.restaurantSopEscalationEvent.findMany({

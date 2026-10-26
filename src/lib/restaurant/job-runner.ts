@@ -145,6 +145,15 @@ async function defaultDiscoverOrganizations(now: Date): Promise<string[]> {
               AND (policy.scope = 'ORG' OR policy."branchId" = occ."branchId")
               AND NOT EXISTS (
                 SELECT 1
+                FROM "restaurant_sop_escalation_events" terminal
+                WHERE terminal."occurrenceId" = occ.id
+                  AND (
+                    terminal.kind = 'STOPPED'
+                    OR (policy."stopOnAcknowledged" = true AND terminal.kind = 'ACKNOWLEDGED')
+                  )
+              )
+              AND NOT EXISTS (
+                SELECT 1
                 FROM "restaurant_sop_escalation_events" event
                 WHERE event."occurrenceId" = occ.id
                   AND event."escalationStepId" = step.id

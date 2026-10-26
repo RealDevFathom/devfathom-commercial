@@ -82,6 +82,10 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export const SOP_LATE_MISSED_JOB = 'sop.sweepLateMissed';
 
+/** Keep one tenant's producer pass bounded so the shared worker can move on. */
+export const MAX_ESCALATION_POLICIES_PER_TICK = 50;
+export const MAX_ESCALATION_OCCURRENCES_PER_TICK = 100;
+
 const PayloadSchema = z
   .object({
     /** Override the "now" instant for deterministic tests. */
@@ -126,10 +130,13 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
   const [policies, occurrences] = await Promise.all([
     db.restaurantSopEscalationPolicy.findMany({
       where: { active: true },
+      orderBy: { id: 'asc' },
+      take: MAX_ESCALATION_POLICIES_PER_TICK,
       select: {
         id: true,
         scope: true,
         branchId: true,
+        stopOnAcknowledged: true,
         quietHoursStartMinutes: true,
         quietHoursEndMinutes: true,
         steps: {
@@ -143,14 +150,16 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
         windowEndsAt: { lte: now },
         status: { in: ['SCHEDULED', 'IN_PROGRESS', 'SUBMITTED', 'LATE', 'MISSED'] },
       },
+      orderBy: [{ windowEndsAt: 'asc' }, { id: 'asc' }],
+      take: MAX_ESCALATION_OCCURRENCES_PER_TICK,
       select: {
         id: true,
         branchId: true,
         windowEndsAt: true,
         branch: { select: { timezone: true } },
         escalationEvents: {
-          where: { kind: 'FIRED' },
-          select: { escalationStepId: true, createdAt: true },
+          where: { kind: { in: ['FIRED', 'ACKNOWLEDGED', 'STOPPED'] } },
+          select: { escalationStepId: true, kind: true, createdAt: true },
           orderBy: { createdAt: 'asc' },
         },
       },
@@ -161,8 +170,16 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
   for (const occurrence of occurrences) {
     for (const policy of policies) {
       if (policy.scope === 'BRANCH' && policy.branchId !== occurrence.branchId) continue;
+      if (occurrence.escalationEvents.some((event) => event.kind === 'STOPPED')) continue;
+      if (
+        policy.stopOnAcknowledged &&
+        occurrence.escalationEvents.some((event) => event.kind === 'ACKNOWLEDGED')
+      ) {
+        continue;
+      }
       const fired = new Set(
         occurrence.escalationEvents
+          .filter((event) => event.kind === 'FIRED')
           .map((event) => event.escalationStepId)
           .filter((id): id is string => id !== null)
       );
@@ -173,7 +190,9 @@ export async function enqueueDueSopEscalations(db: ScopedDb, now: Date): Promise
         .reverse()
         .find(
           (event) =>
-            event.escalationStepId && policy.steps.some((s) => s.id === event.escalationStepId)
+            event.kind === 'FIRED' &&
+            event.escalationStepId &&
+            policy.steps.some((s) => s.id === event.escalationStepId)
         );
       const anchor = previous?.createdAt ?? occurrence.windowEndsAt;
       if (now.getTime() < anchor.getTime() + nextStep.delayMinutes * 60_000) continue;

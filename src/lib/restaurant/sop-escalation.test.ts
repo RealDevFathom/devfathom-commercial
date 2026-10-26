@@ -31,6 +31,8 @@ const BASE_OCCURRENCE = {
 const BASE_POLICY = {
   id: 'policy_1',
   active: true,
+  scope: 'BRANCH',
+  branchId: 'branch_1',
   stopOnAcknowledged: true,
   stopOnVerified: true,
   quietHoursStartMinutes: null,
@@ -170,6 +172,18 @@ function makeCtx(
 }
 
 describe('sopEscalationHandler', () => {
+  it('rejects a durable job that pairs an occurrence with another branch policy', async () => {
+    const { db, mocks } = makeDb({
+      policy: { ...BASE_POLICY, branchId: 'branch_2' },
+    });
+
+    await sopEscalationHandler(makeCtx(db));
+
+    expect(mocks.eventFindMany).not.toHaveBeenCalled();
+    expect(mocks.outboxCreateMany).not.toHaveBeenCalled();
+    expect(mocks.eventCreate).not.toHaveBeenCalled();
+  });
+
   it('keys escalation independently to each same-date INTERVAL occurrence id', async () => {
     const { db, mocks } = makeDb({});
     await sopEscalationHandler(makeCtx(db, { occurrenceId: 'interval_0930' }));

@@ -17,6 +17,8 @@ vi.mock('@/lib/restaurant/scheduler', async (importOriginal) => {
 import {
   enqueueDueSopEscalations,
   isMissedAt,
+  MAX_ESCALATION_OCCURRENCES_PER_TICK,
+  MAX_ESCALATION_POLICIES_PER_TICK,
   missedAt,
   sopEscalationJobKey,
   sopLateMissedHandler,
@@ -156,6 +158,55 @@ describe('sopLateMissedHandler', () => {
 });
 
 describe('enqueueDueSopEscalations', () => {
+  it('bounds both sides of the producer sweep for per-tenant fairness', async () => {
+    const findPolicies = vi.fn().mockResolvedValue([]);
+    const findOccurrences = vi.fn().mockResolvedValue([]);
+    const db = {
+      restaurantSopEscalationPolicy: { findMany: findPolicies },
+      restaurantSopOccurrence: { findMany: findOccurrences },
+    } as unknown as ScopedDb;
+
+    await enqueueDueSopEscalations(db, WINDOW_ENDS);
+
+    expect(findPolicies).toHaveBeenCalledWith(
+      expect.objectContaining({ take: MAX_ESCALATION_POLICIES_PER_TICK })
+    );
+    expect(findOccurrences).toHaveBeenCalledWith(
+      expect.objectContaining({ take: MAX_ESCALATION_OCCURRENCES_PER_TICK })
+    );
+  });
+
+  it('does not produce acknowledged or stopped chains', async () => {
+    const policy = {
+      id: 'policy_1',
+      scope: 'ORG',
+      branchId: null,
+      stopOnAcknowledged: true,
+      quietHoursStartMinutes: null,
+      quietHoursEndMinutes: null,
+      steps: [{ id: 'step_1', delayMinutes: 0 }],
+    };
+    const occurrence = (kind: 'ACKNOWLEDGED' | 'STOPPED') => ({
+      id: `occ_${kind}`,
+      branchId: 'branch_1',
+      windowEndsAt: WINDOW_ENDS,
+      branch: { timezone: 'UTC' },
+      escalationEvents: [{ kind, escalationStepId: null, createdAt: WINDOW_ENDS }],
+    });
+    const db = {
+      restaurantSopEscalationPolicy: { findMany: vi.fn().mockResolvedValue([policy]) },
+      restaurantSopOccurrence: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([occurrence('ACKNOWLEDGED'), occurrence('STOPPED')]),
+      },
+    } as unknown as ScopedDb;
+    vi.mocked(enqueue).mockClear();
+
+    await expect(enqueueDueSopEscalations(db, WINDOW_ENDS)).resolves.toBe(0);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   it('re-enqueues after a queued job reaches quiet hours, then fires exactly once', async () => {
     const policy = {
       id: 'policy_1',
