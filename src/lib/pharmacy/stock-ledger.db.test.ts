@@ -751,7 +751,11 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       )
     );
     expect(results.filter((one) => one.status === 'fulfilled')).toHaveLength(1);
-    expect(results.filter((one) => one.status === 'rejected')).toHaveLength(1);
+    expect(results.filter((one) => one.status === 'rejected')).toEqual([
+      expect.objectContaining({
+        reason: expect.objectContaining({ reason: 'INVALID_STATE' }),
+      }),
+    ]);
     const state = await inOrg(ORG_A, async (db) => ({
       balances: await db.pharmacyStockBalance.findMany({ where: { inventoryLotId: ids.lotId } }),
       movements: await db.pharmacyStockMovement.findMany({
