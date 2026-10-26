@@ -347,7 +347,38 @@ async function setup() {
       ).nextNumber,
     }));
   }
-  return { fixture, command, call, replay, counts, lease };
+  async function journalBalances(saleId: string) {
+    return inOrg(ORG_A, async (db) => {
+      const sale = await db.pharmacySale.findFirstOrThrow({
+        where: { id: saleId },
+        select: { lines: { select: { id: true } }, tenders: { select: { id: true } } },
+      });
+      const entries = await db.financeJournalEntry.findMany({
+        where: {
+          OR: [
+            {
+              sourceKind: 'PHARMACY_SALE_LINE',
+              sourceId: { in: sale.lines.map((line) => line.id) },
+            },
+            {
+              sourceKind: 'PHARMACY_TENDER',
+              sourceId: { in: sale.tenders.map((tender) => tender.id) },
+            },
+          ],
+        },
+        include: { lines: { select: { side: true, amountMinor: true } } },
+      });
+      return entries.map((entry) => ({
+        debit: entry.lines
+          .filter((line) => line.side === 'DEBIT')
+          .reduce((sum, line) => sum + line.amountMinor, 0),
+        credit: entry.lines
+          .filter((line) => line.side === 'CREDIT')
+          .reduce((sum, line) => sum + line.amountMinor, 0),
+      }));
+    });
+  }
+  return { fixture, command, call, replay, counts, journalBalances, lease };
 }
 
 describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
@@ -383,6 +414,9 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
     ).toEqual([200, 200]);
     expect(results[0].saleId).toBe(results[1].saleId);
     expect(results.map((r) => r.replayed).sort()).toEqual([false, true]);
+    const journalBalances = await f.journalBalances(results[0].saleId);
+    expect(journalBalances).toHaveLength(2);
+    expect(journalBalances.every(({ debit, credit }) => debit === credit)).toBe(true);
     expect(await f.counts()).toEqual({
       commands: 1,
       sales: 1,
