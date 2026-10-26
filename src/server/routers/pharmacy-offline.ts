@@ -225,7 +225,16 @@ export async function replayCounterCommand(
   });
   validateLeasedReceiptReplay(scope, deviceId, command.leasedReceipt);
   const originalMs = Date.parse(command.leasedReceipt.originalSaleAt);
+  let safetyLeaseOk = true;
   const snapshots = command.snapshots.map((snapshot) => {
+    const leaseCheck = checkSafetyLease(
+      {
+        lease: snapshot.envelope.safetyLease,
+        appliedRecallVersion: snapshot.envelope.safetyLease.recallVersion,
+        recalledBatchIds: [],
+      },
+      originalMs
+    );
     if (
       !verifySnapshotSignature(snapshot.envelope, snapshot.signature) ||
       !checkEnvelope({
@@ -235,16 +244,10 @@ export async function replayCounterCommand(
         heldVersion: null,
         payloadHash: snapshotPayloadHash(snapshot.payload),
       }).ok ||
-      !checkSafetyLease(
-        {
-          lease: snapshot.envelope.safetyLease,
-          appliedRecallVersion: snapshot.envelope.safetyLease.recallVersion,
-          recalledBatchIds: [],
-        },
-        originalMs
-      ).ok
+      !leaseCheck.ok
     )
       throw new CounterTransportError('invalid_snapshot', 403);
+    safetyLeaseOk &&= leaseCheck.ok;
     return {
       kind: snapshot.envelope.kind,
       verified: true,
@@ -255,6 +258,18 @@ export async function replayCounterCommand(
     (n, line) => n + line.quantity * line.canonicalUnitsPerSaleUnit,
     0
   );
+  // Recall is a live, organization-wide batch property. A signed offline
+  // snapshot helps the counter refuse the sale while disconnected, but replay
+  // must still re-read the authoritative state in this transaction.
+  const replayLots = await db.pharmacyInventoryLot.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      id: { in: [...new Set(command.lines.map((line) => line.inventoryLotId))] },
+    },
+    select: { id: true, manufacturingBatch: { select: { state: true } } },
+  });
+  const batchRecalled = replayLots.some((lot) => lot.manufacturingBatch.state === 'RECALLED');
   authorizeReplayedCommand(command.action, {
     nowMs: originalMs,
     snapshots,
@@ -267,8 +282,8 @@ export async function replayCounterCommand(
     originalSaleAvailable: false,
     deviceUsable: true,
     medicineSale: true,
-    safetyLeaseOk: true,
-    batchRecalled: false,
+    safetyLeaseOk,
+    batchRecalled,
   });
   const recorded = await recordOfflineCommand(db, scope, {
     deviceId,
@@ -534,6 +549,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               unitsPerPack: true,
               printedMrpMinor: true,
               receivedExpiresAt: true,
+              manufacturingBatch: { select: { state: true } },
             },
             take: 1000,
             orderBy: { id: 'asc' },

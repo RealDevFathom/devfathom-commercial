@@ -481,4 +481,27 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
     expect(await r.json()).toEqual({ error: 'medicine_not_offline_otc' });
     expect((await f.counts()).commands).toBe(0);
   });
+  it('rejects replay when the command lot was recalled after snapshot issuance', async () => {
+    const f = await setup();
+    await inOrg(ORG_A, async (db) => {
+      const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+        where: { id: f.fixture.lotId },
+        select: { manufacturingBatchId: true },
+      });
+      await db.pharmacyManufacturingBatch.update({
+        where: { id: lot.manufacturingBatchId },
+        data: { state: 'RECALLED', stateReason: 'Test recall', stateChangedAt: new Date() },
+      });
+    });
+
+    const response = await f.replay();
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: 'BATCH_RECALLED' });
+    expect(await f.counts()).toEqual({
+      commands: 0,
+      sales: 0,
+      consumed: 0,
+      nextNumber: f.lease.blockStart,
+    });
+  });
 });

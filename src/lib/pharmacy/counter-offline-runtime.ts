@@ -220,6 +220,7 @@ export class PharmacyCounterRuntime {
     };
     const previousLease = this.safetyLeaseState().lease;
     const eventType = previousLease ? 'RENEWED' : 'ISSUED';
+    const recalledBatchIds = recalledLotsFromSnapshot(input.envelope.kind, input.payload);
     const nextState: CounterRuntimeState = {
       ...this.state,
       catalog: {
@@ -238,7 +239,7 @@ export class PharmacyCounterRuntime {
             occurredAt: input.envelope.safetyLease.issuedAt,
             lease: input.envelope.safetyLease,
             recallVersion: input.envelope.safetyLease.recallVersion,
-            recalledBatchIds: [],
+            recalledBatchIds,
           },
         ],
       },
@@ -264,7 +265,7 @@ export class PharmacyCounterRuntime {
     const leases = this.cache().snapshots.map((snapshot) => snapshot.envelope.safetyLease);
     const lease = leases.sort((a, b) => Date.parse(b.issuedAt) - Date.parse(a.issuedAt))[0] ?? null;
     const recallEvents = this.queue().safetyLeaseEvents.filter(
-      (event) => event.type === 'RECALL_APPLIED'
+      (event) => event.type === 'RECALL_APPLIED' || event.recalledBatchIds.length > 0
     );
     return {
       lease,
@@ -444,4 +445,20 @@ export class PharmacyCounterRuntime {
     await writeTerminalState(this.driver, nextState, COUNTER_STORE_SCHEMA_VERSION);
     this.state = nextState;
   }
+}
+
+/** Recall state travels inside the signed PRICES payload so a disconnected
+ * counter can reject a recalled lot before its command reaches replay. */
+function recalledLotsFromSnapshot(kind: PharmacyOfflineSnapshotKind, payload: unknown): string[] {
+  if (kind !== 'PRICES' || !Array.isArray(payload)) return [];
+  return payload.flatMap((lot) => {
+    if (
+      typeof lot === 'object' &&
+      lot !== null &&
+      typeof (lot as { id?: unknown }).id === 'string' &&
+      (lot as { manufacturingBatch?: { state?: unknown } }).manufacturingBatch?.state === 'RECALLED'
+    )
+      return [(lot as { id: string }).id];
+    return [];
+  });
 }

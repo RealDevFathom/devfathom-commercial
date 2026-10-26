@@ -313,6 +313,18 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
 });
 
 describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
+  it('blocks a lot marked recalled by the signed prices snapshot', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await install(counter, 'PRICES', [{ id: 'lot_1', manufacturingBatch: { state: 'RECALLED' } }], {
+      version: 2,
+    });
+
+    expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'BATCH_RECALLED',
+    });
+  });
+
   it('issues, renews and reports an expired lease in the append-only event log', async () => {
     const counter = await readyCounter(createMemoryDriver());
     expect(counter.counterStatus(NOW)).toMatchObject({ safetyLeaseStatus: 'ACTIVE' });
