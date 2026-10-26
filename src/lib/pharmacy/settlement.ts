@@ -9,7 +9,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { reverseRefundedEarnedPoints } from './customer-loyalty-earned-reversal';
 import { accrueSalePoints, restoreRefundedLoyaltyPoints } from './customer-loyalty';
-import { returnedLineValue } from './sales';
+import { returnedSaleLineValue } from './sales';
 import { postTenderEntry, postTenderRefundEntry } from './finance-postings';
 import { firstCloseIsFinal } from './migration/first-close';
 import { assertSaleBatchesSellable } from './sale-batch-safety';
@@ -529,11 +529,7 @@ export async function refundPharmacyTender(
       sale?.lines.reduce(
         (sum, line) =>
           sum +
-          returnedLineValue(
-            line,
-            line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0) +
-              line.unidentifiedReturnHolds.reduce((n, row) => n + row.canonicalUnits, 0)
-          ),
+          returnedSaleLineValue(line),
         0
       ) ?? 0;
     if (

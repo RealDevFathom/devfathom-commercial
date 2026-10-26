@@ -578,6 +578,41 @@ export function returnedLineValue(
   );
 }
 
+/**
+ * Value already made refundable for a line. Identified returns keep their exact
+ * allocation value. Unidentified holds share only the value and units left
+ * after those identified returns; identified returns are not accepted while a
+ * hold exists, so that reservation can never be displaced later.
+ */
+export function returnedSaleLineValue(line: {
+  quantity: number;
+  unitPriceMinor: number;
+  grossMinor?: number;
+  discountMinor: number;
+  canonicalUnits: number;
+  returnLines: Array<{ canonicalUnits: number; grossMinor: number; discountMinor: number }>;
+  unidentifiedReturnHolds: Array<{ canonicalUnits: number }>;
+}) {
+  const identifiedUnits = line.returnLines.reduce((sum, row) => sum + row.canonicalUnits, 0);
+  const identifiedValue = line.returnLines.reduce(
+    (sum, row) => sum + row.grossMinor - row.discountMinor,
+    0
+  );
+  const unidentifiedUnits = line.unidentifiedReturnHolds.reduce(
+    (sum, row) => sum + row.canonicalUnits,
+    0
+  );
+  const remainingUnits = line.canonicalUnits - identifiedUnits;
+  const remainingValue =
+    (line.grossMinor ?? line.quantity * line.unitPriceMinor) -
+    line.discountMinor -
+    identifiedValue;
+  return (
+    identifiedValue +
+    (remainingUnits ? Math.floor((remainingValue * unidentifiedUnits) / remainingUnits) : 0)
+  );
+}
+
 export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId: string) {
   const sale = await db.pharmacySale.findFirst({
     where: {
@@ -645,13 +680,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       returnedUnits,
       unidentifiedUnits,
       lots,
-      returnedMinor:
-        unidentifiedUnits === 0
-          ? line.returnLines.reduce(
-              (sum, row) => sum + row.grossMinor - row.discountMinor,
-              0
-            )
-          : returnedLineValue(line, returnedUnits),
+      returnedMinor: returnedSaleLineValue(line),
       netMinor: line.grossMinor - line.discountMinor,
     };
   });
@@ -804,6 +833,11 @@ export async function returnSaleLine(
     returned + input.canonicalUnits > line.canonicalUnits
   )
     throw new PharmacySaleError('RETURN_EXCEEDS_SOLD');
+  // An unidentified hold reserves a proportional slice of all value that was
+  // not already tied to an exact lot. Do not allow a later identified return
+  // to overlap and displace that reservation.
+  if (input.lotId && line.unidentifiedReturnHolds.length)
+    throw new PharmacySaleError('INVALID_STATE');
   if (!input.reason.trim() || !input.integrityDecision.trim())
     throw new PharmacySaleError('INVALID_STATE');
   const allocations = line.allocations.filter((row) => row.inventoryLotId === input.lotId);

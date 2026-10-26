@@ -9,7 +9,12 @@ vi.mock('./finance-postings', () => ({
   postTenderRefundEntry: vi.fn().mockResolvedValue({}),
 }));
 
-import { returnedLineValue, returnSaleLine, readReturnHistory } from './sales';
+import {
+  returnedLineValue,
+  returnedSaleLineValue,
+  returnSaleLine,
+  readReturnHistory,
+} from './sales';
 import { postUnidentifiedSaleReturnEntry } from './finance-postings';
 
 const scope = { organizationId: 'o', branchId: 'b', actorId: 'a' };
@@ -138,6 +143,19 @@ describe('counter return boundaries', () => {
     const line = { quantity: 1, unitPriceMinor: 100, discountMinor: 2, canonicalUnits: 3 };
     expect([1, 2, 3].map((n) => returnedLineValue(line, n))).toEqual([32, 65, 98]);
   });
+  it('adds exact identified value to the reserved share for unidentified holds', () => {
+    expect(
+      returnedSaleLineValue({
+        quantity: 3,
+        unitPriceMinor: 133,
+        grossMinor: 400,
+        discountMinor: 40,
+        canonicalUnits: 3,
+        returnLines: [{ canonicalUnits: 1, grossMinor: 200, discountMinor: 20 }],
+        unidentifiedReturnHolds: [{ canonicalUnits: 1 }],
+      })
+    ).toBe(270);
+  });
   it('does not disclose another branch receipt history', async () => {
     const findFirst = vi.fn().mockResolvedValue(null);
     await expect(
@@ -205,6 +223,14 @@ describe('verified physical lot boundaries', () => {
     await expect(
       returnSaleLine(db as never, scope, { ...input, canonicalUnits: 4 })
     ).rejects.toThrow('RETURN_EXCEEDS_SOLD');
+    expect(db.pharmacySaleReturn.create).not.toHaveBeenCalled();
+  });
+  it('does not let a named return displace value reserved by an unidentified hold', async () => {
+    const { db, line } = fixture();
+    line.unidentifiedReturnHolds.push({ canonicalUnits: 1 });
+    await expect(
+      returnSaleLine(db as never, scope, { ...input, canonicalUnits: 1 })
+    ).rejects.toThrow('INVALID_STATE');
     expect(db.pharmacySaleReturn.create).not.toHaveBeenCalled();
   });
   it('requires quarantine custody for legacy restock requests with no verified lot', async () => {

@@ -88,11 +88,12 @@ it('reverses revenue but not inventory for an unidentified return hold', async (
         saleLine: {
           id: 'line',
           medicineId: 'medicine',
-          unitPriceMinor: 102,
-          quantity: 1,
-          discountMinor: 2,
+          unitPriceMinor: 133,
+          quantity: 3,
+          discountMinor: 40,
           canonicalUnits: 3,
-          returnLines: [],
+          grossMinor: 400,
+          returnLines: [{ canonicalUnits: 1, grossMinor: 200, discountMinor: 20 }],
           unidentifiedReturnHolds: [{ canonicalUnits: 1 }],
         },
       }),
@@ -110,8 +111,10 @@ it('reverses revenue but not inventory for an unidentified return hold', async (
     sourceId: 'hold',
   });
   expect(posted.lines).toEqual([
-    expect.objectContaining({ accountCode: 'SALES_REVENUE', side: 'DEBIT', amountMinor: 33 }),
-    expect.objectContaining({ accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 33 }),
+    expect.objectContaining({ accountCode: 'SALES_REVENUE', side: 'DEBIT', amountMinor: 100 }),
+    expect.objectContaining({ accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 100 }),
+    expect.objectContaining({ accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: 10 }),
+    expect.objectContaining({ accountCode: 'SALES_DISCOUNT', side: 'CREDIT', amountMinor: 10 }),
   ]);
   expect(posted.lines.some((line) => line.accountCode === 'INVENTORY')).toBe(false);
   expect(posted.lines.some((line) => line.accountCode === 'COST_OF_GOODS_SOLD')).toBe(false);
@@ -125,6 +128,7 @@ it('records a zero-minor-unit slice and assigns the rounding remainder to a late
     quantity: 1,
     discountMinor: 0,
     canonicalUnits: 3,
+    grossMinor: 1,
     returnLines: [],
     unidentifiedReturnHolds: [{ canonicalUnits: 1 }],
   };
