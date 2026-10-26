@@ -4,17 +4,26 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   db: {
     column: {
-      findUnique: vi.fn(async () => ({
-        id: 'column-1',
-        board: { project: { id: 'project-1', name: 'Project' } },
-        defaultAssignees: [],
-      })),
+      findUnique: vi.fn(
+        async (): Promise<{
+          id: string;
+          board: { project: { id: string; name: string } };
+          defaultAssignees: Array<{ userId: string }>;
+        }> => ({
+          id: 'column-1',
+          board: { project: { id: 'project-1', name: 'Project' } },
+          defaultAssignees: [],
+        })
+      ),
     },
-    projectMember: { count: vi.fn(async () => 0) },
+    projectMember: {
+      count: vi.fn(async () => 0),
+      findMany: vi.fn(async () => []),
+    },
     label: { count: vi.fn(async () => 0) },
     task: {
       aggregate: vi.fn(async () => ({ _max: { order: null } })),
-      create: vi.fn(),
+      create: vi.fn(async () => ({ id: 'task-1', title: 'Task' })),
     },
   },
 }));
@@ -58,5 +67,31 @@ describe('POST /api/v1/tasks', () => {
       where: { projectId: 'project-1', userId: { in: ['other-project-user'] } },
     });
     expect(mocks.db.task.create).not.toHaveBeenCalled();
+  });
+
+  it('does not assign a stale column default that is no longer a project member', async () => {
+    mocks.db.column.findUnique.mockResolvedValueOnce({
+      id: 'column-1',
+      board: { project: { id: 'project-1', name: 'Project' } },
+      defaultAssignees: [{ userId: 'removed-user' }],
+    });
+    mocks.db.task.create.mockResolvedValueOnce({ id: 'task-1', title: 'Task' });
+
+    const response = await POST(
+      new Request('https://example.test/api/v1/tasks', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'Task', columnId: 'column-1', assigneeIds: [] }),
+      })
+    );
+
+    expect(response.status).toBe(201);
+    expect(mocks.db.projectMember.findMany).toHaveBeenCalledWith({
+      where: { projectId: 'project-1', userId: { in: ['removed-user'] } },
+      select: { userId: true },
+    });
+    expect(mocks.db.task.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ assignees: undefined }) })
+    );
   });
 });

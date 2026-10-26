@@ -116,9 +116,22 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     where: { columnId: input.columnId },
   });
 
-  // Merge explicit assignees with the column's default owners (deduped)
+  // Column defaults can outlive project membership. Only carry current project
+  // members onto the new task; explicit assignees were validated above.
+  const validDefaultAssignees =
+    column.defaultAssignees.length > 0
+      ? await ctx.db.projectMember.findMany({
+          where: {
+            projectId: column.board.project.id,
+            userId: { in: column.defaultAssignees.map((assignee) => assignee.userId) },
+          },
+          select: { userId: true },
+        })
+      : [];
+
+  // Merge explicit assignees with the column's valid default owners (deduped)
   const mergedAssignees = [
-    ...new Set([...input.assigneeIds, ...column.defaultAssignees.map((d) => d.userId)]),
+    ...new Set([...input.assigneeIds, ...validDefaultAssignees.map((member) => member.userId)]),
   ];
 
   const task = await ctx.db.task.create({
