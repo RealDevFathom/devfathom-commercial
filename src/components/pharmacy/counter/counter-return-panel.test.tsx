@@ -15,6 +15,9 @@ vi.mock('@/lib/trpc', () => ({
       returnHistory: { useQuery: () => mocks.history },
       counterReceipt: { useQuery: () => ({}) },
       returnLine: { useMutation: () => ({ mutateAsync: mocks.returnLine }) },
+      controlledReturnWitnesses: {
+        useQuery: () => ({ isSuccess: true, data: [{ id: 'witness', name: 'Dr Witness' }] }),
+      },
       refundTender: { useMutation: () => ({ mutateAsync: mocks.refund }) },
     },
   },
@@ -49,6 +52,7 @@ beforeEach(() => {
         {
           id: 'line',
           name: 'Medicine',
+          controlled: false,
           quantity: 1,
           saleUnit: 'STRIP',
           canonicalUnits: 10,
@@ -125,6 +129,39 @@ describe('counter returns', () => {
       )
     );
     await screen.findByText(/Return recorded/);
+  });
+  it('sends a controlled witness and reports a blocked result as an error', async () => {
+    const controlledHistory = mocks.history as {
+      data: { lines: Array<{ controlled: boolean }> };
+    };
+    controlledHistory.data.lines[0].controlled = true;
+    mocks.returnLine.mockResolvedValueOnce({
+      blocked: 'A different pharmacist must enter a fresh witness PIN.',
+    });
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
+    fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
+      target: { value: 'seal unknown' },
+    });
+    fireEvent.change(screen.getByLabelText('Witness pharmacist'), {
+      target: { value: 'witness' },
+    });
+    fireEvent.change(screen.getByLabelText('Witness PIN'), { target: { value: '1234' } });
+    fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+    fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+    await waitFor(() =>
+      expect(mocks.returnLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          controlledWitness: { staffProfileId: 'witness', pin: '1234' },
+        })
+      )
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent('fresh witness PIN');
+    expect(screen.queryByText(/Return recorded/)).not.toBeInTheDocument();
+    expect(mocks.refetch).not.toHaveBeenCalled();
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).toBeNull();
   });
   it('caps refunds at returned value and requires explicit cash fallback for card', () => {
     render(<ReturnForm {...props} />);
