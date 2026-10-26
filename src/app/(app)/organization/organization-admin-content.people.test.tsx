@@ -95,6 +95,7 @@ beforeEach(() => {
           department: 'COUNTER',
           organizationRoleId: null,
           lastActiveAt: null,
+          permissionOverrides: [],
         },
       ],
       usageCounters: [],
@@ -179,6 +180,29 @@ describe('organization people and access — staff onboarding', () => {
     expect(
       screen.queryByText(/Minimum 12(?:-character password| characters)\./)
     ).not.toBeInTheDocument();
+  });
+
+  it('reconciles Goods-in access with the confirmed grant after refusal or refresh', () => {
+    const view = render(<OrganizationAdminContent />);
+    const control = screen.getByRole('checkbox', { name: 'Goods-in access' });
+
+    fireEvent.click(control);
+    expect(mutationFor('setMemberGoodsInAccess').mutate).toHaveBeenCalledWith({
+      id: 'owner_1',
+      granted: true,
+    });
+    expect(control).not.toBeChecked();
+
+    const data = overviewData.current as {
+      organization: { users: Array<{ permissionOverrides: Array<{ id: string }> }> };
+    };
+    data.organization.users[0]!.permissionOverrides = [{ id: 'grant_1' }];
+    view.rerender(<OrganizationAdminContent />);
+    expect(control).toBeChecked();
+
+    data.organization.users[0]!.permissionOverrides = [];
+    view.rerender(<OrganizationAdminContent />);
+    expect(control).not.toBeChecked();
   });
 });
 

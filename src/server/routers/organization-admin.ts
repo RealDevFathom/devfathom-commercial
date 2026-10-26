@@ -263,6 +263,10 @@ export const organizationAdminRouter = router({
             department: true,
             organizationRoleId: true,
             lastActiveAt: true,
+            permissionOverrides: {
+              where: { capability: 'pharmacy.procurement', effect: 'ALLOW' },
+              select: { id: true },
+            },
           },
         },
         usageCounters: { orderBy: { updatedAt: 'desc' }, take: 25 },
@@ -557,6 +561,46 @@ export const organizationAdminRouter = router({
         metadata: { before, after: input },
       });
       return saved;
+    }),
+
+  setMemberGoodsInAccess: adminProcedure
+    .input(z.object({ id: z.string(), granted: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const id = organizationId(ctx);
+      const user = await ctx.db.user.findFirst({
+        where: { id: input.id, organizationId: id },
+        select: { id: true, email: true },
+      });
+      if (!user) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
+
+      if (input.granted) {
+        await ctx.db.userPermissionOverride.upsert({
+          where: {
+            userId_capability: { userId: user.id, capability: 'pharmacy.procurement' },
+          },
+          update: { effect: 'ALLOW', reason: 'Goods-in access granted by workspace administrator' },
+          create: {
+            organizationId: id,
+            userId: user.id,
+            capability: 'pharmacy.procurement',
+            effect: 'ALLOW',
+            reason: 'Goods-in access granted by workspace administrator',
+            createdById: ctx.session.user.id,
+          },
+        });
+      } else {
+        await ctx.db.userPermissionOverride.deleteMany({
+          where: { organizationId: id, userId: user.id, capability: 'pharmacy.procurement' },
+        });
+      }
+      annotateAudit(ctx, {
+        targetType: 'User',
+        targetId: user.id,
+        targetLabel: user.email,
+        description: `${input.granted ? 'Granted' : 'Removed'} Goods-in access`,
+        metadata: { capability: 'pharmacy.procurement', granted: input.granted },
+      });
+      return { granted: input.granted };
     }),
 
   createMember: adminProcedure

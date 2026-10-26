@@ -239,6 +239,10 @@ export function OrganizationAdminContent() {
     onSuccess: () => success('Member access updated.'),
     onError: failure,
   });
+  const goodsInAccess = trpc.organizationAdmin.setMemberGoodsInAccess.useMutation({
+    onSuccess: () => success('Goods-in access updated.'),
+    onError: failure,
+  });
   const addMember = trpc.organizationAdmin.createMember.useMutation({
     onSuccess: () => success('Staff member added.'),
     onError: failure,
@@ -668,6 +672,21 @@ export function OrganizationAdminContent() {
                   </label>
                   <SubmitButton pending={member.isPending}>Update access</SubmitButton>
                 </form>
+                <div className="space-y-2">
+                  <p className={labelClass}>Pharmacy permissions</p>
+                  <label className="flex min-h-11 items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={user.permissionOverrides.length > 0}
+                      disabled={goodsInAccess.isPending}
+                      onChange={(event) =>
+                        goodsInAccess.mutate({ id: user.id, granted: event.currentTarget.checked })
+                      }
+                      className="size-4 rounded border-border text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                    Goods-in access
+                  </label>
+                </div>
                 <form
                   className="space-y-3"
                   onSubmit={(event) => {
