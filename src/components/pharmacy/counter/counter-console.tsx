@@ -811,6 +811,153 @@ function ScopedPharmacyCounterConsole({
     setLotOverride(null);
   }, []);
 
+  const ensureSale = useCallback(async () => {
+    if (saleId) return saleId;
+    const created = await createSale.mutateAsync({ branchId, quotation: false });
+    setActiveSale(created.id);
+    return created.id;
+  }, [branchId, createSale, saleId, setActiveSale]);
+
+  const addToCart = useCallback(
+    async (selection?: {
+      row: CounterSearchRow;
+      option: NonNullable<typeof selectedOption>;
+      quantity: number;
+      preview: NonNullable<typeof preview>;
+    }) => {
+      const row = selection?.row ?? activeRow;
+      const option = selection?.option ?? selectedOption;
+      const lineQuantity = selection?.quantity ?? quantity;
+      const linePreview = selection?.preview ?? preview;
+      // A GS1 scan reaches this callback while its authentication action still owns
+      // `pending`; that event path is allowed to hand off directly to add-to-cart.
+      if (!row || !option || !linePreview || (busy && !selection)) return;
+      if (!linePreview.sufficient) {
+        setNotice({
+          tone: 'warning',
+          message: `Only ${linePreview.availableUnits} safe units are on hand. Reduce the quantity or capture the shortfall.`,
+        });
+        return;
+      }
+      const overrideLotId = lotOverride?.inventoryLotId ?? null;
+      if (overrideLotId && !lotOverride?.reason.trim()) {
+        setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
+        return;
+      }
+      setPending('addToCart');
+      setNotice(null);
+      try {
+        const activeSaleId = await ensureSale();
+        const controlled = row.restriction.controlled;
+        const addressOk = patientAddress.trim().length >= 3;
+        const prescriptionOk =
+          controlledAuth.emergency || Boolean(controlledAuth.prescriptionLineId);
+        const emergencyOk =
+          !controlledAuth.emergency || controlledAuth.prescriberName.trim().length > 0;
+        if (
+          controlled &&
+          (!patient ||
+            !addressOk ||
+            !prescriptionOk ||
+            !emergencyOk ||
+            !controlledAuth.staffProfileId ||
+            !/^\d{4,8}$/.test(controlledAuth.pin) ||
+            !navigator.onLine)
+        ) {
+          setNotice({
+            tone: 'warning',
+            message:
+              'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber. Connect online, then complete the authorization panel.',
+          });
+          rxPanelRef.current?.focus();
+          return;
+        }
+        const refSerial = Number(controlledAuth.refSerial);
+        const added = await addLine.mutateAsync({
+          controlledAuthorization:
+            controlled && patient
+              ? {
+                  patientId: patient.patientId,
+                  patientAddress: patientAddress.trim(),
+                  staffProfileId: controlledAuth.staffProfileId,
+                  pin: controlledAuth.pin,
+                  rxSerialWritten: controlledAuth.rxSerialWritten,
+                  emergency: controlledAuth.emergency,
+                  prescriptionLineId: controlledAuth.prescriptionLineId || undefined,
+                  prescriberName: controlledAuth.prescriberName.trim() || undefined,
+                  prescriberRegNo: controlledAuth.prescriberRegNo.trim() || undefined,
+                  refSerial: Number.isInteger(refSerial) && refSerial > 0 ? refSerial : undefined,
+                }
+              : undefined,
+          branchId,
+          saleId: activeSaleId,
+          medicineId: row.medicineId,
+          presentationId: row.presentationId,
+          packLevelId: option.packLevelId,
+          saleUnit: option.kind,
+          quantity: lineQuantity,
+          canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+          // A stable key per (sale, medicine, unit, quantity) so a double-press of
+          // the add chord cannot post the same line twice.
+          idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${lineQuantity}${overrideLotId ? `:${overrideLotId}` : ''}`,
+          ...(overrideLotId && lotOverride
+            ? {
+                override: {
+                  inventoryLotId: overrideLotId,
+                  reason: lotOverride.reason.trim(),
+                  approvalPolicy: COUNTER_OVERRIDE_APPROVAL_POLICY,
+                },
+              }
+            : {}),
+        });
+        if ('blocked' in added) {
+          setNotice({ tone: 'warning', message: added.blocked });
+          return;
+        }
+        await refreshCart();
+        await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
+        await utils.pharmacySafety.controlledRegister.invalidate();
+        await utils.pharmacySales.counterSearch.invalidate();
+        setLotOverride(null);
+        setNotice({
+          tone: 'success',
+          message: `${lineQuantity} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
+        });
+        setQuery('');
+        focusSearch();
+      } catch (error) {
+        const message = messageFrom(error);
+        setNotice({
+          tone: 'danger',
+          message,
+          ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
+            ? { inventoryBranchId: branchId }
+            : {}),
+        });
+      } finally {
+        setControlledAuth((value) => ({ ...value, pin: '' }));
+        setPending(null);
+      }
+    },
+    [
+      activeRow,
+      addLine,
+      controlledAuth,
+      patient,
+      patientAddress,
+      branchId,
+      busy,
+      ensureSale,
+      focusSearch,
+      lotOverride,
+      preview,
+      quantity,
+      refreshCart,
+      selectedOption,
+      utils,
+    ]
+  );
+
   const runSearch = useCallback(async () => {
     if (!branchAuthorized) return;
     const trimmed = query.trim();
@@ -825,11 +972,26 @@ function ScopedPharmacyCounterConsole({
       const result = await utils.client.pharmacySales.counterSearch.query(input);
       utils.pharmacySales.counterSearch.setData(input, result);
       if (barcodeAdd.current !== trimmed) return;
-      if (result.rows.length !== 1) {
-        barcodeAdd.current = null;
-        return;
+      barcodeAdd.current = null;
+      if (result.rows.length !== 1) return;
+      const row = result.rows[0]!;
+      const option = row.saleUnits[0];
+      stageRow(row);
+      if (!option || row.printedMrpMinor === null || row.unitsPerPack === null) return;
+      try {
+        const linePreview = previewSaleLine({
+          option,
+          quantity: 1,
+          printedMrpMinor: row.printedMrpMinor,
+          unitsPerPack: row.unitsPerPack,
+          roundingIncrementMinor: row.roundingIncrementMinor,
+          availableUnits: row.onHandUnits,
+        });
+        if (linePreview.sufficient)
+          await addToCart({ row, option, quantity: 1, preview: linePreview });
+      } catch {
+        // Keep the result staged so the operator can resolve invalid pricing manually.
       }
-      stageRow(result.rows[0]!);
     };
     const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
     if (!looksLikeGs1) {
@@ -846,7 +1008,6 @@ function ScopedPharmacyCounterConsole({
     try {
       const verdict = await authenticatePack.mutateAsync({ branchId, payload: trimmed });
       if (revision !== scannerRevision.current) return;
-      await stageBarcodeResult(verdict.parsed?.gtin ?? trimmed);
       setNotice({
         tone:
           verdict.status === 'VERIFIED'
@@ -856,6 +1017,7 @@ function ScopedPharmacyCounterConsole({
               : 'warning',
         message: verdict.explanation,
       });
+      await stageBarcodeResult(verdict.parsed?.gtin ?? trimmed);
     } catch (error) {
       if (revision !== scannerRevision.current) return;
       barcodeAdd.current = null;
@@ -863,165 +1025,7 @@ function ScopedPharmacyCounterConsole({
     } finally {
       setPending(null);
     }
-  }, [authenticatePack, branchAuthorized, branchId, query, stageRow, utils]);
-
-  const ensureSale = useCallback(async () => {
-    if (saleId) return saleId;
-    const created = await createSale.mutateAsync({ branchId, quotation: false });
-    setActiveSale(created.id);
-    return created.id;
-  }, [branchId, createSale, saleId, setActiveSale]);
-
-  const addToCart = useCallback(async () => {
-    if (!activeRow || !selectedOption || !preview || busy) return;
-    if (!preview.sufficient) {
-      setNotice({
-        tone: 'warning',
-        message: `Only ${preview.availableUnits} safe units are on hand. Reduce the quantity or capture the shortfall.`,
-      });
-      return;
-    }
-    const overrideLotId = lotOverride?.inventoryLotId ?? null;
-    if (overrideLotId && !lotOverride?.reason.trim()) {
-      setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
-      return;
-    }
-    setPending('addToCart');
-    setNotice(null);
-    try {
-      const activeSaleId = await ensureSale();
-      const controlled = activeRow.restriction.controlled;
-      const addressOk = patientAddress.trim().length >= 3;
-      const prescriptionOk = controlledAuth.emergency || Boolean(controlledAuth.prescriptionLineId);
-      const emergencyOk =
-        !controlledAuth.emergency || controlledAuth.prescriberName.trim().length > 0;
-      if (
-        controlled &&
-        (!patient ||
-          !addressOk ||
-          !prescriptionOk ||
-          !emergencyOk ||
-          !controlledAuth.staffProfileId ||
-          !/^\d{4,8}$/.test(controlledAuth.pin) ||
-          !navigator.onLine)
-      ) {
-        setNotice({
-          tone: 'warning',
-          message:
-            'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber. Connect online, then complete the authorization panel.',
-        });
-        rxPanelRef.current?.focus();
-        return;
-      }
-      const refSerial = Number(controlledAuth.refSerial);
-      const added = await addLine.mutateAsync({
-        controlledAuthorization:
-          controlled && patient
-            ? {
-                patientId: patient.patientId,
-                patientAddress: patientAddress.trim(),
-                staffProfileId: controlledAuth.staffProfileId,
-                pin: controlledAuth.pin,
-                rxSerialWritten: controlledAuth.rxSerialWritten,
-                emergency: controlledAuth.emergency,
-                prescriptionLineId: controlledAuth.prescriptionLineId || undefined,
-                prescriberName: controlledAuth.prescriberName.trim() || undefined,
-                prescriberRegNo: controlledAuth.prescriberRegNo.trim() || undefined,
-                refSerial: Number.isInteger(refSerial) && refSerial > 0 ? refSerial : undefined,
-              }
-            : undefined,
-        branchId,
-        saleId: activeSaleId,
-        medicineId: activeRow.medicineId,
-        presentationId: activeRow.presentationId,
-        packLevelId: selectedOption.packLevelId,
-        saleUnit: selectedOption.kind,
-        quantity,
-        canonicalUnitsPerSaleUnit: selectedOption.canonicalUnitsPerSaleUnit,
-        // A stable key per (sale, medicine, unit, quantity) so a double-press of
-        // the add chord cannot post the same line twice.
-        idempotencyKey: `counter:${activeSaleId}:${activeRow.medicineId}:${selectedOption.packLevelId}:${selectedOption.kind}:${quantity}${overrideLotId ? `:${overrideLotId}` : ''}`,
-        ...(overrideLotId && lotOverride
-          ? {
-              override: {
-                inventoryLotId: overrideLotId,
-                reason: lotOverride.reason.trim(),
-                approvalPolicy: COUNTER_OVERRIDE_APPROVAL_POLICY,
-              },
-            }
-          : {}),
-      });
-      if ('blocked' in added) {
-        setNotice({ tone: 'warning', message: added.blocked });
-        return;
-      }
-      await refreshCart();
-      await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
-      await utils.pharmacySafety.controlledRegister.invalidate();
-      await utils.pharmacySales.counterSearch.invalidate();
-      setLotOverride(null);
-      setNotice({
-        tone: 'success',
-        message: `${quantity} × ${activeRow.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
-      });
-      setQuery('');
-      focusSearch();
-    } catch (error) {
-      const message = messageFrom(error);
-      setNotice({
-        tone: 'danger',
-        message,
-        ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
-          ? { inventoryBranchId: branchId }
-          : {}),
-      });
-    } finally {
-      setControlledAuth((value) => ({ ...value, pin: '' }));
-      setPending(null);
-    }
-  }, [
-    activeRow,
-    addLine,
-    controlledAuth,
-    patient,
-    patientAddress,
-    branchId,
-    busy,
-    ensureSale,
-    focusSearch,
-    lotOverride,
-    preview,
-    quantity,
-    refreshCart,
-    selectedOption,
-    utils,
-  ]);
-
-  useEffect(() => {
-    const token = barcodeAdd.current;
-    if (!token || token !== trimmedQuery || !searchCurrent) return;
-    if (searchQuery.isFetching || searchQuery.isPlaceholderData || searchQuery.isError) return;
-    const found = searchQuery.data?.rows ?? [];
-    if (found.length !== 1) return;
-    const row = found[0]!;
-    const nextUnit = row.saleUnits[0]?.kind ?? null;
-    if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) return;
-    barcodeAdd.current = null;
-    if (!preview?.sufficient || busy) return;
-    void addToCart();
-  }, [
-    activeRow,
-    addToCart,
-    busy,
-    preview,
-    saleUnit,
-    searchCurrent,
-    searchQuery.data,
-    searchQuery.isError,
-    searchQuery.isFetching,
-    searchQuery.isPlaceholderData,
-    trimmedQuery,
-  ]);
+  }, [addToCart, authenticatePack, branchAuthorized, branchId, query, stageRow, utils]);
 
   const runTransition = useCallback(
     async (action: 'hold' | 'resume' | 'void', reason?: string) => {

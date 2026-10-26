@@ -538,6 +538,20 @@ function restaurantTransaction() {
         if (!row) throw new Error('Missing package in fake');
         return row;
       }),
+      updateMany: vi.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { key: string; defaultSeats: number };
+          data: { defaultSeats: number };
+        }) => {
+          const row = packages.get(where.key);
+          if (!row || row.defaultSeats !== where.defaultSeats) return { count: 0 };
+          Object.assign(row, data);
+          return { count: 1 };
+        }
+      ),
       upsert: vi.fn(async ({ create: data }: { create: { key: string } }) => {
         if (!packages.has(data.key))
           packages.set(data.key, {
@@ -578,6 +592,7 @@ function restaurantTransaction() {
     delegates.platformUser.create,
     delegates.platformModule.upsert,
     delegates.platformPackage.upsert,
+    delegates.platformPackage.updateMany,
     delegates.platformPackageModule.upsert,
     delegates.organizationRole.create,
     delegates.organizationDepartment.createMany,
