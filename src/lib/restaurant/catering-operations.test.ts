@@ -214,6 +214,25 @@ describe('frozen quote and costing', () => {
       recipeVersionId: 'version-original',
     });
   });
+  it('rejects a product-only line before publishing an unusable quote', async () => {
+    const f = fixture();
+    const raw = f.db.$queryRaw.getMockImplementation()!;
+    f.db.$queryRaw.mockImplementation(async (q) =>
+      q.strings.join('?').includes('FROM restaurant_catering_quote_revisions') ? [] : raw(q)
+    );
+    const line = f.order.lines[0]! as {
+      productId: string | null;
+      recipeId: string | null;
+    };
+    line.productId = 'product';
+    line.recipeId = null;
+
+    await expect(publishQuote(f.tx, 'org', 'order', 'PKR', 'staff')).rejects.toThrow(
+      'A recipe is required for every quoted line.'
+    );
+    expect(mocks.cost).not.toHaveBeenCalled();
+    expect(f.db.$executeRaw).not.toHaveBeenCalled();
+  });
   it('labels absent costs missing without manufacturing zero profit inputs', () => {
     const f = fixture();
     f.quote.snapshot.missing = ['rice'];

@@ -222,17 +222,16 @@ export async function publishQuote(
   };
   const grouped = new Map<string, FrozenRequirement>();
   for (const line of order.lines) {
+    if (!line.recipeId) fail('A recipe is required for every quoted line.');
     // Pin the root before costing: the helper's quantities and denominators must
     // describe that same version even if another transaction activates a recipe.
-    const version = line.recipeId
-      ? resolveActiveVersion(
-          await tx.restaurantRecipeVersion.findMany({
-            where: { organizationId: org, recipeId: line.recipeId },
-            select: { id: true, status: true },
-          })
-        )
-      : null;
-    if (line.recipeId && !version) fail('Recipe has no active version.');
+    const version = resolveActiveVersion(
+      await tx.restaurantRecipeVersion.findMany({
+        where: { organizationId: org, recipeId: line.recipeId },
+        select: { id: true, status: true },
+      })
+    );
+    if (!version) fail('Recipe has no active version.');
     const cost = version
       ? await computeRecipeCostInDb(tx, { organizationId: org, recipeVersionId: version.id })
       : null;
