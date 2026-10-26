@@ -120,6 +120,15 @@ describe('private attachment delivery', () => {
     expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'pharmacy-licence.pdf');
   });
 
+  it('does not apply another tenant\'s licence evidence restriction', async () => {
+    db.branchRegulatoryProfile.findFirst.mockImplementation(async ({ where }) =>
+      where.organizationId === 'org_b' ? { id: 'foreign_profile' } : null
+    );
+
+    expect((await read('shared-name.pdf')).status).toBe(200);
+    expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'shared-name.pdf');
+  });
+
   it('keeps the SOP branch membership gate and admin exception', async () => {
     db.restaurantSopEvidence.findFirst.mockResolvedValue({ occurrence: { branchId: 'branch_a' } });
     expect((await read('sop.png')).status).toBe(404);
