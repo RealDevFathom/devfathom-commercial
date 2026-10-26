@@ -66,11 +66,18 @@ BEGIN
   -- the old board rather than either blocking that feature or retaining an
   -- invalid association.
   DELETE FROM "task_labels" tl
-  USING "labels" l, "columns" c
+  USING "labels" l, "columns" c, "boards" b
   WHERE tl."taskId" = NEW.id
     AND l.id = tl."labelId"
     AND c.id = NEW."columnId"
-    AND (l."boardId" <> c."boardId" OR l."organizationId" <> NEW."organizationId");
+    AND b.id = c."boardId"
+    AND (
+      l."boardId" <> c."boardId"
+      OR NEW."organizationId" <> c."organizationId"
+      OR NEW."organizationId" <> b."organizationId"
+      OR NEW."organizationId" <> l."organizationId"
+      OR NEW."organizationId" <> tl."organizationId"
+    );
   RETURN NEW;
 END;
 $$;

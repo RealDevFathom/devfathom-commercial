@@ -97,7 +97,9 @@ describeIfDatabase('task-label board invariant concurrency', () => {
       INSERT INTO "boards" VALUES
         ('board_a', 'org'), ('board_b', 'org'), ('board_other_org', 'other_org');
       INSERT INTO "columns" VALUES
-        ('column_a', 'board_a', 'org'), ('column_b', 'board_b', 'org');
+        ('column_a', 'board_a', 'org'),
+        ('column_b', 'board_b', 'org'),
+        ('column_wrong_org', 'board_a', 'other_org');
       INSERT INTO "tasks" VALUES ('task', 'column_a', 'org');
       INSERT INTO "labels" VALUES ('label', 'board_a', 'org');
     `);
@@ -143,6 +145,22 @@ describeIfDatabase('task-label board invariant concurrency', () => {
     await expectRejectedAttachAfterMove(
       `UPDATE "tasks" SET "columnId" = 'column_b' WHERE id = 'task'`
     );
+    await setup!.query(`UPDATE "tasks" SET "columnId" = 'column_a' WHERE id = 'task'`);
+  });
+
+  it('removes attachments when a task moves to a column from another organization', async () => {
+    await setup!.query(
+      `INSERT INTO "task_labels" ("id", "organizationId", "taskId", "labelId")
+       VALUES ('task_move_org_tl', 'org', 'task', 'label')`
+    );
+    await setup!.query(
+      `UPDATE "tasks" SET "columnId" = 'column_wrong_org' WHERE id = 'task'`
+    );
+
+    const remaining = await setup!.query(
+      `SELECT 1 FROM "task_labels" WHERE id = 'task_move_org_tl'`
+    );
+    expect(remaining.rowCount).toBe(0);
     await setup!.query(`UPDATE "tasks" SET "columnId" = 'column_a' WHERE id = 'task'`);
   });
 
