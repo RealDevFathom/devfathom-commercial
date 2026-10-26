@@ -1287,6 +1287,28 @@ export async function cancelOrder(
       voidedItemIds: active.map((i) => i.id),
       coAuthorizationId: coAuthId,
     });
+    // Cancellation is terminal, so it must post prepared waste here: cancelled
+    // orders can never reach closeOrder's recipe-consumption bridge. Pass the
+    // just-persisted item state rather than the pre-cancellation loadOrder snapshot.
+    const cancelledItems = order.items.map((item) => {
+      const wasActive = active.some((candidate) => candidate.id === item.id);
+      const postPrep = wasActive && isPostPrep(item.status);
+      return wasActive
+        ? {
+            ...item,
+            status: 'VOIDED',
+            wastageDisposition: postPrep ? disposition : 'NONE',
+          }
+        : item;
+    });
+    await postOrderRecipeConsumption(
+      tx,
+      order.id,
+      order.branchId,
+      cancelledItems,
+      { staffProfileId: input.actor.staffProfileId, deviceId: input.actor.deviceId },
+      cancelledAt
+    );
     await recordIdempotentResult(tx, input.actor, order.id);
     return { orderId: order.id, replayed: false };
   });

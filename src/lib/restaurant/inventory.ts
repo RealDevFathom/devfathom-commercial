@@ -556,10 +556,11 @@ type OrderItemForConsumption = {
 };
 
 /**
- * Called by orders.ts::closeOrder (coordinated single touch) inside the order's
- * existing transaction. Resolves the active recipe version for each non-voided
- * order item, flattens its BOM, and posts RECIPE_CONSUMPTION movements. Items with
- * no recipe or no active version are silently skipped (not every product is tracked).
+ * Called by the terminal order commands (closeOrder and cancelOrder) inside the
+ * order's existing transaction. Resolves the active recipe version for each
+ * non-voided order item, flattens its BOM, and posts RECIPE_CONSUMPTION movements.
+ * Items with no recipe or no active version are silently skipped (not every product
+ * is tracked).
  *
  * C6 disposition for post-prep voided items:
  *   - WASTE  → post WASTAGE movements (negative)

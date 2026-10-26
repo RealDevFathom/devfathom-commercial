@@ -19,7 +19,7 @@ vi.mock('./loyalty', () => ({
 }));
 vi.mock('./outbox', () => ({ appendOrderEvent: mocks.appendOrderEvent }));
 
-import { closeOrder } from './orders';
+import { cancelOrder, closeOrder } from './orders';
 
 const actor = {
   staffProfileId: 'staff-1',
@@ -139,5 +139,92 @@ describe('closeOrder close time', () => {
       { staffProfileId: actor.staffProfileId, deviceId: actor.deviceId },
       current
     );
+  });
+});
+
+describe('cancelOrder recipe consumption', () => {
+  it('posts prepared waste atomically with the persisted cancellation state and only once on replay', async () => {
+    const preparedItem = {
+      id: 'item-1',
+      status: 'PREPARED',
+      course: 1,
+      quantity: 2,
+      productId: 'product-1',
+      variantId: null,
+      name: 'Prepared meal',
+      unitPrice: 10,
+      taxAmount: 0,
+      serviceChargeAmount: 0,
+      seatNumber: null,
+      wastageDisposition: null,
+      product: { categoryId: null },
+    };
+    const preparedOrder = { ...order, status: 'READY', items: [preparedItem] };
+    let idempotency: { resultRef: string | null } | null = null;
+    const tx = {
+      $queryRaw: vi.fn(async () => []),
+      restaurantOrder: {
+        findUnique: vi.fn(async () => preparedOrder),
+        update: vi.fn(async () => preparedOrder),
+      },
+      restaurantOrderItem: { update: vi.fn(async () => preparedItem) },
+      restaurantOrderTable: { updateMany: vi.fn() },
+      restaurantCoAuthorization: { create: vi.fn(async () => ({ id: 'co-auth-1' })) },
+      restaurantOrderIdempotencyKey: {
+        findUnique: vi.fn(async () => idempotency),
+        create: vi.fn(async () => {
+          idempotency = { resultRef: null };
+          return idempotency;
+        }),
+        update: vi.fn(async ({ data }: { data: { resultRef: string } }) => {
+          idempotency = { resultRef: data.resultRef };
+          return idempotency;
+        }),
+      },
+    };
+    const db = {
+      $transaction: vi.fn((work: (scoped: ScopedDb) => Promise<unknown>) =>
+        work(tx as unknown as ScopedDb)
+      ),
+    } as unknown as ScopedDb;
+
+    await expect(
+      cancelOrder(db, {
+        orderId: preparedOrder.id,
+        reason: 'discarded meal',
+        wastageDisposition: 'WASTE',
+        approvingStaffProfileId: 'manager-1',
+        actor: { ...actor, idempotencyKey: 'cancel-1' },
+      })
+    ).resolves.toEqual({ orderId: preparedOrder.id, replayed: false });
+    await expect(
+      cancelOrder(db, {
+        orderId: preparedOrder.id,
+        reason: 'discarded meal',
+        wastageDisposition: 'WASTE',
+        approvingStaffProfileId: 'manager-1',
+        actor: { ...actor, idempotencyKey: 'cancel-1' },
+      })
+    ).resolves.toEqual({ orderId: preparedOrder.id, replayed: true });
+
+    expect(mocks.postOrderRecipeConsumption).toHaveBeenCalledTimes(1);
+    expect(mocks.postOrderRecipeConsumption).toHaveBeenCalledWith(
+      tx,
+      preparedOrder.id,
+      preparedOrder.branchId,
+      [
+        expect.objectContaining({
+          id: preparedItem.id,
+          status: 'VOIDED',
+          wastageDisposition: 'WASTE',
+        }),
+      ],
+      { staffProfileId: actor.staffProfileId, deviceId: actor.deviceId },
+      expect.any(Date)
+    );
+    expect(tx.restaurantOrder.update).toHaveBeenCalledWith({
+      where: { id: preparedOrder.id },
+      data: { status: 'CANCELLED', cancelledAt: expect.any(Date) },
+    });
   });
 });
