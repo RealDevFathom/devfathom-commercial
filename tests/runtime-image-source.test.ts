@@ -32,12 +32,15 @@ describe('runtime image source', () => {
       mkdirSync(join(source, 'lib', 'testing'), { recursive: true });
       mkdirSync(join(source, 'lib', 'test-support'), { recursive: true });
       mkdirSync(join(source, 'lib', 'pharmacy', 'migration', 'fixtures'), { recursive: true });
+      mkdirSync(join(source, 'feature', 'mocks'), { recursive: true });
       mkdirSync(join(source, 'feature', '__snapshots__'), { recursive: true });
       mkdirSync(join(source, 'app', 'api', 'trpc'), { recursive: true });
       writeFileSync(join(source, 'feature.ts'), 'export const feature = true;');
       writeFileSync(join(source, 'feature.test.ts'), 'test-only');
       writeFileSync(join(source, 'feature', 'view.test.tsx'), 'test-only');
       writeFileSync(join(source, 'feature', 'worker.spec.mts'), 'test-only');
+      writeFileSync(join(source, 'feature', 'mailer.mock.ts'), 'test-only');
+      writeFileSync(join(source, 'feature', 'mocks', 'clock.ts'), 'test-only');
       writeFileSync(
         join(source, 'app', 'api', 'trpc', 'transaction-boundary.real-http.runner.py'),
         'test-only',
@@ -62,6 +65,8 @@ describe('runtime image source', () => {
       expect(() => readFileSync(join(destination, 'feature.test.ts'))).toThrow();
       expect(() => readFileSync(join(destination, 'feature', 'view.test.tsx'))).toThrow();
       expect(() => readFileSync(join(destination, 'feature', 'worker.spec.mts'))).toThrow();
+      expect(() => readFileSync(join(destination, 'feature', 'mailer.mock.ts'))).toThrow();
+      expect(() => readFileSync(join(destination, 'feature', 'mocks', 'clock.ts'))).toThrow();
       expect(() =>
         readFileSync(
           join(destination, 'app', 'api', 'trpc', 'transaction-boundary.real-http.runner.py'),
