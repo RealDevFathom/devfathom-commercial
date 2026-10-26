@@ -1483,14 +1483,41 @@ describeIfDatabase('frozen service-charge settlement (real DB)', () => {
 
     expect(result.settled).toBe(true);
     expect(result.remainingDue.toFixed(2)).toBe('0.00');
-    const settled = await read((tx) =>
-      tx.restaurantBill.findUniqueOrThrow({
+    const settled = await read(async (tx) => ({
+      bill: await tx.restaurantBill.findUniqueOrThrow({
         where: { id: billId },
-        select: { serviceChargeTotal: true, grandTotal: true },
-      })
-    );
-    expect(settled.serviceChargeTotal.toFixed(2)).toBe('1.25');
-    expect(settled.grandTotal.toFixed(2)).toBe('13.75');
+        select: {
+          subtotal: true,
+          compTotal: true,
+          discountTotal: true,
+          serviceChargeTotal: true,
+          deliveryFeeTotal: true,
+          taxTotal: true,
+          roundingAdjustment: true,
+          grandTotal: true,
+        },
+      }),
+      tender: await tx.restaurantTender.aggregate({
+        where: { billId },
+        _sum: { amount: true },
+      }),
+    }));
+    expect(settled.bill.serviceChargeTotal.toFixed(2)).toBe('1.25');
+    expect(settled.bill.grandTotal.toFixed(2)).toBe('13.75');
+
+    // Reconcile the persisted settlement as exact debit/credit evidence. Keeping the
+    // residual in Decimal space catches cent-level drift that total-only assertions hide.
+    const debitTotal = settled.tender._sum.amount ?? new Prisma.Decimal(0);
+    const creditTotal = settled.bill.subtotal
+      .minus(settled.bill.compTotal)
+      .minus(settled.bill.discountTotal)
+      .plus(settled.bill.serviceChargeTotal)
+      .plus(settled.bill.deliveryFeeTotal)
+      .plus(settled.bill.taxTotal)
+      .plus(settled.bill.roundingAdjustment);
+    expect(debitTotal.toFixed(2)).toBe('13.75');
+    expect(creditTotal.toFixed(2)).toBe('13.75');
+    expect(debitTotal.minus(creditTotal).toFixed(2)).toBe('0.00');
   });
 });
 
