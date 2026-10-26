@@ -49,6 +49,18 @@ describe('InvoicePrintView', () => {
     expect(screen.queryByText('$999')).not.toBeInTheDocument();
   });
 
+  it('uses the payment aggregate to decide whether to print the balance', () => {
+    mocks.useQuery.mockReturnValue({
+      isLoading: false,
+      data: invoice({ payments: [] }),
+    });
+
+    render(<InvoicePrintView invoiceId="invoice-497" />);
+
+    expect(screen.getByText('Amount paid').nextElementSibling).toHaveTextContent('$400');
+    expect(screen.getByText('Balance due').nextElementSibling).toHaveTextContent('$600');
+  });
+
   it('omits payment totals when the invoice has no payments', () => {
     mocks.useQuery.mockReturnValue({
       isLoading: false,

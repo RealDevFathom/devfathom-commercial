@@ -207,7 +207,7 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
                 <span>Total</span>
                 <span className="tabular-nums">{moneyLabel(total, currency)}</span>
               </div>
-              {invoice.payments.length > 0 && (
+              {amountPaid > 0 && (
                 <>
                   <div className="flex justify-between text-slate-600">
                     <span>Amount paid</span>
