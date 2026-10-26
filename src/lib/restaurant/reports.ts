@@ -6,7 +6,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate } from './business-date';
 import { resolveChainTip } from './daily-close';
-import { computeRecipeCost, RecipeCostingError } from './recipe-costing';
+import { computeRecipeCost, computeRecipeCostInDb, RecipeCostingError } from './recipe-costing';
 
 export const MAX_REPORT_DAYS = 90;
 export const MAX_REPORT_BRANCHES = 100;
@@ -877,7 +877,7 @@ export async function readCateringReport(
         let cost = costCache.get(line.recipeId);
         if (!cost) {
           try {
-            cost = await computeRecipeCost({
+            cost = await computeRecipeCostInDb(db, {
               organizationId: order.organizationId,
               recipeId: line.recipeId,
             });

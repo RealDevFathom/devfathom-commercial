@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
-const recipeMocks = vi.hoisted(() => ({ computeRecipeCost: vi.fn() }));
+const recipeMocks = vi.hoisted(() => ({
+  computeRecipeCost: vi.fn(),
+  computeRecipeCostInDb: vi.fn(),
+}));
 vi.mock('./recipe-costing', async () => ({
   ...(await vi.importActual<typeof import('./recipe-costing')>('./recipe-costing')),
   computeRecipeCost: recipeMocks.computeRecipeCost,
+  computeRecipeCostInDb: recipeMocks.computeRecipeCostInDb,
 }));
 
 import { Prisma } from '@/generated/prisma/client';
@@ -29,6 +33,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 beforeEach(() => {
   recipeMocks.computeRecipeCost.mockReset();
+  recipeMocks.computeRecipeCostInDb.mockReset();
 });
 
 describe('restaurant report range and CSV safety', () => {
@@ -185,7 +190,17 @@ describe('restaurant catering report', () => {
       status: index === 500 ? 'DELIVERED' : 'DRAFT',
       quotedTotal: new Prisma.Decimal(100),
       branch: { id: 'b1', name: 'Main' },
-      lines: [],
+      lines:
+        index === 500
+          ? [
+              {
+                recipeId: 'later-page-recipe',
+                description: 'Later page menu line',
+                portions: new Prisma.Decimal(2),
+                costPerPortionSnapshot: null,
+              },
+            ]
+          : [],
       extraCosts: [],
       delivery:
         index === 500
@@ -206,6 +221,10 @@ describe('restaurant catering report', () => {
     const db = {
       restaurantCateringOrder: { findMany },
     } as unknown as ScopedDb;
+    recipeMocks.computeRecipeCostInDb.mockResolvedValue({
+      costPerPortion: new Prisma.Decimal(3),
+      missing: [],
+    });
 
     const report = await readCateringReport(db, boundedRange);
 
@@ -214,6 +233,7 @@ describe('restaurant catering report', () => {
     expect(report.totals).toMatchObject({
       orderCount: 501,
       revenue: '50100',
+      knownIngredientCost: '6',
       deliveredCount: 1,
       deliveredOnTimeCount: 0,
       deliveredOnTimeRate: '0',
@@ -232,6 +252,11 @@ describe('restaurant catering report', () => {
       cursor: { id: 'o500' },
       skip: 1,
     });
+    expect(recipeMocks.computeRecipeCostInDb).toHaveBeenCalledWith(db, {
+      organizationId: 'org1',
+      recipeId: 'later-page-recipe',
+    });
+    expect(recipeMocks.computeRecipeCost).not.toHaveBeenCalled();
   });
 
   it('combines quoted revenue, recipe snapshots, extras, margins, status and delivery timing', async () => {
@@ -307,7 +332,7 @@ describe('restaurant catering report', () => {
         ]),
       },
     } as unknown as ScopedDb;
-    recipeMocks.computeRecipeCost.mockResolvedValue({
+    recipeMocks.computeRecipeCostInDb.mockResolvedValue({
       costPerPortion: new Prisma.Decimal(2),
       missing: [],
     });
