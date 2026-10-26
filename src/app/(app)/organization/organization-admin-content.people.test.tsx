@@ -219,14 +219,21 @@ describe('organization people and access — staff onboarding', () => {
     expect(invalidateOverview).not.toHaveBeenCalled();
     expect(control).not.toBeChecked();
 
-    await mutationFor('setMemberGoodsInAccess').onSuccess?.();
-    expect(invalidateOverview).toHaveBeenCalledOnce();
+    fireEvent.click(control);
+    expect(mutationFor('setMemberGoodsInAccess').mutate).toHaveBeenNthCalledWith(2, {
+      id: 'owner_1',
+      granted: true,
+    });
 
     const data = overviewData.current as {
       organization: { users: Array<{ permissionOverrides: Array<{ id: string }> }> };
     };
-    data.organization.users[0]!.permissionOverrides = [{ id: 'grant_1' }];
-    view.rerender(<OrganizationAdminContent />);
+    invalidateOverview.mockImplementationOnce(async () => {
+      data.organization.users[0]!.permissionOverrides = [{ id: 'grant_1' }];
+      view.rerender(<OrganizationAdminContent />);
+    });
+    await mutationFor('setMemberGoodsInAccess').onSuccess?.();
+    expect(invalidateOverview).toHaveBeenCalledOnce();
     expect(control).toBeChecked();
 
     data.organization.users[0]!.permissionOverrides = [];
