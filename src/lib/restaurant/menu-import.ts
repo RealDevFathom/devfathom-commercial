@@ -956,13 +956,16 @@ export async function commitMenuImport(
       );
     }
 
-    // Reload this value at commit time. The upload-time default is extraction
-    // context only; price-list entries must use the organization's currency at
-    // the instant they are created.
-    const organization = await tx.organization.findUnique({
-      where: { id: record.organizationId },
-      select: { currency: true },
-    });
+    // Lock the organization row before reading its currency. PostgreSQL row
+    // updates take the conflicting lock, so a platform currency change either
+    // completes before this read or waits until all imported prices commit.
+    // The upload-time default remains extraction context only.
+    const [organization] = await tx.$queryRaw<Array<{ currency: string | null }>>`
+      SELECT "currency"
+      FROM "organizations"
+      WHERE "id" = ${record.organizationId}
+      FOR UPDATE
+    `;
     const tenantCurrency = organization?.currency?.toUpperCase() ?? null;
 
     const lines = await tx.restaurantMenuImportLine.findMany({

@@ -190,7 +190,16 @@ function setup(node = 'test', selected = 'FIXTURE') {
     organization: {
       findUnique: async () => ({ currency: record.currentCurrency ?? record.defaultCurrency }),
     },
-    $queryRaw: effect('row-lock', []),
+    $queryRaw: async (strings, ...values) => {
+      const query = strings.join('?');
+      if (query.includes('FROM "organizations"')) {
+        assert.match(query, /FROM "organizations"[\s\S]+FOR UPDATE/);
+        events.push(['organization-currency-lock', ...values]);
+        return [{ currency: record.currentCurrency ?? record.defaultCurrency }];
+      }
+      events.push(['row-lock', ...values]);
+      return [];
+    },
     $transaction: async (fn) => {
       events.push('transaction');
       return fn(db);
@@ -331,6 +340,11 @@ test('manual review remains persistent while extraction disabled and commit stil
   );
   assert.ok(f.events.includes('transaction'));
   assert.ok(f.events.some((e) => Array.isArray(e) && e[0] === 'row-lock'));
+  assert.ok(
+    f.events.some(
+      (e) => Array.isArray(e) && e[0] === 'organization-currency-lock' && e[1] === 'org_1'
+    )
+  );
   assert.ok(
     !f.events.some(
       (e) => Array.isArray(e) && ['createProduct', 'createMenu', 'addPriceListEntry'].includes(e[0])
