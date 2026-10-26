@@ -103,9 +103,11 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
           {/* Header */}
           <div className="flex items-start justify-between gap-6 border-b border-slate-200 pb-6">
             <div className="flex items-start gap-3">
+              {/* The authenticated proxy keeps external branding compatible with
+                  the app's self-only image CSP and browser print-to-PDF. */}
               {invoice.issuer.brand?.logoUrl && (
                 <Image
-                  src={invoice.issuer.brand.logoUrl}
+                  src="/api/finance/issuer-logo"
                   alt={`${invoice.issuer.displayName} logo`}
                   width={48}
                   height={48}
