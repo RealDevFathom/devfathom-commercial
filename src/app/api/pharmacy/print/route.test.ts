@@ -37,11 +37,19 @@ describe('/api/pharmacy/print', () => {
   });
 
   it('returns the guarded print job from an authenticated same-origin POST', async () => {
-    printJob.mockImplementation(async () => ({
-      status: 'READY',
-      reprint: false,
-      document: { kind: 'RECEIPT' },
-    }));
+    printJob
+      .mockResolvedValueOnce({
+        status: 'READY',
+        copyNumber: 1,
+        reprint: false,
+        document: { kind: 'RECEIPT' },
+      })
+      .mockResolvedValueOnce({
+        status: 'READY',
+        copyNumber: 2,
+        reprint: true,
+        document: { kind: 'RECEIPT' },
+      });
     const first = await POST(request());
     const again = await POST(request());
     expect(first.status).toBe(200);
@@ -56,7 +64,16 @@ describe('/api/pharmacy/print', () => {
       saleId: 'sale-a',
       locale: 'en',
     });
-    await expect(again.json()).resolves.toMatchObject({ mode: 'ESC_POS_JOB' });
+    await expect(first.json()).resolves.toMatchObject({
+      mode: 'ESC_POS_JOB',
+      copyNumber: 1,
+      reprint: false,
+    });
+    await expect(again.json()).resolves.toMatchObject({
+      mode: 'ESC_POS_JOB',
+      copyNumber: 2,
+      reprint: true,
+    });
   });
 
   it('surfaces a forbidden receipt read as 403 and does not invent a payload', async () => {
@@ -80,6 +97,17 @@ describe('/api/pharmacy/print', () => {
     expect((await POST(jsonPrefix)).status).toBe(403);
     expect(
       (await POST(request({ branchId: 'branch-a', saleId: 'sale-a', reprint: false }))).status
+    ).toBe(400);
+    expect(
+      (
+        await POST(
+          new Request('http://lan.local/api/pharmacy/print', {
+            method: 'POST',
+            headers: { origin: 'http://lan.local', 'content-type': 'application/json' },
+            body: '{',
+          })
+        )
+      ).status
     ).toBe(400);
     expect(printJob).not.toHaveBeenCalled();
   });
