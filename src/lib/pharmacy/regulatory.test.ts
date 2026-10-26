@@ -13,6 +13,7 @@ function validState(): BranchRegulatoryState {
     licenceCategory: 'PHARMACY',
     licenceValidFrom: new Date('2026-01-01T00:00:00.000Z'),
     licenceValidTo: new Date('2027-01-01T00:00:00.000Z'),
+    licenceEvidenceFileRef: '/api/files/licence-evidence.pdf',
     permittedSchedules: ['RX'],
     qualifiedPersonRegistration: 'QP-1',
     qualifiedPersonValidFrom: new Date('2026-01-01T00:00:00.000Z'),
@@ -56,6 +57,49 @@ describe('assertBranchMayOperate', () => {
     ).not.toThrow();
     expect(state.auditDenied).not.toHaveBeenCalled();
   });
+
+  it('accepts real licence evidence through the same activation primitive', () => {
+    const state = validState();
+    state.licenceEvidenceFileRef = '/api/files/licence-evidence.pdf';
+
+    expect(() =>
+      assertBranchMayOperate(state, {
+        name: 'ACTIVATE',
+        at,
+        requiresQualifiedPerson: true,
+      })
+    ).not.toThrow();
+  });
+
+  it('does not bypass the controlled schedule or qualified-person Rx gate', () => {
+    const controlled = validState();
+    controlled.permittedSchedules = [];
+    expectDenied(controlled, 'SCHEDULE_NOT_PERMITTED');
+
+    const rx = validState();
+    rx.qualifiedPersonCoverageRosterRef = '';
+    expectDenied(rx, 'QUALIFIED_PERSON_COVERAGE_MISSING');
+  });
+
+  it.each(['OTC', 'RX', 'CONTROLLED'])(
+    'permits %s through the placeholder wildcards',
+    (schedule) => {
+      const state = validState();
+      state.licenceCategory = '*';
+      state.permittedSchedules = ['OTC', 'RX', 'CONTROLLED'];
+      state.ruleSet.licenceCategories = { provisional: false, values: ['*'] };
+      state.ruleSet.permittedSchedules = { provisional: false, values: ['*'] };
+
+      expect(() =>
+        assertBranchMayOperate(state, {
+          name: 'DISPENSE',
+          at,
+          schedule,
+          requiresQualifiedPerson: true,
+        })
+      ).not.toThrow();
+    }
+  );
 
   it('fails closed and audits an expired licence', () => {
     const state = validState();

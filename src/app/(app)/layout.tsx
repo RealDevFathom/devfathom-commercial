@@ -42,8 +42,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
   const passwordChange = workspaceRedirectForPasswordChange(actor.session.user.mustChangePassword);
   if (passwordChange) redirect(passwordChange);
-  const { entitlements, brand } = await withTenantDb(actor.organization.id, async (db) => {
-    const [entitlementSnapshot, organization] = await Promise.all([
+  const { entitlements, brand, pharmacyPlaceholder } = await withTenantDb(actor.organization.id, async (db) => {
+    const [entitlementSnapshot, organization, placeholderProfile] = await Promise.all([
       resolveOrganizationEntitlements(actor.organization.id, db),
       db.organization.findUnique({
         where: { id: actor.organization.id },
@@ -60,6 +60,10 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             },
           },
         },
+      }),
+      db.branchRegulatoryProfile.findFirst({
+        where: { organizationId: actor.organization.id, isPlaceholder: true, effectiveTo: null },
+        select: { id: true },
       }),
     ]);
     return {
@@ -78,6 +82,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         primaryColor: organization?.brand?.primaryColor ?? null,
         accentColor: organization?.brand?.accentColor ?? null,
       },
+      pharmacyPlaceholder: Boolean(placeholderProfile),
     };
   });
   assertWorkspaceIdentity(actor.session.user.organizationId, brand.organizationId);
@@ -87,7 +92,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       entitlements={entitlements}
       realtimeEnabled={Boolean(process.env.ABLY_API_KEY)}
     >
-      <AppShell brand={brand}>
+      <AppShell brand={brand} pharmacyPlaceholder={pharmacyPlaceholder}>
         {actor.organization.isDemo ? (
           <DemoToolbar seatName={actor.organization.displayName} />
         ) : null}

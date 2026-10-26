@@ -34,6 +34,8 @@ import { PHARMACY_E2E } from '../tests/e2e/pharmacy-counter-fixture.js';
 import { resolvePharmacyE2eDatabaseUrl } from './pharmacy-e2e-environment.js';
 
 const PHARMACY_E2E_ADMIN_CAPABILITIES = [
+  // #518: POS-09 adds a prescription-only line, which now needs the exact dispense grant.
+  'pharmacy:dispense',
   'pharmacy:counter',
   'pharmacy:manage',
   'pharmacy:procurement',
@@ -216,8 +218,9 @@ async function seedWorkspace(email: string, passwordHash: string) {
     // The administrator role gets explicit, non-sensitive grants only (never `*`). The counter's
     // receipt guard asks the organization role for a capability before it honours a session
     // ADMIN, so without pharmacy:counter the admin the spec signs in as cannot read the bill it
-    // is selling. pharmacy:dispense, pharmacy:safety and pharmacy:catalogue-review are
-    // deliberately absent: the counter spec exercises none of them.
+    // is selling. pharmacy:dispense is granted because POS-09 adds a prescription-only line,
+    // which #518 restricts to the exact grant; pharmacy:safety and pharmacy:catalogue-review are
+    // deliberately absent: the counter spec exercises neither.
     for (const capability of PHARMACY_E2E_ADMIN_CAPABILITIES) {
       await tx.organizationRolePermission.upsert({
         where: {

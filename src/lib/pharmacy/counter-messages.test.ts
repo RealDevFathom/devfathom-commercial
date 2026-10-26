@@ -6,6 +6,7 @@ import {
   COUNTER_UNKNOWN_ERROR_MESSAGE,
   counterErrorMessage,
 } from './counter-messages';
+import { PharmacySaleBatchError } from './sale-batch-safety';
 import { PharmacySettlementError } from './settlement';
 
 /**
@@ -73,6 +74,23 @@ describe('counterErrorMessage', () => {
       const error = new PharmacySettlementError(reason);
       expect(COUNTER_ERROR_MESSAGES[reason], `${reason} has no operator sentence`).toBeTruthy();
       expect(counterErrorMessage(error)).not.toBe(COUNTER_UNKNOWN_ERROR_MESSAGE);
+    }
+  });
+
+  /** #633: a batch that became unsafe after add-to-cart refuses the payment mid-bill. */
+  it('has a sentence for every reason PharmacySaleBatchError can raise', () => {
+    const reasons = [
+      ['SALE_BATCH_RECALLED', 'RECALLED', 'recalled'],
+      ['SALE_BATCH_QUARANTINED', 'QUARANTINED', 'quarantined'],
+      ['SALE_BATCH_EXPIRED', 'EXPIRED', 'expired'],
+      ['SALE_BATCH_BLOCKED', 'UNAUTHORIZED', 'no longer be sold'],
+    ] as const;
+    for (const [reason, blockReason, words] of reasons) {
+      const message = counterErrorMessage(
+        new PharmacySaleBatchError(reason, blockReason, 'line-1', 'lot-1')
+      );
+      expect(message, `${reason} has no operator sentence`).toContain(words);
+      expect(message).toContain('Void the bill');
     }
   });
 

@@ -165,7 +165,15 @@ export function isPathModuleEnabled(
   return !moduleKey || isModuleGranted(moduleKey, entitlements.enabledModules);
 }
 
-export function AppShell({ children, brand }: { children: React.ReactNode; brand: TenantBrand }) {
+export function AppShell({
+  children,
+  brand,
+  pharmacyPlaceholder = false,
+}: {
+  children: React.ReactNode;
+  brand: TenantBrand;
+  pharmacyPlaceholder?: boolean;
+}) {
   // The server-side invariant lives in the `/(app)` layout, which fails closed
   // before this renders. Here the live session is the moving part, so the check
   // below (after every hook) degrades to a notice rather than throwing.
@@ -225,6 +233,11 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
       )}
 
       <div className="studio-shell flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+        {pharmacyPlaceholder ? (
+          <div role="alert" className="min-h-10 border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs font-semibold text-amber-950">
+            Licence details are PLACEHOLDER – not a real licence
+          </div>
+        ) : null}
         {session?.user.isSupportSession ? (
           <div className="flex min-h-10 items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-950">
             <span className="flex items-center gap-2">

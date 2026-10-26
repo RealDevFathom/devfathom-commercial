@@ -240,6 +240,17 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     });
   });
 
+  it('refuses literal PLACEHOLDER licence text when the platform override is not active', async () => {
+    await withTenantDb(organizationId, async (db) => {
+      await expect(
+        caller(db).saveRegulatoryProfile({ ...profile, licenceNumber: 'PLACEHOLDER' })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'PLACEHOLDER text is reserved for the active platform placeholder rule set.',
+      });
+    });
+  });
+
   it('saves version 1 and leaves the licences step outstanding while the rules are provisional', async () => {
     await withTenantDb(organizationId, async (db) => {
       const saved = await caller(db).saveRegulatoryProfile(profile);
