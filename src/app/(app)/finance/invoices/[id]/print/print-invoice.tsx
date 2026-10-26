@@ -2,6 +2,7 @@
 
 import { Loader2, Printer, ArrowLeft, FileText } from 'lucide-react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { format } from 'date-fns';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
@@ -101,14 +102,33 @@ export function InvoicePrintView({ invoiceId }: { invoiceId: string }) {
         >
           {/* Header */}
           <div className="flex items-start justify-between gap-6 border-b border-slate-200 pb-6">
-            <div>
-              <p className="font-display text-2xl font-bold tracking-tight text-[#0C2E2C]">
-                DevFathom
-              </p>
-              <p className="mt-1 text-xs text-slate-500">hub.devfathom.com</p>
+            <div className="flex items-start gap-3">
+              {invoice.issuer.brand?.logoUrl && (
+                <Image
+                  src={invoice.issuer.brand.logoUrl}
+                  alt={`${invoice.issuer.displayName} logo`}
+                  width={48}
+                  height={48}
+                  unoptimized
+                  className="h-12 w-12 shrink-0 object-contain"
+                />
+              )}
+              <div>
+                <p className="font-display text-2xl font-bold tracking-tight text-[#0C2E2C]">
+                  {invoice.issuer.displayName}
+                </p>
+                {invoice.issuer.legalName !== invoice.issuer.displayName && (
+                  <p className="mt-1 text-xs text-slate-500">{invoice.issuer.legalName}</p>
+                )}
+                {invoice.issuer.brand?.supportEmail && (
+                  <p className="mt-1 text-xs text-slate-500">{invoice.issuer.brand.supportEmail}</p>
+                )}
+              </div>
             </div>
             <div className="text-right">
-              <p className="font-display text-xl font-bold tracking-tight text-slate-900">INVOICE</p>
+              <p className="font-display text-xl font-bold tracking-tight text-slate-900">
+                INVOICE
+              </p>
               <p className="mt-1 font-mono text-sm text-slate-700">{invoice.invoiceNumber}</p>
               <span
                 className={cn(
