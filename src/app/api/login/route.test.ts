@@ -311,7 +311,7 @@ describe('DELETE /api/login', () => {
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
   });
 
-  it.each(['acme.devfathom.com', 'admin.devfathom.com'])(
+  it.each(['acme.devfathom.com', 'admin.devfathom.com', 'unrelated.example.com'])(
     'is a successful no-op on the non-shared host %s',
     async (host) => {
       const response = await DELETE(
