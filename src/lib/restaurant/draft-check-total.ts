@@ -61,14 +61,15 @@ export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftChec
   // Settlement taxes each physical unit independently. Expand draft lines the
   // same way so per-line tax rounding cannot make a preview disagree with the
   // amount required at tender time.
-  const lines = input.lines.flatMap((line) =>
-    Array.from({ length: line.quantity }, (_, unitOrdinal) => ({
+  const lines = input.lines.flatMap((line) => {
+    const modifierTotal = formatMoney(sum(line.modifierDeltas ?? []));
+    return Array.from({ length: line.quantity }, (_, unitOrdinal) => ({
       id: `${line.id}:${unitOrdinal}`,
       unitPrice: line.unitPrice,
       quantity: 1,
-      modifierTotal: formatMoney(sum(line.modifierDeltas ?? [])),
-    }))
-  );
+      modifierTotal,
+    }));
+  });
   const basis = sum(
     lines.map((line) => multiply(add(line.unitPrice, line.modifierTotal), line.quantity))
   );

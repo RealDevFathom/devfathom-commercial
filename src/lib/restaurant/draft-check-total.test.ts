@@ -159,6 +159,19 @@ describe('quoteDraftCheckTotal', () => {
     ).toBe('1.00');
   });
 
+  it('accepts an aggregate quantity at the draft-check limit', () => {
+    const lines = Array.from(
+      { length: MAX_DRAFT_CHECK_UNITS / MAX_ORDER_ITEM_QUANTITY },
+      (_, index) => ({
+        id: `item-${index}`,
+        unitPrice: '0.01',
+        quantity: MAX_ORDER_ITEM_QUANTITY,
+      })
+    );
+
+    expect(quoteDraftCheckTotal({ at, lines })).toBe('100.00');
+  });
+
   it('rejects an excessive aggregate quantity before allocating units', () => {
     const fullLines = MAX_DRAFT_CHECK_UNITS / MAX_ORDER_ITEM_QUANTITY;
     const lines = Array.from({ length: fullLines + 1 }, (_, index) => ({
