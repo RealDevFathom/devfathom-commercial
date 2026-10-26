@@ -364,6 +364,25 @@ describe('updateAssignment — effective-dated successor', () => {
     });
   });
 
+  it('clips a later predecessor end date at the successor boundary', async () => {
+    db.restaurantSopAssignment.findUnique.mockResolvedValue(
+      assignment({
+        endDate: new Date('2026-06-30T00:00:00.000Z'),
+      })
+    );
+
+    await caller().updateAssignment({ id: 'assignment_1', effectiveDate: '2026-06-01' });
+
+    expect(db.restaurantSopAssignment.update).toHaveBeenCalledWith({
+      where: { id: 'assignment_1' },
+      data: {
+        active: true,
+        endDate: new Date('2026-05-31T00:00:00.000Z'),
+        supersededAt: expect.any(Date),
+      },
+    });
+  });
+
   it('keeps a paused assignment and its successor inactive', async () => {
     db.restaurantSopAssignment.findUnique.mockResolvedValue(assignment({ active: false }));
 
