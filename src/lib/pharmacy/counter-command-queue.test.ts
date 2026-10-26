@@ -5,6 +5,7 @@ import {
   buildCounterReplayRequest,
   createCounterQueue,
 } from './counter-command-queue';
+import { counterReplaySchema } from './counter-replay-contract';
 
 const envelope = {
   organizationId: 'org',
@@ -84,6 +85,9 @@ it('composes on HTTP LAN and preserves the command key across persisted replay a
   });
   expect(first.body).not.toHaveProperty('payload');
   expect(first.body).not.toHaveProperty('deviceId');
+  expect(counterReplaySchema.safeParse({ ...first.body, payload: command.payload }).success).toBe(
+    false
+  );
   const retry = applyCounterReplayOutcome(JSON.parse(JSON.stringify(snapshot)), {
     commandId: command.commandId,
     outcome: { action: 'RETRY', reason: 'NETWORK', retryAfterMs: null },
