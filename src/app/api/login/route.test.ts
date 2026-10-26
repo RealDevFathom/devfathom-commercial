@@ -309,6 +309,7 @@ describe('DELETE /api/login', () => {
     expect(mocks.discardLoginIntent).toHaveBeenCalledWith('t'.repeat(43));
     expect(response.headers.get('set-cookie')).toContain('df_login_intent=;');
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
+    expect(response.headers.get('set-cookie')).not.toContain('Domain=');
   });
 
   it.each(['acme.devfathom.com', 'admin.devfathom.com', 'unrelated.example.com'])(
@@ -326,6 +327,7 @@ describe('DELETE /api/login', () => {
       expect(mocks.discardLoginIntent).not.toHaveBeenCalled();
       expect(response.headers.get('set-cookie')).toContain('df_login_intent=;');
       expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
+      expect(response.headers.get('set-cookie')).not.toContain('Domain=');
     }
   );
 });
