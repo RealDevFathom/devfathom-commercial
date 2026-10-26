@@ -126,18 +126,6 @@ beforeEach(() => {
 });
 
 describe('procurement write authorization', () => {
-  it('fails closed when the session actor no longer exists', async () => {
-    db.user.findUnique.mockResolvedValue(null);
-
-    await expect(
-      caller('deleted_user').createSupplier({ name: 'Unapproved supplier' })
-    ).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-      message: 'You do not have permission for this action.',
-    });
-    expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
-  });
-
   it.each([
     {
       procedure: 'createSupplier',
@@ -195,6 +183,41 @@ describe('procurement write authorization', () => {
       expect(db.$transaction).not.toHaveBeenCalled();
     }
   );
+
+  it.each([
+    () => caller('deleted_user').createSupplier({ name: 'Unapproved supplier' }),
+    () =>
+      caller('deleted_user').setSupplierAuthorization({
+        supplierId: 'supplier_a',
+        authorized: true,
+      }),
+    () =>
+      caller('deleted_user').createPurchaseOrder({
+        reference: 'PO-DELETED-ACTOR',
+        supplierId: 'supplier_a',
+        lines: [ORDER_LINE],
+      }),
+    () =>
+      caller('deleted_user').approvePurchaseOrder({
+        purchaseOrderId: 'po_a',
+        decision: 'APPROVED',
+      }),
+  ])('fails closed when the session actor no longer exists', async (act) => {
+    db.user.findUnique.mockResolvedValue(null);
+
+    await expect(act()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(db.pharmacySupplier.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
+    expect(db.pharmacySupplier.update).not.toHaveBeenCalled();
+    expect(db.medicine.findFirst).not.toHaveBeenCalled();
+    expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
 });
 
 describe.each(['purchaseReturns', 'supplierCredits'] as const)(
