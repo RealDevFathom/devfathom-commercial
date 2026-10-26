@@ -15,11 +15,15 @@ import {
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'cashier-a' };
 
 describe('CRM-L01 pharmacy loyalty', () => {
-  it('links a retail customer only with current purpose-specific LOYALTY consent', async () => {
+  it.each([
+    ['missing', null],
+    ['denied', { granted: false, revokedAt: null }],
+    ['revoked', { granted: true, revokedAt: new Date('2026-10-26T00:00:00.000Z') }],
+  ])('refuses to link a retail customer when LOYALTY consent is %s', async (_state, consent) => {
     const update = vi.fn();
     const db = {
       patientConsent: {
-        findFirst: vi.fn().mockResolvedValue({ granted: false, revokedAt: new Date() }),
+        findFirst: vi.fn().mockResolvedValue(consent),
       },
       pharmacySale: { findFirst: vi.fn(), update },
       pharmacyCustomer: { upsert: vi.fn() },
