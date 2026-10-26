@@ -6,19 +6,18 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 
-type StaffOption = { id: string; displayName: string };
-
 type EvidenceCaptureProps = {
   branchId: string;
   businessDate: string;
   occurrenceId: string;
   occurrenceStepId: string;
   purpose: 'photo' | 'signature';
-  staff: StaffOption[];
 };
 
 type UploadState =
-  { kind: 'idle' } | { kind: 'uploading'; progress: number } | { kind: 'error'; message: string };
+  | { kind: 'idle' }
+  | { kind: 'uploading'; progress: number }
+  | { kind: 'error'; message: string };
 
 const ACCEPTED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_SIZE_LABEL = `${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB`;
@@ -29,7 +28,6 @@ export function EvidenceCapture({
   occurrenceId,
   occurrenceStepId,
   purpose,
-  staff,
 }: EvidenceCaptureProps) {
   const id = useId();
   const formRef = useRef<HTMLFormElement>(null);
@@ -103,24 +101,7 @@ export function EvidenceCapture({
           record.
         </p>
       </div>
-      <label className="text-sm text-text-body" htmlFor={`${id}-staff`}>
-        Uploading staff
-        <select
-          className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={uploading}
-          id={`${id}-staff`}
-          name="uploaderStaffProfileId"
-          required
-        >
-          <option value="">Select active staff</option>
-          {staff.map((person) => (
-            <option key={person.id} value={person.id}>
-              {person.displayName}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label className="text-sm text-text-body" htmlFor={`${id}-file`}>
+      <label className="text-sm text-text-body sm:col-span-2" htmlFor={`${id}-file`}>
         {purpose === 'photo' ? 'Take or choose photo' : 'Choose signature image'}
         <Input
           accept="image/jpeg,image/png,image/webp"
@@ -133,11 +114,7 @@ export function EvidenceCapture({
           type="file"
         />
       </label>
-      <Button
-        className="min-h-11 sm:col-span-2"
-        disabled={uploading || !staff.length}
-        type="submit"
-      >
+      <Button className="min-h-11 sm:col-span-2" disabled={uploading} type="submit">
         {uploading ? `Uploading ${state.progress}%` : `Upload ${label.toLowerCase()}`}
       </Button>
       {uploading ? (
@@ -151,11 +128,6 @@ export function EvidenceCapture({
       {state.kind === 'error' ? (
         <p className="text-sm text-destructive sm:col-span-2" role="alert">
           {state.message}
-        </p>
-      ) : null}
-      {!staff.length ? (
-        <p className="text-sm text-warning-foreground sm:col-span-2" role="status">
-          No active restaurant staff profile is available to attribute this proof.
         </p>
       ) : null}
     </form>

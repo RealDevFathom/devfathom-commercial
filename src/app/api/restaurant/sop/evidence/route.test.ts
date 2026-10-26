@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   createTRPCContext: vi.fn(),
   deleteUpload: vi.fn(),
   putUpload: vi.fn(),
+  resolveRestaurantActor: vi.fn(),
 }));
 
 vi.mock('@/lib/abac', () => ({
@@ -19,6 +20,9 @@ vi.mock('@/lib/storage', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/storage')>()),
   deleteUpload: mocks.deleteUpload,
   putUpload: mocks.putUpload,
+}));
+vi.mock('@/server/restaurant-actor', () => ({
+  resolveRestaurantActor: mocks.resolveRestaurantActor,
 }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
 
@@ -72,6 +76,7 @@ beforeEach(() => {
   });
   mocks.deleteUpload.mockResolvedValue(undefined);
   mocks.putUpload.mockResolvedValue(undefined);
+  mocks.resolveRestaurantActor.mockResolvedValue({ staffProfileId: 'session-staff' });
   mocks.attachEvidence.mockResolvedValue({ evidenceId: 'evidence-1', created: true });
 });
 
@@ -97,7 +102,7 @@ describe('POST SOP evidence', () => {
     );
   }
 
-  it('hashes and stores accepted proof with tenant, staff, and purpose attribution', async () => {
+  it('derives uploader attribution from the authenticated user instead of multipart data', async () => {
     const warn = warnings();
     const response = await POST(
       request({
@@ -124,8 +129,12 @@ describe('POST SOP evidence', () => {
         occurrenceId: 'occurrence-1',
         occurrenceStepId: 'step-1',
         mimeType: 'image/jpeg; evidence=photo',
-        uploaderStaffProfileId: 'staff-1',
+        uploaderStaffProfileId: 'session-staff',
       })
+    );
+    expect(mocks.resolveRestaurantActor).toHaveBeenCalledWith(
+      expect.objectContaining({ session: { user: { id: 'user-1' } } }),
+      []
     );
     expect(warn).not.toHaveBeenCalled();
   });
@@ -237,6 +246,16 @@ describe('POST SOP evidence', () => {
     response = await POST(request());
     expect(response.headers.get('location')).not.toContain('sensitive');
     expect(mocks.deleteUpload).toHaveBeenCalledWith('org-1', expect.stringMatching(/^sop-/));
+  });
+
+  it('rejects uploads when the session user has no unambiguous active staff profile', async () => {
+    mocks.resolveRestaurantActor.mockRejectedValueOnce(new Error('No active staff actor'));
+
+    const response = await POST(request());
+
+    expect(response.headers.get('location')).toContain('Proof+capture+failed');
+    expect(mocks.putUpload).not.toHaveBeenCalled();
+    expect(mocks.attachEvidence).not.toHaveBeenCalled();
   });
 
   it.each([

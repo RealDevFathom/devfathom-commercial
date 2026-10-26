@@ -717,7 +717,6 @@ function SopBoardView(props: SopBoardViewProps) {
                                     occurrenceId={selected.id}
                                     occurrenceStepId={step.occurrenceStepId}
                                     purpose="photo"
-                                    staff={staff}
                                   />
                                 ) : null}
                                 {needsSignature ? (
@@ -727,7 +726,6 @@ function SopBoardView(props: SopBoardViewProps) {
                                     occurrenceId={selected.id}
                                     occurrenceStepId={step.occurrenceStepId}
                                     purpose="signature"
-                                    staff={staff}
                                   />
                                 ) : null}
                               </div>

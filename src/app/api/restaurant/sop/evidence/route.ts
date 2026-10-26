@@ -7,6 +7,7 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { publicRequestOrigin } from '@/lib/http-origin';
 import { attachEvidence } from '@/lib/restaurant/sop-execution';
 import { deleteUpload, putUpload, StorageUnavailableError } from '@/lib/storage';
+import { resolveRestaurantActor } from '@/server/restaurant-actor';
 import { createTRPCContext } from '@/server/trpc';
 
 const EVIDENCE_TYPES = {
@@ -16,7 +17,12 @@ const EVIDENCE_TYPES = {
 } as const;
 
 type EvidenceCaptureStage =
-  'file_validation' | 'context' | 'authorization' | 'storage' | 'attach' | 'cleanup';
+  | 'file_validation'
+  | 'context'
+  | 'authorization'
+  | 'storage'
+  | 'attach'
+  | 'cleanup';
 
 function warnEvidenceCaptureFailure(stage: EvidenceCaptureStage, error: unknown) {
   try {
@@ -106,13 +112,12 @@ export async function POST(request: Request) {
     const purpose = String(form.get('evidencePurpose') ?? '').trim();
     const occurrenceId = String(form.get('occurrenceId') ?? '').trim();
     const occurrenceStepId = String(form.get('occurrenceStepId') ?? '').trim();
-    const uploaderStaffProfileId = String(form.get('uploaderStaffProfileId') ?? '').trim();
     const { baseType, bytes, extension } = await readEvidenceFile(file);
     if (purpose !== 'photo' && purpose !== 'signature') {
       throw new Error('Choose whether this file is photo or signature proof.');
     }
-    if (!occurrenceId || !occurrenceStepId || !uploaderStaffProfileId) {
-      throw new Error('Occurrence, checklist step, and uploader are required.');
+    if (!occurrenceId || !occurrenceStepId) {
+      throw new Error('Occurrence and checklist step are required.');
     }
 
     stage = 'context';
@@ -125,6 +130,7 @@ export async function POST(request: Request) {
       source: 'TRPC',
     });
     if (!allowed) throw new Error('You do not have permission to capture SOP proof.');
+    const { staffProfileId: uploaderStaffProfileId } = await resolveRestaurantActor(ctx, []);
 
     const hash = crypto.createHash('sha256').update(bytes).digest('hex');
     storedFilename = `sop-${crypto.randomUUID()}.${extension}`;
