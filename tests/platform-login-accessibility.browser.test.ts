@@ -51,6 +51,27 @@ describe.runIf(Boolean(baseURL))('platform login Studio accessibility', () => {
             await page.route('**/api/platform/mfa', (route) => route.fulfill({ json: {} }));
             await page.goto(`${baseURL}/platform/login`);
             await page.getByLabel('Work email').waitFor();
+            const password = page.getByLabel('Password');
+            const toggle = page.getByRole('button', { name: 'Show password' });
+            await password.fill('correct horse battery staple');
+            await password.focus();
+            await page.keyboard.press('Tab');
+            await expect(
+              toggle.evaluate((element) => element === document.activeElement)
+            ).resolves.toBe(true);
+            const toggleStyle = await toggle.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              return {
+                height: rect.height,
+                width: rect.width,
+                boxShadow: getComputedStyle(element).boxShadow,
+              };
+            });
+            expect(toggleStyle).toMatchObject({ height: 44, width: 44 });
+            expect(toggleStyle.boxShadow).not.toBe('none');
+            await toggle.click();
+            await expect(password.getAttribute('type')).resolves.toBe('text');
+            await expect(password.inputValue()).resolves.toBe('correct horse battery staple');
             await page.waitForFunction(() =>
               document
                 .getAnimations()

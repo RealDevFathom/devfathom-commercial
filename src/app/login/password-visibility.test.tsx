@@ -7,9 +7,18 @@ vi.mock('next-auth/react', () => ({ signIn: vi.fn() }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: mocks.replace, refresh: mocks.refresh }),
 }));
+vi.mock('@/lib/trpc', () => ({
+  trpc: {
+    passwordReset: {
+      validate: { useQuery: () => ({ data: { valid: true }, isLoading: false }) },
+      reset: { useMutation: () => ({ isPending: false, mutateAsync: vi.fn() }) },
+    },
+  },
+}));
 
 import { LoginForm } from './login-form';
 import { PlatformLoginForm } from '../platform/(auth)/login/platform-login-form';
+import { ResetPasswordForm } from '../reset-password/[token]/reset-password-form';
 
 function expectAccessiblePasswordToggle(password: HTMLInputElement) {
   const toggle = screen.getByRole('button', { name: 'Show password' });
@@ -49,5 +58,11 @@ describe('password visibility controls', () => {
     render(<PlatformLoginForm />);
 
     expectAccessiblePasswordToggle(screen.getByLabelText<HTMLInputElement>('Password'));
+  });
+
+  it('is keyboard reachable and toggles the reset password without changing it', () => {
+    render(<ResetPasswordForm token="valid-token" />);
+
+    expectAccessiblePasswordToggle(screen.getByLabelText<HTMLInputElement>('New Password'));
   });
 });
