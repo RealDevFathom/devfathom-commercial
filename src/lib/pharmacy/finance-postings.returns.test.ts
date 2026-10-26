@@ -127,6 +127,21 @@ it('reverses revenue but not inventory for an unidentified return hold', async (
       saleLine: { include: { returnLines: true, unidentifiedReturnHolds: true } },
     },
   });
+  expect(db.financeJournalEntry.findFirst).toHaveBeenCalledWith({
+    where: {
+      organizationId: 'org',
+      idempotencyKey: 'finance:PHARMACY_UNIDENTIFIED_RETURN_HOLD:hold',
+    },
+    include: { lines: true },
+  });
+  const postingCalls = vi.mocked(postJournalEntry).mock.calls.length;
+  db.financeJournalEntry.findFirst.mockResolvedValue(posted);
+  await postUnidentifiedSaleReturnEntry(
+    db as unknown as ScopedDb,
+    { organizationId: 'org', branchId: 'branch', actorId: 'actor' },
+    { holdingId: 'hold', at: new Date('2026-10-21') }
+  );
+  expect(vi.mocked(postJournalEntry).mock.calls).toHaveLength(postingCalls);
 });
 
 it('rejects an unidentified return from another branch before posting', async () => {
