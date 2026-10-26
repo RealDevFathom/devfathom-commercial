@@ -80,7 +80,8 @@ export type MenuImportErrorReason =
   | 'REVIEW_INCOMPLETE'
   | 'NOTHING_TO_IMPORT'
   | 'MERGE_TARGET_NOT_FOUND'
-  | 'PRICE_REQUIRED';
+  | 'PRICE_REQUIRED'
+  | 'CURRENCY_MISMATCH';
 
 export class MenuImportError extends Error {
   constructor(
@@ -896,6 +897,7 @@ export async function commitMenuImport(
         organizationId: true,
         status: true,
         fileName: true,
+        defaultCurrency: true,
         storageObjectName: true,
         committedMenuId: true,
         committedPriceListVersionId: true,
@@ -959,11 +961,13 @@ export async function commitMenuImport(
         extractedProductName: true,
         extractedDescription: true,
         extractedPriceAmount: true,
+        extractedCurrency: true,
         extractedVariants: true,
         reviewedCategoryName: true,
         reviewedProductName: true,
         reviewedDescription: true,
         reviewedPriceAmount: true,
+        reviewedCurrency: true,
         mergeProductId: true,
         mergeVariantId: true,
       },
@@ -989,6 +993,24 @@ export async function commitMenuImport(
         throw new MenuImportError(
           'A confirmed line is missing a product name or price.',
           'REVIEW_INCOMPLETE'
+        );
+      }
+      const tenantCurrency = record.defaultCurrency?.toUpperCase() ?? null;
+      const priceCurrency = (line.reviewedCurrency ?? line.extractedCurrency)?.toUpperCase() ?? null;
+      const convertsForeignPrice =
+        line.extractedCurrency?.toUpperCase() !== tenantCurrency &&
+        line.reviewedCurrency?.toUpperCase() === tenantCurrency &&
+        line.reviewedPriceAmount !== null;
+      if (
+        !tenantCurrency ||
+        priceCurrency !== tenantCurrency ||
+        (line.extractedCurrency !== null &&
+          line.extractedCurrency.toUpperCase() !== tenantCurrency &&
+          !convertsForeignPrice)
+      ) {
+        throw new MenuImportError(
+          'Every confirmed price must agree with the organization currency, or include an explicitly reviewed conversion.',
+          'CURRENCY_MISMATCH'
         );
       }
       resolved.push({

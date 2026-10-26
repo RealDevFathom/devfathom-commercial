@@ -330,6 +330,43 @@ test('manual review remains persistent while extraction disabled and commit stil
   );
 });
 
+test('commit rejects a reviewed foreign-currency amount without an explicit local conversion', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  f.record.status = 'AWAITING_REVIEW';
+  f.record.fileName = 'foreign-menu.png';
+  f.record.defaultCurrency = 'PKR';
+  f.lines.push({
+    id: 'line_1',
+    reviewStatus: 'ACCEPTED',
+    sortOrder: 1,
+    extractedCategoryName: null,
+    extractedProductName: 'Foreign item',
+    extractedDescription: null,
+    extractedPriceAmount: new (f.load('@/generated/prisma/client').Prisma.Decimal)('12.50'),
+    extractedCurrency: 'USD',
+    extractedVariants: [],
+    reviewedCategoryName: null,
+    reviewedProductName: null,
+    reviewedDescription: null,
+    reviewedPriceAmount: null,
+    reviewedCurrency: null,
+    mergeProductId: null,
+    mergeVariantId: null,
+  });
+
+  await assert.rejects(
+    menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' }),
+    { reason: 'CURRENCY_MISMATCH' }
+  );
+  assert.ok(
+    !f.events.some(
+      (event) =>
+        Array.isArray(event) && ['createProduct', 'createMenu', 'addPriceListEntry'].includes(event[0])
+    )
+  );
+});
+
 for (const node of ['test', 'development', 'production']) {
   test(`configured FIXTURE upload in ${node} preserves preflight and composition policy`, async () => {
     const f = setup(node);

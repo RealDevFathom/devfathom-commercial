@@ -147,11 +147,16 @@ export const restaurantMenuImportRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'No organization is in scope.' });
       }
       try {
+        const organization = await ctx.db.organization.findUnique({
+          where: { id: organizationId },
+          select: { currency: true },
+        });
         const result = await createMenuImport(ctx.db, organizationId, {
           fileName: input.fileName,
           content: Buffer.from(input.content, 'base64'),
           declaredMimeType: input.declaredMimeType ?? null,
           createdById: ctx.session.user.id,
+          defaultCurrency: organization?.currency ?? null,
           idempotencyKey: input.idempotencyKey,
         });
         annotateAudit(ctx, {
