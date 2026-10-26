@@ -288,22 +288,47 @@ describe('counter receipt authorization', () => {
     }
   );
 
-  it('allows an assigned counter user to record a return and issue a cash fallback refund', async () => {
+  it.each([
+    [
+      'refundTender',
+      (caller: Caller) => caller.refundTender({ ...refundInput, branchId: 'closed-branch' }),
+    ],
+    [
+      'returnLine',
+      (caller: Caller) => caller.returnLine({ ...returnInput, branchId: 'closed-branch' }),
+    ],
+  ])('%s denies an assigned counter user at an inactive branch', async (_name, run) => {
     const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
-    assign(f, ['branch-a']);
-    f.db.pharmacyTender.findFirst.mockResolvedValue({ type: 'CARD' });
+    assign(f, ['closed-branch']);
 
-    await expect(f.caller().returnLine(returnInput)).resolves.toMatchObject({
-      returnLine: { id: 'return-line-1' },
+    await expect(run(f.caller())).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
     });
-    await expect(f.caller().refundTender(refundInput)).resolves.toEqual({ refundId: 'refund-1' });
-    expect(returnSaleLine).toHaveBeenCalled();
-    expect(refundPharmacyTender).toHaveBeenCalledWith(
-      f.db,
-      expect.objectContaining({ branchId: 'branch-a' }),
-      expect.objectContaining({ manualCashFallback: true })
-    );
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+    expect(returnSaleLine).not.toHaveBeenCalled();
   });
+
+  it.each(['EMPLOYEE', 'ADMIN'] as const)(
+    'allows an assigned %s counter user to record a return and issue a cash fallback refund',
+    async (role) => {
+      const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }], role);
+      assign(f, ['branch-a']);
+      f.db.pharmacyTender.findFirst.mockResolvedValue({ type: 'CARD' });
+
+      await expect(f.caller().returnLine(returnInput)).resolves.toMatchObject({
+        returnLine: { id: 'return-line-1' },
+      });
+      await expect(f.caller().refundTender(refundInput)).resolves.toEqual({ refundId: 'refund-1' });
+      expect(returnSaleLine).toHaveBeenCalled();
+      expect(refundPharmacyTender).toHaveBeenCalledWith(
+        f.db,
+        expect.objectContaining({ branchId: 'branch-a' }),
+        expect.objectContaining({ manualCashFallback: true })
+      );
+    }
+  );
 
   it('rejects status-only completion before opening a transaction', async () => {
     const f = fixture(dispense);
