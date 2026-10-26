@@ -95,9 +95,23 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
             tenantAuditId
           )
         )
-      ).rejects.toThrow(/append-only/);
+      ).rejects.toThrow(
+        new RegExp(`audit_logs is append-only: ${operation} is forbidden`, 'i')
+      );
     });
   }
+
+  it('preserves the tenant audit row after rejected mutations', async () => {
+    const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
+
+    await expect(
+      withTenantDb(org, (db) =>
+        db.$queryRaw<{ action: string }[]>`
+          SELECT action FROM audit_logs WHERE id = ${tenantAuditId}
+        `
+      )
+    ).resolves.toEqual([{ action }]);
+  });
 
   it('continues to allow tenant-scoped inserts', async () => {
     const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
