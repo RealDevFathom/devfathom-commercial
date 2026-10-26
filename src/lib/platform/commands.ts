@@ -3058,16 +3058,16 @@ async function runCommand(
       if (!input.opportunityId) {
         throw new PlatformSecurityError('An opportunity is required for conversion.', 400);
       }
-      const lockedOpportunity = await db.$queryRaw<
+      const [lockedOpportunity] = await db.$queryRaw<
         Array<{ id: string; convertedOrganizationId: string | null }>
       >`SELECT id, "convertedOrganizationId"
         FROM platform_opportunities
         WHERE id = ${input.opportunityId}
         FOR UPDATE`;
-      if (lockedOpportunity.length === 0) {
+      if (!lockedOpportunity) {
         throw new PlatformSecurityError('Opportunity not found.', 400);
       }
-      if (lockedOpportunity[0].convertedOrganizationId) {
+      if (lockedOpportunity.convertedOrganizationId) {
         throw new PlatformSecurityError('Opportunity has already been converted.', 409);
       }
       const organization = await bootstrapOrganization(db, actor, input);

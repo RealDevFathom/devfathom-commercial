@@ -95,6 +95,8 @@ describe('crm.opportunity.convert', () => {
     expect(mocks.lockOpportunity).not.toHaveBeenCalled();
     expect(mocks.packageFindUnique).not.toHaveBeenCalled();
     expect(mocks.organizationCreate).not.toHaveBeenCalled();
+    expect(mocks.opportunityFindUnique).not.toHaveBeenCalled();
+    expect(mocks.opportunityUpdate).not.toHaveBeenCalled();
     expect(mocks.jobCreate).not.toHaveBeenCalled();
   });
 
