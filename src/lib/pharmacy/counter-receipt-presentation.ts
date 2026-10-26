@@ -74,8 +74,12 @@ export function buildCounterReceiptPreview(
           `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
         ].join('\n');
       }),
-      // The Pharmacy model supplies no tax breakdown. Never invent zero tax.
-      taxLines: [labels[locale].tax],
+      // Identity is historical receipt data; the model supplies no tax breakdown.
+      taxLines: [
+        ...(receipt.taxIdentity?.ntn ? [`NTN: ${receipt.taxIdentity.ntn}`] : []),
+        ...(receipt.taxIdentity?.strn ? [`STRN: ${receipt.taxIdentity.strn}`] : []),
+        labels[locale].tax,
+      ],
       totals: [
         receipt.currency,
         `${strings.gross}: ${formatMinor(receipt.totals.grossMinor)}`,

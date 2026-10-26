@@ -40,7 +40,7 @@ import {
 } from './counter-receipt';
 
 /** Registered tax identity printed on the receipt; null fields are omitted, never invented. */
-export type PharmacyReceiptTaxIdentity = { ntn: string | null; strn: string | null };
+export type PharmacyReceiptTaxIdentity = NonNullable<CounterReceipt['taxIdentity']>;
 
 export type PharmacyReceiptEscPosJob = {
   document: PrintDocument;
