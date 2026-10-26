@@ -130,6 +130,10 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
         assertionIds: Array.from({ length: 21 }, (_, index) => `assertion_${index}`),
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().publishAssertions({ assertionIds: ['x'.repeat(201)] })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
     expect(db.$transaction).not.toHaveBeenCalled();
   });
 
