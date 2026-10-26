@@ -20,6 +20,18 @@ describe('sale posting MRP rounding', () => {
       movementIds: ['movement-a'],
     });
     let postedLine: Record<string, unknown> | undefined;
+    const findMrps = vi.fn(async () => [
+      {
+        packLevelId: 'pack-a',
+        batchReference: 'batch-a',
+        roundingIncrementMinor: 5,
+      },
+      {
+        packLevelId: 'pack-a',
+        batchReference: 'another-batch',
+        roundingIncrementMinor: 1,
+      },
+    ]);
     const db = {
       pharmacySale: {
         findFirst: async () => ({ id: 'sale-a', status: 'OPEN' }),
@@ -41,18 +53,7 @@ describe('sale posting MRP rounding', () => {
         ],
       },
       medicinePackMrp: {
-        findMany: async () => [
-          {
-            packLevelId: 'pack-a',
-            batchReference: 'batch-a',
-            roundingIncrementMinor: 5,
-          },
-          {
-            packLevelId: 'pack-a',
-            batchReference: 'another-batch',
-            roundingIncrementMinor: 1,
-          },
-        ],
+        findMany: findMrps,
       },
       pharmacySaleLine: {
         create: async ({ data }: { data: Record<string, unknown> }) => {
@@ -85,6 +86,14 @@ describe('sale posting MRP rounding', () => {
     );
 
     expect(postedLine).toMatchObject({ unitPriceMinor: 5, proRataCeilingMinor: 9 });
+    expect(findMrps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org-a',
+          OR: [{ packLevelId: 'pack-a', batchReference: 'batch-a' }],
+        },
+      })
+    );
   });
 
   it('refuses a multi-batch allocation when its prices differ from the preview', async () => {
