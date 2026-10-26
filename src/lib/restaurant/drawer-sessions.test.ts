@@ -175,6 +175,7 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     const date = '2026-08-20';
     const closingDeviceId = await newDevice('POS-day-close');
     const openingDeviceId = await newDevice('POS-after-day-close');
+    const openingActor = actor(openingDeviceId);
     const db = deps.createTenantDb(orgId);
 
     await deps.close.cutClose(db, {
@@ -189,19 +190,23 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
         entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
         branchId: ids.branch,
         openingFloat: '100.00',
-        actor: actor(openingDeviceId),
+        actor: openingActor,
         now: new Date(`${date}T12:00:00.000Z`),
       })
     ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
 
-    const [sessions, movements] = await read((tx) =>
+    const [sessions, movements, idempotencyKeys] = await read((tx) =>
       Promise.all([
         tx.restaurantDrawerSession.count({ where: { deviceId: openingDeviceId } }),
         tx.restaurantDrawerMovement.count({ where: { deviceId: openingDeviceId } }),
+        tx.restaurantMoneyIdempotencyKey.count({
+          where: { deviceId: openingDeviceId, key: openingActor.idempotencyKey },
+        }),
       ])
     );
     expect(sessions).toBe(0);
     expect(movements).toBe(0);
+    expect(idempotencyKeys).toBe(0);
   });
 
   it('serializes a concurrent drawer open against closing the same business day', async () => {
