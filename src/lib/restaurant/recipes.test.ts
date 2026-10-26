@@ -140,6 +140,14 @@ describe('upsertConversion', () => {
     }
   );
 
+  it('accepts leading zeroes that do not consume Decimal precision', async () => {
+    db.restaurantUnit.findUnique.mockImplementation(
+      async ({ where }: { where: { id: string } }) => ({ id: where.id })
+    );
+    await upsertConversion(scoped(), 'A', 'B', `${'0'.repeat(30)}1`);
+    expect(db.restaurantUnitConversion.upsert.mock.calls[0][0].create.factor.toString()).toBe('1');
+  });
+
   it('rejects self-conversion', async () => {
     db.restaurantUnit.findUnique.mockResolvedValue({ id: 'u1' });
     await expect(upsertConversion(scoped(), 'u1', 'u1', '1')).rejects.toMatchObject({

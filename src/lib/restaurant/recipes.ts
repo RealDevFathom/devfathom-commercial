@@ -57,7 +57,9 @@ function decimalInDomain(
   precision: number,
   scale: number
 ): Prisma.Decimal {
-  if (value.length > precision + 2 || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value)) {
+  // Keep a defensive input bound without rejecting representable values that
+  // happen to include leading zeroes (which do not consume database precision).
+  if (value.length > 256 || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value)) {
     throw new RecipeError(`${label} must be a valid decimal.`, 'INVALID');
   }
   let parsed: Prisma.Decimal;

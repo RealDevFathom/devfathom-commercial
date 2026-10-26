@@ -103,7 +103,9 @@ const readProcedure = capabilityProcedure('menu:read');
 function decimalString(domain: 'positive' | 'nonnegative', precision: number, scale: number) {
   return z
     .string()
-    .max(precision + 2)
+    // Leading zeroes do not consume NUMERIC precision, so the transport-level
+    // safety limit must not be derived from the database precision.
+    .max(256)
     .regex(/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/, 'Must be a decimal without exponent notation.')
     .refine(
       (value) => {

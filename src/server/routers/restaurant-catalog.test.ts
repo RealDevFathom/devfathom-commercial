@@ -565,6 +565,19 @@ describe('recipe measurement validation', () => {
     }
   );
 
+  it('accepts leading zeroes that do not consume Decimal precision', async () => {
+    (db.restaurantUnit as Delegate).findUnique.mockImplementation(
+      async ({ where }: { where: { id: string } }) => ({ id: where.id })
+    );
+    await expect(
+      caller().upsertConversion({
+        fromUnitId: 'A',
+        toUnitId: 'B',
+        factor: `${'0'.repeat(30)}1`,
+      })
+    ).resolves.toBeDefined();
+  });
+
   it('rejects negative reference costs at the API boundary', async () => {
     await expect(
       caller().createIngredient({ name: 'Flour', baseUnitId: 'u1', referenceCost: '-0.01' })
