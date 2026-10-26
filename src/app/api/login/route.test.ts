@@ -307,6 +307,7 @@ describe('DELETE /api/login', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
     expect(mocks.discardLoginIntent).toHaveBeenCalledWith('t'.repeat(43));
+    expect(response.headers.get('set-cookie')).toContain('df_login_intent=;');
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
   });
 
@@ -323,6 +324,7 @@ describe('DELETE /api/login', () => {
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ ok: true });
       expect(mocks.discardLoginIntent).not.toHaveBeenCalled();
+      expect(response.headers.get('set-cookie')).toContain('df_login_intent=;');
       expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
     }
   );
