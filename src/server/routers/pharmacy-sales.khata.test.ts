@@ -161,6 +161,35 @@ describe('Khata router trust and recovery boundary', () => {
     );
   });
 
+  it('lets a finance-only operator read statements and tender outcomes', async () => {
+    const f = fixture();
+    vi.mocked(can).mockImplementation(async (_subject, action) =>
+      capabilityMatches('reports:financial', action)
+    );
+
+    await expect(
+      f.caller().khataStatement({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        familyAccountId: 'family-a',
+      })
+    ).resolves.toBeDefined();
+    await expect(f.caller().tenderOutcome(input)).resolves.toMatchObject({
+      status: 'NOT_FOUND',
+    });
+    expect(readPharmacyTenderOutcome).toHaveBeenCalledWith(
+      f.db,
+      expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a' }),
+      { ...input, type: 'CREDIT' }
+    );
+    expect(vi.mocked(can).mock.calls.map(([, action]) => action)).toEqual([
+      'pharmacy:counter',
+      'reports:financial',
+      'pharmacy:counter',
+      'reports:financial',
+    ]);
+  });
+
   it('uses server tenant, CREDIT settlement and an atomic member charge', async () => {
     const f = fixture();
     await f.caller().tender(input);
