@@ -706,6 +706,64 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     expect(balances.find((row) => row.disposition === 'AVAILABLE')?.onHandUnits).toBe(10);
   });
 
+  it('serializes concurrent replays of the same transfer', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-replay-race');
+    const ids = await inOrg(ORG_A, async (db) => {
+      const destinationBranchId = `branch_replay_destination_${suffix}`;
+      await ensureBranch(db, ORG_A, destinationBranchId);
+      const destination = await db.pharmacyStockLocation.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: destinationBranchId,
+          code: `REPLAY-${tag('destination')}`,
+          name: 'Replay destination',
+          kind: 'STORE',
+        },
+      });
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'transfer-replay-race',
+      });
+      const transfer = await deps.operations.allocateTransfer(db, scopeOf(fixture), {
+        toBranchId: destination.branchId,
+        lines: [
+          {
+            sourceLotId: lot.id,
+            sourceStockLocationId: fixture.locationId,
+            destinationStockLocationId: destination.id,
+            quantityUnits: 10,
+          },
+        ],
+      });
+      await deps.operations.approveTransfer(
+        db,
+        { ...scopeOf(fixture), actorId: 'replay_approver' },
+        transfer.id
+      );
+      return { lotId: lot.id, transferId: transfer.id };
+    });
+    const results = await Promise.allSettled(
+      ['replay-a', 'replay-b'].map((label) =>
+        inOrg(ORG_A, (db) =>
+          deps.operations.dispatchTransfer(db, scopeOf(fixture), ids.transferId, tag(label))
+        )
+      )
+    );
+    expect(results.filter((one) => one.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((one) => one.status === 'rejected')).toHaveLength(1);
+    const state = await inOrg(ORG_A, async (db) => ({
+      balances: await db.pharmacyStockBalance.findMany({ where: { inventoryLotId: ids.lotId } }),
+      movements: await db.pharmacyStockMovement.findMany({
+        where: { inventoryLotId: ids.lotId, kind: { in: ['TRANSFER_OUT', 'TRANSFER_IN'] } },
+      }),
+    }));
+    expect(state.movements).toHaveLength(2);
+    expect(state.balances.reduce((sum, row) => sum + row.onHandUnits, 0)).toBe(40);
+    expect(state.balances.find((row) => row.disposition === 'AVAILABLE')?.onHandUnits).toBe(30);
+    expect(state.balances.find((row) => row.disposition === 'IN_TRANSIT')?.onHandUnits).toBe(10);
+  });
+
   it('globally recalls a batch, traces branch holdings, acknowledges, and reconciles closure', async () => {
     const a = await scenario(ORG_A, BRANCH_A, 'recall-a');
     const otherBranch = 'branch_recall_b';

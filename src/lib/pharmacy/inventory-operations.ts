@@ -348,12 +348,16 @@ export async function dispatchTransfer(
   transferId: string,
   key: string
 ) {
+  const [lockedTransfer] = await db.$queryRaw<Array<{ status: string }>>(
+    Prisma.sql`SELECT status::text FROM "pharmacy_interbranch_transfers" WHERE id=${transferId} AND "organizationId"=${scope.organizationId} AND "fromBranchId"=${scope.branchId} FOR UPDATE`
+  );
+  if (!lockedTransfer || lockedTransfer.status !== 'APPROVED')
+    throw new PharmacyInventoryError('INVALID_STATE');
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: { id: transferId, organizationId: scope.organizationId, fromBranchId: scope.branchId },
     include: { lines: true },
   });
-  if (!transfer || transfer.status !== 'APPROVED')
-    throw new PharmacyInventoryError('INVALID_STATE');
+  if (!transfer) throw new PharmacyInventoryError('INVALID_STATE');
   for (const [i, line] of transfer.lines.entries()) {
     const balances = await db.$queryRaw<
       Array<{
