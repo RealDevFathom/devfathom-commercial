@@ -33,6 +33,7 @@ describe('processDueResignationOffboarding', () => {
     const [sql, cutoff] = mocks.query.mock.calls[0] as [string, Date];
     expect(cutoff).toBe(now);
     expect(sql).toContain(`r."status" = 'APPROVED'`);
+    expect(sql).toContain('r."lastWorkingDay" IS NOT NULL');
     expect(sql).toContain('r."lastWorkingDay" <= $1');
     expect(sql).toContain(`u."status" <> 'INACTIVE'`);
     expect(sql).toContain(`"tokenVersion" = u."tokenVersion" + 1`);
@@ -43,5 +44,9 @@ describe('processDueResignationOffboarding', () => {
 
     const [sql] = mocks.query.mock.calls[0] as [string];
     expect(sql).toContain('r."organizationId" = u."organizationId"');
+  });
+
+  it('reports no offboarding when no due resignation matches', async () => {
+    await expect(processDueResignationOffboarding()).resolves.toEqual({ offboarded: 0 });
   });
 });
