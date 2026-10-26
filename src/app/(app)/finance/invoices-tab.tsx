@@ -312,6 +312,8 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
   const [projectId, setProjectId] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [notes, setNotes] = useState('');
+  const [tax, setTax] = useState(0);
+  const [discount, setDiscount] = useState(0);
   const [items, setItems] = useState([{ description: '', quantity: 1, rate: 0 }]);
 
   const addItem = () => setItems([...items, { description: '', quantity: 1, rate: 0 }]);
@@ -323,16 +325,18 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
   };
 
   const subtotal = items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
-  const total = subtotal;
+  const discountInvalid = discount > subtotal;
+  const total = Math.max(0, subtotal - discount) + tax;
 
   const handleSubmit = () => {
-    if (!clientId || !dueDate || items.some((i) => !i.description)) return;
+    if (!clientId || !dueDate || discountInvalid || items.some((i) => !i.description)) return;
     createInvoice.mutate({
       clientId,
       projectId: projectId || undefined,
       items: items.map((i) => ({ ...i, amount: i.quantity * i.rate })),
       subtotal,
-      tax: 0,
+      discount,
+      tax,
       total,
       dueDate: new Date(dueDate),
       notes: notes || undefined,
@@ -438,9 +442,43 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {/* Total */}
+        {/* Totals */}
         <div className="flex justify-end border-t border-border/60 pt-3">
-          <div className="text-right">
+          <div className="w-full max-w-xs space-y-2 text-right">
+            <div className="grid grid-cols-2 items-center gap-2">
+              <label htmlFor="invoice-discount" className="text-xs text-muted-foreground">
+                Discount
+              </label>
+              <input
+                id="invoice-discount"
+                type="number"
+                min="0"
+                max={subtotal}
+                step="0.01"
+                value={discount || ''}
+                onChange={(e) => setDiscount(parseFloat(e.target.value) || 0)}
+                aria-invalid={discountInvalid}
+                aria-describedby={discountInvalid ? 'invoice-discount-error' : undefined}
+                className="rounded-lg border border-border bg-background px-3 py-1.5 text-right text-sm tabular-nums text-foreground focus:border-primary focus:outline-none"
+              />
+              {discountInvalid && (
+                <p id="invoice-discount-error" className="col-span-2 text-xs text-destructive">
+                  Discount cannot exceed the subtotal.
+                </p>
+              )}
+              <label htmlFor="invoice-tax" className="text-xs text-muted-foreground">
+                Tax
+              </label>
+              <input
+                id="invoice-tax"
+                type="number"
+                min="0"
+                step="0.01"
+                value={tax || ''}
+                onChange={(e) => setTax(parseFloat(e.target.value) || 0)}
+                className="rounded-lg border border-border bg-background px-3 py-1.5 text-right text-sm tabular-nums text-foreground focus:border-primary focus:outline-none"
+              />
+            </div>
             <p className="text-xs text-muted-foreground">Total</p>
             <p className="font-display text-xl font-bold text-foreground">
               ${total.toLocaleString()}
@@ -468,7 +506,7 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!clientId || !dueDate || createInvoice.isPending}
+            disabled={!clientId || !dueDate || discountInvalid || createInvoice.isPending}
             className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {createInvoice.isPending ? (

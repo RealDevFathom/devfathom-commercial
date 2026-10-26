@@ -46,6 +46,7 @@ export const createInvoiceInputSchema = z.object({
     )
     .min(1, 'Invoice must have at least one line item'),
   subtotal: nonNegativeMoney(),
+  discount: nonNegativeMoney().default(0),
   tax: nonNegativeMoney().default(0),
   total: nonNegativeMoney(),
   currency: z.enum(['USD', 'PKR']).default('USD'),
@@ -54,8 +55,27 @@ export const createInvoiceInputSchema = z.object({
 });
 
 // Round to 2 decimal places (cents). Used to derive invoice money server-side so
-// caller-supplied subtotal/total are never trusted (FIN-01).
+// caller-supplied subtotal/total are never trusted (FIN-01). Discounts are
+// bounded by the derived subtotal so an invoice can never have a negative net.
 const round2 = (n: number) => Math.round(n * 100) / 100;
+
+export function calculateInvoiceTotals(
+  items: Array<{ quantity: number; rate: number }>,
+  taxInput = 0,
+  discountInput = 0
+) {
+  const amounts = items.map((item) => round2(item.quantity * item.rate));
+  const subtotal = round2(amounts.reduce((sum, amount) => sum + amount, 0));
+  const tax = round2(taxInput);
+  const discount = round2(discountInput);
+  if (discount > subtotal) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Discount cannot exceed the invoice subtotal',
+    });
+  }
+  return { amounts, subtotal, discount, tax, total: round2(subtotal - discount + tax) };
+}
 
 // IMP-FIN-04: money is Decimal(12,2), so a partial payment can legitimately pay an
 // invoice off to the exact cent. Compare paid-vs-total with a half-cent tolerance
@@ -249,18 +269,16 @@ export const financeRouter = router({
     await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
     await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
     // FIN-01: never trust client-sent money. Derive every line `amount`, the
-    // `subtotal` and the `total` from quantity × rate (+ tax) on the server, so
+    // `subtotal` and the `total` from quantity × rate (- discount + tax) on the server, so
     // a request claiming subtotal/total = 0 (or a negative) cannot corrupt the
     // stored figure or the paid/outstanding aggregates. Mirrors the AI tool.
-    const lineItems = input.items.map((it) => ({
+    const totals = calculateInvoiceTotals(input.items, input.tax, input.discount);
+    const lineItems = input.items.map((it, index) => ({
       description: it.description,
       quantity: it.quantity,
       rate: it.rate,
-      amount: round2(it.quantity * it.rate),
+      amount: totals.amounts[index],
     }));
-    const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
-    const tax = round2(input.tax ?? 0);
-    const total = round2(subtotal + tax);
 
     // Generate invoice number. FIN-09: scope the count to THIS year's invoices
     // so the sequence resets to -001 each January (was a global count that never
@@ -277,9 +295,10 @@ export const financeRouter = router({
         clientId: input.clientId,
         projectId: input.projectId || null,
         items: lineItems,
-        subtotal,
-        tax,
-        total,
+        subtotal: totals.subtotal,
+        discount: totals.discount,
+        tax: totals.tax,
+        total: totals.total,
         currency: input.currency,
         status: 'DRAFT',
         dueDate: input.dueDate,
@@ -300,7 +319,7 @@ export const financeRouter = router({
 
   // IMP-FIN-01: full line-item edit of an unsettled invoice. Like createInvoice,
   // every line `amount`, the `subtotal` and the `total` are recomputed SERVER-SIDE
-  // from quantity × rate (+ tax) — a caller-supplied total is never trusted (FIN-01).
+  // from quantity × rate (- discount + tax) — a caller-supplied total is never trusted (FIN-01).
   // Only a DRAFT or SENT invoice may be edited; a PAID/CANCELLED/OVERDUE invoice is
   // settled or void and its figures are frozen.
   updateInvoice: adminProcedure
@@ -317,6 +336,7 @@ export const financeRouter = router({
           )
           .min(1),
         tax: nonNegativeMoney().optional(),
+        discount: nonNegativeMoney().optional(),
         dueDate: z.date().optional(),
         notes: z.string().optional(),
         status: z.enum(['DRAFT', 'SENT']).optional(),
@@ -336,17 +356,21 @@ export const financeRouter = router({
       }
 
       // Recompute money server-side, identical to createInvoice.
-      const lineItems = input.items.map((it) => ({
+      const totals = calculateInvoiceTotals(input.items, input.tax, input.discount);
+      const lineItems = input.items.map((it, index) => ({
         description: it.description,
         quantity: it.quantity,
         rate: it.rate,
-        amount: round2(it.quantity * it.rate),
+        amount: totals.amounts[index],
       }));
-      const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
-      const tax = round2(input.tax ?? 0);
-      const total = round2(subtotal + tax);
 
-      const data: Record<string, unknown> = { items: lineItems, subtotal, tax, total };
+      const data: Record<string, unknown> = {
+        items: lineItems,
+        subtotal: totals.subtotal,
+        discount: totals.discount,
+        tax: totals.tax,
+        total: totals.total,
+      };
       if (input.dueDate) data.dueDate = input.dueDate;
       if (input.notes !== undefined) data.notes = input.notes.trim() || null;
       if (input.status && input.status !== current.status) {
