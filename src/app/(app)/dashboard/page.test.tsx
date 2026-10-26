@@ -110,6 +110,11 @@ describe('DashboardPage vertical dispatch', () => {
       const page = await DashboardPage();
 
       expect(mocks.redirect).not.toHaveBeenCalled();
+      expect(mocks.can.mock.calls.slice(0, 2).map(([, action]) => action)).toEqual([
+        'admin:access',
+        'orders:take',
+      ]);
+      expect(mocks.can).toHaveBeenCalledWith(user, 'admin:access', undefined, { db: mocks.db });
       expect(mocks.can).toHaveBeenCalledWith(user, 'orders:take', undefined, { db: mocks.db });
       expect(page.props.children.type).toBe(RestaurantDashboardContent);
       expect(page.props.children.props.enabledModules).toEqual([
