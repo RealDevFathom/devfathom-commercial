@@ -192,6 +192,20 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
     expect(addSaleLine).not.toHaveBeenCalled();
   });
 
+  it('rejects a caller-supplied override approval policy before stock is touched', async () => {
+    const f = fixture();
+
+    await expect(
+      f.caller.addLine({
+        ...line,
+        override: { ...override, approvalPolicy: 'CALLER_SUPPLIED' },
+      } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(f.transaction).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['NOT_FOUND', 'NOT_FOUND'],
     ['OVERRIDE_EVIDENCE_MISSING', 'BAD_REQUEST'],
@@ -249,6 +263,28 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 
     expect(f.transaction).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('rejects a caller-supplied discount approval policy before stock is touched', async () => {
+    const f = fixture();
+
+    await expect(
+      f.caller.addLine({ ...line, discountMinor: 1, approvalPolicy: 'CALLER_SUPPLIED' } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(f.transaction).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('blocks a positive discount without PIN authorization', async () => {
+    const f = fixture();
+
+    await expect(f.caller.addLine({ ...line, discountMinor: 1 })).resolves.toEqual({
+      blocked: 'An active manager must independently approve this discount with their PIN.',
+    });
+
+    expect(f.db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
   });
 
