@@ -292,7 +292,8 @@ export async function authenticateApprover(
 export function terminalCommandRoute<S extends z.ZodTypeAny>(
   schema: S,
   run: (args: { ctx: TerminalContext; data: z.infer<S>; actor: CommandActor }) => Promise<unknown>,
-  successStatus = 200
+  successStatus = 200,
+  options: { composerProof?: 'REQUIRED' | 'POS_ONLY' } = {}
 ) {
   const parseBody = async (request: Request) => {
     const parsedJson = await readJson(request);
@@ -315,18 +316,22 @@ export function terminalCommandRoute<S extends z.ZodTypeAny>(
       const parsed = await parseBody(request);
       if (!parsed.ok) return parsed.response;
 
-      const composerProof = request.headers.get('x-pos-composer-proof');
-      if (
-        !composerProof ||
-        !verifyPosComposerProof(composerProof, {
-          organizationId: ctx.organizationId,
-          branchId: ctx.device.branchId,
-          deviceId: ctx.device.id,
-          sessionId: ctx.session.id,
-          staffProfileId: operator.staffProfileId,
-        })
-      ) {
-        return json({ error: 'Missing or invalid POS composer proof.' }, 403);
+      const requiresComposerProof =
+        options.composerProof !== 'POS_ONLY' || ctx.device.kind === 'POS';
+      if (requiresComposerProof) {
+        const composerProof = request.headers.get('x-pos-composer-proof');
+        if (
+          !composerProof ||
+          !verifyPosComposerProof(composerProof, {
+            organizationId: ctx.organizationId,
+            branchId: ctx.device.branchId,
+            deviceId: ctx.device.id,
+            sessionId: ctx.session.id,
+            staffProfileId: operator.staffProfileId,
+          })
+        ) {
+          return json({ error: 'Missing or invalid POS composer proof.' }, 403);
+        }
       }
 
       const data = parsed.data as unknown;

@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
     state: 'UNLOCKED',
     organizationId: 'org-1',
     session: { id: 'session-1', activeStaffProfileId: 'staff-cashier' },
-    device: { id: 'device-1', branchId: 'branch-1' },
+    device: { id: 'device-1', branchId: 'branch-1', kind: 'POS' },
     db: { restaurantOrder: { findFirst: vi.fn() } },
   },
 }));
@@ -63,6 +63,7 @@ function request(
 beforeEach(() => {
   vi.stubEnv('AUTH_SECRET', 'terminal-order-test-secret');
   mocks.capabilities.clear();
+  mocks.ctx.device.kind = 'POS';
 });
 
 describe('terminal order capability boundary', () => {
@@ -133,5 +134,22 @@ describe('terminal order capability boundary', () => {
       error: 'Missing or invalid POS composer proof.',
     });
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it('allows an attributed online KDS command without a POS offline-composer proof', async () => {
+    mocks.ctx.device.kind = 'KDS';
+    mocks.capabilities.add('orders:take');
+    const run = vi.fn().mockResolvedValue({ ticketId: 'ticket-1' });
+    const route = terminalCommandRoute(schema, run, 200, { composerProof: 'POS_ONLY' });
+
+    const response = await route(request('DINE_IN', ''));
+
+    expect(response.status).toBe(200);
+    expect(run).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: expect.objectContaining({ staffProfileId: 'staff-cashier' }),
+      })
+    );
   });
 });
