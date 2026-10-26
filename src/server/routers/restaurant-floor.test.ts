@@ -197,9 +197,15 @@ describe('capability gating', () => {
       async (_subject, capability) => capability !== 'restaurant:configure'
     );
 
-    await expect(caller('branch_1').listFloors({ branchId: 'branch_b' })).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-    });
+    const outsideBranchReads = [
+      () => caller('branch_1').listFloors({ branchId: 'branch_b' }),
+      () =>
+        caller('branch_1').listSections({ branchId: 'branch_b', businessDate: '2026-08-19' }),
+      () => caller('branch_1').listStations({ branchId: 'branch_b' }),
+    ];
+    for (const read of outsideBranchReads) {
+      await expect(read()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
     const outsideBranchMutations = [
       () => caller('branch_1').updateFloor({ id: 'branch_b_resource', name: 'Nope' }),
       () => caller('branch_1').updateTable({ id: 'branch_b_resource', code: 'Nope' }),
@@ -211,6 +217,8 @@ describe('capability gating', () => {
       await expect(mutation()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     }
     expect(mocks.listFloors).not.toHaveBeenCalled();
+    expect(mocks.listSections).not.toHaveBeenCalled();
+    expect(mocks.listStations).not.toHaveBeenCalled();
     expect(mocks.updateFloor).not.toHaveBeenCalled();
     expect(mocks.updateTable).not.toHaveBeenCalled();
     expect(mocks.updateSection).not.toHaveBeenCalled();
