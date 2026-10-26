@@ -1,75 +1,151 @@
-import { Client } from 'pg';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { PrismaClient } from '@/generated/prisma/client';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
+import { readPurchasingReport, readWastageReport } from './reports';
 
 const databaseUrl = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 const describeIfDatabase = databaseUrl ? describe : describe.skip;
 
 describeIfDatabase('restaurant report timezone boundaries', () => {
-  let client: Client;
+  const db = databaseUrl
+    ? new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl, max: 1 }) })
+    : null;
 
   beforeAll(async () => {
-    client = new Client({ connectionString: databaseUrl });
-    await client.connect();
-    await client.query(`SET TIME ZONE 'Asia/Karachi'`);
+    await db!.$executeRawUnsafe(`SET TIME ZONE 'Asia/Karachi'`);
+    await db!.$executeRawUnsafe(`
+      CREATE TEMP TABLE "restaurant_branches" ("id" text PRIMARY KEY, "name" text NOT NULL, "timezone" text NOT NULL);
+      CREATE TEMP TABLE "restaurant_stock_locations" ("id" text PRIMARY KEY, "branchId" text NOT NULL, "name" text NOT NULL);
+      CREATE TEMP TABLE "restaurant_units" ("id" text PRIMARY KEY, "name" text NOT NULL, "abbreviation" text);
+      CREATE TEMP TABLE "restaurant_ingredients" ("id" text PRIMARY KEY, "name" text NOT NULL, "referenceCost" numeric);
+      CREATE TEMP TABLE "restaurant_stock_items" ("id" text PRIMARY KEY, "ingredientId" text NOT NULL, "canonicalUnitId" text NOT NULL);
+      CREATE TEMP TABLE "restaurant_stock_movements" (
+        "id" text PRIMARY KEY, "stockItemId" text NOT NULL, "locationId" text NOT NULL,
+        "reason" text NOT NULL, "quantity" numeric NOT NULL, "unitCost" numeric, "occurredAt" timestamp NOT NULL
+      );
+      CREATE TEMP TABLE "restaurant_suppliers" ("id" text PRIMARY KEY, "name" text NOT NULL);
+      CREATE TEMP TABLE "restaurant_purchase_orders" (
+        "id" text PRIMARY KEY, "supplierId" text NOT NULL, "branchId" text NOT NULL,
+        "status" text NOT NULL, "createdAt" timestamp NOT NULL
+      );
+      CREATE TEMP TABLE "restaurant_purchase_order_lines" (
+        "id" text PRIMARY KEY, "purchaseOrderId" text NOT NULL, "orderedQuantity" numeric NOT NULL, "unitCost" numeric NOT NULL
+      );
+      CREATE TEMP TABLE "restaurant_purchase_receipts" (
+        "id" text PRIMARY KEY, "supplierId" text NOT NULL, "branchId" text NOT NULL, "receivedAt" timestamp NOT NULL
+      );
+      CREATE TEMP TABLE "restaurant_purchase_receipt_lines" (
+        "id" text PRIMARY KEY, "purchaseReceiptId" text NOT NULL, "receivedQuantity" numeric NOT NULL, "unitCost" numeric NOT NULL
+      );
+      CREATE TEMP TABLE "restaurant_receiving_discrepancies" (
+        "id" text PRIMARY KEY, "purchaseReceiptId" text NOT NULL, "kind" text NOT NULL
+      );
+    `);
+    await db!.$executeRawUnsafe(`
+      INSERT INTO "restaurant_branches" VALUES
+        ('karachi', 'Karachi', 'Asia/Karachi'), ('new-york', 'New York', 'America/New_York');
+      INSERT INTO "restaurant_stock_locations" VALUES
+        ('karachi-location', 'karachi', 'Pantry'), ('new-york-location', 'new-york', 'Pantry');
+      INSERT INTO "restaurant_units" VALUES ('unit', 'kilogram', 'kg');
+      INSERT INTO "restaurant_ingredients" VALUES ('ingredient', 'Flour', NULL);
+      INSERT INTO "restaurant_stock_items" VALUES ('item', 'ingredient', 'unit');
+      INSERT INTO "restaurant_suppliers" VALUES ('supplier', 'Supplier');
+    `);
+
+    const boundaries = [
+      ['karachi', '2026-10-20 18:59:59.999', 100],
+      ['karachi', '2026-10-20 19:00:00', 1],
+      ['karachi', '2026-10-20 20:00:00', 2],
+      ['karachi', '2026-10-21 18:59:59.999', 4],
+      ['karachi', '2026-10-21 19:00:00', 100],
+      ['new-york', '2026-10-21 03:59:59.999', 100],
+      ['new-york', '2026-10-21 04:00:00', 1],
+      ['new-york', '2026-10-21 05:00:00', 2],
+      ['new-york', '2026-10-22 03:59:59.999', 4],
+      ['new-york', '2026-10-22 04:00:00', 100],
+    ] as const;
+
+    for (const [branchId, occurredAt, quantity] of boundaries) {
+      const locationId = `${branchId}-location`;
+      const id = `${branchId}-${occurredAt}`;
+      await db!.$executeRawUnsafe(
+        `INSERT INTO "restaurant_stock_movements" VALUES ($1, 'item', $2, 'WASTAGE', $3, 1, $4)`,
+        id,
+        locationId,
+        -quantity,
+        occurredAt
+      );
+      await db!.$executeRawUnsafe(
+        `INSERT INTO "restaurant_purchase_orders" VALUES ($1, 'supplier', $2, 'DRAFT', $3)`,
+        `order-${id}`,
+        branchId,
+        occurredAt
+      );
+      await db!.$executeRawUnsafe(
+        `INSERT INTO "restaurant_purchase_order_lines" VALUES ($1, $2, $3, 1)`,
+        `order-line-${id}`,
+        `order-${id}`,
+        quantity
+      );
+      await db!.$executeRawUnsafe(
+        `INSERT INTO "restaurant_purchase_receipts" VALUES ($1, 'supplier', $2, $3)`,
+        `receipt-${id}`,
+        branchId,
+        occurredAt
+      );
+      await db!.$executeRawUnsafe(
+        `INSERT INTO "restaurant_purchase_receipt_lines" VALUES ($1, $2, $3, 1)`,
+        `receipt-line-${id}`,
+        `receipt-${id}`,
+        quantity
+      );
+      await db!.$executeRawUnsafe(
+        `INSERT INTO "restaurant_receiving_discrepancies" VALUES ($1, $2, 'QUANTITY')`,
+        `discrepancy-${id}`,
+        `receipt-${id}`
+      );
+    }
   });
 
   afterAll(async () => {
-    await client.end();
+    await db?.$disconnect();
   });
 
-  it('filters UTC wall-clock timestamps independently of the non-UTC session timezone', async () => {
-    const session = await client.query<{ TimeZone: string }>('SHOW TIME ZONE');
-    expect(session.rows[0]?.TimeZone).toBe('Asia/Karachi');
+  it('runs wastage report filtering and grouping against branch-local days', async () => {
+    const session = await db!.$queryRawUnsafe<Array<{ TimeZone: string }>>('SHOW TIME ZONE');
+    expect(session[0]?.TimeZone).toBe('Asia/Karachi');
 
-    const result = await client.query<{
-      branch: string;
-      occurred_at: string;
-      day: string;
-    }>(`
-      WITH branches(branch, timezone) AS (
-        VALUES ('Karachi', 'Asia/Karachi'), ('New York', 'America/New_York')
-      ), boundaries(label, instant) AS (
-        VALUES
-          ('just before lower', TIMESTAMPTZ '2026-10-20 18:59:59.999+00'),
-          ('exact lower', TIMESTAMPTZ '2026-10-20 19:00:00+00'),
-          ('local 01:00', TIMESTAMPTZ '2026-10-20 20:00:00+00'),
-          ('just before upper', TIMESTAMPTZ '2026-10-21 18:59:59.999+00'),
-          ('exact upper', TIMESTAMPTZ '2026-10-21 19:00:00+00'),
-          ('ny just before lower', TIMESTAMPTZ '2026-10-21 03:59:59.999+00'),
-          ('ny exact lower', TIMESTAMPTZ '2026-10-21 04:00:00+00'),
-          ('ny local 01:00', TIMESTAMPTZ '2026-10-21 05:00:00+00'),
-          ('ny just before upper', TIMESTAMPTZ '2026-10-22 03:59:59.999+00'),
-          ('ny exact upper', TIMESTAMPTZ '2026-10-22 04:00:00+00')
-      ), movements AS (
-        SELECT branch, timezone, label, instant AT TIME ZONE 'UTC' AS occurred_at
-        FROM branches
-        CROSS JOIN boundaries
-        WHERE (branch = 'Karachi' AND label NOT LIKE 'ny %')
-           OR (branch = 'New York' AND label LIKE 'ny %')
-      )
-      SELECT branch, label AS occurred_at,
-        TO_CHAR((occurred_at AT TIME ZONE 'UTC') AT TIME ZONE timezone, 'YYYY-MM-DD') AS day
-      FROM movements
-      WHERE (occurred_at AT TIME ZONE 'UTC') >= (DATE '2026-10-21'::timestamp AT TIME ZONE timezone)
-        AND (occurred_at AT TIME ZONE 'UTC') < ((DATE '2026-10-21' + 1)::timestamp AT TIME ZONE timezone)
-      ORDER BY branch, label
-    `);
+    const report = await readWastageReport(db! as unknown as ScopedDb, {
+      branchIds: ['karachi', 'new-york'],
+      from: '2026-10-21',
+      to: '2026-10-21',
+    });
 
-    expect(result.rows).toEqual([
-      { branch: 'Karachi', occurred_at: 'exact lower', day: '2026-10-21' },
-      { branch: 'Karachi', occurred_at: 'just before upper', day: '2026-10-21' },
-      { branch: 'Karachi', occurred_at: 'local 01:00', day: '2026-10-21' },
-      { branch: 'New York', occurred_at: 'ny exact lower', day: '2026-10-21' },
-      { branch: 'New York', occurred_at: 'ny just before upper', day: '2026-10-21' },
-      { branch: 'New York', occurred_at: 'ny local 01:00', day: '2026-10-21' },
+    expect(report.totals).toMatchObject({ movementCount: 6, quantity: '14', cost: '14' });
+    expect(report.byDay).toEqual([
+      expect.objectContaining({ day: '2026-10-21', movementCount: 6, quantity: '14' }),
     ]);
-    expect(result.rows.map(({ occurred_at }) => occurred_at)).not.toEqual(
-      expect.arrayContaining([
-        'just before lower',
-        'exact upper',
-        'ny just before lower',
-        'ny exact upper',
-      ])
-    );
+  });
+
+  it('runs every purchasing aggregation against branch-local day boundaries', async () => {
+    const report = await readPurchasingReport(db! as unknown as ScopedDb, {
+      branchIds: ['karachi', 'new-york'],
+      from: '2026-10-21',
+      to: '2026-10-21',
+    });
+
+    expect(report).toMatchObject({
+      purchaseOrderCount: 6,
+      purchaseOrderValue: '14',
+      receiptCount: 6,
+      receivedSupplierSpend: '14',
+      discrepancyCount: 6,
+      statusCounts: { DRAFT: 6 },
+      supplierSpend: [{ supplierName: 'Supplier', amount: '14' }],
+    });
+    expect(report.discrepancies).toHaveLength(6);
   });
 });
