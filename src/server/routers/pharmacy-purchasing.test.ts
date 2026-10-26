@@ -442,6 +442,25 @@ describe('PUR-02 tenant boundaries', () => {
     expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
   });
 
+  it('accepts requisitions and IDs at their limits', async () => {
+    const medicineId = 'm'.repeat(200);
+    await expect(
+      caller().createRequisition({
+        reference: 'REQ-AT-LIMIT',
+        branchId: 'b'.repeat(200),
+        lines: Array.from({ length: 100 }, () => ({
+          medicineId,
+          packLevelId: 'p'.repeat(200),
+          quantityPacks: 1,
+          canonicalUnitsPerPack: 1,
+        })),
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.medicine.findFirst).toHaveBeenCalledWith({
+      where: { id: medicineId, saleable: true },
+    });
+  });
+
   it('rejects oversized requisition IDs before catalog lookups', async () => {
     const oversizedId = 'x'.repeat(201);
     const line = {

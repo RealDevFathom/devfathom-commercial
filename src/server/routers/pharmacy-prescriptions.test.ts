@@ -202,6 +202,27 @@ describe('prescription capture and private delivery', () => {
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
+  it('accepts prescription lines, directions, and IDs at their limits', async () => {
+    const input = captureInput('/api/pharmacy/prescription-files/test.png');
+
+    await expect(
+      caller().capture({
+        ...input,
+        patientId: 'p'.repeat(200),
+        prescriberId: 'r'.repeat(200),
+        lines: Array.from({ length: 30 }, (_, index) => ({
+          ...input.lines[0],
+          lineNumber: index + 1,
+          medicineId: 'm'.repeat(200),
+          presentationId: 'x'.repeat(200),
+          directions: 'd'.repeat(2_000),
+        })),
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+
+    expect(mocks.getUpload).toHaveBeenCalledOnce();
+  });
+
   it('rejects oversized capture IDs before storage work', async () => {
     const input = captureInput('/api/pharmacy/prescription-files/test.png');
     const oversizedId = 'x'.repeat(201);
