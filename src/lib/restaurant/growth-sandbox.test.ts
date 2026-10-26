@@ -183,31 +183,36 @@ it('requires current review evidence even with persisted draft', async () => {
   });
   expect(write).not.toHaveBeenCalled();
 });
-it.each([' stop ', 'بند'])('withdraws consent for %j and confirms in English and Urdu', async (text) => {
-  const result = await stopRestaurantGrowthSandbox(
-    h,
-    { branchId: 'b', customerId: 'c1', eventId: input.requestId, text },
-    policy
-  );
-  expect(mocks.consent).toHaveBeenCalledWith(
-    expect.anything(),
-    expect.objectContaining({
-      channel: 'WHATSAPP',
-      granted: false,
-      source: 'TEST_SANDBOX_STOP',
-      idempotencyKey: 'restaurant-growth-stop:' + input.requestId,
-    })
-  );
-  expect(result.confirmation.split('\n')).toEqual([
-    'You will no longer receive WhatsApp growth messages. Reply START to opt back in.',
-    'آپ کو اب واٹس ایپ پر گروتھ پیغامات نہیں ملیں گے۔ دوبارہ شروع کرنے کے لیے START لکھیں۔',
-  ]);
-});
-it('does not accept an arbitrary inbound message', async () => {
+it.each([' stop ', 'STOP', 'ＳＴＯＰ', ' بند '])(
+  'withdraws consent for %j and confirms in English and Urdu',
+  async (text) => {
+    const result = await stopRestaurantGrowthSandbox(
+      h,
+      { branchId: 'b', customerId: 'c1', eventId: input.requestId, text },
+      policy
+    );
+    expect(mocks.consent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        channel: 'WHATSAPP',
+        granted: false,
+        source: 'TEST_SANDBOX_STOP',
+        actorId: 'u',
+        policyVersion: 'TEST_V1',
+        idempotencyKey: 'restaurant-growth-stop:' + input.requestId,
+      })
+    );
+    expect(result.confirmation.split('\n')).toEqual([
+      'You will no longer receive WhatsApp growth messages. Reply START to opt back in.',
+      'آپ کو اب واٹس ایپ پر گروتھ پیغامات نہیں ملیں گے۔ دوبارہ شروع کرنے کے لیے START لکھیں۔',
+    ]);
+  }
+);
+it.each(['subscribe', 'بند کریں', ''])('does not accept inbound message %j', async (text) => {
   await expect(
     stopRestaurantGrowthSandbox(
       h,
-      { branchId: 'b', customerId: 'c1', eventId: input.requestId, text: 'subscribe' },
+      { branchId: 'b', customerId: 'c1', eventId: input.requestId, text },
       policy
     )
   ).rejects.toMatchObject({ code: 'INVALID' });
