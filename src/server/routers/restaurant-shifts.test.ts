@@ -1122,6 +1122,25 @@ describe('restaurantShifts.reviewSwap', () => {
     expect(eventsOf('SWAP_APPROVED')).toHaveLength(0);
   });
 
+  it('allows rejecting a swap after attendance has been recorded', async () => {
+    const request = await pendingSwap();
+    await caller('EMPLOYEE').clockIn({ shiftId: 'shift_emp', idempotencyKey: 'ci-before-reject' });
+
+    const decision = await caller('MANAGER').reviewSwap({
+      requestId: request!.id,
+      branchId: 'branch_1',
+      decision: 'REJECTED',
+      idempotencyKey: 'rv-reject-attendance',
+    });
+
+    expect(decision).toMatchObject({ requestId: request!.id, decision: 'REJECTED' });
+    expect(state.shifts.find((shift) => shift.id === 'shift_emp')).toMatchObject({
+      staffProfileId: 'staff_emp',
+      clockedInAt: at('2026-09-20T09:02:00Z'),
+    });
+    expect(eventsOf('SWAP_REJECTED')).toHaveLength(1);
+  });
+
   it('denies employees, other-branch managers, and replacements with an overlapping shift', async () => {
     const request = await pendingSwap();
     const review = {
