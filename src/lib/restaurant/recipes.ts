@@ -53,8 +53,13 @@ function requireName(value: string, label = 'name'): string {
 function decimalInDomain(
   value: string,
   label: string,
-  domain: 'positive' | 'nonnegative'
+  domain: 'positive' | 'nonnegative',
+  precision: number,
+  scale: number
 ): Prisma.Decimal {
+  if (value.length > precision + 2 || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value)) {
+    throw new RecipeError(`${label} must be a valid decimal.`, 'INVALID');
+  }
   let parsed: Prisma.Decimal;
   try {
     parsed = new Prisma.Decimal(value);
@@ -63,6 +68,8 @@ function decimalInDomain(
   }
   const valid =
     parsed.isFinite() &&
+    parsed.decimalPlaces() <= scale &&
+    parsed.abs().lessThan(new Prisma.Decimal(10).pow(precision - scale)) &&
     (domain === 'positive' ? parsed.greaterThan(0) : parsed.greaterThanOrEqualTo(0));
   if (!valid) {
     throw new RecipeError(
@@ -143,7 +150,7 @@ export async function upsertConversion(
   factor: string
 ) {
   const organizationId = await catalogOrganizationId(db);
-  const parsedFactor = decimalInDomain(factor, 'Unit conversion factor', 'positive');
+  const parsedFactor = decimalInDomain(factor, 'Unit conversion factor', 'positive', 18, 6);
   await requireUnit(db, fromUnitId);
   await requireUnit(db, toUnitId);
   if (fromUnitId === toUnitId) {
@@ -260,7 +267,7 @@ export async function createIngredient(db: ScopedDb, input: CreateIngredientInpu
       baseUnitId: input.baseUnitId,
       referenceCost:
         input.referenceCost != null
-          ? decimalInDomain(input.referenceCost, 'Reference cost', 'nonnegative')
+          ? decimalInDomain(input.referenceCost, 'Reference cost', 'nonnegative', 12, 4)
           : null,
     },
   });
@@ -286,7 +293,7 @@ export async function updateIngredient(db: ScopedDb, id: string, patch: UpdateIn
   if (patch.referenceCost !== undefined) {
     data.referenceCost =
       patch.referenceCost != null
-        ? decimalInDomain(patch.referenceCost, 'Reference cost', 'nonnegative')
+        ? decimalInDomain(patch.referenceCost, 'Reference cost', 'nonnegative', 12, 4)
         : null;
   }
   return db.restaurantIngredient.update({ where: { organizationId, id }, data });
@@ -386,7 +393,7 @@ export async function createRecipeVersion(db: ScopedDb, input: CreateRecipeVersi
   const organizationId = await catalogOrganizationId(db);
   const yieldQuantity =
     input.yieldQuantity != null
-      ? decimalInDomain(input.yieldQuantity, 'Recipe yield quantity', 'positive')
+      ? decimalInDomain(input.yieldQuantity, 'Recipe yield quantity', 'positive', 12, 3)
       : null;
   await requireRecipe(db, input.recipeId);
   if (input.yieldUnitId) await requireUnit(db, input.yieldUnitId);
@@ -435,7 +442,7 @@ export async function updateRecipeVersion(
   if (patch.yieldQuantity !== undefined) {
     data.yieldQuantity =
       patch.yieldQuantity != null
-        ? decimalInDomain(patch.yieldQuantity, 'Recipe yield quantity', 'positive')
+        ? decimalInDomain(patch.yieldQuantity, 'Recipe yield quantity', 'positive', 12, 3)
         : null;
   }
   if (patch.yieldUnitId !== undefined) data.yieldUnitId = patch.yieldUnitId;
@@ -518,7 +525,7 @@ export type CreateRecipeLineInput =
  */
 export async function createRecipeLine(db: ScopedDb, input: CreateRecipeLineInput) {
   const organizationId = await catalogOrganizationId(db);
-  const quantity = decimalInDomain(input.quantity, 'Recipe line quantity', 'positive');
+  const quantity = decimalInDomain(input.quantity, 'Recipe line quantity', 'positive', 12, 4);
   if ((!input.ingredientId && !input.subRecipeId) || (input.ingredientId && input.subRecipeId)) {
     throw new RecipeError('Exactly one of ingredientId or subRecipeId must be set.', 'INVALID');
   }
@@ -573,7 +580,7 @@ export async function updateRecipeLine(db: ScopedDb, id: string, patch: UpdateRe
   if (patch.unitId) await requireUnit(db, patch.unitId);
   const data: Prisma.RestaurantRecipeLineUncheckedUpdateInput = {};
   if (patch.quantity !== undefined) {
-    data.quantity = decimalInDomain(patch.quantity, 'Recipe line quantity', 'positive');
+    data.quantity = decimalInDomain(patch.quantity, 'Recipe line quantity', 'positive', 12, 4);
   }
   if (patch.unitId !== undefined) data.unitId = patch.unitId;
   if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;

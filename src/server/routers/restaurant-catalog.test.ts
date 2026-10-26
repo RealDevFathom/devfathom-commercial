@@ -555,6 +555,16 @@ describe('recipe measurement validation', () => {
     expect((db.restaurantUnitConversion as Delegate).upsert).not.toHaveBeenCalled();
   });
 
+  it.each(['1.0000001', '1000000000000', '1e1', '1'.repeat(100)])(
+    'rejects conversion factors outside Decimal(18,6): %s',
+    async (factor) => {
+      await expect(
+        caller().upsertConversion({ fromUnitId: 'A', toUnitId: 'B', factor })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect((db.restaurantUnitConversion as Delegate).upsert).not.toHaveBeenCalled();
+    }
+  );
+
   it('rejects negative reference costs at the API boundary', async () => {
     await expect(
       caller().createIngredient({ name: 'Flour', baseUnitId: 'u1', referenceCost: '-0.01' })

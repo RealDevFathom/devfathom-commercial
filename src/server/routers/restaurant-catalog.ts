@@ -100,25 +100,33 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const readProcedure = capabilityProcedure('menu:read');
 
-function decimalString(domain: 'positive' | 'nonnegative') {
-  return z.string().refine(
-    (value) => {
-      try {
-        const decimal = new Prisma.Decimal(value);
-        return (
-          decimal.isFinite() &&
-          (domain === 'positive' ? decimal.greaterThan(0) : decimal.greaterThanOrEqualTo(0))
-        );
-      } catch {
-        return false;
-      }
-    },
-    { message: `Must be a ${domain} decimal.` }
-  );
+function decimalString(domain: 'positive' | 'nonnegative', precision: number, scale: number) {
+  return z
+    .string()
+    .max(precision + 2)
+    .regex(/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/, 'Must be a decimal without exponent notation.')
+    .refine(
+      (value) => {
+        try {
+          const decimal = new Prisma.Decimal(value);
+          return (
+            decimal.isFinite() &&
+            decimal.decimalPlaces() <= scale &&
+            decimal.abs().lessThan(new Prisma.Decimal(10).pow(precision - scale)) &&
+            (domain === 'positive' ? decimal.greaterThan(0) : decimal.greaterThanOrEqualTo(0))
+          );
+        } catch {
+          return false;
+        }
+      },
+      { message: `Must be a ${domain} decimal.` }
+    );
 }
 
-const POSITIVE_DECIMAL = decimalString('positive');
-const NONNEGATIVE_DECIMAL = decimalString('nonnegative');
+const POSITIVE_CONVERSION_FACTOR = decimalString('positive', 18, 6);
+const POSITIVE_RECIPE_YIELD = decimalString('positive', 12, 3);
+const POSITIVE_RECIPE_QUANTITY = decimalString('positive', 12, 4);
+const NONNEGATIVE_REFERENCE_COST = decimalString('nonnegative', 12, 4);
 
 const writeProcedure = capabilityProcedure('menu:write').use(async ({ ctx, getRawInput, next }) => {
   const organizationId = workspaceId(ctx);
@@ -862,7 +870,7 @@ export const restaurantCatalogRouter = router({
       z.object({
         fromUnitId: z.string(),
         toUnitId: z.string(),
-        factor: POSITIVE_DECIMAL,
+        factor: POSITIVE_CONVERSION_FACTOR,
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -924,7 +932,7 @@ export const restaurantCatalogRouter = router({
       z.object({
         name: z.string().min(1).max(200),
         baseUnitId: z.string(),
-        referenceCost: NONNEGATIVE_DECIMAL.nullable().optional(),
+        referenceCost: NONNEGATIVE_REFERENCE_COST.nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -942,7 +950,7 @@ export const restaurantCatalogRouter = router({
         id: z.string(),
         name: z.string().min(1).max(200).optional(),
         baseUnitId: z.string().optional(),
-        referenceCost: NONNEGATIVE_DECIMAL.nullable().optional(),
+        referenceCost: NONNEGATIVE_REFERENCE_COST.nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -997,7 +1005,7 @@ export const restaurantCatalogRouter = router({
     .input(
       z.object({
         recipeId: z.string(),
-        yieldQuantity: POSITIVE_DECIMAL.nullable().optional(),
+        yieldQuantity: POSITIVE_RECIPE_YIELD.nullable().optional(),
         yieldUnitId: z.string().nullable().optional(),
         portionCount: z.number().int().positive().nullable().optional(),
         notes: z.string().max(2000).nullable().optional(),
@@ -1019,7 +1027,7 @@ export const restaurantCatalogRouter = router({
     .input(
       z.object({
         id: z.string(),
-        yieldQuantity: POSITIVE_DECIMAL.nullable().optional(),
+        yieldQuantity: POSITIVE_RECIPE_YIELD.nullable().optional(),
         yieldUnitId: z.string().nullable().optional(),
         portionCount: z.number().int().positive().nullable().optional(),
         notes: z.string().max(2000).nullable().optional(),
@@ -1180,7 +1188,7 @@ export const restaurantCatalogRouter = router({
         recipeVersionId: z.string(),
         ingredientId: z.string().optional(),
         subRecipeId: z.string().optional(),
-        quantity: POSITIVE_DECIMAL,
+        quantity: POSITIVE_RECIPE_QUANTITY,
         unitId: z.string(),
         sortOrder: z.number().int().optional(),
       })
@@ -1201,7 +1209,7 @@ export const restaurantCatalogRouter = router({
     .input(
       z.object({
         id: z.string(),
-        quantity: POSITIVE_DECIMAL.optional(),
+        quantity: POSITIVE_RECIPE_QUANTITY.optional(),
         unitId: z.string().optional(),
         sortOrder: z.number().int().optional(),
       })

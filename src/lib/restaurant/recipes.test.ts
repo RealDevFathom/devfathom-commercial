@@ -130,6 +130,16 @@ describe('upsertConversion', () => {
     }
   );
 
+  it.each(['1.0000001', '1000000000000', '1'.repeat(100)])(
+    'rejects a factor outside Decimal(18,6): %s',
+    async (factor) => {
+      await expect(upsertConversion(scoped(), 'A', 'B', factor)).rejects.toMatchObject({
+        reason: 'INVALID',
+      });
+      expect(db.restaurantUnitConversion.upsert).not.toHaveBeenCalled();
+    }
+  );
+
   it('rejects self-conversion', async () => {
     db.restaurantUnit.findUnique.mockResolvedValue({ id: 'u1' });
     await expect(upsertConversion(scoped(), 'u1', 'u1', '1')).rejects.toMatchObject({
@@ -209,6 +219,16 @@ describe('deleteAllergen', () => {
 // ── Ingredients ───────────────────────────────────────────────────────────────
 
 describe('createIngredient', () => {
+  it.each(['0.00001', '100000000'])(
+    'rejects a reference cost outside Decimal(12,4): %s',
+    async (referenceCost) => {
+      await expect(
+        createIngredient(scoped(), { name: 'Flour', baseUnitId: 'u1', referenceCost })
+      ).rejects.toMatchObject({ reason: 'INVALID' });
+      expect(db.restaurantIngredient.create).not.toHaveBeenCalled();
+    }
+  );
+
   it('rejects a negative reference cost but permits zero', async () => {
     db.restaurantUnit.findUnique.mockResolvedValue({ id: 'u1' });
     await expect(
