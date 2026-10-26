@@ -14,6 +14,9 @@ const migration = readFileSync(
 describe('platform audit actor relation migration', () => {
   it('enforces both actor relations without discarding historical orphan identifiers', () => {
     expect(migration).toContain(
+      'CREATE INDEX "platform_audit_logs_actorTenantUserId_createdAt_idx"'
+    );
+    expect(migration).toContain(
       'CONSTRAINT "platform_audit_logs_actorPlatformUserId_fkey"'
     );
     expect(migration).toContain('REFERENCES "platform_users"("id")');
