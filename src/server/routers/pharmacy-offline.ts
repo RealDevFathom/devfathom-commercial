@@ -225,7 +225,6 @@ export async function replayCounterCommand(
   });
   validateLeasedReceiptReplay(scope, deviceId, command.leasedReceipt);
   const originalMs = Date.parse(command.leasedReceipt.originalSaleAt);
-  let safetyLeaseOk = true;
   const snapshots = command.snapshots.map((snapshot) => {
     const leaseCheck = checkSafetyLease(
       {
@@ -247,7 +246,6 @@ export async function replayCounterCommand(
       !leaseCheck.ok
     )
       throw new CounterTransportError('invalid_snapshot', 403);
-    safetyLeaseOk &&= leaseCheck.ok;
     return {
       kind: snapshot.envelope.kind,
       verified: true,
@@ -282,7 +280,9 @@ export async function replayCounterCommand(
     originalSaleAvailable: false,
     deviceUsable: true,
     medicineSale: true,
-    safetyLeaseOk,
+    // Every snapshot lease was checked above; a failed check throws before
+    // authorization can reach this point.
+    safetyLeaseOk: true,
     batchRecalled,
   });
   const recorded = await recordOfflineCommand(db, scope, {

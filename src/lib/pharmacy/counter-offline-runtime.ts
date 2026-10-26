@@ -220,7 +220,7 @@ export class PharmacyCounterRuntime {
     };
     const previousLease = this.safetyLeaseState().lease;
     const eventType = previousLease ? 'RENEWED' : 'ISSUED';
-    const recalledBatchIds = recalledLotsFromSnapshot(input.envelope.kind, input.payload);
+    const recalledBatchIds = recalledLotIdsFromSnapshot(input.envelope.kind, input.payload);
     const nextState: CounterRuntimeState = {
       ...this.state,
       catalog: {
@@ -449,7 +449,7 @@ export class PharmacyCounterRuntime {
 
 /** Recall state travels inside the signed PRICES payload so a disconnected
  * counter can reject a recalled lot before its command reaches replay. */
-function recalledLotsFromSnapshot(kind: PharmacyOfflineSnapshotKind, payload: unknown): string[] {
+function recalledLotIdsFromSnapshot(kind: PharmacyOfflineSnapshotKind, payload: unknown): string[] {
   if (kind !== 'PRICES' || !Array.isArray(payload)) return [];
   return payload.flatMap((lot) => {
     if (
