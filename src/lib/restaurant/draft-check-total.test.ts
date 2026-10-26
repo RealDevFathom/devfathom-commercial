@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { quoteDraftCheckBreakdown, quoteDraftCheckTotal } from './draft-check-total';
-import type { TaxProfile, TaxRule } from './tax-calculator';
+import { quoteTaxSettlement, type TaxProfile, type TaxRule } from './tax-calculator';
 
 const at = new Date('2030-06-01T00:00:00Z');
 
@@ -84,14 +84,31 @@ describe('quoteDraftCheckTotal', () => {
   });
 
   it('rounds tax per unit to match settlement for multi-quantity lines', () => {
-    expect(
-      quoteDraftCheckBreakdown({
-        at,
-        profiles: [profile],
-        rules: [rule('CASH', '0.10'), rule('CARD', '0.10'), rule('OTHER', '0.10')],
-        lines: [{ id: 'small-item', unitPrice: '0.05', quantity: 3 }],
-      })
-    ).toEqual({ tax: '0.03', serviceCharge: '0.00', total: '0.18' });
+    const rules = [rule('CASH', '0.10'), rule('CARD', '0.10'), rule('OTHER', '0.10')];
+    const preview = quoteDraftCheckBreakdown({
+      at,
+      profiles: [profile],
+      rules,
+      lines: [{ id: 'small-item', unitPrice: '0.05', quantity: 3 }],
+    });
+    const settlement = quoteTaxSettlement({
+      at,
+      profiles: [profile],
+      rules,
+      proposedTenderType: 'CASH',
+      acceptedPrincipal: '0.18',
+      lines: Array.from({ length: 3 }, (_, unitOrdinal) => ({
+        id: `small-item:${unitOrdinal}`,
+        unitPrice: '0.05',
+        quantity: 1,
+      })),
+    });
+
+    expect(preview).toEqual({ tax: '0.03', serviceCharge: '0.00', total: '0.18' });
+    expect(settlement.tax.toFixed(2)).toBe(preview.tax);
+    expect(settlement.grandTotal.toFixed(2)).toBe(preview.total);
+    expect(settlement.roundingAdjustment.toFixed(2)).toBe('0.00');
+    expect(settlement.remainingDue.toFixed(2)).toBe('0.00');
   });
 
   it('applies modifiers to every expanded unit', () => {
