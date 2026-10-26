@@ -1025,6 +1025,44 @@ describeIfDatabase('bills command layer (real DB)', () => {
     ).toBe(1);
   });
 
+  it('serializes a bill cut against daily close', async () => {
+    const businessDate = '2026-08-21';
+    const opened = await openWithItems([{}], new Date(`${businessDate}T18:00:00.000Z`));
+
+    const [closeOutcome, cutOutcome] = await Promise.allSettled([
+      deps.close.cutClose(opened.db, {
+        branchId: ids.branch,
+        businessDate,
+        actor: actor(),
+      }),
+      deps.bills.cutBills(opened.db, {
+        orderId: opened.orderId,
+        branchId: ids.branch,
+        split: { kind: 'NONE' },
+        actor: actor(),
+      }),
+    ]);
+
+    expect(closeOutcome).toMatchObject({
+      status: 'rejected',
+      reason: expect.objectContaining({ reason: 'UNSETTLED_BILL' }),
+    });
+    expect(cutOutcome).toMatchObject({ status: 'fulfilled' });
+    expect(
+      await read((tx) =>
+        tx.restaurantDailyClose.count({
+          where: {
+            branchId: ids.branch,
+            businessDate: new Date(`${businessDate}T00:00:00.000Z`),
+          },
+        })
+      )
+    ).toBe(0);
+    expect(
+      await read((tx) => tx.restaurantBill.count({ where: { orderId: opened.orderId } }))
+    ).toBe(1);
+  });
+
   it('BY_SEAT groups items into per-seat bills that reconcile to the order total', async () => {
     const { orderId, db } = await openWithItems([{ seat: 1 }, { seat: 2 }, { seat: 2 }]);
     const result = await deps.bills.cutBills(db, {
