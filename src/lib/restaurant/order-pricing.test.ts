@@ -340,6 +340,25 @@ describe('resolveItemSnapshot', () => {
       })
     ).rejects.toMatchObject({ reason: 'MODIFIER_NOT_ATTACHED' });
   });
+
+  it('rejects an item snapshot when a required modifier group is omitted', async () => {
+    const db = makeDb({
+      publication: basePublication,
+      menuItem: baseMenuItem,
+      priceLists: { pl_pub: [{ productId: 'prod_1', variantId: null, price: D('12.50') }] },
+      productGroups: { prod_1: [{ id: 'grp_required', name: 'Cooking', minSelect: 1 }] },
+    });
+
+    await expect(
+      resolveItemSnapshot(db, {
+        publicationId: 'pub_1',
+        channel: 'DINE_IN',
+        menuItemId: 'mi_1',
+        modifierOptionIds: [],
+        at: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'MODIFIER_SELECTION_COUNT' });
+  });
 });
 
 describe('resolveModifierSnapshots', () => {
