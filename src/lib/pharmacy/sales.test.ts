@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
+const { allocateForSaleMock } = vi.hoisted(() => ({
+  allocateForSaleMock: vi.fn(),
+}));
+
+vi.mock('./stock-ledger', async () => ({
+  ...(await vi.importActual<typeof import('./stock-ledger')>('./stock-ledger')),
+  allocateForSale: allocateForSaleMock,
+}));
+
 import {
   addSaleLine,
   allocationWeightedPrice,
@@ -158,6 +167,81 @@ describe('POS sale voiding', () => {
 });
 
 describe('POS-03 lot-derived pack/strip/unit pricing', () => {
+  it('persists a two-lot FEFO line at the allocation-weighted price', async () => {
+    allocateForSaleMock.mockResolvedValueOnce({
+      allocations: [
+        { inventoryLotId: 'lot-a', stockLocationId: 'shelf-a', units: 1 },
+        { inventoryLotId: 'lot-b', stockLocationId: 'shelf-b', units: 1 },
+      ],
+      movementIds: ['movement-a', 'movement-b'],
+    });
+    let persistedLine: Record<string, unknown> | undefined;
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({ id: 'sale-a', status: 'OPEN' }),
+        updateMany: async () => ({ count: 1 }),
+      },
+      medicine: {
+        findFirst: async () => ({
+          id: 'medicine-a',
+          rx: false,
+          restricted: false,
+          controlled: false,
+        }),
+      },
+      packLevel: {
+        findMany: async () => [
+          { id: 'unit', level: 'UNIT', parentPackLevelId: null, unitsPerParent: 1 },
+        ],
+      },
+      pharmacyInventoryLot: {
+        findMany: async () => [
+          {
+            id: 'lot-a',
+            packLevelId: 'unit',
+            unitsPerPack: 1,
+            printedMrpMinor: 100,
+            unitCostMinor: 60,
+          },
+          {
+            id: 'lot-b',
+            packLevelId: 'unit',
+            unitsPerPack: 1,
+            printedMrpMinor: 200,
+            unitCostMinor: 80,
+          },
+        ],
+      },
+      pharmacySaleLine: {
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          persistedLine = data;
+          return { id: 'line-a', ...data };
+        },
+      },
+      pharmacySaleLineAllocation: { create: async () => ({}) },
+      pharmacySaleEvent: { create: async () => ({}) },
+    };
+
+    const { line } = await addSaleLine(db as never, scope, {
+      saleId: 'sale-a',
+      medicineId: 'medicine-a',
+      presentationId: 'presentation-a',
+      packLevelId: 'unit',
+      saleUnit: 'PACK',
+      quantity: 2,
+      canonicalUnitsPerSaleUnit: 1,
+      idempotencyKey: 'line-a',
+    });
+
+    expect(persistedLine).toMatchObject({
+      canonicalUnits: 2,
+      quantity: 2,
+      unitPriceMinor: 150,
+      proRataCeilingMinor: 150,
+    });
+    expect(line.unitPriceMinor * line.quantity).toBe(300);
+  });
+
   it('weights a split line by each allocated lot instead of charging the highest MRP', () => {
     const price = allocationWeightedPrice({
       allocations: [
