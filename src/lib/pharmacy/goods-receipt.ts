@@ -151,6 +151,30 @@ export async function verifyControlledPurchaseWitness(
   return { pharmacistId: pharmacist.id };
 }
 
+/** Lock and validate a PO for the full transaction that creates its receipt. */
+export async function lockReceivablePurchaseOrder(
+  db: ScopedDb,
+  scope: ReceivingScope,
+  input: { purchaseOrderId: string; supplierId: string }
+) {
+  await db.$queryRaw`SELECT id FROM pharmacy_purchase_orders WHERE id=${input.purchaseOrderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`;
+  const order = await db.pharmacyPurchaseOrder.findFirst({
+    where: {
+      id: input.purchaseOrderId,
+      organizationId: scope.organizationId,
+      supplierId: input.supplierId,
+    },
+  });
+  if (!order) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+  if (order.branchId !== scope.branchId) {
+    throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
+  }
+  if (order.status !== 'SENT' && order.status !== 'RECEIVING') {
+    throw new PharmacyReceivingError('INVALID_TRANSITION');
+  }
+  return order;
+}
+
 export async function postGoodsReceipt(
   db: ScopedDb,
   scope: ReceivingScope,

@@ -536,6 +536,52 @@ describeIfDatabase('PUR-02 — posting a receipt into the batch ledger', () => {
     expect(result.movements).toBeGreaterThan(0);
   });
 
+  it('refuses drafting when a concurrent cancellation wins the purchase-order lock', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'draft-cancel-race');
+
+    let releaseCancellation!: () => void;
+    const holdCancellation = new Promise<void>((resolve) => {
+      releaseCancellation = resolve;
+    });
+    let orderCancelled!: () => void;
+    const hasCancelledOrder = new Promise<void>((resolve) => {
+      orderCancelled = resolve;
+    });
+
+    const cancellation = inOrg(ORG_A, async (db) => {
+      await db.pharmacyPurchaseOrder.update({
+        where: { id: f.purchaseOrderId },
+        data: { status: 'CANCELLED' },
+      });
+      orderCancelled();
+      await holdCancellation;
+    });
+
+    await hasCancelledOrder;
+    let draftingSettled = false;
+    const drafting = inOrg(ORG_A, async (db) => {
+      await deps.receipts.lockReceivablePurchaseOrder(db, scopeOf(f), {
+        purchaseOrderId: f.purchaseOrderId,
+        supplierId: f.supplierId,
+      });
+      return draftReceipt(db, f, 'draft-cancel-race');
+    }).finally(() => {
+      draftingSettled = true;
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(draftingSettled).toBe(false);
+
+    releaseCancellation();
+    await cancellation;
+    await expect(drafting).rejects.toThrow('INVALID_TRANSITION');
+
+    const receiptCount = await inOrg(ORG_A, (db) =>
+      db.pharmacyGoodsReceipt.count({ where: { purchaseOrderId: f.purchaseOrderId } })
+    );
+    expect(receiptCount).toBe(0);
+  });
+
   it('joins a second delivery of the same batch number to the one batch', async () => {
     // §8A invariant 18: one manufacturing batch, many inventory lots — which is
     // what lets a recall reach every lot of it at once.

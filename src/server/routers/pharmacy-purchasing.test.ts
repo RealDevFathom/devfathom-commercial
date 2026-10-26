@@ -65,6 +65,7 @@ function makeDb() {
     medicineBarcode: model(),
   };
   return Object.assign(db, {
+    $queryRaw: vi.fn().mockResolvedValue([{ id: 'po_a' }]),
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
   });
 }
@@ -647,6 +648,22 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     // The tenant and branch are not repeated on the nested line: they travel in
     // the composite key of the header.
     expect(line).not.toHaveProperty('organizationId');
+  });
+
+  it('locks the purchase order in the receipt transaction until the draft is created', async () => {
+    await caller().createGoodsReceipt(RECEIPT);
+
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
+    expect(db.$queryRaw).toHaveBeenCalledTimes(1);
+    const lockSql = (db.$queryRaw.mock.calls[0]![0] as TemplateStringsArray).join('?');
+    expect(lockSql).toContain('pharmacy_purchase_orders');
+    expect(lockSql).toContain('FOR UPDATE');
+    expect(db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]!
+    );
+    expect(db.pharmacyPurchaseOrder.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
+      db.pharmacyGoodsReceipt.create.mock.invocationCallOrder[0]!
+    );
   });
 
   it('takes the receiver from the session, never from the payload', async () => {
