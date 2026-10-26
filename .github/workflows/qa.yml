@@ -21,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: qa-${{ github.event.pull_request.number || github.ref }}-${{ github.event.pull_request.head.sha || inputs.sha || github.sha }}
+  group: qa-${{ github.event.pull_request.number || github.ref }}-${{ github.event.pull_request.head.sha || inputs.sha || github.sha }}${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-ready') && format('-ignored-label-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 
 jobs:
