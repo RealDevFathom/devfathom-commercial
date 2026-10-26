@@ -34,6 +34,74 @@ async function ensureVisibilityParents() {
         provinceCode: 'PB',
       },
     });
+    await db.medicine.upsert({
+      where: { id: fixture.medicines.otc.id },
+      update: {},
+      create: {
+        id: fixture.medicines.otc.id,
+        organizationId: scope.organizationId,
+        productName: fixture.medicines.otc.name,
+        productFamily: 'PHARMACEUTICAL',
+        otc: true,
+        saleable: true,
+      },
+    });
+    await db.presentation.upsert({
+      where: { id: fixture.medicines.otc.presentationId },
+      update: {},
+      create: {
+        id: fixture.medicines.otc.presentationId,
+        organizationId: scope.organizationId,
+        medicineId: fixture.medicines.otc.id,
+        presentation: fixture.medicines.otc.presentation,
+      },
+    });
+    await db.packLevel.upsert({
+      where: { id: fixture.medicines.otc.packLevelIds.strip },
+      update: {},
+      create: {
+        id: fixture.medicines.otc.packLevelIds.strip,
+        organizationId: scope.organizationId,
+        presentationId: fixture.medicines.otc.presentationId,
+        versionGroupId: `${fixture.medicines.otc.packLevelIds.strip}-returns`,
+        version: 1,
+        level: 'STRIP',
+        unitsPerParent: 10,
+        effectiveFrom: new Date('2026-01-01'),
+      },
+    });
+    await db.packLevel.upsert({
+      where: { id: fixture.medicines.otc.packLevelIds.unit },
+      update: {},
+      create: {
+        id: fixture.medicines.otc.packLevelIds.unit,
+        organizationId: scope.organizationId,
+        presentationId: fixture.medicines.otc.presentationId,
+        parentPackLevelId: fixture.medicines.otc.packLevelIds.strip,
+        versionGroupId: `${fixture.medicines.otc.packLevelIds.unit}-returns`,
+        version: 1,
+        level: 'UNIT',
+        unitsPerParent: 10,
+        effectiveFrom: new Date('2026-01-01'),
+      },
+    });
+    for (const [id, code, name, kind] of [
+      [fixture.stockLocationId, fixture.stockLocationCode, 'Store', 'STORE'],
+      [fixture.quarantineLocationId, 'QUARANTINE', 'Quarantine', 'QUARANTINE'],
+    ] as const) {
+      await db.pharmacyStockLocation.upsert({
+        where: { id },
+        update: {},
+        create: {
+          id,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          code,
+          name,
+          kind,
+        },
+      });
+    }
     await db.pharmacyPatient.upsert({
       where: { id: fixture.patientId },
       update: {},

@@ -1064,6 +1064,19 @@ describeIfDatabase('bills command layer (real DB)', () => {
 
   it('clears pinned service-charge evidence after the last service-bearing line is comped', async () => {
     const { orderId, itemIds, db } = await openWithItems([{}, {}]);
+    await read((tx) =>
+      tx.restaurantServiceChargePolicyVersion.updateMany({
+        where: {
+          branchId: ids.branch,
+          effectiveFrom: { lt: new Date('2026-08-18T00:00:00.000Z') },
+          OR: [
+            { effectiveTo: null },
+            { effectiveTo: { gt: new Date('2026-08-18T00:00:00.000Z') } },
+          ],
+        },
+        data: { effectiveTo: new Date('2026-08-18T00:00:00.000Z') },
+      })
+    );
     const policy = await read((tx) =>
       tx.restaurantServiceChargePolicyVersion.create({
         data: {
@@ -1152,6 +1165,19 @@ describeIfDatabase('bills command layer (real DB)', () => {
 
   it('removes a participating zero-allocation line from the basis and reallocates without drift', async () => {
     const { orderId, itemIds, db } = await openWithItems([{}, {}]);
+    await read((tx) =>
+      tx.restaurantServiceChargePolicyVersion.updateMany({
+        where: {
+          branchId: ids.branch,
+          effectiveFrom: { lt: new Date('2026-08-18T00:00:00.000Z') },
+          OR: [
+            { effectiveTo: null },
+            { effectiveTo: { gt: new Date('2026-08-18T00:00:00.000Z') } },
+          ],
+        },
+        data: { effectiveTo: new Date('2026-08-18T00:00:00.000Z') },
+      })
+    );
     const policy = await read((tx) =>
       tx.restaurantServiceChargePolicyVersion.create({
         data: {

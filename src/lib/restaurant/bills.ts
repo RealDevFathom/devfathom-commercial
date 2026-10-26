@@ -1001,12 +1001,13 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         ? ZERO
         : roundMoney(multiply(serviceChargeBasis, bill.serviceChargeRate!))
       : bill.serviceChargeTotal;
-    const remainingServiceCharges = participatesInServiceCharge
-      ? allocate(
-          serviceChargeTotal,
-          remainingLines.map((remaining) => remaining.lineSubtotal.mul(100).toNumber())
-        )
-      : [];
+    const remainingServiceCharges =
+      participatesInServiceCharge && remainingLines.length > 0
+        ? allocate(
+            serviceChargeTotal,
+            remainingLines.map((remaining) => remaining.lineSubtotal.mul(100).toNumber())
+          )
+        : [];
     const removedServiceCharge = sub(bill.serviceChargeTotal, serviceChargeTotal);
 
     // What the comp cannot absorb out of the bill's own balance (B3).

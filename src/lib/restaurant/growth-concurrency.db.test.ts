@@ -91,27 +91,37 @@ async function fixture(run: (scope: FixtureScope, admin: Client) => Promise<void
       [scope.branch, scope.org]
     );
     await db.query(
-      `INSERT INTO organization_departments (id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,'test','Test',now());
-       INSERT INTO organization_roles (id,"organizationId",key,name,"updatedAt") VALUES ($3,$2,'growth-test','Growth test',now());
-       INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES
-         ($4,$2,$3,'reports:financial','ALLOW'),($5,$2,$3,'restaurant:configure','ALLOW');
-       INSERT INTO users (id,"organizationId","organizationRoleId",name,email,role,department,title,"updatedAt") VALUES
-         ($6,$2,$3,'Growth test actor',$6 || '@test.invalid','EMPLOYEE','test','Test',now());
-       INSERT INTO restaurant_staff_profiles (id,"organizationId","userId","displayName","primaryBranchId","updatedAt") VALUES
-         ($7,$2,$6,'Growth test actor',$8,now());
-       INSERT INTO restaurant_branch_assignments (id,"organizationId","branchId","userId","updatedAt") VALUES
-         ($9,$2,$8,$6,now())`,
+      `INSERT INTO organization_departments (id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,'test','Test',now())`,
+      [`department_${scope.user}`, scope.org]
+    );
+    await db.query(
+      `INSERT INTO organization_roles (id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,'growth-test','Growth test',now())`,
+      [scope.role, scope.org]
+    );
+    await db.query(
+      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES
+         ($1,$2,$3,'reports:financial','ALLOW'),($4,$2,$3,'restaurant:configure','ALLOW')`,
       [
-        `department_${scope.user}`,
+        `permission_reports_${scope.user}`,
         scope.org,
         scope.role,
-        `permission_reports_${scope.user}`,
         `permission_configure_${scope.user}`,
-        scope.user,
-        `staff_${scope.user}`,
-        scope.branch,
-        `assignment_${scope.user}`,
       ]
+    );
+    await db.query(
+      `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,role,department,title,"updatedAt") VALUES
+         ($1,$2,$3,'Growth test actor',$1 || '@test.invalid','EMPLOYEE','test','Test',now())`,
+      [scope.user, scope.org, scope.role]
+    );
+    await db.query(
+      `INSERT INTO restaurant_staff_profiles (id,"organizationId","userId","displayName","primaryBranchId","updatedAt") VALUES
+         ($1,$2,$3,'Growth test actor',$4,now())`,
+      [`staff_${scope.user}`, scope.org, scope.user, scope.branch]
+    );
+    await db.query(
+      `INSERT INTO restaurant_branch_assignments (id,"organizationId","branchId","userId","updatedAt") VALUES
+         ($1,$2,$3,$4,now())`,
+      [`assignment_${scope.user}`, scope.org, scope.branch, scope.user]
     );
     await db.query(
       `INSERT INTO growth_insights (id,"organizationId","branchId",vertical,"actorId","schemaVersion","inputHash",status,provider,model,snapshot,output) VALUES ($1,$2,$3,'RESTAURANT','TEST_DOUBLE',1,$4,'READY','TEST_DOUBLE','TEST_DOUBLE','{"actions":[{"ref":"a1","kind":"LOYALTY_REVIEW"}]}','{"recommendations":[{"actionRef":"a1"}]}')`,

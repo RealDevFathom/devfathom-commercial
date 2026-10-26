@@ -630,7 +630,9 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  redeemPoints: capabilityProcedure('pharmacy:dispense')
+  // The domain gate below owns the Rx refusal so add-line, loyalty completion,
+  // and cash completion expose the same typed FORBIDDEN contract.
+  redeemPoints: protectedProcedure
     .input(
       z
         .object({

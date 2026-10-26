@@ -518,12 +518,12 @@ export async function requireBillInDeviceBranch(
   db: ScopedDb,
   billId: string,
   branchId: string
-): Promise<void> {
+): Promise<boolean> {
   const bill = await db.restaurantBill.findFirst({
     where: { id: billId, branchId },
     select: { id: true },
   });
-  if (!bill) throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
+  return bill !== null;
 }
 
 /**
@@ -552,11 +552,16 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
   /** Resolve bill ids within the authenticated register branch only after the
    * capability decision, so an unauthorized operator cannot probe bill existence. */
   obscureBillId?: (data: z.infer<S>) => string;
+  /** Restrict a money route to a physical register before any resource lookup. */
+  deviceKind?: 'POS' | 'KDS';
 }) {
   return withTerminalAuth(
     async (ctx, request) => {
       const operator = requireActingOperator(ctx);
-      if (!operator.ok) return operator.response;
+      if (!operator.ok) return forbidden('An unlocked operator is required.');
+      if (opts.deviceKind && ctx.device.kind !== opts.deviceKind) {
+        return forbidden(`A ${opts.deviceKind} register is required.`);
+      }
 
       const now = new Date();
       const denied = await requireCapability(
@@ -575,11 +580,12 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
       const parsed = opts.schema.safeParse(parsedJson.data);
       if (!parsed.success) return invalidBody(parsed.error.issues);
       if (opts.obscureBillId) {
-        await requireBillInDeviceBranch(
+        const visible = await requireBillInDeviceBranch(
           ctx.db,
           opts.obscureBillId(parsed.data),
           ctx.device.branchId
         );
+        if (!visible) return json({ error: 'No settled bill with that id.' }, 404);
       }
 
       const actor = buildMoneyActor(operator.staffProfileId, ctx.device.id, key);
@@ -605,11 +611,15 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
 export function moneyReadRoute(opts: {
   capability: MoneyCapability;
   run: (ctx: TerminalContext, request: Request) => Promise<Response>;
+  deviceKind?: 'POS' | 'KDS';
 }) {
   return withTerminalAuth(
     async (ctx, request) => {
       const operator = requireActingOperator(ctx);
-      if (!operator.ok) return operator.response;
+      if (!operator.ok) return forbidden('An unlocked operator is required.');
+      if (opts.deviceKind && ctx.device.kind !== opts.deviceKind) {
+        return forbidden(`A ${opts.deviceKind} register is required.`);
+      }
 
       const now = new Date();
       const denied = await requireCapability(

@@ -970,7 +970,15 @@ function ScopedPharmacyCounterConsole({
         setSubmittedSearch({ text: trimmed, query: search, branchId });
         if (barcodeAdd.current !== trimmed) return;
         const input = { branchId, query: search };
-        const result = await utils.client.pharmacySales.counterSearch.query(input);
+        // `client` is unavailable in lightweight/offline adapters. In that case a
+        // hook result already resolved for this exact barcode is still authoritative.
+        const clientSearch = utils.client?.pharmacySales?.counterSearch;
+        const cached = searchQuery.data;
+        const result = clientSearch
+          ? await clientSearch.query(input)
+          : cached?.rows.length === 1 && cached.rows[0]?.matchedOn === 'BARCODE'
+            ? cached
+            : { rows: [] };
         utils.pharmacySales.counterSearch.setData(input, result);
         if (barcodeAdd.current !== trimmed) return;
         barcodeAdd.current = null;
@@ -1027,7 +1035,16 @@ function ScopedPharmacyCounterConsole({
         setPending(null);
       }
     },
-    [addToCart, authenticatePack, branchAuthorized, branchId, query, stageRow, utils]
+    [
+      addToCart,
+      authenticatePack,
+      branchAuthorized,
+      branchId,
+      query,
+      searchQuery.data,
+      stageRow,
+      utils,
+    ]
   );
 
   const runTransition = useCallback(

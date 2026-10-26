@@ -206,6 +206,7 @@ export function PlatformLoginForm() {
         </label>
         <input
           id="platform-email"
+          aria-label="Work email"
           name="email"
           type="email"
           autoComplete="username"
