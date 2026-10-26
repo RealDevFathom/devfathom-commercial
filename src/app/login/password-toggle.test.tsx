@@ -1,9 +1,9 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ replace: vi.fn(), refresh: vi.fn() }));
+const mocks = vi.hoisted(() => ({ replace: vi.fn(), refresh: vi.fn(), signIn: vi.fn() }));
 
-vi.mock('next-auth/react', () => ({ signIn: vi.fn() }));
+vi.mock('next-auth/react', () => ({ signIn: mocks.signIn }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: mocks.replace, refresh: mocks.refresh }),
 }));
@@ -39,5 +39,6 @@ describe('login password visibility controls', () => {
 
     expect(screen.getByRole('button', { name: 'Hide password' })).toBe(toggle);
     expect(password).toHaveProperty('type', 'text');
+    expect(mocks.signIn).not.toHaveBeenCalled();
   });
 });
