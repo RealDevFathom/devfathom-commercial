@@ -226,6 +226,7 @@ describe('frozen quote and costing', () => {
     await expect(publishQuote(f.tx, 'org', 'order', 'PKR', 'staff')).rejects.toThrow(
       'A recipe is required for every quoted line.'
     );
+    expect(f.db.$queryRaw).not.toHaveBeenCalled();
     expect(mocks.cost).not.toHaveBeenCalled();
     expect(f.db.$executeRaw).not.toHaveBeenCalled();
   });
