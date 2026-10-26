@@ -68,6 +68,18 @@ describe('isolated Pharmacy browser receipt', () => {
     });
   });
 
+  it('returns null identifiers when no profile was in force at completion', async () => {
+    const findFirst = vi.fn(async () => null);
+
+    await expect(
+      readPharmacyReceiptTaxIdentity(
+        { branchRegulatoryProfile: { findFirst } } as never,
+        { organizationId: 'org-1', branchId: 'branch-1' },
+        new Date('2026-09-05T10:00:00Z')
+      )
+    ).resolves.toEqual({ ntn: null, strn: null });
+  });
+
   it.each([
     ['en', 'THERMAL_58'],
     ['en', 'THERMAL'],
