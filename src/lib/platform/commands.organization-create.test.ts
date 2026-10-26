@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   userCreate: vi.fn(),
   opportunityFindUnique: vi.fn(),
   opportunityUpdateMany: vi.fn(),
+  accountUpdateMany: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -55,7 +56,7 @@ const platformDb = {
     update: record('opportunityUpdate'),
   },
   platformOpportunityStageEvent: { create: record('opportunityStageEvent') },
-  platformAccount: { update: record('accountUpdate') },
+  platformAccount: { updateMany: mocks.accountUpdateMany, update: record('accountUpdate') },
   platformAuditLog: { create: record('audit') },
 };
 
@@ -133,6 +134,7 @@ describe('crm.opportunity.convert eligibility', () => {
     vi.clearAllMocks();
     mocks.userFindFirst.mockResolvedValue(null);
     mocks.userCreate.mockResolvedValue({ id: 'user_new' });
+    mocks.accountUpdateMany.mockResolvedValue({ count: 1 });
   });
 
   it.each([
@@ -170,6 +172,28 @@ describe('crm.opportunity.convert eligibility', () => {
     expect(platformDb.organization.create).not.toHaveBeenCalled();
   });
 
+  it('rejects a second opportunity when its account is already linked', async () => {
+    mocks.opportunityFindUnique.mockResolvedValue({
+      id: 'opp_2', accountId: 'account_1', stage: 'DISCOVERY', convertedOrganizationId: null,
+    });
+    mocks.opportunityUpdateMany.mockResolvedValue({ count: 1 });
+    mocks.accountUpdateMany.mockResolvedValue({ count: 0 });
+
+    const error = await executePlatformCommand(actor, 'crm.opportunity.convert',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_2' }, request
+    ).catch((caught: unknown) => caught);
+
+    expect(mocks.accountUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'account_1', organizationId: null },
+      data: { status: 'CUSTOMER' },
+    });
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'Account is already linked to an organization.',
+    });
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+  });
+
   it('applies the same replay guard to opportunity-linked organization onboarding', async () => {
     mocks.opportunityFindUnique.mockResolvedValue({
       id: 'opp_1', accountId: 'account_1', stage: 'WON', convertedOrganizationId: 'org_existing',
@@ -195,6 +219,10 @@ describe('crm.opportunity.convert eligibility', () => {
     expect(mocks.opportunityUpdateMany).toHaveBeenCalledWith({
       where: { id: 'opp_1', stage: 'NEGOTIATION', convertedOrganizationId: null },
       data: { stage: 'WON', wonAt: expect.any(Date) },
+    });
+    expect(mocks.accountUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'account_1', organizationId: null },
+      data: { status: 'CUSTOMER' },
     });
     expect(created.opportunityUpdate).toContainEqual({ convertedOrganizationId: 'org_new' });
     expect(created.opportunityStageEvent).toContainEqual(expect.objectContaining({
