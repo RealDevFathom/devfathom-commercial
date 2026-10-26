@@ -102,6 +102,9 @@ describe('projects.addMember role invariants', () => {
     await expect(
       caller().addMember({ projectId: 'project_1', userId: 'lead_1', role: 'MEMBER' })
     ).resolves.toMatchObject({ role: 'MEMBER' });
+    expect(db.$queryRaw.mock.invocationCallOrder[0]!).toBeLessThan(
+      projectMemberFindFirst.mock.invocationCallOrder[0]!
+    );
     expect(projectMemberUpsert).toHaveBeenCalledWith({
       where: { projectId_userId: { projectId: 'project_1', userId: 'lead_1' } },
       create: {
