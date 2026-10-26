@@ -173,6 +173,8 @@ async function persistCoAuth(
 type LoadedBillItem = {
   id: string;
   status: string;
+  /** Linked preparation replacement; the original item remains the purchased line. */
+  remakeOfItemId: string | null;
   seatNumber: number | null;
   name: string;
   unitPrice: Prisma.Decimal;
@@ -203,7 +205,7 @@ function itemLineSubtotal(item: LoadedBillItem): Prisma.Decimal {
 
 /**
  * The DERIVED order total: Σ (unitPrice + Σ modifier deltas) × quantity over the
- * non-voided items. There is no stored order total (C3) — this recomputes it from
+ * billable items. There is no stored order total (C3) — this recomputes it from
  * the frozen snapshots, matching `restaurant-orders.ts` `deriveSubtotal` exactly so
  * governance can reconcile bills ↔ order from durable rows. Tax/service-charge are
  * structurally zero in M5, so the subtotal IS the order total.
@@ -232,6 +234,7 @@ async function loadBillOrder(
         select: {
           id: true,
           status: true,
+          remakeOfItemId: true,
           seatNumber: true,
           name: true,
           unitPrice: true,
@@ -247,8 +250,10 @@ async function loadBillOrder(
   return order as LoadedBillOrder;
 }
 
-function nonVoidedItems(order: LoadedBillOrder): LoadedBillItem[] {
-  return order.items.filter((i) => i.status !== 'VOIDED');
+function billableItems(order: LoadedBillOrder): LoadedBillItem[] {
+  // A remake is operational kitchen history, not a second purchase. The original
+  // line retains the frozen consideration and remains billable unless it is voided.
+  return order.items.filter((i) => i.status !== 'VOIDED' && i.remakeOfItemId === null);
 }
 
 // ── Split planning (pure) ────────────────────────────────────────────────────
@@ -327,7 +332,7 @@ function itemBill(
  * cents across runs (a named check).
  */
 export function planBills(order: LoadedBillOrder, split: SplitSpec): PlannedBill[] {
-  const items = nonVoidedItems(order);
+  const items = billableItems(order);
   if (items.length === 0) {
     throw new BillCommandError('The order has no non-voided items to bill.', 'NO_ITEMS');
   }
@@ -1780,7 +1785,7 @@ export async function evaluateOrderSettlement(
   orderId: string
 ): Promise<OrderSettlement> {
   const order = await loadBillOrder(tx, orderId);
-  const items = nonVoidedItems(order);
+  const items = billableItems(order);
   const allBills = await tx.restaurantBill.findMany({
     where: { orderId },
     orderBy: { createdAt: 'asc' },

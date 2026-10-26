@@ -111,6 +111,7 @@ function order(
     quantity?: number;
     seatNumber?: number | null;
     status?: string;
+    remakeOfItemId?: string | null;
     modifiers?: string[];
   }>
 ) {
@@ -122,6 +123,7 @@ function order(
     items: items.map((i) => ({
       id: i.id,
       status: i.status ?? 'SERVED',
+      remakeOfItemId: i.remakeOfItemId ?? null,
       seatNumber: i.seatNumber ?? null,
       name: i.id,
       unitPrice: D(i.unitPrice),
@@ -242,6 +244,7 @@ describe('exclusiveTaxFromSettlementSnapshots', () => {
             {
               id: 'item-1',
               status: 'SERVED',
+              remakeOfItemId: null,
               seatNumber: null,
               name: 'Chicken Karahi',
               unitPrice: D('970.00'),
@@ -476,6 +479,19 @@ describe('planBills — NONE / BY_ITEM / BY_SEAT (pure partition, C4)', () => {
     expect(bill!.subtotal.toString()).toBe('25');
     expect(bill!.grandTotal.toString()).toBe('25');
     expect(bill!.roundingAdjustment.toString()).toBe('0');
+  });
+
+  it('charges the original purchase once and excludes its preparation remake', () => {
+    const o = order([
+      { id: 'original', unitPrice: '30.00', quantity: 1 },
+      { id: 'replacement', unitPrice: '30.00', quantity: 1, remakeOfItemId: 'original' },
+    ]);
+
+    const [bill] = planBills(o, { kind: 'NONE' });
+
+    expect(bill!.lines.map((line) => line.orderItemId)).toEqual(['original']);
+    expect(bill!.subtotal.toFixed(2)).toBe('30.00');
+    expect(bill!.grandTotal.toFixed(2)).toBe('30.00');
   });
 
   it('BY_ITEM asserts a complete partition and rejects gaps/dupes/unknowns', () => {
