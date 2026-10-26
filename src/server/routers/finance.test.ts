@@ -3,8 +3,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   can: vi.fn(async () => true),
   transactionGroupBy: vi.fn(),
+  transactionCreateMany: vi.fn(),
   invoiceGroupBy: vi.fn(async () => []),
   recurringFindMany: vi.fn(),
+  recurringUpdate: vi.fn(),
+  dbTransaction: vi.fn(async (operations: Array<Promise<unknown>>) => Promise.all(operations)),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -25,9 +28,16 @@ import { createInvoiceInputSchema, financeRouter } from './finance';
 function caller() {
   return financeRouter.createCaller({
     db: {
-      transaction: { groupBy: mocks.transactionGroupBy },
+      $transaction: mocks.dbTransaction,
+      transaction: {
+        groupBy: mocks.transactionGroupBy,
+        createMany: mocks.transactionCreateMany,
+      },
       invoice: { groupBy: mocks.invoiceGroupBy },
-      recurringExpense: { findMany: mocks.recurringFindMany },
+      recurringExpense: {
+        findMany: mocks.recurringFindMany,
+        update: mocks.recurringUpdate,
+      },
     },
     entitlements: { organizationId: 'org-1', enabledModules: [], modules: [] },
     session: {
@@ -69,6 +79,66 @@ describe('createInvoiceInputSchema', () => {
 });
 
 describe('finance.getFinancialSummary', () => {
+  it('reports a due recurring expense once after posting it', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-26T12:34:56.000Z'));
+
+    const transactions: Array<{
+      type: 'EXPENSE';
+      amount: number;
+      currency: 'USD';
+      date: Date;
+    }> = [];
+    const recurring = {
+      id: 'recurring-1',
+      name: 'Hosting',
+      amount: 100,
+      currency: 'USD' as const,
+      category: 'HOSTING' as const,
+      interval: 'monthly',
+      nextDueDate: new Date('2026-10-01T00:00:00.000Z'),
+      vendorName: null,
+      active: true,
+    };
+
+    mocks.recurringFindMany.mockResolvedValue([recurring]);
+    mocks.transactionCreateMany.mockImplementation(async ({ data }: { data: typeof transactions }) => {
+      transactions.push(...data);
+      return { count: data.length };
+    });
+    mocks.recurringUpdate.mockImplementation(async ({ data }: { data: { nextDueDate: Date } }) => {
+      recurring.nextDueDate = data.nextDueDate;
+      return recurring;
+    });
+    mocks.transactionGroupBy.mockImplementation(
+      async ({
+        where,
+      }: {
+        where: { type: 'INCOME' | 'EXPENSE'; date: { gte: Date; lte: Date } };
+      }) => {
+        const amount = transactions
+          .filter(
+            (transaction) =>
+              transaction.type === where.type &&
+              transaction.date >= where.date.gte &&
+              transaction.date <= where.date.lte
+          )
+          .reduce((sum, transaction) => sum + transaction.amount, 0);
+        return amount === 0 ? [] : [{ currency: 'USD', _sum: { amount } }];
+      }
+    );
+
+    const finance = caller();
+    await expect(finance.postDueRecurringExpenses()).resolves.toMatchObject({ posted: 1 });
+    const summary = await finance.getFinancialSummary();
+
+    expect(transactions).toHaveLength(1);
+    expect(summary.monthlyExpense).toEqual([{ currency: 'USD', amount: 100 }]);
+    expect(summary.yearlyExpense).toEqual([{ currency: 'USD', amount: 100 }]);
+    expect(summary.monthlyProfit).toEqual([{ currency: 'USD', amount: -100 }]);
+    expect(summary.yearlyProfit).toEqual([{ currency: 'USD', amount: -100 }]);
+  });
+
   it('counts a posted recurring expense only once', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-26T12:34:56.000Z'));
