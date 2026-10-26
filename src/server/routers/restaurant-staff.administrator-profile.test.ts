@@ -339,46 +339,46 @@ describe('administrator repair authorization before writes', () => {
     expect(mocks.staffFindUnique).not.toHaveBeenCalled();
     expectNoWrites();
   });
-  it.each<[string, () => Promise<unknown>]>([
+  it.each<[string, (staffProfileId: string) => Promise<unknown>]>([
     [
       'setStaffJobRoles',
-      () =>
+      (staffProfileId) =>
         caller('EMPLOYEE').setStaffJobRoles({
           branchId: 'branch_default',
-          staffProfileId: 'staff_actor',
+          staffProfileId,
           jobRoleIds: ['role_with_refunds'],
         }),
     ],
     [
       'setStaffAccess',
-      () =>
+      (staffProfileId) =>
         caller('EMPLOYEE').setStaffAccess({
           branchId: 'branch_default',
-          staffProfileId: 'staff_actor',
+          staffProfileId,
           jobRoleIds: ['role_with_refunds'],
           overrides: [{ capability: 'payments:refund', effect: 'ALLOW' }],
         }),
     ],
     [
       'setStaffCapabilityOverride',
-      () =>
+      (staffProfileId) =>
         caller('EMPLOYEE').setStaffCapabilityOverride({
           branchId: 'branch_default',
-          staffProfileId: 'staff_actor',
+          staffProfileId,
           capability: 'payments:refund',
           effect: 'ALLOW',
         }),
     ],
     [
       'clearStaffCapabilityOverride',
-      () =>
+      (staffProfileId) =>
         caller('EMPLOYEE').clearStaffCapabilityOverride({
           branchId: 'branch_default',
-          staffProfileId: 'staff_actor',
+          staffProfileId,
           capability: 'payments:refund',
         }),
     ],
-  ])('%s denies a branch manager from delegating access at their own branch', async (_name, run) => {
+  ])('%s denies a branch manager from delegating access to any target', async (_name, run) => {
     mocks.can.mockImplementation(
       async (_subject, capability) => capability !== 'restaurant:configure'
     );
@@ -392,7 +392,8 @@ describe('administrator repair authorization before writes', () => {
     ]);
     mocks.staffFindUnique.mockResolvedValue({ id: 'staff_actor' });
 
-    await expect(run()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(run('staff_target')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(run('staff_actor')).rejects.toMatchObject({ code: 'FORBIDDEN' });
 
     expect(mocks.resolveStaffCapabilities).toHaveBeenCalledWith(
       db,
