@@ -553,6 +553,26 @@ describe('prescription capture and private delivery', () => {
     });
   });
 
+  it("allows dispensing staff to read another operator's image only after capture", async () => {
+    const receipt = await upload();
+    await expect(
+      caller(context('user-b')).readSource({ sourceFileRef: receipt.url })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(mocks.find).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-a',
+        patientId: 'patient-a',
+        sourceFileRef: receipt.url,
+      },
+      select: { id: true },
+    });
+
+    mocks.find.mockResolvedValue({ id: 'prescription-a' });
+    await expect(
+      caller(context('user-b')).readSource({ sourceFileRef: receipt.url })
+    ).resolves.toHaveProperty('contentType', 'image/png');
+  });
+
   it('delivers private image bytes with no-store/nosniff headers', async () => {
     const receipt = await upload();
     mocks.can.mockResolvedValue(false);

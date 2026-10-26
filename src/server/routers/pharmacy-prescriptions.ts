@@ -255,17 +255,32 @@ export const pharmacyPrescriptionsRouter = router({
   readSource: prescriptionFileProcedure
     .input(z.object({ sourceFileRef: prescriptionFileRefSchema }).strict())
     .query(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      const file = await loadPrescriptionFile(organizationId, input.sourceFileRef);
+      if (file.uploadedByUserId === ctx.session.user.id) {
+        return { dataBase64: file.dataBase64, contentType: file.contentType };
+      }
       const mayDispense = await can(
         subjectFromSession(ctx.session.user),
         'pharmacy:dispense',
         undefined,
         { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }
       );
-      // A cashier may retrieve only their own intake photo, including directly
-      // after capture. Dispensing staff can retrieve retained tenant evidence.
-      const file = mayDispense
-        ? await loadPrescriptionFile(ctx.entitlements.organizationId, input.sourceFileRef)
-        : await uploaderSourceFile(ctx, input.sourceFileRef);
+      const retained = mayDispense
+        ? await ctx.db.prescription.findFirst({
+            where: {
+              organizationId,
+              patientId: file.patientId,
+              sourceFileRef: input.sourceFileRef,
+            },
+            select: { id: true },
+          })
+        : null;
+      // Another operator's upload becomes dispensing evidence only after it is
+      // bound to a tenant- and patient-scoped prescription record.
+      if (!retained) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription image unavailable.' });
+      }
       return { dataBase64: file.dataBase64, contentType: file.contentType };
     }),
 
