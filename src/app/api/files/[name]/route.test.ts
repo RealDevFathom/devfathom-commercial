@@ -95,12 +95,17 @@ describe('private attachment delivery', () => {
     expect(mocks.tenantDb.mock.calls.every(([org]) => org === 'org_a')).toBe(true);
   });
 
-  it('restricts licence evidence to the admin role used by the regulatory profile', async () => {
+  it.each(['EMPLOYEE', 'HR'])('hides licence evidence from the %s role', async (role) => {
     db.branchRegulatoryProfile.findFirst.mockResolvedValue({ id: 'profile_1' });
+    mocks.actor.mockResolvedValue(actor(role));
 
     expect((await read('pharmacy-licence.pdf')).status).toBe(404);
     expect(mocks.getUpload).not.toHaveBeenCalled();
     expect(db.messageAttachment.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('allows admins to read licence evidence', async () => {
+    db.branchRegulatoryProfile.findFirst.mockResolvedValue({ id: 'profile_1' });
 
     mocks.actor.mockResolvedValue(actor('ADMIN'));
     expect((await read('pharmacy-licence.pdf')).status).toBe(200);
