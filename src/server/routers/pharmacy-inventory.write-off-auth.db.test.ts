@@ -391,6 +391,8 @@ describeDatabase('SEC-374-01 Postgres no-effect authorization regressions', () =
       branchId: branchA,
       actorId: actors.allowed,
       quantityUnits: -2,
+      sealedPackDelta: 0,
+      looseUnitDelta: -2,
       kind: 'WRITE_OFF',
     });
     expect(result.custody).toMatchObject({
@@ -399,6 +401,8 @@ describeDatabase('SEC-374-01 Postgres no-effect authorization regressions', () =
       actorId: actors.allowed,
       witnessId: witness,
       movementId: result.movement.id,
+      reason: input.reason,
+      evidenceRef: input.evidenceRef,
     });
   });
 
