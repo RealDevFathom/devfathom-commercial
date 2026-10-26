@@ -49,9 +49,13 @@ describe('invoice status contract shared by REST, tRPC, and AI', () => {
     }
   );
 
-  it('stamps SENT and clears paidAt whenever PAID is exited', () => {
+  it.each(['DRAFT', 'OVERDUE'] as const)('stamps SENT when %s is sent', (prior) => {
     const at = new Date('2026-10-21T00:00:00Z');
-    expect(invoiceStatusUpdate('DRAFT', 'SENT', at)).toEqual({ status: 'SENT', sentAt: at });
+    expect(invoiceStatusUpdate(prior, 'SENT', at)).toEqual({ status: 'SENT', sentAt: at });
+  });
+
+  it('clears paidAt whenever PAID is exited', () => {
+    const at = new Date('2026-10-21T00:00:00Z');
     expect(invoiceStatusUpdate('PAID', 'CANCELLED', at)).toEqual({
       status: 'CANCELLED',
       paidAt: null,
