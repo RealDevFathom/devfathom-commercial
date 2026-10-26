@@ -37,6 +37,49 @@ type BoundedJsonObject = { [key: string]: BoundedJsonValue };
 
 const jsonScalar = z.union([z.string().max(2_000), z.number(), z.boolean(), z.null()]);
 
+const MAX_ASSERTED_VALUE_NODES = 1_000;
+const MAX_ASSERTED_VALUE_CHARACTERS = 20_000;
+
+const assertedValueBudget = z.unknown().superRefine((value, ctx) => {
+  const pending: unknown[] = [value];
+  let nodes = 0;
+  let characters = 0;
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    nodes += 1;
+
+    if (nodes > MAX_ASSERTED_VALUE_NODES) {
+      ctx.addIssue({ code: 'custom', message: 'Must contain at most 1000 values' });
+      return z.NEVER;
+    }
+
+    if (typeof current === 'string') characters += current.length;
+    else if (Array.isArray(current)) {
+      if (current.length > 20) {
+        ctx.addIssue({ code: 'custom', message: 'Must contain at most 20 items' });
+        return z.NEVER;
+      }
+      for (const child of current) pending.push(child);
+    } else if (current !== null && typeof current === 'object') {
+      const entries = Object.entries(current);
+      if (entries.length > 20) {
+        ctx.addIssue({ code: 'custom', message: 'Must contain at most 20 properties' });
+        return z.NEVER;
+      }
+      for (const [key, child] of entries) {
+        characters += key.length;
+        pending.push(child);
+      }
+    }
+
+    if (characters > MAX_ASSERTED_VALUE_CHARACTERS) {
+      ctx.addIssue({ code: 'custom', message: 'Must contain at most 20000 characters' });
+      return z.NEVER;
+    }
+  }
+});
+
 function boundedJsonValue(depth: number): z.ZodType<BoundedJsonValue> {
   if (depth === 0) return jsonScalar;
 
@@ -50,7 +93,8 @@ function boundedJsonValue(depth: number): z.ZodType<BoundedJsonValue> {
   ]);
 }
 
-const assertedValue = boundedJsonValue(4);
+// Check aggregate complexity before the recursive shape schema walks the full value.
+const assertedValue = assertedValueBudget.pipe(boundedJsonValue(4));
 
 const provenance = z
   .object({
