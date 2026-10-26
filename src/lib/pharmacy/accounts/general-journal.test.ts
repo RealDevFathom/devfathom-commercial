@@ -1,5 +1,22 @@
-import { describe, expect, it } from 'vitest';
-import { createGeneralJournalDraft, PharmacyGeneralJournalError } from './general-journal';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const journal = vi.hoisted(() => ({
+  post: vi.fn(async () => ({ id: 'entry-1' })),
+  reverse: vi.fn(async () => ({ id: 'reversal-1' })),
+}));
+
+vi.mock('@/lib/finance/journal', () => ({
+  postJournalEntry: journal.post,
+  reverseJournalEntry: journal.reverse,
+}));
+
+import {
+  cancelGeneralJournal,
+  createGeneralJournalDraft,
+  PharmacyGeneralJournalError,
+  postGeneralJournal,
+  reverseGeneralJournal,
+} from './general-journal';
 import { createJournalDraftSchema, GENERAL_JOURNAL_MAX_DATE, GENERAL_JOURNAL_MIN_DATE } from './general-journal-schema';
 
 describe('pharmacy journal input boundary', () => {
@@ -38,5 +55,101 @@ describe('draft creation replay', () => {
     let call = 0;
     db.pharmacyGeneralJournalDocument.findFirst = async () => (++call === 1 ? null : { id: 'other-branch-document' });
     await expect(createGeneralJournalDraft(db as never, scope, input)).rejects.toMatchObject<Partial<PharmacyGeneralJournalError>>({ reason: 'REPLAY_MISMATCH' });
+  });
+});
+
+describe('voucher lifecycle commands', () => {
+  const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'user-1' };
+  const occurredAt = new Date('2026-10-25T12:00:00Z');
+
+  beforeEach(() => vi.clearAllMocks());
+
+  function database(initial: 'DRAFT' | 'POSTED' = 'DRAFT') {
+    let row = {
+      id: 'document-1', organizationId: 'org-1', branchId: 'branch-1', reference: 'JV-1',
+      reason: 'accrual', evidence: 'invoice', amountMinor: 100, currency: 'PKR', occurredAt,
+      status: initial, version: initial === 'DRAFT' ? 1 : 2, journalEntryId: initial === 'POSTED' ? 'entry-1' : null,
+      postKey: initial === 'POSTED' ? 'post-1' : null, postPayloadHash: null,
+      reverseKey: null, reversePayloadHash: null,
+    };
+    const db = {
+      $executeRaw: vi.fn(async () => 1),
+      pharmacyAccountingPeriod: { findFirst: vi.fn(async (): Promise<{ id: string } | null> => null) },
+      auditLog: { create: vi.fn(async () => ({})) },
+      pharmacyGeneralJournalDocument: {
+        findFirst: vi.fn(async () => ({ ...row })),
+        findFirstOrThrow: vi.fn(async () => ({ ...row })),
+        updateMany: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          row = { ...row, ...data, version: row.version + 1 } as typeof row;
+          return { count: 1 };
+        }),
+        update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+          row = { ...row, ...data, version: row.version + 1 } as typeof row;
+          return { ...row };
+        }),
+      },
+    };
+    return { db, row: () => row };
+  }
+
+  it('posts one canonical balanced entry, audits success, and replays the identical command', async () => {
+    const { db } = database();
+    const command = { documentId: 'document-1', version: 1, idempotencyKey: 'post-1' };
+    const posted = await postGeneralJournal(db as never, scope, command);
+    expect(journal.post).toHaveBeenCalledWith(db, scope, expect.objectContaining({
+      sourceId: 'document-1', idempotencyKey: 'pharmacy-jv:document-1',
+      lines: [
+        expect.objectContaining({ accountCode: 'OPERATING_EXPENSE', side: 'DEBIT', amountMinor: 100 }),
+        expect.objectContaining({ accountCode: 'MANUAL_NONTRADE_ACCRUAL', side: 'CREDIT', amountMinor: 100 }),
+      ],
+    }));
+    expect(db.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ outcome: 'SUCCESS' }) }));
+    await expect(postGeneralJournal(db as never, scope, command)).resolves.toEqual(posted);
+    expect(journal.post).toHaveBeenCalledTimes(1);
+    await expect(postGeneralJournal(db as never, scope, { ...command, idempotencyKey: 'different-key' }))
+      .rejects.toMatchObject({ reason: 'REPLAY_MISMATCH' });
+  });
+
+  it('rejects stale, closed-period, and invalid-state posting before writing the ledger', async () => {
+    const stale = database();
+    await expect(postGeneralJournal(stale.db as never, scope, { documentId: 'document-1', version: 0, idempotencyKey: 'x' }))
+      .rejects.toMatchObject({ reason: 'STALE_VERSION' });
+    const closed = database();
+    closed.db.pharmacyAccountingPeriod.findFirst.mockResolvedValue({ id: 'closed' });
+    await expect(postGeneralJournal(closed.db as never, scope, { documentId: 'document-1', version: 1, idempotencyKey: 'x' }))
+      .rejects.toMatchObject({ reason: 'PERIOD_CLOSED' });
+    const posted = database('POSTED');
+    posted.db.pharmacyGeneralJournalDocument.findFirst.mockResolvedValue({ ...posted.row(), postKey: null });
+    await expect(postGeneralJournal(posted.db as never, scope, { documentId: 'document-1', version: 2, idempotencyKey: 'x' }))
+      .rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    expect(journal.post).not.toHaveBeenCalled();
+  });
+
+  it('cancels only a matching draft version', async () => {
+    const success = database();
+    await expect(cancelGeneralJournal(success.db as never, scope, { documentId: 'document-1', version: 1 }))
+      .resolves.toMatchObject({ status: 'CANCELLED', version: 2 });
+    const conflict = database();
+    conflict.db.pharmacyGeneralJournalDocument.updateMany.mockResolvedValue({ count: 0 });
+    await expect(cancelGeneralJournal(conflict.db as never, scope, { documentId: 'document-1', version: 1 }))
+      .rejects.toMatchObject({ reason: 'INVALID_STATE' });
+  });
+
+  it('reverses additively once and enforces payload-stable replay', async () => {
+    const { db } = database('POSTED');
+    const command = { documentId: 'document-1', version: 2, idempotencyKey: 'reverse-1', at: new Date('2026-10-26T12:00:00Z'), reason: 'correction' };
+    const reversed = await reverseGeneralJournal(db as never, scope, command);
+    expect(journal.reverse).toHaveBeenCalledWith(db, scope, expect.objectContaining({ entryId: 'entry-1', idempotencyKey: 'pharmacy-jv-reversal:document-1' }));
+    await expect(reverseGeneralJournal(db as never, scope, command)).resolves.toEqual(reversed);
+    expect(journal.reverse).toHaveBeenCalledTimes(1);
+    await expect(reverseGeneralJournal(db as never, scope, { ...command, reason: 'another correction' }))
+      .rejects.toMatchObject({ reason: 'REPLAY_MISMATCH' });
+  });
+
+  it('awaits the success audit so a transaction can roll back the document and ledger together', async () => {
+    const { db } = database();
+    db.auditLog.create.mockRejectedValue(new Error('audit unavailable'));
+    await expect(postGeneralJournal(db as never, scope, { documentId: 'document-1', version: 1, idempotencyKey: 'post-1' }))
+      .rejects.toThrow('audit unavailable');
   });
 });
