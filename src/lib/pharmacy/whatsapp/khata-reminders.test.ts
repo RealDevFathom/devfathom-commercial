@@ -161,6 +161,20 @@ describe('planKhataReminder', () => {
     expect(sameInstant.dedupeKey).toBe(base.dedupeKey);
     expect(nextWeek.dedupeKey).not.toBe(base.dedupeKey);
   });
+
+  it('starts a new reminder week at Monday midnight in Asia/Karachi', () => {
+    const sunday = planKhataReminder(
+      { familyAccountId: 'family-1', balanceMinor: 50_000, oldestOverdueAt: NOW },
+      new Date('2026-10-25T18:59:59.999Z')
+    );
+    const monday = planKhataReminder(
+      { familyAccountId: 'family-1', balanceMinor: 50_000, oldestOverdueAt: NOW },
+      new Date('2026-10-25T19:00:00.000Z')
+    );
+
+    expect(sunday.dedupeKey).toBe('khata:family-1:w2026-43');
+    expect(monday.dedupeKey).toBe('khata:family-1:w2026-44');
+  });
 });
 
 describe('processDueWhatsAppKhataReminders', () => {
@@ -215,6 +229,28 @@ describe('processDueWhatsAppKhataReminders', () => {
     const result = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
 
     expect(result).toMatchObject({ scanned: 1, sent: 0, skippedNoConsent: 1 });
+    expect(provider.calls).toEqual([]);
+    expect(store.logs).toEqual([]);
+  });
+
+  it('counts a consented customer skipped during local quiet hours separately', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    const result = await processDueWhatsAppKhataReminders({
+      now: new Date('2026-10-21T17:00:00.000Z'), // 22:00 in Asia/Karachi
+      config,
+      provider,
+    });
+
+    expect(result).toMatchObject({
+      scanned: 1,
+      sent: 0,
+      skippedQuietHours: 1,
+      skippedNoConsent: 0,
+    });
     expect(provider.calls).toEqual([]);
     expect(store.logs).toEqual([]);
   });
