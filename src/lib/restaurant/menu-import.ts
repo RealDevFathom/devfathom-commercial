@@ -566,6 +566,8 @@ export type ReviewLineInput = {
   description?: string | null;
   priceAmount?: string | null;
   currency?: string | null;
+  /** Complete reviewer-confirmed variant list. Required when accepting extracted variants. */
+  variants?: Array<{ name: string; priceAmount: string | null }>;
   note?: string | null;
   /** Required for MERGED, forbidden otherwise. */
   mergeProductId?: string | null;
@@ -601,6 +603,7 @@ export async function reviewMenuImportLine(
       importId: true,
       extractedProductName: true,
       extractedPriceAmount: true,
+      extractedVariants: true,
       import: { select: { status: true } },
     },
   });
@@ -630,6 +633,25 @@ export async function reviewMenuImportLine(
       }
       priceAmount = new Prisma.Decimal(input.priceAmount.trim());
     }
+  }
+
+  let reviewedVariants: Prisma.InputJsonValue | undefined;
+  if (input.variants !== undefined) {
+    const variants = input.variants.map((variant) => {
+      const name = variant.name.trim().slice(0, 200);
+      if (!name) {
+        throw new MenuImportError('Every variant needs a name.', 'INVALID');
+      }
+      const amount = variant.priceAmount?.trim() || null;
+      if (amount !== null && !/^\d{1,10}(\.\d{1,2})?$/.test(amount)) {
+        throw new MenuImportError(
+          'Every variant price must be a positive decimal amount.',
+          'INVALID'
+        );
+      }
+      return { name, price: { amount } };
+    });
+    reviewedVariants = variants as Prisma.InputJsonValue;
   }
 
   if (input.decision === 'MERGED') {
@@ -708,6 +730,19 @@ export async function reviewMenuImportLine(
         'PRICE_REQUIRED'
       );
     }
+    const extractedVariants = resolveVariants(line.extractedVariants);
+    if (extractedVariants.length > 0 && input.variants === undefined) {
+      throw new MenuImportError(
+        'Accepting a line with variants requires reviewing every variant name and price.',
+        'REVIEW_INCOMPLETE'
+      );
+    }
+    if (input.variants !== undefined && input.variants.length !== extractedVariants.length) {
+      throw new MenuImportError(
+        'Every extracted variant must be included in the review.',
+        'REVIEW_INCOMPLETE'
+      );
+    }
   }
 
   return db.restaurantMenuImportLine.update({
@@ -723,6 +758,7 @@ export async function reviewMenuImportLine(
       ...(description !== undefined ? { reviewedDescription: description } : {}),
       ...(priceAmount !== undefined ? { reviewedPriceAmount: priceAmount } : {}),
       ...(currency !== undefined ? { reviewedCurrency: currency } : {}),
+      ...(reviewedVariants !== undefined ? { reviewedVariants } : {}),
       ...(note !== undefined ? { reviewNote: note } : {}),
     },
   });
@@ -960,6 +996,7 @@ export async function commitMenuImport(
         extractedDescription: true,
         extractedPriceAmount: true,
         extractedVariants: true,
+        reviewedVariants: true,
         reviewedCategoryName: true,
         reviewedProductName: true,
         reviewedDescription: true,
@@ -1000,7 +1037,23 @@ export async function commitMenuImport(
         price,
         mergeProductId: line.mergeProductId,
         mergeVariantId: line.mergeVariantId,
-        variants: resolveVariants(line.extractedVariants),
+        variants: line.reviewStatus === 'MERGED' ? [] : (() => {
+          const extracted = resolveVariants(line.extractedVariants);
+          if (extracted.length > 0 && line.reviewedVariants === null) {
+            throw new MenuImportError(
+              'A confirmed line has variants that were not reviewed.',
+              'REVIEW_INCOMPLETE'
+            );
+          }
+          const reviewed = resolveVariants(line.reviewedVariants ?? []);
+          if (reviewed.length !== extracted.length) {
+            throw new MenuImportError(
+              'A confirmed line does not include a review of every extracted variant.',
+              'REVIEW_INCOMPLETE'
+            );
+          }
+          return reviewed;
+        })(),
         sortOrder: line.sortOrder,
       });
     }

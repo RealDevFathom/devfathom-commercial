@@ -61,6 +61,7 @@ function line(overrides: Partial<ImportLine> = {}): ImportLine {
     extractedCurrency: 'PKR',
     extractedPriceRaw: 'Rs. 1250',
     extractedVariants: [],
+    reviewedVariants: null,
     extractedModifiers: [],
     confidence: { productName: 0.94 },
     flags: [],
@@ -352,6 +353,48 @@ describe('Restaurant menu-import console', () => {
           decision: 'ACCEPTED',
           productName: 'Grilled Chicken (half)',
           priceAmount: '1300.00',
+        })
+      );
+    });
+
+    it('shows every extracted variant price and submits the reviewer-confirmed values', () => {
+      mocks.get.mockReturnValue({
+        data: detail({
+          pages: [
+            {
+              ...detail().pages[0]!,
+              lines: [
+                line({
+                  extractedVariants: [
+                    { name: 'Small', price: { amount: '900.00', currency: 'PKR', raw: '900' } },
+                    { name: 'Large', price: { amount: '1400.00', currency: 'PKR', raw: '1400' } },
+                  ],
+                }),
+              ],
+            },
+          ],
+        }),
+        error: null,
+        isLoading: false,
+        refetch: vi.fn(),
+      });
+      renderConsole();
+
+      expect(screen.getByText('Small')).toBeInTheDocument();
+      expect(screen.getByText('900.00')).toBeInTheDocument();
+      expect(screen.getByText('Large')).toBeInTheDocument();
+      expect(screen.getByText('1400.00')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Edit Grilled Chicken' }));
+      fireEvent.change(screen.getByLabelText('Variant 2 price'), { target: { value: '1450.00' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Accept with edits' }));
+
+      expect(mocks.reviewLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variants: [
+            { name: 'Small', priceAmount: '900.00' },
+            { name: 'Large', priceAmount: '1450.00' },
+          ],
         })
       );
     });
