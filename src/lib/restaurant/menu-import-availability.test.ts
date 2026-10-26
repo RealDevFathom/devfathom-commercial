@@ -221,6 +221,24 @@ describe('queued availability', () => {
 });
 
 describe('retention survives failed deletion', () => {
+  it('rechecks a stale import under the commit lock before deleting it', async () => {
+    const { db, record, table, runtime } = fake();
+    table.findMany.mockResolvedValueOnce([record]).mockResolvedValueOnce([]);
+    table.findUnique.mockImplementation(async () => ({
+      status: 'COMMITTED',
+      storageObjectName: record.storageObjectName,
+    }));
+
+    await expect(purgeStaleMenuImports(db, { runtime })).resolves.toEqual({
+      purgedDrafts: 0,
+      deletedSources: 0,
+    });
+
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+    expect(runtime.deleteSource).not.toHaveBeenCalled();
+    expect(table.delete).not.toHaveBeenCalled();
+  });
+
   it('discard keeps the persisted source obligation on deletion failure', async () => {
     const { db, record, runtime } = fake();
     runtime.deleteSource.mockRejectedValue(new Error('storage unavailable'));
