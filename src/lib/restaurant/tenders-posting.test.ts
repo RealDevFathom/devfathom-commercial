@@ -550,6 +550,39 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     }
   );
 
+  it('continues to refund card payments through their stored MOCK provider', async () => {
+    const f = fixture();
+    f.raw.restaurantPayment.findUnique.mockResolvedValueOnce({
+      id: 'payment',
+      provider: 'MOCK',
+      providerRef: 'mock-payment',
+    });
+    const collected = await f.collect({ tender: { type: 'CARD', amount: '3860' } });
+    const paymentEventsBeforeRefund = f.raw.restaurantPaymentEvent.create.mock.calls.length;
+
+    const result = await refundTender(f.db, {
+      originalTenderId: collected.tenderId,
+      amount: '1000',
+      reason: 'Supported provider regression',
+      approvingStaffProfileId: 'manager',
+      actor: { ...actor, idempotencyKey: 'mock-refund' },
+      now: NOW,
+    });
+
+    expect(result).toMatchObject({
+      paymentId: 'payment',
+      paymentStatus: 'PARTIALLY_REFUNDED',
+      replayed: false,
+    });
+    expect(f.raw.restaurantPaymentEvent.create).toHaveBeenCalledTimes(
+      paymentEventsBeforeRefund + 1
+    );
+    expect(f.raw.restaurantPayment.update).toHaveBeenCalledWith({
+      where: { id: 'payment' },
+      data: { status: 'PARTIALLY_REFUNDED' },
+    });
+  });
+
   it.each(['missing payment link', 'deleted payment'] as const)(
     'rejects a card refund with a %s before claiming idempotency or writing refund records',
     async (failure) => {
