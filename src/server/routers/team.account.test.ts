@@ -7,7 +7,7 @@
  * Reading your own profile is account self-service; reading another member is still
  * the licensed team directory.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
@@ -81,6 +81,10 @@ beforeEach(() => {
   mocks.findMany.mockResolvedValue([]);
   mocks.update.mockResolvedValue({ id: 'user_self', name: 'Hotel GM' });
   mocks.permissions.mockResolvedValue({ organizationRole: null, permissionOverrides: [] });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('module catalog', () => {
@@ -391,7 +395,6 @@ describe('team.getRoster and team:view', () => {
       ...rosterQuery,
       where: { id: 'user_self' },
     });
-    error.mockRestore();
   });
 
   it('fails closed when the permission lookup finds no viewer', async () => {
