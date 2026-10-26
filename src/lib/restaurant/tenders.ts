@@ -583,7 +583,11 @@ async function loadSettlementContext(
   const fractionalItems =
     bill.splitKind === 'FRACTIONAL'
       ? await tx.restaurantOrderItem.findMany({
-          where: { orderId: bill.orderId, status: { not: 'VOIDED' } },
+          where: {
+            orderId: bill.orderId,
+            status: { not: 'VOIDED' },
+            remakeOfItemId: null,
+          },
           orderBy: { id: 'asc' },
           select: {
             id: true,

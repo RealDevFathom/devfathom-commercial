@@ -638,6 +638,88 @@ describeIfDatabase('card tenders + tips (real DB)', () => {
 });
 
 describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
+  it('quotes and settles fractional bills from purchased items without charging chained remakes', async () => {
+    const db = deps.createTenantDb(orgId);
+    const opened = await deps.orders.openOrder(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.orders.monthly': 1000000 },
+      branchId: ids.branch,
+      channel: 'DINE_IN',
+      publicationId: ids.publication,
+      actor: actor(),
+      now: AT,
+    });
+    const original = await deps.orders.addItem(db, {
+      orderId: opened.orderId,
+      menuItemId: ids.menuItem,
+      actor: actor(),
+    });
+    await read((tx) =>
+      tx.restaurantOrderItem.update({ where: { id: original.itemId }, data: { status: 'SERVED' } })
+    );
+    const firstRemake = await deps.orders.requestRemake(db, {
+      orderId: opened.orderId,
+      itemId: original.itemId,
+      reason: 'first replacement',
+      actor: actor(),
+    });
+    await read((tx) =>
+      tx.restaurantOrderItem.update({
+        where: { id: firstRemake.remakeItemId },
+        data: { status: 'SERVED' },
+      })
+    );
+    const secondRemake = await deps.orders.requestRemake(db, {
+      orderId: opened.orderId,
+      itemId: firstRemake.remakeItemId,
+      reason: 'second replacement',
+      actor: actor(),
+    });
+    const cut = await deps.bills.cutBills(db, {
+      orderId: opened.orderId,
+      branchId: ids.branch,
+      split: { kind: 'FRACTIONAL', weights: [1, 1] },
+      actor: actor(),
+    });
+
+    for (const billId of cut.billIds) {
+      const quote = await read((tx) => deps.tenders.quoteOpenBillSettlement(tx, billId, AT));
+      expect(quote?.grandTotal.toFixed(2)).toBe('6.25');
+      expect(quote?.remainingDue.toFixed(2)).toBe('6.25');
+
+      const tender = await deps.tenders.applyTender(db, {
+        billId,
+        tender: { type: 'OTHER', amount: '6.25' },
+        actor: actor(),
+        now: AT,
+      });
+      expect(tender).toMatchObject({ settled: true });
+      expect(tender.remainingDue.toFixed(2)).toBe('0.00');
+
+      const snapshot = await read((tx) =>
+        tx.restaurantTaxTransactionSnapshot.findFirstOrThrow({
+          where: { billId },
+          select: { grandTotal: true, evidencePayload: true },
+        })
+      );
+      expect(snapshot.grandTotal.toFixed(2)).toBe('6.25');
+      expect(snapshot.evidencePayload).toMatchObject({
+        fractional: {
+          lines: [{ sourceOrderItemId: original.itemId, lineTotal: '6.25' }],
+        },
+      });
+      expect(JSON.stringify(snapshot.evidencePayload)).not.toContain(firstRemake.remakeItemId);
+      expect(JSON.stringify(snapshot.evidencePayload)).not.toContain(secondRemake.remakeItemId);
+    }
+
+    const settlement = await deps.bills.evaluateOrderSettlement(db, opened.orderId);
+    expect(settlement.settled).toBe(true);
+    expect(settlement.blocker).toBeNull();
+    expect(settlement.bills.every((bill) => bill.remainingDue.toFixed(2) === '0.00')).toBe(true);
+    expect(settlement.accountedTotal.toFixed(2)).toBe('12.50');
+    expect(settlement.accountedTotal.toFixed(2)).toBe(settlement.derivedOrderTotal.toFixed(2));
+  });
+
   async function installMixedRateProfile() {
     const at = new Date('2026-09-15T18:00:00.000Z');
     await read(async (tx) => {
