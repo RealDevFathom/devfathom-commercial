@@ -122,11 +122,55 @@ describe('finance.createInvoice money calculation', () => {
   });
 });
 
-describe('finance.updateInvoice settlement serialization', () => {
+describe('finance.updateInvoice money calculation and settlement serialization', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
     mocks.queryRaw.mockResolvedValue([{ id: 'invoice-1' }]);
+  });
+
+  it('rounds updated line items and tax half up before persisting totals', async () => {
+    mocks.findUnique.mockResolvedValue({ status: 'DRAFT' });
+    mocks.update.mockResolvedValue({
+      id: 'invoice-1',
+      total: 2.03,
+      payments: [],
+    });
+
+    await caller().updateInvoice({
+      id: 'invoice-1',
+      items: [
+        { description: 'First', quantity: 1, rate: 1.005 },
+        { description: 'Second', quantity: 3, rate: 0.335 },
+      ],
+      tax: 0.005,
+    });
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          items: [
+            { description: 'First', quantity: 1, rate: 1.005, amount: 1.01 },
+            { description: 'Second', quantity: 3, rate: 0.335, amount: 1.01 },
+          ],
+          subtotal: 2.02,
+          tax: 0.01,
+          total: 2.03,
+        },
+      })
+    );
+  });
+
+  it('rejects an updated line amount overflow before opening a transaction', async () => {
+    await expect(
+      caller().updateInvoice({
+        id: 'invoice-1',
+        items: [{ description: 'Too large', quantity: 2, rate: 9_999_999_999.99 }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
   });
 
   it('locks before rechecking status and refuses an invoice settled by a concurrent payment', async () => {
