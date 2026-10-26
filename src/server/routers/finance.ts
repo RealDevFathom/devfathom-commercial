@@ -398,12 +398,20 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const orgId = workspaceId(ctx);
       return ctx.db.$transaction(async (tx) => {
         // Serialize edits with payment recording. Re-read only after acquiring the
         // row lock so status, adjustments, and collected funds cannot go stale.
-        await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.id} FOR UPDATE`;
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM invoices
+          WHERE id = ${input.id} AND "organizationId" = ${orgId}
+          FOR UPDATE
+        `;
+        if (locked.length === 0) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
+        }
         const current = await tx.invoice.findUnique({
-          where: { id: input.id },
+          where: { id: input.id, organizationId: orgId },
           select: { status: true, discount: true, tax: true },
         });
         if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
@@ -420,7 +428,7 @@ export const financeRouter = router({
           input.discount ?? Number(current.discount)
         );
         const paid = await tx.payment.aggregate({
-          where: { invoiceId: input.id },
+          where: { invoiceId: input.id, organizationId: orgId },
           _sum: { amount: true },
         });
         const amountPaid = round2(Number(paid._sum.amount ?? 0));
@@ -453,7 +461,7 @@ export const financeRouter = router({
         }
 
         const invoice = await tx.invoice.update({
-          where: { id: input.id },
+          where: { id: input.id, organizationId: orgId },
           data,
           include: {
             client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
@@ -617,6 +625,7 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const orgId = workspaceId(ctx);
       // IMP-REST-03: captured inside the tx, fired only AFTER it commits.
       let paidEvent: {
         invoiceId: string;
@@ -626,9 +635,16 @@ export const financeRouter = router({
       } | null = null;
 
       const result = await ctx.db.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${input.invoiceId} FOR UPDATE`;
+        const locked = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM invoices
+          WHERE id = ${input.invoiceId} AND "organizationId" = ${orgId}
+          FOR UPDATE
+        `;
+        if (locked.length === 0) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
+        }
         const invoice = await tx.invoice.findUnique({
-          where: { id: input.invoiceId },
+          where: { id: input.invoiceId, organizationId: orgId },
           select: { id: true, status: true, total: true, currency: true, clientId: true },
         });
         if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
@@ -656,7 +672,7 @@ export const financeRouter = router({
 
         const total = round2(Number(invoice.total));
         const prior = await tx.payment.aggregate({
-          where: { invoiceId: invoice.id },
+          where: { invoiceId: invoice.id, organizationId: orgId },
           _sum: { amount: true },
         });
         const alreadyPaid = round2(Number(prior._sum.amount ?? 0));
@@ -673,6 +689,7 @@ export const financeRouter = router({
 
         const payment = await tx.payment.create({
           data: {
+            organizationId: orgId,
             invoiceId: invoice.id,
             amount: input.amount,
             currency: invoice.currency,
@@ -687,7 +704,7 @@ export const financeRouter = router({
         const fullyPaid = newPaid >= total - PAYMENT_EPSILON;
         if (fullyPaid) {
           await tx.invoice.update({
-            where: { id: invoice.id },
+            where: { id: invoice.id, organizationId: orgId },
             data: { status: 'PAID', paidAt: new Date() },
           });
           paidEvent = {

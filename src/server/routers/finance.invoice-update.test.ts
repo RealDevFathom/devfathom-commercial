@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
   update: vi.fn(),
   aggregate: vi.fn(),
+  createPayment: vi.fn(),
   queryRaw: vi.fn(),
   transaction: vi.fn(),
 }));
@@ -28,7 +29,7 @@ const testDb = {
   $transaction: mocks.transaction,
   $queryRaw: mocks.queryRaw,
   invoice: { findUnique: mocks.findUnique, update: mocks.update },
-  payment: { aggregate: mocks.aggregate },
+  payment: { aggregate: mocks.aggregate, create: mocks.createPayment },
 };
 
 function caller() {
@@ -50,6 +51,7 @@ describe('finance.updateInvoice', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
+    mocks.queryRaw.mockResolvedValue([{ id: 'invoice-1' }]);
     mocks.findUnique.mockResolvedValue({ status: 'DRAFT', discount: 10, tax: 0 });
     mocks.aggregate.mockResolvedValue({ _sum: { amount: null } });
     mocks.transaction.mockImplementation(async (work) => work(testDb));
@@ -73,7 +75,7 @@ describe('finance.updateInvoice', () => {
 
     expect(mocks.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'invoice-1' },
+        where: { id: 'invoice-1', organizationId: 'org-1' },
         data: expect.objectContaining({
           subtotal: 100,
           discount: 10,
@@ -81,6 +83,60 @@ describe('finance.updateInvoice', () => {
           total: 90,
           dueDate,
         }),
+      })
+    );
+  });
+
+  it('does not read or update an invoice outside the active organization', async () => {
+    mocks.queryRaw.mockResolvedValue([]);
+
+    await expect(
+      caller().updateInvoice({
+        id: 'foreign-invoice',
+        items: [{ description: 'Consulting', quantity: 1, rate: 100 }],
+      })
+    ).rejects.toThrow('Invoice not found');
+
+    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.aggregate).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('does not record a payment against an invoice outside the active organization', async () => {
+    mocks.queryRaw.mockResolvedValue([]);
+
+    await expect(
+      caller().addPayment({ invoiceId: 'foreign-invoice', amount: 25 })
+    ).rejects.toThrow('Invoice not found');
+
+    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.aggregate).not.toHaveBeenCalled();
+    expect(mocks.createPayment).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('scopes payment reads and writes to the active organization', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'invoice-1',
+      status: 'SENT',
+      total: 100,
+      currency: 'USD',
+      clientId: 'client-1',
+    });
+    mocks.createPayment.mockResolvedValue({ id: 'payment-1' });
+
+    await caller().addPayment({ invoiceId: 'invoice-1', amount: 25 });
+
+    expect(mocks.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'invoice-1', organizationId: 'org-1' } })
+    );
+    expect(mocks.aggregate).toHaveBeenCalledWith({
+      where: { invoiceId: 'invoice-1', organizationId: 'org-1' },
+      _sum: { amount: true },
+    });
+    expect(mocks.createPayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ organizationId: 'org-1', invoiceId: 'invoice-1' }),
       })
     );
   });
@@ -101,7 +157,10 @@ describe('finance.updateInvoice', () => {
 
   it('rechecks status only after acquiring the invoice lock', async () => {
     const order: string[] = [];
-    mocks.queryRaw.mockImplementation(async () => void order.push('lock'));
+    mocks.queryRaw.mockImplementation(async () => {
+      order.push('lock');
+      return [{ id: 'invoice-1' }];
+    });
     mocks.findUnique.mockImplementation(async () => {
       order.push('read');
       return { status: 'PAID', discount: 0, tax: 0 };
