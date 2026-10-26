@@ -342,7 +342,10 @@ test('accepting extracted variants requires and persists explicit human review',
     extractedPriceAmount: new (class {
       toString() { return '10.00'; }
     })(),
-    extractedVariants: [{ name: 'Large', price: { amount: '14.00' } }],
+    extractedVariants: [
+      { name: 'Large', price: { amount: '14.00' } },
+      { name: 'Family', price: { amount: null } },
+    ],
     import: f.record,
   });
 
@@ -359,12 +362,18 @@ test('accepting extracted variants requires and persists explicit human review',
     lineId: 'line_1',
     decision: 'ACCEPTED',
     reviewedById: 'user_1',
-    variants: [{ name: 'Large', priceAmount: '15.00' }],
+    variants: [
+      { name: 'Large', priceAmount: '15.00' },
+      { name: 'Family', priceAmount: '' },
+    ],
   });
   const review = f.events.findLast((event) => Array.isArray(event) && event[0] === 'review');
   assert.equal(
     JSON.stringify(review[1].reviewedVariants),
-    JSON.stringify([{ name: 'Large', price: { amount: '15.00' } }])
+    JSON.stringify([
+      { name: 'Large', price: { amount: '15.00' } },
+      { name: 'Family', price: { amount: null } },
+    ])
   );
 });
 
