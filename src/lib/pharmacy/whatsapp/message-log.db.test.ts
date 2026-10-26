@@ -1,8 +1,26 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
 
+import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+import { PrismaClient } from '@/generated/prisma/client';
+
+const mocks = vi.hoisted(() => ({ runtimeDb: null as PrismaClient | null }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  withTenantDb: async <T>(organizationId: string, run: (db: PrismaClient) => Promise<T>) =>
+    mocks.runtimeDb!.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(
+        `SELECT set_config('app.current_organization_id', $1, true),
+                set_config('app.is_platform_admin', 'false', true)`,
+        organizationId
+      );
+      return run(tx as unknown as PrismaClient);
+    }),
+}));
+
+import { sendClaimedMessage } from './message-log';
 
 const databaseUrl = process.env.DATABASE_URL;
 const describeIfDatabase = databaseUrl ? describe : describe.skip;
@@ -38,24 +56,17 @@ async function claim(client: pg.Client, id: string, customerId: string) {
   await client.query('COMMIT');
 }
 
-async function drain(client: pg.Client, logId: string, customerId: string) {
-  await beginTenant(client, orgA);
-  const eligible = await client.query<{ id: string }>(
-    `SELECT id FROM pharmacy_customers
-     WHERE "organizationId" = $1 AND id = $2 AND active = true AND "whatsappOptIn" = true
-     FOR UPDATE`,
-    [orgA, customerId]
+async function drain(logId: string, customerId: string, send: () => Promise<never>) {
+  return sendClaimedMessage(
+    {
+      organizationId: orgA,
+      customerId,
+      kind: 'REFILL_REMINDER',
+      dedupeKey: logId,
+    },
+    logId,
+    send
   );
-  if (eligible.rowCount === 0) {
-    await client.query(
-      `UPDATE pharmacy_message_logs
-       SET status = 'IGNORED', error = 'OPTED_OUT_BEFORE_SEND', "updatedAt" = now()
-       WHERE id = $1`,
-      [logId]
-    );
-  }
-  await client.query('COMMIT');
-  return eligible.rows;
 }
 
 describeIfDatabase('WhatsApp consent send race (restricted PostgreSQL)', () => {
@@ -95,6 +106,9 @@ describeIfDatabase('WhatsApp consent send race (restricted PostgreSQL)', () => {
     const runtimeUrl = new URL(databaseUrl!);
     runtimeUrl.username = role;
     runtimeUrl.password = password;
+    mocks.runtimeDb = new PrismaClient({
+      adapter: new PrismaPg({ connectionString: runtimeUrl.toString(), max: 4 }),
+    });
     stop = new pg.Client({ connectionString: runtimeUrl.toString() });
     sender = new pg.Client({ connectionString: runtimeUrl.toString() });
     await Promise.all([stop.connect(), sender.connect()]);
@@ -112,6 +126,7 @@ describeIfDatabase('WhatsApp consent send race (restricted PostgreSQL)', () => {
   afterAll(async () => {
     await Promise.allSettled([stop?.query('ROLLBACK'), sender?.query('ROLLBACK')]);
     await Promise.allSettled([stop?.end(), sender?.end()]);
+    await mocks.runtimeDb?.$disconnect();
     if (admin) {
       await admin.query('BEGIN');
       await admin.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
@@ -135,7 +150,9 @@ describeIfDatabase('WhatsApp consent send race (restricted PostgreSQL)', () => {
     );
     await stop!.query('COMMIT');
 
-    expect(await drain(sender!, logId, customerA)).toEqual([]);
+    const send = vi.fn<() => Promise<never>>();
+    expect(await drain(logId, customerA, send)).toBe('PREPARED');
+    expect(send).not.toHaveBeenCalled();
     await beginTenant(sender!, orgA);
     expect(
       (await sender!.query(`SELECT status, error FROM pharmacy_message_logs WHERE id = $1`, [logId]))
@@ -162,7 +179,8 @@ describeIfDatabase('WhatsApp consent send race (restricted PostgreSQL)', () => {
       `UPDATE pharmacy_customers SET "whatsappOptIn" = false, "updatedAt" = now() WHERE id = $1`,
       [customerA]
     );
-    const draining = drain(sender!, logId, customerA);
+    const send = vi.fn<() => Promise<never>>();
+    const draining = drain(logId, customerA, send);
     const stateBeforeCommit = await Promise.race([
       draining.then(() => 'completed'),
       new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 100)),
@@ -170,7 +188,8 @@ describeIfDatabase('WhatsApp consent send race (restricted PostgreSQL)', () => {
     expect(stateBeforeCommit).toBe('blocked');
 
     await stop!.query('COMMIT');
-    expect(await draining).toEqual([]);
+    expect(await draining).toBe('PREPARED');
+    expect(send).not.toHaveBeenCalled();
     await beginTenant(sender!, orgA);
     expect(
       (await sender!.query(`SELECT status, error FROM pharmacy_message_logs WHERE id = $1`, [logId]))
