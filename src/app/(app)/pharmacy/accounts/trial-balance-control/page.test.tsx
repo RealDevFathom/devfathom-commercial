@@ -67,6 +67,7 @@ describe('TrialBalanceControlPage', () => {
     { branch: 'branch-1', from: '2026-01-01' },
     { branch: ['branch-1', 'branch-2'], from: '2026-01-01', to: '2026-02-01' },
     { branch: '', from: '2026-01-01', to: '2026-02-01' },
+    { branch: '   ', from: '2026-01-01', to: '2026-02-01' },
     { branch: 'branch-1', from: '2026-02-30', to: '2026-03-02' },
     { branch: 'branch-1', from: '2026-01-01', to: '2026-04-04' },
     { branch: 'branch-1', from: '2026-02-01', to: '2026-02-01' },
@@ -75,6 +76,7 @@ describe('TrialBalanceControlPage', () => {
     async (query: Record<string, string | string[] | undefined>) => {
       expect(await html(query)).toContain('role="alert"');
       expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
+      expect(mocks.createTRPCContext).not.toHaveBeenCalled();
       expect(mocks.financialStatements).not.toHaveBeenCalled();
     }
   );

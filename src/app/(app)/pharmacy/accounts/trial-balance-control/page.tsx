@@ -52,7 +52,8 @@ function parseQuery(query: Query): { controls?: Controls; error?: string } {
   if (values.some((value) => typeof value !== 'string')) {
     return { error: 'Choose one branch and provide both UTC dates.' };
   }
-  const [branchId, fromValue, toValue] = values as [string, string, string];
+  const [branchValue, fromValue, toValue] = values as [string, string, string];
+  const branchId = branchValue.trim();
   const from = day(fromValue);
   const to = day(toValue);
   if (!branchId || branchId.length > 128 || !from || !to) {
