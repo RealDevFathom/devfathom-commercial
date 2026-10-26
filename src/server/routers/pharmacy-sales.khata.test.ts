@@ -139,7 +139,10 @@ describe('Khata router trust and recovery boundary', () => {
 
     await expect(
       f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy counter or financial reports permission required.',
+    });
   });
 
   it('uses server tenant, CREDIT settlement and an atomic member charge', async () => {

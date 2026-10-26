@@ -173,7 +173,10 @@ async function khataScope(ctx: TRPCContext, branch: string) {
         source: 'TRPC',
       })))
   )
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy counter or financial reports permission required.',
+    });
   const available = await ctx.db.pharmacyBranch.findFirst({
     where: { organizationId: scope.organizationId, id: branch, active: true },
     select: { id: true },
