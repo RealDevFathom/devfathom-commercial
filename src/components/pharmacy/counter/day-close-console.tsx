@@ -74,10 +74,11 @@ function DayCloseBranches() {
   const today = useMemo(() => (timeZone ? workspaceToday(timeZone) : ''), [timeZone]);
   const date = picked ?? today;
   const branchId = selected || branches.data?.branches[0]?.id || '';
+  const currency = branches.data?.currency;
   return (
     <div className="space-y-6">
       <PageHeader
-        eyebrow="Pharmacy · PKR"
+        eyebrow={currency ? `Pharmacy · ${currency}` : 'Pharmacy'}
         heading="Day close"
         description="Reconcile each drawer, record any variance, then lock the business day."
       />
@@ -121,14 +122,27 @@ function DayCloseBranches() {
           <p>No active pharmacy branches are available.</p>
         )}
       </SectionCard>
-      {branchId && /^\d{4}-\d{2}-\d{2}$/.test(date) && (
-        <DayCloseForm key={`${branchId}:${date}`} branchId={branchId} date={date} />
+      {branchId && currency && /^\d{4}-\d{2}-\d{2}$/.test(date) && (
+        <DayCloseForm
+          key={`${branchId}:${date}`}
+          branchId={branchId}
+          date={date}
+          currency={currency}
+        />
       )}
     </div>
   );
 }
 
-function DayCloseForm({ branchId, date }: { branchId: string; date: string }) {
+function DayCloseForm({
+  branchId,
+  date,
+  currency,
+}: {
+  branchId: string;
+  date: string;
+  currency: string;
+}) {
   const input = { branchId, businessDate: new Date(`${date}T00:00:00.000Z`) };
   const preview = trpc.pharmacySales.closePreview.useQuery(input, { refetchOnWindowFocus: false });
   const close = trpc.pharmacySales.closeDay.useMutation();
@@ -189,7 +203,9 @@ function DayCloseForm({ branchId, date }: { branchId: string; date: string }) {
             ['Variance', valid || report ? formatMinor(variance) : 'Awaiting count'],
           ].map(([label, value]) => (
             <div key={label}>
-              <dt className="text-sm text-text-muted">{label} · PKR</dt>
+              <dt className="text-sm text-text-muted">
+                {label} · {currency}
+              </dt>
               <dd className="font-mono text-xl tabular-nums" data-testid={label}>
                 {value}
               </dd>
@@ -222,7 +238,7 @@ function DayCloseForm({ branchId, date }: { branchId: string; date: string }) {
               onClick={() => {
                 try {
                   printCounterBrowserZReport(
-                    { ...report, branchName: data.branchName, businessDate: date },
+                    { ...report, branchName: data.branchName, businessDate: date, currency },
                     locale
                   );
                   setPrintMessage(
@@ -266,10 +282,12 @@ function DayCloseForm({ branchId, date }: { branchId: string; date: string }) {
                   Drawer {i + 1} · {drawerOpenedLabel(d, data.timezone)} ·{' '}
                   {d.status === 'OPEN' ? 'Open' : 'Closed'}
                 </p>
-                <p className="text-sm">Expected: PKR {formatMinor(d.expectedMinor)}</p>
+                <p className="text-sm">
+                  Expected: {currency} {formatMinor(d.expectedMinor)}
+                </p>
                 {d.status === 'OPEN' ? (
                   <label className="grid gap-2">
-                    Counted cash for drawer {i + 1} (PKR)
+                    Counted cash for drawer {i + 1} ({currency})
                     <Input
                       className="min-h-11"
                       inputMode="decimal"
@@ -288,7 +306,9 @@ function DayCloseForm({ branchId, date }: { branchId: string; date: string }) {
                     )}
                   </label>
                 ) : (
-                  <p>Counted: PKR {formatMinor(d.countedMinor ?? 0)}</p>
+                  <p>
+                    Counted: {currency} {formatMinor(d.countedMinor ?? 0)}
+                  </p>
                 )}
               </div>
             ))}

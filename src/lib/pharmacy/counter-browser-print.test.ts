@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { buildCounterBrowserReceipt, printCounterBrowserReceipt } from './counter-browser-print';
+import {
+  buildCounterBrowserReceipt,
+  buildCounterBrowserZReport,
+  printCounterBrowserReceipt,
+} from './counter-browser-print';
 import type { CounterReceipt, CounterReceiptLocale } from './counter-receipt';
 
 const receipt: CounterReceipt = {
@@ -39,6 +43,31 @@ const receipt: CounterReceipt = {
 afterEach(() => vi.restoreAllMocks());
 
 describe('isolated Pharmacy browser receipt', () => {
+  it('renders the organization currency on a Z-report', () => {
+    const html = buildCounterBrowserZReport(
+      {
+        id: 'close-1',
+        branchName: 'Main',
+        businessDate: '2026-10-22',
+        currency: 'USD',
+        sequence: 1,
+        grossSalesMinor: 10000,
+        refundTotalMinor: 0,
+        netSalesMinor: 10000,
+        cashExpectedMinor: 10000,
+        cashCountedMinor: 10000,
+        cashVarianceMinor: 0,
+        reason: null,
+        isFinal: true,
+      },
+      'en'
+    );
+    const text = new DOMParser().parseFromString(html, 'text/html').body.textContent;
+    expect(text).toContain('USD');
+    expect(text).toContain('Expected cash: 100.00');
+    expect(text).not.toContain('PKR');
+  });
+
   it.each([
     ['THERMAL_58', '58mm'],
     ['THERMAL', '80mm'],
