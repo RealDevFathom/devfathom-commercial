@@ -5,7 +5,7 @@ import { logActivity } from '../activity';
 import { emitEvent } from '@/lib/webhooks';
 import { appUrl, templates } from '@/lib/email';
 import { notify } from '@/lib/notifications';
-import { Prisma } from '@/generated/prisma/client';
+import { lockProjectMembership } from '@/lib/projects/membership-lock';
 import {
   assertProjectAccess,
   assertBoardAccess,
@@ -42,12 +42,6 @@ const hoursInput = z
 // Prisma returns Decimal; rollups are computed as Number and rounded back to the
 // same 2-decimal precision the column stores.
 const round2 = (n: number) => Math.round(n * 100) / 100;
-
-async function lockProjectMembership(tx: Prisma.TransactionClient, projectId: string) {
-  await tx.$queryRaw(
-    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`project-members:${projectId}`}, 0))`
-  );
-}
 
 export const projectsRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {

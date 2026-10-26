@@ -22,12 +22,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { matchScore, norm } from '@/lib/ai/context';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
-
-async function lockProjectMembership(tx: Prisma.TransactionClient, projectId: string) {
-  await tx.$queryRaw(
-    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`project-members:${projectId}`}, 0))`
-  );
-}
+import { lockProjectMembership } from '@/lib/projects/membership-lock';
 
 export function buildProjectsTools(h: AssistantHelpers): ToolSet {
   const { db } = h;
