@@ -329,6 +329,8 @@ describe('CounterWhatsAppOffer', () => {
         optedIn: false,
       })
     );
+    expect(screen.getByText('Current status: Opted out')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).not.toBeChecked();
     expect(onSaved).toHaveBeenCalledOnce();
   });
 
