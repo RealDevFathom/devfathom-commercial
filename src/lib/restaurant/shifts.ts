@@ -374,6 +374,7 @@ export async function cancelShift(
     where: {
       id: existing.id,
       ...(cas ? { organizationId: cas.organizationId, version: cas.expectedVersion } : {}),
+      status: { not: 'CANCELLED' },
       OR: [{ clockedInAt: null }, { clockedOutAt: { not: null } }],
     },
     data: cas ? { ...data, version: { increment: 1 } } : data,

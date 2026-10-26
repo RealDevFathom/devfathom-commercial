@@ -537,6 +537,34 @@ describe('cancelShift', () => {
     });
   });
 
+  it('does not overwrite a cancellation that commits after the initial read', async () => {
+    const shift = await createShift(db, {
+      branchId: BRANCH,
+      staffProfileId: STAFF,
+      startAt: START,
+      endAt: END,
+    });
+    const firstCancelledAt = new Date('2026-08-20T11:55:00Z');
+
+    beforeShiftUpdateMany = () => {
+      Object.assign(shifts[0]!, {
+        status: 'CANCELLED',
+        cancelledAt: firstCancelledAt,
+        cancelReason: 'Manager cancellation',
+      });
+      beforeShiftUpdateMany = undefined;
+    };
+
+    await expect(
+      cancelShift(db, shift.id, { now: NOON, reason: 'Stale cancellation' })
+    ).rejects.toMatchObject({ reason: 'ALREADY_CANCELLED' });
+    expect(shifts[0]).toMatchObject({
+      status: 'CANCELLED',
+      cancelledAt: firstCancelledAt,
+      cancelReason: 'Manager cancellation',
+    });
+  });
+
   it('refuses a second cancellation and an unknown shift', async () => {
     const shift = await createShift(db, {
       branchId: BRANCH,
