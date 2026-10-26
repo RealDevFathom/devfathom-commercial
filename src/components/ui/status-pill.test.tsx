@@ -12,5 +12,6 @@ describe('StatusPill', () => {
     expect(pill).toHaveAttribute('data-tone', 'info');
     expect(pill).toHaveClass('bg-info/10', 'text-info');
     expect(pill).not.toHaveClass('bg-primary/10', 'text-primary');
+    expect(pill.querySelector('[aria-hidden="true"]')).toHaveClass('bg-current');
   });
 });
