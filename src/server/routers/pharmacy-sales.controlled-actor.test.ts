@@ -97,7 +97,7 @@ describe('pharmacySales.addLine controlled actor', () => {
 
   it('honors an explicit ABAC deny even when the role grants dispense', async () => {
     const { caller, credential, register } = callerFor([
-      { capability: 'pharmacy.dispense', effect: 'ALLOW' },
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
       { capability: 'pharmacy:dispense', effect: 'DENY' },
     ]);
     await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
