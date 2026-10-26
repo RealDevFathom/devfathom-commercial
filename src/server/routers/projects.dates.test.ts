@@ -132,4 +132,24 @@ describe('project date ranges', () => {
       data: { endDate },
     });
   });
+
+  it('allows either stored bound to be cleared', async () => {
+    projectFindUnique.mockResolvedValue({
+      startDate: new Date('2026-10-10T00:00:00.000Z'),
+      endDate: new Date('2026-10-20T00:00:00.000Z'),
+    });
+    projectUpdate.mockResolvedValue({ id: 'project_1', name: 'Project' });
+
+    await caller().update({ id: 'project_1', startDate: null });
+    await caller().update({ id: 'project_1', endDate: null });
+
+    expect(projectUpdate).toHaveBeenNthCalledWith(1, {
+      where: { id: 'project_1', organizationId: 'org_1' },
+      data: { startDate: null },
+    });
+    expect(projectUpdate).toHaveBeenNthCalledWith(2, {
+      where: { id: 'project_1', organizationId: 'org_1' },
+      data: { endDate: null },
+    });
+  });
 });
