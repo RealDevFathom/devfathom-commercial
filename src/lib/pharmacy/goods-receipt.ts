@@ -199,6 +199,7 @@ export async function postGoodsReceipt(
   let purchaseOrder: {
     id: string;
     branchId: string | null;
+    supplierId: string;
     status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'SENT' | 'RECEIVING' | 'CANCELLED';
   } | null = null;
   if (receipt.purchaseOrderId) {
@@ -206,11 +207,15 @@ export async function postGoodsReceipt(
       Array<{
         id: string;
         branchId: string | null;
+        supplierId: string;
         status: 'DRAFT' | 'SUBMITTED' | 'APPROVED' | 'SENT' | 'RECEIVING' | 'CANCELLED';
       }>
-    >`SELECT id, "branchId", status FROM pharmacy_purchase_orders WHERE id=${receipt.purchaseOrderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`;
+    >`SELECT id, "branchId", "supplierId", status FROM pharmacy_purchase_orders WHERE id=${receipt.purchaseOrderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`;
     purchaseOrder = lockedOrder ?? null;
     if (!purchaseOrder) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+    if (purchaseOrder.supplierId !== receipt.supplierId) {
+      throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+    }
     if (purchaseOrder.branchId !== scope.branchId) {
       throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
     }

@@ -20,6 +20,7 @@ function receiptDb(line: {
   warnings?: string[];
   purchaseOrderStatus?: 'DRAFT' | 'SENT' | 'RECEIVING';
   purchaseOrderBranchId?: string;
+  purchaseOrderSupplierId?: string;
 }) {
   const batchFind = vi.fn().mockResolvedValue(null);
   const lineUpdate = vi.fn().mockResolvedValue({});
@@ -33,6 +34,7 @@ function receiptDb(line: {
                 {
                   id: 'po',
                   branchId: line.purchaseOrderBranchId ?? 'branch_a',
+                  supplierId: line.purchaseOrderSupplierId ?? 'supplier_a',
                   status: line.purchaseOrderStatus,
                 },
               ]
@@ -50,6 +52,7 @@ function receiptDb(line: {
         status: 'DRAFT',
         supplierInvoiceRef: 'INV',
         warrantyEvidenceRef: 'WAR',
+        supplierId: 'supplier_a',
         purchaseOrderId: line.purchaseOrderStatus ? 'po' : null,
         purchaseOrder: line.purchaseOrderStatus
           ? {
@@ -143,6 +146,21 @@ describe('postGoodsReceipt expiry', () => {
     await expect(
       postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT })
     ).rejects.toMatchObject({ reason: 'CROSS_BRANCH_REFERENCE' });
+    expect(batchFind).not.toHaveBeenCalled();
+    expect(receiveLot).not.toHaveBeenCalled();
+  });
+
+  it("refuses to post when the linked order belongs to another supplier", async () => {
+    const { db, batchFind } = receiptDb({
+      accepted: 10,
+      rejected: 0,
+      expiry: '2027-12-31',
+      purchaseOrderStatus: 'SENT',
+      purchaseOrderSupplierId: 'supplier_b',
+    });
+    await expect(
+      postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT })
+    ).rejects.toMatchObject({ reason: 'CROSS_TENANT_REFERENCE' });
     expect(batchFind).not.toHaveBeenCalled();
     expect(receiveLot).not.toHaveBeenCalled();
   });
