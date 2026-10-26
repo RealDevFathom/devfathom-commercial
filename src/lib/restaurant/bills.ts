@@ -1028,8 +1028,14 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       },
     });
     const serviceChargeTotal = sub(bill.serviceChargeTotal, line.serviceChargeAmount);
-    const serviceChargeBasis = sub(bill.serviceChargeBasis, line.lineSubtotal);
-    const clearedServiceCharge = serviceChargeBasis.isZero();
+    // Bills without a service-charge policy carry a zero basis.  Subtracting the
+    // merchandise subtotal from that sentinel produced a negative basis on an
+    // ordinary comp and violated the evidence CHECK.  Only charged lines
+    // participate in the policy basis.
+    const serviceChargeBasis = line.serviceChargeAmount.isZero()
+      ? bill.serviceChargeBasis
+      : sub(bill.serviceChargeBasis, line.lineSubtotal);
+    const clearedServiceCharge = serviceChargeTotal.isZero();
     await tx.restaurantBill.update({
       where: { id: bill.id },
       data: {

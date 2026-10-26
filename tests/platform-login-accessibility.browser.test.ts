@@ -5,6 +5,9 @@ import AxeBuilder from '@axe-core/playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const baseURL = process.env.PLATFORM_QA_BASE_URL;
+const platformLoginURL = baseURL
+  ? new URL('/platform/login', baseURL.replace('://127.0.0.1', '://admin.localhost'))
+  : null;
 let browser: Browser;
 
 function luminance(color: string) {
@@ -49,7 +52,7 @@ describe.runIf(Boolean(baseURL))('platform login Studio accessibility', () => {
               if (message.type() === 'error') errors.push(message.text());
             });
             await page.route('**/api/platform/mfa', (route) => route.fulfill({ json: {} }));
-            await page.goto(`${baseURL}/platform/login`);
+            await page.goto(platformLoginURL!.href);
             await page.getByLabel('Work email').waitFor();
             await page.waitForFunction(() =>
               document

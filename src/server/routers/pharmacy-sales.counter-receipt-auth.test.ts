@@ -86,6 +86,7 @@ function fixture(
   overrides: Permission[] = []
 ) {
   const db = {
+    $queryRaw: vi.fn(async () => []),
     user: {
       findUnique: vi.fn(async () => ({
         status: 'ACTIVE',

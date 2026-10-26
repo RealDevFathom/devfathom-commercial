@@ -41,5 +41,6 @@ export const GET = moneyReadRoute({
 export const POST = moneyMutationRoute({
   capability: 'payments:collect',
   schema: receiptPrintBody,
+  obscureBillId: (data) => data.billId,
   run: dispatchReceipt,
 });

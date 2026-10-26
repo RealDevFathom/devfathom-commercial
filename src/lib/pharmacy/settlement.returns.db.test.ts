@@ -19,6 +19,33 @@ const day = new Date('2026-09-29');
 const inTenant = <T>(work: Parameters<typeof withTenantDb<T>>[1]) =>
   withTenantDb(scope.organizationId, work);
 
+async function ensureVisibilityParents() {
+  await inTenant(async (db) => {
+    await db.pharmacyBranch.upsert({
+      where: { id: scope.branchId },
+      update: {},
+      create: {
+        id: scope.branchId,
+        organizationId: scope.organizationId,
+        code: fixture.branchCode,
+        name: fixture.branchName,
+        addressLine: 'Synthetic settlement acceptance branch',
+        city: 'Lahore',
+        provinceCode: 'PB',
+      },
+    });
+    await db.pharmacyPatient.upsert({
+      where: { id: fixture.patientId },
+      update: {},
+      create: {
+        id: fixture.patientId,
+        organizationId: scope.organizationId,
+        displayName: fixture.patientName,
+      },
+    });
+  });
+}
+
 describe.skipIf(!enabled)('return/refund disposable database acceptance', () => {
   it('restores loyalty, splits refunds, audits cash fallback, and serializes cumulative caps', async () => {
     const url = new URL(process.env.PHARMACY_E2E_DATABASE_URL!);
@@ -27,6 +54,7 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
     expect(Number(url.port)).toBeLessThanOrEqual(55699);
     expect(url.pathname).toContain('disposable');
     const deviceId = `returns-${randomUUID()}`;
+    await ensureVisibilityParents();
     const key = () => randomUUID();
     await inTenant(async (db) => {
       const roles = await db.$queryRaw<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>(
@@ -216,6 +244,7 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
   it('isolates partial A/B returns, refuses recalled B, and never credits A for unidentified stock', async () => {
     const key = () => randomUUID();
     const deviceId = `lots-${key()}`;
+    await ensureVisibilityParents();
     const prepared = await inTenant(async (db) => {
       await openPharmacyDrawer(db, scope, { deviceId, businessDate: day, openingFloatMinor: 5000 });
       const lots = [];

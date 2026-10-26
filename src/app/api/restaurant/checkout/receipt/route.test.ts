@@ -100,7 +100,9 @@ beforeEach(() => {
       : null
   );
   findBill.mockImplementation(async ({ where }) =>
-    where.id === receipt?.id && where.branchId === receipt?.branchId && where.status === 'SETTLED'
+    where.id === receipt?.id &&
+    where.branchId === receipt?.branchId &&
+    (where.status === undefined || where.status === 'SETTLED')
       ? receipt
       : null
   );
