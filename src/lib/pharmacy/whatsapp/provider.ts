@@ -84,6 +84,14 @@ function parameterOrder(
   return null;
 }
 
+function englishKhataParameterOrder(
+  value: string | null
+): readonly ['name', 'balance'] | readonly ['balance', 'name'] | null {
+  // An omitted value keeps the established English contract, but an explicitly
+  // invalid value must fail closed rather than silently selecting an order.
+  return value === null ? ['name', 'balance'] : parameterOrder(value);
+}
+
 export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
   const leadDays = Number(envValue(env, 'PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS') ?? 3);
   return {
@@ -109,9 +117,9 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
     },
     khataParameterOrder: {
       // Preserve the established English template contract.
-      en:
-        parameterOrder(envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN_PARAMETERS')) ??
-        ['name', 'balance'],
+      en: englishKhataParameterOrder(
+        envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN_PARAMETERS')
+      ),
       // Urdu has no safe implicit contract: both approval name and placeholder order are explicit.
       ur: parameterOrder(
         envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR_PARAMETERS')

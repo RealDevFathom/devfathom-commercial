@@ -56,6 +56,15 @@ describe('readWhatsAppConfig', () => {
     expect(readWhatsAppConfig({ PHARMACY_WHATSAPP_PROVIDER: 'twilio' }).provider).toBe('mock');
   });
 
+  it('fails closed when an explicit English Khata parameter contract is invalid', () => {
+    const config = readWhatsAppConfig({
+      ...ENV,
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN_PARAMETERS: 'name,amount',
+    });
+
+    expect(config.khataParameterOrder.en).toBeNull();
+  });
+
   it('rejects an out-of-range reminder lead', () => {
     expect(readWhatsAppConfig({ PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS: '5' }).reminderLeadDays).toBe(
       5
