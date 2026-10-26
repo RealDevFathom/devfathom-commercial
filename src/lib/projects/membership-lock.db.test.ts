@@ -48,10 +48,16 @@ describe.skipIf(!databaseUrl)('lockProjectMembership on PostgreSQL', () => {
     await firstHasLock;
 
     let secondAcquired = false;
+    let secondStarted!: () => void;
+    const secondHasStarted = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
     const second = withTransaction(async (tx) => {
+      secondStarted();
       await lockProjectMembership(tx as never, 'project-1');
       secondAcquired = true;
     });
+    await secondHasStarted;
 
     try {
       await new Promise((resolve) => setTimeout(resolve, 50));
