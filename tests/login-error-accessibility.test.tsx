@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const mocks = vi.hoisted(() => ({
   signIn: vi.fn(),
@@ -57,6 +57,15 @@ describe('login credential error accessibility', () => {
     expect(password).not.toHaveAttribute('aria-invalid');
     expect(email).not.toHaveAttribute('aria-describedby');
     expect(password).not.toHaveAttribute('aria-describedby');
+
+    fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
+    await waitFor(() => expect(email).toHaveAttribute('aria-invalid', 'true'));
+
+    fireEvent.change(email, { target: { value: 'somebody@example.invalid' } });
+    expect(email).not.toHaveAttribute('aria-invalid');
+    expect(password).not.toHaveAttribute('aria-invalid');
+    expect(email).not.toHaveAttribute('aria-describedby');
+    expect(password).not.toHaveAttribute('aria-describedby');
   });
 
   it('associates a platform sign-in failure with both fields until either field is edited', async () => {
@@ -64,6 +73,10 @@ describe('login credential error accessibility', () => {
       .fn()
       .mockResolvedValueOnce({ ok: true, json: async () => ({}) })
       .mockResolvedValueOnce({
+        ok: false,
+        json: async () => ({ error: 'Email or password is incorrect.' }),
+      })
+      .mockResolvedValue({
         ok: false,
         json: async () => ({ error: 'Email or password is incorrect.' }),
       });
@@ -80,6 +93,15 @@ describe('login credential error accessibility', () => {
     expectCredentialError(email, password, alert, 'platform-sign-in-error');
 
     fireEvent.change(email, { target: { value: 'another@example.invalid' } });
+    expect(email).not.toHaveAttribute('aria-invalid');
+    expect(password).not.toHaveAttribute('aria-invalid');
+    expect(email).not.toHaveAttribute('aria-describedby');
+    expect(password).not.toHaveAttribute('aria-describedby');
+
+    fireEvent.submit(screen.getByRole('button', { name: 'Continue to control desk' }));
+    await waitFor(() => expect(email).toHaveAttribute('aria-invalid', 'true'));
+
+    fireEvent.change(password, { target: { value: 'another-password' } });
     expect(email).not.toHaveAttribute('aria-invalid');
     expect(password).not.toHaveAttribute('aria-invalid');
     expect(email).not.toHaveAttribute('aria-describedby');
