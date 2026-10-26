@@ -20,6 +20,17 @@ import {
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
 import { protectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import type { Action } from '@/lib/abac/policies';
+
+const PHARMACY_RAIL_CAPABILITIES = [
+  'pharmacy:counter',
+  'pharmacy:inventory',
+  'pharmacy:procurement',
+  'pharmacy:dispense',
+  'pharmacy:safety',
+  'reports:operational',
+  'reports:financial',
+] as const satisfies readonly Action[];
 
 async function organizationBranch(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements?.organizationId;
@@ -44,12 +55,22 @@ const safety = capabilityProcedure('pharmacy:safety');
 export const pharmacySafetyRouter = router({
   access: protectedProcedure.query(async ({ ctx }) => {
     const user = ctx.session?.user;
-    if (!user) return { allowed: false };
+    if (!user) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const capabilities = (
+      await Promise.all(
+        PHARMACY_RAIL_CAPABILITIES.map(async (capability) => ({
+          capability,
+          allowed: await can(subjectFromSession(user), capability, undefined, {
+            db: ctx.db,
+            source: 'TRPC',
+          }),
+        }))
+      )
+    ).filter(({ allowed }) => allowed);
     return {
-      allowed: await can(subjectFromSession(user), 'pharmacy:safety', undefined, {
-        db: ctx.db,
-        source: 'TRPC',
-      }),
+      userId: user.id,
+      organizationId: user.organizationId,
+      capabilities: capabilities.map(({ capability }) => capability),
     };
   }),
   controlledPharmacists: protectedProcedure.query(async ({ ctx }) => {
