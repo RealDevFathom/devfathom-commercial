@@ -292,6 +292,42 @@ describe('PH-OFF OFF-01 — signed snapshots', () => {
     expect(counter.payloadFor('PRICES')).toEqual({ priceMinor: 300 });
   });
 
+  it('cannot recreate a counter revoked while snapshot verification is in flight', async () => {
+    const driver = createMemoryDriver();
+    const enrolled = runtime(driver);
+    await enrolled.hydrate();
+    await install(enrolled, 'RULES');
+
+    let verificationStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      verificationStarted = resolve;
+    });
+    let finishVerification: (() => void) | undefined;
+    const finish = new Promise<void>((resolve) => {
+      finishVerification = resolve;
+    });
+    const delayedVerifier: SnapshotVerifier = {
+      verify: async ({ envelope, signature, publicKey: key }) => {
+        verificationStarted?.();
+        await finish;
+        return signing.verifySnapshotSignature(envelope, signature, key);
+      },
+    };
+    const installing = runtime(driver, delayedVerifier);
+    const revoking = runtime(driver);
+    expect(await installing.hydrate()).toBe('ready');
+    expect(await revoking.hydrate()).toBe('ready');
+
+    const installation = install(installing, 'PRICES', { priceMinor: 100 });
+    await started;
+    expect(await revoking.revoke()).toEqual({ commands: 0 });
+    finishVerification?.();
+
+    expect(await installation).toMatchObject({ ok: false, reason: 'DEVICE_REVOKED' });
+    expect(await driver.read('org_a::branch_a::counter_1')).toBeUndefined();
+    expect(installing.cachedSnapshotStates()).toEqual([]);
+  });
+
   it('survives a reload: an installed snapshot is read back from storage', async () => {
     const driver = createMemoryDriver();
     const first = runtime(driver);

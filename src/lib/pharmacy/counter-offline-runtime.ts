@@ -113,7 +113,7 @@ export interface SnapshotVerifier {
 
 export type InstallSnapshotResult =
   | { ok: true; snapshot: StoredCounterSnapshot }
-  | { ok: false; reason: EnvelopeRejection | 'BAD_SIGNATURE'; message: string };
+  | { ok: false; reason: EnvelopeRejection | 'BAD_SIGNATURE' | 'DEVICE_REVOKED'; message: string };
 
 export type CounterReplayResponse = {
   status: number;
@@ -207,32 +207,65 @@ export class PharmacyCounterRuntime {
     payloadHash: string;
     nowMs: number;
   }): Promise<InstallSnapshotResult> {
+    return this.installSnapshotTransition(input, false);
+  }
+
+  private async installSnapshotTransition(
+    input: {
+      envelope: OfflineSnapshotEnvelope;
+      signature: string;
+      payload: unknown;
+      payloadHash: string;
+      nowMs: number;
+    },
+    rejectMissing: boolean
+  ): Promise<InstallSnapshotResult> {
     try {
-      return await this.installSnapshotOnce(input);
+      return await this.installSnapshotOnce(input, rejectMissing);
     } catch (error) {
       if (error instanceof CounterStorageConflictError) {
         // Verification may take long enough for another context to publish a
         // newer snapshot. Re-read and repeat every check rather than applying
-        // a replacement derived from the stale document.
-        return this.installSnapshot(input);
+        // a replacement derived from the stale document. Once a CAS has
+        // conflicted, however, absence is a revocation boundary rather than a
+        // fresh scope that this in-flight installation may recreate.
+        return this.installSnapshotTransition(input, true);
       }
       throw error;
     }
   }
 
-  private async installSnapshotOnce(input: {
-    envelope: OfflineSnapshotEnvelope;
-    signature: string;
-    payload: unknown;
-    payloadHash: string;
-    nowMs: number;
-  }): Promise<InstallSnapshotResult> {
+  private async installSnapshotOnce(
+    input: {
+      envelope: OfflineSnapshotEnvelope;
+      signature: string;
+      payload: unknown;
+      payloadHash: string;
+      nowMs: number;
+    },
+    rejectMissing: boolean
+  ): Promise<InstallSnapshotResult> {
     const durable = await readTerminalState<CounterQueueSnapshot, CounterCache>(
       this.driver,
       this.scope,
       COUNTER_STORE_SCHEMA_VERSION
     );
     if (durable.status === 'unrecoverable') throw new Error(durable.message);
+    if (durable.status === 'empty' && rejectMissing) {
+      const snapshotPublicKey = this.cache().snapshotPublicKey;
+      this.state = emptyTerminalState<CounterQueueSnapshot, CounterCache>(
+        this.scope,
+        COUNTER_STORE_SCHEMA_VERSION
+      );
+      this.state.queue = createCounterQueue(this.scope.deviceId);
+      this.state.catalog = { snapshotPublicKey, snapshots: [] };
+      this.persistedState = undefined;
+      return {
+        ok: false,
+        reason: 'DEVICE_REVOKED',
+        message: 'This counter was removed while the snapshot was being installed.',
+      };
+    }
 
     const expectedState = durable.status === 'ok' ? durable.state : undefined;
     const sourceState: CounterRuntimeState =
