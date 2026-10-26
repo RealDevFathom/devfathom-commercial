@@ -43,6 +43,14 @@ export type OrderDetail = {
   totals: { subtotal: string; tax: string; serviceCharge: string; deliveryFee?: string };
 };
 
+export function canCloseDeliveredOrder(
+  order: Pick<OrderDetail, 'channel' | 'deliveryStatus' | 'settled'>
+) {
+  return (
+    order.channel === 'DELIVERY' && order.deliveryStatus === 'DELIVERED' && order.settled === true
+  );
+}
+
 export type VoidItemInput = {
   itemId: string;
   reason: string;
@@ -171,10 +179,8 @@ export function OrderTicketPanel({
       !activeTables.includes(table.id) &&
       (!table.occupied || table.activeOrderIds.includes(order.id))
   );
-  const canCloseDeliveredOrder =
-    order.channel === 'DELIVERY' && order.deliveryStatus === 'DELIVERED' && order.settled === true;
   const shouldCollectPayment =
-    !canCloseDeliveredOrder &&
+    !canCloseDeliveredOrder(order) &&
     (order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY');
 
   return (

@@ -1,7 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { OrderTicketPanel, type OrderDetail } from './order-ticket-panel';
+import {
+  canCloseDeliveredOrder,
+  OrderTicketPanel,
+  type OrderDetail,
+} from './order-ticket-panel';
 
 const order: OrderDetail = {
   id: 'order-1',
@@ -48,7 +52,22 @@ function handlers() {
   };
 }
 
+const ineligibleDeliveryOrders: [string, Parameters<typeof canCloseDeliveredOrder>[0]][] = [
+  ['not delivered', { channel: 'DELIVERY', deliveryStatus: 'OUT_FOR_DELIVERY', settled: true }],
+  ['not settled', { channel: 'DELIVERY', deliveryStatus: 'DELIVERED', settled: false }],
+  ['missing delivery state', { channel: 'DELIVERY', settled: true }],
+  ['missing settlement state', { channel: 'DELIVERY', deliveryStatus: 'DELIVERED' }],
+  ['not a delivery', { channel: 'TAKEAWAY', deliveryStatus: 'DELIVERED', settled: true }],
+];
+
 describe('OrderTicketPanel', () => {
+  it.each(ineligibleDeliveryOrders)(
+    'does not close a delivery order when it is %s',
+    (_label, candidate) => {
+      expect(canCloseDeliveredOrder(candidate)).toBe(false);
+    }
+  );
+
   it('provides 44px touch targets for hold, fire, and void actions', () => {
     render(
       <OrderTicketPanel

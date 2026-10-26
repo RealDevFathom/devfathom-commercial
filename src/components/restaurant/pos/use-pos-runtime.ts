@@ -32,7 +32,12 @@ import type { OperatorSwitch } from './operator-switch';
 import type { Input } from '@/components/ui/input';
 import type { StatusPill } from '@/components/ui/status-pill';
 import type { RefundPanel } from './refund-panel';
-import type { OrderTicketPanel, OrderDetail, VoidItemInput } from './order-ticket-panel';
+import {
+  canCloseDeliveredOrder,
+  type OrderTicketPanel,
+  type OrderDetail,
+  type VoidItemInput,
+} from './order-ticket-panel';
 import { type OrderChannel } from '@/lib/restaurant/order-channels';
 import {
   createIndexedDbDriver,
@@ -688,10 +693,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
   async function closeForPayment() {
     const activeOrder = order;
     if (!activeOrder || pending) return;
-    const finalizingDeliveredOrder =
-      activeOrder.channel === 'DELIVERY' &&
-      activeOrder.deliveryStatus === 'DELIVERED' &&
-      activeOrder.settled === true;
+    const finalizingDeliveredOrder = canCloseDeliveredOrder(activeOrder);
     if (activeOrder.status === 'PAYMENT_PENDING') {
       if (finalizingDeliveredOrder) {
         if (await mutate('close', { orderId: activeOrder.id }, 'Order closed.', false)) {
