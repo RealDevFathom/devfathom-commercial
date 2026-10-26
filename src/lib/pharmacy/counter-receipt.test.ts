@@ -83,6 +83,7 @@ describe('counterReceiptTotals', () => {
     expect(totals.netMinor).toBe(7_800);
     expect(totals.tenderedMinor).toBe(8_000);
     expect(totals.changeMinor).toBe(200);
+    expect(totals.tenderedMinor - totals.changeMinor).toBe(totals.netMinor);
   });
 
   it('uses applied amounts for non-cash and legacy cash tenders', () => {
