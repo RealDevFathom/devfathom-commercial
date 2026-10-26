@@ -10,6 +10,14 @@ describe('financeCsvCell', () => {
     }
   );
 
+  it.each(
+    [' ', '\t', '\r', '\n'].flatMap((prefix) =>
+      ['=', '+', '-', '@'].map((marker) => `${prefix}${marker}danger`)
+    )
+  )('neutralizes whitespace-prefixed agency finance formulas: %j', (value) => {
+    expect(financeCsvCell(value)).toBe(`"'${value}"`);
+  });
+
   it('quotes ordinary text without changing it', () => {
     expect(financeCsvCell('Client "A"')).toBe('"Client ""A"""');
   });
