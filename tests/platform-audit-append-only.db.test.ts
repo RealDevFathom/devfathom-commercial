@@ -54,6 +54,10 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
           reason: '=HYPERLINK("https://example.invalid")',
         })),
       });
+      await db.$executeRaw`
+        INSERT INTO audit_logs (id, "organizationId", source, category, action)
+        VALUES (${`${org}_tenant_audit`}, ${org}, 'TRPC', 'SYSTEM', ${action})
+      `;
     });
   });
   afterAll(async () => {
@@ -76,6 +80,22 @@ describe.skipIf(!url)('platform audit ledger on disposable PostgreSQL', () => {
         ).rejects.toThrow(/append-only/);
       });
     }
+  }
+
+  for (const operation of ['UPDATE', 'DELETE']) {
+    it(`audit_logs rejects tenant-scoped ${operation}`, async () => {
+      const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
+      await expect(
+        withTenantDb(org, (db) =>
+          db.$executeRawUnsafe(
+            operation === 'UPDATE'
+              ? `UPDATE audit_logs SET action = 'tampered' WHERE id = $1`
+              : `DELETE FROM audit_logs WHERE id = $1`,
+            `${org}_tenant_audit`
+          )
+        )
+      ).rejects.toThrow(/append-only/);
+    });
   }
 
   const filters = { org, actor, action, from: '2026-09-20', through: '2026-09-20' };
