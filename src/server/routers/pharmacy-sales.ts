@@ -352,7 +352,8 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
 async function requireCounterReceiptAccess(
   ctx: TRPCContext,
   branch: string,
-  requireCanonicalCounter = false
+  requireCanonicalCounter = false,
+  requireAssignedBranch = false
 ): Promise<LedgerScope> {
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
@@ -426,6 +427,12 @@ async function requireCounterReceiptAccess(
   });
   const assigned = new Set(rows.map((row) => row.branchId));
   if (assigned.has(branch)) return scope;
+
+  // Returns and refunds move stock or money, so even organization administrators
+  // must be actively assigned to the branch where the movement is recorded.
+  if (requireAssignedBranch) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
 
   // Session role only. An organization-role key is not an administrator grant.
   // An assigned admin still reaches every other active branch of this organization.
@@ -837,7 +844,7 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const authorizedScope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        const authorizedScope = await requireCounterReceiptAccess(ctx, input.branchId, true, true);
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           const scope = authorizedScope;
@@ -1372,7 +1379,7 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true, true);
         return await ctx.db.$transaction(async (tx) => {
           try {
             return await returnSaleLine(txDb(tx), scope, input);
