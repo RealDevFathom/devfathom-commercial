@@ -23,8 +23,13 @@ vi.mock('@/lib/pharmacy/stock-ledger', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/stock-ledger')>()),
   onHand: vi.fn(),
 }));
+vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/restaurant/operator-credentials')>()),
+  verifyOperatorCredential: vi.fn(async () => true),
+}));
 
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
+import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { addSaleLine } from '@/lib/pharmacy/sales';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
 import { recordTrpcAudit } from '@/server/audit';
@@ -73,6 +78,20 @@ function fixture() {
       })),
     },
     pharmacyBranchAssignment: { findFirst: vi.fn(async () => ({ id: 'assignment-1' })) },
+    restaurantOperatorCredential: {
+      findFirst: vi.fn(async () => ({
+        id: 'credential-1',
+        credentialHash: 'hash',
+        failedAttempts: 0,
+        lockedUntil: null,
+        staffProfile: {
+          status: 'ACTIVE',
+          user: { id: 'manager-1', status: 'ACTIVE', organizationId: 'org-1' },
+        },
+      })),
+      update: vi.fn(),
+    },
+    $queryRaw: vi.fn(),
     // Integrated tip: addLine first reads the medicine to route controlled lines; these are not.
     medicine: { findFirst: vi.fn(async () => null) },
   };
@@ -220,21 +239,26 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
 });
 
 describe('pharmacySales.addLine discount approval (#482)', () => {
-  it('rejects caller-supplied approval by the operator before stock is touched', async () => {
+  it('rejects a caller-supplied manager id before stock is touched', async () => {
     const f = fixture();
 
     await expect(
-      f.caller.addLine({ ...line, discountMinor: 1, approvedByUserId: 'actor-1' })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      f.caller.addLine({ ...line, discountMinor: 1, approvedByUserId: 'manager-1' } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
 
+    expect(f.transaction).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
   });
 
-  it('persists only a real active branch manager under the server-owned policy', async () => {
+  it('persists the manager authenticated by PIN under the server-owned policy', async () => {
     const f = fixture();
     vi.mocked(addSaleLine).mockResolvedValue({ line: { id: 'line-1' }, allocation: {} } as never);
 
-    await f.caller.addLine({ ...line, discountMinor: 1, approvedByUserId: 'manager-1' });
+    await f.caller.addLine({
+      ...line,
+      discountMinor: 1,
+      discountAuthorization: { staffProfileId: 'manager-profile', pin: '1234' },
+    });
 
     const input = vi.mocked(addSaleLine).mock.calls[0]![2];
     expect(input).toMatchObject({
@@ -242,6 +266,28 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
       approvedByUserId: 'manager-1',
       approvalPolicy: 'PHARMACY_MANAGER',
     });
+    expect(input).not.toHaveProperty('discountAuthorization');
+    expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
+  });
+
+  it('rejects a real manager who did not authenticate the approval', async () => {
+    const f = fixture();
+    vi.mocked(verifyOperatorCredential).mockResolvedValueOnce(false);
+
+    await expect(
+      f.caller.addLine({
+        ...line,
+        discountMinor: 1,
+        discountAuthorization: { staffProfileId: 'manager-profile', pin: '9999' },
+      })
+    ).resolves.toEqual({
+      blocked: 'An active manager must independently approve this discount with their PIN.',
+    });
+    expect(f.db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'credential-1' },
+      data: { failedAttempts: 1, lockedUntil: null },
+    });
+    expect(addSaleLine).not.toHaveBeenCalled();
   });
 
   it('rejects an approver without an active assignment to this branch', async () => {
@@ -249,8 +295,14 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
     f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null as never);
 
     await expect(
-      f.caller.addLine({ ...line, discountMinor: 1, approvedByUserId: 'manager-1' })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      f.caller.addLine({
+        ...line,
+        discountMinor: 1,
+        discountAuthorization: { staffProfileId: 'manager-profile', pin: '1234' },
+      })
+    ).resolves.toEqual({
+      blocked: 'An active manager must independently approve this discount with their PIN.',
+    });
     expect(addSaleLine).not.toHaveBeenCalled();
   });
 });

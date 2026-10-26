@@ -162,27 +162,58 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 async function authorizedSaleLineApprover(
   db: ScopedDb,
   scope: LedgerScope,
-  approverId: string | undefined,
+  authorization: { staffProfileId: string; pin: string } | undefined,
   needsDiscountApproval: boolean
 ) {
   if (!needsDiscountApproval) return null;
-  if (!approverId || approverId === scope.actorId) return null;
-  const [approver, assignment] = await Promise.all([
-    db.user.findFirst({
-      where: { id: approverId, organizationId: scope.organizationId, status: 'ACTIVE' },
-    }),
-    db.pharmacyBranchAssignment.findFirst({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        userId: approverId,
-        active: true,
-      },
-    }),
-  ]);
-  if (!approver || !assignment) return null;
-  if (!(await can(approver, 'pharmacy:manage', undefined, { db, source: 'TRPC' })))
+  if (!authorization) return null;
+  await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${authorization.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
+  const credential = await db.restaurantOperatorCredential.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      staffProfileId: authorization.staffProfileId,
+      type: 'PIN',
+      revokedAt: null,
+      deviceId: null,
+    },
+    include: { staffProfile: { include: { user: true } } },
+  });
+  const approver = credential?.staffProfile.user;
+  const now = new Date();
+  if (
+    !credential ||
+    credential.staffProfile.status !== 'ACTIVE' ||
+    !approver ||
+    approver.organizationId !== scope.organizationId ||
+    approver.status !== 'ACTIVE' ||
+    approver.id === scope.actorId ||
+    isLockedOut(credential, now)
+  )
     return null;
+  const assignment = await db.pharmacyBranchAssignment.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      userId: approver.id,
+      active: true,
+    },
+  });
+  if (
+    !assignment ||
+    !(await can(approver, 'pharmacy:manage', undefined, { db, source: 'TRPC', now }))
+  )
+    return null;
+  if (!(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))) {
+    await db.restaurantOperatorCredential.update({
+      where: { id: credential.id },
+      data: registerFailedAttempt(credential, now),
+    });
+    return null;
+  }
+  await db.restaurantOperatorCredential.update({
+    where: { id: credential.id },
+    data: clearLockout(),
+  });
   return approver.id;
 }
 
@@ -972,7 +1003,13 @@ export const pharmacySalesRouter = router({
           canonicalUnitsPerSaleUnit: z.number().int().positive(),
           discountKind: z.enum(['DISCOUNT', 'PROMOTION', 'COMPLIMENTARY']).optional(),
           discountMinor: z.number().int().nonnegative().optional(),
-          approvedByUserId: z.string().min(1).optional(),
+          discountAuthorization: z
+            .object({
+              staffProfileId: z.string().trim().min(1).max(128),
+              pin: z.string().regex(/^\d{4,8}$/),
+            })
+            .strict()
+            .optional(),
           override: z
             .object({
               inventoryLotId: z.string().min(1),
@@ -1015,14 +1052,14 @@ export const pharmacySalesRouter = router({
           const approverId = await authorizedSaleLineApprover(
             db,
             scope,
-            input.approvedByUserId,
+            input.discountAuthorization,
             needsDiscountApproval
           );
           if (needsDiscountApproval && !approverId) {
-            throw new TRPCError({
-              code: 'FORBIDDEN',
-              message: 'An active, independently authorized branch approver is required.',
-            });
+            // Return a refusal so a failed PIN attempt commits its durable lockout update.
+            return {
+              blocked: 'An active manager must independently approve this discount with their PIN.',
+            };
           }
           if (
             input.override &&
@@ -1036,8 +1073,10 @@ export const pharmacySalesRouter = router({
               message: 'Pharmacy safety permission is required for a FEFO override.',
             });
           }
+          const { discountAuthorization: _discountAuthorization, ...lineInputWithoutSecret } = input;
+          void _discountAuthorization;
           const approvedInput = {
-            ...input,
+            ...lineInputWithoutSecret,
             approvedByUserId: approverId ?? undefined,
             approvalPolicy: needsDiscountApproval ? DISCOUNT_APPROVAL_POLICY : undefined,
             override: input.override
