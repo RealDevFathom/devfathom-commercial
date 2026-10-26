@@ -11,13 +11,13 @@ import { cn } from '@/lib/utils';
 import { moneyLabel } from '@/lib/finance/currency';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
-import { PAID_STATUS_ERROR } from '@/lib/finance/invoice-status';
+import {
+  INVOICE_STATUS_VALUES,
+  PAID_STATUS_ERROR,
+  type InvoiceStatusValue,
+} from '@/lib/finance/invoice-status';
 
-type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
-
-const INVOICE_STATUSES: InvoiceStatus[] = ['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED'];
-
-const statusConfig: Record<string, { bg: string; label: string }> = {
+const statusConfig: Record<InvoiceStatusValue, { bg: string; label: string }> = {
   DRAFT: { bg: 'bg-muted text-muted-foreground', label: 'Draft' },
   SENT: { bg: 'bg-blue-500/10 text-blue-500', label: 'Sent' },
   PAID: { bg: 'bg-emerald-500/10 text-emerald-500', label: 'Paid' },
@@ -28,7 +28,7 @@ const statusConfig: Record<string, { bg: string; label: string }> = {
 type InvoiceRowData = {
   id: string;
   invoiceNumber: string;
-  status: string;
+  status: InvoiceStatusValue;
   currency: string;
   total: unknown;
   dueDate: Date | string;
@@ -63,7 +63,7 @@ export function InvoicesTab() {
   });
 
   const handleUpdateStatus = useCallback(
-    (id: string, status: InvoiceStatus) => mutateStatus({ id, status }),
+    (id: string, status: InvoiceStatusValue) => mutateStatus({ id, status }),
     [mutateStatus]
   );
 
@@ -177,7 +177,7 @@ export const InvoiceRow = memo(function InvoiceRow({
   onUpdateStatus,
 }: {
   inv: InvoiceRowData;
-  onUpdateStatus: (id: string, status: InvoiceStatus) => void;
+  onUpdateStatus: (id: string, status: InvoiceStatusValue) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -253,7 +253,7 @@ export const InvoiceRow = memo(function InvoiceRow({
                 className="fixed z-[61] w-32 -translate-x-1/2 rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10"
                 style={{ top: menuPos.top, left: menuPos.left }}
               >
-                {INVOICE_STATUSES.map((s) => (
+                {INVOICE_STATUS_VALUES.map((s) => (
                   <button
                     key={s}
                     role="menuitem"
