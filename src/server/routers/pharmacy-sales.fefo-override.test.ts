@@ -239,6 +239,8 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
 });
 
 describe('pharmacySales.addLine discount approval (#482)', () => {
+  const discountAuthorization = { staffProfileId: 'manager-profile', pin: '1234' };
+
   it('rejects a caller-supplied manager id before stock is touched', async () => {
     const f = fixture();
 
@@ -257,7 +259,7 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
     await f.caller.addLine({
       ...line,
       discountMinor: 1,
-      discountAuthorization: { staffProfileId: 'manager-profile', pin: '1234' },
+      discountAuthorization,
     });
 
     const input = vi.mocked(addSaleLine).mock.calls[0]![2];
@@ -298,11 +300,79 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
       f.caller.addLine({
         ...line,
         discountMinor: 1,
-        discountAuthorization: { staffProfileId: 'manager-profile', pin: '1234' },
+        discountAuthorization,
       })
     ).resolves.toEqual({
       blocked: 'An active manager must independently approve this discount with their PIN.',
     });
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the current operator', { id: 'actor-1', status: 'ACTIVE', organizationId: 'org-1' }],
+    ['an inactive user', { id: 'manager-1', status: 'INACTIVE', organizationId: 'org-1' }],
+    [
+      'a user in another organization',
+      { id: 'manager-1', status: 'ACTIVE', organizationId: 'org-2' },
+    ],
+  ])('rejects %s as the independent approver', async (_label, user) => {
+    const f = fixture();
+    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue({
+      id: 'credential-1',
+      credentialHash: 'hash',
+      failedAttempts: 0,
+      lockedUntil: null,
+      staffProfile: { status: 'ACTIVE', user },
+    });
+
+    await expect(
+      f.caller.addLine({ ...line, discountMinor: 1, discountAuthorization })
+    ).resolves.toHaveProperty('blocked');
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('rejects an inactive staff profile', async () => {
+    const f = fixture();
+    const credential = await f.db.restaurantOperatorCredential.findFirst();
+    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue({
+      ...credential,
+      staffProfile: { ...credential.staffProfile, status: 'INACTIVE' },
+    });
+
+    await expect(
+      f.caller.addLine({ ...line, discountMinor: 1, discountAuthorization })
+    ).resolves.toHaveProperty('blocked');
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('rejects a locked credential', async () => {
+    const f = fixture();
+    const credential = await f.db.restaurantOperatorCredential.findFirst();
+    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue({
+      ...credential,
+      lockedUntil: new Date('2999-01-01T00:00:00Z'),
+    });
+
+    await expect(
+      f.caller.addLine({ ...line, discountMinor: 1, discountAuthorization })
+    ).resolves.toHaveProperty('blocked');
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('rejects an approver without pharmacy management permission', async () => {
+    const f = fixture();
+    f.db.user.findUnique.mockResolvedValue({
+      organizationRole: { permissions: [] },
+      permissionOverrides: [],
+    });
+
+    await expect(
+      f.caller.addLine({ ...line, discountMinor: 1, discountAuthorization })
+    ).resolves.toHaveProperty('blocked');
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
   });
 });
