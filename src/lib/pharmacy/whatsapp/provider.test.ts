@@ -65,6 +65,18 @@ describe('readWhatsAppConfig', () => {
     expect(config.khataParameterOrder.en).toBeNull();
   });
 
+  it('keeps English and Urdu Khata template contracts independent', () => {
+    const config = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN: 'khata_due_en',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_EN_PARAMETERS: 'amount,name',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR: 'khata_due_ur',
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR_PARAMETERS: 'name,amount',
+    });
+
+    expect(config.templates.khataReminder).toEqual({ en: 'khata_due_en', ur: 'khata_due_ur' });
+    expect(config.khataParameterOrder).toEqual({ en: ['amount', 'name'], ur: null });
+  });
+
   it('rejects an out-of-range reminder lead', () => {
     expect(readWhatsAppConfig({ PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS: '5' }).reminderLeadDays).toBe(
       5
