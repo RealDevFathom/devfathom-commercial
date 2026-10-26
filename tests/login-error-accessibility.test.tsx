@@ -16,12 +16,17 @@ vi.mock('@/components/app-providers', () => ({ AppProviders: () => null }));
 import { LoginForm } from '@/app/login/login-form';
 import { PlatformLoginForm } from '@/app/platform/(auth)/login/platform-login-form';
 
-function expectCredentialError(email: HTMLElement, password: HTMLElement, alert: HTMLElement) {
+function expectCredentialError(
+  email: HTMLElement,
+  password: HTMLElement,
+  alert: HTMLElement,
+  errorId: string,
+) {
   expect(email).toHaveAttribute('aria-invalid', 'true');
   expect(password).toHaveAttribute('aria-invalid', 'true');
-  expect(alert).toHaveAttribute('id');
-  expect(email).toHaveAttribute('aria-describedby', alert.id);
-  expect(password).toHaveAttribute('aria-describedby', alert.id);
+  expect(alert).toHaveAttribute('id', errorId);
+  expect(email).toHaveAttribute('aria-describedby', errorId);
+  expect(password).toHaveAttribute('aria-describedby', errorId);
   expect(email).toHaveFocus();
 }
 
@@ -45,7 +50,7 @@ describe('login credential error accessibility', () => {
     fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
 
     const alert = await screen.findByRole('alert');
-    expectCredentialError(email, password, alert);
+    expectCredentialError(email, password, alert, 'login-sign-in-error');
 
     fireEvent.change(password, { target: { value: 'another-password' } });
     expect(email).not.toHaveAttribute('aria-invalid');
@@ -72,7 +77,7 @@ describe('login credential error accessibility', () => {
     fireEvent.submit(screen.getByRole('button', { name: 'Continue to control desk' }));
 
     const alert = await screen.findByRole('alert');
-    expectCredentialError(email, password, alert);
+    expectCredentialError(email, password, alert, 'platform-sign-in-error');
 
     fireEvent.change(email, { target: { value: 'another@example.invalid' } });
     expect(email).not.toHaveAttribute('aria-invalid');
