@@ -209,4 +209,22 @@ describe('CRM-L01 pharmacy loyalty', () => {
       data: { whatsappOptIn: true, whatsappOptInChangedAt: changedAt },
     });
   });
+
+  it('rejects a missing or inactive customer before taking the consent lock', async () => {
+    const db = {
+      pharmacyCustomer: {
+        findFirst: vi.fn().mockResolvedValue(null),
+      },
+      $queryRaw: vi.fn(),
+    };
+
+    await expect(
+      setCustomerWhatsAppOptIn(db as never, scope, 'customer-a', true)
+    ).rejects.toMatchObject({ reason: 'CUSTOMER_NOT_FOUND' });
+    expect(db.pharmacyCustomer.findFirst).toHaveBeenCalledWith({
+      where: { id: 'customer-a', organizationId: 'org-a', active: true },
+      select: { id: true },
+    });
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+  });
 });

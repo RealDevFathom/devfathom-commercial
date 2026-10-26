@@ -410,6 +410,11 @@ export async function setCustomerWhatsAppOptIn(
   optedIn: boolean,
   clock: () => Date = () => new Date()
 ) {
+  const customer = await db.pharmacyCustomer.findFirst({
+    where: { id: customerId, organizationId: scope.organizationId, active: true },
+    select: { id: true },
+  });
+  if (!customer) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
   await lockCustomerConsent(db, scope.organizationId, customerId);
   // Resolve the server timestamp while holding the lock so a request that was
   // queued behind a newer inbound consent event cannot backdate its write.
