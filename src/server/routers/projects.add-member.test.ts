@@ -17,6 +17,8 @@ const projectMemberUpsert = vi.fn();
 const userFindMany = vi.fn();
 
 const db = {
+  $queryRaw: vi.fn(async () => [{ id: 'project_1' }]),
+  $transaction: vi.fn(async (callback: (tx: never) => Promise<unknown>) => callback(db as never)),
   projectMember: {
     findUnique: projectMemberFindUnique,
     count: projectMemberCount,
@@ -76,6 +78,7 @@ describe('projects.addMember role invariants', () => {
       message: 'Cannot demote the last lead. Promote another member first.',
     });
     expect(projectMemberUpsert).not.toHaveBeenCalled();
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
   });
 
   it('preserves role updates when another project lead remains', async () => {
@@ -94,5 +97,6 @@ describe('projects.addMember role invariants', () => {
       create: { projectId: 'project_1', userId: 'lead_1', role: 'MEMBER' },
       update: { role: 'MEMBER' },
     });
+    expect(db.$transaction).toHaveBeenCalledOnce();
   });
 });
