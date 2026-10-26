@@ -541,12 +541,16 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
   });
   if (!order) return null;
 
-  const activeItems = order.items.filter((i) => i.status !== 'VOIDED');
+  // Remakes remain part of the operational item history, but are not a new
+  // purchase and therefore must not contribute to guest-facing totals.
+  const purchasedItems = order.items.filter(
+    (item) => item.status !== 'VOIDED' && item.remakeOfItemId === null
+  );
   const at = new Date();
   const terms = reviveCommercialTerms(await loadBranchCommercialTerms(db, order.branchId, at));
   const quoted = quoteDraftCheckBreakdown({
     at,
-    lines: activeItems.map((item) => ({
+    lines: purchasedItems.map((item) => ({
       id: item.id,
       unitPrice: item.unitPrice.toString(),
       quantity: item.quantity,
@@ -610,7 +614,7 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
       items: ticket.items,
     })),
     totals: {
-      subtotal: money(deriveSubtotal(activeItems)),
+      subtotal: money(deriveSubtotal(purchasedItems)),
       tax: quoted.tax,
       serviceCharge: order.bills.length > 0 ? money(billedServiceCharge) : quoted.serviceCharge,
       deliveryFee: money(order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)),
