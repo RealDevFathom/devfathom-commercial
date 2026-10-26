@@ -42,6 +42,10 @@ function day(value: string): Date | null {
     : null;
 }
 
+function isValidDate(value: unknown): value is Date {
+  return value instanceof Date && !Number.isNaN(value.getTime());
+}
+
 function parseQuery(query: Query): { controls?: Controls; error?: string } {
   const values = [query.branch, query.from, query.to];
   if (values.every((value) => value === undefined)) return {};
@@ -290,6 +294,9 @@ export default async function TrialBalanceControlPage({
         if (
           report.scope.organizationId !== actor.organization.id ||
           report.scope.branchId !== parsed.controls.branchId ||
+          !isValidDate(report.from) ||
+          !isValidDate(report.to) ||
+          !isValidDate(report.freshness?.retrievedAt) ||
           report.from.getTime() !== requestedFrom.getTime() ||
           report.to.getTime() !== requestedTo.getTime()
         ) {

@@ -198,4 +198,19 @@ describe('TrialBalanceControlPage', () => {
     expect(output).not.toContain('database detail');
     expect(output).not.toContain('All account rows');
   });
+
+  it.each([
+    ['missing', {}],
+    ['non-Date', { retrievedAt: '2026-02-02T03:04:05.000Z' }],
+    ['invalid Date', { retrievedAt: new Date(Number.NaN) }],
+  ])('fails closed when freshness.retrievedAt is %s', async (_description, freshness) => {
+    mocks.financialStatements.mockResolvedValueOnce({
+      ...report(),
+      freshness,
+    });
+
+    const output = await html({ branch: 'branch-1', from: '2026-01-01', to: '2026-02-01' });
+    expect(output).toContain('Trial-balance source unavailable');
+    expect(output).not.toContain('All account rows');
+  });
 });
