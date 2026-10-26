@@ -24,6 +24,35 @@ vi.mock('@/lib/trpc', () => ({
 import { CounterRxPanel } from './counter-rx-panel';
 
 describe('cashier prescription intake', () => {
+  it('does not link the production fallback action to the dispense-only workspace', () => {
+    mocks.captureWorkspace.mockReturnValue({ data: { medicines: [], prescribers: [] } });
+    render(
+      <CounterRxPanel
+        alerts={[]}
+        patient={{
+          patientId: 'patient-a',
+          displayName: 'Patient A',
+          phone: null,
+          cnic: null,
+          dispensingConsent: true,
+          address: null,
+          prescriptions: [],
+        }}
+        candidates={[]}
+        query=""
+        state="ready"
+        onQueryChange={vi.fn()}
+        onSearch={vi.fn()}
+        onSelectPatient={vi.fn()}
+        onClearPatient={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Capture prescription' })).toBeDisabled();
+    expect(screen.queryByRole('link', { name: /Capture prescription/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/Use Photograph prescription below/)).toBeInTheDocument();
+  });
+
   it('offers enabled capture controls before any upload and opens the narrow intake workspace', async () => {
     mocks.captureWorkspace.mockReturnValue({ data: { medicines: [], prescribers: [] } });
     render(

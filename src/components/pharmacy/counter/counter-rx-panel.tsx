@@ -1,7 +1,6 @@
 'use client';
 
 import { forwardRef, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import Link from 'next/link';
 
 import {
   attachmentUrl,
@@ -9,7 +8,7 @@ import {
   imageBase64,
   isImageType,
 } from '@/components/pharmacy/dispensing/prescriptions-console';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -835,26 +834,15 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   >
                     Capture prescription
                   </Button>
-                ) : disabled || state === 'loading' || state === 'error' ? (
+                ) : (
                   <Button type="button" variant="outline" className="h-11" disabled>
                     Capture prescription
                   </Button>
-                ) : (
-                  <Link
-                    className={buttonVariants({ variant: 'outline', className: 'h-11' })}
-                    href={`/pharmacy/prescriptions#patientId=${encodeURIComponent(patient.patientId)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    prefetch={false}
-                  >
-                    Capture prescription
-                    <span className="sr-only"> for {patient.displayName} (opens in a new tab)</span>
-                  </Link>
                 )}
                 <p className="text-xs text-text-muted">
                   {onCapturePrescription
                     ? `Capture evidence for ${patient.displayName}.`
-                    : `Opens capture for ${patient.displayName} in a new tab. This bill stays open.`}{' '}
+                    : 'Use Photograph prescription below to capture evidence without opening the pharmacist workspace.'}{' '}
                   Capture does not replace pharmacist review or dispensing consent.
                 </p>
                 <CounterRxPhotoCapture

@@ -105,9 +105,14 @@ describe('prescription capture and private delivery', () => {
     mocks.hasModule.mockReturnValue(true);
     mocks.patient.mockResolvedValue({ id: 'patient-a' });
     mocks.prescriber.mockResolvedValue({ id: 'prescriber-a' });
-    mocks.prescribers.mockResolvedValue([{ id: 'prescriber-a', name: 'Dr Test' }]);
-    mocks.medicines.mockImplementation(async (args: { select?: unknown } | undefined) =>
-      args?.select ? [{ id: 'medicine-a', presentations: [{ id: 'presentation-a' }] }] : []
+    mocks.prescribers.mockResolvedValue([
+      { id: 'prescriber-a', name: 'Dr Test', registrationNumber: 'REG-1' },
+    ]);
+    mocks.medicines.mockImplementation(
+      async (args: { select?: { productName?: boolean } } | undefined) =>
+        args?.select && !args.select.productName
+          ? [{ id: 'medicine-a', presentations: [{ id: 'presentation-a' }] }]
+          : []
     );
     mocks.find.mockResolvedValue(null);
     mocks.create.mockImplementation(async ({ data }) => ({
@@ -263,11 +268,99 @@ describe('prescription capture and private delivery', () => {
     mocks.canAny.mockResolvedValue(true);
 
     await expect(caller().captureWorkspace()).resolves.toEqual({
-      prescribers: [{ id: 'prescriber-a', name: 'Dr Test' }],
+      prescribers: [{ id: 'prescriber-a', name: 'Dr Test', registrationNumber: 'REG-1' }],
       medicines: [],
     });
     const receipt = await upload();
     await expect(caller().capture(captureInput(receipt.url))).resolves.toHaveProperty('id');
+  });
+
+  it('tenant-scopes and minimizes every capture workspace lookup', async () => {
+    const prescribers = [
+      { id: 'prescriber-a', organizationId: 'org-a', name: 'Dr A', registrationNumber: 'A-1' },
+      { id: 'prescriber-b', organizationId: 'org-b', name: 'Dr B', registrationNumber: 'B-1' },
+    ];
+    const medicines = [
+      {
+        id: 'medicine-a',
+        organizationId: 'org-a',
+        productName: 'Medicine A',
+        presentations: [
+          { id: 'presentation-a', organizationId: 'org-a', presentation: 'Tablet' },
+          { id: 'presentation-b', organizationId: 'org-b', presentation: 'Foreign tablet' },
+        ],
+      },
+      {
+        id: 'medicine-b',
+        organizationId: 'org-b',
+        productName: 'Medicine B',
+        presentations: [],
+      },
+    ];
+    mocks.prescribers.mockImplementation(async ({ where }: { where: { organizationId: string } }) =>
+      prescribers
+        .filter((item) => item.organizationId === where.organizationId)
+        .map(({ id, name, registrationNumber }) => ({ id, name, registrationNumber }))
+    );
+    mocks.medicines.mockImplementation(
+      async ({
+        where,
+        select,
+      }: {
+        where: { organizationId: string };
+        select: { presentations: { where: { organizationId: string } } };
+      }) =>
+        medicines
+          .filter((item) => item.organizationId === where.organizationId)
+          .map((item) => ({
+            id: item.id,
+            productName: item.productName,
+            presentations: item.presentations
+              .filter(
+                (presentation) =>
+                  presentation.organizationId === select.presentations.where.organizationId
+              )
+              .map(({ id, presentation }) => ({ id, presentation })),
+          }))
+    );
+
+    await expect(caller(context('user-a', 'org-a')).captureWorkspace()).resolves.toEqual({
+      prescribers: [{ id: 'prescriber-a', name: 'Dr A', registrationNumber: 'A-1' }],
+      medicines: [
+        {
+          id: 'medicine-a',
+          productName: 'Medicine A',
+          presentations: [{ id: 'presentation-a', presentation: 'Tablet' }],
+        },
+      ],
+    });
+  });
+
+  it('rejects oversized and chronologically invalid capture records', async () => {
+    const input = captureInput('/api/pharmacy/prescription-files?id=valid');
+    await expect(
+      caller().capture({
+        ...input,
+        lines: Array.from({ length: 51 }, (_, index) => ({
+          ...input.lines[0],
+          lineNumber: index + 1,
+        })),
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().capture({
+        ...input,
+        lines: [{ ...input.lines[0], directions: 'x'.repeat(2_001) }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().capture({
+        ...input,
+        validFrom: new Date('2026-10-02'),
+        validUntil: new Date('2026-10-01'),
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.getUpload).not.toHaveBeenCalled();
   });
 
   it('keeps historical records and other operators retained images unavailable to capture-only users', async () => {

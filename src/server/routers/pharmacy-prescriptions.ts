@@ -179,12 +179,25 @@ export const pharmacyPrescriptionsRouter = router({
     }),
 
   captureWorkspace: prescriptionFileProcedure.query(async ({ ctx }) => {
+    const organizationId = ctx.entitlements.organizationId;
     const [prescribers, medicines] = await Promise.all([
-      ctx.db.pharmacyPrescriber.findMany({ orderBy: { name: 'asc' } }),
+      ctx.db.pharmacyPrescriber.findMany({
+        where: { organizationId },
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true, registrationNumber: true },
+      }),
       ctx.db.medicine.findMany({
-        where: { saleable: true },
+        where: { organizationId, saleable: true },
         orderBy: { productName: 'asc' },
-        include: { presentations: { orderBy: { presentation: 'asc' } } },
+        select: {
+          id: true,
+          productName: true,
+          presentations: {
+            where: { organizationId },
+            orderBy: { presentation: 'asc' },
+            select: { id: true, presentation: true },
+          },
+        },
       }),
     ]);
     return { prescribers, medicines };
@@ -304,8 +317,8 @@ export const pharmacyPrescriptionsRouter = router({
     .input(
       z
         .object({
-          patientId: z.string().min(1),
-          prescriberId: z.string().min(1),
+          patientId: z.string().min(1).max(191),
+          prescriberId: z.string().min(1).max(191),
           sourceKind: z.enum(['PAPER_IMAGE', 'WHATSAPP_PHOTO']),
           sourceFileRef: prescriptionFileRefSchema,
           custodyState: z
@@ -319,16 +332,21 @@ export const pharmacyPrescriptionsRouter = router({
               z
                 .object({
                   lineNumber: z.number().int().positive(),
-                  medicineId: z.string().min(1),
-                  presentationId: z.string().min(1),
+                  medicineId: z.string().min(1).max(191),
+                  presentationId: z.string().min(1).max(191),
                   authorizedCanonicalUnits: z.number().int().positive(),
-                  directions: z.string().trim().min(1),
+                  directions: z.string().trim().min(1).max(2_000),
                 })
                 .strict()
             )
-            .min(1),
+            .min(1)
+            .max(50),
         })
         .strict()
+        .refine((input) => input.validUntil >= input.validFrom, {
+          message: 'Valid until must be on or after valid from.',
+          path: ['validUntil'],
+        })
     )
     .mutation(async ({ ctx, input }) => {
       const { lines, ...prescription } = input;
@@ -385,7 +403,9 @@ export const pharmacyPrescriptionsRouter = router({
           medicine.presentations.map((presentation) => `${medicine.id}\0${presentation.id}`)
         )
       );
-      if (lines.some((line) => !validSelections.has(`${line.medicineId}\0${line.presentationId}`))) {
+      if (
+        lines.some((line) => !validSelections.has(`${line.medicineId}\0${line.presentationId}`))
+      ) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'Prescription line medicine or presentation is unavailable.',
