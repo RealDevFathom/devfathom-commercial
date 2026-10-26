@@ -381,6 +381,21 @@ describe('updateAssignment — effective-dated successor', () => {
       },
     });
   });
+
+  it('deactivates a same-day predecessor without creating an invalid date range', async () => {
+    db.restaurantSopAssignment.findUnique.mockResolvedValue(assignment());
+
+    await caller().updateAssignment({ id: 'assignment_1', effectiveDate: '2026-05-01' });
+
+    expect(db.restaurantSopAssignment.update).toHaveBeenCalledWith({
+      where: { id: 'assignment_1' },
+      data: {
+        active: false,
+        endDate: null,
+        supersededAt: expect.any(Date),
+      },
+    });
+  });
 });
 
 describe('previewSchedule — DST-correct, no persistence', () => {

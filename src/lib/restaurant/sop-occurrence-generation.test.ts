@@ -30,6 +30,7 @@ type AssignmentFixture = {
   dueTimeMinutes: number;
   intervalEndTimeMinutes: number | null;
   windowMinutes: number;
+  active: boolean;
   branch: { id: string; timezone: string; businessDayCutoff: string };
 };
 
@@ -59,6 +60,7 @@ function assignment(overrides: Partial<AssignmentFixture> = {}): AssignmentFixtu
     dueTimeMinutes: 6 * 60,
     intervalEndTimeMinutes: null,
     windowMinutes: 120,
+    active: true,
     branch: { id: 'b1', timezone: 'America/New_York', businessDayCutoff: '00:00' },
     ...overrides,
   };
@@ -76,7 +78,7 @@ function makeDb(opts: {
 
   const db = {
     restaurantSopAssignment: {
-      findMany: vi.fn(async () => opts.assignments),
+      findMany: vi.fn(async () => opts.assignments.filter((candidate) => candidate.active)),
     },
     restaurantSopTemplateVersion: {
       findFirst: vi.fn(

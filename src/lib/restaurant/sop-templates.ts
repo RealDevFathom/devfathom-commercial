@@ -672,6 +672,7 @@ export async function updateAssignment(db: ScopedDb, id: string, patch: UpdateAs
   return runSopTransaction(db, async (tx) => {
     const predecessorEndDate = new Date(businessDateToUtcDate(merged.startDate));
     predecessorEndDate.setUTCDate(predecessorEndDate.getUTCDate() - 1);
+    const predecessorHasEffectivePeriod = predecessorEndDate >= existing.startDate;
     const successor = await tx.restaurantSopAssignment.create({
       data: {
         branchId: existing.branchId,
@@ -702,11 +703,15 @@ export async function updateAssignment(db: ScopedDb, id: string, patch: UpdateAs
       data: {
         // Keep a live predecessor visible to the scheduler until the successor's
         // effective date; its bounded date range performs the boundary switch.
-        active: existing.active && predecessorEndDate >= existing.startDate,
-        endDate:
-          existing.endDate && existing.endDate < predecessorEndDate
+        active: existing.active && predecessorHasEffectivePeriod,
+        // A same-day revision has no representable predecessor date range. Keep
+        // its valid historical bounds while deactivating it instead of writing
+        // an end date before its start date.
+        endDate: predecessorHasEffectivePeriod
+          ? existing.endDate && existing.endDate < predecessorEndDate
             ? existing.endDate
-            : predecessorEndDate,
+            : predecessorEndDate
+          : existing.endDate,
         supersededAt: new Date(),
       },
     });
