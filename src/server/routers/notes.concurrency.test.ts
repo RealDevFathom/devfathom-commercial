@@ -9,6 +9,7 @@ vi.mock('@/server/audit', () => ({
   recordTrpcAudit: vi.fn(),
 }));
 
+import { notify } from '@/lib/notifications';
 import { notesRouter } from './notes';
 
 const doc = (text: string) => ({ type: 'doc', content: [{ type: 'text', text }] });
@@ -121,9 +122,14 @@ describe('notes.update concurrency', () => {
   });
 
   it('stops when the tenant-qualified lock finds no note', async () => {
+    vi.mocked(notify).mockClear();
     const tx = {
       $queryRaw: vi.fn(async () => []),
-      note: { findFirst: vi.fn(), update: vi.fn() },
+      note: { findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn() },
+      noteRevision: { create: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn() },
+      noteLink: { deleteMany: vi.fn(), createMany: vi.fn() },
+      noteMention: { deleteMany: vi.fn(), createMany: vi.fn() },
+      user: { findMany: vi.fn() },
     };
     const db = {
       project: { findMany: vi.fn() },
@@ -155,5 +161,10 @@ describe('notes.update concurrency', () => {
     });
     expect(tx.note.findFirst).not.toHaveBeenCalled();
     expect(tx.note.update).not.toHaveBeenCalled();
+    expect(tx.noteRevision.create).not.toHaveBeenCalled();
+    expect(tx.noteLink.deleteMany).not.toHaveBeenCalled();
+    expect(tx.noteMention.deleteMany).not.toHaveBeenCalled();
+    expect(tx.user.findMany).not.toHaveBeenCalled();
+    expect(vi.mocked(notify)).not.toHaveBeenCalled();
   });
 });
