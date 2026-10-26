@@ -263,6 +263,52 @@ describe('runRestaurantWorkerTick', () => {
     expect(orgB.jobs.jobs.get('b1')!.status).toBe('SUCCEEDED');
   });
 
+  it('services a later tenant after a large first-tenant escalation sweep', async () => {
+    const orgA = createJobDb();
+    const orgB = createJobDb([queuedJob({ id: 'b1' })]);
+    Object.assign(orgA.db, {
+      restaurantSopEscalationPolicy: {
+        findMany: async () =>
+          Array.from({ length: 50 }, (_, i) => ({
+            id: `policy_${i}`,
+            scope: 'ORG',
+            branchId: null,
+            stopOnAcknowledged: false,
+            quietHoursStartMinutes: null,
+            quietHoursEndMinutes: null,
+            steps: [{ id: `step_${i}`, delayMinutes: 0 }],
+          })),
+      },
+      restaurantSopOccurrence: {
+        findMany: async () =>
+          Array.from({ length: 100 }, (_, i) => ({
+            id: `occ_${i}`,
+            branchId: 'branch_1',
+            windowEndsAt: T0,
+            branch: { timezone: 'UTC' },
+            escalationEvents: [],
+          })),
+      },
+    });
+    Object.assign(orgB.db, {
+      restaurantSopEscalationPolicy: { findMany: async () => [] },
+      restaurantSopOccurrence: { findMany: async () => [] },
+    });
+    const dbs = { org_a: orgA.db, org_b: orgB.db };
+
+    const result = await runRestaurantWorkerTick({
+      workerId: 'worker-1',
+      now: T0,
+      discoverOrganizations: async () => ['org_a', 'org_b'],
+      runInOrg: (orgId, work) => work(dbs[orgId as keyof typeof dbs]),
+      outboxClient: () => createOutboxDb().db,
+    });
+
+    expect(result.organizations).toBe(2);
+    expect(orgA.jobs.size).toBe(500);
+    expect(orgB.jobs.get('b1')!.status).toBe('SUCCEEDED');
+  });
+
   it('settles a failing handler as a retry and records the execution', async () => {
     mocks.runRestaurantJob.mockRejectedValue(new Error('handler exploded'));
     const org = createJobDb([queuedJob({ id: 'j1' })]);

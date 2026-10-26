@@ -18,6 +18,7 @@ import {
   enqueueDueSopEscalations,
   isMissedAt,
   MAX_ESCALATION_OCCURRENCES_PER_TICK,
+  MAX_ESCALATION_PAIR_EVALUATIONS_PER_TICK,
   MAX_ESCALATION_POLICIES_PER_TICK,
   missedAt,
   sopEscalationJobKey,
@@ -176,95 +177,28 @@ describe('enqueueDueSopEscalations', () => {
     );
   });
 
-  it('keyset-paginates policies beyond the query cap', async () => {
+  it('enforces a tick-wide policy/occurrence pair budget', async () => {
     vi.mocked(enqueue).mockClear();
-    const ignoredPolicies = Array.from({ length: MAX_ESCALATION_POLICIES_PER_TICK }, (_, i) => ({
-      id: `policy_${String(i).padStart(3, '0')}`,
-      scope: 'BRANCH',
-      branchId: 'another_branch',
-      stopOnAcknowledged: true,
+    const policies = Array.from({ length: MAX_ESCALATION_POLICIES_PER_TICK }, (_, i) => ({
+      id: `policy_${i}`,
+      scope: 'ORG' as const,
+      branchId: null,
+      stopOnAcknowledged: false,
       quietHoursStartMinutes: null,
       quietHoursEndMinutes: null,
-      steps: [{ id: `ignored_step_${i}`, delayMinutes: 0 }],
+      steps: [{ id: `step_${i}`, delayMinutes: 0 }],
     }));
-    const targetPolicy = {
-      ...ignoredPolicies[0],
-      id: 'policy_999',
+    const occurrences = Array.from({ length: MAX_ESCALATION_OCCURRENCES_PER_TICK }, (_, i) => ({
+      id: `occ_${i}`,
       branchId: 'branch_1',
-      steps: [{ id: 'target_step', delayMinutes: 0 }],
-    };
-    const findPolicies = vi
-      .fn()
-      .mockResolvedValueOnce(ignoredPolicies)
-      .mockResolvedValueOnce([targetPolicy]);
+      windowEndsAt: WINDOW_ENDS,
+      branch: { timezone: 'UTC' },
+      escalationEvents: [],
+    }));
+    const findPolicies = vi.fn().mockResolvedValue(policies);
+    const findOccurrences = vi.fn().mockResolvedValue(occurrences);
     const db = {
       restaurantSopEscalationPolicy: { findMany: findPolicies },
-      restaurantSopOccurrence: {
-        findMany: vi.fn().mockResolvedValueOnce([
-          {
-            id: 'occ_1',
-            branchId: 'branch_1',
-            windowEndsAt: WINDOW_ENDS,
-            branch: { timezone: 'UTC' },
-            escalationEvents: [],
-          },
-        ]),
-      },
-    } as unknown as ScopedDb;
-    vi.mocked(enqueue).mockResolvedValue({
-      job: {} as Awaited<ReturnType<typeof enqueue>>['job'],
-      deduplicated: false,
-    });
-
-    await expect(enqueueDueSopEscalations(db, WINDOW_ENDS)).resolves.toBe(1);
-    expect(findPolicies.mock.calls[1]?.[0]).toMatchObject({
-      cursor: { id: ignoredPolicies.at(-1)?.id },
-      skip: 1,
-    });
-    expect(enqueue).toHaveBeenCalledWith(
-      db,
-      expect.objectContaining({ idempotencyKey: 'sop-escalation:occ_1:policy_999:target_step' })
-    );
-  });
-
-  it('keyset-paginates occurrences beyond the query cap', async () => {
-    vi.mocked(enqueue).mockClear();
-    const stoppedOccurrences = Array.from(
-      { length: MAX_ESCALATION_OCCURRENCES_PER_TICK },
-      (_, i) => ({
-        id: `occ_${String(i).padStart(3, '0')}`,
-        branchId: 'branch_1',
-        windowEndsAt: WINDOW_ENDS,
-        branch: { timezone: 'UTC' },
-        escalationEvents: [{ kind: 'STOPPED', escalationStepId: null, createdAt: WINDOW_ENDS }],
-      })
-    );
-    const findOccurrences = vi
-      .fn()
-      .mockResolvedValueOnce(stoppedOccurrences)
-      .mockResolvedValueOnce([
-        {
-          id: 'occ_999',
-          branchId: 'branch_1',
-          windowEndsAt: WINDOW_ENDS,
-          branch: { timezone: 'UTC' },
-          escalationEvents: [],
-        },
-      ]);
-    const db = {
-      restaurantSopEscalationPolicy: {
-        findMany: vi.fn().mockResolvedValueOnce([
-          {
-            id: 'policy_1',
-            scope: 'ORG',
-            branchId: null,
-            stopOnAcknowledged: true,
-            quietHoursStartMinutes: null,
-            quietHoursEndMinutes: null,
-            steps: [{ id: 'step_1', delayMinutes: 0 }],
-          },
-        ]),
-      },
       restaurantSopOccurrence: { findMany: findOccurrences },
     } as unknown as ScopedDb;
     vi.mocked(enqueue).mockResolvedValue({
@@ -272,11 +206,12 @@ describe('enqueueDueSopEscalations', () => {
       deduplicated: false,
     });
 
-    await expect(enqueueDueSopEscalations(db, WINDOW_ENDS)).resolves.toBe(1);
-    expect(findOccurrences.mock.calls[1]?.[0]).toMatchObject({
-      cursor: { id: stoppedOccurrences.at(-1)?.id },
-      skip: 1,
-    });
+    await expect(enqueueDueSopEscalations(db, WINDOW_ENDS)).resolves.toBe(
+      MAX_ESCALATION_PAIR_EVALUATIONS_PER_TICK
+    );
+    expect(enqueue).toHaveBeenCalledTimes(MAX_ESCALATION_PAIR_EVALUATIONS_PER_TICK);
+    expect(findPolicies).toHaveBeenCalledOnce();
+    expect(findOccurrences).toHaveBeenCalledOnce();
   });
 
   it('does not produce acknowledged or stopped chains', async () => {
@@ -299,9 +234,7 @@ describe('enqueueDueSopEscalations', () => {
     const db = {
       restaurantSopEscalationPolicy: { findMany: vi.fn().mockResolvedValue([policy]) },
       restaurantSopOccurrence: {
-        findMany: vi
-          .fn()
-          .mockResolvedValue([occurrence('ACKNOWLEDGED'), occurrence('STOPPED')]),
+        findMany: vi.fn().mockResolvedValue([occurrence('ACKNOWLEDGED'), occurrence('STOPPED')]),
       },
     } as unknown as ScopedDb;
     vi.mocked(enqueue).mockClear();
@@ -370,9 +303,9 @@ describe('enqueueDueSopEscalations', () => {
     });
 
     // Enqueued just before quiet hours, but not claimed until they have begun.
-    await expect(
-      enqueueDueSopEscalations(db, new Date('2026-08-20T12:59:00.000Z'))
-    ).resolves.toBe(1);
+    await expect(enqueueDueSopEscalations(db, new Date('2026-08-20T12:59:00.000Z'))).resolves.toBe(
+      1
+    );
     await sopEscalationHandler({
       db,
       job: {
@@ -391,9 +324,9 @@ describe('enqueueDueSopEscalations', () => {
       },
     });
 
-    await expect(
-      enqueueDueSopEscalations(db, new Date('2026-08-20T15:00:00.000Z'))
-    ).resolves.toBe(1);
+    await expect(enqueueDueSopEscalations(db, new Date('2026-08-20T15:00:00.000Z'))).resolves.toBe(
+      1
+    );
     await sopEscalationHandler({
       db,
       job: {
