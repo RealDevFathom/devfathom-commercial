@@ -53,4 +53,25 @@ describe('POST /api/v1/tasks label isolation', () => {
     });
     expect(mocks.db.task.create).not.toHaveBeenCalled();
   });
+
+  it('rejects duplicate label IDs before creating the task', async () => {
+    const response = await POST(
+      new Request('https://example.test/api/v1/tasks', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          title: 'Task A',
+          columnId: 'column-a',
+          labelIds: ['label-a', 'label-a'],
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: 'labelIds must not contain duplicates.',
+    });
+    expect(mocks.db.label.findMany).not.toHaveBeenCalled();
+    expect(mocks.db.task.create).not.toHaveBeenCalled();
+  });
 });

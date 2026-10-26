@@ -98,11 +98,15 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     }
   }
   if (input.labelIds.length > 0) {
+    const uniqueLabelIds = new Set(input.labelIds);
+    if (uniqueLabelIds.size !== input.labelIds.length) {
+      return NextResponse.json({ error: 'labelIds must not contain duplicates.' }, { status: 400 });
+    }
     const labels = await ctx.db.label.findMany({
       where: { id: { in: input.labelIds }, boardId: column.board.id },
       select: { id: true },
     });
-    if (labels.length !== new Set(input.labelIds).size) {
+    if (labels.length !== uniqueLabelIds.size) {
       return NextResponse.json(
         { error: 'One or more labelIds do not belong to the selected column’s board.' },
         { status: 400 }
