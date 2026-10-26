@@ -288,6 +288,24 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
     expect(JSON.stringify(body)).not.toContain('Other Branch Operator');
     expect(JSON.stringify(body)).not.toContain('Inactive Operator');
     expect(JSON.stringify(body)).not.toContain('Foreign Operator');
+
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantStaffCapabilityGrant.create({
+        data: {
+          staffProfileId: STAFF.A.id,
+          branchId,
+          capability: 'orders:complimentary',
+        },
+      })
+    );
+    const authorizedResponse = await deps.routes.operators.GET(
+      new Request('https://tenant.test/api/restaurant/terminal/operators', {
+        headers: { authorization: `Bearer ${secret}`, 'x-terminal-session': token },
+      })
+    );
+    const authorizedBody = (await authorizedResponse.json()) as typeof body;
+    expect(authorizedBody.operators.find((operator) => operator.staffProfileId === STAFF.A.id))
+      .toMatchObject({ canComp: true });
   });
 
   it('establishes, unlocks, switches operator, and locks (C6 state machine)', async () => {
