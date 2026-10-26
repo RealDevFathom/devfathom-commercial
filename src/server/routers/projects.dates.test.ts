@@ -14,9 +14,12 @@ const projectCreate = vi.fn();
 const projectFindUnique = vi.fn();
 const projectUpdate = vi.fn();
 const membershipFindUnique = vi.fn();
+const userFindMany = vi.fn();
 const db = {
   project: { create: projectCreate, findUnique: projectFindUnique, update: projectUpdate },
   projectMember: { findUnique: membershipFindUnique },
+  user: { findMany: userFindMany },
+  client: { findMany: vi.fn() },
 };
 
 function caller() {
@@ -44,6 +47,7 @@ describe('project date ranges', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     membershipFindUnique.mockResolvedValue({ role: 'MEMBER' });
+    userFindMany.mockResolvedValue([{ id: 'user_1' }]);
   });
 
   it('rejects an invalid range when creating a project', async () => {
@@ -54,8 +58,31 @@ describe('project date ranges', () => {
         startDate: new Date('2026-10-22T00:00:00.000Z'),
         endDate: new Date('2026-10-21T00:00:00.000Z'),
       })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: expect.stringContaining('End date must be on or after start date'),
+    });
     expect(projectCreate).not.toHaveBeenCalled();
+  });
+
+  it('accepts equal dates and omitted bounds when creating a project', async () => {
+    const date = new Date('2026-10-22T00:00:00.000Z');
+    projectCreate.mockResolvedValue({ id: 'project_1', name: 'Valid dates' });
+
+    await caller().create({
+      name: 'Valid dates',
+      type: 'INTERNAL',
+      startDate: date,
+      endDate: date,
+      createDefaultBoard: false,
+    });
+    await caller().create({
+      name: 'No schedule',
+      type: 'INTERNAL',
+      createDefaultBoard: false,
+    });
+
+    expect(projectCreate).toHaveBeenCalledTimes(2);
   });
 
   it('checks a partial update against the stored start date', async () => {
