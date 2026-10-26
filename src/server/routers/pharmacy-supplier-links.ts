@@ -43,7 +43,7 @@ function mapError(error: unknown): never {
 
 type SupplierAuditTarget = { id: string; organizationId: string; branchId: string };
 
-function auditSupplierLinkAction(
+async function auditSupplierLinkAction(
   ctx: TRPCContext,
   target: SupplierAuditTarget | null,
   action: 'submit' | 'uploadDocument',
@@ -60,22 +60,25 @@ function auditSupplierLinkAction(
         : error
           ? 'INTERNAL_ERROR'
           : null;
-  recordAudit({
-    organizationId: target.organizationId,
-    actorType: 'ANONYMOUS',
-    source: 'TRPC',
-    category: 'PHARMACY',
-    operation: 'CREATE',
-    action: `pharmacySupplierLinks.${action}`,
-    targetType: 'PharmacySupplierActionLink',
-    targetId: target.id,
-    metadata: { branchId: target.branchId, linkId: target.id, kind },
-    ip: ctx.requestMeta?.ip ?? null,
-    userAgent: ctx.requestMeta?.userAgent ?? null,
-    outcome,
-    errorCode: reason,
-    errorMessage: reason,
-  });
+  await recordAudit(
+    {
+      organizationId: target.organizationId,
+      actorType: 'ANONYMOUS',
+      source: 'TRPC',
+      category: 'PHARMACY',
+      operation: 'CREATE',
+      action: `pharmacySupplierLinks.${action}`,
+      targetType: 'PharmacySupplierActionLink',
+      targetId: target.id,
+      metadata: { branchId: target.branchId, linkId: target.id, kind },
+      ip: ctx.requestMeta?.ip ?? null,
+      userAgent: ctx.requestMeta?.userAgent ?? null,
+      outcome,
+      errorCode: reason,
+      errorMessage: reason,
+    },
+    ctx.db
+  );
 }
 
 function auditedSupplierLinkProcedure(action: 'submit' | 'uploadDocument') {
@@ -99,7 +102,7 @@ function auditedSupplierLinkProcedure(action: 'submit' | 'uploadDocument') {
           ctx.entitlements.organizationId
         );
         const rawKind = typeof raw?.kind === 'string' ? raw.kind : null;
-        auditSupplierLinkAction(
+        await auditSupplierLinkAction(
           ctx,
           target,
           action,
@@ -140,14 +143,15 @@ export const pharmacySupplierLinksRouter = router({
         input.token,
         ctx.entitlements.organizationId
       );
+      let result;
       try {
-        const result = await submitSupplierEvidence(ctx.db, input);
-        auditSupplierLinkAction(ctx, target, 'submit', 'SUCCESS', input.kind);
-        return result;
+        result = await submitSupplierEvidence(ctx.db, input);
       } catch (error) {
-        auditSupplierLinkAction(ctx, target, 'submit', 'FAILURE', input.kind, error);
+        await auditSupplierLinkAction(ctx, target, 'submit', 'FAILURE', input.kind, error);
         mapError(error);
       }
+      await auditSupplierLinkAction(ctx, target, 'submit', 'SUCCESS', input.kind);
+      return result;
     }),
   uploadDocument: auditedSupplierLinkProcedure('uploadDocument')
     .input(
@@ -167,17 +171,25 @@ export const pharmacySupplierLinksRouter = router({
         input.token,
         ctx.entitlements.organizationId
       );
+      let result;
       try {
-        const result = await uploadSupplierDocument(ctx.db, {
+        result = await uploadSupplierDocument(ctx.db, {
           ...input,
           content: Buffer.from(input.contentBase64, 'base64'),
         });
-        auditSupplierLinkAction(ctx, target, 'uploadDocument', 'SUCCESS', 'DOCUMENT');
-        return result;
       } catch (error) {
-        auditSupplierLinkAction(ctx, target, 'uploadDocument', 'FAILURE', 'DOCUMENT', error);
+        await auditSupplierLinkAction(
+          ctx,
+          target,
+          'uploadDocument',
+          'FAILURE',
+          'DOCUMENT',
+          error
+        );
         mapError(error);
       }
+      await auditSupplierLinkAction(ctx, target, 'uploadDocument', 'SUCCESS', 'DOCUMENT');
+      return result;
     }),
   createRelationship: protectedProcedure
     .input(z.object({ branchId: id, supplierId: id }).strict())

@@ -55,7 +55,8 @@ describe('pharmacy supplier signed-link auditing', () => {
         targetId: 'link_a',
         outcome: 'SUCCESS',
         metadata: { branchId: 'branch_a', linkId: 'link_a', kind: 'ACKNOWLEDGEMENT' },
-      })
+      }),
+      context.db
     );
   });
 
@@ -81,7 +82,8 @@ describe('pharmacy supplier signed-link auditing', () => {
         outcome: 'FAILURE',
         errorCode: 'IDEMPOTENCY_CONFLICT',
         metadata: { branchId: 'branch_a', linkId: 'link_a', kind: 'REJECTION' },
-      })
+      }),
+      context.db
     );
   });
 
@@ -103,7 +105,8 @@ describe('pharmacy supplier signed-link auditing', () => {
         targetId: 'link_a',
         outcome: 'SUCCESS',
         metadata: { branchId: 'branch_a', linkId: 'link_a', kind: 'DOCUMENT' },
-      })
+      }),
+      context.db
     );
   });
 
@@ -128,7 +131,8 @@ describe('pharmacy supplier signed-link auditing', () => {
         outcome: 'FAILURE',
         errorCode: 'INVALID_UPLOAD',
         metadata: { branchId: 'branch_a', linkId: 'link_a', kind: 'DOCUMENT' },
-      })
+      }),
+      context.db
     );
   });
 
@@ -156,7 +160,8 @@ describe('pharmacy supplier signed-link auditing', () => {
         outcome: 'FAILURE',
         errorCode: 'BAD_REQUEST',
         metadata: { branchId: 'branch_a', linkId: 'link_a', kind: 'UNSUPPORTED' },
-      })
+      }),
+      context.db
     );
   });
 
@@ -180,7 +185,8 @@ describe('pharmacy supplier signed-link auditing', () => {
         outcome: 'FAILURE',
         errorCode: 'BAD_REQUEST',
         metadata: { branchId: 'branch_a', linkId: 'link_a', kind: 'DOCUMENT' },
-      })
+      }),
+      context.db
     );
   });
 
@@ -198,5 +204,21 @@ describe('pharmacy supplier signed-link auditing', () => {
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
 
     expect(recordAudit).not.toHaveBeenCalled();
+  });
+
+  it('does not complete a successful action until its audit row is durable', async () => {
+    vi.mocked(submitSupplierEvidence).mockResolvedValue({ id: 'submission_a' } as never);
+    vi.mocked(recordAudit).mockRejectedValueOnce(new Error('audit insert failed'));
+
+    await expect(
+      pharmacySupplierLinksRouter.createCaller(context as never).submit({
+        token: 'link.secret.signature',
+        kind: 'ETA',
+        idempotencyKey: 'idem_audit_failure',
+        payload: {},
+      })
+    ).rejects.toThrow('audit insert failed');
+
+    expect(recordAudit).toHaveBeenCalledWith(expect.any(Object), context.db);
   });
 });

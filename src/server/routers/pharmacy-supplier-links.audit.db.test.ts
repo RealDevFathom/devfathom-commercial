@@ -20,6 +20,7 @@ vi.mock('@/lib/pharmacy/supplier-action-links', async (importOriginal) => {
     ...actual,
     getSupplierLinkAuditTarget: vi.fn(),
     submitSupplierEvidence: vi.fn(),
+    uploadSupplierDocument: vi.fn(),
   };
 });
 
@@ -157,6 +158,50 @@ describeIfDatabase('pharmacy supplier signed-link audit persistence', () => {
       ip: '192.0.2.11',
       userAgent: 'supplier-audit-failure-test',
       metadata: { branchId: BRANCH, linkId: LINK, kind: 'REJECTION' },
+    });
+  });
+
+  it('durably writes a successful document upload', async () => {
+    const { getSupplierLinkAuditTarget, uploadSupplierDocument } = await import(
+      '@/lib/pharmacy/supplier-action-links'
+    );
+    vi.mocked(getSupplierLinkAuditTarget).mockResolvedValue({
+      id: LINK,
+      organizationId: ORGANIZATION,
+      branchId: BRANCH,
+    });
+    vi.mocked(uploadSupplierDocument).mockResolvedValue({ id: `document_${suffix}` } as never);
+
+    await deps.withTenantDb(ORGANIZATION, async (db) => {
+      const caller = deps.router.createCaller({
+        db,
+        entitlements: { organizationId: ORGANIZATION },
+        requestMeta: { ip: '192.0.2.12', userAgent: 'supplier-upload-audit-test' },
+      } as never);
+      await caller.uploadDocument({
+        token: 'link.secret.signature',
+        idempotencyKey: `idem_document_${suffix}`,
+        fileName: 'invoice.pdf',
+        declaredMimeType: 'application/pdf',
+        contentBase64: 'JVBERg==',
+      });
+    });
+
+    const row = await deps.withTenantDb(ORGANIZATION, (db) =>
+      db.auditLog.findFirst({
+        where: { action: 'pharmacySupplierLinks.uploadDocument', targetId: LINK },
+        orderBy: { createdAt: 'desc' },
+      })
+    );
+    expect(row).toMatchObject({
+      organizationId: ORGANIZATION,
+      action: 'pharmacySupplierLinks.uploadDocument',
+      targetType: 'PharmacySupplierActionLink',
+      targetId: LINK,
+      outcome: 'SUCCESS',
+      ip: '192.0.2.12',
+      userAgent: 'supplier-upload-audit-test',
+      metadata: { branchId: BRANCH, linkId: LINK, kind: 'DOCUMENT' },
     });
   });
 });
