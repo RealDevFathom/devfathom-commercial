@@ -16,9 +16,10 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-  -- Lock the rows which determine validity. Unlike an advisory-lock wait,
-  -- PostgreSQL's locking SELECT follows a concurrently updated row and
-  -- rechecks the predicate against its latest committed version.
+  -- Lock the rows which determine validity. FOR SHARE conflicts with the
+  -- FOR NO KEY UPDATE lock taken by board/column moves, so an attachment
+  -- cannot validate against a row version that a concurrent move is changing.
+  -- PostgreSQL then follows the updated row and rechecks this predicate.
   IF NOT EXISTS (
     SELECT 1
     FROM "tasks" t
@@ -31,7 +32,7 @@ BEGIN
       AND t."organizationId" = c."organizationId"
       AND t."organizationId" = b."organizationId"
       AND t."organizationId" = NEW."organizationId"
-    FOR KEY SHARE OF t, c, b, l
+    FOR SHARE OF t, c, b, l
   ) THEN
     RAISE EXCEPTION 'task label must belong to the task board and organization'
       USING ERRCODE = '23514';

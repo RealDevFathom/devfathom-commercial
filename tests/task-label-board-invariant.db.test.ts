@@ -19,14 +19,31 @@ const setup = DATABASE_URL ? new pg.Client({ connectionString: DATABASE_URL }) :
 const mover = DATABASE_URL ? new pg.Client({ connectionString: DATABASE_URL }) : null;
 const attacher = DATABASE_URL ? new pg.Client({ connectionString: DATABASE_URL }) : null;
 
-async function isPending(promise: Promise<unknown>) {
-  return Promise.race([
-    promise.then(
-      () => false,
-      () => false
-    ),
-    new Promise<true>((resolve) => setTimeout(() => resolve(true), 100)),
-  ]);
+async function expectAttachBlocked(promise: Promise<unknown>) {
+  let settled = false;
+  void promise.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    }
+  );
+
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    const activity = await setup!.query<{ wait_event_type: string | null }>(
+      `SELECT wait_event_type
+         FROM pg_stat_activity
+        WHERE pid = $1`,
+      [attacher!.processID]
+    );
+    if (activity.rows[0]?.wait_event_type === 'Lock') return;
+    if (settled) throw new Error('Attachment completed instead of waiting for the concurrent move');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  throw new Error('Attachment did not reach the expected row-lock wait');
 }
 
 async function expectRejectedAttachAfterMove(move: string) {
@@ -38,7 +55,7 @@ async function expectRejectedAttachAfterMove(move: string) {
     `INSERT INTO "task_labels" ("id", "organizationId", "taskId", "labelId")
      VALUES ('tl', 'org', 'task', 'label')`
   );
-  expect(await isPending(attach)).toBe(true);
+  await expectAttachBlocked(attach);
 
   await mover!.query('COMMIT');
   await expect(attach).rejects.toMatchObject({ code: '23514' });
