@@ -196,7 +196,7 @@ describe('SEC-643-01 counter quote to charged sale-unit rounding', () => {
     expect(row!.saleableUnits.find((unit) => unit.kind === 'STRIP')?.unitPriceMinor).toBe(501);
   });
 
-  it('rounds each allocated batch before preserving the maximum-price policy', async () => {
+  it('keeps the counter-quoted FEFO price when fulfillment crosses into a later batch', async () => {
     const db = fixture([
       policy,
       { ...policy, batchReference: 'batch-b', roundingIncrementMinor: 6 },
@@ -209,6 +209,20 @@ describe('SEC-643-01 counter quote to charged sale-unit rounding', () => {
       batch: { ...first.batch, batchNumber: 'batch-b' },
     };
     db.pharmacyInventoryLot.findMany.mockResolvedValue([first, second]);
+    db.pharmacyStockBalance.findMany.mockResolvedValue([
+      {
+        inventoryLotId: first.id,
+        stockLocationId: 'shelf',
+        disposition: 'AVAILABLE',
+        onHandUnits: 10,
+      },
+      {
+        inventoryLotId: second.id,
+        stockLocationId: 'shelf',
+        disposition: 'AVAILABLE',
+        onHandUnits: 20,
+      },
+    ]);
     db.$queryRaw.mockResolvedValue(
       [first, second].map((lot, index) => ({
         ...scope,
@@ -224,14 +238,27 @@ describe('SEC-643-01 counter quote to charged sale-unit rounding', () => {
         looseUnits: index === 0 ? 10 : 20,
       }))
     );
+    const {
+      rows: [row],
+    } = await searchCounterCatalog(db as never, scope, { query: 'Rounding', at });
+    const option = row!.saleUnits.find((unit) => unit.kind === 'STRIP')!;
+    const preview = previewSaleLine({
+      option,
+      quantity: 3,
+      printedMrpMinor: row!.printedMrpMinor!,
+      unitsPerPack: row!.unitsPerPack!,
+      roundingIncrementMinor: row!.roundingIncrementMinor,
+      availableUnits: row!.onHandUnits,
+    });
     const { line, allocation } = await addSaleLine(db as never, scope, {
       ...lineInput,
       quantity: 3,
     });
     expect(allocation.allocations).toHaveLength(2);
-    expect(line.unitPriceMinor).toBe(510); // max(round501 to 500, round515 to 510)
-    expect(line.proRataCeilingMinor).toBe(515);
-    expect(line.unitPriceMinor * line.quantity).toBe(1_530);
+    expect(preview.grossMinor).toBe(1_500);
+    expect(line.unitPriceMinor).toBe(500);
+    expect(line.proRataCeilingMinor).toBe(501);
+    expect(line.unitPriceMinor * line.quantity).toBe(preview.grossMinor);
   });
 
   it('applies the same rounding in reserved customer-order checkout', async () => {

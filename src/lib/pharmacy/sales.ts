@@ -313,8 +313,8 @@ async function addSaleLineWithAllocation(
       })
     : [];
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
-  let unitPriceMinor = 0,
-    ceiling = 0,
+  let unitPriceMinor: number | null = null,
+    ceiling: number | null = null,
     costMinor = 0;
   for (const part of allocation.allocations) {
     const lot = lotById.get(part.inventoryLotId);
@@ -325,10 +325,15 @@ async function addSaleLineWithAllocation(
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
       roundingIncrementMinor: roundingIncrementForLot(lot, mrps),
     });
-    unitPriceMinor = Math.max(unitPriceMinor, price.unitPriceMinor);
-    ceiling = Math.max(ceiling, price.proRataCeilingMinor);
+    // A counter quote is anchored to the first FEFO lot. Keep that quoted
+    // price for the whole line when fulfillment crosses into a later lot;
+    // selecting the most expensive allocated lot would raise the charge after
+    // the customer saw the preview.
+    unitPriceMinor ??= price.unitPriceMinor;
+    ceiling ??= price.proRataCeilingMinor;
     costMinor += lot.unitCostMinor * part.units;
   }
+  if (unitPriceMinor === null || ceiling === null) throw new PharmacySaleError('NOT_FOUND');
   const grossMinor = unitPriceMinor * input.quantity;
   const discountMinor = input.discountMinor ?? 0;
   validateDiscount({

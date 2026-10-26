@@ -35,7 +35,12 @@ const tenant = <T>(work: (db: ScopedDb) => Promise<T>) =>
   withTenantDb(scope.organizationId, work, { userId: scope.actorId, skipDrain: true });
 
 /** Each case owns a medicine, preventing cross-case FEFO allocations. */
-async function catalog(label: string, increment: number | null, policyFirst: boolean) {
+async function catalog(
+  label: string,
+  increment: number | null,
+  policyFirst: boolean,
+  quantityUnits = 200
+) {
   return tenant(async (db) => {
     const medicine = await db.medicine.create({
       data: {
@@ -101,14 +106,14 @@ async function catalog(label: string, increment: number | null, policyFirst: boo
       printedMrpMinor: 1_003,
       receivedExpiresAt: expiry,
       receivedExpiryPrecision: 'DAY',
-      quantityUnits: 200,
+      quantityUnits,
       idempotencyKey: randomUUID(),
       receivedAt: new Date('2026-01-01'),
     });
     await ledger.breakPack(db, scope, {
       inventoryLotId: lot.id,
       stockLocationId,
-      requiredLooseUnits: 40,
+      requiredLooseUnits: Math.min(40, quantityUnits),
       idempotencyKey: randomUUID(),
       at,
     });
@@ -255,7 +260,118 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
       );
       expect(tender.amountMinor).toBe(expectedTotal);
       expect(tender.amountMinor).toBe(preview.grossMinor);
+      const journal = await tenant((db) =>
+        db.financeJournalEntry.findFirstOrThrow({
+          where: {
+            organizationId: scope.organizationId,
+            sourceKind: 'PHARMACY_TENDER',
+            sourceId: tender.id,
+          },
+          include: { lines: true },
+        })
+      );
+      const debits = journal.lines
+        .filter((line) => line.side === 'DEBIT')
+        .reduce((sum, line) => sum + line.amountMinor, 0);
+      const credits = journal.lines
+        .filter((line) => line.side === 'CREDIT')
+        .reduce((sum, line) => sum + line.amountMinor, 0);
+      expect(debits).toBe(expectedTotal);
+      expect(credits).toBe(expectedTotal);
+      expect(debits).toBe(credits);
     },
     30_000
   );
+
+  it('keeps preview, persisted line, receipt and tender equal across differently priced lots', async () => {
+    const { medicine, lot: firstLot } = await catalog('split-lot', 5, true, 20);
+    const secondLot = await tenant(async (db) => {
+      const batch = await db.pharmacyManufacturingBatch.create({
+        data: {
+          organizationId: scope.organizationId,
+          medicineId: medicine.id,
+          batchNumber: 'SEC643-BATCH-LATER',
+          expiresAt: new Date('2100-02-01T00:00:00.000Z'),
+          expiryPrecision: 'DAY',
+        },
+      });
+      await db.medicinePackMrp.create({
+        data: {
+          organizationId: scope.organizationId,
+          packLevelId: firstLot.packLevelId,
+          batchReference: batch.batchNumber,
+          printedMrpMinor: 1_030,
+          roundingIncrementMinor: 6,
+        },
+      });
+      const received = await ledger.receiveLot(db, scope, {
+        manufacturingBatchId: batch.id,
+        packLevelId: firstLot.packLevelId,
+        stockLocationId,
+        unitsPerPack: 20,
+        supplierName: 'SEC643 split fixture',
+        supplierInvoiceRef: randomUUID(),
+        unitCostMinor: 1,
+        printedMrpMinor: 1_030,
+        receivedExpiresAt: batch.expiresAt,
+        receivedExpiryPrecision: 'DAY',
+        quantityUnits: 200,
+        idempotencyKey: randomUUID(),
+        receivedAt: new Date('2026-01-02'),
+      });
+      return received.lot;
+    });
+    const { rows } = await tenant((db) =>
+      counter.searchCounterCatalog(db, scope, { query: medicine.productName, at })
+    );
+    const row = rows[0]!;
+    const option = row.saleUnits.find((unit) => unit.kind === 'STRIP')!;
+    const preview = previewSaleLine({
+      option,
+      quantity: 3,
+      printedMrpMinor: row.printedMrpMinor!,
+      unitsPerPack: row.unitsPerPack!,
+      roundingIncrementMinor: row.roundingIncrementMinor,
+      availableUnits: row.onHandUnits,
+    });
+    expect(preview.grossMinor).toBe(1_500);
+    const { sale, line } = await tenant(async (db) => {
+      const sale = await sales.createSale(db, scope);
+      const result = await sales.addSaleLine(db, scope, {
+        saleId: sale.id,
+        medicineId: medicine.id,
+        presentationId: row.presentationId,
+        packLevelId: option.packLevelId,
+        saleUnit: 'STRIP',
+        quantity: 3,
+        canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+        idempotencyKey: randomUUID(),
+      });
+      return { sale, line: result.line };
+    });
+    const stored = await tenant((db) =>
+      db.pharmacySaleLine.findFirstOrThrow({
+        where: { id: line.id },
+        include: { allocations: true },
+      })
+    );
+    expect(stored.allocations).toHaveLength(2);
+    expect(new Set(stored.allocations.map((part) => part.inventoryLotId))).toEqual(
+      new Set([firstLot.id, secondLot.id])
+    );
+    expect(stored.unitPriceMinor * stored.quantity).toBe(preview.grossMinor);
+    await tenant((db) =>
+      settlement.applyPharmacyTender(db, scope, {
+        saleId: sale.id,
+        deviceId: randomUUID(),
+        businessDate: new Date('2026-10-24'),
+        type: 'BANK_TRANSFER',
+        amountMinor: preview.grossMinor,
+        idempotencyKey: randomUUID(),
+      })
+    );
+    const receipt = await tenant((db) => counter.readCounterReceipt(db, scope, sale.id));
+    expect(receipt.totals.netMinor).toBe(preview.grossMinor);
+    expect(receipt.totals.tenderedMinor).toBe(preview.grossMinor);
+  }, 30_000);
 });
