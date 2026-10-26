@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { Building2, Eye, EyeOff, Loader2 } from 'lucide-react';
@@ -9,6 +9,7 @@ import { useHydrated } from './use-hydrated';
 
 const inputClass =
   'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
+const signInErrorId = 'login-sign-in-error';
 
 export function LoginForm({
   connections,
@@ -30,7 +31,9 @@ export function LoginForm({
   const [error, setError] = useState<string>(
     initialError ? LOGIN_ERROR_MESSAGES[initialError] : ''
   );
+  const [credentialsInvalid, setCredentialsInvalid] = useState(Boolean(initialError));
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const emailRef = useRef<HTMLInputElement>(null);
   // IMP-AUTH-02: revealed after a correct password when the account has 2FA on.
   const [twoFactor, setTwoFactor] = useState(
     initialError === '2fa-required' || initialError === '2fa-invalid'
@@ -39,6 +42,7 @@ export function LoginForm({
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError('');
+    setCredentialsInvalid(false);
     setIsSubmitting(true);
 
     const formData = new FormData(event.currentTarget);
@@ -60,6 +64,7 @@ export function LoginForm({
       });
 
       if (result?.error) {
+        setCredentialsInvalid(true);
         // A deactivated account that supplied the CORRECT password is surfaced by
         // the server with code 'suspended' (see SuspendedError in src/lib/auth.ts).
         // Every other failure — wrong password or unknown email, including a wrong
@@ -84,6 +89,7 @@ export function LoginForm({
           );
         }
         setIsSubmitting(false);
+        emailRef.current?.focus();
         return;
       }
 
@@ -91,7 +97,9 @@ export function LoginForm({
       router.replace(callbackUrl);
     } catch {
       setError('Unable to sign in right now. Please check your connection and try again.');
+      setCredentialsInvalid(true);
       setIsSubmitting(false);
+      emailRef.current?.focus();
     }
   };
 
@@ -99,6 +107,7 @@ export function LoginForm({
     <>
       {error && (
         <div
+          id={signInErrorId}
           role="alert"
           className="mb-5 rounded-[3px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
         >
@@ -146,6 +155,7 @@ export function LoginForm({
               Email
             </label>
             <input
+              ref={emailRef}
               id="email"
               type="email"
               placeholder="you@company.com"
@@ -153,6 +163,9 @@ export function LoginForm({
               autoFocus
               name="email"
               required
+              aria-invalid={credentialsInvalid || undefined}
+              aria-describedby={credentialsInvalid ? signInErrorId : undefined}
+              onChange={() => setCredentialsInvalid(false)}
               className={inputClass}
             />
           </div>
@@ -177,6 +190,9 @@ export function LoginForm({
                 autoComplete="current-password"
                 name="password"
                 required
+                aria-invalid={credentialsInvalid || undefined}
+                aria-describedby={credentialsInvalid ? signInErrorId : undefined}
+                onChange={() => setCredentialsInvalid(false)}
                 className={`${inputClass} pr-10`}
               />
               <button
