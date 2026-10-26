@@ -103,33 +103,39 @@ describeIfDatabase('AI ledger database integration', () => {
     });
   });
 
-  it('does not treat unfinished work as persisted spend and charges an abort', async () => {
+  it('keeps an expired reservation in the budget after process loss', async () => {
     const [{ withTenantDb }, { commitAIUsageReservation, reserveAIUsage }] = await Promise.all([
       import('@/lib/tenancy/scoped-db'),
       import('./ledger'),
     ]);
     const expiredId = `expired-${suffix}`;
-    const old = new Date(Date.now() - 10 * 60_000);
     const first = await withTenantDb(orgA, (db) =>
       reserveAIUsage(db, {
         organizationId: orgA,
         requestId: expiredId,
         tier: 'standard',
         monthlyBudgetUsd: new Prisma.Decimal(5),
-        occurredAt: old,
       })
     );
     expect(first.provider).toBe('anthropic');
+
+    // Simulate a worker disappearing without invoking a terminal callback.
+    await withTenantDb(orgA, (db) =>
+      db.aiUsage.update({
+        where: { organizationId_requestId: { organizationId: orgA, requestId: expiredId } },
+        data: { expiresAt: new Date(Date.now() - 10 * 60_000) },
+      })
+    );
 
     const second = await withTenantDb(orgA, (db) =>
       reserveAIUsage(db, {
         organizationId: orgA,
         requestId: `after-expiry-${suffix}`,
         tier: 'standard',
-        monthlyBudgetUsd: new Prisma.Decimal(5),
+        monthlyBudgetUsd: new Prisma.Decimal('3.9'),
       })
     );
-    expect(second.provider).toBe('anthropic');
+    expect(second.provider).toBe('bedrock');
 
     await withTenantDb(orgA, (db) => commitAIUsageReservation(db, orgA, expiredId));
     await withTenantDb(orgA, async (db) => {

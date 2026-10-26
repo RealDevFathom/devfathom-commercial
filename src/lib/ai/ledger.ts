@@ -48,10 +48,10 @@ export async function reserveAIUsage(
       organizationId: input.organizationId,
       provider: 'anthropic',
       occurredAt: { gte: monthStart(occurredAt), lte: occurredAt },
-      OR: [
-        { status: 'COMPLETED' },
-        { status: 'RESERVED', expiresAt: { gt: occurredAt } },
-      ],
+      // Reservations remain part of the budget until an explicit terminal
+      // transition. Expiry is diagnostic metadata, not proof that provider
+      // work stopped or that no charge was incurred.
+      status: { in: ['COMPLETED', 'RESERVED'] },
     },
     _sum: { costUsd: true },
   });
