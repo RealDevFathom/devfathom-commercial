@@ -95,6 +95,18 @@ describe('provider event ingestion', () => {
     expect(executeRaw.mock.calls[0][0].values.slice(3, 5)).toEqual(['grant-1', 'user-1']);
   });
 
+  it('preserves colons within the namespaced identity value', async () => {
+    await recordAndApplyProviderEvent(occurrence, {
+      ...joined,
+      participantIdentity: 'gst:guest:grant-1',
+    });
+
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { occurrenceId: 'occ-1', id: 'guest:grant-1' },
+      select: { id: true, userId: true },
+    });
+  });
+
   it('continues to resolve legacy unprefixed participant identities', async () => {
     await recordAndApplyProviderEvent(occurrence, {
       ...joined,
