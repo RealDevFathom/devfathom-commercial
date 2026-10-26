@@ -10,6 +10,8 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { moneyLabel } from '@/lib/finance/currency';
 import { format } from 'date-fns';
+import { toast } from 'sonner';
+import { PAID_STATUS_ERROR } from '@/lib/finance/invoice-status';
 
 type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
 
@@ -49,10 +51,11 @@ export function InvoicesTab() {
       );
       return { previous };
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
       if (ctx?.previous) {
         utils.finance.getInvoices.setData(undefined, ctx.previous);
       }
+      toast.error(err.message);
     },
     onSettled: () => {
       utils.finance.getFinancialSummary.invalidate();
@@ -169,7 +172,7 @@ export function InvoicesTab() {
 /* ============================================
    Invoice Row (memoized; owns its own status-menu open state)
    ============================================ */
-const InvoiceRow = memo(function InvoiceRow({
+export const InvoiceRow = memo(function InvoiceRow({
   inv,
   onUpdateStatus,
 }: {
@@ -251,6 +254,11 @@ const InvoiceRow = memo(function InvoiceRow({
                   <button
                     key={s}
                     onClick={() => {
+                      if (s === 'PAID') {
+                        toast.error(PAID_STATUS_ERROR);
+                        setMenuOpen(false);
+                        return;
+                      }
                       onUpdateStatus(inv.id, s);
                       setMenuOpen(false);
                     }}
