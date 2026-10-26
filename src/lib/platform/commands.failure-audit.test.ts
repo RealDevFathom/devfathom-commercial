@@ -48,7 +48,15 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 import { executePlatformCommand } from './commands';
 import { PlatformSecurityError } from './security';
 
-const actor = (role: 'SUPER_ADMIN' | 'AUDITOR' | 'SALES' = 'SUPER_ADMIN') =>
+type TestPlatformRole =
+  | 'SUPER_ADMIN'
+  | 'OPERATIONS'
+  | 'SALES'
+  | 'FINANCE'
+  | 'SUPPORT'
+  | 'AUDITOR';
+
+const actor = (role: TestPlatformRole = 'SUPER_ADMIN') =>
   ({ id: 'operator_1', role }) as never;
 const request = (requestId = 'req_failure_1') =>
   new Request('https://admin.devfathom.test/api/platform/control', {
@@ -92,28 +100,31 @@ describe('platform command failure auditing', () => {
     });
   });
 
-  it('denies CRM conversion to sales before organization provisioning begins', async () => {
-    await expect(
-      executePlatformCommand(
-        actor('SALES'),
-        'crm.opportunity.convert',
-        { opportunityId: 'opp_1' },
-        request()
-      )
-    ).rejects.toMatchObject({ status: 403 });
+  it.each(['OPERATIONS', 'SALES', 'FINANCE', 'SUPPORT', 'AUDITOR'] as const)(
+    'denies CRM conversion to %s before organization provisioning begins',
+    async (role) => {
+      await expect(
+        executePlatformCommand(
+          actor(role),
+          'crm.opportunity.convert',
+          { opportunityId: 'opp_1' },
+          request()
+        )
+      ).rejects.toMatchObject({ status: 403 });
 
-    // The sole transaction records the denial; runCommand never receives the
-    // caller-controlled organization or first-administrator payload.
-    expect(state.transactionCalls).toBe(1);
-    expect(state.audits).toHaveLength(1);
-    expect(state.audits[0]).toMatchObject({
-      actorPlatformUserId: 'operator_1',
-      action: 'crm.opportunity.convert',
-      success: false,
-      reason: 'Platform command capability denied.',
-      metadata: { outcomeCategory: 'capability_denied' },
-    });
-  });
+      // The sole transaction records the denial; runCommand never receives the
+      // caller-controlled organization or first-administrator payload.
+      expect(state.transactionCalls).toBe(1);
+      expect(state.audits).toHaveLength(1);
+      expect(state.audits[0]).toMatchObject({
+        actorPlatformUserId: 'operator_1',
+        action: 'crm.opportunity.convert',
+        success: false,
+        reason: 'Platform command capability denied.',
+        metadata: { outcomeCategory: 'capability_denied' },
+      });
+    }
+  );
 
   it('persists validation failure without copying raw input', async () => {
     const secret = 'password=validation-secret';
