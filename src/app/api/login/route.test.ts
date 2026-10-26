@@ -305,6 +305,7 @@ describe('DELETE /api/login', () => {
     );
 
     expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
     expect(mocks.discardLoginIntent).toHaveBeenCalledWith('t'.repeat(43));
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0');
   });
