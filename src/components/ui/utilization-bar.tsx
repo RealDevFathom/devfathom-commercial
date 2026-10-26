@@ -23,7 +23,7 @@ function UtilizationBar({
   ...props
 }: UtilizationBarProps) {
   const labelId = React.useId();
-  const pct = Math.max(0, Math.min(100, value));
+  const pct = Number.isNaN(value) ? 0 : Math.max(0, Math.min(100, value));
   const hasLabel = Boolean(label?.trim());
   const showHeader = hasLabel || !hidePercent;
   return (

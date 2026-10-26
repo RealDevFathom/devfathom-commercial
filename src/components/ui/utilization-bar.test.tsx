@@ -46,6 +46,7 @@ describe('UtilizationBar', () => {
   });
 
   it.each([
+    { value: Number.NaN, expectedValue: 0, expectedWidth: '0%' },
     { value: -1, expectedValue: 0, expectedWidth: '0%' },
     { value: 72.6, expectedValue: 73, expectedWidth: '72.6%' },
     { value: 101, expectedValue: 100, expectedWidth: '100%' },
