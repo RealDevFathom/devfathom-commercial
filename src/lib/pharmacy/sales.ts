@@ -265,6 +265,46 @@ export function assertSaleUnitConversion(input: {
   }
 }
 
+/**
+ * Derive the one integer sale-unit price persisted on a line from every lot
+ * that fulfilled it. The weighted average is rounded down: this preserves the
+ * existing line model (`unitPriceMinor * quantity`) without ever moving a
+ * rounding paisa from a cheaper lot onto the patient.
+ */
+export function allocationWeightedPrice(input: {
+  allocations: readonly {
+    canonicalUnits: number;
+    unitPriceMinor: number;
+    proRataCeilingMinor: number;
+  }[];
+  canonicalUnits: number;
+}) {
+  if (!Number.isSafeInteger(input.canonicalUnits) || input.canonicalUnits <= 0)
+    throw new PharmacySaleError('INVALID_QUANTITY');
+
+  let pricedUnitMinorTotal = 0;
+  let ceilingUnitMinorTotal = 0;
+  let allocatedUnits = 0;
+  for (const allocation of input.allocations) {
+    if (!Number.isSafeInteger(allocation.canonicalUnits) || allocation.canonicalUnits <= 0)
+      throw new PharmacySaleError('INVALID_QUANTITY');
+    allocatedUnits += allocation.canonicalUnits;
+    pricedUnitMinorTotal += allocation.unitPriceMinor * allocation.canonicalUnits;
+    ceilingUnitMinorTotal += allocation.proRataCeilingMinor * allocation.canonicalUnits;
+  }
+  if (
+    allocatedUnits !== input.canonicalUnits ||
+    !Number.isSafeInteger(pricedUnitMinorTotal) ||
+    !Number.isSafeInteger(ceilingUnitMinorTotal)
+  )
+    throw new PharmacySaleError('INVALID_QUANTITY');
+
+  return {
+    unitPriceMinor: Math.floor(pricedUnitMinorTotal / input.canonicalUnits),
+    proRataCeilingMinor: Math.floor(ceilingUnitMinorTotal / input.canonicalUnits),
+  };
+}
+
 export async function addSaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
   return addSaleLineWithAllocation(db, scope, input);
 }
@@ -342,9 +382,12 @@ async function addSaleLineWithAllocation(
   });
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
   assertSaleUnitConversion({ ...input, packLevels, lots });
-  let unitPriceMinor = 0,
-    ceiling = 0,
-    costMinor = 0;
+  const allocationPrices: {
+    canonicalUnits: number;
+    unitPriceMinor: number;
+    proRataCeilingMinor: number;
+  }[] = [];
+  let costMinor = 0;
   for (const part of allocation.allocations) {
     const lot = lotById.get(part.inventoryLotId);
     if (!lot) throw new PharmacySaleError('NOT_FOUND');
@@ -353,10 +396,13 @@ async function addSaleLineWithAllocation(
       canonicalUnitsInPack: lot.unitsPerPack,
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
     });
-    unitPriceMinor = Math.max(unitPriceMinor, price.unitPriceMinor);
-    ceiling = Math.max(ceiling, price.proRataCeilingMinor);
+    allocationPrices.push({ canonicalUnits: part.units, ...price });
     costMinor += lot.unitCostMinor * part.units;
   }
+  const { unitPriceMinor, proRataCeilingMinor } = allocationWeightedPrice({
+    allocations: allocationPrices,
+    canonicalUnits,
+  });
   const grossMinor = unitPriceMinor * input.quantity;
   const discountMinor = input.discountMinor ?? 0;
   validateDiscount({
@@ -380,7 +426,7 @@ async function addSaleLineWithAllocation(
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
       canonicalUnits,
       unitPriceMinor,
-      proRataCeilingMinor: ceiling,
+      proRataCeilingMinor,
       unitCostMinor: Math.ceil(costMinor / input.quantity),
       discountKind: input.discountKind,
       discountMinor,

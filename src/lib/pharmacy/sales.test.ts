@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   addSaleLine,
+  allocationWeightedPrice,
   assertSaleUnitConversion,
   addRestockInterest,
   captureSafeRestockArrival,
@@ -157,6 +158,33 @@ describe('POS sale voiding', () => {
 });
 
 describe('POS-03 lot-derived pack/strip/unit pricing', () => {
+  it('weights a split line by each allocated lot instead of charging the highest MRP', () => {
+    const price = allocationWeightedPrice({
+      allocations: [
+        { canonicalUnits: 1, unitPriceMinor: 100, proRataCeilingMinor: 100 },
+        { canonicalUnits: 1, unitPriceMinor: 200, proRataCeilingMinor: 200 },
+      ],
+      canonicalUnits: 2,
+    });
+
+    expect(price).toEqual({ unitPriceMinor: 150, proRataCeilingMinor: 150 });
+    expect(price.unitPriceMinor * 2).toBe(300);
+  });
+
+  it('rounds an unequal allocation-weighted price down to avoid a patient overcharge', () => {
+    const price = allocationWeightedPrice({
+      allocations: [
+        { canonicalUnits: 2, unitPriceMinor: 100, proRataCeilingMinor: 100 },
+        { canonicalUnits: 1, unitPriceMinor: 200, proRataCeilingMinor: 200 },
+      ],
+      canonicalUnits: 3,
+    });
+
+    expect(price).toEqual({ unitPriceMinor: 133, proRataCeilingMinor: 133 });
+    expect(price.unitPriceMinor * 3).toBe(399);
+    expect(price.unitPriceMinor * 3).toBeLessThanOrEqual(100 * 2 + 200);
+  });
+
   it('rejects a client claiming that a ten-unit pack contains one canonical unit', () => {
     expect(() =>
       assertSaleUnitConversion({
