@@ -7,6 +7,7 @@ import { registerPrintTotals } from '@/lib/pharmacy/register-print';
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
+import { PendingLegalReviewNotice } from '../pending-legal-review-notice';
 import { WorkspaceState } from './field';
 
 const cell = 'break-words px-2 py-1.5 align-top text-xs text-text-body';
@@ -120,6 +121,9 @@ export function ControlledRegisterConsole() {
         <WorkspaceState title="Controlled register could not be loaded" tone="danger">
           {register.error.message}
         </WorkspaceState>
+      ) : null}
+      {register.data?.pendingLegalReview ? (
+        <PendingLegalReviewNotice provinceName={register.data.provinceName} />
       ) : null}
       {register.data ? (
         <SectionCard title="Register" titleLevel={2}>

@@ -30,6 +30,7 @@ import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Textarea } from '@/components/ui/textarea';
+import { PendingLegalReviewNotice } from '@/components/pharmacy/pending-legal-review-notice';
 import {
   FISCAL_STATUSES,
   PROVISIONAL_LICENCE_CATEGORY,
@@ -83,6 +84,10 @@ function Field({
 }
 
 export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory }) {
+  const initialProvinceCode =
+    initial.branches.find((branch) => branch.id === initial.selectedBranchId)?.provinceCode ??
+    initial.jurisdictions[0]?.provinceCode ??
+    '';
   const [data, setData] = useState<Regulatory>(initial);
   const [branchId, setBranchId] = useState<string>(initial.selectedBranchId ?? '');
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -90,16 +95,20 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [evidenceRef, setEvidenceRef] = useState('');
-  const [provinceCode, setProvinceCode] = useState<string>(
-    initial.jurisdictions[0]?.provinceCode ?? ''
-  );
+  const [provinceCode, setProvinceCode] = useState<string>(initialProvinceCode);
   const formRef = useRef<HTMLFormElement>(null);
 
   const utils = trpc.useUtils();
   const refresh = (nextBranchId = branchId) => {
     void utils.pharmacyOnboarding.regulatory
       .fetch({ branchId: nextBranchId || undefined })
-      .then(setData)
+      .then((next) => {
+        setData(next);
+        const branchProvince = next.branches.find(
+          (branch) => branch.id === next.selectedBranchId
+        )?.provinceCode;
+        setProvinceCode(branchProvince ?? next.jurisdictions[0]?.provinceCode ?? '');
+      })
       .catch(() => setErrors({ form: 'That branch could not be loaded. Try again.' }));
   };
 
@@ -287,6 +296,10 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
         )}
       </SectionCard>
 
+      {jurisdiction?.provisional ? (
+        <PendingLegalReviewNotice provinceName={jurisdiction.provinceName} />
+      ) : null}
+
       <SectionCard
         eyebrow="Effective-dated"
         title={inForce ? 'Record the next version' : 'Record the first version'}
@@ -340,7 +353,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               htmlFor="provinceCode"
               hint={
                 jurisdiction?.provisional
-                  ? 'These rules are still provisional, so this branch cannot operate on them yet.'
+                  ? 'These rules are pending legal review; see the notice above.'
                   : 'Only provinces with published rules appear here.'
               }
               label="Province"
