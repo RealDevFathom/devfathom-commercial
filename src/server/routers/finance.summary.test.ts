@@ -68,6 +68,7 @@ describe('finance.getFinancialSummary', () => {
       by: ['currency'],
       _sum: { amount: true },
       where: {
+        organizationId: 'org-1',
         paidAt: {
           gte: new Date(2026, 9, 1),
           lte: new Date(2026, 9, 22, 12),
@@ -78,6 +79,7 @@ describe('finance.getFinancialSummary', () => {
       by: ['currency'],
       _sum: { amount: true },
       where: {
+        organizationId: 'org-1',
         paidAt: {
           gte: new Date(2026, 0, 1),
           lte: new Date(2026, 9, 22, 12),

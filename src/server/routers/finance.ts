@@ -831,12 +831,18 @@ export const financeRouter = router({
       ctx.db.payment.groupBy({
         by: ['currency'],
         _sum: { amount: true },
-        where: { paidAt: { gte: startOfMonth, lte: now } },
+        where: {
+          organizationId: ctx.entitlements.organizationId,
+          paidAt: { gte: startOfMonth, lte: now },
+        },
       }),
       ctx.db.payment.groupBy({
         by: ['currency'],
         _sum: { amount: true },
-        where: { paidAt: { gte: startOfYear, lte: now } },
+        where: {
+          organizationId: ctx.entitlements.organizationId,
+          paidAt: { gte: startOfYear, lte: now },
+        },
       }),
       ctx.db.invoice.groupBy({
         by: ['currency'],
