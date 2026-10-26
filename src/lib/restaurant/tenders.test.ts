@@ -1429,6 +1429,7 @@ describeIfDatabase('idempotency (real DB)', () => {
 describeIfDatabase('frozen service-charge settlement (real DB)', () => {
   it('settles with the charge frozen at bill cut after a new policy becomes effective', async () => {
     const transition = new Date('2026-08-20T00:00:00.000Z');
+    const settlementAt = new Date('2026-08-20T18:00:00.000Z');
     const [openingPolicy, settlementPolicy] = await read(async (tx) => {
       const first = await tx.restaurantServiceChargePolicyVersion.create({
         data: {
@@ -1478,8 +1479,8 @@ describeIfDatabase('frozen service-charge settlement (real DB)', () => {
       tx.restaurantServiceChargePolicyVersion.findFirstOrThrow({
         where: {
           branchId: ids.branch,
-          effectiveFrom: { lte: transition },
-          OR: [{ effectiveTo: null }, { effectiveTo: { gt: transition } }],
+          effectiveFrom: { lte: settlementAt },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: settlementAt } }],
         },
         orderBy: [{ effectiveFrom: 'desc' }, { id: 'asc' }],
       })
@@ -1488,7 +1489,7 @@ describeIfDatabase('frozen service-charge settlement (real DB)', () => {
     expect(activePolicy.rate.toFixed(6)).toBe('0.200000');
 
     const quote = await read((tx) =>
-      deps.tenders.quoteOpenBillSettlement(tx, billId, new Date('2026-08-20T18:00:00.000Z'))
+      deps.tenders.quoteOpenBillSettlement(tx, billId, settlementAt)
     );
     expect(quote?.serviceChargePayable.toFixed(2)).toBe('1.25');
     expect(quote?.grandTotal.toFixed(2)).toBe('13.75');
@@ -1498,7 +1499,7 @@ describeIfDatabase('frozen service-charge settlement (real DB)', () => {
       billId,
       tender: { type: 'OTHER', amount: grandTotal },
       actor: actor(),
-      now: new Date('2026-08-20T18:00:00.000Z'),
+      now: settlementAt,
     });
 
     expect(result.settled).toBe(true);
