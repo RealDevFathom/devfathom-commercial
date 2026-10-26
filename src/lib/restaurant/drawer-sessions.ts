@@ -8,7 +8,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { buildCoAuthorizationRecord } from './co-authorization';
-import { assertMoneyDayOpen } from './daily-close';
+import { assertMoneyDayOpen } from './money-day-guard';
 import { add, isNegative, money, sub, ZERO } from './money';
 
 /**
