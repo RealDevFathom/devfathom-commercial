@@ -867,8 +867,8 @@ type ClaimedConversionOpportunity = {
  * Reserve an eligible opportunity before provisioning starts. The conditional
  * update is the concurrency guard: after PostgreSQL waits on a competing
  * conversion, it rechecks this predicate and only one transaction can win.
- * The account claim applies the same guard across distinct opportunities for
- * one account, preventing either a replay or a race from creating two tenants.
+ * Locking the account row applies the same guard across distinct opportunities
+ * for one account, preventing either a replay or a race from creating two tenants.
  * Because the reservation and provisioning share the platform transaction, a
  * later provisioning failure restores both claims.
  */
@@ -902,11 +902,13 @@ async function claimOpportunityForConversion(
   if (claimed.count !== 1) {
     throw new PlatformSecurityError('Opportunity is not eligible for conversion.', 409);
   }
-  const claimedAccount = await db.platformAccount.updateMany({
-    where: { id: opportunity.accountId, organizationId: null },
-    data: { status: 'CUSTOMER' },
-  });
-  if (claimedAccount.count !== 1) {
+  const [account] = await db.$queryRaw<Array<{ organizationId: string | null }>>(Prisma.sql`
+    SELECT "organizationId"
+    FROM "platform_accounts"
+    WHERE "id" = ${opportunity.accountId}
+    FOR UPDATE
+  `);
+  if (!account || account.organizationId !== null) {
     throw new PlatformSecurityError('Account is already linked to an organization.', 409);
   }
   return { id: opportunity.id, accountId: opportunity.accountId, fromStage };
