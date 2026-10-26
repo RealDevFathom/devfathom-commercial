@@ -148,7 +148,10 @@ export async function POST(request: Request) {
   });
   const sessionCookieNames = new Set(['authjs.session-token', '__Secure-authjs.session-token']);
   for (const cookie of request.headers.get('cookie')?.split(';') ?? []) {
-    const name = cookie.slice(0, cookie.indexOf('=')).trim();
+    const separatorIndex = cookie.indexOf('=');
+    if (separatorIndex === -1) continue;
+
+    const name = cookie.slice(0, separatorIndex).trim();
     if (/^(?:__Secure-)?authjs\.session-token\.\d+$/.test(name)) {
       sessionCookieNames.add(name);
     }

@@ -244,7 +244,9 @@ describe('POST browser enrollment', () => {
     const response = await POST(
       request(
         'authjs.session-token.0=local-first; authjs.session-token.1=local-second; ' +
-          '__Secure-authjs.session-token.0=secure-first; unrelated-cookie=preserved'
+          '__Secure-authjs.session-token.0=secure-first; authjs.session-token.1=duplicate; ' +
+          'authjs.session-token.invalid=preserved; authjs.session-token.2; ' +
+          'unrelated-cookie=preserved'
       )
     );
     const cookies = response.headers.getSetCookie();
@@ -259,6 +261,13 @@ describe('POST browser enrollment', () => {
       expect(deletion).toContain('Expires=Thu, 01 Jan 1970 00:00:00 GMT');
       expect(deletion?.includes('Secure')).toBe(name.startsWith('__Secure-'));
     }
+    expect(
+      cookies.filter((cookie) => cookie.startsWith('authjs.session-token.1='))
+    ).toHaveLength(1);
+    expect(
+      cookies.some((cookie) => cookie.startsWith('authjs.session-token.invalid='))
+    ).toBe(false);
+    expect(cookies.some((cookie) => cookie.startsWith('authjs.session-token.2='))).toBe(false);
     expect(cookies.some((cookie) => cookie.startsWith('unrelated-cookie='))).toBe(false);
   });
 });
