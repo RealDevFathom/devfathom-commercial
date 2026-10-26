@@ -2,7 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-const url = process.env.TEST_DATABASE_URL;
+// CI supplies TEST_DATABASE_URL, while the focused acceptance command documents DATABASE_URL.
+// Either must opt in explicitly because this test writes fixture rows.
+const url = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
 if (url) process.env.DATABASE_URL = url;
 const suite = url ? describe : describe.skip;
 const suffix = randomBytes(5).toString('hex');
