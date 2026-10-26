@@ -21,6 +21,7 @@
  * assertion could be satisfied by a neighbour's lot.
  */
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -621,6 +622,91 @@ describeIfDatabase('FIN-01 / FIN-03 — sale line', () => {
       );
     }
   );
+
+  it('backfills historical partial and full identified returns without changing their journals', async () => {
+    const f = await fixture(ORG_A, branch('return-backfill'), 'return-backfill');
+    const result = await inOrg(ORG_A, async (db) => {
+      const cheap = await stockLot(db, f, {
+        label: 'backfill-cheap',
+        units: 2,
+        unitCostMinor: 60,
+        printedMrpMinor: 100,
+        expiresAt: EXPIRY_SOON,
+        unitsPerPack: 1,
+      });
+      const dear = await stockLot(db, f, {
+        label: 'backfill-dear',
+        units: 1,
+        unitCostMinor: 80,
+        printedMrpMinor: 200,
+        expiresAt: EXPIRY_LATER,
+        unitsPerPack: 1,
+      });
+      const sold = await completedSaleLine(db, f, {
+        label: 'return-backfill',
+        quantity: 3,
+        discountKind: 'DISCOUNT',
+        discountMinor: 40,
+      });
+      const requests = [cheap.lot.id, cheap.lot.id, dear.lot.id];
+      const returnLineIds: string[] = [];
+      const journals: Entry[] = [];
+      for (const [index, lotId] of requests.entries()) {
+        const returned = await deps.sales.returnSaleLine(db, scopeOf(f), {
+          saleLineId: sold.line.id,
+          lotId,
+          canonicalUnits: 1,
+          quarantineLocationId: f.quarantineId,
+          reason: 'Historical return',
+          integrityDecision: 'QUARANTINE',
+          idempotencyKey: `return-backfill-${index}-${tag('backfill')}`,
+        });
+        if (!returned.returnLine) throw new Error('Expected identified return');
+        returnLineIds.push(returned.returnLine.id);
+        journals.push(
+          (await deps.postings.postSaleReturnEntry(db, scopeOf(f), {
+            saleReturnLineId: returned.returnLine.id,
+            at: LATER,
+          }))!
+        );
+      }
+
+      await db.pharmacySaleReturnLine.updateMany({
+        where: { id: { in: returnLineIds }, organizationId: ORG_A },
+        data: { grossMinor: 0, discountMinor: 0 },
+      });
+      const migration = readFileSync(
+        'prisma/migrations/20261026120000_pharmacy_allocation_money/migration.sql',
+        'utf8'
+      );
+      const backfill = migration.match(
+        /-- BEGIN historical return money backfill\n([\s\S]*?)\n-- END historical return money backfill/
+      )?.[1];
+      if (!backfill) throw new Error('Historical return money backfill not found');
+      await db.$executeRawUnsafe(backfill);
+
+      const lines = await db.pharmacySaleReturnLine.findMany({
+        where: { id: { in: returnLineIds }, organizationId: ORG_A },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
+      return { lines, journals, partialReturnLineId: returnLineIds[0]! };
+    });
+
+    result.journals.forEach(expectBalanced);
+    expect(result.lines.map((line) => line.grossMinor).sort((a, b) => a - b)).toEqual([100, 100, 200]);
+    expect(result.lines.find((line) => line.id === result.partialReturnLineId)).toMatchObject({
+      grossMinor: 100,
+      discountMinor: 13,
+    });
+    expect(result.lines.reduce((sum, line) => sum + line.grossMinor, 0)).toBe(400);
+    expect(result.lines.reduce((sum, line) => sum + line.discountMinor, 0)).toBe(40);
+    expect(
+      result.journals.reduce(
+        (sum, journal) => sum + totalFor(journal, 'SALES_CLEARING', 'CREDIT'),
+        0
+      )
+    ).toBe(400);
+  });
 
   it('posts revenue and COGS at the EXACT allocated lot cost across two lots', async () => {
     const f = await fixture(ORG_A, branch('cogs'), 'cogs');

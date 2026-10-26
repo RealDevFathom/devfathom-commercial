@@ -26,3 +26,47 @@ FROM shares WHERE shares.id = a.id;
 ALTER TABLE "pharmacy_sale_return_lines"
 ADD COLUMN "grossMinor" INTEGER NOT NULL DEFAULT 0,
 ADD COLUMN "discountMinor" INTEGER NOT NULL DEFAULT 0;
+
+-- BEGIN historical return money backfill
+-- Replay identified returns in their original order.  The interval overlap
+-- makes this work even if one historical return crossed two allocations for
+-- the same lot; the cumulative FLOOR deltas also assign every final remainder.
+WITH allocation_ranges AS (
+  SELECT a.*,
+    COALESCE(SUM(a."canonicalUnits") OVER (
+      PARTITION BY a."organizationId", a."saleLineId", a."inventoryLotId" ORDER BY a.id
+      ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+    ), 0)::integer AS unit_start
+  FROM "pharmacy_sale_line_allocations" a
+), return_ranges AS (
+  SELECT r.*,
+    COALESCE(SUM(r."canonicalUnits") OVER (
+      PARTITION BY r."organizationId", r."saleLineId", r."inventoryLotId" ORDER BY r."createdAt", r.id
+      ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+    ), 0)::integer AS unit_start
+  FROM "pharmacy_sale_return_lines" r
+), return_money AS (
+  SELECT r.id,
+    SUM(
+      FLOOR(a."grossMinor"::numeric * (LEAST(r.unit_start + r."canonicalUnits", a.unit_start + a."canonicalUnits") - a.unit_start) / a."canonicalUnits")
+      - FLOOR(a."grossMinor"::numeric * (GREATEST(r.unit_start, a.unit_start) - a.unit_start) / a."canonicalUnits")
+    )::integer AS gross,
+    SUM(
+      FLOOR(a."discountMinor"::numeric * (LEAST(r.unit_start + r."canonicalUnits", a.unit_start + a."canonicalUnits") - a.unit_start) / a."canonicalUnits")
+      - FLOOR(a."discountMinor"::numeric * (GREATEST(r.unit_start, a.unit_start) - a.unit_start) / a."canonicalUnits")
+    )::integer AS discount
+  FROM return_ranges r
+  JOIN allocation_ranges a
+    ON a."organizationId" = r."organizationId"
+   AND a."saleLineId" = r."saleLineId"
+   AND a."inventoryLotId" = r."inventoryLotId"
+   AND r.unit_start < a.unit_start + a."canonicalUnits"
+   AND r.unit_start + r."canonicalUnits" > a.unit_start
+  GROUP BY r.id
+)
+UPDATE "pharmacy_sale_return_lines" r
+SET "grossMinor" = return_money.gross,
+    "discountMinor" = return_money.discount
+FROM return_money
+WHERE return_money.id = r.id;
+-- END historical return money backfill
