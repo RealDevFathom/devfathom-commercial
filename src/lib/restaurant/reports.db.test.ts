@@ -10,14 +10,17 @@ describeIfDatabase('restaurant report timezone boundaries', () => {
   beforeAll(async () => {
     client = new Client({ connectionString: TEST_DATABASE_URL });
     await client.connect();
-    await client.query(`SET TIME ZONE 'UTC'`);
+    await client.query(`SET TIME ZONE 'Asia/Karachi'`);
   });
 
   afterAll(async () => {
     await client.end();
   });
 
-  it('filters UTC wall-clock timestamps and labels days for each branch timezone', async () => {
+  it('filters UTC wall-clock timestamps independently of the non-UTC session timezone', async () => {
+    const session = await client.query<{ TimeZone: string }>('SHOW TIME ZONE');
+    expect(session.rows[0]?.TimeZone).toBe('Asia/Karachi');
+
     const result = await client.query<{
       branch: string;
       occurred_at: string;
@@ -45,8 +48,8 @@ describeIfDatabase('restaurant report timezone boundaries', () => {
       SELECT branch, label AS occurred_at,
         TO_CHAR((occurred_at AT TIME ZONE 'UTC') AT TIME ZONE timezone, 'YYYY-MM-DD') AS day
       FROM movements
-      WHERE occurred_at >= (DATE '2026-10-21'::timestamp AT TIME ZONE timezone)
-        AND occurred_at < ((DATE '2026-10-21' + 1)::timestamp AT TIME ZONE timezone)
+      WHERE (occurred_at AT TIME ZONE 'UTC') >= (DATE '2026-10-21'::timestamp AT TIME ZONE timezone)
+        AND (occurred_at AT TIME ZONE 'UTC') < ((DATE '2026-10-21' + 1)::timestamp AT TIME ZONE timezone)
       ORDER BY branch, label
     `);
 
