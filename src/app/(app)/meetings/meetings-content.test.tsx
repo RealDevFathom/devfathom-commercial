@@ -204,7 +204,17 @@ describe('MeetingsContent pagination', () => {
     fireEvent.click(screen.getByRole('button', { name: 'End time' }));
     fireEvent.click(screen.getByRole('option', { name: '10:00 AM' }));
 
-    expect(screen.getByRole('alert')).toHaveTextContent('End time must be after start time.');
+    const timeError = screen.getByRole('alert');
+    expect(timeError).toHaveTextContent('End time must be after start time.');
+    expect(timeError.id).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Start time' })).toHaveAttribute(
+      'aria-describedby',
+      timeError.id
+    );
+    expect(screen.getByRole('button', { name: 'End time' })).toHaveAttribute(
+      'aria-describedby',
+      timeError.id
+    );
     const schedule = screen.getByRole('button', { name: 'Schedule' });
     expect(schedule).toBeDisabled();
     fireEvent.click(schedule);

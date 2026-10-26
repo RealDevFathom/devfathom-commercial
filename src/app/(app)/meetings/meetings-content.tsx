@@ -207,6 +207,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
     ''
   );
   const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
+  const timeErrorId = useId();
 
   const hasCompleteTimeRange = Boolean(date && startTime && endTime);
   const hasInvalidTimeRange =
@@ -286,7 +287,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               value={startTime}
               onChange={setStartTime}
               aria-label="Start time"
-              aria-describedby={hasInvalidTimeRange ? 'meeting-time-error' : undefined}
+              aria-describedby={hasInvalidTimeRange ? timeErrorId : undefined}
               aria-invalid={hasInvalidTimeRange}
               className={cn(
                 'rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
@@ -300,7 +301,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
               value={endTime}
               onChange={setEndTime}
               aria-label="End time"
-              aria-describedby={hasInvalidTimeRange ? 'meeting-time-error' : undefined}
+              aria-describedby={hasInvalidTimeRange ? timeErrorId : undefined}
               aria-invalid={hasInvalidTimeRange}
               className={cn(
                 'rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
@@ -310,7 +311,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
           </div>
         </div>
         {hasInvalidTimeRange && (
-          <p id="meeting-time-error" role="alert" className="text-xs text-destructive">
+          <p id={timeErrorId} role="alert" className="text-xs text-destructive">
             {INVALID_MEETING_TIME_MESSAGE}
           </p>
         )}
