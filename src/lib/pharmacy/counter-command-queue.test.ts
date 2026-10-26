@@ -94,4 +94,14 @@ it('composes on HTTP LAN and preserves the command key across persisted replay a
     outcome: { action: 'RETRY', reason: 'NETWORK', retryAfterMs: null },
   });
   expect(buildCounterReplayRequest(retry.snapshot, retry.snapshot.commands[0]!)).toEqual(first);
+
+  expect(() =>
+    buildCounterReplayRequest(snapshot, { ...command, idempotencyKey: 'different-command-key' })
+  ).toThrow('INVALID_REPLAY_CONTRACT');
+  expect(() =>
+    buildCounterReplayRequest(snapshot, {
+      ...command,
+      authentication: { ...command.authentication, receiptSignature: '' },
+    })
+  ).toThrow('INVALID_REPLAY_CONTRACT');
 });

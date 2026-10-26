@@ -483,7 +483,11 @@ export function buildCounterReplayRequest(
   _snapshot: CounterQueueSnapshot,
   command: CounterQueuedCommand
 ): CounterReplayRequest {
-  if (!isSaleReplayAction(command.action) || !command.authentication) {
+  if (
+    !isSaleReplayAction(command.action) ||
+    !command.authentication ||
+    !isValidQueuedCounterCommand(command)
+  ) {
     throw new Error('INVALID_REPLAY_CONTRACT');
   }
   return {
