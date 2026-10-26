@@ -58,7 +58,12 @@ const prepared = {
     stationId: null,
     branchName: 'Main branch',
   },
-  operator: { staffProfileId: 'staff_1', displayName: 'Demo Manager', role: 'Manager' },
+  operator: {
+    staffProfileId: 'staff_1',
+    displayName: 'Demo Manager',
+    role: 'Manager',
+    canComp: true,
+  },
 };
 
 function request(body?: string, cookie?: string) {

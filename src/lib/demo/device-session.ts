@@ -137,7 +137,7 @@ export async function prepareDemoDeviceSession(
   const staff = profiles[0];
   if (profiles.length !== 1 || !staff?.primaryBranchId) return null;
 
-  const [canOperateTerminal, canOperateKind] = await Promise.all([
+  const [canOperateTerminal, canOperateKind, canComp] = await Promise.all([
     operatorHasCapability(db, staff.id, 'terminal:operate', now, staff.primaryBranchId),
     operatorHasCapability(
       db,
@@ -146,6 +146,7 @@ export async function prepareDemoDeviceSession(
       now,
       staff.primaryBranchId
     ),
+    operatorHasCapability(db, staff.id, 'orders:complimentary', now, staff.primaryBranchId),
   ]);
   if (!canOperateTerminal || !canOperateKind) return null;
 
@@ -220,6 +221,7 @@ export async function prepareDemoDeviceSession(
       staffProfileId: staff.id,
       displayName: staff.displayName,
       role: staff.user?.organizationRole?.name ?? staff.user?.title ?? 'Manager',
+      canComp,
     },
   };
 }

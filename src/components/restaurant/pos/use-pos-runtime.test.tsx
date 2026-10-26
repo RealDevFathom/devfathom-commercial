@@ -5,8 +5,20 @@ import type { ChangeEvent } from 'react';
 import { usePosRuntime } from './use-pos-runtime';
 
 const operators = [
-  { staffProfileId: 'staff-1', displayName: 'Amina', role: 'Manager', canApprove: true },
-  { staffProfileId: 'staff-2', displayName: 'Bilal', role: 'Cashier', canApprove: false },
+  {
+    staffProfileId: 'staff-1',
+    displayName: 'Amina',
+    role: 'Manager',
+    canComp: true,
+    canApprove: true,
+  },
+  {
+    staffProfileId: 'staff-2',
+    displayName: 'Bilal',
+    role: 'Cashier',
+    canComp: false,
+    canApprove: false,
+  },
 ];
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status });
@@ -105,6 +117,7 @@ describe('usePosRuntime boundaries', () => {
     const { result } = renderHook(() => usePosRuntime({ demo: true }));
     await waitFor(() => expect(result.current.runtime?.state).toBe('UNLOCKED'));
     await waitFor(() => expect(result.current.pending).toBeNull());
+    expect(result.current.workspace!.checkoutPanelProps.canComp).toBe(true);
     act(() =>
       result.current.workspace!.changeCustomerQuery({
         target: { value: 'Customer' },
@@ -120,6 +133,7 @@ describe('usePosRuntime boundaries', () => {
       });
     });
     expect(result.current.runtime?.operator?.staffProfileId).toBe('staff-2');
+    expect(result.current.workspace!.checkoutPanelProps.canComp).toBe(false);
     await act(async () => {
       release(
         json({

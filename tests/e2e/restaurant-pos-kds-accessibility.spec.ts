@@ -148,6 +148,7 @@ async function mockPos(page: Page, failure?: { status: number; error: string }) 
             displayName: 'Amina Khan',
             role: 'Operator',
             canApprove: false,
+            canComp: false,
           },
         ],
       });
@@ -214,6 +215,7 @@ async function mockKds(page: Page, response: typeof queue | { error: string }, s
             displayName: 'Amina Khan',
             role: 'Operator',
             canApprove: false,
+            canComp: false,
           },
         ],
       });

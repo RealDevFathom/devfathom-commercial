@@ -215,6 +215,7 @@ describe('demo device session recovery', () => {
     expect(mocks.capability.mock.calls).toEqual([
       [db, 'staff_1', 'terminal:operate', NOW, 'branch_1'],
       [db, 'staff_1', 'pos:operate', NOW, 'branch_1'],
+      [db, 'staff_1', 'orders:complimentary', NOW, 'branch_1'],
     ]);
     expect(mocks.lock.mock.calls[0]?.[1]).toBe(
       'demo-device-session:org_demo_restaurant_seat_1:manager:POS'
@@ -234,7 +235,7 @@ describe('demo device session recovery', () => {
       branchId: 'branch_1',
       sessionToken: 'terminal-session-token',
       session: { state: 'UNLOCKED', activeStaffProfileId: 'staff_1' },
-      operator: { staffProfileId: 'staff_1', displayName: 'Demo Manager' },
+      operator: { staffProfileId: 'staff_1', displayName: 'Demo Manager', canComp: true },
     });
   });
 

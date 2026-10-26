@@ -272,6 +272,7 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
         staffProfileId: string;
         displayName: string;
         role: string;
+        canComp: boolean;
         canApprove: boolean;
       }[];
     };
@@ -282,7 +283,7 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
         .map((staff) => staff.id)
         .sort()
     );
-    expect(body.operators.every((operator) => Object.keys(operator).length === 4)).toBe(true);
+    expect(body.operators.every((operator) => Object.keys(operator).length === 5)).toBe(true);
     expect(JSON.stringify(body)).not.toContain('Other Branch Operator');
     expect(JSON.stringify(body)).not.toContain('Inactive Operator');
     expect(JSON.stringify(body)).not.toContain('Foreign Operator');
