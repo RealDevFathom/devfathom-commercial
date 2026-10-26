@@ -122,8 +122,9 @@ describe('pharmacySales.addLine controlled actor', () => {
     ]);
     const { controlledAuthorization, ...plain } = line;
     void controlledAuthorization;
-    await expect(caller.addLine(plain)).resolves.toMatchObject({
-      blocked: expect.stringMatching(/pharmacist PIN/),
+    await expect(caller.addLine(plain)).resolves.toEqual({
+      blocked:
+        'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
     });
     expect(credential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
