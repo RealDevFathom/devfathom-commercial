@@ -133,6 +133,22 @@ describe('finance.getFinancialSummary', () => {
     const summary = await finance.getFinancialSummary();
 
     expect(transactions).toHaveLength(1);
+    expect(mocks.transactionCreateMany).toHaveBeenCalledWith({
+      data: [
+        {
+          type: 'EXPENSE',
+          amount: 100,
+          currency: 'USD',
+          category: 'HOSTING',
+          description: 'Hosting (recurring)',
+          date: new Date('2026-10-01T00:00:00.000Z'),
+        },
+      ],
+    });
+    expect(mocks.recurringUpdate).toHaveBeenCalledWith({
+      where: { id: 'recurring-1' },
+      data: { nextDueDate: new Date('2026-11-01T00:00:00.000Z') },
+    });
     expect(summary.monthlyExpense).toEqual([{ currency: 'USD', amount: 100 }]);
     expect(summary.yearlyExpense).toEqual([{ currency: 'USD', amount: 100 }]);
     expect(summary.monthlyProfit).toEqual([{ currency: 'USD', amount: -100 }]);
