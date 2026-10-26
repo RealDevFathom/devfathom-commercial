@@ -690,6 +690,41 @@ describeIfDatabase('card refunds (real DB)', () => {
     expect(payment?.events.map((e) => e.eventType)).toContain('VOID_APPROVED');
   });
 
+  it('allows a same-day full VOID_REVERSAL when principal and tip are both returned', async () => {
+    const { tenderId, paymentId } = await cardTender('2.00');
+
+    const reversal = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '12.50',
+      tipRefundAmount: '2.00',
+      kind: 'VOID_REVERSAL',
+      reason: 'wrong card including tip',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+      now: AT,
+    });
+
+    expect(reversal.paymentStatus).toBe('VOIDED');
+    const payment = await read((tx) =>
+      tx.restaurantPayment.findUniqueOrThrow({
+        where: { id: paymentId },
+        select: {
+          status: true,
+          events: {
+            where: { capability: 'VOID' },
+            select: { amount: true, payload: true },
+          },
+        },
+      })
+    );
+    expect(payment.status).toBe('VOIDED');
+    expect(payment.events).toHaveLength(1);
+    expect(payment.events[0]!.amount.toString()).toBe('12.5');
+    expect(payment.events[0]!.payload).toEqual(
+      expect.objectContaining({ amount: '12.5', tipAmount: '2' })
+    );
+  });
+
   it('rejects a VOID_REVERSAL that is not a same-day full reversal', async () => {
     const { tenderId } = await cardTender();
     // Partial amount → cannot be a VOID_REVERSAL.
