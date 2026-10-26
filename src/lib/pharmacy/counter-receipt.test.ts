@@ -67,6 +67,10 @@ describe('formatMinor', () => {
   });
 
   it('uses Urdu digits when formatting an Urdu receipt', () => {
+    expect(formatMinor(0, 'ur')).toBe('۰٫۰۰');
+    expect(formatMinor(1, 'ur')).toBe('۰٫۰۱');
+    expect(formatMinor(99, 'ur')).toBe('۰٫۹۹');
+    expect(formatMinor(100, 'ur')).toBe('۱٫۰۰');
     expect(formatMinor(123_456, 'ur')).toBe('۱۲۳۴٫۵۶');
     expect(formatMinor(-250, 'ur')).toBe('-۲٫۵۰');
   });
