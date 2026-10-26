@@ -74,6 +74,9 @@ describe('finance.getInvoiceById issuer', () => {
         brand: { select: { logoUrl: true, supportEmail: true } },
       },
     });
+    expect(mocks.findInvoice.mock.invocationCallOrder[0]!).toBeLessThan(
+      mocks.findOrganization.mock.invocationCallOrder[0]!
+    );
     expect(invoice?.issuer).toEqual({
       displayName: 'Northstar Studio',
       legalName: 'Northstar Studio Limited',
