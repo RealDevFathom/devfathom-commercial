@@ -360,6 +360,15 @@ describe('prescription capture and private delivery', () => {
         validUntil: new Date('2026-10-01'),
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().capture({ ...input, authorizedRepeats: 2_147_483_648 })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().capture({
+        ...input,
+        lines: [{ ...input.lines[0], authorizedCanonicalUnits: 2_147_483_648 }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.getUpload).not.toHaveBeenCalled();
   });
 

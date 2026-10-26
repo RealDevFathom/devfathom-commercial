@@ -326,15 +326,15 @@ export const pharmacyPrescriptionsRouter = router({
             .optional(),
           validFrom: z.date(),
           validUntil: z.date(),
-          authorizedRepeats: z.number().int().nonnegative(),
+          authorizedRepeats: z.number().int().nonnegative().max(2_147_483_647),
           lines: z
             .array(
               z
                 .object({
-                  lineNumber: z.number().int().positive(),
+                  lineNumber: z.number().int().positive().max(2_147_483_647),
                   medicineId: z.string().min(1).max(191),
                   presentationId: z.string().min(1).max(191),
-                  authorizedCanonicalUnits: z.number().int().positive(),
+                  authorizedCanonicalUnits: z.number().int().positive().max(2_147_483_647),
                   directions: z.string().trim().min(1).max(2_000),
                 })
                 .strict()
