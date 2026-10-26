@@ -200,13 +200,32 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
 
     expect(state.tenders).toHaveLength(1);
     expect(state.tenders[0]).toMatchObject({ type: 'CARD', billId: tenant.a.billId });
+    expect(state.tenders[0]!.amount.toFixed(2)).toBe('25.00');
+    expect(state.tenders[0]!.tipAmount.toFixed(2)).toBe('4.00');
     expect(state.payments).toHaveLength(1);
+    expect(state.payments[0]!.amount.toFixed(2)).toBe('25.00');
+    expect(state.payments[0]!.tipAmount.toFixed(2)).toBe('4.00');
     expect(state.events).toHaveLength(1);
+    expect(state.events[0]!.amount?.toFixed(2)).toBe('25.00');
     expect(state.reconciliations).toHaveLength(1);
     expect(state.reconciliations[0]).toMatchObject({ outcome: 'APPLIED' });
+    expect(state.reconciliations[0]!.amount.toFixed(2)).toBe('25.00');
+    expect(state.reconciliations[0]!.tipAmount.toFixed(2)).toBe('4.00');
     expect(state.moneyKeys).toHaveLength(1);
     expect(state.bill).toMatchObject({ status: 'SETTLED' });
     expect(state.bill.receiptNumber).toEqual(expect.any(Number));
+
+    // Prove the persisted principal settles exactly and the customer debit
+    // (bill plus tip) equals the provider credit without floating-point math.
+    const remainingDue = state.tenders.reduce(
+      (remaining, tender) => remaining.minus(tender.amount),
+      state.bill.grandTotal
+    );
+    const customerDebit = state.bill.grandTotal.plus(state.tenders[0]!.tipAmount);
+    const providerCredit = state.payments[0]!.amount.plus(state.payments[0]!.tipAmount);
+    expect(remainingDue.toFixed(2)).toBe('0.00');
+    expect(customerDebit.toFixed(2)).toBe('29.00');
+    expect(providerCredit.equals(customerDebit)).toBe(true);
 
     const sequential = await deps.processTerminalEvent(deps.createTenantDb(orgA), input);
     expect(sequential).toMatchObject({ replayed: true });
