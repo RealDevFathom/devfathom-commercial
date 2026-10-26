@@ -88,6 +88,24 @@ describe('atomic HR decisions', () => {
     expect(mocks.notify).not.toHaveBeenCalled();
   });
 
+  it('reports a conflict when the leave winner commits before the contender reads', async () => {
+    const findFirst = vi.fn().mockResolvedValue({
+      userId: 'employee-1',
+      status: 'REJECTED',
+    });
+    const transaction = vi.fn();
+    const caller = teamRouter.createCaller(
+      context({ leaveRequest: { findFirst }, $transaction: transaction })
+    );
+
+    await expect(
+      caller.updateLeaveStatus({ id: 'leave-1', status: 'APPROVED' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+
+    expect(transaction).not.toHaveBeenCalled();
+    expect(mocks.notify).not.toHaveBeenCalled();
+  });
+
   it('uses a pending compare-and-swap for resignation and emits no effect when it loses', async () => {
     const resignation = {
       id: 'resignation-1',
@@ -124,6 +142,40 @@ describe('atomic HR decisions', () => {
     );
     expect(findFirstOrThrow).not.toHaveBeenCalled();
     expect(updateUser).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).not.toHaveBeenCalled();
+    expect(mocks.notify).not.toHaveBeenCalled();
+  });
+
+  it('reports a conflict when a resignation winner commits before the lock is acquired', async () => {
+    const resignation = {
+      id: 'resignation-1',
+      userId: 'employee-1',
+      status: 'DECLINED',
+      proposedLastDay: new Date('2026-01-01'),
+      user: { id: 'employee-1', role: 'EMPLOYEE', name: 'Employee', email: 'e@example.test' },
+    };
+    const tx = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: resignation.id }]),
+      resignation: {
+        findFirst: vi.fn().mockResolvedValue(resignation),
+        updateMany: vi.fn(),
+        findFirstOrThrow: vi.fn(),
+      },
+      user: { update: vi.fn() },
+    };
+    const caller = resignationsRouter.createCaller(
+      context({
+        $transaction: vi.fn(async (work: (transaction: typeof tx) => unknown) => work(tx)),
+      })
+    );
+
+    await expect(
+      caller.review({ id: resignation.id, decision: 'APPROVED' })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+
+    expect(mocks.can).not.toHaveBeenCalled();
+    expect(tx.resignation.updateMany).not.toHaveBeenCalled();
+    expect(tx.user.update).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).not.toHaveBeenCalled();
     expect(mocks.notify).not.toHaveBeenCalled();
   });

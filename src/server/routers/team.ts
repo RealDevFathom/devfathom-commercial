@@ -514,7 +514,10 @@ export const teamRouter = router({
       }
       if (existing.status !== 'PENDING') {
         throw new TRPCError({
-          code: 'BAD_REQUEST',
+          // A contender may first observe the row only after the winning
+          // decision commits. Report the same conflict as a lost CAS rather
+          // than making the result depend on request scheduling.
+          code: 'CONFLICT',
           message: 'This leave request has already been decided.',
         });
       }

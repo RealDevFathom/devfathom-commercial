@@ -181,6 +181,15 @@ export const resignationsRouter = router({
         if (!resignation) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Resignation not found.' });
         }
+        if (resignation.status !== 'PENDING') {
+          // A concurrent reviewer can acquire the lock after the winner has
+          // committed. Treat that request as a lost transition, before ABAC's
+          // pending-state rule could turn the race into a permission error.
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This resignation has already been decided.',
+          });
+        }
 
         const allowed = await can(
           subjectFromSession(ctx.session.user),
