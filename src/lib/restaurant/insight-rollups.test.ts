@@ -365,7 +365,20 @@ describe('rollupDay handler idempotency and correction', () => {
     expect(result.replayed).toBe(false);
     expect(db.insightDailyRollup.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        update: expect.objectContaining({ netSales: D('5'), refundTotal: D('5') }),
+        create: expect.objectContaining({
+          netSales: D('5'),
+          deliveryFeeRefunds: D('1'),
+          taxTotal: D('2'),
+          serviceChargeTotal: D('1'),
+          refundTotal: D('5'),
+        }),
+        update: expect.objectContaining({
+          netSales: D('5'),
+          deliveryFeeRefunds: D('1'),
+          taxTotal: D('2'),
+          serviceChargeTotal: D('1'),
+          refundTotal: D('5'),
+        }),
       })
     );
   });
