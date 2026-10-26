@@ -45,7 +45,6 @@ let pharmacyPurchasingRouter: typeof import('./pharmacy-purchasing').pharmacyPur
 const suffix = randomUUID().replaceAll('-', '').slice(0, 10);
 const organizationId = `pur472_org_${suffix}`;
 const supplierId = `pur472_supplier_${suffix}`;
-const purchaseOrderId = `pur472_po_${suffix}`;
 const owner = new pg.Client({ connectionString: databaseUrl });
 
 function caller(db: ScopedDb, userId: string) {
@@ -126,12 +125,6 @@ describeIfDatabase('purchase-order decision concurrency against PostgreSQL', () 
        VALUES ($1, $2, $3, 'WHOLESALE', $1, 'Test authority', now(), '2099-01-01', now())`,
       [`pur472_licence_${suffix}`, organizationId, supplierId]
     );
-    await owner.query(
-      `INSERT INTO pharmacy_purchase_orders
-         (id, "organizationId", reference, status, "supplierId", "createdByUserId", "submittedAt", "updatedAt")
-       VALUES ($1, $2, $1, 'SUBMITTED', $3, 'pur472_creator', now(), now())`,
-      [purchaseOrderId, organizationId, supplierId]
-    );
   });
 
   afterAll(async () => {
@@ -141,46 +134,61 @@ describeIfDatabase('purchase-order decision concurrency against PostgreSQL', () 
     await owner.end();
   });
 
-  it('commits exactly one competing decision and one matching approval event', async () => {
-    const transactionDbs: ScopedDb[] = [];
-    let synchronizedDbs: ScopedDb[] | undefined;
-    let releaseTransactions!: () => void;
-    const transactionsReady = new Promise<void>((resolve) => (releaseTransactions = resolve));
-    const decide = (userId: string, decision: 'APPROVED' | 'REJECTED') =>
-      withTenantDb(organizationId, async (db) => {
-        const index = transactionDbs.push(db) - 1;
-        if (transactionDbs.length === 2) releaseTransactions();
-        await transactionsReady;
-        synchronizedDbs ??= synchronizePurchaseOrderReads(transactionDbs);
-        return caller(synchronizedDbs[index]!, userId).approvePurchaseOrder({
-          purchaseOrderId,
-          decision,
+  it.each([
+    ['APPROVED', 'REJECTED'],
+    ['APPROVED', 'APPROVED'],
+    ['REJECTED', 'REJECTED'],
+  ] as const)(
+    'commits exactly one competing %s/%s decision and one matching approval event',
+    async (firstDecision, secondDecision) => {
+      const purchaseOrderId = `pur472_po_${firstDecision}_${secondDecision}_${suffix}`;
+      await owner.query(
+        `INSERT INTO pharmacy_purchase_orders
+           (id, "organizationId", reference, status, "supplierId", "createdByUserId", "submittedAt", "updatedAt")
+         VALUES ($1, $2, $1, 'SUBMITTED', $3, 'pur472_creator', now(), now())`,
+        [purchaseOrderId, organizationId, supplierId]
+      );
+
+      const transactionDbs: ScopedDb[] = [];
+      let synchronizedDbs: ScopedDb[] | undefined;
+      let releaseTransactions!: () => void;
+      const transactionsReady = new Promise<void>((resolve) => (releaseTransactions = resolve));
+      const decide = (userId: string, decision: 'APPROVED' | 'REJECTED') =>
+        withTenantDb(organizationId, async (db) => {
+          const index = transactionDbs.push(db) - 1;
+          if (transactionDbs.length === 2) releaseTransactions();
+          await transactionsReady;
+          synchronizedDbs ??= synchronizePurchaseOrderReads(transactionDbs);
+          return caller(synchronizedDbs[index]!, userId).approvePurchaseOrder({
+            purchaseOrderId,
+            decision,
+          });
         });
+
+      const first = decide('pur472_first_reviewer', firstDecision);
+      const second = decide('pur472_second_reviewer', secondDecision);
+
+      const results = await Promise.allSettled([first, second]);
+      expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
+      expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+        reason: { code: 'CONFLICT' },
       });
 
-    const first = decide('pur472_approver', 'APPROVED');
-    const second = decide('pur472_rejector', 'REJECTED');
-
-    const results = await Promise.allSettled([first, second]);
-    expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
-    expect(results.find((result) => result.status === 'rejected')).toMatchObject({
-      reason: { code: 'CONFLICT' },
-    });
-
-    const persisted = await owner.query<{ status: string; decision: string }>(
-      `SELECT po.status, approval.decision
+      const persisted = await owner.query<{ status: string; decision: string }>(
+        `SELECT po.status, approval.decision
          FROM pharmacy_purchase_orders po
          JOIN pharmacy_purchase_order_approvals approval
            ON approval."organizationId" = po."organizationId"
           AND approval."purchaseOrderId" = po.id
         WHERE po."organizationId" = $1 AND po.id = $2`,
-      [organizationId, purchaseOrderId]
-    );
-    expect(persisted.rows).toHaveLength(1);
-    expect(persisted.rows[0]).toEqual(
-      results[0]?.status === 'fulfilled'
-        ? { status: 'APPROVED', decision: 'APPROVED' }
-        : { status: 'DRAFT', decision: 'REJECTED' }
-    );
-  });
+        [organizationId, purchaseOrderId]
+      );
+      expect(persisted.rows).toHaveLength(1);
+      const committedDecision = results[0]?.status === 'fulfilled' ? firstDecision : secondDecision;
+      expect(persisted.rows[0]).toEqual({
+        status: committedDecision === 'APPROVED' ? 'APPROVED' : 'DRAFT',
+        decision: committedDecision,
+      });
+    }
+  );
 });
