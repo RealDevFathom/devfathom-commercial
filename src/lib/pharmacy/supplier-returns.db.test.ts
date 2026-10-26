@@ -645,22 +645,56 @@ describeIfDatabase('PUR-06 — expected vs received credit', () => {
         amountMinor: 10_000,
         at: NOW,
       });
+    let firstPid = 0;
+    let secondPid = 0;
+    let markSecondReady: () => void = () => {};
+    const secondReady = new Promise<void>((resolve) => {
+      markSecondReady = resolve;
+    });
 
     // Hold the first successful allocation open. Without the debit-note lock,
     // the second transaction reads zero committed allocations during this
     // window and also succeeds with its different credit/allocation pair.
     const first = inOrg(ORG_A, async (db) => {
+      const [backend] = await db.$queryRaw<Array<{ pid: number }>>`
+        SELECT pg_backend_pid() AS pid`;
       const result = await allocate(db, credits[0]!.id);
+      firstPid = backend!.pid;
       markFirstAllocated();
       await held;
       return result;
     });
     await firstAllocated;
-    const second = inOrg(ORG_A, (db) => allocate(db, credits[1]!.id));
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    releaseFirst();
+    const second = inOrg(ORG_A, async (db) => {
+      await db.$executeRaw`SET LOCAL lock_timeout = '8s'`;
+      const [backend] = await db.$queryRaw<Array<{ pid: number }>>`
+        SELECT pg_backend_pid() AS pid`;
+      secondPid = backend!.pid;
+      markSecondReady();
+      return allocate(db, credits[1]!.id);
+    });
+    await secondReady;
+
+    let observedDebitNoteLock = false;
+    try {
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        const [wait] = await inOrg(ORG_A, (db) =>
+          db.$queryRaw<Array<{ blocked: boolean }>>`
+            SELECT ${firstPid}::integer = ANY(pg_blocking_pids(${secondPid}::integer)) AS blocked`
+        );
+        if (wait!.blocked) {
+          observedDebitNoteLock = true;
+          break;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      }
+    } finally {
+      releaseFirst();
+    }
 
     const outcomes = await Promise.allSettled([first, second]);
+    expect(observedDebitNoteLock).toBe(true);
     expect(outcomes.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
     expect(outcomes.filter(({ status }) => status === 'rejected')).toHaveLength(1);
     expect(
