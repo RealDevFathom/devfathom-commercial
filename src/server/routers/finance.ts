@@ -345,7 +345,7 @@ export const financeRouter = router({
     .mutation(async ({ ctx, input }) => {
       const current = await ctx.db.invoice.findUnique({
         where: { id: input.id },
-        select: { status: true },
+        select: { status: true, discount: true, tax: true },
       });
       if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
       if (current.status !== 'DRAFT' && current.status !== 'SENT') {
@@ -355,8 +355,13 @@ export const financeRouter = router({
         });
       }
 
-      // Recompute money server-side, identical to createInvoice.
-      const totals = calculateInvoiceTotals(input.items, input.tax, input.discount);
+      // Recompute money server-side, identical to createInvoice. Monetary adjustments
+      // are optional update fields, so preserve their stored values when omitted.
+      const totals = calculateInvoiceTotals(
+        input.items,
+        input.tax ?? Number(current.tax),
+        input.discount ?? Number(current.discount)
+      );
       const lineItems = input.items.map((it, index) => ({
         description: it.description,
         quantity: it.quantity,
