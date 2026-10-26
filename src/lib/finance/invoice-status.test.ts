@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  allowedInvoiceStatuses,
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
   PAID_STATUS_ERROR,
@@ -7,6 +8,16 @@ import {
 } from './invoice-status';
 
 describe('invoice status contract shared by REST, tRPC, and AI', () => {
+  it.each([
+    ['DRAFT', ['DRAFT', 'SENT', 'CANCELLED']],
+    ['SENT', ['DRAFT', 'SENT', 'OVERDUE', 'CANCELLED']],
+    ['OVERDUE', ['SENT', 'OVERDUE', 'CANCELLED']],
+    ['PAID', ['CANCELLED']],
+    ['CANCELLED', ['DRAFT', 'CANCELLED']],
+  ] as const)('only offers API-supported transitions from %s', (prior, expected) => {
+    expect(allowedInvoiceStatuses(prior)).toEqual(expected);
+  });
+
   it.each<InvoiceStatusValue>(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED'])(
     'rejects direct PAID from %s',
     (prior) => expect(invoiceStatusTransitionError(prior, 'PAID')).toBe(PAID_STATUS_ERROR)
