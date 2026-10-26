@@ -257,6 +257,13 @@ export const pharmacyPrescriptionsRouter = router({
     .query(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements.organizationId;
       const file = await loadPrescriptionFile(organizationId, input.sourceFileRef);
+      const patient = await ctx.db.pharmacyPatient.findFirst({
+        where: { id: file.patientId, organizationId },
+        select: { id: true },
+      });
+      if (!patient) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription image unavailable.' });
+      }
       if (file.uploadedByUserId === ctx.session.user.id) {
         return { dataBase64: file.dataBase64, contentType: file.contentType };
       }
