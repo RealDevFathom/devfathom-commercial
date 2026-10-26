@@ -614,6 +614,55 @@ describeIfDatabase('PUR-06 — expected vs received credit', () => {
     ).rejects.toMatchObject({ reason: 'OVER_ALLOCATION' });
   });
 
+  it('refuses to allocate a supplier credit from another branch', async () => {
+    const fixture = await scenario(ORG_A, 'cross-branch-credit');
+    const note = await dispatchedReturn(fixture, 'cross-branch-credit', 10_000);
+    const otherBranchId = `branch_b_${ORG_A}_${suffix}`;
+    const credit = await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, otherBranchId);
+      return deps.returns.recordSupplierCredit(
+        db,
+        { ...scopeOf(fixture, CONTROLLER), branchId: otherBranchId },
+        {
+          supplierId: fixture.supplierId,
+          reference: `CN-${tag('cross-branch-credit')}`,
+          amountMinor: 10_000,
+          receivedAt: NOW,
+        }
+      );
+    });
+
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.returns.allocateSupplierCredit(db, scopeOf(fixture, CONTROLLER), {
+          supplierCreditId: credit.id,
+          debitNoteId: note.id,
+          amountMinor: 10_000,
+          at: NOW,
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'NOT_FOUND' });
+
+    const state = await inOrg(ORG_A, async (db) => ({
+      allocations: await db.pharmacySupplierCreditAllocation.count({
+        where: { organizationId: ORG_A, supplierCreditId: credit.id },
+      }),
+      debitNote: await db.pharmacyDebitNote.findFirstOrThrow({
+        where: { id: note.id, organizationId: ORG_A, branchId: fixture.branchId },
+        select: { status: true },
+      }),
+      purchaseReturn: await db.pharmacyPurchaseReturn.findFirstOrThrow({
+        where: { id: note.purchaseReturnId, organizationId: ORG_A, branchId: fixture.branchId },
+        select: { status: true, settledAt: true },
+      }),
+    }));
+    expect(state).toEqual({
+      allocations: 0,
+      debitNote: { status: 'OPEN' },
+      purchaseReturn: { status: 'DISPATCHED', settledAt: null },
+    });
+  });
+
   it('serializes concurrent credits competing for the same debit note', async () => {
     const fixture = await scenario(ORG_A, 'concurrent-credit-allocation');
     const note = await dispatchedReturn(fixture, 'concurrent-credit-allocation', 10_000);

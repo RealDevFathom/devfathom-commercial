@@ -420,6 +420,7 @@ export async function allocateSupplierCredit(
     Prisma.sql`SELECT id FROM pharmacy_supplier_credits
       WHERE id = ${input.supplierCreditId}
         AND "organizationId" = ${scope.organizationId}
+        AND "branchId" = ${scope.branchId}
       FOR UPDATE`
   );
   await db.$queryRaw(
@@ -432,7 +433,11 @@ export async function allocateSupplierCredit(
 
   const [credit, note] = await Promise.all([
     db.pharmacySupplierCredit.findFirst({
-      where: { id: input.supplierCreditId, organizationId: scope.organizationId },
+      where: {
+        id: input.supplierCreditId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+      },
     }),
     db.pharmacyDebitNote.findFirst({
       where: {
