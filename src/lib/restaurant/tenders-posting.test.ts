@@ -526,6 +526,10 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
         })
       ).rejects.toMatchObject({ reason: 'UNSUPPORTED_PAYMENT_PROVIDER' });
 
+      expect(f.raw.restaurantPayment.findUnique).toHaveBeenCalledWith({
+        where: { id: 'payment' },
+        select: { id: true, provider: true, providerRef: true },
+      });
       expect(f.raw.restaurantMoneyIdempotencyKey.create).toHaveBeenCalledTimes(
         writesBeforeRefund.idempotency
       );
@@ -575,8 +579,12 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
       );
       expect(f.raw.restaurantRefund.create).not.toHaveBeenCalled();
       expect(f.raw.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantTaxRefundAllocation.create).not.toHaveBeenCalled();
       expect(reverseLoyaltyForRefund).not.toHaveBeenCalled();
+      expect(f.raw.restaurantPaymentEvent.create).not.toHaveBeenCalled();
       expect(f.raw.restaurantPayment.update).not.toHaveBeenCalled();
+      expect(f.raw.restaurantTerminalReconciliation.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantDrawerMovement.create).not.toHaveBeenCalled();
     }
   );
 
