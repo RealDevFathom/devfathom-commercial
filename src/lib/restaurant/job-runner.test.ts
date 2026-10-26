@@ -410,11 +410,13 @@ describe('runRestaurantWorkerTick', () => {
     const org = createJobDb();
     Object.assign(org.db, {
       restaurantSopEscalationPolicy: {
+        count: async () => 1,
         findMany: async () => [
           {
             id: 'policy_1',
             scope: 'BRANCH',
             branchId: 'branch_1',
+            stopOnAcknowledged: false,
             quietHoursStartMinutes: null,
             quietHoursEndMinutes: null,
             steps: [{ id: 'step_1', delayMinutes: 0 }],
@@ -422,6 +424,7 @@ describe('runRestaurantWorkerTick', () => {
         ],
       },
       restaurantSopOccurrence: {
+        count: async () => 1,
         findMany: async () => [
           {
             id: 'occ_1',
