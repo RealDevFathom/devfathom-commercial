@@ -422,6 +422,19 @@ describe('resolveModifierSnapshots', () => {
     );
   });
 
+  it('rejects a selection when an attached group allows no selections', async () => {
+    const db = makeDb({
+      modifierOptions: [
+        { id: 'opt_1', name: 'Cheese', priceDelta: D('1.00'), modifierGroupId: 'grp_1' },
+      ],
+      productGroups: { prod_1: [{ id: 'grp_1', name: 'Extras', maxSelect: 0 }] },
+    });
+
+    await expect(resolveModifierSnapshots(db, 'prod_1', ['opt_1'])).rejects.toMatchObject({
+      reason: 'MODIFIER_SELECTION_COUNT',
+    });
+  });
+
   it('accepts selections at the exact bounds across multiple attached groups', async () => {
     const db = makeDb({
       modifierOptions: [
