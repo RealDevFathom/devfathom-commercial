@@ -282,15 +282,19 @@ describe('prescription capture and private delivery', () => {
     expect(mocks.patients).not.toHaveBeenCalled();
   });
 
-  it('refuses counter patient access when neither eligible module is licensed', async () => {
+  it.each([
+    ['counterPatients', () => caller().counterPatients({ query: 'patient' })],
+    ['counterPatientPanel', () => caller().counterPatientPanel({ patientId: 'patient-a' })],
+  ])('refuses %s when neither eligible module is licensed', async (_procedure, invoke) => {
     mocks.hasModule.mockReturnValue(false);
 
-    await expect(caller().counterPatients({ query: 'patient' })).rejects.toMatchObject({
+    await expect(invoke()).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'The pharmacy-counter module is not enabled for this organization.',
     });
 
     expect(mocks.can).not.toHaveBeenCalled();
+    expect(mocks.patient).not.toHaveBeenCalled();
     expect(mocks.patients).not.toHaveBeenCalled();
   });
 
