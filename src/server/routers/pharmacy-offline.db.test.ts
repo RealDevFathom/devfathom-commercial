@@ -416,7 +416,7 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
     expect(results.map((r) => r.replayed).sort()).toEqual([false, true]);
     const journalBalances = await f.journalBalances(results[0].saleId);
     expect(journalBalances).toHaveLength(2);
-    expect(journalBalances.every(({ debit, credit }) => debit === credit)).toBe(true);
+    expect(journalBalances.every(({ debit, credit }) => debit > 0 && debit === credit)).toBe(true);
     expect(await f.counts()).toEqual({
       commands: 1,
       sales: 1,
