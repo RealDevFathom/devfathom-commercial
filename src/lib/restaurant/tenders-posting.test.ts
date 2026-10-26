@@ -8,7 +8,11 @@ import { getOrderSettlementForBranch } from './checkout-routes';
 import { closePreview } from './daily-close';
 import { appendMovement, closeDrawerSession, foldExpectedCash } from './drawer-sessions';
 import { refundTender } from './refunds';
-import { applyTenderInTransaction, type ApplyTenderInput } from './tenders';
+import {
+  applyTenderInTransaction,
+  quoteOpenBillSettlement,
+  type ApplyTenderInput,
+} from './tenders';
 
 vi.mock('./bills', async (original) => ({
   ...(await original<typeof import('./bills')>()),
@@ -44,6 +48,7 @@ type Tender = {
 };
 
 function fixture() {
+  let taxRate = D('0');
   const tenders: Tender[] = [];
   const movements = [{ kind: 'OPENING_FLOAT' as const, amount: D('100') }] as Array<{
     kind: Parameters<typeof foldExpectedCash>[0][number]['kind'];
@@ -238,7 +243,7 @@ function fixture() {
             profileVersionId: 'profile',
             paymentCategory,
             priceMode: 'EXCLUSIVE',
-            rate: D('0'),
+            rate: taxRate,
             ...effective,
             officialSource: { expiresAt: new Date('2027-08-01T00:00:00Z') },
           })),
@@ -295,12 +300,87 @@ function fixture() {
     billsById,
     linesByBill,
     defaultLine,
+    setTaxRate: (rate: string) => {
+      taxRate = D(rate);
+    },
   };
 }
 
 beforeEach(() => vi.clearAllMocks());
 
 describe('collection posting and authoritative recorded balances (no DB)', () => {
+  it('quotes and persists the real tax-inclusive CARD balance with exact decimal cents', async () => {
+    const f = fixture();
+    f.bill.subtotal = D('10.00');
+    f.bill.compTotal = D('0');
+    f.bill.grandTotal = D('10.00');
+    f.defaultLine.unitPrice = D('10.00');
+    f.defaultLine.lineSubtotal = D('10.00');
+    f.defaultLine.compAmount = D('0');
+    f.setTaxRate('0.08');
+
+    const quote = await quoteOpenBillSettlement(f.db, f.bill.id, NOW, 'CARD');
+    expect(quote?.taxTotal.toFixed(2)).toBe('0.80');
+    expect(quote?.remainingDue.toFixed(2)).toBe('10.80');
+
+    const result = await f.collect({
+      tender: {
+        type: 'CARD',
+        amount: quote!.remainingDue,
+        terminalConfirmation: {
+          configId: 'config',
+          branchId: 'branch',
+          externalEventId: 'event',
+          source: 'provider',
+          externalReference: 'bill',
+          providerRef: 'approval',
+        },
+      },
+    });
+
+    expect(result).toMatchObject({ settled: true });
+    expect(result.remainingDue.toFixed(2)).toBe('0.00');
+    expect(f.tenders).toHaveLength(1);
+    expect(f.tenders[0]!.amount.toFixed(2)).toBe('10.80');
+  });
+
+  it('rejects a terminal approval when the locked CARD quote was repriced', async () => {
+    const f = fixture();
+    f.bill.subtotal = D('10.00');
+    f.bill.compTotal = D('0');
+    f.bill.grandTotal = D('10.00');
+    f.defaultLine.unitPrice = D('10.00');
+    f.defaultLine.lineSubtotal = D('10.00');
+    f.defaultLine.compAmount = D('0');
+    f.setTaxRate('0.08');
+    const approved = await quoteOpenBillSettlement(f.db, f.bill.id, NOW, 'CARD');
+
+    // The tax authority changes after webhook validation. applyTenderInTransaction
+    // re-quotes only after acquiring its order and bill locks.
+    f.setTaxRate('0.15');
+    await expect(
+      f.collect({
+        tender: {
+          type: 'CARD',
+          amount: approved!.remainingDue,
+          terminalConfirmation: {
+            configId: 'config',
+            branchId: 'branch',
+            externalEventId: 'repriced-event',
+            source: 'provider',
+            externalReference: 'bill',
+            providerRef: 'approval',
+          },
+        },
+      })
+    ).rejects.toMatchObject({ reason: 'TAX_SETTLEMENT_REPRICE_REQUIRED' });
+    expect(f.locks).toEqual([
+      'SELECT id FROM restaurant_orders WHERE id = ? FOR UPDATE',
+      'SELECT id FROM restaurant_bills WHERE id = ? FOR UPDATE',
+    ]);
+    expect(f.tenders).toHaveLength(0);
+  });
+
   it('collects a prior-day bill on the drawer date; reconciles sales and collections on their own days', async () => {
     const f = fixture();
     const result = await f.collect();
