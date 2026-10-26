@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
     findFirst: vi.fn(),
     create: vi.fn(async ({ data }) => ({ id: 'comment-2', ...data })),
   },
+  canAccessProject: vi.fn(async () => true),
+  projectIdOfTask: vi.fn(async () => 'project-1'),
 }));
 
 vi.mock('@/lib/api-auth', () => ({
@@ -23,14 +25,16 @@ vi.mock('@/lib/api-auth', () => ({
       ),
 }));
 vi.mock('@/lib/authz', () => ({
-  canAccessProject: vi.fn(async () => true),
-  projectIdOfTask: vi.fn(async () => 'project-1'),
+  canAccessProject: mocks.canAccessProject,
+  projectIdOfTask: mocks.projectIdOfTask,
 }));
 
 import { POST } from './route';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.canAccessProject.mockResolvedValue(true);
+  mocks.projectIdOfTask.mockResolvedValue('project-1');
 });
 
 async function post(parentId?: string) {
@@ -57,6 +61,17 @@ describe('POST /api/v1/tasks/:id/comments', () => {
       where: { id: 'comment-on-another-task', taskId: 'task-1' },
       select: { id: true },
     });
+    expect(mocks.taskComment.create).not.toHaveBeenCalled();
+  });
+
+  it('does not look up the parent before authorizing access to the URL task', async () => {
+    mocks.canAccessProject.mockResolvedValue(false);
+
+    const { response, body } = await post('comment-on-another-task');
+
+    expect(response.status).toBe(403);
+    expect(body).toEqual({ error: 'Forbidden' });
+    expect(mocks.taskComment.findFirst).not.toHaveBeenCalled();
     expect(mocks.taskComment.create).not.toHaveBeenCalled();
   });
 
