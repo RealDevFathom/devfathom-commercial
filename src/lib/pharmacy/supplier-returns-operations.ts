@@ -416,20 +416,23 @@ export async function allocateSupplierCredit(
   // balance so allocations sharing a credit or a note cannot validate against
   // the same stale remainder. The fixed credit-then-note order also prevents
   // competing allocations from acquiring these locks in opposite orders.
-  await db.$queryRaw(
+  const lockedCredits = await db.$queryRaw<Array<{ id: string }>>(
     Prisma.sql`SELECT id FROM pharmacy_supplier_credits
       WHERE id = ${input.supplierCreditId}
         AND "organizationId" = ${scope.organizationId}
         AND "branchId" = ${scope.branchId}
       FOR UPDATE`
   );
-  await db.$queryRaw(
+  if (lockedCredits.length === 0) throw new PharmacySupplierReturnError('NOT_FOUND');
+
+  const lockedNotes = await db.$queryRaw<Array<{ id: string }>>(
     Prisma.sql`SELECT id FROM pharmacy_debit_notes
       WHERE id = ${input.debitNoteId}
         AND "organizationId" = ${scope.organizationId}
         AND "branchId" = ${scope.branchId}
       FOR UPDATE`
   );
+  if (lockedNotes.length === 0) throw new PharmacySupplierReturnError('NOT_FOUND');
 
   const [credit, note] = await Promise.all([
     db.pharmacySupplierCredit.findFirst({
