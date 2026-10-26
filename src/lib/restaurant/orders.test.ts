@@ -857,11 +857,13 @@ describeIfDatabase('orders command layer (real DB)', () => {
       orderId: opened.orderId,
       menuItemId: ids.menuItem,
       actor: actor(addKey),
+      now: AT,
     });
     const replay = await deps.orders.addItem(db, {
       orderId: opened.orderId,
       menuItemId: ids.menuItem,
       actor: actor(addKey),
+      now: new Date(AT.getTime() + 1_000),
     });
     expect(replay.replayed).toBe(true);
     expect(replay.itemId).toBe(first.itemId);
@@ -870,6 +872,18 @@ describeIfDatabase('orders command layer (real DB)', () => {
       tx.restaurantOrderItem.count({ where: { orderId: opened.orderId } })
     );
     expect(count).toBe(1); // the replay created nothing
+
+    const binding = await read((tx) =>
+      tx.restaurantOrderIdempotencyKey.findUnique({
+        where: { deviceId_key: { deviceId, key: addKey } },
+        select: { commandType: true, canonicalPayloadHash: true, resultRef: true },
+      })
+    );
+    expect(binding).toEqual({
+      commandType: 'item.add',
+      canonicalPayloadHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+      resultRef: first.itemId,
+    });
   });
 
   it('rejects an idempotency key reused for another command type or payload', async () => {
