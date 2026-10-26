@@ -197,12 +197,20 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
       })
     ).rejects.toMatchObject({ reason: 'CLOSE_EXISTS' });
     expect(
-      await read((tx) =>
-        tx.restaurantDrawerSession.count({
+      await read(async (tx) => ({
+        sessions: await tx.restaurantDrawerSession.count({
           where: { branchId, businessDate: new Date('2026-08-19T00:00:00.000Z') },
-        })
-      )
-    ).toBe(0);
+        }),
+        movements: await tx.restaurantDrawerMovement.count({
+          where: {
+            drawerSession: {
+              branchId,
+              businessDate: new Date('2026-08-19T00:00:00.000Z'),
+            },
+          },
+        }),
+      }))
+    ).toEqual({ sessions: 0, movements: 0 });
 
     const drawerSessionId = await read(async (tx) => {
       const session = await tx.restaurantDrawerSession.create({
