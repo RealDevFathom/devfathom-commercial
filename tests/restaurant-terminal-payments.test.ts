@@ -189,10 +189,15 @@ describe('provider-neutral terminal payments', () => {
     });
 
     expect(applyTenderInTransaction).not.toHaveBeenCalled();
+    expect(quoteOpenBillSettlement).toHaveBeenCalledWith(db, 'bill-1', expect.any(Date), 'CARD');
     expect(created[0]).toMatchObject({
       outcome: 'REJECTED',
       failureReason: 'SETTLEMENT_QUOTE_UNAVAILABLE',
+      amount: expect.objectContaining({ toFixed: expect.any(Function) }),
     });
+    expect(
+      (created[0]!.amount as { toFixed: (places: number) => string }).toFixed(2)
+    ).toBe('12.50');
   });
 
   it('returns the reconciliation on replay without another tender', async () => {
