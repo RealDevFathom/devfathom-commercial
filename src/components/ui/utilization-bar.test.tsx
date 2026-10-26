@@ -25,6 +25,15 @@ describe('UtilizationBar', () => {
     expect(progressbar).toHaveValue(40);
   });
 
+  it('does not use a visible percentage as the accessible name', () => {
+    render(<UtilizationBar value={40} />);
+
+    const progressbar = screen.getByRole('progressbar', { name: 'Utilization' });
+
+    expect(screen.getByText('40%')).toBeVisible();
+    expect(progressbar).not.toHaveAccessibleName('40%');
+  });
+
   it.each(['', '   '])('provides a default accessible name for an empty label', (label) => {
     render(<UtilizationBar label={label} value={40} />);
 
