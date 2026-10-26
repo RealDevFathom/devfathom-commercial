@@ -90,7 +90,7 @@ describe('module catalog', () => {
     expect(ACCOUNT_PROCEDURES.has('team.updateProfile')).toBe(true);
     expect(moduleForProcedure('team.getAll')).toBe('hr');
     expect(moduleForProcedure('team.updateRole')).toBe('hr');
-    expect(moduleForProcedure('team.getNotifications')).toBe('hr');
+    expect(moduleForProcedure('team.getNotifications')).toBeNull();
   });
 });
 
