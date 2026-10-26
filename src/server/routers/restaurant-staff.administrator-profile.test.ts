@@ -122,6 +122,10 @@ beforeEach(() => {
   mocks.staffFindMany.mockResolvedValue([]);
   mocks.staffFindUnique.mockResolvedValue(null);
   mocks.resolveStaffCapabilities.mockResolvedValue(new Set(['staff:manage']));
+  mocks.setStaffJobRoles.mockResolvedValue({ granted: [], revoked: [] });
+  mocks.setStaffAccess.mockResolvedValue({ granted: [], revoked: [], overrides: [] });
+  mocks.setStaffCapabilityOverride.mockResolvedValue({ changed: false });
+  mocks.clearStaffCapabilityOverride.mockResolvedValue({ changed: false });
   mocks.staffFindFirst.mockResolvedValue(null);
   mocks.branchFindFirst.mockResolvedValue({ id: 'branch_default' });
   mocks.staffCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -339,11 +343,16 @@ describe('administrator repair authorization before writes', () => {
     expect(mocks.staffFindUnique).not.toHaveBeenCalled();
     expectNoWrites();
   });
-  const accessMutations: [string, (staffProfileId: string) => Promise<unknown>][] = [
+  const accessMutations: [
+    string,
+    ReturnType<typeof vi.fn>,
+    (staffProfileId: string, role?: string) => Promise<unknown>,
+  ][] = [
     [
       'setStaffJobRoles',
-      (staffProfileId) =>
-        caller('EMPLOYEE').setStaffJobRoles({
+      mocks.setStaffJobRoles,
+      (staffProfileId, role = 'EMPLOYEE') =>
+        caller(role).setStaffJobRoles({
           branchId: 'branch_default',
           staffProfileId,
           jobRoleIds: ['role_with_refunds'],
@@ -351,8 +360,9 @@ describe('administrator repair authorization before writes', () => {
     ],
     [
       'setStaffAccess',
-      (staffProfileId) =>
-        caller('EMPLOYEE').setStaffAccess({
+      mocks.setStaffAccess,
+      (staffProfileId, role = 'EMPLOYEE') =>
+        caller(role).setStaffAccess({
           branchId: 'branch_default',
           staffProfileId,
           jobRoleIds: ['role_with_refunds'],
@@ -361,8 +371,9 @@ describe('administrator repair authorization before writes', () => {
     ],
     [
       'setStaffCapabilityOverride',
-      (staffProfileId) =>
-        caller('EMPLOYEE').setStaffCapabilityOverride({
+      mocks.setStaffCapabilityOverride,
+      (staffProfileId, role = 'EMPLOYEE') =>
+        caller(role).setStaffCapabilityOverride({
           branchId: 'branch_default',
           staffProfileId,
           capability: 'payments:refund',
@@ -371,15 +382,16 @@ describe('administrator repair authorization before writes', () => {
     ],
     [
       'clearStaffCapabilityOverride',
-      (staffProfileId) =>
-        caller('EMPLOYEE').clearStaffCapabilityOverride({
+      mocks.clearStaffCapabilityOverride,
+      (staffProfileId, role = 'EMPLOYEE') =>
+        caller(role).clearStaffCapabilityOverride({
           branchId: 'branch_default',
           staffProfileId,
           capability: 'payments:refund',
         }),
     ],
   ];
-  const unauthorizedAccessCases = accessMutations.flatMap(([mutation, run]) =>
+  const unauthorizedAccessCases = accessMutations.flatMap(([mutation, _writer, run]) =>
     [
       ['another staff member', 'staff_target'],
       ['the acting staff member', 'staff_actor'],
@@ -416,6 +428,17 @@ describe('administrator repair authorization before writes', () => {
       );
       expect(mocks.staffFindUnique).not.toHaveBeenCalled();
       expectNoWrites();
+    }
+  );
+  it.each(accessMutations)(
+    '%s allows an organization-wide administrator to change access',
+    async (_mutation, writer, run) => {
+      mocks.staffFindUnique.mockResolvedValue({ id: 'staff_target' });
+
+      await expect(run('staff_target', 'ADMIN')).resolves.toBeDefined();
+
+      expect(mocks.staffFindUnique).toHaveBeenCalledOnce();
+      expect(writer).toHaveBeenCalledOnce();
     }
   );
   it.each(['staff_other_tenant', 'staff_missing'])(
