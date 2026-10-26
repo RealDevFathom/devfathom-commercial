@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { randomUUID } from 'node:crypto';
 
 import pg from 'pg';
