@@ -190,6 +190,27 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
     expect(db.medicine.create).not.toHaveBeenCalled();
   });
 
+  it('rejects provenance assertedValue trees over the aggregate character budget', async () => {
+    await expect(
+      caller().createMedicine({
+        productName: 'Medicine',
+        productFamily: 'PHARMACEUTICAL',
+        provenance: [
+          {
+            field: 'productName',
+            source: 'manual',
+            sourceType: 'USER',
+            retrievedAt: new Date('2026-01-01'),
+            status: 'UNREVIEWED',
+            assertedValue: Array.from({ length: 11 }, () => 'x'.repeat(2_000)),
+          },
+        ],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(db.medicine.create).not.toHaveBeenCalled();
+  });
+
   it('rejects an oversized ingredient ID before database work', async () => {
     await expect(
       caller().createMedicine({
