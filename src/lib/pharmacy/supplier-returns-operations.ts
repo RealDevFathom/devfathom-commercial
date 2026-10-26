@@ -493,13 +493,21 @@ export async function allocateSupplierCredit(
     allocations: [...note.allocations, allocation],
   });
   const updatedNote = await db.pharmacyDebitNote.update({
-    where: { id: note.id },
+    where: {
+      id: note.id,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+    },
     data: { status: settled.status },
   });
   if (settled.status === 'SETTLED') {
     assertPurchaseReturnTransition(note.purchaseReturn.status as PurchaseReturnStatus, 'SETTLED');
     await db.pharmacyPurchaseReturn.update({
-      where: { id: note.purchaseReturnId },
+      where: {
+        id: note.purchaseReturnId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+      },
       data: { status: 'SETTLED', settledAt: input.at },
     });
   }
