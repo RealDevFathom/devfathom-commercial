@@ -27,6 +27,7 @@ import {
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
 import { can } from '@/lib/abac';
+import { capabilityMatches } from '@/lib/abac/capabilities';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 const app = router({ pharmacySales: pharmacySalesRouter });
@@ -111,6 +112,36 @@ beforeEach(() => {
   });
 });
 describe('Khata router trust and recovery boundary', () => {
+  it.each([
+    ['bootstrap admin wildcard', '*'],
+    ['counter operator', 'pharmacy:counter'],
+    ['finance operator', 'reports:financial'],
+  ])('admits a %s without requiring clinical dispense permission', async (_name, grant) => {
+    const f = fixture();
+    vi.mocked(can).mockImplementation(async (_subject, action) => capabilityMatches(grant, action));
+
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toEqual([expect.objectContaining({ id: 'family-a' })]);
+    expect(can).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:dispense',
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it('does not treat clinical dispense permission as Khata access', async () => {
+    const f = fixture();
+    vi.mocked(can).mockImplementation(async (_subject, action) =>
+      capabilityMatches('pharmacy:dispense', action)
+    );
+
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
   it('uses server tenant, CREDIT settlement and an atomic member charge', async () => {
     const f = fixture();
     await f.caller().tender(input);
