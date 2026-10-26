@@ -117,6 +117,19 @@ async function cardTenderAtBranchTwo(): Promise<{
   tenderId: string;
   paymentId: string;
 }> {
+  const billId = await openBillAtBranchTwo();
+  const db = deps.createTenantDb(orgId);
+  const tender = await deps.tenders.applyTender(db, {
+    billId,
+    // 12.50 merchandise + 1.25 exclusive tax + 1.25 non-taxable service charge.
+    tender: { type: 'CARD', amount: '15.00' },
+    actor: actor(branchTwoDeviceId),
+    now: AT,
+  });
+  return { billId, tenderId: tender.tenderId, paymentId: tender.paymentId! };
+}
+
+async function openBillAtBranchTwo(): Promise<string> {
   const db = deps.createTenantDb(orgId);
   const opened = await deps.orders.openOrder(db, {
     organizationId: orgId,
@@ -138,15 +151,7 @@ async function cardTenderAtBranchTwo(): Promise<{
     split: { kind: 'NONE' },
     actor: actor(branchTwoDeviceId),
   });
-  const billId = cut.billIds[0]!;
-  const tender = await deps.tenders.applyTender(db, {
-    billId,
-    // 12.50 merchandise + 1.25 exclusive tax + 1.25 non-taxable service charge.
-    tender: { type: 'CARD', amount: '15.00' },
-    actor: actor(branchTwoDeviceId),
-    now: AT,
-  });
-  return { billId, tenderId: tender.tenderId, paymentId: tender.paymentId! };
+  return cut.billIds[0]!;
 }
 
 /** Settle a single-item (12.50) bill with a card tender and return the tender id. */
@@ -551,6 +556,79 @@ describeIfDatabase('card refunds (real DB)', () => {
       '6.00',
       '6.50',
     ]);
+  });
+
+  it('reloads the complete tender set after waiting for concurrent settlement', async () => {
+    const billId = await openBillAtBranchTwo();
+    const partial = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+      billId,
+      tender: { type: 'OTHER', amount: '5.00' },
+      actor: actor(branchTwoDeviceId),
+      now: AT,
+    });
+
+    let signalSettlementReady!: () => void;
+    const settlementReady = new Promise<void>((resolve) => {
+      signalSettlementReady = resolve;
+    });
+    let releaseSettlement!: () => void;
+    const settlementMayCommit = new Promise<void>((resolve) => {
+      releaseSettlement = resolve;
+    });
+    const concurrentSettlement = read(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${billId} FOR UPDATE`;
+      await tx.restaurantTender.create({
+        data: {
+          billId,
+          type: 'OTHER',
+          amount: '10.00',
+          businessDate: new Date('2026-08-19T00:00:00.000Z'),
+          staffProfileId: ids.operator,
+          deviceId: branchTwoDeviceId,
+        },
+      });
+      await tx.restaurantBill.update({
+        where: { id: billId },
+        data: { status: 'SETTLED', settledAt: AT },
+      });
+      signalSettlementReady();
+      await settlementMayCommit;
+    });
+    await settlementReady;
+
+    const refund = deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: partial.tenderId,
+      amount: '5.00',
+      reason: 'concurrent settlement allocation',
+      branchId: ids.branchTwo,
+      approvingStaffProfileId: ids.manager,
+      actor: actor(branchTwoDeviceId),
+      now: AT,
+    });
+    let blocked = false;
+    try {
+      for (let attempt = 0; attempt < 100 && !blocked; attempt += 1) {
+        const [activity] = await deps.withPlatformDb((tx) =>
+          tx.$queryRaw<Array<{ count: number }>>`
+            SELECT count(*)::int AS count
+            FROM pg_stat_activity
+            WHERE wait_event_type = 'Lock'
+              AND query LIKE '%SELECT status FROM restaurant_bills%FOR UPDATE%'
+          `
+        );
+        blocked = (activity?.count ?? 0) > 0;
+        if (!blocked) await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    } finally {
+      releaseSettlement();
+    }
+    await concurrentSettlement;
+
+    const result = await refund;
+    expect(blocked).toBe(true);
+    // The settled bill's 1.25 service charge is shared 5:10, rather than assigning
+    // all 1.25 to the only tender visible before the settlement transaction committed.
+    expect(result.serviceChargeRefundAmount.toFixed(2)).toBe('0.42');
   });
 
   it('appends a capped REVERSAL pinned to the original earn program', async () => {

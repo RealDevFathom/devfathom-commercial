@@ -168,9 +168,9 @@ export async function refundTender(
     // side effect. A tenant-known tender from another branch is the same 404 as an
     // unknown tender and cannot burn a key or write co-auth/payment/drawer rows.
     const branchId = await loadActorBranch(tx, input.actor.deviceId, input.branchId);
-    const tender = await loadTender(tx, input.originalTenderId, branchId);
+    const initialTender = await loadTender(tx, input.originalTenderId, branchId);
     const canonicalBytes = JSON.stringify({
-      originalTenderId: tender.id,
+      originalTenderId: initialTender.id,
       amount: amount.toString(),
       tipRefundAmount: tipRefundAmount.toString(),
       kind,
@@ -187,11 +187,16 @@ export async function refundTender(
     // after settlement, when the tender can no longer be counted toward an open balance.
     // The bill row carries a full RLS policy, so FOR UPDATE is valid.
     const [lockedBill] = await tx.$queryRaw<Array<{ status: string }>>`
-      SELECT status FROM restaurant_bills WHERE id = ${tender.billId} FOR UPDATE
+      SELECT status FROM restaurant_bills WHERE id = ${initialTender.billId} FOR UPDATE
     `;
     if (lockedBill?.status !== 'SETTLED') {
       throw new RefundError('Only a SETTLED bill can have a tender refunded.', 'BILL_NOT_SETTLED');
     }
+
+    // The lock may have waited behind the final tender transaction. READ COMMITTED
+    // gives each statement a fresh snapshot, so reload every settlement-dependent
+    // value now rather than allocating bill-level charges from the pre-lock snapshot.
+    const tender = await loadTender(tx, initialTender.id, branchId);
 
     // Cap: Σ(refunds) ≤ tender amount; Σ(tip refunds) ≤ tender tip.
     const priorRefunds = await tx.restaurantRefund.aggregate({
