@@ -116,6 +116,7 @@ describe('restaurant tax configuration UI', () => {
     for (const label of [
       /no input tax credit or adjustment/i,
       /no refund/i,
+      /End the currently open tax profile/i,
       /I confirm an accountant reviewed/i,
     ])
       fireEvent.click(screen.getByLabelText(label));
@@ -127,6 +128,7 @@ describe('restaurant tax configuration UI', () => {
       approvalReference: 'Memo 42',
       accountantConfirmation: true,
       eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
+      replaceOpenProfile: true,
       idempotencyKey: expect.any(String),
     });
   });

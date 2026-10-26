@@ -146,6 +146,7 @@ export function RestaurantTaxConsole() {
       eligibilityConfirmations: selected.eligibilityControls
         .filter((control) => data.get(control.id) === 'on')
         .map((control) => control.id),
+      replaceOpenProfile: data.get('replaceOpenPresetProfile') === 'on',
       idempotencyKey: idempotencyKey.current,
     });
   };
@@ -302,6 +303,14 @@ export function RestaurantTaxConsole() {
                 </div>
               ) : null}
 
+              <label className="flex items-start gap-3 text-sm text-text-strong">
+                <input
+                  className="mt-1 size-4"
+                  type="checkbox"
+                  name="replaceOpenPresetProfile"
+                />
+                End the currently open tax profile when this profile starts.
+              </label>
               <label className="flex items-start gap-3 text-sm text-text-strong">
                 <input
                   className="mt-1 size-4"

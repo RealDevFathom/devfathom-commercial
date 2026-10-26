@@ -58,6 +58,7 @@ const activationSchema = z.object({
   accountantConfirmation: z.boolean(),
   approvalReference: z.string().trim().min(1).max(240),
   eligibilityConfirmations: z.array(z.string().min(1)).default([]),
+  replaceOpenProfile: z.boolean().default(false),
   idempotencyKey: z.string().trim().min(8).max(128),
 });
 
@@ -115,6 +116,8 @@ function canonicalActivationPayload(input: z.infer<typeof activationSchema>) {
     accountantConfirmation: input.accountantConfirmation,
     approvalReference: input.approvalReference.trim(),
     eligibilityConfirmations: [...new Set(input.eligibilityConfirmations)].sort(),
+    // Preserve hashes for pre-replacement activations while binding an opted-in replacement.
+    ...(input.replaceOpenProfile ? { replaceOpenProfile: true } : {}),
   };
 }
 
@@ -475,6 +478,7 @@ export const restaurantTaxRouter = router({
         idempotencyKey: input.idempotencyKey,
         payloadHash,
         presetId: preset.id,
+        replaceOpenProfile: input.replaceOpenProfile,
         source: {
           authorityCode: preset.authorityCode,
           documentTitle: preset.sourceTitle,

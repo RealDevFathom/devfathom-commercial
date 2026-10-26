@@ -155,6 +155,31 @@ describe('restaurant tax activation router', () => {
     );
   });
 
+  it('atomically replaces an open profile when preset activation requests it', async () => {
+    const openProfile = { id: 'profile_open', rules: [] };
+    db.restaurantTaxProfileVersion.findFirst
+      .mockResolvedValueOnce(openProfile)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ versionNumber: 1 });
+
+    await caller().activate({
+      ...base,
+      profileId: 'PK-ICT-RESTAURANT',
+      eligibilityConfirmations: ['ictNoInputTaxCreditOrAdjustment', 'ictNoRefund'],
+      replaceOpenProfile: true,
+    });
+
+    expect(db.restaurantTaxRuleVersion.updateMany).toHaveBeenCalledWith({
+      where: { profileVersionId: 'profile_open', effectiveTo: null },
+      data: { effectiveTo: new Date(base.effectiveFrom) },
+    });
+    expect(db.restaurantTaxProfileVersion.update).toHaveBeenCalledWith({
+      where: { id: 'profile_open' },
+      data: { effectiveTo: new Date(base.effectiveFrom) },
+    });
+    expect(db.restaurantTaxProfileVersion.create).toHaveBeenCalled();
+  });
+
   it('returns the original profile for a matching idempotent replay', async () => {
     db.restaurantTaxProfileVersion.findUnique.mockResolvedValue({
       id: 'profile_1',
