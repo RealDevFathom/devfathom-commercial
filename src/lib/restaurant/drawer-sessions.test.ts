@@ -213,6 +213,7 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
     const date = '2026-08-21';
     const closingDeviceId = await newDevice('POS-concurrent-close');
     const openingDeviceId = await newDevice('POS-concurrent-open');
+    const openingActor = actor(openingDeviceId);
 
     const [closeResult, openResult] = await Promise.allSettled([
       deps.close.cutClose(deps.createTenantDb(orgId), {
@@ -225,7 +226,7 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
         entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
         branchId: ids.branch,
         openingFloat: '100.00',
-        actor: actor(openingDeviceId),
+        actor: openingActor,
         now: new Date(`${date}T12:00:00.000Z`),
       }),
     ]);
@@ -240,7 +241,7 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
       });
     }
 
-    const [closes, sessions, movements] = await read((tx) =>
+    const [closes, sessions, movements, openingIdempotencyKeys] = await read((tx) =>
       Promise.all([
         tx.restaurantDailyClose.count({
           where: { branchId: ids.branch, businessDate: new Date(`${date}T00:00:00.000Z`) },
@@ -253,12 +254,16 @@ describeIfDatabase('drawer session command layer (real DB)', () => {
           where: { deviceId: openingDeviceId },
           select: { amount: true, kind: true },
         }),
+        tx.restaurantMoneyIdempotencyKey.count({
+          where: { deviceId: openingDeviceId, key: openingActor.idempotencyKey },
+        }),
       ])
     );
     if (closeResult.status === 'fulfilled') {
-      expect([closes, sessions, movements]).toEqual([1, [], []]);
+      expect([closes, sessions, movements, openingIdempotencyKeys]).toEqual([1, [], [], 0]);
     } else {
       expect(closes).toBe(0);
+      expect(openingIdempotencyKeys).toBe(1);
       expect(sessions).toHaveLength(1);
       expect(sessions[0]?.openingFloat.toString()).toBe('100');
       expect(movements).toHaveLength(1);
