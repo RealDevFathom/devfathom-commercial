@@ -172,7 +172,32 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
 
       const first = deps.processTerminalEvent(deps.createTenantDb(orgA), input);
       const second = deps.processTerminalEvent(deps.createTenantDb(orgA), input);
+      let firstSettled = false;
+      let secondSettled = false;
+      void first.then(
+        () => {
+          firstSettled = true;
+        },
+        () => {
+          firstSettled = true;
+        }
+      );
+      void second.then(
+        () => {
+          secondSettled = true;
+        },
+        () => {
+          secondSettled = true;
+        }
+      );
       await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // The first delivery must still be waiting for the bill row and the
+      // duplicate must still be queued behind its event-scoped advisory lock.
+      // This makes the assertion below exercise overlap instead of allowing a
+      // pair of accidentally sequential deliveries to satisfy it.
+      expect(firstSettled).toBe(false);
+      expect(secondSettled).toBe(false);
       await blocker.query('COMMIT');
 
       const results = await Promise.all([first, second]);
