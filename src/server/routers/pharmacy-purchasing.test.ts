@@ -599,7 +599,12 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
 
   /** A resolvable purchase order whose one line the receipt may name. */
   function resolvableOrder() {
-    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'po_a', supplierId: 'supplier_a' });
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      branchId: 'branch_a',
+      status: 'SENT',
+    });
     db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([{ id: 'poline_a' }]);
   }
 
@@ -721,6 +726,34 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     db.pharmacyPurchaseOrderLine.findMany.mockResolvedValue([{ id: 'poline_other' }]);
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
       code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a receipt against a purchase order that has not been sent', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      branchId: 'branch_a',
+      status: 'APPROVED',
+    });
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'INVALID_TRANSITION',
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses a receipt against another branch's purchase order", async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      branchId: 'branch_b',
+      status: 'SENT',
+    });
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'CROSS_BRANCH_REFERENCE',
     });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });

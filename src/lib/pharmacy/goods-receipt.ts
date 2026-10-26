@@ -160,6 +160,7 @@ export async function postGoodsReceipt(
     where: { id: input.goodsReceiptId, organizationId: scope.organizationId },
     include: {
       supplier: { include: { licences: true } },
+      purchaseOrder: { select: { id: true, branchId: true, status: true } },
       lines: { orderBy: { lineNumber: 'asc' } },
     },
   });
@@ -169,6 +170,18 @@ export async function postGoodsReceipt(
   }
   assertGoodsReceiptTransition(receipt.status, 'POSTED');
   if (receipt.lines.length === 0) throw new PharmacyReceivingError('INVALID_QUANTITY');
+  if (receipt.purchaseOrderId) {
+    if (!receipt.purchaseOrder) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+    if (receipt.purchaseOrder.branchId !== scope.branchId) {
+      throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
+    }
+    if (
+      receipt.purchaseOrder.status !== 'SENT' &&
+      receipt.purchaseOrder.status !== 'RECEIVING'
+    ) {
+      throw new PharmacyReceivingError('INVALID_TRANSITION');
+    }
+  }
 
   const controlledMedicines = await db.medicine.findMany({
     where: {
@@ -341,12 +354,9 @@ export async function postGoodsReceipt(
   // last transition of that status machine, so a second receipt against the
   // same order finds it already there and leaves it alone.
   if (receipt.purchaseOrderId) {
-    const order = await db.pharmacyPurchaseOrder.findFirst({
-      where: { id: receipt.purchaseOrderId, organizationId: scope.organizationId },
-    });
-    if (order?.status === 'SENT') {
+    if (receipt.purchaseOrder?.status === 'SENT') {
       await db.pharmacyPurchaseOrder.update({
-        where: { id: order.id },
+        where: { id: receipt.purchaseOrder.id },
         data: { status: 'RECEIVING' },
       });
     }

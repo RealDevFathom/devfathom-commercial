@@ -977,13 +977,21 @@ const purchasingRouter = router({
             receivedByUserId: scope.actorId,
           });
         }
-        if (
-          input.purchaseOrderId &&
-          !(await ctx.db.pharmacyPurchaseOrder.findFirst({
-            where: { id: input.purchaseOrderId, supplierId: input.supplierId },
-          }))
-        ) {
-          throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+        if (input.purchaseOrderId) {
+          const order = await ctx.db.pharmacyPurchaseOrder.findFirst({
+            where: {
+              id: input.purchaseOrderId,
+              organizationId: scope.organizationId,
+              supplierId: input.supplierId,
+            },
+          });
+          if (!order) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+          if (order.branchId !== scope.branchId) {
+            throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
+          }
+          if (order.status !== 'SENT' && order.status !== 'RECEIVING') {
+            throw new PharmacyReceivingError('INVALID_TRANSITION');
+          }
         }
 
         const ownOrderLines = input.purchaseOrderId

@@ -18,6 +18,8 @@ function receiptDb(line: {
   rejected: number;
   expiry: string;
   warnings?: string[];
+  purchaseOrderStatus?: 'DRAFT' | 'SENT' | 'RECEIVING';
+  purchaseOrderBranchId?: string;
 }) {
   const batchFind = vi.fn().mockResolvedValue(null);
   const lineUpdate = vi.fn().mockResolvedValue({});
@@ -31,7 +33,14 @@ function receiptDb(line: {
         status: 'DRAFT',
         supplierInvoiceRef: 'INV',
         warrantyEvidenceRef: 'WAR',
-        purchaseOrderId: null,
+        purchaseOrderId: line.purchaseOrderStatus ? 'po' : null,
+        purchaseOrder: line.purchaseOrderStatus
+          ? {
+              id: 'po',
+              branchId: line.purchaseOrderBranchId ?? 'branch_a',
+              status: line.purchaseOrderStatus,
+            }
+          : null,
         supplier: {
           name: 'Supplier',
           authorized: true,
@@ -91,6 +100,35 @@ beforeEach(() => {
 });
 
 describe('postGoodsReceipt expiry', () => {
+  it('refuses to post an existing draft against an order that was never sent', async () => {
+    const { db, batchFind } = receiptDb({
+      accepted: 10,
+      rejected: 0,
+      expiry: '2027-12-31',
+      purchaseOrderStatus: 'DRAFT',
+    });
+    await expect(
+      postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT })
+    ).rejects.toMatchObject({ reason: 'INVALID_TRANSITION' });
+    expect(batchFind).not.toHaveBeenCalled();
+    expect(receiveLot).not.toHaveBeenCalled();
+  });
+
+  it("refuses to post an existing draft against another branch's order", async () => {
+    const { db, batchFind } = receiptDb({
+      accepted: 10,
+      rejected: 0,
+      expiry: '2027-12-31',
+      purchaseOrderStatus: 'SENT',
+      purchaseOrderBranchId: 'branch_b',
+    });
+    await expect(
+      postGoodsReceipt(db, SCOPE, { goodsReceiptId: 'gr', at: AT })
+    ).rejects.toMatchObject({ reason: 'CROSS_BRANCH_REFERENCE' });
+    expect(batchFind).not.toHaveBeenCalled();
+    expect(receiveLot).not.toHaveBeenCalled();
+  });
+
   it('does not put accepted units of an expired pack into stock', async () => {
     const { db, batchFind } = receiptDb({ accepted: 10, rejected: 0, expiry: '2025-12-31' });
     await expect(
