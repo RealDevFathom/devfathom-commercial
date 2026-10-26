@@ -89,43 +89,46 @@ export const projectsRouter = router({
       await assertInOrganization(ctx.db.user, orgId, allMemberIds);
       await assertInOrganization(ctx.db.client, orgId, [projectData.clientId]);
 
-      const project = await ctx.db.project.create({
-        data: {
-          ...projectData,
-          clientId: projectData.clientId || null,
-          members: {
-            create: allMemberIds.map((userId, i) => ({
-              userId,
-              role: i === 0 ? 'LEAD' : 'MEMBER',
-            })),
-          },
-        },
-      });
-
-      // Create a default board with standard columns
-      if (createDefaultBoard) {
-        await ctx.db.board.create({
+      const project = await ctx.db.$transaction(async (tx) => {
+        const createdProject = await tx.project.create({
           data: {
-            name: `${project.name} Board`,
-            projectId: project.id,
-            columns: {
-              create: ['Backlog', 'To Do', 'In Progress', 'Review', 'Done'].map((name, order) => ({
-                name,
-                order,
+            ...projectData,
+            clientId: projectData.clientId || null,
+            members: {
+              create: allMemberIds.map((userId, i) => ({
+                userId,
+                role: i === 0 ? 'LEAD' : 'MEMBER',
               })),
-            },
-            labels: {
-              create: [
-                { name: 'Bug', color: '#EF4444' },
-                { name: 'Feature', color: '#2563EB' },
-                { name: 'Enhancement', color: '#0EA5E9' },
-                { name: 'Design', color: '#F59E0B' },
-                { name: 'Urgent', color: '#DC2626' },
-              ],
             },
           },
         });
-      }
+
+        // Keep the project, default board, columns, and labels in one atomic write unit.
+        if (createDefaultBoard) {
+          await tx.board.create({
+            data: {
+              name: `${createdProject.name} Board`,
+              projectId: createdProject.id,
+              columns: {
+                create: ['Backlog', 'To Do', 'In Progress', 'Review', 'Done'].map(
+                  (name, order) => ({ name, order })
+                ),
+              },
+              labels: {
+                create: [
+                  { name: 'Bug', color: '#EF4444' },
+                  { name: 'Feature', color: '#2563EB' },
+                  { name: 'Enhancement', color: '#0EA5E9' },
+                  { name: 'Design', color: '#F59E0B' },
+                  { name: 'Urgent', color: '#DC2626' },
+                ],
+              },
+            },
+          });
+        }
+
+        return createdProject;
+      });
 
       logActivity(ctx.db, ctx.session.user.id, {
         type: 'project_created',
