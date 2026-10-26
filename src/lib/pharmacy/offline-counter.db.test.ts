@@ -721,6 +721,17 @@ describeIfDatabase('PH-OFF OFF-01 — the append-only command log', () => {
     expect(message).toBe('IDEMPOTENCY_CONFLICT');
   });
 
+  it('refuses one key carrying two different device sequences', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'log-key-sequence-conflict');
+    await inOrg(ORG_A, (db) =>
+      deps.log.recordOfflineCommand(db, scopeOf(fixture), command(fixture))
+    );
+    const message = await refusal(ORG_A, (db) =>
+      deps.log.recordOfflineCommand(db, scopeOf(fixture), command(fixture, { sequence: 2 }))
+    );
+    expect(message).toBe('IDEMPOTENCY_CONFLICT');
+  });
+
   it('refuses one device sequence carrying two different commands', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'log-sequence');
     await inOrg(ORG_A, (db) =>

@@ -117,7 +117,11 @@ export async function recordOfflineCommand(
     },
   });
   if (existing) {
-    if (existing.action !== input.action || existing.payloadHash !== payloadHash)
+    if (
+      existing.sequence !== input.sequence ||
+      existing.action !== input.action ||
+      existing.payloadHash !== payloadHash
+    )
       throw new PharmacyOfflineCommandError('IDEMPOTENCY_CONFLICT');
     return { command: existing, replayed: existing.attempts > 0 || existing.status !== 'PENDING' };
   }
@@ -182,7 +186,11 @@ export async function recordOfflineCommand(
     // counter already used this sequence for a different command.
     throw new PharmacyOfflineCommandError('SEQUENCE_CONFLICT');
   }
-  if (stored.action !== input.action || stored.payloadHash !== payloadHash) {
+  if (
+    stored.sequence !== input.sequence ||
+    stored.action !== input.action ||
+    stored.payloadHash !== payloadHash
+  ) {
     throw new PharmacyOfflineCommandError('IDEMPOTENCY_CONFLICT');
   }
 
