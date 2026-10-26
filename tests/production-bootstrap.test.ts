@@ -85,6 +85,7 @@ function fakeTransaction() {
   };
   const platformPackage = {
     findMany: findManyByKey(packageKeys),
+    updateMany: vi.fn(async () => ({ count: 0 })),
     upsert: vi.fn(async (args: { where: { key: string } }) => {
       packageKeys.add(args.where.key);
       return { id: `package_${args.where.key}` };
@@ -283,6 +284,7 @@ describe('production bootstrap', () => {
           key: restaurantPackage.key,
           name: restaurantPackage.name,
           vertical: 'RESTAURANT',
+          defaultSeats: restaurantPackage.defaultLimits['users.max'],
         },
       });
       for (const moduleKey of restaurantPackage.moduleKeys) {

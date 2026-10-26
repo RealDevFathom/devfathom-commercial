@@ -284,6 +284,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_1',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -303,6 +304,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
       active: true,
+      defaultSeats: 25,
       vertical: 'RESTAURANT',
       moduleLinks: [{ moduleId: 'restaurant-core', enabled: true }],
     });
@@ -346,6 +348,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_1',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -379,6 +382,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
       active: true,
+      defaultSeats: 25,
       vertical: 'RESTAURANT',
       moduleLinks: [{ moduleId: 'restaurant-core', enabled: true }],
     });
@@ -418,6 +422,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_p',
       active: true,
+      defaultSeats: 25,
       vertical: 'PHARMACY',
       moduleLinks: [{ moduleId: 'pharmacy-core', enabled: true }],
     });
@@ -484,6 +489,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_p',
       active: true,
+      defaultSeats: 25,
       vertical: 'PHARMACY',
       moduleLinks: [],
     });
@@ -514,6 +520,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_p',
       active: true,
+      defaultSeats: 25,
       vertical: 'PHARMACY',
       moduleLinks: [],
     });
@@ -535,6 +542,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_1',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -553,6 +561,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_a',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -572,6 +581,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
       active: true,
+      defaultSeats: 25,
       vertical: 'RESTAURANT',
       moduleLinks: [],
     });
