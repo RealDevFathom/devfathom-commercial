@@ -134,5 +134,6 @@ describe('finance.getFinancialSummary', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.clearAllMocks();
   });
 });
