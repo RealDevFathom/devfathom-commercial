@@ -46,6 +46,7 @@ describe('InvoicePrintView', () => {
     expect(screen.getByText('Amount paid').nextElementSibling).toHaveTextContent('$400');
     expect(screen.getByText('Balance due').nextElementSibling).toHaveTextContent('$600');
     expect(screen.getByText('Total').nextElementSibling).toHaveTextContent('$1,000');
+    expect(screen.queryByText('$999')).not.toBeInTheDocument();
   });
 
   it('omits payment totals when the invoice has no payments', () => {
