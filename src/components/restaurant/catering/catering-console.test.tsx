@@ -512,7 +512,7 @@ describe('CateringConsole', () => {
     select();
     change('Vehicle', 'Keep delivery');
     expect(screen.queryByRole('option', { name: 'Lunch box' })).not.toBeInTheDocument();
-    change('Recipe', 'recipe:recipe_1');
+    change('Recipe', 'recipe_1');
     change('Description', 'Buffet');
     change('Portions', '3.125');
     change('Unit price', '9007199254740993.12');

@@ -435,8 +435,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
     const orderId = formOrderId(form);
     if (!orderId) return;
     const data = new FormData(form);
-    const source = value(data, 'source');
-    const recipeId = source.slice('recipe:'.length);
+    const recipeId = value(data, 'source');
     addLine.mutate(
       {
         orderId,
@@ -1167,7 +1166,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                               return (
                                 <option
                                   key={item.id}
-                                  value={`recipe:${item.id}`}
+                                  value={item.id}
                                   disabled={Boolean(cost?.error)}
                                 >
                                   {item.name} ·{' '}
