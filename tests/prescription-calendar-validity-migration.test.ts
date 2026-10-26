@@ -26,7 +26,9 @@ const sql = readFileSync(
       `);
       await client.query(`
         INSERT INTO pharmacy_prescriptions ("validFrom", "validUntil")
-        VALUES ('2026-10-22 00:00:00', '2026-10-31 00:00:00')
+        VALUES
+          ('2024-02-29 00:00:00', '2024-03-01 00:00:00'),
+          ('2026-10-22 00:00:00', '2026-10-31 00:00:00')
       `);
 
       await client.query(sql);
@@ -43,8 +45,15 @@ const sql = readFileSync(
           pg_typeof("validFrom")::text AS "validFromType",
           pg_typeof("validUntil")::text AS "validUntilType"
         FROM pharmacy_prescriptions
+        ORDER BY "validFrom"
       `);
       expect(result.rows).toEqual([
+        {
+          validFrom: '2024-02-29',
+          validUntil: '2024-03-01',
+          validFromType: 'date',
+          validUntilType: 'date',
+        },
         {
           validFrom: '2026-10-22',
           validUntil: '2026-10-31',
