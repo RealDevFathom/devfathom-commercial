@@ -181,6 +181,37 @@ describe('restaurant food-cost and dish-profitability reports', () => {
 });
 
 describe('restaurant catering report', () => {
+  it('does not mark an exact detail-limit page as truncated', async () => {
+    const orders = Array.from({ length: 500 }, (_, index) => ({
+      id: `o${String(index + 1).padStart(3, '0')}`,
+      organizationId: 'org1',
+      eventName: `Event ${index + 1}`,
+      eventDate: new Date('2026-01-10T00:00:00Z'),
+      status: 'DRAFT',
+      quotedTotal: new Prisma.Decimal(1),
+      branch: { id: 'b1', name: 'Main' },
+      lines: [],
+      extraCosts: [],
+      delivery: null,
+    }));
+    const findMany = vi.fn(
+      async (query: { take: number; cursor?: { id: string }; skip?: number }) => {
+        const start = query.cursor
+          ? orders.findIndex((order) => order.id === query.cursor?.id) + (query.skip ?? 0)
+          : 0;
+        return orders.slice(start, start + query.take);
+      }
+    );
+    const db = { restaurantCateringOrder: { findMany } } as unknown as ScopedDb;
+
+    const report = await readCateringReport(db, boundedRange, 500);
+
+    expect(report.orders).toHaveLength(500);
+    expect(report.totals.orderCount).toBe(500);
+    expect(report.truncated).toBe(false);
+    expect(findMany).toHaveBeenCalledTimes(2);
+  });
+
   it('aggregates across cursor pages while retaining only the bounded detail rows', async () => {
     const orders = Array.from({ length: 501 }, (_, index) => ({
       id: `o${String(index + 1).padStart(3, '0')}`,
