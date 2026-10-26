@@ -7,6 +7,7 @@ import { finalizeBillSettlement } from './bills';
 import { getOrderSettlementForBranch } from './checkout-routes';
 import { closePreview } from './daily-close';
 import { appendMovement, closeDrawerSession, foldExpectedCash } from './drawer-sessions';
+import { reverseLoyaltyForRefund } from './loyalty';
 import { refundTender } from './refunds';
 import { applyTenderInTransaction, type ApplyTenderInput } from './tenders';
 
@@ -263,6 +264,7 @@ function fixture() {
       create: vi.fn(async () => ({ id: 'refund' })),
     },
     restaurantTaxTenderAllocationSnapshot: { findMany: vi.fn(async () => []) },
+    restaurantTaxRefundAllocation: { create: vi.fn(async () => ({ id: 'tax-refund' })) },
     restaurantTaxTransactionSnapshot: { findMany: vi.fn(async () => []) },
     restaurantCoAuthorization: { create: vi.fn(async () => ({ id: 'approval' })) },
     restaurantPayment: {
@@ -505,6 +507,12 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
           },
         },
       });
+      const writesBeforeRefund = {
+        idempotency: f.raw.restaurantMoneyIdempotencyKey.create.mock.calls.length,
+        paymentEvents: f.raw.restaurantPaymentEvent.create.mock.calls.length,
+        reconciliations: f.raw.restaurantTerminalReconciliation.create.mock.calls.length,
+        movements: f.raw.restaurantDrawerMovement.create.mock.calls.length,
+      };
 
       await expect(
         refundTender(f.db, {
@@ -518,8 +526,23 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
         })
       ).rejects.toMatchObject({ reason: 'UNSUPPORTED_PAYMENT_PROVIDER' });
 
-      expect(f.raw.restaurantPaymentEvent.create).toHaveBeenCalledTimes(1);
+      expect(f.raw.restaurantMoneyIdempotencyKey.create).toHaveBeenCalledTimes(
+        writesBeforeRefund.idempotency
+      );
+      expect(f.raw.restaurantRefund.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+      expect(f.raw.restaurantTaxRefundAllocation.create).not.toHaveBeenCalled();
+      expect(reverseLoyaltyForRefund).not.toHaveBeenCalled();
+      expect(f.raw.restaurantPaymentEvent.create).toHaveBeenCalledTimes(
+        writesBeforeRefund.paymentEvents
+      );
       expect(f.raw.restaurantPayment.update).not.toHaveBeenCalled();
+      expect(f.raw.restaurantTerminalReconciliation.create).toHaveBeenCalledTimes(
+        writesBeforeRefund.reconciliations
+      );
+      expect(f.raw.restaurantDrawerMovement.create).toHaveBeenCalledTimes(
+        writesBeforeRefund.movements
+      );
     }
   );
 
