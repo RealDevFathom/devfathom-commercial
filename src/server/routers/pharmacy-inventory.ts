@@ -167,8 +167,8 @@ async function receiptScopeFor(ctx: TRPCContext, branch: string): Promise<Ledger
   if (user.organizationId !== scope.organizationId) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
-  const member = await ctx.db.user.findUnique({
-    where: { id: scope.actorId },
+  const member = await ctx.db.user.findFirst({
+    where: { id: scope.actorId, organizationId: scope.organizationId },
     select: { organizationId: true, status: true },
   });
   if (
@@ -333,6 +333,45 @@ function transferVarianceKey(transferId: string, lineId: string): string {
   return `transfer-variance:${transferId}:${lineId}`;
 }
 
+function transferVarianceReason(
+  transferId: string,
+  lineId: string,
+  receiptKey: string,
+  reason: string
+): string {
+  return JSON.stringify({
+    type: 'TRANSFER_RECEIPT_VARIANCE',
+    transferId,
+    lineId,
+    receiptKey,
+    reason,
+  });
+}
+
+function varianceReceiptKey(reason: string | null): string | null {
+  if (!reason) return null;
+  try {
+    const value = JSON.parse(reason) as { type?: unknown; receiptKey?: unknown };
+    return value.type === 'TRANSFER_RECEIPT_VARIANCE' && typeof value.receiptKey === 'string'
+      ? value.receiptKey
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function varianceDisplayReason(reason: string | null): string | null {
+  if (!reason) return null;
+  try {
+    const value = JSON.parse(reason) as { type?: unknown; reason?: unknown };
+    return value.type === 'TRANSFER_RECEIPT_VARIANCE' && typeof value.reason === 'string'
+      ? value.reason
+      : reason;
+  } catch {
+    return reason;
+  }
+}
+
 async function transferBoard(db: ScopedDb, scope: LedgerScope) {
   const transfers = await db.pharmacyInterbranchTransfer.findMany({
     where: {
@@ -441,7 +480,7 @@ async function transferBoard(db: ScopedDb, scope: LedgerScope) {
         quantityUnits: line.quantityUnits,
         receivedUnits: line.receivedUnits,
         varianceUnits: variance ? Math.abs(variance.quantityUnits) : 0,
-        varianceReason: variance?.reason ?? null,
+        varianceReason: varianceDisplayReason(variance?.reason ?? null),
       };
     }),
   }));
@@ -494,10 +533,39 @@ async function receiveTransferWithVariance(
       idempotencyKey: { startsWith: `${input.idempotencyKeyPrefix}:` },
     },
   });
-  if (prior.length) {
+  const varianceKeys = new Map(
+    input.lines.map((line) => [transferVarianceKey(transfer.id, line.lineId), line.lineId])
+  );
+  const priorVarianceMovements = await db.pharmacyStockMovement.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      kind: 'WRITE_OFF',
+      idempotencyKey: { in: [...varianceKeys.keys()] },
+    },
+  });
+  const priorCustody = priorVarianceMovements.length
+    ? await db.pharmacyCustodyRecord.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          movementId: { in: priorVarianceMovements.map((movement) => movement.id) },
+        },
+      })
+    : [];
+  const matchingVariances = priorVarianceMovements.filter(
+    (movement) => varianceReceiptKey(movement.reason) === input.idempotencyKeyPrefix
+  );
+  if (prior.length || matchingVariances.length) {
     const positive = input.lines.filter((line) => line.receivedUnits > 0);
+    const expectedVarianceLines = input.variance
+      ? input.lines.filter((answer) => {
+          const line = transfer.lines.find((candidate) => candidate.id === answer.lineId);
+          return line !== undefined && line.quantityUnits > line.receivedUnits;
+        })
+      : [];
+    const expectedVarianceKeys = new Set(
+      expectedVarianceLines.map((line) => transferVarianceKey(transfer.id, line.lineId))
+    );
     if (
-      input.variance ||
       prior.length !== positive.length ||
       positive.some(
         (line) =>
@@ -507,10 +575,33 @@ async function receiveTransferWithVariance(
               movement.idempotencyKey === `${input.idempotencyKeyPrefix}:${line.lineId}:in` &&
               movement.quantityUnits === line.receivedUnits
           )
-      )
+      ) ||
+      matchingVariances.length !== expectedVarianceLines.length ||
+      matchingVariances.some((movement) => {
+        const lineId = varianceKeys.get(movement.idempotencyKey);
+        const line = transfer.lines.find((candidate) => candidate.id === lineId);
+        const custody = priorCustody.find((record) => record.movementId === movement.id);
+        return (
+          !line ||
+          !expectedVarianceKeys.has(movement.idempotencyKey) ||
+          movement.quantityUnits !== -(line.quantityUnits - line.receivedUnits) ||
+          !custody ||
+          custody.witnessId !== input.variance!.witnessId ||
+          custody.reason !== input.variance!.reason ||
+          custody.evidenceRef !== input.variance!.evidenceRef
+        );
+      })
     )
       throw new PharmacyInventoryError('INVALID_STATE');
-    return { transfer, variances: [] };
+    return {
+      transfer,
+      variances: matchingVariances.map((movement) => ({
+        lineId: varianceKeys.get(movement.idempotencyKey)!,
+        units: Math.abs(movement.quantityUnits),
+        movement,
+        custody: priorCustody.find((record) => record.movementId === movement.id)!,
+      })),
+    };
   }
   if (!RECEIVABLE_TRANSFER_STATUSES.includes(transfer.status))
     throw new PharmacyInventoryError('INVALID_STATE');
@@ -604,7 +695,12 @@ async function receiveTransferWithVariance(
         sealedPackDelta: -variance.sealedPacks,
         looseUnitDelta: -variance.looseUnits,
         actorId: scope.actorId,
-        reason: `Transfer ${transfer.id} receipt variance: ${evidence.reason}`,
+        reason: transferVarianceReason(
+          transfer.id,
+          step.line.id,
+          input.idempotencyKeyPrefix,
+          evidence.reason
+        ),
         idempotencyKey: transferVarianceKey(transfer.id, step.line.id),
       },
     });
@@ -623,7 +719,7 @@ async function receiveTransferWithVariance(
   }
 
   const closed = await db.pharmacyInterbranchTransfer.update({
-    where: { id: transfer.id },
+    where: { organizationId_id: { organizationId: scope.organizationId, id: transfer.id } },
     data:
       short && !closingWithVariance
         ? { status: 'PARTIALLY_RECEIVED', receivedAt: null }

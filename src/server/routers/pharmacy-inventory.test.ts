@@ -43,6 +43,7 @@ function model() {
       .fn()
       .mockImplementation(async ({ data }: { data: object }) => ({ id: 'new', ...data })),
     update: vi.fn(),
+    updateMany: vi.fn(),
     count: vi.fn(),
   };
 }
@@ -630,6 +631,7 @@ describe('PUR-07 — the stock action centre transport', () => {
  */
 describe('#357 partial transfer receipts', () => {
   function scenario(units = 10) {
+    db.user.findFirst.mockResolvedValue({ organizationId: 'org_a', status: 'ACTIVE' });
     grant([allow('pharmacy:inventory')]);
     const transfer = {
       id: 'transfer_357',
@@ -669,6 +671,13 @@ describe('#357 partial transfer receipts', () => {
       | 'reason'
     > & { id?: string };
     const movements: Movement[] = [];
+    const custodyRecords: Array<{
+      id: string;
+      movementId: string;
+      witnessId: string;
+      reason: string;
+      evidenceRef: string;
+    }> = [];
     db.pharmacyStockBalance.findFirst.mockImplementation(async () => structuredClone(transit));
     db.$queryRaw.mockImplementation(async (query: { strings: readonly string[] }) =>
       query.strings.join('').includes('pharmacy_stock_balances')
@@ -682,11 +691,11 @@ describe('#357 partial transfer receipts', () => {
       Object.assign(transfer, data);
       return structuredClone(transfer);
     });
-    db.pharmacyInterbranchTransferLine.update.mockImplementation(async ({ data }) => {
+    db.pharmacyInterbranchTransferLine.updateMany = vi.fn(async ({ data }) => {
       transfer.lines[0].receivedUnits += (
         data as { receivedUnits: { increment: number } }
       ).receivedUnits.increment;
-      return structuredClone(transfer.lines[0]);
+      return { count: 1 };
     });
     db.pharmacyInventoryLot.findFirstOrThrow.mockResolvedValue({
       id: 'lot_source',
@@ -712,14 +721,19 @@ describe('#357 partial transfer receipts', () => {
         ) ?? null
     );
     db.pharmacyStockMovement.findMany.mockImplementation(async ({ where }) =>
-      movements.filter(
-        (m) =>
-          m.organizationId === where.organizationId &&
-          m.branchId === where.branchId &&
-          where.reason.in.includes(m.reason) &&
-          m.kind === where.kind &&
-          m.idempotencyKey.startsWith(where.idempotencyKey.startsWith)
-      )
+      movements.filter((m) => {
+        if (m.organizationId !== where.organizationId || m.kind !== where.kind) return false;
+        if (where.branchId !== undefined && m.branchId !== where.branchId) return false;
+        if (where.reason?.in && !where.reason.in.includes(m.reason)) return false;
+        if (
+          where.idempotencyKey?.startsWith &&
+          !m.idempotencyKey.startsWith(where.idempotencyKey.startsWith)
+        )
+          return false;
+        if (where.idempotencyKey?.in && !where.idempotencyKey.in.includes(m.idempotencyKey))
+          return false;
+        return true;
+      })
     );
     db.pharmacyStockMovement.create.mockImplementation(async ({ data }: { data: object }) => {
       const m = data as Movement;
@@ -741,9 +755,21 @@ describe('#357 partial transfer receipts', () => {
       )
         throw new Error('INVALID_ARRANGEMENT');
       Object.assign(bucket, next);
-      movements.push(m);
-      return { id: `m_${movements.length}`, ...m };
+      const created = { id: `m_${movements.length + 1}`, ...m };
+      movements.push(created);
+      return created;
     });
+    db.pharmacyCustodyRecord.create.mockImplementation(async ({ data }) => {
+      const created = {
+        id: `c_${custodyRecords.length + 1}`,
+        ...data,
+      } as (typeof custodyRecords)[number];
+      custodyRecords.push(created);
+      return created;
+    });
+    db.pharmacyCustodyRecord.findMany.mockImplementation(async ({ where }) =>
+      custodyRecords.filter((record) => where.movementId.in.includes(record.movementId))
+    );
     const receive = (receivedUnits: number, key = 'receipt-1') =>
       caller().receiveTransferWithVariance({
         branchId: 'branch_a',
@@ -862,6 +888,51 @@ describe('#357 partial transfer receipts', () => {
       looseUnitDelta: -6,
     });
     expect(Math.abs(s.movements.find((m) => m.kind === 'WRITE_OFF')!.sealedPackDelta)).toBe(0);
+  });
+
+  it('replays an identical variance receipt, including a variance-only receipt', async () => {
+    const s = scenario();
+    db.user.findFirst.mockResolvedValue({ id: 'witness' });
+    const input = {
+      branchId: 'branch_a',
+      transferId: s.transfer.id,
+      lines: [{ lineId: 'line_1', receivedUnits: 0 }],
+      idempotencyKeyPrefix: 'variance-only',
+      variance: {
+        reason: 'Entire carton missing',
+        witnessId: 'witness',
+        evidenceRef: 'courier:missing',
+      },
+    };
+    const first = await caller().receiveTransferWithVariance(input);
+    const replay = await caller().receiveTransferWithVariance(input);
+    expect(replay).toEqual(first);
+    expect(s.movements.filter((movement) => movement.kind === 'WRITE_OFF')).toHaveLength(1);
+    expect(s.transit.onHandUnits).toBe(0);
+  });
+
+  it('rejects changed variance evidence on a consumed receipt key', async () => {
+    const s = scenario();
+    db.user.findFirst.mockResolvedValue({ id: 'witness' });
+    const input = {
+      branchId: 'branch_a',
+      transferId: s.transfer.id,
+      lines: [{ lineId: 'line_1', receivedUnits: 0 }],
+      idempotencyKeyPrefix: 'variance-only',
+      variance: {
+        reason: 'Entire carton missing',
+        witnessId: 'witness',
+        evidenceRef: 'courier:missing',
+      },
+    };
+    await caller().receiveTransferWithVariance(input);
+    await expect(
+      caller().receiveTransferWithVariance({
+        ...input,
+        variance: { ...input.variance, evidenceRef: 'courier:changed' },
+      })
+    ).rejects.toMatchObject({ message: 'INVALID_STATE' });
+    expect(s.movements.filter((movement) => movement.kind === 'WRITE_OFF')).toHaveLength(1);
   });
 
   it('gives receipt and variance pack openings distinct keys in a pooled transit balance', async () => {
@@ -1045,14 +1116,7 @@ describe('#357 partial transfer receipts', () => {
           const s = scenario();
           s.transfer.toBranchId = 'branch_b';
           // Capability lookup remains granted; the second lookup is persisted membership.
-          db.user.findUnique
-            .mockResolvedValueOnce({
-              organizationId: 'org_a',
-              status: 'ACTIVE',
-              organizationRole: { permissions: [allow('pharmacy:inventory')] },
-              permissionOverrides: [],
-            })
-            .mockResolvedValue(value);
+          db.user.findFirst.mockResolvedValue(value);
           await expect(
             caller({ role: 'ADMIN' })[procedure](
               branchReceiptInput(procedure, s.transfer.id) as never

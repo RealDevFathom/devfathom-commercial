@@ -577,15 +577,16 @@ export async function receiveTransferLine(
       idempotencyKey: `${input.idempotencyKeyPrefix}:in`,
     },
   });
-  await db.pharmacyInterbranchTransferLine.update({
-    where: { id: line.id },
+  const updatedLine = await db.pharmacyInterbranchTransferLine.updateMany({
+    where: { id: line.id, organizationId: scope.organizationId, transferId: transfer.id },
     data: { receivedUnits: { increment: input.receivedUnits } },
   });
+  if (updatedLine.count !== 1) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
   const totalReceived =
     transfer.lines.reduce((n, l) => n + l.receivedUnits, 0) + input.receivedUnits;
   const totalExpected = transfer.lines.reduce((n, l) => n + l.quantityUnits, 0);
   return db.pharmacyInterbranchTransfer.update({
-    where: { id: transfer.id },
+    where: { organizationId_id: { organizationId: scope.organizationId, id: transfer.id } },
     data: {
       status: totalReceived === totalExpected ? 'RECEIVED' : 'PARTIALLY_RECEIVED',
       receivedAt: totalReceived === totalExpected ? new Date() : null,
