@@ -13,6 +13,22 @@ vi.mock('@/lib/trpc', () => ({
       validate: { useQuery: () => ({ data: { valid: true }, isLoading: false }) },
       reset: { useMutation: () => ({ isPending: false, mutateAsync: vi.fn() }) },
     },
+    invitations: {
+      get: {
+        useQuery: () => ({
+          data: {
+            name: 'Ada Lovelace',
+            email: 'ada@example.com',
+            title: 'Engineer',
+            department: 'ENGINEERING',
+            role: 'MEMBER',
+          },
+          isLoading: false,
+          error: null,
+        }),
+      },
+      accept: { useMutation: () => ({ isPending: false, mutateAsync: vi.fn() }) },
+    },
   },
 }));
 
@@ -20,6 +36,7 @@ import { LoginForm } from './login-form';
 import { SharedLoginForm } from './shared-login-form';
 import { PlatformLoginForm } from '../platform/(auth)/login/platform-login-form';
 import { ResetPasswordForm } from '../reset-password/[token]/reset-password-form';
+import { AcceptInviteForm } from '../invite/[token]/accept-invite-form';
 
 function expectAccessiblePasswordToggle(password: HTMLInputElement) {
   const toggle = screen.getByRole('button', { name: 'Show password' });
@@ -71,6 +88,12 @@ describe('password visibility controls', () => {
 
   it('is keyboard reachable and toggles the reset password without changing it', () => {
     render(<ResetPasswordForm token="valid-token" />);
+
+    expectAccessiblePasswordToggle(screen.getByLabelText<HTMLInputElement>('New Password'));
+  });
+
+  it('is keyboard reachable and toggles the invite password without changing it', () => {
+    render(<AcceptInviteForm token="valid-token" />);
 
     expectAccessiblePasswordToggle(screen.getByLabelText<HTMLInputElement>('New Password'));
   });
