@@ -1057,7 +1057,7 @@ export async function commitMenuImport(
           const extracted = resolveVariants(line.extractedVariants);
           if (line.reviewedVariants === null) {
             throw new MenuImportError(
-              'A confirmed line has variants that were not reviewed.',
+              'A confirmed line has no variant review evidence.',
               'REVIEW_INCOMPLETE'
             );
           }

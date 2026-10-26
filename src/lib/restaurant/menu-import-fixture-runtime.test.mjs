@@ -382,7 +382,10 @@ test('commit rejects an accepted line without explicit empty variant review evid
 
   await assert.rejects(
     menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' }),
-    { reason: 'REVIEW_INCOMPLETE' }
+    {
+      message: 'A confirmed line has no variant review evidence.',
+      reason: 'REVIEW_INCOMPLETE',
+    }
   );
   assert.ok(
     !f.events.some(
