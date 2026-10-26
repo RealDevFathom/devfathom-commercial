@@ -13,11 +13,11 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * counter would effectively hold its own full-stock snapshot and two of them
  * could sell the same last unit during an outage.
  *
- * That sum is enforced by the database, not here. `guard_pharmacy_device_lot_quota`
- * locks the balance row BEFORE it sums, so two grants racing for the same last
- * unit serialize and the loser is refused; the service below adds the domain
- * error and the branch scoping on top. The guard is the mechanism, this module
- * is the vocabulary — the same division as the stock ledger's non-negative CHECK.
+ * That sum is projected by the database onto the AVAILABLE balance row, not
+ * calculated here. `guard_pharmacy_device_lot_quota` atomically applies each
+ * outstanding-unit delta to that row, so quota grants and stock movements
+ * serialize on the same tuple and the operation that would over-allocate stock
+ * is refused. The service below adds the domain error and branch scoping on top.
  *
  * A quota is a RESERVATION, not a movement. Selling still posts through the
  * INV-01 ledger with its own FEFO planning and its own non-negative projection;
@@ -79,9 +79,9 @@ export async function outstandingQuotaUnits(
 
 /**
  * Give one counter ownership of `units` of a bucket for the duration of an
- * outage. Refused when the branch does not hold enough units once every other
- * counter's outstanding quota is counted — that refusal is the DB guard's, and
- * it is what makes a concurrent last-unit grant impossible.
+ * outage. Refused when the branch does not hold enough unreserved units — that
+ * refusal is the DB guard's, and it is what makes a concurrent last-unit grant
+ * impossible.
  */
 export async function grantDeviceLotQuota(
   db: ScopedDb,

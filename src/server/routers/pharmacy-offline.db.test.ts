@@ -285,6 +285,7 @@ describeIfDatabase('offline quota stock reservation', () => {
       })
     );
     expect(reservedBalance.onHandUnits).toBe(10);
+    expect(reservedBalance.offlineReservedUnits).toBe(10);
 
     await inOrg(ORG_A, async (db) => {
       await deps.quotas.consumeDeviceLotQuota(db, scopeOf(fixture), {
@@ -303,6 +304,7 @@ describeIfDatabase('offline quota stock reservation', () => {
       })
     );
     expect(balance.onHandUnits).toBe(0);
+    expect(balance.offlineReservedUnits).toBe(0);
   });
 
   it('allows exactly the unreserved units and counts every device quota', async () => {
