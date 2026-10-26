@@ -1347,10 +1347,15 @@ describeIfDatabase('WHA-333 per-original-tender refund evidence (restricted real
       refundEvents: await tx.restaurantPaymentEvent.count({
         where: { paymentId, capability: 'REFUND' },
       }),
+      payment: await tx.restaurantPayment.findUnique({
+        where: { id: paymentId },
+        select: { status: true },
+      }),
     }));
     expect(evidence.refunds).toHaveLength(1);
     expect(evidence.refunds[0]!.amount.toString()).toBe('0');
     expect(evidence.refunds[0]!.tipRefundAmount.toString()).toBe('1.5');
     expect(evidence.refundEvents).toBe(1);
+    expect(evidence.payment?.status).toBe('PARTIALLY_REFUNDED');
   });
 });
