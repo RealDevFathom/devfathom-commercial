@@ -670,6 +670,8 @@ export async function updateAssignment(db: ScopedDb, id: string, patch: UpdateAs
   if (patch.assigneeTarget) await assertAssigneeTarget(db, patch.assigneeTarget);
 
   return runSopTransaction(db, async (tx) => {
+    const predecessorEndDate = new Date(businessDateToUtcDate(merged.startDate));
+    predecessorEndDate.setUTCDate(predecessorEndDate.getUTCDate() - 1);
     const successor = await tx.restaurantSopAssignment.create({
       data: {
         branchId: existing.branchId,
@@ -697,7 +699,16 @@ export async function updateAssignment(db: ScopedDb, id: string, patch: UpdateAs
     });
     await tx.restaurantSopAssignment.update({
       where: { id: existing.id },
-      data: { active: false, supersededAt: new Date() },
+      data: {
+        // Keep a live predecessor visible to the scheduler until the successor's
+        // effective date; its bounded date range performs the boundary switch.
+        active: existing.active && predecessorEndDate >= existing.startDate,
+        endDate:
+          existing.endDate && existing.endDate < predecessorEndDate
+            ? existing.endDate
+            : predecessorEndDate,
+        supersededAt: new Date(),
+      },
     });
     return successor;
   });

@@ -287,7 +287,7 @@ describe('createAssignment — recurrence validation mapping', () => {
 });
 
 describe('updateAssignment — effective-dated successor', () => {
-  it('appends a linked successor and does not rewrite occurrence or evidence rows', async () => {
+  it('keeps the predecessor schedulable until a future successor becomes effective', async () => {
     db.restaurantSopAssignment.findUnique.mockResolvedValue({
       id: 'assignment_1',
       branchId: 'b1',
@@ -329,7 +329,11 @@ describe('updateAssignment — effective-dated successor', () => {
     );
     expect(db.restaurantSopAssignment.update).toHaveBeenCalledWith({
       where: { id: 'assignment_1' },
-      data: { active: false, supersededAt: expect.any(Date) },
+      data: {
+        active: true,
+        endDate: new Date('2026-05-31T00:00:00.000Z'),
+        supersededAt: expect.any(Date),
+      },
     });
     expect(db.restaurantSopOccurrence.findMany).not.toHaveBeenCalled();
   });
