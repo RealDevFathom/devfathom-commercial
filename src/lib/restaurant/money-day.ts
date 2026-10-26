@@ -28,14 +28,14 @@ export class DailyCloseError extends Error {
 export async function lockMoneyDay(
   tx: ScopedDb,
   branchId: string,
-  businessDate: string
+  businessDate: Date
 ): Promise<void> {
   const branch = await tx.restaurantBranch.findUnique({
     where: { id: branchId },
     select: { organizationId: true },
   });
   if (!branch) throw new DailyCloseError('The branch does not exist.', 'INVALID');
-  const key = `${branch.organizationId}:${branchId}:${businessDate}`;
+  const key = `${branch.organizationId}:${branchId}:${businessDate.toISOString().slice(0, 10)}`;
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
 }
 
@@ -45,7 +45,7 @@ export async function assertMoneyDayOpen(
   branchId: string,
   businessDate: Date
 ): Promise<void> {
-  await lockMoneyDay(tx, branchId, businessDate.toISOString().slice(0, 10));
+  await lockMoneyDay(tx, branchId, businessDate);
   const close = await tx.restaurantDailyClose.findFirst({
     where: { branchId, businessDate },
     select: { id: true },

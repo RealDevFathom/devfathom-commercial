@@ -419,7 +419,7 @@ export type CutCloseResult = {
 export async function cutClose(db: ScopedDb, input: CutCloseInput): Promise<CutCloseResult> {
   const businessDate = businessDateToUtcDate(input.businessDate);
   return runMoneyTransaction(db, async (tx) => {
-    await lockMoneyDay(tx, input.branchId, input.businessDate);
+    await lockMoneyDay(tx, input.branchId, businessDate);
     const canonical = canonicalClosePayload({
       version: 1,
       branchId: input.branchId,
@@ -501,7 +501,7 @@ export async function correctClose(
   }
 
   return runMoneyTransaction(db, async (tx) => {
-    await lockMoneyDay(tx, input.branchId, input.businessDate);
+    await lockMoneyDay(tx, input.branchId, businessDate);
     const canonical = canonicalClosePayload({
       version: 1,
       branchId: input.branchId,
