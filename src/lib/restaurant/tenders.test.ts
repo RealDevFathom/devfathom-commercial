@@ -1518,9 +1518,9 @@ describeIfDatabase('frozen service-charge settlement (real DB)', () => {
           grandTotal: true,
         },
       }),
-      tender: await tx.restaurantTender.aggregate({
-        where: { billId },
-        _sum: { amount: true },
+      tender: await tx.restaurantTender.findUniqueOrThrow({
+        where: { id: result.tenderId },
+        select: { amount: true },
       }),
     }));
     expect(settled.bill.serviceChargeTotal.toFixed(2)).toBe('1.25');
@@ -1528,7 +1528,7 @@ describeIfDatabase('frozen service-charge settlement (real DB)', () => {
 
     // Reconcile the persisted settlement as exact debit/credit evidence. Keeping the
     // residual in Decimal space catches cent-level drift that total-only assertions hide.
-    const debitTotal = settled.tender._sum.amount ?? new Prisma.Decimal(0);
+    const debitTotal = settled.tender.amount;
     const creditTotal = settled.bill.subtotal
       .minus(settled.bill.compTotal)
       .minus(settled.bill.discountTotal)
