@@ -245,6 +245,40 @@ describe('staff CRUD', () => {
     expect(mocks.userFindMany).not.toHaveBeenCalled();
   });
 
+  it('does not expose users linked only to an inactive authorized branch', async () => {
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValue(false);
+    mocks.staffFindMany.mockResolvedValueOnce([
+      {
+        id: 'staff_manager',
+        primaryBranchId: 'branch_inactive',
+        jobRoles: [{ branchId: 'branch_active' }],
+        directCapabilityGrants: [],
+      },
+    ]);
+    mocks.branchFindMany.mockResolvedValueOnce([{ id: 'branch_active' }]);
+
+    await caller().listEligibleUsers();
+
+    const eligibleProfileWhere = {
+      OR: [
+        { primaryBranchId: { in: ['branch_active'] } },
+        { jobRoles: { some: { branchId: { in: ['branch_active'] } } } },
+        { directCapabilityGrants: { some: { branchId: { in: ['branch_active'] } } } },
+      ],
+    };
+    expect(mocks.userFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_workspace',
+          restaurantStaffProfiles: { some: eligibleProfileWhere },
+        },
+        select: expect.objectContaining({
+          restaurantStaffProfiles: expect.objectContaining({ where: eligibleProfileWhere }),
+        }),
+      })
+    );
+  });
+
   it('creates a staff profile and audits it', async () => {
     const result = await caller().create({ displayName: 'Dana', email: 'Dana@R.com' });
     expect(result).toMatchObject({ id: 'staff_new', email: 'dana@r.com' });
