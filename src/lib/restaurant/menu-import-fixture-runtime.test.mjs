@@ -454,6 +454,38 @@ test('commit rejects a foreign priced variant even when the base price has a rev
   assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'createProduct'));
 });
 
+test('commit rejects a priced variant when its currency is missing', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  f.record.status = 'AWAITING_REVIEW';
+  f.record.fileName = 'ambiguous-variant-menu.png';
+  f.record.defaultCurrency = 'PKR';
+  f.lines.push({
+    id: 'line_1',
+    reviewStatus: 'ACCEPTED',
+    sortOrder: 1,
+    extractedCategoryName: null,
+    extractedProductName: 'Ambiguous variant item',
+    extractedDescription: null,
+    extractedPriceAmount: new (f.load('@/generated/prisma/client').Prisma.Decimal)('500'),
+    extractedCurrency: 'PKR',
+    extractedVariants: [{ name: 'Large', price: { amount: '650' } }],
+    reviewedCategoryName: null,
+    reviewedProductName: null,
+    reviewedDescription: null,
+    reviewedPriceAmount: null,
+    reviewedCurrency: null,
+    mergeProductId: null,
+    mergeVariantId: null,
+  });
+
+  await assert.rejects(
+    menu.commitMenuImport(f.db, { importId: 'imp_1', committedById: 'user_1' }),
+    { reason: 'CURRENCY_MISMATCH' }
+  );
+  assert.ok(!f.events.some((event) => Array.isArray(event) && event[0] === 'createProduct'));
+});
+
 test('commit validates reviewed prices against the current organization currency', async () => {
   const f = setup('production', 'disabled');
   const menu = f.load('@/lib/restaurant/menu-import');
