@@ -151,21 +151,26 @@ suite('owner command centre Khata aging under forced PostgreSQL RLS', () => {
       partial: { amount: 400, paid: 400, dishonoured: 400 },
       unlinkedDishonoured: 300,
     });
+    const third = await createFixture(orgA, `report-a3-${suffix}`, {
+      overdue: [],
+      partial: { amount: 500, paid: 500, dishonoured: 200 },
+    });
     const foreign = await createFixture(orgB, `report-b-${suffix}`, {
       overdue: [2_000_000_000],
     });
 
     const result = await withTenantDb(orgA, (db) =>
       readCommandCentre(db, {
-        branchIds: [first.branchId, second.branchId, foreign.branchId],
+        branchIds: [first.branchId, second.branchId, third.branchId, foreign.branchId],
         from: '2026-01-01',
         to: '2026-01-01',
       })
     );
 
-    // Includes unpaid + partially paid overdue charges and adds bounced-cheque debt back in.
+    // Includes unpaid + partially paid overdue charges and adds full and partial bounced-cheque
+    // debt back in.
     // Excludes the future charge and foreign organization's charge. The total is also deliberately
     // above PostgreSQL INTEGER_MAX.
-    expect(result.metrics.khataAgingMinor).toBe(2_750_000_800);
+    expect(result.metrics.khataAgingMinor).toBe(2_750_001_000);
   });
 });
