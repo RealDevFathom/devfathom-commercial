@@ -232,6 +232,8 @@ export const InvoiceRow = memo(function InvoiceRow({
       <div className="col-span-2 flex justify-center">
         <button
           ref={btnRef}
+          aria-expanded={menuOpen}
+          aria-haspopup="menu"
           onClick={() => (menuOpen ? setMenuOpen(false) : openMenu())}
           className={cn(
             'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium',
@@ -247,12 +249,14 @@ export const InvoiceRow = memo(function InvoiceRow({
             <>
               <div className="fixed inset-0 z-[60]" onClick={() => setMenuOpen(false)} />
               <div
+                role="menu"
                 className="fixed z-[61] w-32 -translate-x-1/2 rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10"
                 style={{ top: menuPos.top, left: menuPos.left }}
               >
                 {INVOICE_STATUSES.map((s) => (
                   <button
                     key={s}
+                    role="menuitem"
                     onClick={() => {
                       if (s === 'PAID') {
                         toast.error(PAID_STATUS_ERROR);
