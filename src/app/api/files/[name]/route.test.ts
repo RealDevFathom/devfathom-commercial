@@ -117,6 +117,7 @@ describe('private attachment delivery', () => {
 
     mocks.actor.mockResolvedValue(actor('ADMIN'));
     expect((await read('pharmacy-licence.pdf')).status).toBe(200);
+    expect(db.branchRegulatoryProfile.findFirst).not.toHaveBeenCalled();
     expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'pharmacy-licence.pdf');
   });
 

@@ -82,17 +82,19 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   // not let an ordinary tenant member bypass that profile's authorization.
   // The tenant-scoped transaction and explicit predicate keep the lookup from
   // classifying a file referenced by another organization as this tenant's.
-  const licenceEvidence = await withTenantDb(organization.id, (db) =>
-    db.branchRegulatoryProfile.findFirst({
-      where: {
-        organizationId: organization.id,
-        licenceEvidenceFileRef: fileRef,
-      },
-      select: { id: true },
-    })
-  );
-  if (licenceEvidence && session.user.role !== 'ADMIN') {
-    return new Response('Not found', { status: 404 });
+  if (session.user.role !== 'ADMIN') {
+    const licenceEvidence = await withTenantDb(organization.id, (db) =>
+      db.branchRegulatoryProfile.findFirst({
+        where: {
+          organizationId: organization.id,
+          licenceEvidenceFileRef: fileRef,
+        },
+        select: { id: true },
+      })
+    );
+    if (licenceEvidence) {
+      return new Response('Not found', { status: 404 });
+    }
   }
 
   // IMP-RT-05: per-channel membership enforcement. If this file is a chat
