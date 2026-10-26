@@ -60,15 +60,18 @@ describe('CheckoutPanel', () => {
     expect(screen.queryByText(splitKind)).not.toBeInTheDocument();
   });
 
-  it('does not expose an unexpected split kind', async () => {
-    const request: TerminalRequest = async <T,>() =>
-      ({ ...billed, bills: [{ ...billed.bills[0], splitKind: 'UNRECOGNIZED' }] }) as T;
-    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+  it.each(['UNRECOGNIZED', 'constructor'])(
+    'does not expose the unexpected split kind %s',
+    async (splitKind) => {
+      const request: TerminalRequest = async <T,>() =>
+        ({ ...billed, bills: [{ ...billed.bills[0], splitKind }] }) as T;
+      render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
-    expect(await screen.findByText('Bill details')).toBeVisible();
-    expect(screen.getByText('Bill 1')).toBeVisible();
-    expect(screen.queryByText('UNRECOGNIZED')).not.toBeInTheDocument();
-  });
+      expect(await screen.findByText('Bill details')).toBeVisible();
+      expect(screen.getByText('Bill 1')).toBeVisible();
+      expect(screen.queryByText(splitKind)).not.toBeInTheDocument();
+    }
+  );
 
   it('prefers the receipt number over the split kind label', async () => {
     const request: TerminalRequest = async <T,>() =>
