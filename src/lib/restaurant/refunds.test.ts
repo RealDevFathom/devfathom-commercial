@@ -500,6 +500,41 @@ beforeAll(async () => {
 });
 
 describeIfDatabase('card refunds (real DB)', () => {
+  it('rejects refunding a partial tender while its bill is still open', async () => {
+    const billId = await openBill(1);
+    const db = deps.createTenantDb(orgId);
+    const partial = await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'OTHER', amount: '6.00' },
+      actor: actor(),
+      now: AT,
+    });
+
+    await expect(
+      deps.refunds.refundTender(db, {
+        originalTenderId: partial.tenderId,
+        amount: '6.00',
+        reason: 'must not refund before settlement',
+        approvingStaffProfileId: ids.manager,
+        actor: actor(),
+        now: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'BILL_NOT_SETTLED' });
+
+    const final = await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'OTHER', amount: '6.50' },
+      actor: actor(),
+      now: AT,
+    });
+    expect(final.settled).toBe(true);
+    expect(
+      await read((tx) =>
+        tx.restaurantRefund.count({ where: { originalTenderId: partial.tenderId } })
+      )
+    ).toBe(0);
+  });
+
   it('appends a capped REVERSAL pinned to the original earn program', async () => {
     const { billId, tenderId } = await cardTender();
     await read((tx) =>

@@ -69,6 +69,7 @@ export type RefundErrorReason =
   | 'TIP_REFUND_EXCEEDS_TENDER'
   | 'INVALID_REVERSAL'
   | 'REASON_REQUIRED'
+  | 'BILL_NOT_SETTLED'
   | 'DRAWER_NOT_OPEN'
   | 'INVALID';
 
@@ -182,9 +183,15 @@ export async function refundTender(
     });
     if (idem.replay) return replayRefundResult(tx, idem.resultRef, idem.resultPayload);
 
-    // Serialize concurrent refunds against this bill so Σ(refunds) cannot overshoot
-    // the tender (the bill row carries a full RLS policy, so FOR UPDATE is valid).
-    await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${tender.billId} FOR UPDATE`;
+    // Serialize with settlement and concurrent refunds. Refund authority begins only
+    // after settlement, when the tender can no longer be counted toward an open balance.
+    // The bill row carries a full RLS policy, so FOR UPDATE is valid.
+    const [lockedBill] = await tx.$queryRaw<Array<{ status: string }>>`
+      SELECT status FROM restaurant_bills WHERE id = ${tender.billId} FOR UPDATE
+    `;
+    if (lockedBill?.status !== 'SETTLED') {
+      throw new RefundError('Only a SETTLED bill can have a tender refunded.', 'BILL_NOT_SETTLED');
+    }
 
     // Cap: Σ(refunds) ≤ tender amount; Σ(tip refunds) ≤ tender tip.
     const priorRefunds = await tx.restaurantRefund.aggregate({
