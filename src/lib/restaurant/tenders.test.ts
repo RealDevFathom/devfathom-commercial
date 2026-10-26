@@ -1474,6 +1474,12 @@ describeIfDatabase('frozen service-charge settlement (real DB)', () => {
     expect(frozen.serviceChargeBasis.toFixed(2)).toBe('12.50');
     expect(frozen.serviceChargeTotal.toFixed(2)).toBe('1.25');
 
+    const quote = await read((tx) =>
+      deps.tenders.quoteOpenBillSettlement(tx, billId, new Date('2026-08-20T18:00:00.000Z'))
+    );
+    expect(quote?.grandTotal.toFixed(2)).toBe('13.75');
+    expect(quote?.remainingDue.toFixed(2)).toBe('13.75');
+
     const result = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
       billId,
       tender: { type: 'OTHER', amount: grandTotal },
