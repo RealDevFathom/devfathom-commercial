@@ -614,11 +614,42 @@ describeIfDatabase('card refunds (real DB)', () => {
       now: AT,
     });
     expect(tip.paymentStatus).toBe('REFUNDED');
+    const persisted = await read(async (tx) => ({
+      payment: await tx.restaurantPayment.findUnique({
+        where: { id: paymentId },
+        select: {
+          status: true,
+          events: {
+            where: { capability: 'REFUND' },
+            orderBy: { createdAt: 'asc' },
+            select: { amount: true, payload: true },
+          },
+        },
+      }),
+      refunds: await tx.restaurantRefund.findMany({
+        where: { originalTenderId: tenderId },
+        orderBy: { createdAt: 'asc' },
+        select: { amount: true, tipRefundAmount: true },
+      }),
+    }));
+    expect(persisted.payment?.status).toBe('REFUNDED');
+    expect(persisted.payment?.events.map((event) => event.amount.toString())).toEqual([
+      '12.5',
+      '0',
+    ]);
+    expect(persisted.payment?.events.map((event) => event.payload)).toEqual([
+      expect.objectContaining({ amount: '12.5', tipAmount: '0' }),
+      expect.objectContaining({ amount: '0', tipAmount: '2' }),
+    ]);
     expect(
-      await read((tx) =>
-        tx.restaurantPayment.findUnique({ where: { id: paymentId }, select: { status: true } })
-      )
-    ).toMatchObject({ status: 'REFUNDED' });
+      persisted.refunds.map((refund) => ({
+        amount: refund.amount.toString(),
+        tipRefundAmount: refund.tipRefundAmount.toString(),
+      }))
+    ).toEqual([
+      { amount: '12.5', tipRefundAmount: '0' },
+      { amount: '0', tipRefundAmount: '2' },
+    ]);
   });
 
   it('a same-day full VOID_REVERSAL voids the payment via the adapter VOID', async () => {
