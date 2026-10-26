@@ -15,7 +15,16 @@ describe('logActivity', () => {
         message: 'created project Alpha',
       })
     ).toBeUndefined();
-    expect(create).toHaveBeenCalledOnce();
+    expect(create).toHaveBeenCalledWith({
+      data: {
+        type: 'project_created',
+        message: 'created project Alpha',
+        userId: 'user-1',
+        entityType: null,
+        entityId: null,
+        metadata: undefined,
+      },
+    });
   });
 
   it('keeps a tenant transaction open until the activity insert settles', async () => {
