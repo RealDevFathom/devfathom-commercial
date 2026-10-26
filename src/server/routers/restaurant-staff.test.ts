@@ -198,7 +198,7 @@ describe('staff CRUD', () => {
         id: 'staff_manager',
         primaryBranchId: 'branch_1',
         jobRoles: [{ branchId: 'branch_1' }],
-        directCapabilityGrants: [],
+        directCapabilityGrants: [{ branchId: 'branch_2' }],
       },
     ]);
 
@@ -206,9 +206,9 @@ describe('staff CRUD', () => {
 
     const eligibleProfileWhere = {
       OR: [
-        { primaryBranchId: { in: ['branch_1'] } },
-        { jobRoles: { some: { branchId: { in: ['branch_1'] } } } },
-        { directCapabilityGrants: { some: { branchId: { in: ['branch_1'] } } } },
+        { primaryBranchId: { in: ['branch_1', 'branch_2'] } },
+        { jobRoles: { some: { branchId: { in: ['branch_1', 'branch_2'] } } } },
+        { directCapabilityGrants: { some: { branchId: { in: ['branch_1', 'branch_2'] } } } },
       ],
     };
     expect(mocks.userFindMany).toHaveBeenCalledWith(
