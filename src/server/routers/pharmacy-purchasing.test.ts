@@ -218,6 +218,17 @@ describe('procurement write authorization', () => {
     expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
     expect(db.$transaction).not.toHaveBeenCalled();
   });
+
+  it('fails closed before a database lookup when the session actor id is missing', async () => {
+    await expect(
+      caller('').createSupplier({ name: 'Unapproved supplier' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(db.user.findUnique).not.toHaveBeenCalled();
+    expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
+  });
 });
 
 describe.each(['purchaseReturns', 'supplierCredits'] as const)(
