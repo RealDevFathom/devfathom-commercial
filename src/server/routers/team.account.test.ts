@@ -375,6 +375,19 @@ describe('team.getRoster and team:view', () => {
       where: { id: 'user_self' },
     });
   });
+
+  it('fails closed when the permission lookup fails', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    mocks.permissions.mockRejectedValue(new Error('permission lookup failed'));
+    mocks.findMany.mockResolvedValue([self]);
+
+    await expect(caller(['hr']).getRoster()).resolves.toEqual([self]);
+    expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith({
+      ...rosterQuery,
+      where: { id: 'user_self' },
+    });
+    error.mockRestore();
+  });
 });
 
 describe('team.updateProfile', () => {
