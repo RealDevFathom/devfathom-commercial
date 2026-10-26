@@ -404,6 +404,13 @@ describeDatabase('SEC-374-01 Postgres no-effect authorization regressions', () =
       reason: input.reason,
       evidenceRef: input.evidenceRef,
     });
+    expect(result.movement.sealedPackDelta + result.movement.looseUnitDelta).toBe(
+      result.movement.quantityUnits
+    );
+    expect(
+      after.balances.reduce((total, balance) => total + balance.onHandUnits, 0) -
+        before.balances.reduce((total, balance) => total + balance.onHandUnits, 0)
+    ).toBe(result.movement.quantityUnits);
   });
 
   it.each(['assignment', 'witness'] as const)(
