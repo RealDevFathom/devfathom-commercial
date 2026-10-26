@@ -256,6 +256,7 @@ export const restaurantStaffRouter = router({
     }),
 
   listEligibleUsers: staffProcedure.query(async ({ ctx }) => {
+    const organizationId = workspaceOrganizationId(ctx);
     const authorization = await resolveStaffBranchAuthorization(
       ctx.db,
       ctx.session!.user,
@@ -264,6 +265,7 @@ export const restaurantStaffRouter = router({
     const eligibleProfileWhere = authorization.organizationWide
       ? undefined
       : {
+          organizationId,
           OR: [
             { primaryBranchId: { in: authorization.branchIds } },
             { jobRoles: { some: { branchId: { in: authorization.branchIds } } } },
@@ -276,7 +278,7 @@ export const restaurantStaffRouter = router({
         };
     return ctx.db.user.findMany({
       where: {
-        organizationId: workspaceOrganizationId(ctx),
+        organizationId,
         ...(eligibleProfileWhere
           ? { restaurantStaffProfiles: { some: eligibleProfileWhere } }
           : {}),

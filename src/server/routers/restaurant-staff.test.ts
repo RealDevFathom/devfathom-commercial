@@ -221,6 +221,7 @@ describe('staff CRUD', () => {
     await caller().listEligibleUsers();
 
     const eligibleProfileWhere = {
+      organizationId: 'org_workspace',
       OR: [
         { primaryBranchId: { in: ['branch_1', 'branch_2'] } },
         { jobRoles: { some: { branchId: { in: ['branch_1', 'branch_2'] } } } },
@@ -283,6 +284,7 @@ describe('staff CRUD', () => {
       select: { id: true },
     });
     const eligibleProfileWhere = {
+      organizationId: 'org_workspace',
       OR: [
         { primaryBranchId: { in: ['branch_active'] } },
         { jobRoles: { some: { branchId: { in: ['branch_active'] } } } },
