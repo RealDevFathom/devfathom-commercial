@@ -1,5 +1,45 @@
-import { describe, expect, it } from 'vitest';
-import { createInvoiceInputSchema } from './finance';
+import { describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  can: vi.fn(async () => true),
+  transactionGroupBy: vi.fn(),
+  invoiceGroupBy: vi.fn(async () => []),
+  recurringFindMany: vi.fn(),
+}));
+
+vi.mock('server-only', () => ({}));
+vi.mock('@/lib/abac', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
+  can: mocks.can,
+}));
+vi.mock('@/lib/entitlements', () => ({ hasModule: vi.fn(() => true) }));
+vi.mock('../audit', () => ({
+  ipFromHeaders: vi.fn(() => null),
+  isAuditExcludedPath: vi.fn(() => true),
+  recordTrpcAudit: vi.fn(),
+}));
+
+import type { TRPCContext } from '../trpc';
+import { createInvoiceInputSchema, financeRouter } from './finance';
+
+function caller() {
+  return financeRouter.createCaller({
+    db: {
+      transaction: { groupBy: mocks.transactionGroupBy },
+      invoice: { groupBy: mocks.invoiceGroupBy },
+      recurringExpense: { findMany: mocks.recurringFindMany },
+    },
+    entitlements: { organizationId: 'org-1', enabledModules: [], modules: [] },
+    session: {
+      expires: 'later',
+      user: { id: 'admin-1', role: 'ADMIN', status: 'ACTIVE', organizationId: 'org-1' },
+    },
+    organization: { id: 'org-1' },
+    support: null,
+    requestMeta: { ip: null, userAgent: null },
+    audit: { detail: {} },
+  } as unknown as TRPCContext);
+}
 
 const validInvoice = {
   clientId: 'client-1',
@@ -25,5 +65,25 @@ describe('createInvoiceInputSchema', () => {
 
   it('accepts a non-negative invoice with a line item', () => {
     expect(createInvoiceInputSchema.safeParse(validInvoice).success).toBe(true);
+  });
+});
+
+describe('finance.getFinancialSummary', () => {
+  it('counts a posted recurring expense only once', async () => {
+    mocks.transactionGroupBy.mockImplementation(
+      ({ where }: { where: { type: 'INCOME' | 'EXPENSE' } }) =>
+        Promise.resolve([
+          { currency: 'USD', _sum: { amount: where.type === 'EXPENSE' ? 100 : 300 } },
+        ])
+    );
+    mocks.recurringFindMany.mockResolvedValue([
+      { amount: 100, currency: 'USD', interval: 'monthly' },
+    ]);
+
+    const summary = await caller().getFinancialSummary();
+
+    expect(summary.monthlyExpense).toEqual([{ currency: 'USD', amount: 100 }]);
+    expect(summary.monthlyProfit).toEqual([{ currency: 'USD', amount: 200 }]);
+    expect(mocks.recurringFindMany).not.toHaveBeenCalled();
   });
 });
