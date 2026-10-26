@@ -117,7 +117,7 @@ describe('pharmacySales.addLine controlled actor', () => {
   });
 
   it('lets a pharmacist past the actor check', async () => {
-    const { caller, credential } = callerFor([
+    const { caller, credential, register } = callerFor([
       { capability: 'pharmacy:dispense', effect: 'ALLOW' },
     ]);
     const { controlledAuthorization, ...plain } = line;
@@ -127,5 +127,6 @@ describe('pharmacySales.addLine controlled actor', () => {
     });
     expect(credential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
   });
 });
