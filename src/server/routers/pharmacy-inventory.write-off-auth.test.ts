@@ -34,6 +34,9 @@ const input = {
 };
 
 function makeDb() {
+  const currentActorRows = vi
+    .fn<() => Promise<Array<{ id: string; role: string; department: null; status: string }>>>()
+    .mockResolvedValue([{ id: 'actor_a', role: 'EMPLOYEE', department: null, status: 'ACTIVE' }]);
   const db = {
     user: {
       findUnique: vi.fn().mockResolvedValue({
@@ -85,7 +88,7 @@ function makeDb() {
         return assignment ? [assignment] : [];
       }
       if (sql.includes('u.id, u.role, u.department, u.status')) {
-        return [{ id: 'actor_a', role: 'EMPLOYEE', department: null, status: 'ACTIVE' }];
+        return currentActorRows();
       }
       if (
         sql.includes('organization_roles') ||
@@ -99,6 +102,7 @@ function makeDb() {
     }
   );
   return Object.assign(db, {
+    currentActorRows,
     $transaction: vi.fn(async (run: (tx: typeof db) => unknown) => run(db)),
   });
 }
@@ -275,6 +279,15 @@ describe('SEC-374-01 write-off capability and actual-branch authority', () => {
 
     await expect(caller().writeOff(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.user.findUnique).toHaveBeenCalledTimes(2);
+    untouched();
+  });
+
+  it('refuses an actor who is no longer active before capability or witness access', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.currentActorRows.mockResolvedValue([]);
+
+    await expect(caller().writeOff(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.user.findUnique).toHaveBeenCalledTimes(1);
     untouched();
   });
 
