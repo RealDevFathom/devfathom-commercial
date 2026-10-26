@@ -64,6 +64,12 @@ describe('clients.getAll revenue totals', () => {
         contacts: [],
         _count: { projects: 0, invoices: 1, documents: 0 },
       },
+      {
+        id: 'client-3',
+        name: 'Initech',
+        contacts: [],
+        _count: { projects: 0, invoices: 0, documents: 0 },
+      },
     ]);
     mocks.groupBy.mockResolvedValue([
       { clientId: 'client-1', currency: 'PKR', _sum: { total: 100 } },
@@ -85,5 +91,6 @@ describe('clients.getAll revenue totals', () => {
       { currency: 'PKR', amount: 100 },
     ]);
     expect(result[1].totalRevenue).toEqual([{ currency: 'PKR', amount: 250 }]);
+    expect(result[2].totalRevenue).toEqual([]);
   });
 });
