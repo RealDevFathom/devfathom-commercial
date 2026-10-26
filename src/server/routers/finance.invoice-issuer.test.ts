@@ -71,4 +71,21 @@ describe('finance.getInvoiceById issuer', () => {
       primaryContactEmail: 'accounts@northwind.example',
     });
   });
+
+  it('returns null without reading issuer data when the tenant-scoped invoice is absent', async () => {
+    mocks.findInvoice.mockResolvedValue(null);
+
+    await expect(caller().getInvoiceById({ id: 'another-tenant-invoice' })).resolves.toBeNull();
+
+    expect(mocks.findInvoice).toHaveBeenCalledWith({
+      where: {
+        organizationId_id: {
+          organizationId: 'agency-a',
+          id: 'another-tenant-invoice',
+        },
+      },
+      include: expect.any(Object),
+    });
+    expect(mocks.findOrganization).not.toHaveBeenCalled();
+  });
 });
