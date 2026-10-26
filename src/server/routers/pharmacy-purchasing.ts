@@ -987,15 +987,15 @@ const purchasingRouter = router({
         }
 
         const ownOrderLines = input.purchaseOrderId
-          ? new Set(
+          ? new Map(
               (
                 await ctx.db.pharmacyPurchaseOrderLine.findMany({
                   where: { purchaseOrderId: input.purchaseOrderId },
-                  select: { id: true },
+                  select: { id: true, medicineId: true, packLevelId: true },
                 })
-              ).map((line) => line.id)
+              ).map((line) => [line.id, line] as const)
             )
-          : new Set<string>();
+          : new Map<string, { medicineId: string; packLevelId: string }>();
 
         const lines = [];
         const seenSerials = new Set<string>();
@@ -1006,11 +1006,19 @@ const purchasingRouter = router({
             throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
           if (!(await ctx.db.packLevel.findFirst({ where: { id: line.packLevelId } })))
             throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
-          // An ordered line borrowed from another order — or from another
-          // tenant — would make the three-way match compare the goods against
-          // something they were never ordered on.
-          if (line.purchaseOrderLineId && !ownOrderLines.has(line.purchaseOrderLineId))
-            throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+          // A line borrowed from another order (or tenant), or receipt goods
+          // whose medicine/pack differs from the matched line, would make the
+          // three-way match compare goods against something never ordered.
+          if (line.purchaseOrderLineId) {
+            const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
+            if (
+              !orderLine ||
+              orderLine.medicineId !== line.medicineId ||
+              orderLine.packLevelId !== line.packLevelId
+            ) {
+              throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+            }
+          }
 
           const quantities = receiptLineQuantities({
             receivedPacks: line.receivedPacks,
