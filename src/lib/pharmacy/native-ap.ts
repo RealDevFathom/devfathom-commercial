@@ -253,7 +253,12 @@ export async function supplierExpenseAging(database: ScopedDb, scope: Omit<Bookk
     LEFT JOIN "pharmacy_supplier_expense_settlement_reversals" r ON r."organizationId"=s."organizationId" AND r."settlementId"=s.id
     WHERE i."organizationId"=${scope.organizationId} AND i."branchId"=${scope.branchId}
       AND i."issuedAt" <= ${input.asOf} AND i."createdAt" <= ${input.asOf} AND i."createdAt" <= ${retrievedAt}
-      AND i."dueAt" >= ${input.from} AND i.status <> 'VOID'
+      AND i."dueAt" >= ${input.from}
+      AND NOT EXISTS (
+        SELECT 1 FROM "pharmacy_supplier_expense_invoice_events" v
+        WHERE v."organizationId"=i."organizationId" AND v."invoiceId"=i.id AND v.kind='VOID'
+          AND v."occurredAt" <= ${input.asOf} AND v."createdAt" <= ${retrievedAt}
+      )
     GROUP BY i.id HAVING i."amountMinor" - COALESCE(SUM(s."amountMinor") FILTER (WHERE s."occurredAt" <= ${input.asOf}
       AND s."createdAt" <= ${input.asOf} AND s."createdAt" <= ${retrievedAt}
       AND (r.id IS NULL OR NOT (r."reversedAt" <= ${input.asOf} AND r."createdAt" <= ${input.asOf} AND r."createdAt" <= ${retrievedAt}))),0) > 0

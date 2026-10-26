@@ -14,6 +14,7 @@ CREATE TABLE "pharmacy_supplier_expense_invoices" (
  CONSTRAINT "pharmacy_supplier_expense_invoices_amount_check" CHECK ("amountMinor" > 0),
  CONSTRAINT "pharmacy_supplier_expense_invoices_dates_check" CHECK ("dueAt" >= "issuedAt"),
  CONSTRAINT "pharmacy_supplier_expense_invoices_supplier_fkey" FOREIGN KEY ("organizationId","supplierId") REFERENCES "pharmacy_suppliers"("organizationId","id") ON DELETE RESTRICT ON UPDATE CASCADE,
+ CONSTRAINT "pharmacy_supplier_expense_invoices_journal_fkey" FOREIGN KEY ("organizationId","journalEntryId") REFERENCES "finance_journal_entries"("organizationId","id") ON DELETE RESTRICT ON UPDATE CASCADE,
  CONSTRAINT "pharmacy_supplier_expense_invoices_branch_fkey" FOREIGN KEY ("organizationId","branchId") REFERENCES "pharmacy_branches"("organizationId","id") ON DELETE RESTRICT ON UPDATE RESTRICT
 );
 CREATE UNIQUE INDEX "pharmacy_supplier_expense_invoices_org_id_key" ON "pharmacy_supplier_expense_invoices"("organizationId","id");
@@ -38,7 +39,8 @@ CREATE TABLE "pharmacy_supplier_expense_settlements" (
  "occurredAt" TIMESTAMP(3) NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
  CONSTRAINT "pharmacy_supplier_expense_settlements_pkey" PRIMARY KEY ("id"),
  CONSTRAINT "pharmacy_supplier_expense_settlements_amount_check" CHECK ("amountMinor" > 0),
- CONSTRAINT "pharmacy_supplier_expense_settlements_invoice_fkey" FOREIGN KEY ("organizationId","invoiceId") REFERENCES "pharmacy_supplier_expense_invoices"("organizationId","id") ON DELETE RESTRICT
+ CONSTRAINT "pharmacy_supplier_expense_settlements_invoice_fkey" FOREIGN KEY ("organizationId","invoiceId") REFERENCES "pharmacy_supplier_expense_invoices"("organizationId","id") ON DELETE RESTRICT,
+ CONSTRAINT "pharmacy_supplier_expense_settlements_transaction_fkey" FOREIGN KEY ("organizationId","bookkeepingTransactionId") REFERENCES "pharmacy_bookkeeping_transactions"("organizationId","id") ON DELETE RESTRICT ON UPDATE CASCADE
 );
 CREATE UNIQUE INDEX "pharmacy_supplier_expense_settlements_org_id_key" ON "pharmacy_supplier_expense_settlements"("organizationId","id");
 CREATE UNIQUE INDEX "pharmacy_supplier_expense_settlements_idempotency_key" ON "pharmacy_supplier_expense_settlements"("organizationId","idempotencyKey");
@@ -58,7 +60,7 @@ CREATE UNIQUE INDEX "pharmacy_supplier_expense_settlement_reversals_settlement_k
 
 CREATE TABLE "pharmacy_supplier_expense_invoice_events" (
  "id" TEXT NOT NULL, "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true), "invoiceId" TEXT NOT NULL,
- "kind" TEXT NOT NULL, "actorId" TEXT NOT NULL, "occurredAt" TIMESTAMP(3) NOT NULL, "detail" TEXT,
+ "kind" TEXT NOT NULL, "actorId" TEXT NOT NULL, "occurredAt" TIMESTAMP(3) NOT NULL, "detail" TEXT, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
  CONSTRAINT "pharmacy_supplier_expense_invoice_events_pkey" PRIMARY KEY ("id"),
  CONSTRAINT "pharmacy_supplier_expense_invoice_events_invoice_fkey" FOREIGN KEY ("organizationId","invoiceId") REFERENCES "pharmacy_supplier_expense_invoices"("organizationId","id") ON DELETE RESTRICT
 );

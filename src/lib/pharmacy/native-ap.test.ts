@@ -155,6 +155,10 @@ describe('native non-stock AP', () => {
     expect(sql).toContain('i."createdAt" <= ');
     expect(sql).toContain('s."createdAt" <= ');
     expect(sql).toContain('r."createdAt" <= ');
+    expect(sql).toContain("v.kind='VOID'");
+    expect(sql).toContain('v."occurredAt" <= ');
+    expect(sql).toContain('v."createdAt" <= ');
+    expect(sql).not.toContain("i.status <> 'VOID'");
   });
 
   it('escapes spreadsheet values and emits fixed native-only CSV columns', () => {
