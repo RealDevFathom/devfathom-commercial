@@ -214,6 +214,7 @@ describe('capability gating', () => {
     }
     const outsideBranchMutations = [
       () => caller('branch_1').updateFloor({ id: 'branch_b_resource', name: 'Nope' }),
+      () => caller('branch_1').deleteFloor({ id: 'branch_b_resource' }),
       () => caller('branch_1').updateTable({ id: 'branch_b_resource', code: 'Nope' }),
       () => caller('branch_1').updateSection({ id: 'branch_b_resource', name: 'Nope' }),
       () => caller('branch_1').updateStation({ id: 'branch_b_resource', name: 'Nope' }),
@@ -226,6 +227,7 @@ describe('capability gating', () => {
     expect(mocks.listSections).not.toHaveBeenCalled();
     expect(mocks.listStations).not.toHaveBeenCalled();
     expect(mocks.updateFloor).not.toHaveBeenCalled();
+    expect(mocks.deleteFloor).not.toHaveBeenCalled();
     expect(mocks.updateTable).not.toHaveBeenCalled();
     expect(mocks.updateSection).not.toHaveBeenCalled();
     expect(mocks.updateStation).not.toHaveBeenCalled();
@@ -241,6 +243,7 @@ describe('capability gating', () => {
   it('does not reveal whether an ID-addressed resource exists', async () => {
     const missingResourceMutations = [
       () => caller().updateFloor({ id: 'missing_resource', name: 'Nope' }),
+      () => caller().deleteFloor({ id: 'missing_resource' }),
       () => caller().updateTable({ id: 'missing_resource', code: 'Nope' }),
       () => caller().updateSection({ id: 'missing_resource', name: 'Nope' }),
       () => caller().updateStation({ id: 'missing_resource', name: 'Nope' }),
@@ -251,6 +254,7 @@ describe('capability gating', () => {
       await expect(mutation()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     }
     expect(mocks.updateFloor).not.toHaveBeenCalled();
+    expect(mocks.deleteFloor).not.toHaveBeenCalled();
     expect(mocks.updateTable).not.toHaveBeenCalled();
     expect(mocks.updateSection).not.toHaveBeenCalled();
     expect(mocks.updateStation).not.toHaveBeenCalled();
