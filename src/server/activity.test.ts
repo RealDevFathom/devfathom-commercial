@@ -5,6 +5,19 @@ import { bindSideEffects } from '@/lib/side-effects/scope';
 import { logActivity } from './activity';
 
 describe('logActivity', () => {
+  it('remains fire-and-forget outside a tenant transaction', () => {
+    const create = vi.fn(() => new Promise<void>(() => undefined));
+    const db = { activity: { create } } as never;
+
+    expect(
+      logActivity(db, 'user-1', {
+        type: 'project_created',
+        message: 'created project Alpha',
+      })
+    ).toBeUndefined();
+    expect(create).toHaveBeenCalledOnce();
+  });
+
   it('keeps a tenant transaction open until the activity insert settles', async () => {
     let finishWrite!: () => void;
     const create = vi.fn(

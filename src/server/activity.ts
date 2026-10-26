@@ -47,9 +47,9 @@ export interface LogActivityArgs {
 }
 
 /**
- * Append a single row to the Activity feed. Fire-and-forget — never blocks
- * or rejects the surrounding mutation if the insert fails (the user action
- * succeeded; failing to log shouldn't surface an error to the client).
+ * Append a single row to the Activity feed. The write never rejects the
+ * surrounding mutation; inside a tenant transaction it is allowed to settle
+ * before commit, while calls outside that scope remain fire-and-forget.
  */
 export function logActivity(db: PrismaClient, userId: string, args: LogActivityArgs): void {
   const write = db.activity
