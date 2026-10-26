@@ -4,7 +4,7 @@ import { hasModule } from '@/lib/entitlements';
 import type { TRPCContext } from './trpc';
 
 /** Canonical authorization and tenant/active-branch resolution for every JV operation. */
-export async function authorizePharmacyGeneralJournal(ctx: TRPCContext, branchId: string) {
+export async function authorizePharmacyGeneralJournalCapability(ctx: TRPCContext) {
   const actorId = ctx.session?.user?.id;
   const organizationId = ctx.organization?.id;
   if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
@@ -14,6 +14,12 @@ export async function authorizePharmacyGeneralJournal(ctx: TRPCContext, branchId
   if (!(await can(subjectFromSession(ctx.session.user), 'reports:financial', undefined, { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip }))) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Financial permission is required.' });
   }
+  return { organizationId, actorId };
+}
+
+/** Canonical authorization and tenant/active-branch resolution for every JV operation. */
+export async function authorizePharmacyGeneralJournal(ctx: TRPCContext, branchId: string) {
+  const { organizationId, actorId } = await authorizePharmacyGeneralJournalCapability(ctx);
   const branch = await ctx.db.pharmacyBranch.findFirst({ where: { organizationId, id: branchId, active: true }, select: { id: true } });
   if (!branch) throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   await ctx.db.auditLog.create({

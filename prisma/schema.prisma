@@ -3524,6 +3524,8 @@ model FinanceJournalEntry {
 
   reverses         FinanceJournalEntry?  @relation("FinanceEntryReversal", fields: [organizationId, reversesEntryId], references: [organizationId, id], onDelete: Restrict, map: "finance_journal_entries_reverses_fkey")
   reversal         FinanceJournalEntry[] @relation("FinanceEntryReversal")
+  pharmacyGeneralJournalDocuments PharmacyGeneralJournalDocument[] @relation("PharmacyGeneralJournalEntry")
+  pharmacyGeneralJournalReversals PharmacyGeneralJournalDocument[] @relation("PharmacyGeneralJournalReversal")
   lines            FinanceJournalLine[]
   visibilityAnchor Organization          @relation("FinanceJournalEntryVisibilityAnchor", fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "finance_journal_entries_visibility_fkey")
 
@@ -3677,6 +3679,8 @@ model PharmacyGeneralJournalDocument {
   updatedAt          DateTime                       @updatedAt
 
   visibilityAnchor PharmacyBranch @relation("PharmacyGeneralJournalDocumentVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_general_journal_documents_visibility_fkey")
+  journalEntry FinanceJournalEntry? @relation("PharmacyGeneralJournalEntry", fields: [organizationId, journalEntryId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_general_journal_documents_entry_fkey")
+  reversalEntry FinanceJournalEntry? @relation("PharmacyGeneralJournalReversal", fields: [organizationId, reversalEntryId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_general_journal_documents_reversal_fkey")
 
   @@unique([organizationId, id], map: "pharmacy_general_journal_documents_org_id_key")
   @@unique([organizationId, reference], map: "pharmacy_general_journal_documents_org_reference_key")

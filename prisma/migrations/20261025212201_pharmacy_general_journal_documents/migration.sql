@@ -33,7 +33,9 @@ CREATE TABLE "pharmacy_general_journal_documents" (
   CONSTRAINT "pharmacy_general_journal_documents_occurred_at_check" CHECK ("occurredAt" >= TIMESTAMP '2000-01-01 00:00:00' AND "occurredAt" < TIMESTAMP '2100-01-01 00:00:00'),
   CONSTRAINT "pharmacy_general_journal_documents_evidence_check" CHECK (length(btrim("evidence")) > 0),
   CONSTRAINT "pharmacy_general_journal_documents_reason_check" CHECK (length(btrim("reason")) > 0),
-  CONSTRAINT "pharmacy_general_journal_documents_visibility_fkey" FOREIGN KEY ("organizationId", "branchId") REFERENCES "pharmacy_branches"("organizationId", "id") ON DELETE RESTRICT ON UPDATE RESTRICT
+  CONSTRAINT "pharmacy_general_journal_documents_visibility_fkey" FOREIGN KEY ("organizationId", "branchId") REFERENCES "pharmacy_branches"("organizationId", "id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT "pharmacy_general_journal_documents_entry_fkey" FOREIGN KEY ("organizationId", "journalEntryId") REFERENCES "finance_journal_entries"("organizationId", "id") ON DELETE RESTRICT ON UPDATE RESTRICT,
+  CONSTRAINT "pharmacy_general_journal_documents_reversal_fkey" FOREIGN KEY ("organizationId", "reversalEntryId") REFERENCES "finance_journal_entries"("organizationId", "id") ON DELETE RESTRICT ON UPDATE RESTRICT
 );
 CREATE UNIQUE INDEX "pharmacy_general_journal_documents_org_id_key" ON "pharmacy_general_journal_documents"("organizationId", "id");
 CREATE UNIQUE INDEX "pharmacy_general_journal_documents_org_reference_key" ON "pharmacy_general_journal_documents"("organizationId", "reference");
@@ -54,7 +56,8 @@ BEGIN
     NEW.purpose IS DISTINCT FROM OLD.purpose OR NEW."amountMinor" IS DISTINCT FROM OLD."amountMinor" OR
     NEW.currency IS DISTINCT FROM OLD.currency OR NEW."occurredAt" IS DISTINCT FROM OLD."occurredAt" OR
     NEW.evidence IS DISTINCT FROM OLD.evidence OR NEW.reason IS DISTINCT FROM OLD.reason OR
-    NEW."journalEntryId" IS DISTINCT FROM OLD."journalEntryId"
+    NEW."journalEntryId" IS DISTINCT FROM OLD."journalEntryId" OR
+    (OLD.status = 'REVERSED' AND NEW."reversalEntryId" IS DISTINCT FROM OLD."reversalEntryId")
   ) THEN RAISE EXCEPTION 'posted pharmacy journal vouchers are immutable'; END IF;
   RETURN NEW;
 END; $$ LANGUAGE plpgsql;
