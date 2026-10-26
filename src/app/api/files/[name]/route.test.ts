@@ -100,6 +100,13 @@ describe('private attachment delivery', () => {
     mocks.actor.mockResolvedValue(actor(role));
 
     expect((await read('pharmacy-licence.pdf')).status).toBe(404);
+    expect(db.branchRegulatoryProfile.findFirst).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        organizationId: 'org_a',
+        licenceEvidenceFileRef: '/api/files/pharmacy-licence.pdf',
+      },
+      select: { id: true },
+    });
     expect(mocks.getUpload).not.toHaveBeenCalled();
     expect(db.messageAttachment.findFirst).not.toHaveBeenCalled();
   });

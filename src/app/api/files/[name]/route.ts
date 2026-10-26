@@ -54,10 +54,11 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     return new Response('Not found', { status: 404 });
   }
   const organization = actor.organization;
+  const fileRef = `/api/files/${name}`;
 
   const sopEvidence = await withTenantDb(organization.id, (db) =>
     db.restaurantSopEvidence.findFirst({
-      where: { storageRef: '/api/files/' + name },
+      where: { storageRef: fileRef },
       select: { occurrence: { select: { branchId: true } } },
     })
   );
@@ -85,7 +86,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     db.branchRegulatoryProfile.findFirst({
       where: {
         organizationId: organization.id,
-        licenceEvidenceFileRef: '/api/files/' + name,
+        licenceEvidenceFileRef: fileRef,
       },
       select: { id: true },
     })
@@ -101,7 +102,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   // their own visibility model and aren't in this ticket's scope.
   const attachment = await withTenantDb(organization.id, (db) =>
     db.messageAttachment.findFirst({
-      where: { url: '/api/files/' + name },
+      where: { url: fileRef },
       select: { message: { select: { channelId: true } } },
     })
   );
