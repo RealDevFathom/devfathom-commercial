@@ -6,6 +6,10 @@ const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
   update: vi.fn(),
   queryRaw: vi.fn(),
+  paymentFindUnique: vi.fn(),
+  paymentDelete: vi.fn(),
+  paymentAggregate: vi.fn(),
+  paymentCreate: vi.fn(),
   logActivity: vi.fn(),
 }));
 
@@ -34,6 +38,12 @@ function caller() {
       create: mocks.create,
       findUnique: mocks.findUnique,
       update: mocks.update,
+    },
+    payment: {
+      findUnique: mocks.paymentFindUnique,
+      delete: mocks.paymentDelete,
+      aggregate: mocks.paymentAggregate,
+      create: mocks.paymentCreate,
     },
     $queryRaw: mocks.queryRaw,
   };
@@ -188,5 +198,69 @@ describe('finance.updateInvoice money calculation and settlement serialization',
       mocks.findUnique.mock.invocationCallOrder[0]
     );
     expect(mocks.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('invoice payment settlement serialization', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.queryRaw.mockResolvedValue([{ id: 'invoice-1' }]);
+  });
+
+  it('locks the invoice before adding and aggregating a payment', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'invoice-1',
+      status: 'SENT',
+      total: 10,
+      currency: 'USD',
+      clientId: 'client-1',
+    });
+    mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 0 } });
+    mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 5 });
+
+    await caller().addPayment({ invoiceId: 'invoice-1', amount: 5 });
+
+    expect(mocks.queryRaw).toHaveBeenCalledWith(
+      ['SELECT id FROM invoices WHERE id = ', ' FOR UPDATE'],
+      'invoice-1'
+    );
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.findUnique.mock.invocationCallOrder[0]
+    );
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.paymentAggregate.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('resolves the invoice then locks it before deleting and recomputing', async () => {
+    mocks.paymentFindUnique.mockResolvedValue({ id: 'payment-1', invoiceId: 'invoice-1' });
+    mocks.paymentDelete.mockResolvedValue({ id: 'payment-1' });
+    mocks.findUnique.mockResolvedValue({ id: 'invoice-1', status: 'PAID', total: 10 });
+    mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 5 } });
+    mocks.update.mockResolvedValue({ id: 'invoice-1', status: 'SENT' });
+
+    await caller().deletePayment({ id: 'payment-1' });
+
+    expect(mocks.queryRaw).toHaveBeenCalledWith(
+      ['SELECT id FROM invoices WHERE id = ', ' FOR UPDATE'],
+      'invoice-1'
+    );
+    expect(mocks.paymentFindUnique.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.queryRaw.mock.invocationCallOrder[0]
+    );
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.paymentDelete.mock.invocationCallOrder[0]
+    );
+    expect(mocks.paymentDelete.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.findUnique.mock.invocationCallOrder[0]
+    );
+    expect(mocks.findUnique.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.paymentAggregate.mock.invocationCallOrder[0]
+    );
+    expect(mocks.update).toHaveBeenCalledWith({
+      where: { id: 'invoice-1' },
+      data: { status: 'SENT', paidAt: null },
+    });
   });
 });

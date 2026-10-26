@@ -666,6 +666,10 @@ export const financeRouter = router({
         });
         if (!payment) throw new TRPCError({ code: 'NOT_FOUND', message: 'Payment not found' });
 
+        // Join updateInvoice and addPayment's invoice-row serialization protocol
+        // before changing either the payment set or the derived invoice status.
+        await tx.$queryRaw`SELECT id FROM invoices WHERE id = ${payment.invoiceId} FOR UPDATE`;
+
         await tx.payment.delete({ where: { id: payment.id } });
 
         const invoice = await tx.invoice.findUnique({
