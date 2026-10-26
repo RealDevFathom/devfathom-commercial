@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './load-local-env';
 import { processPlatformJobs } from '@/lib/platform/jobs';
 
 function requestedJobCount(): number {

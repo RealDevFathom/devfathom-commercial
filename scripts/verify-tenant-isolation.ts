@@ -2,14 +2,13 @@ import { randomUUID } from 'node:crypto';
 
 import pg from 'pg';
 
+import { requireEnvironment } from './load-local-env.js';
+
 import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js';
 
 const { Client } = pg;
 
-const databaseUrl = process.env.TEST_DATABASE_URL;
-if (!databaseUrl) {
-  throw new Error('TEST_DATABASE_URL is required; tenant isolation tests never use DATABASE_URL.');
-}
+const databaseUrl = requireEnvironment('TEST_DATABASE_URL');
 
 const parsedUrl = new URL(databaseUrl);
 // WHATWG `URL.hostname` keeps the brackets around an IPv6 host, so the IPv6
