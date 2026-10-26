@@ -4,7 +4,7 @@ const can = vi.fn();
 vi.mock('@/lib/abac', () => ({ can, subjectFromSession: () => ({}) }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: () => true }));
 
-import { authorizePharmacyGeneralJournal } from './pharmacy-general-journal-security';
+import { authorizePharmacyGeneralJournal, authorizePharmacyGeneralJournalCollection } from './pharmacy-general-journal-security';
 
 describe('pharmacy general journal admission', () => {
   const auditCreate = vi.fn();
@@ -25,6 +25,20 @@ describe('pharmacy general journal admission', () => {
     can.mockResolvedValue(false);
     await expect(authorizePharmacyGeneralJournal(context() as never, 'branch-1')).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(branchFindFirst).not.toHaveBeenCalled();
+    expect(auditCreate).not.toHaveBeenCalled();
+  });
+
+  it('awaits a collection admission audit before allowing the branch list', async () => {
+    await expect(authorizePharmacyGeneralJournalCollection(context() as never)).resolves.toEqual({ organizationId: 'org-1', actorId: 'user-1' });
+    expect(auditCreate).toHaveBeenCalledWith({ data: expect.objectContaining({
+      action: 'pharmacyGeneralJournal.collectionAdmission', targetType: 'Organization', targetId: 'org-1',
+      operation: 'OTHER', result: { decision: 'ADMITTED' }, outcome: 'SUCCESS',
+    }) });
+  });
+
+  it('does not record collection admission when branch-list authorization is denied', async () => {
+    can.mockResolvedValue(false);
+    await expect(authorizePharmacyGeneralJournalCollection(context() as never)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(auditCreate).not.toHaveBeenCalled();
   });
 });

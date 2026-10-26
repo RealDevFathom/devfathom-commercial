@@ -28,11 +28,24 @@ describeDatabase('pharmacy general-journal database contract', () => {
     expect(result.rows[0]).toEqual({ relrowsecurity: true, relforcerowsecurity: true });
   });
 
-  it('makes original and reversal linkage immutable after posting', async () => {
-    const result = await client.query<{ definition: string }>(`
-      SELECT pg_get_functiondef(p.oid) AS definition FROM pg_proc p
-      WHERE p.proname = 'prevent_pharmacy_general_journal_posted_mutation'`);
-    expect(result.rows[0]?.definition).toContain('NEW."journalEntryId"');
-    expect(result.rows[0]?.definition).toContain('NEW."reversalEntryId"');
+  it('prevents posted and reversed vouchers from regressing or being relinked', async () => {
+    await client.query(`CREATE TEMP TABLE journal_immutability_test (
+      status "PharmacyGeneralJournalStatus" NOT NULL,
+      "organizationId" text, "branchId" text, reference text,
+      purpose "PharmacyGeneralJournalPurpose", "amountMinor" integer, currency "Currency",
+      "occurredAt" timestamp, evidence text, reason text,
+      "journalEntryId" text, "reversalEntryId" text
+    )`);
+    await client.query(`CREATE TRIGGER journal_immutability_test_trigger BEFORE UPDATE ON journal_immutability_test
+      FOR EACH ROW EXECUTE FUNCTION prevent_pharmacy_general_journal_posted_mutation()`);
+    await client.query(`INSERT INTO journal_immutability_test
+      (status, "organizationId", "branchId", reference, purpose, "amountMinor", currency, "occurredAt", evidence, reason, "journalEntryId", "reversalEntryId") VALUES
+      ('POSTED', 'org', 'branch', 'posted', 'NONTRADE_OPERATING_ACCRUAL', 100, 'PKR', now(), 'evidence', 'reason', 'entry-1', NULL),
+      ('REVERSED', 'org', 'branch', 'reversed', 'NONTRADE_OPERATING_ACCRUAL', 100, 'PKR', now(), 'evidence', 'reason', 'entry-2', 'reversal-1')`);
+
+    await expect(client.query(`UPDATE journal_immutability_test SET status = 'DRAFT' WHERE reference = 'posted'`)).rejects.toThrow(/status cannot regress/);
+    await expect(client.query(`UPDATE journal_immutability_test SET "journalEntryId" = 'entry-other' WHERE reference = 'posted'`)).rejects.toThrow(/immutable/);
+    await expect(client.query(`UPDATE journal_immutability_test SET status = 'DRAFT' WHERE reference = 'reversed'`)).rejects.toThrow(/status cannot regress/);
+    await expect(client.query(`UPDATE journal_immutability_test SET "reversalEntryId" = 'reversal-other' WHERE reference = 'reversed'`)).rejects.toThrow(/immutable/);
   });
 });

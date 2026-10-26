@@ -50,6 +50,10 @@ CREATE POLICY "tenant_isolation" ON "pharmacy_general_journal_documents"
 
 CREATE OR REPLACE FUNCTION prevent_pharmacy_general_journal_posted_mutation() RETURNS trigger AS $$
 BEGIN
+  IF (OLD.status = 'POSTED' AND NEW.status NOT IN ('POSTED', 'REVERSED')) OR
+    (OLD.status = 'REVERSED' AND NEW.status <> 'REVERSED') THEN
+    RAISE EXCEPTION 'posted pharmacy journal voucher status cannot regress';
+  END IF;
   IF OLD.status IN ('POSTED', 'REVERSED') AND (
     NEW."organizationId" IS DISTINCT FROM OLD."organizationId" OR
     NEW."branchId" IS DISTINCT FROM OLD."branchId" OR NEW.reference IS DISTINCT FROM OLD.reference OR

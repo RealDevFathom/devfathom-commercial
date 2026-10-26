@@ -17,6 +17,26 @@ export async function authorizePharmacyGeneralJournalCapability(ctx: TRPCContext
   return { organizationId, actorId };
 }
 
+/** Authorize a collection read and persist admission before returning protected data. */
+export async function authorizePharmacyGeneralJournalCollection(ctx: TRPCContext) {
+  const scope = await authorizePharmacyGeneralJournalCapability(ctx);
+  await ctx.db.auditLog.create({
+    data: {
+      organizationId: scope.organizationId,
+      actorId: scope.actorId,
+      source: 'TRPC',
+      category: 'FINANCE',
+      operation: 'OTHER',
+      action: 'pharmacyGeneralJournal.collectionAdmission',
+      targetType: 'Organization',
+      targetId: scope.organizationId,
+      result: { decision: 'ADMITTED' },
+      outcome: 'SUCCESS',
+    },
+  });
+  return scope;
+}
+
 /** Canonical authorization and tenant/active-branch resolution for every JV operation. */
 export async function authorizePharmacyGeneralJournal(ctx: TRPCContext, branchId: string) {
   const { organizationId, actorId } = await authorizePharmacyGeneralJournalCapability(ctx);

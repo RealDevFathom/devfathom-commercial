@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { cancelGeneralJournal, createGeneralJournalDraft, PharmacyGeneralJournalError, postGeneralJournal, reverseGeneralJournal, updateGeneralJournalDraft } from '@/lib/pharmacy/accounts/general-journal';
 import { createJournalDraftSchema, journalCommandSchema, reverseJournalSchema, updateJournalDraftSchema } from '@/lib/pharmacy/accounts/general-journal-schema';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { authorizePharmacyGeneralJournal, authorizePharmacyGeneralJournalCapability } from '../pharmacy-general-journal-security';
+import { authorizePharmacyGeneralJournal, authorizePharmacyGeneralJournalCollection } from '../pharmacy-general-journal-security';
 import { adminProcedure, router } from '../trpc';
 
 function fail(error: unknown): never {
@@ -22,7 +22,7 @@ export function documentDto(document: {
 
 export const pharmacyGeneralJournalRouter = router({
   branches: adminProcedure.query(async ({ ctx }) => {
-    const scope = await authorizePharmacyGeneralJournalCapability(ctx);
+    const scope = await authorizePharmacyGeneralJournalCollection(ctx);
     return ctx.db.pharmacyBranch.findMany({ where: { organizationId: scope.organizationId, active: true }, orderBy: { name: 'asc' }, select: { id: true, name: true } });
   }),
   accounts: adminProcedure.input(z.object({ branchId: z.string().trim().min(1).max(128) }).strict()).query(async ({ ctx, input }) => {
