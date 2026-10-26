@@ -322,6 +322,7 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
 
       await expect(invoke()).rejects.toMatchObject({ code: 'FORBIDDEN' });
 
+      expect(mocks.can).toHaveBeenCalledTimes(1);
       expect(mocks.can).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'user_admin' }),
         'reports:operational',
