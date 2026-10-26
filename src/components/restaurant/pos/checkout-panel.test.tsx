@@ -66,6 +66,7 @@ describe('CheckoutPanel', () => {
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
 
     expect(await screen.findByText('Bill details')).toBeVisible();
+    expect(screen.getByText('Bill 1')).toBeVisible();
     expect(screen.queryByText('UNRECOGNIZED')).not.toBeInTheDocument();
   });
 
