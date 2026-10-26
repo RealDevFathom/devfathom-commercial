@@ -155,9 +155,10 @@ describe('SplitBillDialog', () => {
     );
   });
 
-  it('resets assignments when refreshed order lines are reordered', () => {
+  it('resets assignments when refreshed order lines are reordered before submission', async () => {
+    const onSplit = vi.fn<(split: BillSplit) => Promise<boolean>>().mockResolvedValue(true);
     const { rerender } = render(
-      <SplitBillDialog items={items} onSplit={vi.fn().mockResolvedValue(true)} />
+      <SplitBillDialog items={items} onSplit={onSplit} />
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Split bill' }));
@@ -165,11 +166,18 @@ describe('SplitBillDialog', () => {
       target: { value: '2' },
     });
 
-    rerender(
-      <SplitBillDialog items={[items[1], items[0]]} onSplit={vi.fn().mockResolvedValue(true)} />
-    );
+    rerender(<SplitBillDialog items={[items[1], items[0]]} onSplit={onSplit} />);
 
     expect(screen.getByLabelText('Guest bill for Soup, order line 1')).toHaveValue('1');
     expect(screen.getByLabelText('Guest bill for Burger, order line 2')).toHaveValue('2');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create split bills' }));
+
+    await waitFor(() =>
+      expect(onSplit).toHaveBeenCalledWith({
+        kind: 'BY_ITEM',
+        groups: [['item-2'], ['item-1']],
+      })
+    );
   });
 });
