@@ -179,11 +179,19 @@ describe('staff CRUD', () => {
 
     await caller().listEligibleUsers();
     expect(mocks.userFindMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { organizationId: 'org_workspace' } })
+      expect.objectContaining({
+        where: { organizationId: 'org_workspace' },
+        select: expect.objectContaining({
+          restaurantStaffProfiles: {
+            select: { id: true, displayName: true },
+            take: 1,
+          },
+        }),
+      })
     );
   });
 
-  it('limits eligible users and returned profiles to the manager branch scope', async () => {
+  it('limits users and multi-profile results to all eligible manager linkage paths', async () => {
     mocks.can.mockResolvedValueOnce(true).mockResolvedValue(false);
     mocks.staffFindMany.mockResolvedValueOnce([
       {
