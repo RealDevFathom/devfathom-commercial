@@ -79,6 +79,8 @@ describe('module catalog routing', () => {
     expect(alternativeModulesForProcedure('pharmacyPrescriptions.counterPatientPanel')).toEqual([
       'pharmacy-dispensing',
     ]);
+    expect(alternativeModulesForProcedure('pharmacyPrescriptions.workspace')).toEqual([]);
+    expect(alternativeModulesForProcedure('unknown.list')).toEqual([]);
   });
 
   it('pins every restaurant procedure namespace to its licensed module', () => {
