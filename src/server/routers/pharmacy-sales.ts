@@ -269,7 +269,7 @@ export function failDayClose(error: unknown): never {
     .filter((value): value is string => typeof value === 'string')
     .join(' ');
   if (
-    databaseError.code === 'P2010' ||
+    databaseError.code === '55000' ||
     databaseError.meta?.code === '55000' ||
     /append-only|pharmacy_reject_money_mutation/i.test(details)
   ) {
