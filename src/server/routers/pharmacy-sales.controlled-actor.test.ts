@@ -102,6 +102,7 @@ describe('pharmacySales.addLine controlled actor', () => {
     ]);
     await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(credential).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
   });
 
