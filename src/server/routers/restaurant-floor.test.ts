@@ -109,9 +109,10 @@ import { StationError } from '@/lib/restaurant/stations';
 import type { TRPCContext } from '../trpc';
 
 function caller(primaryBranchId = 'branch_1') {
-  const branch = (id: string) => ({
-    branchId: id === 'branch_b_resource' ? 'branch_b' : 'branch_1',
-  });
+  const branch = (id: string) =>
+    id === 'missing_resource'
+      ? undefined
+      : { branchId: id === 'branch_b_resource' ? 'branch_b' : 'branch_1' };
   type ResourceLookup = { where: { id: string } };
   return restaurantFloorRouter.createCaller({
     db: {
@@ -130,7 +131,10 @@ function caller(primaryBranchId = 'branch_1') {
         findUnique: vi.fn(async ({ where }: ResourceLookup) => branch(where.id)),
       },
       restaurantTable: {
-        findUnique: vi.fn(async ({ where }: ResourceLookup) => ({ floor: branch(where.id) })),
+        findUnique: vi.fn(async ({ where }: ResourceLookup) => {
+          const resourceBranch = branch(where.id);
+          return resourceBranch ? { floor: resourceBranch } : undefined;
+        }),
       },
       restaurantServerSection: {
         findUnique: vi.fn(async ({ where }: ResourceLookup) => branch(where.id)),
@@ -139,7 +143,10 @@ function caller(primaryBranchId = 'branch_1') {
         findUnique: vi.fn(async ({ where }: ResourceLookup) => branch(where.id)),
       },
       restaurantStationRoutingRule: {
-        findUnique: vi.fn(async ({ where }: ResourceLookup) => ({ station: branch(where.id) })),
+        findUnique: vi.fn(async ({ where }: ResourceLookup) => {
+          const resourceBranch = branch(where.id);
+          return resourceBranch ? { station: resourceBranch } : undefined;
+        }),
       },
     },
     entitlements: {
@@ -199,8 +206,7 @@ describe('capability gating', () => {
 
     const outsideBranchReads = [
       () => caller('branch_1').listFloors({ branchId: 'branch_b' }),
-      () =>
-        caller('branch_1').listSections({ branchId: 'branch_b', businessDate: '2026-08-19' }),
+      () => caller('branch_1').listSections({ branchId: 'branch_b', businessDate: '2026-08-19' }),
       () => caller('branch_1').listStations({ branchId: 'branch_b' }),
     ];
     for (const read of outsideBranchReads) {
@@ -230,6 +236,25 @@ describe('capability gating', () => {
     mocks.can.mockResolvedValue(true);
     await caller('branch_1').listFloors({ branchId: 'branch_b' });
     expect(mocks.listFloors).toHaveBeenCalled();
+  });
+
+  it('does not reveal whether an ID-addressed resource exists', async () => {
+    const missingResourceMutations = [
+      () => caller().updateFloor({ id: 'missing_resource', name: 'Nope' }),
+      () => caller().updateTable({ id: 'missing_resource', code: 'Nope' }),
+      () => caller().updateSection({ id: 'missing_resource', name: 'Nope' }),
+      () => caller().updateStation({ id: 'missing_resource', name: 'Nope' }),
+      () => caller().updateRoutingRule({ id: 'missing_resource', priority: 1 }),
+    ];
+
+    for (const mutation of missingResourceMutations) {
+      await expect(mutation()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    expect(mocks.updateFloor).not.toHaveBeenCalled();
+    expect(mocks.updateTable).not.toHaveBeenCalled();
+    expect(mocks.updateSection).not.toHaveBeenCalled();
+    expect(mocks.updateStation).not.toHaveBeenCalled();
+    expect(mocks.updateRoutingRule).not.toHaveBeenCalled();
   });
 
   it('gates mutations on floor:manage and reads on orders:read', async () => {
