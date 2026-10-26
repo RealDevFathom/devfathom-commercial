@@ -220,6 +220,30 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it('allows WhatsApp consent updates for an assigned counter user', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+
+    await expect(
+      f.caller().setCustomerWhatsAppOptIn({
+        branchId: 'branch-a',
+        customerId: 'customer-a',
+        optedIn: true,
+      })
+    ).resolves.toEqual({ whatsappOptIn: true });
+    expect(setCustomerWhatsAppOptIn).toHaveBeenCalledWith(
+      f.db,
+      expect.objectContaining({
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        actorId: 'user-a',
+      }),
+      'customer-a',
+      true
+    );
+    expect(f.db.$transaction).toHaveBeenCalledOnce();
+  });
+
   it('denies WhatsApp consent updates without a counter capability', async () => {
     const f = fixture([]);
     assign(f, ['branch-a']);

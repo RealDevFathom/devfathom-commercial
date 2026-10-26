@@ -285,6 +285,28 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('CounterWhatsAppOffer', () => {
+  it.each([
+    [true, 'Opted in', true],
+    [false, 'Opted out', false],
+    [null, 'Not recorded', false],
+  ] as const)('shows the current %s consent state as %s', (initialOptIn, status, checked) => {
+    render(
+      <CounterWhatsAppOffer
+        branchId="branch-a"
+        customerId="customer-a"
+        initialOptIn={initialOptIn}
+        onSaved={vi.fn()}
+        onError={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(`Current status: ${status}`)).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'WhatsApp consent' })).toHaveProperty(
+      'checked',
+      checked
+    );
+  });
+
   it('shows current consent and saves with the matching pharmacy customer id', async () => {
     mocks.mutations.setCustomerWhatsAppOptIn.mockResolvedValue({ whatsappOptIn: false });
     const onSaved = vi.fn();
