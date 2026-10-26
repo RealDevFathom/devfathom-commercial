@@ -32,7 +32,11 @@ import { projectsRouter } from './projects';
 
 const taskUpdate = vi.fn(async () => ({}));
 const assigneeDeleteMany = vi.fn(async () => ({ count: 1 }));
-const defaultAssigneeFindMany = vi.fn(async () => []);
+const defaultAssigneeFindMany = vi.fn(async () => [
+  { userId: 'admin-default' },
+  { userId: 'destination-member' },
+]);
+const assigneeCreateMany = vi.fn(async () => ({ count: 2 }));
 
 const tx = {
   task: {
@@ -47,7 +51,7 @@ const tx = {
   column: {
     findUnique: vi.fn(async () => ({ board: { projectId: 'destination-project' } })),
   },
-  taskAssignee: { deleteMany: assigneeDeleteMany, createMany: vi.fn() },
+  taskAssignee: { deleteMany: assigneeDeleteMany, createMany: assigneeCreateMany },
   columnDefaultAssignee: { findMany: defaultAssigneeFindMany },
 };
 
@@ -103,6 +107,13 @@ describe('projects.moveTask', () => {
       },
       select: { userId: true },
     });
+    expect(assigneeCreateMany).toHaveBeenCalledWith({
+      data: [
+        { taskId: 'task-1', userId: 'admin-default' },
+        { taskId: 'task-1', userId: 'destination-member' },
+      ],
+      skipDuplicates: true,
+    });
   });
 
   it('does not change assignees when moving between boards in the same project', async () => {
@@ -155,6 +166,15 @@ describe('projects.moveTask', () => {
         },
       },
       select: { userId: true },
+    });
+    expect(assigneeCreateMany).toHaveBeenCalledWith({
+      data: [
+        { taskId: 'task-1', userId: 'admin-default' },
+        { taskId: 'task-1', userId: 'destination-member' },
+        { taskId: 'task-2', userId: 'admin-default' },
+        { taskId: 'task-2', userId: 'destination-member' },
+      ],
+      skipDuplicates: true,
     });
   });
 });
