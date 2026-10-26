@@ -441,7 +441,9 @@ export async function listOpenOrdersForBranch(db: ScopedDb, branchId: string) {
       serverStaffProfileId: true,
       openedAt: true,
       items: {
-        where: { status: { not: 'VOIDED' } },
+        // List totals and counts describe purchased units, not kitchen remake
+        // workload. Remakes remain visible in the order-detail history below.
+        where: { status: { not: 'VOIDED' }, remakeOfItemId: null },
         select: { unitPrice: true, quantity: true, modifiers: { select: { priceDelta: true } } },
       },
       orderTables: { where: { active: true }, select: { tableId: true } },
