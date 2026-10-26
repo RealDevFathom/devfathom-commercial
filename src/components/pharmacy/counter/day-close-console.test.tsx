@@ -115,6 +115,8 @@ describe('day-close console', () => {
     expect(screen.getByText('Expected cash · USD')).toBeInTheDocument();
     expect(screen.getByText('Counted cash · USD')).toBeInTheDocument();
     expect(screen.getByText('Variance · USD')).toBeInTheDocument();
+    expect(screen.getByText('Expected: USD 125.00')).toBeInTheDocument();
+    expect(screen.getByLabelText('Counted cash for drawer 1 (USD)')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Print Z-report' }));
     expect(mocks.printZReport).toHaveBeenCalledWith(
       expect.objectContaining({ ...recorded, currency: 'USD' }),
