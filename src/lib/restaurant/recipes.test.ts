@@ -59,6 +59,7 @@ function makeDb() {
     })),
   });
 
+  const transactionQueryRaw = vi.fn().mockResolvedValue([{ organizationId: 'org_1' }]);
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([{ organizationId: 'org_1' }]),
     restaurantUnit: model(),
@@ -71,7 +72,10 @@ function makeDb() {
     restaurantRecipeLine: model(),
     restaurantRecipeLineSubstitute: model(),
     restaurantProduct: model(),
-    $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(db)),
+    $transaction: vi.fn(async (fn: (tx: unknown) => unknown) =>
+      fn({ ...db, $queryRaw: transactionQueryRaw })
+    ),
+    transactionQueryRaw,
   };
   return db;
 }
@@ -163,13 +167,14 @@ describe('upsertConversion', () => {
 
     expect(db.$transaction).toHaveBeenCalledTimes(1);
     expect(db.$transaction.mock.invocationCallOrder[0]).toBeLessThan(
-      db.$queryRaw.mock.invocationCallOrder[0]
+      db.transactionQueryRaw.mock.invocationCallOrder[0]
     );
-    const lockCall = db.$queryRaw.mock.calls.find(([query]) =>
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+    const lockCall = db.transactionQueryRaw.mock.calls.find(([query]) =>
       query?.strings?.join('?').includes('pg_advisory_xact_lock')
     );
     expect(lockCall?.[0].values).toEqual(['restaurant:org_1:unit-conversions']);
-    expect(db.$queryRaw.mock.invocationCallOrder.at(-1)).toBeLessThan(
+    expect(db.transactionQueryRaw.mock.invocationCallOrder.at(-1)).toBeLessThan(
       db.restaurantUnitConversion.findMany.mock.invocationCallOrder[0]
     );
     expect(db.restaurantUnitConversion.findMany.mock.invocationCallOrder[0]).toBeLessThan(
@@ -442,13 +447,14 @@ describe('createRecipeLine — recipe cycle detection', () => {
 
     expect(db.$transaction).toHaveBeenCalledTimes(1);
     expect(db.$transaction.mock.invocationCallOrder[0]).toBeLessThan(
-      db.$queryRaw.mock.invocationCallOrder[0]
+      db.transactionQueryRaw.mock.invocationCallOrder[0]
     );
-    const lockCall = db.$queryRaw.mock.calls.find(([query]) =>
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+    const lockCall = db.transactionQueryRaw.mock.calls.find(([query]) =>
       query?.strings?.join('?').includes('pg_advisory_xact_lock')
     );
     expect(lockCall?.[0].values).toEqual(['restaurant:org_1:recipes']);
-    expect(db.$queryRaw.mock.invocationCallOrder.at(-1)).toBeLessThan(
+    expect(db.transactionQueryRaw.mock.invocationCallOrder.at(-1)).toBeLessThan(
       db.restaurantRecipeLine.findMany.mock.invocationCallOrder[0]
     );
     expect(db.restaurantRecipeLine.findMany.mock.invocationCallOrder[0]).toBeLessThan(
