@@ -186,7 +186,11 @@ describe('removal arrangement planning (INV-04)', () => {
             });
             const sealedAfterBreak = sealedPacks + plan.breakPack.sealedPackDelta;
             const looseAfterBreak = looseUnits + plan.breakPack.looseUnitDelta;
+            const remainder = quantityUnits % unitsPerPack;
 
+            expect(plan.breakPack.packsToBreak).toBe(
+              Math.ceil(Math.max(0, remainder - looseUnits) / unitsPerPack)
+            );
             expect(plan.sealedPacks * unitsPerPack + plan.looseUnits).toBe(quantityUnits);
             expect(plan.sealedPacks).toBeLessThanOrEqual(sealedAfterBreak);
             expect(plan.looseUnits).toBeLessThanOrEqual(looseAfterBreak);
