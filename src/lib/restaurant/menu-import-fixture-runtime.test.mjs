@@ -314,6 +314,7 @@ test('manual review remains persistent while extraction disabled and commit stil
     decision: 'ACCEPTED',
     reviewedById: 'user_1',
     priceAmount: '12.50',
+    variants: [],
   });
   assert.equal(reviewed.reviewStatus, 'ACCEPTED');
   assert.equal(reviewed.reviewedPriceAmount.toString(), '12.50');
@@ -331,6 +332,32 @@ test('manual review remains persistent while extraction disabled and commit stil
     )
   );
 });
+test('accepting a line requires an explicit review of an empty variant list', async () => {
+  const f = setup('production', 'disabled');
+  const menu = f.load('@/lib/restaurant/menu-import');
+  f.record.status = 'AWAITING_REVIEW';
+
+  await assert.rejects(
+    menu.reviewMenuImportLine(f.db, {
+      lineId: 'line_1',
+      decision: 'ACCEPTED',
+      reviewedById: 'user_1',
+      priceAmount: '10.00',
+    }),
+    { reason: 'REVIEW_INCOMPLETE' }
+  );
+
+  await menu.reviewMenuImportLine(f.db, {
+    lineId: 'line_1',
+    decision: 'ACCEPTED',
+    reviewedById: 'user_1',
+    priceAmount: '10.00',
+    variants: [],
+  });
+  const review = f.events.findLast((event) => Array.isArray(event) && event[0] === 'review');
+  assert.deepEqual(review[1].reviewedVariants, []);
+});
+
 test('accepting extracted variants requires and persists explicit human review', async () => {
   const f = setup('production', 'disabled');
   const menu = f.load('@/lib/restaurant/menu-import');

@@ -746,9 +746,9 @@ export async function reviewMenuImportLine(
         );
       }
       const extractedVariants = resolveVariants(line.extractedVariants);
-      if (extractedVariants.length > 0 && input.variants === undefined) {
+      if (input.variants === undefined) {
         throw new MenuImportError(
-          'Accepting a line with variants requires reviewing every variant name and price.',
+          'Accepting a line requires reviewing the complete extracted variant list.',
           'REVIEW_INCOMPLETE'
         );
       }
