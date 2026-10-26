@@ -1255,6 +1255,9 @@ describeIfDatabase('bills command layer (real DB)', () => {
     expect(after.lines.reduce((total, line) => total.add(line.lineTotal), D(0))).toEqual(
       after.grandTotal
     );
+    expect(after.subtotal.add(after.serviceChargeTotal).sub(after.compTotal)).toEqual(
+      after.grandTotal
+    );
   });
 
   it('leaves the zero service-charge sentinel unchanged when comping a non-participating line', async () => {
