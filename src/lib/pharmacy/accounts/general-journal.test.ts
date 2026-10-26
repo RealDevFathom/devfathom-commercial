@@ -64,10 +64,10 @@ describe('voucher lifecycle commands', () => {
 
   beforeEach(() => vi.clearAllMocks());
 
-  function database(initial: 'DRAFT' | 'POSTED' = 'DRAFT') {
+  function database(initial: 'DRAFT' | 'POSTED' = 'DRAFT', amountMinor = 100) {
     let row = {
       id: 'document-1', organizationId: 'org-1', branchId: 'branch-1', reference: 'JV-1',
-      reason: 'accrual', evidence: 'invoice', amountMinor: 100, currency: 'PKR', occurredAt,
+      reason: 'accrual', evidence: 'invoice', amountMinor, currency: 'PKR', occurredAt,
       status: initial, version: initial === 'DRAFT' ? 1 : 2, journalEntryId: initial === 'POSTED' ? 'entry-1' : null,
       postKey: initial === 'POSTED' ? 'post-1' : null, postPayloadHash: null,
       reverseKey: null, reversePayloadHash: null,
@@ -92,15 +92,15 @@ describe('voucher lifecycle commands', () => {
     return { db, row: () => row };
   }
 
-  it('posts one canonical balanced entry, audits success, and replays the identical command', async () => {
-    const { db } = database();
+  it.each([1, 12_345, 2_147_483_647])('posts one canonical balanced entry for %i minor units, audits success, and replays the identical command', async (amountMinor) => {
+    const { db } = database('DRAFT', amountMinor);
     const command = { documentId: 'document-1', version: 1, idempotencyKey: 'post-1' };
     const posted = await postGeneralJournal(db as never, scope, command);
     expect(journal.post).toHaveBeenCalledWith(db, scope, expect.objectContaining({
       sourceId: 'document-1', idempotencyKey: 'pharmacy-jv:document-1',
       lines: [
-        expect.objectContaining({ accountCode: 'OPERATING_EXPENSE', side: 'DEBIT', amountMinor: 100 }),
-        expect.objectContaining({ accountCode: 'MANUAL_NONTRADE_ACCRUAL', side: 'CREDIT', amountMinor: 100 }),
+        expect.objectContaining({ accountCode: 'OPERATING_EXPENSE', side: 'DEBIT', amountMinor }),
+        expect.objectContaining({ accountCode: 'MANUAL_NONTRADE_ACCRUAL', side: 'CREDIT', amountMinor }),
       ],
     }));
     expect(db.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ outcome: 'SUCCESS' }) }));
