@@ -31,7 +31,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export async function actorCanProcure(db: ScopedDb, userId: string, now = new Date()) {
   const user = await db.user.findUnique({
-    where: { id: userId },
+    where: { id: userId, status: 'ACTIVE' },
     select: {
       organizationRole: {
         select: { permissions: { select: { capability: true, effect: true } } },

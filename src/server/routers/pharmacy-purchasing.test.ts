@@ -378,7 +378,7 @@ describe('procurement write authorization', () => {
         message: 'You do not have permission for this action.',
       });
       expect(db.user.findUnique).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'counter_user' } })
+        expect.objectContaining({ where: { id: 'counter_user', status: 'ACTIVE' } })
       );
       expect(db.pharmacySupplier.findFirst).not.toHaveBeenCalled();
       expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
@@ -434,6 +434,21 @@ describe('procurement write authorization', () => {
       message: 'You do not have permission for this action.',
     });
     expect(db.user.findUnique).not.toHaveBeenCalled();
+    expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the session actor is no longer active', async () => {
+    db.user.findUnique.mockResolvedValue(null);
+
+    await expect(
+      caller('inactive_user').createSupplier({ name: 'Unapproved supplier' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(db.user.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'inactive_user', status: 'ACTIVE' } })
+    );
     expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
   });
 });
