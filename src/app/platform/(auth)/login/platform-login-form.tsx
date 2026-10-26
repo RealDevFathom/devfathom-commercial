@@ -65,7 +65,10 @@ export function PlatformLoginForm() {
     setPending(true);
     setError('');
     try {
-      const response = await fetch('/api/platform/session', { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
+      const response = await fetch('/api/platform/session', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+      });
       if (!response.ok) throw new Error('logout');
       setEnrollment(false);
       setSecret('');

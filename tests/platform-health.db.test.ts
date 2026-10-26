@@ -73,9 +73,8 @@ describe.skipIf(!url)('platform health with real PostgreSQL and platform session
             mfaRequired: role === 'SUPER_ADMIN',
             mfaEnabledAt: role === 'SUPER_ADMIN' ? now : null,
             // Synthetic enrollment state for session reads, never decrypted.
-            encryptedTotpSecret: role === 'SUPER_ADMIN'
-              ? 'SYNTHETIC_ENROLLED_SESSION_FIXTURE_NOT_DECRYPTED'
-              : null,
+            encryptedTotpSecret:
+              role === 'SUPER_ADMIN' ? 'SYNTHETIC_ENROLLED_SESSION_FIXTURE_NOT_DECRYPTED' : null,
           },
         });
         await tx.platformSession.create({

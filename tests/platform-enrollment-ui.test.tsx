@@ -44,5 +44,8 @@ it('resumes an enrollment cookie after refresh and permits logout', async () => 
   render(<PlatformLoginForm />);
   fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
   await waitFor(() => expect(screen.getByLabelText('Work email')).toBeVisible());
-  expect(fetchMock).toHaveBeenLastCalledWith('/api/platform/session', { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
+  expect(fetchMock).toHaveBeenLastCalledWith('/api/platform/session', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+  });
 });

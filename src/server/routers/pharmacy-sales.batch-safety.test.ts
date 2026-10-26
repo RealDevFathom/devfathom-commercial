@@ -31,8 +31,8 @@ const BRANCH = 'branch-1';
 
 function caller(granted = true) {
   const db = {
-    $transaction: vi.fn(
-      async (callback: (tx: unknown) => unknown): Promise<unknown> => callback(db)
+    $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
+      callback(db)
     ),
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>

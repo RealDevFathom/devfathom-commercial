@@ -382,7 +382,11 @@ export function PlatformCommandForm({
                   defaultValue={
                     field.defaultValue !== null && typeof field.defaultValue === 'object'
                       ? JSON.stringify(field.defaultValue, null, 2)
-                      : String(field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ?? field.defaultValue ?? '')
+                      : String(
+                          field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ??
+                            field.defaultValue ??
+                            ''
+                        )
                   }
                   placeholder={field.placeholder}
                   rows={field.type === 'json' ? 6 : 3}
@@ -445,11 +449,18 @@ export function PlatformCommandForm({
                   defaultValue={
                     typeof field.defaultValue === 'boolean'
                       ? undefined
-                      : String(field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ?? field.defaultValue ?? '')
+                      : String(
+                          field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ??
+                            field.defaultValue ??
+                            ''
+                        )
                   }
                   placeholder={field.format === 'time24' ? 'HH:MM' : field.placeholder}
                   min={field.min}
-                  max={field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ?? field.max}
+                  max={
+                    field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ??
+                    field.max
+                  }
                   step={field.step}
                   inputMode={field.format === 'time24' ? 'numeric' : undefined}
                   maxLength={field.format === 'time24' ? 5 : undefined}

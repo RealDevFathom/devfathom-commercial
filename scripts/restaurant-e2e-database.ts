@@ -124,10 +124,14 @@ export function restaurantE2eEnvironment(
     throw new Error('RESTAURANT_ACTOR_AGENCY_PASSWORD must equal RESTAURANT_ACTOR_ADMIN_PASSWORD.');
   }
   if (!env.PLATFORM_ADMIN_EMAIL || !env.PLATFORM_ADMIN_PASSWORD) {
-    throw new Error('Disposable template PLATFORM_ADMIN_EMAIL and PLATFORM_ADMIN_PASSWORD are required.');
+    throw new Error(
+      'Disposable template PLATFORM_ADMIN_EMAIL and PLATFORM_ADMIN_PASSWORD are required.'
+    );
   }
   if (env.RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL !== env.PLATFORM_ADMIN_EMAIL.toLowerCase()) {
-    throw new Error('RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL must match the seeded PLATFORM_ADMIN_EMAIL.');
+    throw new Error(
+      'RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL must match the seeded PLATFORM_ADMIN_EMAIL.'
+    );
   }
   if (env.RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD !== env.PLATFORM_ADMIN_PASSWORD) {
     throw new Error('RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD must equal PLATFORM_ADMIN_PASSWORD.');

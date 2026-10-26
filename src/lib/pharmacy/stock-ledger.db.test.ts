@@ -706,7 +706,11 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
   it('does not sell units a concurrent claim reserved while the sale waited (#355, claim-first)', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'claim-first');
     const lotId = await inOrg(ORG_A, async (db) => {
-      const { lot } = await stockLot(db, fixture, { expiresAt: LATER, units: 10, label: 'claim-first' });
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'claim-first',
+      });
       return lot.id;
     });
     let releaseClaim: () => void = () => {};
@@ -745,7 +749,11 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
   it('serializes a supplier claim against a concurrent sale of the same units (#355)', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'claim-race');
     const lotId = await inOrg(ORG_A, async (db) => {
-      const { lot } = await stockLot(db, fixture, { expiresAt: LATER, units: 10, label: 'claim-race' });
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'claim-race',
+      });
       return lot.id;
     });
     let releaseSale: () => void = () => {};
