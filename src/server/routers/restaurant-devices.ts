@@ -46,6 +46,26 @@ import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc'
 const manageDevicesProcedure = capabilityProcedure('devices:manage');
 const coAuthorizationApprovalCapability = 'coauth:approve';
 
+async function assertApproverCanCoAuthorize(
+  db: ScopedDb,
+  staffProfileId: string,
+  branchId: string
+) {
+  if (
+    !(await staffHasCapability(
+      db,
+      staffProfileId,
+      branchId,
+      coAuthorizationApprovalCapability
+    ))
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'The approving staff member lacks co-authorization approval permission.',
+    });
+  }
+}
+
 /**
  * M2-L3 / §5 / C7 — back-office device administration.
  *
@@ -498,19 +518,11 @@ export const restaurantDevicesRouter = router({
         }
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Invalid approving credential.' });
       }
-      if (
-        !(await staffHasCapability(
-          ctx.db,
-          input.approvingStaffProfileId,
-          device.branchId,
-          coAuthorizationApprovalCapability
-        ))
-      ) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'The approving staff member lacks co-authorization approval permission.',
-        });
-      }
+      await assertApproverCanCoAuthorize(
+        ctx.db,
+        input.approvingStaffProfileId,
+        device.branchId
+      );
 
       // The whole tRPC request runs inside one tenant transaction (the fetch
       // adapter wraps it in `withTenantDb`), so writing the evidence and then
@@ -615,19 +627,11 @@ export const restaurantDevicesRouter = router({
         }
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Invalid approving credential.' });
       }
-      if (
-        !(await staffHasCapability(
-          ctx.db,
-          input.approvingStaffProfileId,
-          device.branchId,
-          coAuthorizationApprovalCapability
-        ))
-      ) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'The approving staff member lacks co-authorization approval permission.',
-        });
-      }
+      await assertApproverCanCoAuthorize(
+        ctx.db,
+        input.approvingStaffProfileId,
+        device.branchId
+      );
 
       try {
         const { result, coAuthorization } = await ctx.db.$transaction(async (tx) => {
