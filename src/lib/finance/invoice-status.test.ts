@@ -30,13 +30,16 @@ describe('invoice status contract shared by REST, tRPC, and AI', () => {
     expect(invoiceStatusUpdate('SENT', next, new Date(0))).toEqual({ status: next });
   });
 
-  it('clears sentAt only when an invoice returns to DRAFT', () => {
-    expect(invoiceStatusUpdate('SENT', 'DRAFT', new Date(0))).toEqual({
-      status: 'DRAFT',
-      sentAt: null,
-      paidAt: null,
-    });
-  });
+  it.each(['SENT', 'CANCELLED'] as const)(
+    'clears issue and payment timestamps when %s returns to DRAFT',
+    (prior) => {
+      expect(invoiceStatusUpdate(prior, 'DRAFT', new Date(0))).toEqual({
+        status: 'DRAFT',
+        sentAt: null,
+        paidAt: null,
+      });
+    }
+  );
 
   it('stamps SENT and clears paidAt whenever PAID is exited', () => {
     const at = new Date('2026-10-21T00:00:00Z');
