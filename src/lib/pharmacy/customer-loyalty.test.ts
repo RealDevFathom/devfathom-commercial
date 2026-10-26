@@ -41,8 +41,13 @@ describe('CRM-L01 pharmacy loyalty', () => {
     ).rejects.toEqual(new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED'));
     expect(db.patientConsent.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: expect.objectContaining({ purpose: 'LOYALTY', organizationId: 'org-a' }),
+        where: {
+          organizationId: 'org-a',
+          patientId: 'patient-a',
+          purpose: 'LOYALTY',
+        },
         orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
+        select: { granted: true, revokedAt: true },
       })
     );
     expect(lockSale).not.toHaveBeenCalled();
