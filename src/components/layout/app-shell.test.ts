@@ -36,6 +36,31 @@ vi.mock('@/components/restaurant/administrator-staff-profile-callout', () => ({
 import { AppShell, isPathModuleEnabled } from './app-shell';
 
 describe('AppShell module guard', () => {
+  it('starts with a skip link targeting the main application canvas', () => {
+    render(
+      createElement(
+        AppShell,
+        {
+          brand: {
+            organizationId: 'org_test',
+            displayName: 'Test pharmacy',
+            logoUrl: null,
+            markUrl: null,
+            faviconUrl: null,
+            primaryColor: null,
+            accentColor: null,
+          },
+        },
+        createElement('p', null, 'Counter')
+      )
+    );
+
+    const skipLink = screen.getByRole('link', { name: 'Skip to content' });
+    expect(document.querySelectorAll('a, button, input, select, textarea')[0]).toBe(skipLink);
+    expect(skipLink).toHaveAttribute('href', '#main-content');
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content');
+  });
+
   it('keeps the responsive dashboard brand link explicitly named', () => {
     const topbar = readFileSync(
       path.join(process.cwd(), 'src/components/layout/topbar.tsx'),
