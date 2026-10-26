@@ -181,7 +181,7 @@ async function beginIdempotent(
   payload: unknown
 ): Promise<IdempotencyOutcome> {
   const canonicalPayloadHash = createHash('sha256')
-    .update(canonicalOrderPayload(payload))
+    .update(canonicalOrderPayload(commandPayload(payload)))
     .digest('hex');
   const existing = await tx.restaurantOrderIdempotencyKey.findUnique({
     where: { deviceId_key: { deviceId: actor.deviceId, key: actor.idempotencyKey } },
@@ -211,12 +211,21 @@ async function beginIdempotent(
   return { replay: false };
 }
 
-/** Stable command bytes, excluding retry metadata and server-generated timestamps. */
+/** Remove only the known retry metadata; similarly named nested command data remains bound. */
+function commandPayload(value: unknown): unknown {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return value;
+  const { actor, now: _now, ...command } = value as Record<string, unknown>;
+  if (actor === null || typeof actor !== 'object' || Array.isArray(actor)) return command;
+  const { idempotencyKey: _idempotencyKey, ...commandActor } = actor as Record<string, unknown>;
+  return { ...command, actor: commandActor };
+}
+
+/** Stable command bytes after retry metadata has been removed. */
 function canonicalOrderPayload(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalOrderPayload).join(',')}]`;
   if (value !== null && typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([key, item]) => key !== 'idempotencyKey' && key !== 'now' && item !== undefined)
+      .filter(([, item]) => item !== undefined)
       .sort(([left], [right]) => left.localeCompare(right));
     return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalOrderPayload(item)}`).join(',')}}`;
   }

@@ -923,6 +923,29 @@ describeIfDatabase('orders command layer (real DB)', () => {
     ).resolves.toBe(0);
   });
 
+  it('binds nested command data even when a field has a retry-metadata name', async () => {
+    const db = deps.createTenantDb(orgId);
+    const openKey = key();
+    const input = {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.orders.monthly': 1000000, now: 1 },
+      branchId: ids.branch,
+      channel: 'DINE_IN' as const,
+      publicationId: ids.publication,
+      actor: actor(openKey),
+      now: AT,
+    };
+    await deps.orders.openOrder(db, input);
+
+    await expect(
+      deps.orders.openOrder(db, {
+        ...input,
+        entitlementLimits: { ...input.entitlementLimits, now: 2 },
+        now: new Date(AT.getTime() + 1_000),
+      })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+  });
+
   it('fails closed when a legacy idempotency key has no payload hash', async () => {
     const first = await openWithItem();
     const second = await deps.orders.openOrder(first.db, {
