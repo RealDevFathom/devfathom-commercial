@@ -689,6 +689,19 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       bypassReason: 'Emergency insulin.',
       bypassApprovedByUserId: 'user_manager',
     });
+    expect(db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0]).toMatchObject({
+      purchaseOrderLineId: null,
+    });
+  });
+
+  it('refuses a purchase-order receipt line that omits its order-line identity', async () => {
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [{ ...RECEIPT_LINE, purchaseOrderLineId: undefined }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
   it('refuses a bypass the receiver approved for themselves', async () => {
