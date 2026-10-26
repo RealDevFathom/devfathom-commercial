@@ -1,8 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSupplierExpenseInvoice, nativeApAgingCsv, supplierExpenseAging } from './native-ap';
+import { createSupplierExpenseInvoice, nativeApAgingCsv, reverseSupplierExpenseSettlement, settleSupplierExpenseInvoice, supplierExpenseAging } from './native-ap';
 
 const postJournalEntry = vi.fn();
+const postBookkeepingTransaction = vi.fn();
+const reverseBookkeepingTransaction = vi.fn();
 vi.mock('@/lib/finance/journal', () => ({ postJournalEntry: (...args: unknown[]) => postJournalEntry(...args) }));
+vi.mock('@/lib/pharmacy/bookkeeping', async (original) => {
+  const actual = await original<typeof import('@/lib/pharmacy/bookkeeping')>();
+  return {
+    ...actual,
+    postBookkeepingTransaction: (...args: unknown[]) => postBookkeepingTransaction(...args),
+    reverseBookkeepingTransaction: (...args: unknown[]) => reverseBookkeepingTransaction(...args),
+  };
+});
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
 function invoiceDb() {
@@ -18,6 +28,8 @@ function invoiceDb() {
 beforeEach(() => {
   vi.clearAllMocks();
   postJournalEntry.mockResolvedValue({ id: 'journal-a' });
+  postBookkeepingTransaction.mockResolvedValue({ id: 'transaction-a' });
+  reverseBookkeepingTransaction.mockResolvedValue({ id: 'reversal-a' });
 });
 
 describe('native non-stock AP', () => {
@@ -54,6 +66,46 @@ describe('native non-stock AP', () => {
       from: new Date('2025-10-25T00:00:00Z'), asOf: now, limit: 200,
     })).rejects.toThrow('INVALID_STATE');
     expect(db.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a payment before its invoice and performs no canonical posting', async () => {
+    const db = { $queryRaw: vi.fn().mockResolvedValue([{ id: 'invoice-a', amountMinor: 100, supplierInvoiceRef: 'A', issuedAt: new Date('2026-10-02Z') }]) } as any;
+    await expect(settleSupplierExpenseInvoice(db, scope, { invoiceId: 'invoice-a', amountMinor: 100, occurredAt: new Date('2026-10-01Z'), reference: 'PAY', idempotencyKey: 'pay-a' })).rejects.toThrow('INVALID_STATE');
+    expect(postBookkeepingTransaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects a conflicting settlement replay after taking the invoice lock', async () => {
+    const db = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'invoice-a', amountMinor: 100, supplierInvoiceRef: 'A', issuedAt: new Date('2026-10-01Z') }]),
+      pharmacySupplierExpenseSettlement: { findFirst: vi.fn().mockResolvedValue({ invoiceId: 'invoice-a', invoice: { branchId: 'branch-a' }, amountMinor: 99, reference: 'PAY', fundingAccount: 'BANK', occurredAt: new Date('2026-10-02Z') }) },
+    } as any;
+    await expect(settleSupplierExpenseInvoice(db, scope, { invoiceId: 'invoice-a', amountMinor: 100, occurredAt: new Date('2026-10-02Z'), reference: 'PAY', idempotencyKey: 'pay-a' })).rejects.toThrow('INVALID_STATE');
+  });
+
+  it('rejects a canonical idempotency collision instead of attaching it to an invoice', async () => {
+    const db = {
+      $queryRaw: vi.fn().mockResolvedValue([{ id: 'invoice-a', amountMinor: 100, supplierInvoiceRef: 'A', issuedAt: new Date('2026-10-01Z') }]),
+      pharmacySupplierExpenseSettlement: { findFirst: vi.fn().mockResolvedValue(null), aggregate: vi.fn().mockResolvedValue({ _sum: { amountMinor: 0 } }) },
+      pharmacyBookkeepingTransaction: { findFirst: vi.fn().mockResolvedValue({ id: 'unrelated' }) },
+    } as any;
+    await expect(settleSupplierExpenseInvoice(db, scope, { invoiceId: 'invoice-a', amountMinor: 100, occurredAt: new Date('2026-10-02Z'), reference: 'PAY', idempotencyKey: 'pay-a' })).rejects.toThrow('INVALID_STATE');
+    expect(postBookkeepingTransaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects reversal before settlement and leaves the canonical payment untouched', async () => {
+    const db = { pharmacySupplierExpenseSettlement: { findFirst: vi.fn().mockResolvedValue({ id: 'settlement-a', invoiceId: 'invoice-a', invoice: { branchId: 'branch-a' }, status: 'POSTED', occurredAt: new Date('2026-10-03Z') }) } } as any;
+    await expect(reverseSupplierExpenseSettlement(db, scope, { settlementId: 'settlement-a', reason: 'mistake', at: new Date('2026-10-02Z'), idempotencyKey: 'reverse-a' })).rejects.toThrow('INVALID_STATE');
+    expect(reverseBookkeepingTransaction).not.toHaveBeenCalled();
+  });
+
+  it('applies effective and durable cutoffs to invoices, settlements and reversals', async () => {
+    const now = new Date('2026-10-26T12:00:00Z');
+    const db = { $queryRaw: vi.fn().mockResolvedValueOnce([{ now }]).mockResolvedValueOnce([]) } as any;
+    await supplierExpenseAging(db, scope, { from: new Date('2026-01-01Z'), asOf: new Date('2026-10-01Z') });
+    const sql = db.$queryRaw.mock.calls[1]![0].strings.join(' ');
+    expect(sql).toContain('i."createdAt" <= ');
+    expect(sql).toContain('s."createdAt" <= ');
+    expect(sql).toContain('r."createdAt" <= ');
   });
 
   it('escapes spreadsheet values and emits fixed native-only CSV columns', () => {

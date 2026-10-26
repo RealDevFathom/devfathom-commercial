@@ -117,7 +117,7 @@ export default async function PharmacyFinancePage({
     nativeAp = await caller.expenseAging({
       branchId: branch.id,
       asOf,
-      from: new Date(asOf.getTime() - 90 * 86_400_000),
+      from: new Date(asOf.getTime() - 366 * 86_400_000),
       format: 'CSV',
       limit: 200,
     });
@@ -405,8 +405,17 @@ export default async function PharmacyFinancePage({
           </form>
         </div>
         <div className="mt-5 flex items-center justify-between gap-3">
-          <p className="text-xs text-text-muted">Native non-stock invoices only · 90-day due-date view · maximum {nativeAp.bounds.maxRows} rows</p>
+          <p className="text-xs text-text-muted">Native non-stock invoices only · bounded one-year view · maximum {nativeAp.bounds.maxRows} rows</p>
           {'csv' in nativeAp ? <a className="text-sm font-medium text-link underline" download="native-ap-aging.csv" href={`data:text/csv;charset=utf-8,${encodeURIComponent(nativeAp.csv)}`}>Download CSV</a> : null}
+        </div>
+        <div className="mt-4 overflow-x-auto">
+          <Table>
+            <TableHeader><TableRow><TableHead>Invoice</TableHead><TableHead>Due date</TableHead><TableHead className="text-right">Outstanding</TableHead><TableHead className="text-right">Days past due</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {nativeAp.rows.map((invoice) => <TableRow key={invoice.id}><TableCell className="font-medium">{invoice.supplierInvoiceRef}</TableCell><TableCell>{dated(invoice.dueAt)}</TableCell><TableCell className="text-right tabular-nums">{money(invoice.outstandingMinor)}</TableCell><TableCell className="text-right tabular-nums">{invoice.daysPastDue}</TableCell></TableRow>)}
+              {!nativeAp.rows.length ? <TableRow><TableCell colSpan={4} className="text-center text-text-muted">No open native supplier invoices in this bounded view.</TableCell></TableRow> : null}
+            </TableBody>
+          </Table>
         </div>
       </SectionCard>
       <SectionCard title="Create POS settlement batch" eyebrow="Card · wallet · bank transfer">

@@ -3659,6 +3659,8 @@ model PharmacySupplierExpenseSettlement {
   amountMinor           Int
   status                PharmacySupplierExpenseSettlementStatus @default(POSTED)
   idempotencyKey        String
+  reference             String
+  fundingAccount        String
   occurredAt            DateTime
   createdAt             DateTime @default(now())
   invoice PharmacySupplierExpenseInvoice @relation(fields: [organizationId, invoiceId], references: [organizationId, id], onDelete: Restrict)

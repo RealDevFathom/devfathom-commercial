@@ -34,7 +34,8 @@ CREATE INDEX "pharmacy_supplier_expense_invoice_lines_invoice_idx" ON "pharmacy_
 CREATE TABLE "pharmacy_supplier_expense_settlements" (
  "id" TEXT NOT NULL, "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true), "invoiceId" TEXT NOT NULL,
  "bookkeepingTransactionId" TEXT NOT NULL, "amountMinor" INTEGER NOT NULL, "status" "PharmacySupplierExpenseSettlementStatus" NOT NULL DEFAULT 'POSTED',
- "idempotencyKey" TEXT NOT NULL, "occurredAt" TIMESTAMP(3) NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ "idempotencyKey" TEXT NOT NULL, "reference" TEXT NOT NULL, "fundingAccount" TEXT NOT NULL,
+ "occurredAt" TIMESTAMP(3) NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
  CONSTRAINT "pharmacy_supplier_expense_settlements_pkey" PRIMARY KEY ("id"),
  CONSTRAINT "pharmacy_supplier_expense_settlements_amount_check" CHECK ("amountMinor" > 0),
  CONSTRAINT "pharmacy_supplier_expense_settlements_invoice_fkey" FOREIGN KEY ("organizationId","invoiceId") REFERENCES "pharmacy_supplier_expense_invoices"("organizationId","id") ON DELETE RESTRICT
