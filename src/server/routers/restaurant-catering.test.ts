@@ -323,7 +323,17 @@ describe('restaurant catering lifecycle', () => {
     expect(db.restaurantCateringOrderLine.create).not.toHaveBeenCalled();
   });
 
-  it('rejects excess precision for order totals and extra costs before persistence', async () => {
+  it.each([{ portions: '1.2345' }, { unitPrice: '1.999' }])(
+    'rejects line updates beyond their durable database scale',
+    async (decimals) => {
+      await expect(
+        caller().updateLine({ orderId: 'order_1', lineId: 'line_1', ...decimals })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(db.restaurantCateringOrderLine.updateMany).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects excess money precision on every order write before persistence', async () => {
     await expect(
       caller().create({
         branchId: 'branch_1',
@@ -334,6 +344,26 @@ describe('restaurant catering lifecycle', () => {
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     await expect(
+      caller().create({
+        branchId: 'branch_1',
+        eventName: 'Precision test',
+        eventDate: new Date('2026-10-08'),
+        headcount: 1,
+        depositAmount: '1.001',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().update({ orderId: 'order_1', quotedTotal: '1.001' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().update({ orderId: 'order_1', depositAmount: '1.001' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.restaurantCateringOrder.create).not.toHaveBeenCalled();
+    expect(db.restaurantCateringOrder.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects excess precision for extra costs before persistence', async () => {
+    await expect(
       caller().addExtraCost({
         orderId: 'order_1',
         kind: 'OTHER',
@@ -341,7 +371,6 @@ describe('restaurant catering lifecycle', () => {
         amount: '1.001',
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(db.restaurantCateringOrder.create).not.toHaveBeenCalled();
     expect(db.restaurantCateringExtraCost.create).not.toHaveBeenCalled();
   });
 });
