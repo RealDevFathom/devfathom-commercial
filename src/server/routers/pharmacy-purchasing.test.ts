@@ -170,9 +170,15 @@ describe('procurement write authorization', () => {
         code: 'FORBIDDEN',
         message: 'You do not have permission for this action.',
       });
+      expect(db.user.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'counter_user' } })
+      );
       expect(db.pharmacySupplier.findFirst).not.toHaveBeenCalled();
       expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
       expect(db.pharmacySupplier.update).not.toHaveBeenCalled();
+      expect(db.medicine.findFirst).not.toHaveBeenCalled();
+      expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
       expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
       expect(db.$transaction).not.toHaveBeenCalled();
     }
