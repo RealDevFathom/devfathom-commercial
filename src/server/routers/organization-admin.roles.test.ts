@@ -93,13 +93,13 @@ describe('organization role replacement', () => {
     });
   });
 
-  it('rejects duplicate capabilities before starting a mutation', async () => {
+  it('rejects duplicate capabilities after trimming before starting a mutation', async () => {
     await expect(
       caller().upsertRole({
         ...input,
         permissions: [
           { capability: 'finance:read', effect: 'ALLOW' },
-          { capability: 'finance:read', effect: 'DENY' },
+          { capability: ' finance:read ', effect: 'DENY' },
         ],
       })
     ).rejects.toThrow('Each capability may only appear once.');
