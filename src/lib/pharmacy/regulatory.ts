@@ -45,6 +45,8 @@ export type BranchRegulatoryState = {
 
 type RuleField = { provisional?: boolean; pendingLegalReview?: boolean; values?: unknown };
 
+const PENDING_LEGAL_REVIEW_ENVIRONMENTS = new Set(['staging', 'pilot']);
+
 /**
  * Existing #129 legal-review contract: development/tests and explicit staging or
  * pilot builds may exercise these rules. Production fails closed, including an
@@ -52,7 +54,7 @@ type RuleField = { provisional?: boolean; pendingLegalReview?: boolean; values?:
  */
 export function pendingLegalReviewAllowed(env: Record<string, string | undefined> = process.env) {
   if (env.NODE_ENV !== 'production') return true;
-  return env.APP_ENV === 'staging' || env.APP_ENV === 'pilot';
+  return PENDING_LEGAL_REVIEW_ENVIRONMENTS.has(env.APP_ENV ?? '');
 }
 
 function ruleField(value: unknown): RuleField {

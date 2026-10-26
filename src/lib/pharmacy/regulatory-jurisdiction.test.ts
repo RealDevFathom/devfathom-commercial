@@ -69,6 +69,13 @@ function confirm(state: BranchRegulatoryState) {
 }
 
 describe('#129 pending-legal-review enforcement', () => {
+  it('evaluates an explicit environment without consulting process globals', () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('APP_ENV', 'staging');
+    expect(pendingLegalReviewAllowed({ NODE_ENV: 'production' })).toBe(false);
+    expect(pendingLegalReviewAllowed({ NODE_ENV: 'production', APP_ENV: 'pilot' })).toBe(true);
+  });
+
   it.each([undefined, '', 'production', 'development', 'test', 'preview', 'STAGING', 'unknown'])(
     'fails closed for production APP_ENV=%s and audits the denial once',
     (appEnv: string | undefined) => {
