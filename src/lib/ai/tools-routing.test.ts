@@ -107,13 +107,13 @@ describe('assistant tool routing', () => {
 
     for (const missingModule of noteDependencies) {
       const tools = buildAssistantTools(
-        { ...ctx, enabledModules: noteDependencies.filter((module) => module !== missingModule) },
+        { ...ctx, enabledModules: ctx.enabledModules.filter((module) => module !== missingModule) },
         { hint }
       );
       for (const name of noteToolNames) expect(tools).not.toHaveProperty(name);
     }
 
-    const entitledTools = buildAssistantTools({ ...ctx, enabledModules: noteDependencies }, { hint });
+    const entitledTools = buildAssistantTools(ctx, { hint });
     for (const name of noteToolNames) expect(entitledTools).toHaveProperty(name);
   });
 
