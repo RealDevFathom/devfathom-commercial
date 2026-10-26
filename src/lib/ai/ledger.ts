@@ -5,7 +5,14 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { DEFAULT_AI_MODELS, type AIModelTier, type RoutedAIProvider } from './model-defaults';
 import { calculateAIUsageCost, UnknownAIModelPriceError } from './spend';
 
-const RESERVATION_USD = new Prisma.Decimal('0.100000');
+export const AI_GENERATION_LIMITS = {
+  maxSteps: 6,
+  maxOutputTokensPerStep: 4_096,
+  // All routed defaults have a 200k context window. Charging that entire
+  // window on every step is intentionally conservative, including tool output.
+  maxInputTokensPerStep: 200_000,
+  reservationTtlMs: 2 * 60_000,
+} as const;
 
 function monthStart(value: Date) {
   return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), 1));
@@ -39,11 +46,23 @@ export async function reserveAIUsage(
       organizationId: input.organizationId,
       provider: 'anthropic',
       occurredAt: { gte: monthStart(occurredAt), lte: occurredAt },
+      OR: [{ status: 'COMPLETED' }, { status: 'RESERVED', expiresAt: { gt: occurredAt } }],
     },
     _sum: { costUsd: true },
   });
   const spent = aggregate._sum.costUsd ?? new Prisma.Decimal(0);
-  const provider: RoutedAIProvider = spent.plus(RESERVATION_USD).greaterThan(input.monthlyBudgetUsd)
+  const anthropicModel = DEFAULT_AI_MODELS.anthropic[input.tier];
+  const price = await db.aiModelPrice.findFirst({
+    where: { provider: 'anthropic', model: anthropicModel, effectiveFrom: { lte: occurredAt } },
+    orderBy: { effectiveFrom: 'desc' },
+  });
+  if (!price) throw new UnknownAIModelPriceError('anthropic', anthropicModel);
+  const reservationUsd = calculateAIUsageCost(
+    price,
+    AI_GENERATION_LIMITS.maxInputTokensPerStep * AI_GENERATION_LIMITS.maxSteps,
+    AI_GENERATION_LIMITS.maxOutputTokensPerStep * AI_GENERATION_LIMITS.maxSteps
+  );
+  const provider: RoutedAIProvider = spent.plus(reservationUsd).greaterThan(input.monthlyBudgetUsd)
     ? 'bedrock'
     : 'anthropic';
   const model = DEFAULT_AI_MODELS[provider][input.tier];
@@ -53,7 +72,8 @@ export async function reserveAIUsage(
       requestId: input.requestId,
       provider,
       model,
-      costUsd: RESERVATION_USD,
+      costUsd: provider === 'anthropic' ? reservationUsd : new Prisma.Decimal(0),
+      expiresAt: new Date(occurredAt.getTime() + AI_GENERATION_LIMITS.reservationTtlMs),
       occurredAt,
     },
   });
@@ -69,7 +89,7 @@ export async function recordAIUsage(
     where: { organizationId_requestId: { organizationId: input.organizationId, requestId: input.requestId } },
   });
   if (!usage) throw new Error('ai_usage_reservation_missing');
-  if (usage.completedAt) return usage;
+  if (usage.status !== 'RESERVED') return usage;
   const occurredAt = input.occurredAt ?? usage.occurredAt;
   const price = await db.aiModelPrice.findFirst({
     where: { provider: usage.provider, model: usage.model, effectiveFrom: { lte: occurredAt } },
@@ -77,8 +97,25 @@ export async function recordAIUsage(
   });
   if (!price) throw new UnknownAIModelPriceError(usage.provider, usage.model);
   const costUsd = calculateAIUsageCost(price, input.inputTokens, input.outputTokens);
-  return db.aiUsage.update({
+  await db.aiUsage.updateMany({
+    where: { organizationId: input.organizationId, requestId: input.requestId, status: 'RESERVED' },
+    data: {
+      inputTokens: input.inputTokens,
+      outputTokens: input.outputTokens,
+      costUsd,
+      status: 'COMPLETED',
+      completedAt: new Date(),
+    },
+  });
+  return db.aiUsage.findUniqueOrThrow({
     where: { organizationId_requestId: { organizationId: input.organizationId, requestId: input.requestId } },
-    data: { inputTokens: input.inputTokens, outputTokens: input.outputTokens, costUsd, completedAt: new Date() },
+  });
+}
+
+/** Releases an unfinished reservation; racing terminal transitions are first-writer-wins. */
+export async function cancelAIUsage(db: ScopedDb, organizationId: string, requestId: string) {
+  await db.aiUsage.updateMany({
+    where: { organizationId, requestId, status: 'RESERVED' },
+    data: { costUsd: new Prisma.Decimal(0), status: 'CANCELLED', completedAt: new Date() },
   });
 }

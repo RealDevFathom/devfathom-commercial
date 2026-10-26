@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
+import { DEFAULT_AI_MODELS } from './model-defaults';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 const describeIfDatabase = DATABASE_URL ? describe : describe.skip;
@@ -32,7 +33,7 @@ describeIfDatabase('AI ledger database integration', () => {
   });
 
   it('reads seeded prices, isolates tenants, and makes retries idempotent', async () => {
-    const [{ withTenantDb }, { reserveAIUsage, recordAIUsage }] = await Promise.all([
+    const [{ withTenantDb }, { cancelAIUsage, reserveAIUsage, recordAIUsage }] = await Promise.all([
       import('@/lib/tenancy/scoped-db'),
       import('./ledger'),
     ]);
@@ -49,15 +50,60 @@ describeIfDatabase('AI ledger database integration', () => {
     const [first, retry] = await Promise.all([reserve(), reserve()]);
     expect(retry).toEqual(first);
 
-    const completed = await withTenantDb(orgA, (db) =>
-      recordAIUsage(db, { organizationId: orgA, requestId, inputTokens: 1_000, outputTokens: 500 })
+    const [completed, competingCompletion] = await Promise.all([
+      withTenantDb(orgA, (db) =>
+        recordAIUsage(db, { organizationId: orgA, requestId, inputTokens: 1_000, outputTokens: 500 })
+      ),
+      withTenantDb(orgA, (db) =>
+        recordAIUsage(db, { organizationId: orgA, requestId, inputTokens: 2_000, outputTokens: 1_000 })
+      ),
+    ]);
+    expect(competingCompletion.costUsd.toFixed(6)).toBe(completed.costUsd.toFixed(6));
+    expect(['0.010500', '0.021000']).toContain(completed.costUsd.toFixed(6));
+
+    const crossover = await withTenantDb(orgA, (db) =>
+      reserveAIUsage(db, {
+        organizationId: orgA,
+        requestId: `crossover-${suffix}`,
+        tier: 'standard',
+        monthlyBudgetUsd: new Prisma.Decimal('3.9'),
+      })
     );
-    expect(completed.costUsd.toFixed(6)).toBe('0.010500');
+    expect(crossover.provider).toBe('bedrock');
+
+    await withTenantDb(orgA, (db) => cancelAIUsage(db, orgA, `crossover-${suffix}`));
+    await withTenantDb(orgA, async (db) => {
+      const cancelled = await db.aiUsage.findUniqueOrThrow({
+        where: {
+          organizationId_requestId: {
+            organizationId: orgA,
+            requestId: `crossover-${suffix}`,
+          },
+        },
+      });
+      expect(cancelled.status).toBe('CANCELLED');
+      expect(cancelled.costUsd.toFixed(6)).toBe('0.000000');
+    });
     await withTenantDb(orgA, async (db) => {
       expect(await db.aiUsage.count({ where: { organizationId: orgA, requestId } })).toBe(1);
     });
     await withTenantDb(orgB, async (db) => {
       expect(await db.aiUsage.count({ where: { organizationId: orgB } })).toBe(0);
+    });
+  });
+
+  it('has an effective catalog price for every default provider/model pair', async () => {
+    const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
+    await withTenantDb(orgA, async (db) => {
+      for (const [provider, tiers] of Object.entries(DEFAULT_AI_MODELS)) {
+        for (const model of Object.values(tiers)) {
+          const price = await db.aiModelPrice.findFirst({
+            where: { provider, model, effectiveFrom: { lte: new Date() } },
+            orderBy: { effectiveFrom: 'desc' },
+          });
+          expect(price, `${provider}/${model}`).not.toBeNull();
+        }
+      }
     });
   });
 });

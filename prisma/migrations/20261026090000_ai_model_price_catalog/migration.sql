@@ -35,12 +35,15 @@ CREATE TABLE IF NOT EXISTS "ai_usages" (
   "input_tokens" INTEGER,
   "output_tokens" INTEGER,
   "cost_usd" DECIMAL(18, 6) NOT NULL,
+  "status" TEXT NOT NULL DEFAULT 'RESERVED',
+  "expires_at" TIMESTAMP(3) NOT NULL,
   "occurred_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "completed_at" TIMESTAMP(3),
   CONSTRAINT "ai_usages_pkey" PRIMARY KEY ("id"),
   CONSTRAINT "ai_usages_nonnegative_check" CHECK
     ("cost_usd" >= 0 AND ("input_tokens" IS NULL OR "input_tokens" >= 0)
-      AND ("output_tokens" IS NULL OR "output_tokens" >= 0))
+      AND ("output_tokens" IS NULL OR "output_tokens" >= 0)),
+  CONSTRAINT "ai_usages_status_check" CHECK ("status" IN ('RESERVED', 'COMPLETED', 'CANCELLED'))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "ai_usages_organization_id_request_id_key"
   ON "ai_usages" ("organization_id", "request_id");

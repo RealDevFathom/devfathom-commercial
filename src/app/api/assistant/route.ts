@@ -18,7 +18,12 @@ import { rateLimit } from '@/lib/rate-limit';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { createAIModel, readAIAvailability } from '@/lib/ai/provider';
 import { createRoutedAIModel } from '@/lib/ai/provider';
-import { reserveAIUsage, recordAIUsage } from '@/lib/ai/ledger';
+import {
+  AI_GENERATION_LIMITS,
+  cancelAIUsage,
+  recordAIUsage,
+  reserveAIUsage,
+} from '@/lib/ai/ledger';
 import { Prisma } from '@/generated/prisma/client';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
@@ -199,6 +204,11 @@ async function respond(req: Request) {
       ai = createAIModel();
     }
   } catch {
+    if (routedRequestId) {
+      await withTenantDb(organization.id, (tx) =>
+        cancelAIUsage(tx, organization.id, routedRequestId!)
+      );
+    }
     console.error('ASSISTANT_PROVIDER_UNAVAILABLE');
     return Response.json(
       { error: 'Ask Fathom is currently unavailable. No cached answer was used.' },
@@ -216,7 +226,8 @@ async function respond(req: Request) {
     toolChoice: isApprovalContinuation ? 'auto' : assistantToolChoice(hint, tools),
     // Operator actions chain resolve → act → confirm; 6 steps covers that while
     // capping the worst-case number of (token-heavy) model round-trips per turn.
-    stopWhen: stepCountIs(6),
+    stopWhen: stepCountIs(AI_GENERATION_LIMITS.maxSteps),
+    maxOutputTokens: AI_GENERATION_LIMITS.maxOutputTokensPerStep,
     providerOptions: ai.providerOptions,
     onFinish: routedRequestId
       ? async ({ totalUsage }) => {
@@ -227,6 +238,20 @@ async function respond(req: Request) {
               inputTokens: totalUsage.inputTokens ?? 0,
               outputTokens: totalUsage.outputTokens ?? 0,
             })
+          );
+        }
+      : undefined,
+    onError: routedRequestId
+      ? async () => {
+          await withTenantDb(organization.id, (tx) =>
+            cancelAIUsage(tx, organization.id, routedRequestId!)
+          );
+        }
+      : undefined,
+    onAbort: routedRequestId
+      ? async () => {
+          await withTenantDb(organization.id, (tx) =>
+            cancelAIUsage(tx, organization.id, routedRequestId!)
           );
         }
       : undefined,

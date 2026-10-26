@@ -15365,6 +15365,8 @@ model AiUsage {
   inputTokens    Int?     @map("input_tokens")
   outputTokens   Int?     @map("output_tokens")
   costUsd        Decimal  @map("cost_usd") @db.Decimal(18, 6)
+  status         String   @default("RESERVED")
+  expiresAt      DateTime @map("expires_at")
   occurredAt     DateTime @map("occurred_at") @default(now())
   completedAt    DateTime? @map("completed_at")
 
