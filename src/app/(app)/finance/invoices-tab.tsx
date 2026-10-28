@@ -169,7 +169,7 @@ export function InvoicesTab() {
 /* ============================================
    Invoice Row (memoized; owns its own status-menu open state)
    ============================================ */
-const InvoiceRow = memo(function InvoiceRow({
+export const InvoiceRow = memo(function InvoiceRow({
   inv,
   onUpdateStatus,
 }: {
@@ -180,6 +180,7 @@ const InvoiceRow = memo(function InvoiceRow({
   const btnRef = useRef<HTMLButtonElement>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const config = statusConfig[inv.status] || statusConfig.DRAFT;
+  const totalLabel = moneyLabel(Number(inv.total), inv.currency);
 
   // Anchor the menu to the button's viewport rect and render it in a portal, so it
   // escapes the virtualizer's per-row transform stacking contexts (which otherwise
@@ -222,9 +223,7 @@ const InvoiceRow = memo(function InvoiceRow({
         <p className="text-sm text-muted-foreground truncate">{inv.project?.name || '—'}</p>
       </div>
       <div className="col-span-1 text-right">
-        <p className="text-sm font-semibold text-foreground tabular-nums">
-          {moneyLabel(Number(inv.total), inv.currency)}
-        </p>
+        <p className="text-sm font-semibold text-foreground tabular-nums">{totalLabel}</p>
       </div>
       <div className="col-span-2 flex justify-center">
         <button
