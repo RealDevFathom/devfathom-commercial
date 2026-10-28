@@ -118,8 +118,14 @@ beforeEach(() => {
       $executeRawUnsafe: lock,
       restaurantBill: { findFirst: findBill, findFirstOrThrow: findBill },
       restaurantBranch: { findFirst: findLayout },
+      restaurantStaffJobRole: { findMany: async () => [] },
+      restaurantStaffCapabilityGrant: { findMany: async () => [] },
       restaurantStaffProfile: {
         findUnique: async () => ({
+          status: 'ACTIVE',
+          primaryBranchId: mocks.ctx.device.branchId,
+          jobRoles: [],
+          directCapabilityGrants: [],
           user: {
             permissionOverrides: [],
             organizationRole: {

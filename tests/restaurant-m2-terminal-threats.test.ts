@@ -43,11 +43,12 @@ const db = {
   },
   user: { findFirst: vi.fn(async () => null) },
   restaurantBranch: {
-    findUnique: vi.fn(async () => ({ id: 'branch_m2', active: true })),
+    findUnique: vi.fn(async (): Promise<Row> => ({ id: 'branch_m2', active: true })),
     // WHA-149: /terminal/establish returns the branch NAME so the POS never
     // renders a raw branch id.
     findUniqueOrThrow: vi.fn(async () => ({ id: 'branch_m2', name: 'M2 Branch' })),
   },
+  restaurantShift: { findFirst: vi.fn(async (): Promise<Row | null> => null) },
   restaurantRegisteredDevice: {
     create: async ({ data }: { data: Row }) => {
       const row = {
@@ -348,6 +349,9 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  db.restaurantBranch.findUnique.mockResolvedValue({ id: BRANCH, active: true });
+  db.restaurantShift.findFirst.mockReset();
+  db.restaurantShift.findFirst.mockResolvedValue(null);
   h.store.organizations = [{ id: ORG, status: 'ACTIVE' }];
   h.store.devices = [];
   h.store.sessions = [];
@@ -546,6 +550,63 @@ describe('KDS unlock authorization', () => {
 });
 
 describe('operator attribution and secret containment', () => {
+  it.each(['cross-branch', 'off-shift', 'on-shift'] as const)(
+    'enforces the trusted device branch for a valid %s approving PIN',
+    async (scenario) => {
+      const { device, secret } = await enroll('approval-boundary');
+      const { token, sessionId } = await establish(secret);
+      addOperator(ACTING, device.id);
+      addOperator(MANAGER, device.id);
+      expect((await unlock(secret, token, ACTING, PINS[ACTING])).response.status).toBe(200);
+      if (scenario === 'cross-branch') {
+        find(h.store.staff, { id: MANAGER })!.primaryBranchId = 'foreign_branch';
+      }
+      db.restaurantBranch.findUnique.mockResolvedValue({
+        id: BRANCH,
+        active: true,
+        shiftSignInEnforced: true,
+      });
+      if (scenario === 'on-shift') {
+        db.restaurantShift.findFirst.mockResolvedValue({
+          id: 'manager_shift',
+          branchId: BRANCH,
+          staffProfileId: MANAGER,
+          startAt: new Date(Date.now() - 60_000),
+          endAt: new Date(Date.now() + 60_000),
+        });
+      }
+      const auditCount = h.store.auditLogs.length;
+      const result = await call(
+        coAuthorizeRoute,
+        terminalRequest(
+          secret,
+          token,
+          {
+            approvingStaffProfileId: MANAGER,
+            type: 'PIN',
+            secret: PINS[MANAGER],
+            capability: 'orders:void',
+            reason: 'guest complaint',
+            // Untrusted body branch must never override the registered device.
+            branchId: 'foreign_branch',
+          },
+          'co-authorize'
+        )
+      );
+      expect(result.response.status).toBe(scenario === 'on-shift' ? 201 : 401);
+      expect(h.store.coAuthorizations).toHaveLength(scenario === 'on-shift' ? 1 : 0);
+      expect(h.store.auditLogs).toHaveLength(auditCount + (scenario === 'on-shift' ? 1 : 0));
+      expect(find(h.store.sessions, { id: sessionId })!.activeStaffProfileId).toBe(ACTING);
+      if (scenario !== 'cross-branch') {
+        expect(db.restaurantShift.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({ branchId: BRANCH, staffProfileId: MANAGER }),
+          })
+        );
+      }
+    }
+  );
+
   it('keeps acting and approving identities separate in complete server-stamped evidence', async () => {
     // Freeze policy time without trapping bcrypt's asynchronous yield timers.
     vi.useFakeTimers({ toFake: ['Date'] });

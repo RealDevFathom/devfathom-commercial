@@ -334,7 +334,7 @@ describe('pharmacovigilance PostgreSQL authorization and review', () => {
             ).toBe(1);
             expect(
               await tx.auditLog.count({
-                where: { action: 'pharmacyReports.soloOwnerSelfApproval' },
+                where: { organizationId: org, action: 'pharmacyReports.soloOwnerSelfApproval' },
               })
             ).toBe(0);
           });
@@ -349,7 +349,7 @@ describe('pharmacovigilance PostgreSQL authorization and review', () => {
           });
           await withTenantDb(org, async (tx) => {
             const rows = await tx.auditLog.findMany({
-              where: { action: 'pharmacyReports.soloOwnerSelfApproval' },
+              where: { organizationId: org, action: 'pharmacyReports.soloOwnerSelfApproval' },
             });
             expect(rows).toHaveLength(1);
             expect(rows[0]).toMatchObject({
