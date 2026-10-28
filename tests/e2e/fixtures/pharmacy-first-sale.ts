@@ -408,8 +408,17 @@ export async function freshPharmacyFirstSale(
       qualifiedPersonValidTo: data.regulatory.qualifiedPersonValidTo,
       qualifiedPersonCoverageRosterRef: data.regulatory.qualifiedPersonCoverageRosterRef,
     });
+    const upload = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/api/upload' && response.request().method() === 'POST'
+    );
     await page.locator('#licenceEvidence').setInputFiles(licenceEvidencePath);
+    expect((await upload).status(), 'Licence evidence upload must succeed').toBe(200);
     await expect(page.getByText('Licence evidence attached', { exact: false })).toBeVisible();
+    const evidenceUrl = await page.locator('input[name="licenceEvidenceFileRef"]').inputValue();
+    const storedEvidence = await page.request.get(new URL(evidenceUrl, page.url()).href);
+    expect(storedEvidence.status()).toBe(200);
+    expect(await storedEvidence.body()).toEqual(readFileSync(licenceEvidencePath));
     for (const schedule of permittedScheduleLabels)
       await page.getByRole('checkbox', { name: schedule, exact: true }).check();
     await click(page.getByRole('button', { name: 'Save this version', exact: true }));

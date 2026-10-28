@@ -1,5 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 import path from 'node:path';
+import { browserUploadStore } from './fixtures/upload-store';
 
 const requiredEnvironment = [
   'DATABASE_URL',
@@ -14,6 +15,7 @@ if (missingEnvironment.length > 0) {
 }
 
 const port = Number(process.env.PLAYWRIGHT_PORT ?? 4319);
+const uploads = browserUploadStore(port);
 // PLAYWRIGHT_BASE_URL must use the admin host: http://admin.localhost:<port>.
 // PLAYWRIGHT_DATABASE_ADMIN_URL must include ?options=-c%20app.is_platform_admin%3Dtrue
 // so fixture setup can access FORCE RLS platform tables.
@@ -61,26 +63,30 @@ export default defineConfig({
   ],
   webServer: process.env.PLAYWRIGHT_BASE_URL
     ? undefined
-    : {
-        // Bind to the same authority Chromium uses so Next.js synthesizes a
-        // matching x-forwarded-host instead of its default 127.0.0.1 address.
-        command: process.env.CI
-          ? `bunx next start --hostname admin.localhost --port ${port}`
-          : `bun run dev --hostname admin.localhost --port ${port}`,
-        cwd: path.resolve(__dirname, '../..'),
-        url: baseURL,
-        reuseExistingServer: !process.env.CI,
-        timeout: 120_000,
-        env: {
-          AUTH_TRUST_HOST: 'true',
-          AUTH_URL: sharedBaseURL,
-          DATABASE_URL: process.env.DATABASE_URL ?? '',
-          SHARED_APP_HOSTS: new URL(sharedBaseURL).hostname,
-          // WHA-1180 — the shared-host deployment default derives a tenant URL
-          // from this base domain, and offers nothing when it is unset. Stated
-          // here so the checklist's one-click action is deterministic under the
-          // managed server rather than depending on the operator's shell.
-          PLATFORM_BASE_DOMAIN: process.env.PLATFORM_BASE_DOMAIN ?? 'localhost',
+    : [
+        uploads.server,
+        {
+          // Bind to the same authority Chromium uses so Next.js synthesizes a
+          // matching x-forwarded-host instead of its default 127.0.0.1 address.
+          command: process.env.CI
+            ? `bunx next start --hostname admin.localhost --port ${port}`
+            : `bun run dev --hostname admin.localhost --port ${port}`,
+          cwd: path.resolve(__dirname, '../..'),
+          url: baseURL,
+          reuseExistingServer: !process.env.CI,
+          timeout: 120_000,
+          env: {
+            ...uploads.env,
+            AUTH_TRUST_HOST: 'true',
+            AUTH_URL: sharedBaseURL,
+            DATABASE_URL: process.env.DATABASE_URL ?? '',
+            SHARED_APP_HOSTS: new URL(sharedBaseURL).hostname,
+            // WHA-1180 — the shared-host deployment default derives a tenant URL
+            // from this base domain, and offers nothing when it is unset. Stated
+            // here so the checklist's one-click action is deterministic under the
+            // managed server rather than depending on the operator's shell.
+            PLATFORM_BASE_DOMAIN: process.env.PLATFORM_BASE_DOMAIN ?? 'localhost',
+          },
         },
-      },
+      ],
 });

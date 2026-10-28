@@ -382,12 +382,22 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
     page.getByText('Upload a scan or photograph of the licence as evidence.')
   ).toBeVisible();
 
+  const upload = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/api/upload' && response.request().method() === 'POST'
+  );
+  const evidence = Buffer.from('%PDF-1.4 e2e licence evidence');
   await page.setInputFiles('#licenceEvidence', {
     name: 'licence.pdf',
     mimeType: 'application/pdf',
-    buffer: Buffer.from('%PDF-1.4 e2e licence evidence'),
+    buffer: evidence,
   });
+  expect((await upload).status(), 'Licence evidence upload must succeed').toBe(200);
   await expect(page.getByText('Licence evidence attached.')).toBeVisible();
+  const evidenceUrl = await page.locator('input[name="licenceEvidenceFileRef"]').inputValue();
+  const storedEvidence = await page.request.get(new URL(evidenceUrl, page.url()).href);
+  expect(storedEvidence.status()).toBe(200);
+  expect(await storedEvidence.body()).toEqual(evidence);
   // Each schedule is a real checkbox with its own accessible name, so it is
   // reachable by keyboard and by name — not a div wearing a click handler.
   await page.getByRole('checkbox', { name: 'G', exact: true }).check();
