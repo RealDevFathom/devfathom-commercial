@@ -16,6 +16,34 @@ export function chooseRegisterPersonName(
   return null;
 }
 
+/**
+ * Inclusive millisecond bounds for a printed-register period, read as Karachi
+ * calendar days (Pakistan is a fixed UTC+5 with no daylight-saving shift). An empty
+ * or malformed end of the range is left open.
+ */
+export function registerPeriodBounds(
+  from: string,
+  to: string
+): { fromMs: number | null; toMs: number | null } {
+  const fromMs = from ? Date.parse(`${from}T00:00:00.000+05:00`) : NaN;
+  const toMs = to ? Date.parse(`${to}T23:59:59.999+05:00`) : NaN;
+  return {
+    fromMs: Number.isNaN(fromMs) ? null : fromMs,
+    toMs: Number.isNaN(toMs) ? null : toMs,
+  };
+}
+
+/** Whether an entry's timestamp falls inside a (possibly half-open) register period. */
+export function withinRegisterPeriod(
+  at: Date,
+  bounds: { fromMs: number | null; toMs: number | null }
+): boolean {
+  const ms = at.getTime();
+  if (bounds.fromMs !== null && ms < bounds.fromMs) return false;
+  if (bounds.toMs !== null && ms > bounds.toMs) return false;
+  return true;
+}
+
 export type RegisterPrintRow = {
   inventoryLotId: string;
   batchNumber: string;

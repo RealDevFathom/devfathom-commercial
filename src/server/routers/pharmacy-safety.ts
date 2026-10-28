@@ -6,6 +6,7 @@ import {
   appendControlledCorrection,
   assignedRegisterBranchIds,
   listControlledPinWitnesses,
+  loadProvincialRegisterSetting,
 } from '@/lib/pharmacy/controlled-register';
 import { chooseRegisterPersonName } from '@/lib/pharmacy/register-print';
 import { maskCnic } from '@/lib/pharmacy/patient-prescriptions';
@@ -80,20 +81,23 @@ export const pharmacySafetyRouter = router({
     .input(z.object({ branchId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       const organizationId = await organizationBranch(ctx, input.branchId);
-      const entries = await ctx.db.pharmacyControlledRegisterEntry.findMany({
-        where: { organizationId, branchId: input.branchId },
-        orderBy: { serial: 'asc' },
-        include: {
-          patient: { select: { displayName: true, cnic: true } },
-          prescriber: true,
-          prescription: true,
-          medicine: { select: { productName: true, manufacturer: true } },
-          line: { include: { medicine: true } },
-          correctsEntry: { select: { serial: true } },
-          refEntry: { select: { serial: true } },
-          incidents: { include: { approvals: true } },
-        },
-      });
+      const [entries, province] = await Promise.all([
+        ctx.db.pharmacyControlledRegisterEntry.findMany({
+          where: { organizationId, branchId: input.branchId },
+          orderBy: { serial: 'asc' },
+          include: {
+            patient: { select: { displayName: true, cnic: true } },
+            prescriber: true,
+            prescription: true,
+            medicine: { select: { productName: true, manufacturer: true } },
+            line: { include: { medicine: true } },
+            correctsEntry: { select: { serial: true } },
+            refEntry: { select: { serial: true } },
+            incidents: { include: { approvals: true } },
+          },
+        }),
+        loadProvincialRegisterSetting(ctx.db, organizationId, input.branchId, new Date()),
+      ]);
       const witnessIds = [...new Set(entries.map((entry) => entry.witnessedByUserId))];
       const [witnesses, staff] = witnessIds.length
         ? await Promise.all([
@@ -116,6 +120,8 @@ export const pharmacySafetyRouter = router({
         staffNames.set(profile.userId, names);
       }
       return {
+        pendingLegalReview:
+          province?.provinceCode === 'PK-SD' && province.pendingLegalReview,
         entries: entries.map((entry) => ({
           ...entry,
           patient: entry.patient

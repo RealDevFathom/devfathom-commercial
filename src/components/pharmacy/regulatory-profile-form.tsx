@@ -326,7 +326,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               htmlFor="provinceCode"
               hint={
                 jurisdiction?.provisional
-                  ? 'These rules are still provisional, so this branch cannot operate on them yet.'
+                  ? 'These rules are pending legal review. Sales are allowed.'
                   : 'Only provinces with published rules appear here.'
               }
               label="Province"

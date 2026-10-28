@@ -1,6 +1,11 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
+import {
+  assertControlledSaleFields,
+  isPendingLegalReview,
+  type ProvincialRegisterSetting,
+} from './provincial-register';
 
 /** Running balance after applying a signed delta. Null when the result is not a safe non-negative integer. */
 export function registerBalanceAfter(previous: number, delta: number): number | null {
@@ -151,10 +156,45 @@ type SaleRegisterInput = {
   recordedByUserId: string;
   witnessedByUserId: string;
   signatureRef: string;
+  /** The branch's province setting; used to enforce province-specific register fields. */
+  province?: ProvincialRegisterSetting | null;
 };
+
+/**
+ * The province register setting in force for a branch at `at`, read from its active
+ * regulatory profile and jurisdiction rule set. Null when the branch has no profile
+ * yet (dispensing is already gated elsewhere); callers then apply the base default.
+ */
+export async function loadProvincialRegisterSetting(
+  db: ScopedDb,
+  organizationId: string,
+  branchId: string,
+  at: Date
+): Promise<ProvincialRegisterSetting | null> {
+  const profile = await db.branchRegulatoryProfile.findFirst({
+    where: {
+      organizationId,
+      branchId,
+      effectiveFrom: { lte: at },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+    },
+    orderBy: { effectiveFrom: 'desc' },
+    select: {
+      provinceCode: true,
+      jurisdictionRuleSet: { select: { controlledRegisterFlags: true } },
+    },
+  });
+  if (!profile) return null;
+  return {
+    provinceCode: profile.provinceCode,
+    pendingLegalReview: isPendingLegalReview(profile.jurisdictionRuleSet.controlledRegisterFlags),
+  };
+}
 
 /** Append one SALE row per stock movement. The caller is already inside the sale transaction. */
 export async function appendControlledSaleEntries(db: ScopedDb, input: SaleRegisterInput) {
+  // Province-specific required fields (spec §7): refuse before any row is written.
+  assertControlledSaleFields(input.province, { patientAddress: input.patientAddress });
   await lockRegister(db, input.organizationId, input.branchId);
   let serial = (await nextSerial(db, input.organizationId, input.branchId)) - 1;
   for (const movementId of input.movementIds) {

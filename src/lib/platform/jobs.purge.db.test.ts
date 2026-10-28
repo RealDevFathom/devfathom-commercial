@@ -85,6 +85,8 @@ const LOCATION_ID = `wha1209_loc_${suffix}`;
 const JOB_ID = `wha1209_job_${suffix}`;
 const PURGED_PROFILE_ID = `wha1220_profile_${suffix}`;
 const LIVE_PROFILE_ID = `wha1220_live_profile_${suffix}`;
+const REGISTER_ENTRY_ID = `wha281_register_${suffix}`;
+const LIVE_REGISTER_ENTRY_ID = `wha281_live_register_${suffix}`;
 const HOTEL_PURGED_ORG = `hotel_purge_${suffix}`;
 const HOTEL_LIVE_ORG = `hotel_live_${suffix}`;
 const HOTEL_JOB_ID = `hotel_purge_job_${suffix}`;
@@ -168,6 +170,39 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       );
       await seedRegulatoryProfile(db, PURGED_PROFILE_ID, PURGED_ORG, BRANCH_ID);
       await seedRegulatoryProfile(db, LIVE_PROFILE_ID, LIVE_ORG, LIVE_BRANCH_ID);
+      // The reconciliation trigger validates normal domain writes. This fixture is
+      // deliberately minimal because the purge behavior under test starts at DELETE.
+      await db.$executeRawUnsafe(
+        `ALTER TABLE pharmacy_controlled_register_entries DISABLE TRIGGER pharmacy_controlled_register_reconcile`
+      );
+      try {
+        await db.$executeRawUnsafe(
+          `INSERT INTO pharmacy_controlled_register_entries
+             (id, "organizationId", "branchId", serial, "entryKind", "inventoryLotId",
+              "stockMovementId", "batchNumber", "quantityCanonicalUnits", "runningBalance",
+              "balanceDelta", "recordedByUserId", "witnessedByUserId", "counterpartyName")
+           VALUES ($1, $2, $3, 1, 'PURCHASE', 'purge-fixture-lot', 'purge-fixture-movement',
+                   'PURGE-BATCH', 1, 1, 1, 'operator-a', 'operator-b', 'Purge fixture supplier')`,
+          REGISTER_ENTRY_ID,
+          PURGED_ORG,
+          BRANCH_ID
+        );
+        await db.$executeRawUnsafe(
+          `INSERT INTO pharmacy_controlled_register_entries
+             (id, "organizationId", "branchId", serial, "entryKind", "inventoryLotId",
+              "stockMovementId", "batchNumber", "quantityCanonicalUnits", "runningBalance",
+              "balanceDelta", "recordedByUserId", "witnessedByUserId", "counterpartyName")
+           VALUES ($1, $2, $3, 1, 'PURCHASE', 'live-fixture-lot', 'live-fixture-movement',
+                   'LIVE-BATCH', 1, 1, 1, 'operator-a', 'operator-b', 'Live fixture supplier')`,
+          LIVE_REGISTER_ENTRY_ID,
+          LIVE_ORG,
+          LIVE_BRANCH_ID
+        );
+      } finally {
+        await db.$executeRawUnsafe(
+          `ALTER TABLE pharmacy_controlled_register_entries ENABLE TRIGGER pharmacy_controlled_register_reconcile`
+        );
+      }
       await db.$executeRawUnsafe(
         `INSERT INTO pharmacy_stock_locations (id, "organizationId", "branchId", code, name, kind, "updatedAt")
          VALUES ($1, $2, $3, $1, 'Main store', 'STORE', now())`,
@@ -231,7 +266,8 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
                 (SELECT count(*) FROM pharmacy_branches WHERE "organizationId" = $1) AS branches,
                 (SELECT count(*) FROM pharmacy_stock_locations WHERE "organizationId" = $1) AS locations,
                 (SELECT count(*) FROM pharmacy_onboarding_events WHERE "organizationId" = $1) AS events,
-                (SELECT count(*) FROM pharmacy_onboarding_states WHERE "organizationId" = $1) AS states`,
+                (SELECT count(*) FROM pharmacy_onboarding_states WHERE "organizationId" = $1) AS states,
+                (SELECT count(*) FROM pharmacy_controlled_register_entries WHERE "organizationId" = $1) AS register_entries`,
         PURGED_ORG
       )
     );
@@ -245,6 +281,7 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       locations: none,
       events: none,
       states: none,
+      register_entries: none,
     });
 
     const [live] = await withPlatformDb((db) =>
@@ -282,6 +319,28 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
         )
       )
     ).rejects.toThrow(/append-only/);
+
+    // A tenant connection can set custom GUCs, so the tenant name by itself must
+    // never turn into purge authority.
+    await expect(
+      withTenantDb(LIVE_ORG, async (db) => {
+        await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${LIVE_ORG}, true)`;
+        return db.$executeRawUnsafe(
+          `DELETE FROM pharmacy_branch_regulatory_profiles WHERE id = $1`,
+          LIVE_PROFILE_ID
+        );
+      })
+    ).rejects.toThrow(/append-only/);
+
+    await expect(
+      withTenantDb(LIVE_ORG, async (db) => {
+        await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${LIVE_ORG}, true)`;
+        return db.$executeRawUnsafe(
+          `DELETE FROM pharmacy_controlled_register_entries WHERE id = $1`,
+          LIVE_REGISTER_ENTRY_ID
+        );
+      })
+    ).rejects.toThrow(/controlled register entry is within its 3-year retention window/);
 
     await expect(
       withPlatformDb((db) =>

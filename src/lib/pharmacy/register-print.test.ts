@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   chooseRegisterPersonName,
+  registerPeriodBounds,
   registerPersonName,
   registerPrintTotals,
+  withinRegisterPeriod,
 } from './register-print';
 
 describe('register print', () => {
@@ -46,5 +48,29 @@ describe('register print', () => {
       { batchNumber: 'CD-QA-1001', runningBalance: 8, serial: 2 },
       { batchNumber: 'CD-QA-UI', runningBalance: 5, serial: 3 },
     ]);
+  });
+
+  it('bounds a period on Karachi (UTC+5) calendar-day edges', () => {
+    const bounds = registerPeriodBounds('2026-10-01', '2026-10-31');
+    // 2026-10-01 00:00 PKT is 2026-09-30 19:00 UTC.
+    expect(bounds.fromMs).toBe(Date.parse('2026-09-30T19:00:00.000Z'));
+    // 2026-10-31 23:59:59.999 PKT is 2026-10-31 18:59:59.999 UTC.
+    expect(bounds.toMs).toBe(Date.parse('2026-10-31T18:59:59.999Z'));
+
+    const open = registerPeriodBounds('', '');
+    expect(open).toEqual({ fromMs: null, toMs: null });
+  });
+
+  it('keeps entries inside the period and drops those outside it', () => {
+    const bounds = registerPeriodBounds('2026-10-01', '2026-10-31');
+    // Midnight Karachi on the 1st is inside; a second before is outside.
+    expect(withinRegisterPeriod(new Date('2026-09-30T19:00:00.000Z'), bounds)).toBe(true);
+    expect(withinRegisterPeriod(new Date('2026-09-30T18:59:59.000Z'), bounds)).toBe(false);
+    expect(withinRegisterPeriod(new Date('2026-10-31T18:59:59.999Z'), bounds)).toBe(true);
+    expect(withinRegisterPeriod(new Date('2026-11-01T00:00:00.000Z'), bounds)).toBe(false);
+    // An open period keeps everything.
+    expect(
+      withinRegisterPeriod(new Date('2000-01-01T00:00:00.000Z'), { fromMs: null, toMs: null })
+    ).toBe(true);
   });
 });

@@ -13,7 +13,9 @@ import {
   earlierRegisterEntry,
   EMERGENCY_NO_RX_WINDOW_MS,
   emergencyNoRxDecision,
+  loadProvincialRegisterSetting,
 } from '@/lib/pharmacy/controlled-register';
+import { ProvincialRegisterError } from '@/lib/pharmacy/provincial-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
 import {
@@ -181,6 +183,8 @@ function fail(error: unknown): never {
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof FamilyKhataError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
+  if (error instanceof ProvincialRegisterError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof PharmacyInventoryError && error.reason === 'BLOCKED_STOCK') {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -1017,6 +1021,14 @@ export const pharmacySalesRouter = router({
           if (authorization.refSerial && !refEntry) {
             return { blocked: 'That earlier register serial is not on this branch.' };
           }
+          // Province-specific required register fields (spec §7), e.g. Sindh needs
+          // the patient's complete address. Null when the branch has no profile.
+          const province = await loadProvincialRegisterSetting(
+            db,
+            scope.organizationId,
+            scope.branchId,
+            now
+          );
           if (authorization.emergency) {
             const patient = await db.pharmacyPatient.findFirst({
               where: { id: authorization.patientId, organizationId: scope.organizationId },
@@ -1081,6 +1093,7 @@ export const pharmacySalesRouter = router({
               recordedByUserId: scope.actorId,
               witnessedByUserId: pharmacist.id,
               signatureRef: `pin:${pharmacist.id}`,
+              province,
             });
             await db.pharmacyEmergencyRxFollowUp.create({
               data: {
@@ -1199,6 +1212,7 @@ export const pharmacySalesRouter = router({
             recordedByUserId: scope.actorId,
             witnessedByUserId: pharmacist.id,
             signatureRef: decision.id,
+            province,
           });
           return result;
         });
