@@ -1236,9 +1236,11 @@ export const pharmacySalesRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           try {
+            const db = txDb(tx);
+            const scope = await scopeFor(ctx, input.branchId);
             return await changeSaleStatus(
-              txDb(tx),
-              await scopeFor(ctx, input.branchId),
+              db,
+              scope,
               input.saleId,
               input.action,
               input.reason,

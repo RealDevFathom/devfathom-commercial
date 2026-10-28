@@ -146,10 +146,45 @@ export class PharmacySaleError extends Error {
       | 'IDEMPOTENCY_CONFLICT'
       | 'CONSENT_REQUIRED'
       | 'UNSAFE_STOCK'
+      | 'INSUFFICIENT_TENDER'
       | 'CROSS_BRANCH_REFERENCE'
   ) {
     super(reason);
   }
+}
+
+/** A completed sale must have exact, safely representable persisted payment coverage. */
+export function tendersExactlyCoverSaleTotal(sale: {
+  lines: readonly { quantity: number; unitPriceMinor: number; discountMinor: number }[];
+  tenders: readonly { amountMinor: number }[];
+}) {
+  let totalMinor = 0;
+  for (const line of sale.lines) {
+    if (
+      !Number.isSafeInteger(line.quantity) ||
+      !Number.isSafeInteger(line.unitPriceMinor) ||
+      !Number.isSafeInteger(line.discountMinor) ||
+      line.quantity <= 0 ||
+      line.unitPriceMinor < 0 ||
+      line.discountMinor < 0
+    )
+      return false;
+    const grossMinor = line.quantity * line.unitPriceMinor;
+    const netMinor = grossMinor - line.discountMinor;
+    if (!Number.isSafeInteger(grossMinor) || !Number.isSafeInteger(netMinor) || netMinor < 0)
+      return false;
+    totalMinor += netMinor;
+    if (!Number.isSafeInteger(totalMinor)) return false;
+  }
+  if (totalMinor <= 0) return false;
+
+  let tenderedMinor = 0;
+  for (const tender of sale.tenders) {
+    if (!Number.isSafeInteger(tender.amountMinor) || tender.amountMinor <= 0) return false;
+    tenderedMinor += tender.amountMinor;
+    if (!Number.isSafeInteger(tenderedMinor)) return false;
+  }
+  return tenderedMinor === totalMinor;
 }
 
 export function validateDiscount(input: {
@@ -173,7 +208,7 @@ export function validateDiscount(input: {
 async function saleInScope(db: ScopedDb, scope: LedgerScope, saleId: string) {
   const sale = await db.pharmacySale.findFirst({
     where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
-    include: { lines: { include: { medicine: true } } },
+    include: { lines: { include: { medicine: true } }, tenders: { select: { amountMinor: true } } },
   });
   if (!sale) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
   return sale;
@@ -400,6 +435,12 @@ export async function changeSaleStatus(
   });
   if (claimed.count !== 1) throw new PharmacySaleError('INVALID_STATE');
 
+  // The conditional update above is also the sale-row lock. Re-read payment facts only
+  // after acquiring it so add-line and tender transactions cannot race this check.
+  const transitioned = action === 'complete' ? await saleInScope(db, scope, saleId) : undefined;
+  if (transitioned && !tendersExactlyCoverSaleTotal(transitioned))
+    throw new PharmacySaleError('INSUFFICIENT_TENDER');
+
   if (action === 'void') {
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
@@ -439,7 +480,7 @@ export async function changeSaleStatus(
   }
 
   if (action === 'complete') {
-    const completed = await saleInScope(db, scope, saleId);
+    const completed = transitioned!;
     if (completed.receiptNumber == null) {
       const receiptDeviceId = deviceId?.trim() || completed.receiptDeviceId || 'counter';
       const rows = await db.$queryRaw<Array<{ receipt_number: number }>>(Prisma.sql`

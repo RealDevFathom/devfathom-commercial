@@ -5,6 +5,7 @@ import {
   addRestockInterest,
   captureSafeRestockArrival,
   changeSaleStatus,
+  tendersExactlyCoverSaleTotal,
   PharmacySaleError,
   priceFromLot,
   recoverDemandWithAlternate,
@@ -131,6 +132,8 @@ describe('POS sale voiding', () => {
       receiptNumber: null as number | null,
       receiptDeviceId: null as string | null,
       businessDate: null as Date | null,
+      lines: [{ quantity: 2, unitPriceMinor: 100, discountMinor: 10 }],
+      tenders: [{ amountMinor: 190 }],
     };
     const db = {
       pharmacySale: {
@@ -164,6 +167,73 @@ describe('POS sale voiding', () => {
       receiptNumber: 7,
       receiptDeviceId: 'counter-1',
     });
+  });
+
+  it('refuses to complete or issue a receipt when persisted tenders do not cover the sale', async () => {
+    const sale = {
+      id: 'sale-a',
+      status: 'OPEN',
+      receiptNumber: null,
+      lines: [{ quantity: 2, unitPriceMinor: 100, discountMinor: 10 }],
+      tenders: [{ amountMinor: 189 }],
+    };
+    const updateMany = vi.fn();
+    const issueReceipt = vi.fn();
+    const db = {
+      pharmacySale: { findFirst: vi.fn().mockResolvedValue(sale), updateMany },
+      $queryRaw: issueReceipt,
+    };
+
+    await expect(
+      changeSaleStatus(db as never, scope, 'sale-a', 'complete', undefined, 'counter-1')
+    ).rejects.toMatchObject({ reason: 'INSUFFICIENT_TENDER' });
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(issueReceipt).not.toHaveBeenCalled();
+  });
+
+  it('requires exact, safe integer tender coverage before completion', () => {
+    const paid = {
+      lines: [{ quantity: 2, unitPriceMinor: 100, discountMinor: 10 }],
+      tenders: [{ amountMinor: 190 }],
+    };
+    expect(tendersExactlyCoverSaleTotal(paid)).toBe(true);
+    expect(
+      tendersExactlyCoverSaleTotal({ ...paid, tenders: [{ amountMinor: 191 }] })
+    ).toBe(false);
+    expect(
+      tendersExactlyCoverSaleTotal({
+        lines: [{ quantity: Number.MAX_SAFE_INTEGER, unitPriceMinor: 2, discountMinor: 0 }],
+        tenders: [{ amountMinor: Number.MAX_SAFE_INTEGER }],
+      })
+    ).toBe(false);
+  });
+
+  it('checks tender coverage from the locked post-claim sale snapshot', async () => {
+    const beforeClaim = {
+      id: 'sale-a',
+      status: 'OPEN',
+      lines: [{ quantity: 1, unitPriceMinor: 100, discountMinor: 0 }],
+      tenders: [{ amountMinor: 100 }],
+    };
+    const afterClaim = {
+      ...beforeClaim,
+      status: 'COMPLETED',
+      lines: [{ quantity: 2, unitPriceMinor: 100, discountMinor: 0 }],
+    };
+    const findFirst = vi
+      .fn()
+      .mockResolvedValueOnce(beforeClaim)
+      .mockResolvedValueOnce(afterClaim);
+    const db = {
+      pharmacySale: { findFirst, updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      $queryRaw: vi.fn(),
+    };
+
+    await expect(
+      changeSaleStatus(db as never, scope, 'sale-a', 'complete', undefined, 'counter-1')
+    ).rejects.toMatchObject({ reason: 'INSUFFICIENT_TENDER' });
+    expect(findFirst).toHaveBeenCalledTimes(2);
+    expect(db.$queryRaw).not.toHaveBeenCalled();
   });
 
   it('stops a losing add-line race before stock allocation', async () => {
