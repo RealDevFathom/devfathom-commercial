@@ -53,3 +53,29 @@ Use one status on every capability claim:
 Documentation changes should cite repository paths and line ranges where practical, distinguish current code from decisions, avoid secret values and customer data, and preserve the web-only boundary. Azure is the deployment platform; no Vercel deployment instructions belong in current operating guidance. Mobile apps are future work; responsive mobile web is part of the current web surface where implemented.
 
 Last reconciled: 2026-08-08.
+
+## Data migrations under forced RLS
+
+Prisma migration files must explicitly bracket cross-tenant data changes and their
+transaction-local platform scope. Do not rely on a migration runner to preserve
+scope across statements, or put `set_config` in the write's CTE:
+
+```sql
+BEGIN;
+SELECT set_config('app.is_platform_admin', 'true', true);
+-- Idempotent INSERT ... ON CONFLICT DO NOTHING, or a narrowly guarded UPDATE/DELETE.
+-- Validate expected rows here, while the same scope is still active.
+COMMIT;
+```
+
+Keep `ENABLE ROW LEVEL SECURITY` and `FORCE ROW LEVEL SECURITY` intact. Never use
+session-level platform scope as a workaround. A single `DO` statement may set local
+scope internally for its own work; `BEGIN` inside PL/pgSQL is not a SQL transaction.
+Do not change applied migrations: add a uniquely timestamped repair migration.
+Verify from an empty database owned by a `NOSUPERUSER NOBYPASSRLS` role, then use
+populated fixtures to assert changed row counts, a second replay, and tenant
+visibility after commit. Empty tables alone cannot prove a backfill worked.
+
+The #218 regression check is `TZ=UTC MIGSWEEP_DATABASE_URL=<disposable-owner-url>
+bun run test tests/migration-rls-sweep.db.test.ts --maxWorkers=1`. Its URL must point
+to a disposable database after `prisma migrate deploy`; it inserts test fixtures.
