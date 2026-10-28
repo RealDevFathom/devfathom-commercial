@@ -10,7 +10,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { reverseRefundedEarnedPoints } from './customer-loyalty-earned-reversal';
 import { accrueSalePoints, restoreRefundedLoyaltyPoints } from './customer-loyalty';
 import { returnedLineValue } from './sales';
-import { postTenderEntry, postTenderRefundEntry } from './finance-postings';
+import { postDailyCloseEntry, postTenderEntry, postTenderRefundEntry } from './finance-postings';
 import { firstCloseIsFinal } from './migration/first-close';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
 import type { LedgerScope } from './stock-ledger';
@@ -882,6 +882,7 @@ export async function cutPharmacyDailyClose(
       actorId: scope.actorId,
     },
   });
+  await postDailyCloseEntry(db, scope, { closeId: close.id, at: close.createdAt });
   await requestCounterEvidence(db, scope, { kind: 'DAILY_CLOSE', subjectId: close.id });
   return close;
 }
