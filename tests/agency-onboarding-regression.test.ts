@@ -116,6 +116,7 @@ describe('§9 contract item 1 — AGENCY organization.create: zero branch rows',
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_a',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
