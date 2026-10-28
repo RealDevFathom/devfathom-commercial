@@ -83,7 +83,8 @@ const dispense: Permission[] = [{ capability: 'pharmacy:dispense', effect: 'ALLO
 function fixture(
   permissions: Permission[],
   role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE',
-  overrides: Permission[] = []
+  overrides: Permission[] = [],
+  roleKey?: string
 ) {
   const db = {
     user: {
@@ -92,7 +93,7 @@ function fixture(
         status: 'ACTIVE',
         role,
         organizationId: 'org-a',
-        organizationRole: { permissions },
+        organizationRole: { permissions, ...(roleKey ? { key: roleKey } : {}) },
         permissionOverrides: overrides,
       })),
     },
@@ -217,6 +218,82 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  describe.each([
+    { name: 'persisted admin', role: 'ADMIN' as const, key: 'custom' },
+    { name: 'persisted owner', role: 'EMPLOYEE' as const, key: 'owner' },
+  ])('$name capability precedence', ({ role, key }) => {
+    const protectedPaths = () => [
+      ...paths,
+      {
+        name: 'counterCart',
+        run: (caller: Caller) => caller.counterCart({ branchId: 'branch-a', saleId: 'sale-a' }),
+        allowed: { saleId: 'sale-a', lines: [] },
+      },
+      {
+        name: 'returnHistory',
+        run: (caller: Caller) => caller.returnHistory({ branchId: 'branch-a', saleId: 'sale-a' }),
+        allowed: [{ id: 'return-1' }],
+      },
+    ];
+
+    it.each([1, 2])('honors role and override DENYs with %i active users', async (activeUsers) => {
+      for (const capability of [
+        '*',
+        'pharmacy:*',
+        'pharmacy.*',
+        'pharmacy:counter',
+        'pharmacy.counter',
+        'pharmacy:receipt',
+        'pharmacy.receipt',
+        'pharmacy:dispense',
+        'pharmacy.dispense',
+      ]) {
+        for (const source of ['role', 'override']) {
+          const deny: Permission = { capability, effect: 'DENY' };
+          const f = fixture(
+            source === 'role' ? [...dispense, deny] : dispense,
+            role,
+            source === 'override' ? [deny] : [],
+            key
+          );
+          f.db.user.count.mockResolvedValue(activeUsers);
+          // Persisted authority must govern even when the session disagrees.
+          f.user.role = 'EMPLOYEE';
+          for (const path of protectedPaths()) {
+            await expect(
+              path.run(f.caller()),
+              `${source} ${capability}: ${path.name}`
+            ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+          }
+          expect(f.db.pharmacySale.findMany).not.toHaveBeenCalled();
+          expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+        }
+      }
+      for (const read of [...reads(), readCounterCart, readReturnHistory]) {
+        expect(read).not.toHaveBeenCalled();
+      }
+    });
+
+    it('retains solo access without grants or branch assignments', async () => {
+      const f = fixture([], role, [], key);
+      f.user.role = 'EMPLOYEE';
+      f.db.user.count.mockResolvedValue(1);
+      for (const path of protectedPaths()) {
+        await expect(path.run(f.caller()), path.name).resolves.toMatchObject(path.allowed);
+      }
+      expect(f.db.user.count).toHaveBeenCalledWith({
+        where: { organizationId: 'org-a', status: 'ACTIVE' },
+      });
+    });
+
+    it('requires a grant when another ACTIVE user exists', async () => {
+      const f = fixture([], role, [], key);
+      for (const path of protectedPaths()) {
+        await expect(path.run(f.caller()), path.name).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+    });
+  });
+
   it('rejects status-only completion before opening a transaction', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);

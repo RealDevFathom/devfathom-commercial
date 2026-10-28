@@ -40,6 +40,9 @@ const db = {
   // The actor can inspect safety evidence and receive purchases.
   user: {
     findUnique: vi.fn(async () => ({
+      organizationId: 'org-1',
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
       organizationRole: null,
       permissionOverrides: [
         { capability: 'pharmacy:safety', effect: 'ALLOW' },

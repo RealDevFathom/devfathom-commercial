@@ -51,8 +51,16 @@ function caller(enabledModules: string[], role = 'EMPLOYEE') {
       user: {
         // `can()` reads the viewer's custom permissions through the same delegate;
         // that lookup is answered separately from the member read.
-        findUnique: (args: { select?: { permissionOverrides?: unknown } }) =>
-          args.select?.permissionOverrides ? mocks.permissions(args) : mocks.findUnique(args),
+        findUnique: async (args: { select?: { permissionOverrides?: unknown } }) =>
+          args.select?.permissionOverrides
+            ? {
+                organizationId: 'org_1',
+                role,
+                status: 'ACTIVE',
+                ...(await mocks.permissions(args)),
+              }
+            : mocks.findUnique(args),
+        count: vi.fn().mockResolvedValue(2),
         findMany: mocks.findMany,
         update: mocks.update,
       },

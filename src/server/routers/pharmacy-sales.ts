@@ -404,7 +404,14 @@ async function requireCounterReceiptAccess(
   const owner =
     member.status === 'ACTIVE' &&
     (member.role === 'ADMIN' || member.organizationRole?.key === 'owner');
-  const capable = owner || counterCapabilityDecision([...overrides, ...roleRules]) === 'ALLOW';
+  const decision = counterCapabilityDecision([...overrides, ...roleRules]);
+  const capable =
+    decision === 'ALLOW' ||
+    (decision === null &&
+      owner &&
+      (await ctx.db.user.count({
+        where: { organizationId: scope.organizationId, status: 'ACTIVE' },
+      })) === 1);
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
