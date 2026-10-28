@@ -13,6 +13,7 @@ export type CounterUnitToggleProps = {
   selected: SaleUnitKind | null;
   quantity: number;
   preview: SaleLinePreview | null;
+  availableUnits: number;
   disabled?: boolean;
   onSelect: (kind: SaleUnitKind) => void;
   onQuantityChange: (quantity: number) => void;
@@ -43,6 +44,7 @@ export function CounterUnitToggle({
   selected,
   quantity,
   preview,
+  availableUnits,
   disabled = false,
   onSelect,
   onQuantityChange,
@@ -53,8 +55,14 @@ export function CounterUnitToggle({
   if (options.length === 0) {
     return (
       <p className="text-sm text-text-muted" role="status">
-        No sale unit is available for this medicine. Its pack hierarchy does not match the received
-        lot, so no price can be derived.
+        {availableUnits <= 0 ? (
+          <>This medicine is out of stock.</>
+        ) : (
+          <>
+            No sale unit is available for this medicine. Its pack hierarchy does not match the
+            received lot, so no price can be derived.
+          </>
+        )}
       </p>
     );
   }
