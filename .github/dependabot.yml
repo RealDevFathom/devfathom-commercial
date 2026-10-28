@@ -1,116 +1,143 @@
-# Dependabot: hardened config
-# Docs: https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
-# - Security updates are grouped per ecosystem and skip cooldown.
-# - Version updates wait (cooldown) before adopting fresh releases to reduce supply-chain risk.
-# - Major updates are never grouped (one PR each).
-# - Note: pin GitHub Actions to full commit SHAs in workflows; Dependabot keeps SHA pins updated.
+# .github/dependabot.yml for DevFathom (RealDevFathom/devfathom-commercial)
+# - Version updates go to develop after a cooldown; security fixes skip the cooldown.
+# - Security blocks (limit 0) shape the security PRs GitHub raises against the default branch.
+# - Nothing auto-merges or adds ci-ready. No registries or tokens.
+# - Dependabot reads this file only from the default branch.
+
 version: 2
+
 updates:
+  # Bun: version updates into develop
   - package-ecosystem: "bun"
     directory: "/"
-    target-branch: "develop"
-    schedule:
-      interval: "daily"
-      time: "09:00"
-      timezone: "Asia/Karachi"
-    versioning-strategy: increase
-    open-pull-requests-limit: 10
-    rebase-strategy: "auto"
-    labels: ["dependencies", "javascript"]
-    commit-message:
-      prefix: "chore(deps)"
-      prefix-development: "chore(deps-dev)"
-      include: "scope"
-    cooldown:
-      default-days: 3
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 3
-    groups:
-      bun-security:
-        applies-to: security-updates
-        patterns: ["*"]
-      bun-minor-patch:
-        applies-to: version-updates
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    target-branch: "develop"
-    schedule:
-      interval: "daily"
-      time: "09:00"
-      timezone: "Asia/Karachi"
-    open-pull-requests-limit: 5
-    rebase-strategy: "auto"
-    labels: ["dependencies", "github-actions"]
-    commit-message:
-      prefix: "chore(deps)"
-      prefix-development: "chore(deps-dev)"
-      include: "scope"
-    cooldown:
-      default-days: 3
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 3
-    groups:
-      actions-security:
-        applies-to: security-updates
-        patterns: ["*"]
-      actions-minor-patch:
-        applies-to: version-updates
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  - package-ecosystem: "docker"
-    directories: ["/", "/infra/aws"]
     target-branch: "develop"
     schedule:
       interval: "weekly"
       day: "monday"
       time: "09:00"
       timezone: "Asia/Karachi"
-    open-pull-requests-limit: 5
-    rebase-strategy: "auto"
-    labels: ["dependencies", "docker"]
-    commit-message:
-      prefix: "chore(deps)"
-      prefix-development: "chore(deps-dev)"
-      include: "scope"
     cooldown:
-      default-days: 3
+      default-days: 7
+      semver-patch-days: 7
+      semver-minor-days: 14
+      semver-major-days: 30
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "javascript"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
-      docker-security:
-        applies-to: security-updates
-        patterns: ["*"]
-      docker-minor-patch:
-        applies-to: version-updates
-        patterns: ["*"]
+      nextjs:
+        patterns: ["next", "eslint-config-next", "@next/*"]
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+      prisma:
+        patterns: ["prisma", "@prisma/*"]
+      trpc:
+        patterns: ["@trpc/*"]
+      tanstack:
+        patterns: ["@tanstack/*"]
+      tiptap:
+        patterns: ["@tiptap/*"]
+      ai-sdk:
+        patterns: ["ai", "@ai-sdk/*"]
+      tailwind:
+        patterns: ["tailwindcss", "@tailwindcss/*"]
+      test-tooling:
+        patterns: ["vitest", "@vitest/*", "@playwright/test", "@axe-core/playwright", "@testing-library/*", "jsdom"]
+      production-patch:
+        dependency-type: "production"
+        update-types: ["patch"]
+      production-minor:
+        dependency-type: "production"
+        update-types: ["minor"]
+      development:
+        dependency-type: "development"
         update-types: ["minor", "patch"]
 
+  # Bun: security updates (daily, no version PRs)
+  - package-ecosystem: "bun"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "08:00"
+      timezone: "Asia/Karachi"
+    open-pull-requests-limit: 0
+    labels: ["dependencies", "security"]
+    commit-message:
+      prefix: "fix"
+      include: "scope"
+
+  # Docker base images (Dockerfile, Dockerfile.aws) into develop
+  - package-ecosystem: "docker"
+    directory: "/"
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "Asia/Karachi"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+
+  # LiveKit compose image into develop
   - package-ecosystem: "docker-compose"
     directory: "/docker/livekit"
     target-branch: "develop"
     schedule:
       interval: "weekly"
-      day: "monday"
+      day: "tuesday"
       time: "09:00"
       timezone: "Asia/Karachi"
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
-    rebase-strategy: "auto"
     labels: ["dependencies", "docker"]
     commit-message:
-      prefix: "chore(deps)"
-      prefix-development: "chore(deps-dev)"
+      prefix: "chore"
       include: "scope"
+
+  # GitHub Actions into develop
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "develop"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+      time: "09:00"
+      timezone: "Asia/Karachi"
     cooldown:
-      default-days: 3
+      default-days: 14
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "github-actions"]
+    commit-message:
+      prefix: "ci"
+      include: "scope"
     groups:
-      compose-security:
-        applies-to: security-updates
-        patterns: ["*"]
-      compose-minor-patch:
-        applies-to: version-updates
+      actions:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+
+  # GitHub Actions: security updates (daily, no version PRs)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "08:00"
+      timezone: "Asia/Karachi"
+    open-pull-requests-limit: 0
+    labels: ["dependencies", "security"]
+    commit-message:
+      prefix: "ci"
+      include: "scope"
