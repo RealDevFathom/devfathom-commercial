@@ -46,6 +46,7 @@ const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).t
 
 // How long an invitation link stays valid.
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const OCCUPIED_SEAT_STATUSES = ['ACTIVE', 'ON_LEAVE', 'INVITED'] as const;
 
 // IMP-HR-01: the leave types we track balances for (mirrors the LeaveType enum).
 const LEAVE_TYPES = ['VACATION', 'SICK', 'REMOTE'] as const;
@@ -128,27 +129,13 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const organizationId = workspaceId(ctx);
       const email = input.email;
       const department = await ctx.db.organizationDepartment.findFirst({
-        where: { key: input.department, active: true },
+        where: { organizationId, key: input.department, active: true },
         select: { id: true },
       });
       if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
-      const existing = await ctx.db.user.findFirst({
-        where: { email },
-        select: { id: true, status: true },
-      });
-      // Only a still-pending invite may be re-sent; an active/real account blocks.
-      if (existing && existing.status !== 'INVITED') {
-        throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists' });
-      }
-      if (!existing && ctx.entitlements.activeSeats >= ctx.entitlements.seatLimit) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: `Seat limit reached (${ctx.entitlements.activeSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
-        });
-      }
-
       const { token, tokenHash } = generateInviteToken();
       const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
       const profile = {
@@ -162,15 +149,41 @@ export const teamRouter = router({
       };
 
       const user = await ctx.db.$transaction(async (tx) => {
+        // The organization row is the per-tenant mutex for seat-consuming writes.
+        // Find the member only after taking it so a concurrent invite cannot turn
+        // this request's earlier "not found" result into a stale decision.
+        await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
+        const existing = await tx.user.findFirst({
+          where: { organizationId, email },
+          select: { id: true, status: true },
+        });
+
+        // Only a still-pending invite may be re-sent; an active/real account blocks.
+        if (existing && existing.status !== 'INVITED') {
+          throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists' });
+        }
+
+        if (!existing) {
+          const activeSeats = await tx.user.count({
+            where: { organizationId, status: { in: [...OCCUPIED_SEAT_STATUSES] } },
+          });
+          if (activeSeats >= ctx.entitlements.seatLimit) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: `Seat limit reached (${activeSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
+            });
+          }
+        }
+
         // Upsert the user (re-invite refreshes the seeded details), then replace
         // any prior invitation with a fresh single-use token.
         const u = existing
           ? await tx.user.update({
-              where: { id: existing.id },
+              where: { organizationId_id: { organizationId, id: existing.id } },
               data: { ...profile, password: null, status: 'INVITED' },
             })
           : await tx.user.create({
-              data: { ...profile, email, password: null, status: 'INVITED' },
+              data: { organizationId, ...profile, email, password: null, status: 'INVITED' },
             });
 
         await tx.invitation.upsert({
