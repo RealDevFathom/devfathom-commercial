@@ -210,6 +210,52 @@ function AskFathomSettingsForm({ organizationId }: { organizationId: string }) {
   );
 }
 
+type ProcurementMutation = ReturnType<
+  typeof trpc.organizationAdmin.setMemberProcurement.useMutation
+>;
+type OrganizationUser = NonNullable<
+  ReturnType<typeof trpc.organizationAdmin.overview.useQuery>['data']
+>['organization']['users'][number];
+
+function ProcurementToggle({
+  user,
+  mutation,
+}: {
+  user: OrganizationUser;
+  mutation: ProcurementMutation;
+}) {
+  const serverChecked = user.permissionOverrides.some(
+    (o) => o.effect === 'ALLOW' && (o.expiresAt === null || new Date(o.expiresAt) > new Date())
+  );
+  const hasDenyOverride = user.permissionOverrides.some((o) => o.effect === 'DENY');
+  const [checked, setChecked] = useState(serverChecked);
+  // Keep the control in sync with the server once an overview refetch lands.
+  useEffect(() => {
+    setChecked(serverChecked);
+  }, [serverChecked]);
+
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={mutation.isPending || hasDenyOverride}
+        onChange={(event) => {
+          const next = event.currentTarget.checked;
+          setChecked(next);
+          mutation.mutate(
+            { id: user.id, enabled: next },
+            // Revert to the server state if the grant is refused; the error toast
+            // is raised by the mutation-level onError handler.
+            { onError: () => setChecked(serverChecked) }
+          );
+        }}
+      />
+      <span>Allow Goods in (receive stock) for this person</span>
+    </label>
+  );
+}
+
 export function OrganizationAdminContent() {
   const utils = trpc.useUtils();
   const overview = trpc.organizationAdmin.overview.useQuery();
@@ -237,6 +283,11 @@ export function OrganizationAdminContent() {
   });
   const member = trpc.organizationAdmin.updateMember.useMutation({
     onSuccess: () => success('Member access updated.'),
+    onError: failure,
+  });
+  const procurement = trpc.organizationAdmin.setMemberProcurement.useMutation({
+    onSuccess: (result) =>
+      success(result.enabled ? 'Goods in access granted.' : 'Goods in access removed.'),
     onError: failure,
   });
   const addMember = trpc.organizationAdmin.createMember.useMutation({
@@ -667,6 +718,9 @@ export function OrganizationAdminContent() {
                   </label>
                   <SubmitButton pending={member.isPending}>Update access</SubmitButton>
                 </form>
+                {organization.vertical === 'PHARMACY' ? (
+                  <ProcurementToggle user={user} mutation={procurement} />
+                ) : null}
                 <form
                   className="space-y-3"
                   onSubmit={(event) => {

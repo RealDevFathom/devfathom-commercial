@@ -26,6 +26,13 @@ export type CanOptions = {
   db?: AuthzDb;
 };
 
+// Clinical authority requires an explicit action grant, including for owners.
+const explicitGrantActions = new Set([
+  'pharmacy:dispense',
+  'pharmacy:safety',
+  'pharmacy:catalogue-review',
+]);
+
 async function customDecision(
   db: AuthzDb,
   userId: string,
@@ -49,12 +56,24 @@ async function customDecision(
     capabilityMatches(rule.capability, action)
   );
   if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
+  if (
+    overrides.some(
+      (rule) =>
+        rule.effect === 'ALLOW' && (!explicitGrantActions.has(action) || rule.capability === action)
+    )
+  )
+    return true;
   const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
     capabilityMatches(rule.capability, action)
   );
   if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
-  if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
+  if (
+    roleRules.some(
+      (rule) =>
+        rule.effect === 'ALLOW' && (!explicitGrantActions.has(action) || rule.capability === action)
+    )
+  )
+    return true;
   return null;
 }
 

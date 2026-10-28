@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const overviewData = vi.hoisted(() => ({ current: null as unknown }));
@@ -95,6 +95,7 @@ beforeEach(() => {
           department: 'COUNTER',
           organizationRoleId: null,
           lastActiveAt: null,
+          permissionOverrides: [],
         },
       ],
       usageCounters: [],
@@ -179,6 +180,30 @@ describe('organization people and access — staff onboarding', () => {
     const memberDepartment = screen.getAllByLabelText('Department')[1]!;
     const options = [...memberDepartment.querySelectorAll('option')].map((o) => o.textContent);
     expect(options).toEqual(['Counter', 'Dispensary', 'Store']);
+  });
+
+  it('reverts the Goods-in checkbox to the server state when the grant is refused', () => {
+    render(<OrganizationAdminContent />);
+
+    const checkbox = screen.getByLabelText(
+      'Allow Goods in (receive stock) for this person'
+    ) as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+
+    // The owner opts the member in; the control tracks the pending state optimistically.
+    fireEvent.click(checkbox);
+    expect(checkbox.checked).toBe(true);
+
+    const mutate = mutationFor('setMemberProcurement').mutate;
+    expect(mutate).toHaveBeenCalledWith(
+      { id: 'owner_1', enabled: true },
+      expect.objectContaining({ onError: expect.any(Function) })
+    );
+
+    // The server refuses the grant: the per-call onError fires and the checkbox snaps back.
+    const options = mutate.mock.calls[0]![1] as { onError: (error: unknown) => void };
+    act(() => options.onError(new Error('Goods in access is governed by platform policy.')));
+    expect(checkbox.checked).toBe(false);
   });
 });
 

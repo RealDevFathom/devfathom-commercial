@@ -80,11 +80,11 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     ).resolves.toBe(false);
   });
 
-  it('grants owners pharmacy actions and both report actions', async () => {
+  it('requires explicit clinical grants for owners while allowing operational and report actions', async () => {
     const db = authorizationDb({ rolePermissions: permissionsFor('owner') });
     for (const action of grantedActions) {
       await expect(can(proprietor, action, undefined, { db })).resolves.toBe(
-        true
+        !['pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review'].includes(action)
       );
     }
   });
@@ -124,6 +124,25 @@ describe('custom ABAC decisions', () => {
       can({ ...employee, role: 'ADMIN' }, 'finance:read', undefined, { db })
     ).resolves.toBe(false);
   });
+
+  it.each(['pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review'] as const)(
+    'requires an explicit ALLOW for %s while preserving wildcard DENY',
+    async (action) => {
+      for (const capability of ['*', 'pharmacy:*']) {
+        for (const source of ['overrides', 'rolePermissions'] as const) {
+          const db = authorizationDb({ [source]: [{ capability, effect: 'ALLOW' }] });
+          await expect(can(employee, action, undefined, { db })).resolves.toBe(false);
+        }
+        const db = authorizationDb({
+          overrides: [{ capability, effect: 'DENY' }],
+          rolePermissions: [{ capability: action, effect: 'ALLOW' }],
+        });
+        await expect(can(employee, action, undefined, { db })).resolves.toBe(false);
+      }
+      const db = authorizationDb({ overrides: [{ capability: action, effect: 'ALLOW' }] });
+      await expect(can(employee, action, undefined, { db })).resolves.toBe(true);
+    }
+  );
 
   it('falls back to built-in policy only when no custom rule matches', async () => {
     const db = authorizationDb({});

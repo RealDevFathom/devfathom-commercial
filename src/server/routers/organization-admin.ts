@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { hash } from 'bcryptjs';
 import { z } from 'zod';
@@ -267,6 +267,10 @@ export const organizationAdminRouter = router({
             department: true,
             organizationRoleId: true,
             lastActiveAt: true,
+            permissionOverrides: {
+              where: { capability: 'pharmacy:procurement' },
+              select: { effect: true, expiresAt: true },
+            },
           },
         },
         usageCounters: { orderBy: { updatedAt: 'desc' }, take: 25 },
@@ -666,6 +670,93 @@ export const organizationAdminRouter = router({
         metadata: { role: input.role, department: input.department },
       });
       return created;
+    }),
+
+  /**
+   * Per-person Goods in grant (product decision): the Pharmacist template stays
+   * without pharmacy:procurement; an owner/admin grants it to one staff member via
+   * a user permission override. Disabling removes only an ALLOW override, never a DENY.
+   */
+  setMemberProcurement: adminProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        enabled: z.boolean(),
+        reason: z.string().trim().min(5).max(500).default('Goods in access granted by an admin'),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const id = organizationId(ctx);
+      const target = await ctx.db.user.findFirst({
+        where: { id: input.id, organizationId: id },
+        select: { id: true, email: true, status: true },
+      });
+      if (!target) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
+      if (input.enabled && target.id === ctx.session.user.id) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You cannot grant Goods in to yourself.',
+        });
+      }
+      if (input.enabled && target.status !== 'ACTIVE') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Only an active member can be granted Goods in.',
+        });
+      }
+      const org = await ctx.db.organization.findUnique({
+        where: { id },
+        select: { vertical: true },
+      });
+      if (org?.vertical !== 'PHARMACY') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Goods in access applies to pharmacies only.',
+        });
+      }
+      const capability = 'pharmacy:procurement';
+      const denied = () =>
+        new TRPCError({
+          code: 'CONFLICT',
+          message:
+            'This member has an explicit Goods in denial. Remove it through access review first.',
+        });
+      // Security (#177): one conditional write each way. An explicit DENY is a deliberate
+      // restriction; the toggle never overwrites or removes it, even under a race.
+      if (input.enabled) {
+        const written = await ctx.db.$executeRaw`
+          INSERT INTO user_permission_overrides
+            (id, "organizationId", "userId", capability, effect, reason, "expiresAt", "createdById", "createdAt", "updatedAt")
+          VALUES (${randomUUID()}, ${id}, ${target.id}, ${capability}, 'ALLOW'::"PermissionEffect",
+                  ${input.reason}, NULL, ${ctx.session.user.id}, now(), now())
+          ON CONFLICT ("userId", capability) DO UPDATE
+            SET reason = EXCLUDED.reason, "expiresAt" = NULL,
+                "createdById" = EXCLUDED."createdById", "updatedAt" = now()
+            WHERE user_permission_overrides.effect = 'ALLOW'
+              AND user_permission_overrides."organizationId" = EXCLUDED."organizationId"`;
+        if (written === 0) throw denied();
+      } else {
+        const removed = await ctx.db.userPermissionOverride.deleteMany({
+          where: { organizationId: id, userId: target.id, capability, effect: 'ALLOW' },
+        });
+        if (removed.count === 0) {
+          const deny = await ctx.db.userPermissionOverride.findFirst({
+            where: { organizationId: id, userId: target.id, capability, effect: 'DENY' },
+            select: { id: true },
+          });
+          if (deny) throw denied();
+        }
+      }
+      annotateAudit(ctx, {
+        targetType: 'User',
+        targetId: target.id,
+        targetLabel: target.email,
+        description: input.enabled
+          ? 'Granted Goods in (pharmacy:procurement)'
+          : 'Removed Goods in grant',
+        metadata: { capability, enabled: input.enabled },
+      });
+      return { enabled: input.enabled };
     }),
 
   resetMemberPassword: adminProcedure
