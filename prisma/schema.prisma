@@ -4843,6 +4843,11 @@ enum OrganizationVertical {
   HOSPITALITY
 }
 
+enum PharmacyOperatingMode {
+  SOLO
+  STAFFED
+}
+
 enum PlatformModuleBand {
   BASELINE
   PLATFORM
@@ -4874,6 +4879,7 @@ model Organization {
   seatLimit                Int                        @default(1)
   isDemo                   Boolean                    @default(false)
   askFathomEnabled         Boolean                    @default(true)
+  pharmacyOperatingMode    PharmacyOperatingMode      @default(STAFFED)
   lastDemoResetAt          DateTime?
   gracePeriodDays          Int                        @default(0)
   activatedAt              DateTime?

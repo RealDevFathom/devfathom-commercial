@@ -1,6 +1,10 @@
 import { isPharmacyOwner } from '@/lib/pharmacy/owner';
 import { assertBranchAssignment } from '@/lib/pharmacy/branch-assignment';
-import { authorizeSoloApproval, pinProfileBelongsToActor } from '@/lib/pharmacy/solo-approval';
+import {
+  authorizeSoloApproval,
+  pinProfileBelongsToActor,
+  soloOwnerEligible,
+} from '@/lib/pharmacy/solo-approval';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
@@ -957,6 +961,10 @@ export const pharmacySalesRouter = router({
             .object({
               prescriptionLineId: z.string().trim().min(1).max(128),
               patientId: z.string().trim().min(1).max(128),
+              approvalPin: z
+                .string()
+                .regex(/^\d{4,8}$/)
+                .optional(),
             })
             .strict()
             .optional(),
@@ -1030,9 +1038,21 @@ export const pharmacySalesRouter = router({
               }))
             )
               throw new PharmacyRxReferenceError('PRESCRIPTION_NEEDS_PHARMACIST');
+            if (
+              (await soloOwnerEligible(db, scope)) &&
+              !(await authorizeSoloApproval(
+                db,
+                scope,
+                { type: 'PrescriptionSale', id: input.saleId },
+                prescription.approvalPin
+              ))
+            )
+              throw new PharmacyRxReferenceError('PRESCRIPTION_NEEDS_PHARMACIST');
             const units = input.quantity * input.canonicalUnitsPerSaleUnit;
+            const { approvalPin: _approvalPin, ...prescriptionReference } = prescription;
+            void _approvalPin;
             const reference = await resolvePrescriptionReference(db, scope, {
-              ...prescription,
+              ...prescriptionReference,
               saleId: input.saleId,
               medicineId: input.medicineId,
               presentationId: input.presentationId,
