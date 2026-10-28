@@ -429,6 +429,81 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     expect(result.balance?.onHandUnits).toBe(35);
   });
 
+  it('serializes count approvals so different idempotency prefixes cannot apply a variance twice', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'count-concurrent-approval');
+    const { count, lotId } = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 40,
+        label: 'count-concurrent-approval',
+      });
+      const created = await deps.operations.createCount(db, scopeOf(fixture), {
+        varianceThreshold: 10,
+        readings: [
+          {
+            inventoryLotId: lot.id,
+            stockLocationId: fixture.locationId,
+            countedSealedPacks: 3,
+            countedLooseUnits: 5,
+          },
+        ],
+      });
+      return { count: created, lotId: lot.id };
+    });
+
+    let releaseFirst: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstApproved: () => void = () => {};
+    const approved = new Promise<void>((resolve) => {
+      firstApproved = resolve;
+    });
+
+    const first = inOrg(ORG_A, async (db) => {
+      const result = await deps.operations.approveCount(
+        db,
+        scopeOf(fixture),
+        count.id,
+        tag('count-approval-first')
+      );
+      firstApproved();
+      await held;
+      return result;
+    });
+    await approved;
+
+    const second = inOrg(ORG_A, (db) =>
+      deps.operations.approveCount(db, scopeOf(fixture), count.id, tag('count-approval-second'))
+    );
+    const startedSecond = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    releaseFirst();
+
+    const [firstOutcome, secondOutcome] = await Promise.allSettled([first, second]);
+    const waitedMs = Date.now() - startedSecond;
+    expect(firstOutcome.status).toBe('fulfilled');
+    expect(secondOutcome.status).toBe('rejected');
+    // Prove that the second approval stayed inside the first transaction's
+    // overlap window rather than merely losing after the transactions happened
+    // to execute back to back.
+    expect(waitedMs).toBeGreaterThanOrEqual(200);
+    const rejection = (secondOutcome as PromiseRejectedResult).reason;
+    expect(rejection).toBeInstanceOf(PharmacyInventoryError);
+    expect(rejection.reason).toBe('INVALID_STATE');
+
+    const after = await inOrg(ORG_A, async (db) => ({
+      balance: await db.pharmacyStockBalance.findFirst({
+        where: { inventoryLotId: lotId, disposition: 'AVAILABLE' },
+      }),
+      adjustments: await db.pharmacyStockMovement.count({
+        where: { inventoryLotId: lotId, kind: 'ADJUSTMENT' },
+      }),
+    }));
+    expect(after.balance?.onHandUnits).toBe(35);
+    expect(after.adjustments).toBe(1);
+  });
+
   it('quarantines only part of a lot and keeps the remainder available', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'partial-quarantine');
     const balances = await inOrg(ORG_A, async (db) => {

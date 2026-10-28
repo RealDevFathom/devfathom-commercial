@@ -116,6 +116,14 @@ export async function approveCount(
   countId: string,
   idempotencyKeyPrefix: string
 ) {
+  // The count is the lifecycle root for every adjustment below. Lock it before
+  // reading its status so a concurrent approval with a different idempotency
+  // prefix cannot observe the same pre-approval state and post the variance a
+  // second time. Tenant and branch predicates are deliberately part of the
+  // lock lookup as well as the subsequent ORM read.
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_inventory_counts WHERE id=${countId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+  );
   const count = await db.pharmacyInventoryCount.findFirst({
     where: { id: countId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: { lines: true },
