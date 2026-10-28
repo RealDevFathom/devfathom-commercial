@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import { ArrowRight, Building2, Eye, EyeOff, Loader2, ShieldCheck } from 'lucide-react';
 import { LOGIN_ERROR_MESSAGES, type LoginErrorKey } from './login-errors';
 import { useHydrated } from './use-hydrated';
+import { Button } from '@/components/ui/button';
+import { verticalCopy, workspaceEyebrow, type LoginVertical } from './vertical';
 
 type Organization = {
   id: string;
@@ -19,7 +21,7 @@ type Organization = {
 type Stage = 'credentials' | 'select' | 'sso-only';
 
 const inputClass =
-  'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-2 aria-[invalid=true]:ring-destructive/20';
+  'flex h-12 w-full rounded-[var(--radius-sm)] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 aria-[invalid=true]:border-destructive aria-[invalid=true]:ring-2 aria-[invalid=true]:ring-destructive/20';
 
 const GENERIC_ERROR = 'Invalid email or password. Please try again.';
 
@@ -58,10 +60,12 @@ function rateLimitedError(retryAfterHeader: string | null): string {
  * the address bar.
  */
 export function SharedLoginForm({
+  vertical = 'default',
   callbackUrl,
   // WHA-1623: the outcome of a native submit that landed before hydration.
   initialError,
 }: {
+  vertical?: LoginVertical;
   callbackUrl: string;
   initialError?: LoginErrorKey;
 }) {
@@ -195,9 +199,9 @@ export function SharedLoginForm({
 
   const HEADINGS: Record<Stage, { eyebrow: string; title: string; description: string }> = {
     credentials: {
-      eyebrow: 'Secure workspace access',
+      eyebrow: workspaceEyebrow(vertical),
       title: 'Welcome back',
-      description: 'Sign in to pick up the work your team is moving forward.',
+      description: verticalCopy[vertical].signIn,
     },
     select: {
       eyebrow: 'Choose a workspace',
@@ -230,7 +234,7 @@ export function SharedLoginForm({
     <div
       id={errorId}
       role="alert"
-      className="mb-5 rounded-[3px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+      className="mb-5 rounded-[var(--radius-sm)] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
     >
       {error}
     </div>
@@ -258,7 +262,7 @@ export function SharedLoginForm({
             <input
               id="email"
               type="email"
-              placeholder="you@company.com"
+              placeholder={vertical === 'default' ? 'you@company.com' : `you@${vertical}.pk`}
               autoComplete="email"
               autoFocus
               name="email"
@@ -274,12 +278,6 @@ export function SharedLoginForm({
               <label htmlFor="password" className="block text-sm font-semibold text-foreground">
                 Password
               </label>
-              <a
-                href="/forgot-password"
-                className="rounded-[3px] text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-              >
-                Forgot password?
-              </a>
             </div>
             <div className="relative">
               <input
@@ -291,34 +289,41 @@ export function SharedLoginForm({
                 required
                 aria-invalid={Boolean(error)}
                 aria-describedby={error ? errorId : undefined}
-                className={`${inputClass} pr-10`}
+                className={`${inputClass} pe-12`}
               />
               <button
                 type="button"
                 onClick={() => setShowPassword((visible) => !visible)}
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
-                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-[3px] text-text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-                tabIndex={-1}
+                className="absolute end-1 top-1/2 flex h-11 w-11 items-center justify-center -translate-y-1/2 rounded-[var(--radius-sm)] text-text-muted transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               >
                 {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
             </div>
+            <div className="text-end">
+              <a
+                href="/forgot-password"
+                className="rounded-[var(--radius-sm)] text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              >
+                Forgot password?
+              </a>
+            </div>
           </div>
 
-          <button
+          <Button
             type="submit"
             disabled={isSubmitting}
-            className="group flex h-12 w-full items-center justify-center rounded-[3px] bg-primary text-sm font-semibold text-primary-foreground shadow-[0_10px_22px_-14px_rgba(12,29,48,0.86)] transition-all hover:-translate-y-px hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 active:translate-y-0 disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none motion-reduce:hover:translate-y-0"
+            className="group flex h-12 w-full items-center justify-center rounded-[var(--radius-sm)] bg-primary text-sm font-semibold text-primary-foreground shadow-none transition-all hover:-translate-y-px hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 active:translate-y-0 disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none motion-reduce:hover:translate-y-0"
           >
             {isSubmitting ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" />
+                <Loader2 className="me-2 h-4 w-4 animate-spin motion-reduce:animate-none" />
                 Signing in...
               </>
             ) : (
               'Sign in'
             )}
-          </button>
+          </Button>
         </form>
       </>
     );
@@ -359,7 +364,7 @@ export function SharedLoginForm({
                 onClick={() => continueInto(organization.id)}
                 disabled={Boolean(pendingOrganizationId)}
                 aria-describedby={error ? errorId : undefined}
-                className="group flex w-full items-center justify-between gap-4 rounded-[3px] border border-border-default bg-card px-4 py-4 text-left transition-colors hover:border-primary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-60"
+                className="group flex w-full items-center justify-between gap-4 rounded-[var(--radius-sm)] border border-border-default bg-card px-4 py-4 text-start transition-colors hover:border-primary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-60"
               >
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-semibold text-foreground">
@@ -402,22 +407,22 @@ export function SharedLoginForm({
           <p className="text-xs text-text-muted">
             Open your authenticator app, or enter one of your recovery codes.
           </p>
-          <button
+          <Button
             type="submit"
             disabled={isSubmitting}
-            className="flex h-12 w-full items-center justify-center rounded-[3px] bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none"
+            className="flex h-12 w-full items-center justify-center rounded-[var(--radius-sm)] bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 motion-reduce:transition-none"
           >
             {isSubmitting ? (
               <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
             ) : (
               'Continue'
             )}
-          </button>
+          </Button>
         </form>
       ) : null}
 
       {selectable.length === 0 ? (
-        <p className="mt-5 border-l-2 border-accent-brand bg-muted px-4 py-3 text-xs leading-5 text-text-muted">
+        <p className="mt-5 border-s-2 border-accent-brand bg-muted px-4 py-3 text-xs leading-5 text-text-muted">
           None of these workspaces accept a password. Use the identity provider link on each one.
         </p>
       ) : null}
@@ -446,7 +451,7 @@ function SsoEntry({ organization }: { organization: Organization }) {
   return (
     <div
       aria-labelledby={labelId}
-      className="flex items-center justify-between gap-4 rounded-[3px] border border-border-subtle bg-surface-sunken px-4 py-4"
+      className="flex items-center justify-between gap-4 rounded-[var(--radius-sm)] border border-border-subtle bg-surface-sunken px-4 py-4"
     >
       <span className="min-w-0">
         <span id={labelId} className="block truncate text-sm font-semibold text-text-muted">
@@ -460,7 +465,7 @@ function SsoEntry({ organization }: { organization: Organization }) {
       {organization.ssoUrl ? (
         <a
           href={organization.ssoUrl}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-[3px] border border-border-default bg-card px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:border-primary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] border border-border-default bg-card px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:border-primary hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         >
           <Building2 className="h-3.5 w-3.5 text-accent-brand" aria-hidden="true" />
           Sign in with SSO
@@ -480,7 +485,7 @@ function BackToCredentials({ onBack }: { onBack: () => void }) {
     <button
       type="button"
       onClick={onBack}
-      className="mt-6 rounded-[3px] text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="mt-6 rounded-[var(--radius-sm)] text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
     >
       Use a different account
     </button>
