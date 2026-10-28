@@ -1305,7 +1305,7 @@ export const pharmacySalesRouter = router({
           try {
             return await changeSaleStatus(
               txDb(tx),
-              await scopeFor(ctx, input.branchId),
+              await requireCounterReceiptAccess(ctx, input.branchId),
               input.saleId,
               input.action,
               input.reason,
