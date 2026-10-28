@@ -18,7 +18,7 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 
 import { bindSideEffects } from '@/lib/side-effects/scope';
-import { flushAuditWritesForTest, recordTrpcAudit } from './audit';
+import { flushAuditWritesForTest, recordTrpcAudit, toAuditJson } from './audit';
 import { createTRPCContext, protectedProcedure, router, type TRPCContext } from './trpc';
 
 const organizationId = 'org_demo_restaurant_seat_1';
@@ -139,5 +139,42 @@ describe('transaction-bound seed audits', () => {
         session: ctx.session,
       })
     ).rejects.toThrow('Audit transaction must match');
+  });
+});
+
+describe('PIN redaction before resolver annotation', () => {
+  it.each(['pin', 'PIN', 'PiN'])(
+    'redacts exact %s recursively without hiding unrelated keys',
+    (key) => {
+      expect(
+        toAuditJson({
+          ownerAuthorization: { [key]: '123456' },
+          nested: [{ [key]: 'bad' }],
+          shipping: 'visible',
+        })
+      ).toEqual({
+        ownerAuthorization: '[REDACTED]',
+        nested: [{ [key]: '[REDACTED]' }],
+        shipping: 'visible',
+      });
+    }
+  );
+  it.each(['FORBIDDEN', 'BAD_REQUEST'])('redacts unannotated %s audit input', async (errorCode) => {
+    const create = vi.fn().mockResolvedValue({});
+    await recordTrpcAudit({
+      ctx: {
+        audit: { detail: {}, db: { auditLog: { create } } as unknown as ScopedDb },
+        session: { user: { id: actorId, organizationId } },
+      },
+      path: 'pharmacyReports.transitionPharmacovigilanceReport',
+      type: 'mutation',
+      input: { pin: '123456', nested: [{ PIN: 'invalid' }] },
+      outcome: 'FAILURE',
+      error: { code: errorCode, message: 'Rejected' },
+    });
+    expect(create.mock.calls[0][0].data.input).toEqual({
+      pin: '[REDACTED]',
+      nested: [{ PIN: '[REDACTED]' }],
+    });
   });
 });

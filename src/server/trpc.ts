@@ -270,7 +270,7 @@ const requireLicensedModule = t.middleware(async ({ ctx, next, path }) => {
 // within the revalidation window. Resource-level conditions (e.g. "this
 // resignation is PENDING and not your own") are checked INSIDE the resolver via
 // a second `can(...)` call with the loaded resource's attributes.
-function requireCapability(action: Action) {
+function requireCapability(action: Action, pvOwnerAccess = false) {
   return t.middleware(async ({ ctx, next, path, type }) => {
     if (!ctx.session?.user) {
       throw new TRPCError({
@@ -285,6 +285,7 @@ function requireCapability(action: Action) {
     const allowed = await can(subject, action, undefined, {
       db: ctx.db as Prisma.TransactionClient,
       source: 'TRPC',
+      ...(pvOwnerAccess ? { pvOrganizationId: ctx.entitlements.organizationId } : {}),
       ip: ctx.requestMeta.ip,
     });
     if (!allowed) {
@@ -341,6 +342,9 @@ export const hrProcedure = t.procedure
  * Generic capability-gated procedure. Use for any action in the ABAC catalogue,
  * e.g. `capabilityProcedure('resignation:readAll')`. Audits like adminProcedure.
  */
-export function capabilityProcedure(action: Action) {
-  return t.procedure.use(auditAll).use(requireCapability(action)).use(requireLicensedModule);
+export function capabilityProcedure(action: Action, pvOwnerAccess = false) {
+  return t.procedure
+    .use(auditAll)
+    .use(requireCapability(action, pvOwnerAccess))
+    .use(requireLicensedModule);
 }

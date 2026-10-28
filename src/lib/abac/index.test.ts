@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AuthzDb } from '@/lib/authz';
 import { isAdmin } from '@/lib/authz';
-import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
+import { AGENCY_ROLE_TEMPLATES, roleTemplatesForVertical } from '@/lib/vertical-catalog';
 
 import { can, subjectFromSession } from '.';
 import { ALL_ACTIONS, POLICIES, type Action } from './policies';
@@ -343,5 +343,72 @@ describe('hospitality capability namespace', () => {
         can({ ...employee, role }, 'hotel:folio-adjust', undefined, { db })
       ).resolves.toBe(false);
     }
+  });
+});
+
+describe('PV-only verified owner exception', () => {
+  const organizationId = 'org_pv';
+  const subject = { ...employee, role: 'ADMIN' };
+  const templates = [...roleTemplatesForVertical('PHARMACY'), ...AGENCY_ROLE_TEMPLATES];
+  it.each([
+    ['standard owner', 'owner', true, 'EMPLOYEE', organizationId, true],
+    ['standard admin', 'admin', true, 'EMPLOYEE', organizationId, true],
+    ['tenant administrator', 'member', false, 'ADMIN', organizationId, true],
+    ['fake owner', 'owner', false, 'EMPLOYEE', organizationId, false],
+    ['foreign system owner', 'owner', true, 'EMPLOYEE', 'foreign', false],
+  ] as const)('%s is tenant verified', async (_label, key, isSystem, role, roleOrg, allowed) => {
+    const user = {
+      organizationId,
+      role,
+      organizationRole: {
+        key,
+        isSystem,
+        organizationId: roleOrg,
+        permissions: (templates.find((r) => r.key === key)?.capabilities ?? []).map(
+          (capability) => ({ capability, effect: 'ALLOW' })
+        ),
+      },
+      permissionOverrides: [],
+    };
+    const db = { user: { findUnique: vi.fn().mockResolvedValue(user) } } as unknown as AuthzDb;
+    expect(
+      await can(subject, 'pharmacy:safety', undefined, { db, pvOrganizationId: organizationId })
+    ).toBe(allowed);
+    expect(await can(subject, 'pharmacy:safety', undefined, { db })).toBe(false);
+  });
+  it.each(['*', 'pharmacy:*', 'pharmacy:safety'])(
+    'keeps %s DENY above owner authority',
+    async (capability) => {
+      const db = {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({
+            organizationId,
+            role: 'ADMIN',
+            organizationRole: {
+              permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
+            },
+            permissionOverrides: [{ capability, effect: 'DENY' }],
+          }),
+        },
+      } as unknown as AuthzDb;
+      expect(
+        await can(subject, 'pharmacy:safety', undefined, { db, pvOrganizationId: organizationId })
+      ).toBe(false);
+    }
+  );
+  it('rejects a foreign tenant administrator', async () => {
+    const db = {
+      user: {
+        findUnique: vi.fn().mockResolvedValue({
+          organizationId: 'foreign',
+          role: 'ADMIN',
+          organizationRole: null,
+          permissionOverrides: [],
+        }),
+      },
+    } as unknown as AuthzDb;
+    expect(
+      await can(subject, 'pharmacy:safety', undefined, { db, pvOrganizationId: organizationId })
+    ).toBe(false);
   });
 });
