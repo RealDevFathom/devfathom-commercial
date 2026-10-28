@@ -30,6 +30,7 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const orgId = `org_wha22_term_${suffix}`;
 const branchId = `branch_${suffix}`;
+const otherBranchId = `branch_other_${suffix}`;
 const otherOrgId = `org_wha149_other_${suffix}`;
 const OTHER_BRANCH_STAFF = { id: `staff_other_branch_${suffix}`, pin: '333333' };
 const FOREIGN_STAFF = { id: `staff_foreign_${suffix}`, pin: '444444' };
@@ -195,7 +196,6 @@ beforeAll(async () => {
         },
       });
     }
-    const otherBranchId = `branch_other_${suffix}`;
     await tx.restaurantBranch.create({ data: { id: otherBranchId, name: 'Other branch' } });
     await tx.restaurantStaffProfile.createMany({
       data: [
@@ -259,9 +259,18 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
     );
   });
 
-  it('returns only active, credentialed operators from the device branch', async () => {
+  it('returns only active, credentialed operators with branch-scoped comp access', async () => {
     const { secret } = await enroll('directory');
     const { token } = await establish(secret);
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantStaffCapabilityGrant.create({
+        data: {
+          staffProfileId: STAFF.A.id,
+          branchId: otherBranchId,
+          capability: 'orders:complimentary',
+        },
+      })
+    );
     const request = new Request('https://tenant.test/api/restaurant/terminal/operators', {
       headers: { authorization: `Bearer ${secret}`, 'x-terminal-session': token },
     });
@@ -272,6 +281,7 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
         staffProfileId: string;
         displayName: string;
         role: string;
+        canComp: boolean;
         canApprove: boolean;
       }[];
     };
@@ -282,10 +292,33 @@ describeIfDatabase('terminal transport end-to-end (real DB)', () => {
         .map((staff) => staff.id)
         .sort()
     );
-    expect(body.operators.every((operator) => Object.keys(operator).length === 4)).toBe(true);
+    expect(body.operators.every((operator) => Object.keys(operator).length === 5)).toBe(true);
+    expect(
+      body.operators.find((operator) => operator.staffProfileId === STAFF.A.id)?.canComp
+    ).toBe(false);
     expect(JSON.stringify(body)).not.toContain('Other Branch Operator');
     expect(JSON.stringify(body)).not.toContain('Inactive Operator');
     expect(JSON.stringify(body)).not.toContain('Foreign Operator');
+
+    await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantStaffCapabilityGrant.create({
+        data: {
+          staffProfileId: STAFF.A.id,
+          branchId,
+          capability: 'orders:complimentary',
+        },
+      })
+    );
+    const authorizedResponse = await deps.routes.operators.GET(
+      new Request('https://tenant.test/api/restaurant/terminal/operators', {
+        headers: { authorization: `Bearer ${secret}`, 'x-terminal-session': token },
+      })
+    );
+    expect(authorizedResponse.status).toBe(200);
+    const authorizedBody = (await authorizedResponse.json()) as typeof body;
+    expect(
+      authorizedBody.operators.find((operator) => operator.staffProfileId === STAFF.A.id)?.canComp
+    ).toBe(true);
   });
 
   it('establishes, unlocks, switches operator, and locks (C6 state machine)', async () => {

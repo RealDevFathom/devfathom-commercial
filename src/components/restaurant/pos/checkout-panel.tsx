@@ -70,6 +70,8 @@ type CheckoutPanelProps = {
   connected?: boolean;
   operators?: RestaurantStaffOption[];
   actingOperatorId?: string;
+  /** UI affordance only; the comp route remains the authoritative capability check. */
+  canComp?: boolean;
   /** `settled` reports whether the order was fully settled when the panel closed. */
   onClose: (result: { settled: boolean }) => void;
 };
@@ -669,6 +671,7 @@ export function CheckoutPanel({
   connected = true,
   operators = [],
   actingOperatorId = '',
+  canComp = false,
   onClose,
 }: CheckoutPanelProps) {
   const [summary, setSummary] = useState<CheckoutSummary | null>(null);
@@ -960,15 +963,17 @@ export function CheckoutPanel({
                 </dl>
                 {bill.status === 'OPEN' ? (
                   <>
-                    <CompControl
-                      billId={bill.id}
-                      lines={bill.lines ?? []}
-                      request={request}
-                      operators={operators}
-                      actingOperatorId={actingOperatorId}
-                      disabled={busy || tenderPending}
-                      onComped={loadSummary}
-                    />
+                    {canComp === true ? (
+                      <CompControl
+                        billId={bill.id}
+                        lines={bill.lines ?? []}
+                        request={request}
+                        operators={operators}
+                        actingOperatorId={actingOperatorId}
+                        disabled={busy || tenderPending}
+                        onComped={loadSummary}
+                      />
+                    ) : null}
                     <TenderPad
                       billId={bill.id}
                       amountDue={bill.remainingDue}

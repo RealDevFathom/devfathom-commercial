@@ -4,7 +4,13 @@ import type { FormEvent } from 'react';
 import { useTerminalSession } from './use-terminal-session';
 
 const operators = [
-  { staffProfileId: 'staff-1', displayName: 'Amina', role: 'Manager', canApprove: true },
+  {
+    staffProfileId: 'staff-1',
+    displayName: 'Amina',
+    role: 'Manager',
+    canComp: true,
+    canApprove: true,
+  },
 ];
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 function transport(extra?: (path: string) => Promise<Response> | Response | undefined) {

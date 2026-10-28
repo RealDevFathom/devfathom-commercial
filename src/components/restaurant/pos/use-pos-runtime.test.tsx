@@ -5,8 +5,20 @@ import type { ChangeEvent } from 'react';
 import { usePosRuntime } from './use-pos-runtime';
 
 const operators = [
-  { staffProfileId: 'staff-1', displayName: 'Amina', role: 'Manager', canApprove: true },
-  { staffProfileId: 'staff-2', displayName: 'Bilal', role: 'Cashier', canApprove: false },
+  {
+    staffProfileId: 'staff-1',
+    displayName: 'Amina',
+    role: 'Manager',
+    canComp: true,
+    canApprove: true,
+  },
+  {
+    staffProfileId: 'staff-2',
+    displayName: 'Bilal',
+    role: 'Cashier',
+    canComp: false,
+    canApprove: false,
+  },
 ];
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status });
@@ -56,6 +68,46 @@ function transport(extra: (path: string, init?: RequestInit) => Promise<Response
 afterEach(() => vi.unstubAllGlobals());
 
 describe('usePosRuntime boundaries', () => {
+  it('fails closed when legacy session data omits the comp capability', async () => {
+    const legacyOperator = {
+      staffProfileId: 'staff-1',
+      displayName: 'Amina',
+      role: 'Manager',
+      canApprove: true,
+    };
+    const fetch = transport((path) => {
+      if (path === '/demo/restaurants/device-session') {
+        return Promise.resolve(
+          json({
+            sessionToken: 'test-session-token',
+            session: {
+              id: 'session-1',
+              state: 'UNLOCKED',
+              establishedAt: '2026-08-19T00:00:00Z',
+            },
+            device: {
+              id: 'device-1',
+              organizationId: 'org-1',
+              branchId: 'branch-1',
+              name: 'Register',
+              branchName: 'Main',
+            },
+            operator: legacyOperator,
+          })
+        );
+      }
+      if (path.endsWith('/operators')) {
+        return Promise.resolve(json({ operators: [legacyOperator] }));
+      }
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    const { result } = renderHook(() => usePosRuntime({ demo: true }));
+
+    await waitFor(() => expect(result.current.runtime?.state).toBe('UNLOCKED'));
+    expect(result.current.workspace!.checkoutPanelProps.canComp).toBe(false);
+  });
+
   it.each(['timeout', 'definitive rejection'] as const)(
     'preserves the checkout retry contract after %s',
     async (failure) => {
@@ -105,6 +157,7 @@ describe('usePosRuntime boundaries', () => {
     const { result } = renderHook(() => usePosRuntime({ demo: true }));
     await waitFor(() => expect(result.current.runtime?.state).toBe('UNLOCKED'));
     await waitFor(() => expect(result.current.pending).toBeNull());
+    expect(result.current.workspace!.checkoutPanelProps.canComp).toBe(true);
     act(() =>
       result.current.workspace!.changeCustomerQuery({
         target: { value: 'Customer' },
@@ -120,6 +173,7 @@ describe('usePosRuntime boundaries', () => {
       });
     });
     expect(result.current.runtime?.operator?.staffProfileId).toBe('staff-2');
+    expect(result.current.workspace!.checkoutPanelProps.canComp).toBe(false);
     await act(async () => {
       release(
         json({

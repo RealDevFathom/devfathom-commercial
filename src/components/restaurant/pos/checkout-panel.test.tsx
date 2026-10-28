@@ -159,6 +159,7 @@ describe('CheckoutPanel', () => {
         orderId="order-1"
         request={request}
         actingOperatorId="cashier-1"
+        canComp
         operators={[{ id: 'manager-1', displayName: 'Mina Manager', role: 'Manager' }]}
         onClose={vi.fn()}
       />
@@ -194,6 +195,41 @@ describe('CheckoutPanel', () => {
     expect(calls.find((call) => call.options?.intent)?.options?.intent).not.toContain('5678');
   });
 
+  it('hides comp when the acting operator lacks orders:complimentary', async () => {
+    const request: TerminalRequest = async <T,>() => billed as T;
+    render(
+      <CheckoutPanel
+        open
+        orderId="order-1"
+        request={request}
+        actingOperatorId="cashier-1"
+        canComp={false}
+        operators={[{ id: 'manager-1', displayName: 'Mina Manager', role: 'Manager' }]}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByText('Bill total')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Comp item' })).not.toBeInTheDocument();
+  });
+
+  it('fails closed when legacy operator data omits the comp capability', async () => {
+    const request: TerminalRequest = async <T,>() => billed as T;
+    render(
+      <CheckoutPanel
+        open
+        orderId="order-1"
+        request={request}
+        actingOperatorId="cashier-1"
+        operators={[{ id: 'manager-1', displayName: 'Mina Manager', role: 'Manager' }]}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByText('Bill total')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Comp item' })).not.toBeInTheDocument();
+  });
+
   it('does not offer comp when no distinct approving manager is available', async () => {
     const request: TerminalRequest = async <T,>() => billed as T;
     render(
@@ -202,6 +238,7 @@ describe('CheckoutPanel', () => {
         orderId="order-1"
         request={request}
         actingOperatorId="manager-1"
+        canComp
         operators={[{ id: 'manager-1', displayName: 'Mina Manager', role: 'Manager' }]}
         onClose={vi.fn()}
       />

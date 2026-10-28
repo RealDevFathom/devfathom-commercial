@@ -1058,6 +1058,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       request: checkoutRequest,
       connected: online,
       actingOperatorId: runtime.operator?.staffProfileId ?? '',
+      canComp: runtime.operator?.canComp === true,
       operators: operators
         .filter((operator) => operator.canApprove)
         .map((operator) => ({
