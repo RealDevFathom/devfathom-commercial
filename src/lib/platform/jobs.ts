@@ -16,6 +16,7 @@ import {
   runCameraEvidenceRetentionJob,
   runCounterEvidenceSnapshotJob,
 } from '@/lib/pharmacy/counter-evidence';
+import { archiveWhatsAppConsentBeforeTenantPurge } from '@/lib/pharmacy/whatsapp/consent-archive';
 
 type JobPayload = Record<string, unknown>;
 type JobResult = Record<string, unknown>;
@@ -675,6 +676,11 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
   // have no vanished parent row to recognise it by. Transaction-local, and
   // scoped to the organization this job names.
   await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${organizationId}, true)`;
+  // The customer and message rows below are about to be destroyed. Keep only
+  // pseudonymous consent state and its effective date, never contact details or
+  // message content, so a later complaint can be answered without retaining the
+  // tenant's customer record.
+  await archiveWhatsAppConsentBeforeTenantPurge(db, organizationId);
   for (const { tableName, columns } of plan.detach) {
     await db.$executeRawUnsafe(
       `UPDATE ${quoteIdentifier(tableName)} SET ${columns

@@ -14437,6 +14437,23 @@ model PharmacyMessageLog {
   @@map("pharmacy_message_logs")
 }
 
+/// Minimized consent evidence surviving tenant erasure for a bounded period.
+/// Fingerprints are keyed HMACs; this table intentionally has no organization
+/// foreign key or contact, message, customer, or patient data.
+model PharmacyWhatsAppConsentArchive {
+  id                          String   @id @default(cuid())
+  organizationFingerprint     String
+  customerFingerprint         String
+  optedIn                     Boolean
+  consentChangedAt            DateTime @db.Timestamp(3)
+  archivedAt                  DateTime @default(now()) @db.Timestamp(3)
+  expiresAt                   DateTime @db.Timestamp(3)
+
+  @@unique([organizationFingerprint, customerFingerprint, consentChangedAt], map: "pharmacy_wa_consent_archive_event_key")
+  @@index([expiresAt], map: "pharmacy_wa_consent_archive_expiry_idx")
+  @@map("pharmacy_whatsapp_consent_archives")
+}
+
 model PharmacyOrderDeliveryEvidence {
   id             String                @id @default(cuid())
   organizationId String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
