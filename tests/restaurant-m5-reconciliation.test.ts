@@ -21,7 +21,7 @@ const D = (value: string | Prisma.Decimal) => new Prisma.Decimal(value);
 const sum = (values: readonly Prisma.Decimal[]) =>
   values.reduce((total, value) => total.plus(value), D('0'));
 const eqMoney = (actual: unknown, expected: string | Prisma.Decimal) =>
-  expect(D(String(actual)).equals(expected)).toBe(true);
+  expect(D(String(actual)).toString()).toBe(D(expected).toString());
 
 type RouteModule = {
   GET?: (request: Request) => Promise<Response>;
@@ -543,8 +543,12 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
       grossSales: sum(settledBills.map((bill) => bill.subtotal)),
       compTotal: sum(settledBills.map((bill) => bill.compTotal)),
       discountTotal: sum(settledBills.map((bill) => bill.discountTotal)),
-      taxTotal: sum(settledBills.map((bill) => bill.taxTotal)),
-      serviceChargeTotal: sum(settledBills.map((bill) => bill.serviceChargeTotal)),
+      taxTotal: sum(settledBills.map((bill) => bill.taxTotal)).minus(
+        sum(raw.refunds.map((refund) => refund.taxRefundAmount))
+      ),
+      serviceChargeTotal: sum(settledBills.map((bill) => bill.serviceChargeTotal)).minus(
+        sum(raw.refunds.map((refund) => refund.serviceChargeRefundAmount))
+      ),
       tipTotal: sum(raw.tenders.map((tenderRow) => tenderRow.tipAmount)),
       refundTotal: sum(
         raw.refunds.map((refundRow) => refundRow.amount.minus(refundRow.deliveryFeeRefundAmount))

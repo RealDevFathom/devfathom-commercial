@@ -41,6 +41,7 @@ vi.mock('./restaurant-dashboard-content', () => ({ RestaurantDashboardContent: (
 import DashboardPage from './page';
 import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
 import { HotelDashboardContent } from './hotel-dashboard-content';
+import { RestaurantDashboardContent } from './restaurant-dashboard-content';
 
 function helpers() {
   return {
@@ -71,12 +72,33 @@ describe('DashboardPage vertical dispatch', () => {
         entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
       });
 
-      await expect(DashboardPage()).rejects.toThrow('redirect');
+      await expect(
+        DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) })
+      ).rejects.toThrow('redirect');
 
       expect(mocks.redirect).toHaveBeenCalledWith(target);
       expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
       expect(agencyHelpers.meetings.getUpcoming.prefetch).not.toHaveBeenCalled();
       expect(mocks.withTenantDb).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['ADMIN', 'EMPLOYEE'])(
+    'retains the Restaurant dashboard on explicit navigation for %s',
+    async (role) => {
+      const agencyHelpers = helpers();
+      mocks.can.mockResolvedValue(false);
+      mocks.createSSRHelpers.mockResolvedValue({
+        helpers: agencyHelpers,
+        organization: { id: 'restaurant-org' },
+        session: { user: { id: 'restaurant-user', role, status: 'ACTIVE' } },
+        entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
+      });
+      const page = await DashboardPage();
+      expect(mocks.redirect).not.toHaveBeenCalled();
+      expect(page.props.children.type).toBe(RestaurantDashboardContent);
+      expect(page.props.children.props.enabledModules).toEqual(['restaurant-core']);
+      expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
     }
   );
 

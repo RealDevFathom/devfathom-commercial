@@ -248,7 +248,8 @@ beforeAll(async () => {
   });
 });
 
-describeIfDatabase('terminal transport end-to-end (real DB)', () => {
+// Unlock/lockout journeys perform multiple real production-cost bcrypt checks.
+describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 }, () => {
   it('returns the authenticated non-secret organization and branch scope', async () => {
     const { secret } = await enroll('branch-name');
     const response = await call(deps.routes.establish, { secret });

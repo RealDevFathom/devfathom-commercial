@@ -540,8 +540,12 @@ test('creates, costs, produces, delivers, and closes a catering order', async ({
 });
 
 async function enrollBrowser(page: Page, branch: string = fixture.branchId) {
-  const origin = await signInAs(page, 'restaurantAdmin');
+  const origin = new URL(process.env.PLAYWRIGHT_BASE_URL!).origin;
   await page.goto(new URL('/restaurant/devices', origin).href);
+  if (new URL(page.url()).pathname === '/login') {
+    await signInAs(page, 'restaurantAdmin');
+    await page.goto(new URL('/restaurant/devices', origin).href);
+  }
   await page.getByRole('button', { name: 'Enroll device', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Enroll this browser' });
   await dialog.getByLabel('Device name').fill('Acceptance catering browser');

@@ -629,7 +629,8 @@ function read<T>(fn: (tx: ScopedDb) => Promise<T>): Promise<T> {
 /** Open a fresh order, add N items (each with a price + optional seat + modifier),
  * and return the order id + item ids. Items are HELD (a billable OPEN order). */
 async function openWithItems(
-  items: Array<{ seat?: number; modifier?: boolean }>
+  items: Array<{ seat?: number; modifier?: boolean }>,
+  now = AT
 ): Promise<{ orderId: string; itemIds: string[]; db: ScopedDb }> {
   const db = deps.createTenantDb(orgId);
   const opened = await deps.orders.openOrder(db, {
@@ -639,7 +640,7 @@ async function openWithItems(
     channel: 'DINE_IN',
     publicationId: ids.publication,
     actor: actor(),
-    now: AT,
+    now,
   });
   const itemIds: string[] = [];
   for (const spec of items) {
@@ -1164,24 +1165,15 @@ describeIfDatabase('bills command layer (real DB)', () => {
   });
 
   it('removes a participating zero-allocation line from the basis and reallocates without drift', async () => {
-    const { orderId, itemIds, db } = await openWithItems([{}, {}]);
-    await read((tx) =>
-      tx.restaurantServiceChargePolicyVersion.updateMany({
-        where: {
-          branchId: ids.branch,
-          effectiveFrom: { lt: AT },
-          OR: [{ effectiveTo: null }, { effectiveTo: { gt: AT } }],
-        },
-        data: { effectiveTo: AT },
-      })
-    );
+    // Isolate the policy from orders opened at AT by the other cases.
+    const policyStart = new Date(AT.getTime() + 1);
     const policy = await read((tx) =>
       tx.restaurantServiceChargePolicyVersion.create({
         data: {
           branchId: ids.branch,
           rate: '0.100000',
-          effectiveFrom: AT,
-          effectiveTo: new Date('2026-08-20T00:00:00.000Z'),
+          effectiveFrom: policyStart,
+          effectiveTo: new Date(AT.getTime() + 2),
           acknowledgedAt: AT,
           acknowledgementRef: 'zero-allocation-regression',
           idempotencyKey: `service_zero_${suffix}`,
@@ -1189,6 +1181,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
         },
       })
     );
+    const { orderId, itemIds, db } = await openWithItems([{}, {}], policyStart);
     await read(async (tx) => {
       await tx.restaurantOrderItem.update({
         where: { id: itemIds[0]! },
