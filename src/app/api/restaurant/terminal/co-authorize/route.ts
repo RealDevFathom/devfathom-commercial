@@ -6,7 +6,9 @@ import { rateLimit } from '@/lib/rate-limit';
 import {
   CoAuthorizationError,
   buildCoAuthorizationRecord,
+  buildSoloOwnerCoAuthorization,
 } from '@/lib/restaurant/co-authorization';
+import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
 import { recordTerminalOperatorAudit } from '@/lib/restaurant/terminal-audit';
 import { authenticateOperator, withTerminalAuth } from '@/lib/restaurant/terminal-auth';
 
@@ -28,7 +30,7 @@ const bodySchema = z.object({
  * ADDS their identity to the evidence record and never changes who is acting.
  * The record pins acting + approving staff, capability, target, reason, device
  * and terminal session, with a SERVER timestamp. A self-approval (approver ==
- * actor) is rejected by the L1 primitive.
+ * actor) requires the server-validated solo-owner PIN exception.
  */
 export const POST = withTerminalAuth(async (ctx, request) => {
   const actingStaffProfileId = ctx.session.activeStaffProfileId;
@@ -63,11 +65,11 @@ export const POST = withTerminalAuth(async (ctx, request) => {
     );
   }
 
-  // Validate the co-authorization invariants (distinct identities, etc.) BEFORE
-  // spending a bcrypt compare, so a self-approval fails fast and cheaply.
+  // Ordinary approval requires distinct identities. The solo-owner exception
+  // rechecks owner status, branch staffing, and the owner's PIN on the server.
   let record;
   try {
-    record = buildCoAuthorizationRecord({
+    const approvalRequest = {
       actingStaffProfileId,
       approvingStaffProfileId,
       capability,
@@ -76,7 +78,16 @@ export const POST = withTerminalAuth(async (ctx, request) => {
       targetId: targetId ?? null,
       deviceId: ctx.device.id,
       terminalSessionId: ctx.session.id,
-    });
+    };
+    record =
+      actingStaffProfileId === approvingStaffProfileId
+        ? await buildSoloOwnerCoAuthorization(
+            ctx.db,
+            approvalRequest,
+            ctx.device.branchId,
+            type === 'PIN' ? secret : undefined
+          )
+        : buildCoAuthorizationRecord(approvalRequest);
   } catch (err) {
     if (err instanceof CoAuthorizationError) {
       return NextResponse.json({ error: err.message }, { status: 400 });
@@ -88,6 +99,7 @@ export const POST = withTerminalAuth(async (ctx, request) => {
   const auth = await authenticateOperator(ctx.db, {
     staffProfileId: approvingStaffProfileId,
     deviceId: ctx.device.id,
+    branchId: ctx.device.branchId,
     type,
     secret,
     now,
@@ -102,6 +114,20 @@ export const POST = withTerminalAuth(async (ctx, request) => {
     return NextResponse.json({ error: 'Invalid approving credential.' }, { status: 401 });
   }
 
+  if (
+    !(await operatorHasCapability(
+      ctx.db,
+      approvingStaffProfileId,
+      'coauth:approve',
+      now,
+      ctx.device.branchId
+    ))
+  ) {
+    return NextResponse.json(
+      { error: 'The approving manager lacks approval capability.' },
+      { status: 403 }
+    );
+  }
   const created = await ctx.db.restaurantCoAuthorization.create({ data: record });
   // C7 attribution: the actor stays the ACTING operator (approval never changes
   // who acts); the approving manager and the evidence are pinned in metadata.
@@ -116,6 +142,7 @@ export const POST = withTerminalAuth(async (ctx, request) => {
       approvingStaffProfileId: record.approvingStaffProfileId,
       capability: record.capability,
       reason: record.reason,
+      soloOwnerPinReauthenticated: actingStaffProfileId === approvingStaffProfileId,
     },
   });
   return NextResponse.json(

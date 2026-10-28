@@ -73,7 +73,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
   mocks.createTRPCContext.mockResolvedValue({
-    db: {},
+    db: {
+      restaurantSopOccurrence: { findUnique: vi.fn().mockResolvedValue({ branchId: 'branch-1' }) },
+    },
     organization: { id: 'org-1' },
     session: { user: { id: 'user-1' } },
   });
@@ -128,7 +130,7 @@ describe('POST SOP evidence', () => {
       'image/jpeg'
     );
     expect(mocks.attachEvidence).toHaveBeenCalledWith(
-      {},
+      expect.anything(),
       expect.objectContaining({
         occurrenceId: 'occurrence-1',
         occurrenceStepId: 'step-1',
@@ -142,7 +144,7 @@ describe('POST SOP evidence', () => {
     );
     expect(mocks.resolveRestaurantActor).toHaveBeenCalledWith(
       expect.objectContaining({ session: { user: { id: 'user-1' } } }),
-      []
+      ['branch-1']
     );
     expect(warn).not.toHaveBeenCalled();
   });
@@ -372,4 +374,20 @@ it('failed cleanup after attach failure is visible and sanitized', async () => {
   expect(response.headers.get('location')).toContain('cleanup+is+incomplete');
   expect(JSON.stringify(warn.mock.calls)).not.toContain('private');
   expect(mocks.deleteUpload).toHaveBeenCalledOnce();
+});
+
+it('uses the stored occurrence branch rather than the submitted form branch', async () => {
+  const findUnique = vi.fn().mockResolvedValue({ branchId: 'stored-branch' });
+  mocks.createTRPCContext.mockResolvedValue({
+    db: { restaurantSopOccurrence: { findUnique } },
+    organization: { id: 'org-1' },
+    session: { user: { id: 'user-1' } },
+  });
+  mocks.resolveRestaurantActor.mockRejectedValueOnce(new Error('Branch access denied'));
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  await POST(request({ uploaderStaffProfileId: 'spoofed-staff' }));
+  expect(mocks.resolveRestaurantActor).toHaveBeenCalledWith(expect.anything(), ['stored-branch']);
+  expect(mocks.putUpload).not.toHaveBeenCalled();
+  expect(mocks.attachEvidence).not.toHaveBeenCalled();
+  expect(warn).toHaveBeenCalled();
 });

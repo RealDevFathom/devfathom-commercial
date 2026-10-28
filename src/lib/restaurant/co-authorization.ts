@@ -13,10 +13,11 @@ import 'server-only';
  * untrusted).
  *
  * This primitive lives in L1 because both the L2 back-office and L3 terminal
- * paths must construct the identical, validated record. It performs no I/O: it
+ * paths must construct the identical, validated record. The ordinary builder
  * validates a request and returns the create-shaped data the caller persists
  * (organizationId and createdAt are supplied by the database — the RLS default
  * and the row default respectively — and must not be forged by the caller).
+ * The async solo-owner builder additionally checks live ownership, roster and PIN.
  */
 
 export type CoAuthorizationRequest = {
@@ -80,10 +81,10 @@ function optionalTrimmed(value: string | null | undefined): string | null {
  * on any violation. The load-bearing rule is that the approving manager cannot
  * be the acting operator: a self-approval is not a co-authorization.
  */
-export function assertCoAuthorization(request: CoAuthorizationRequest): void {
+function validateRequest(request: CoAuthorizationRequest, soloOwner = false): void {
   const acting = requireNonEmpty(request.actingStaffProfileId, 'acting staff profile');
   const approving = requireNonEmpty(request.approvingStaffProfileId, 'approving staff profile');
-  if (acting === approving) {
+  if (acting === approving && !soloOwner) {
     throw new CoAuthorizationError(
       'A co-authorization requires a second identity: the approving manager must differ from the acting operator.'
     );
@@ -100,6 +101,10 @@ export function assertCoAuthorization(request: CoAuthorizationRequest): void {
   }
 }
 
+export function assertCoAuthorization(request: CoAuthorizationRequest): void {
+  validateRequest(request);
+}
+
 /**
  * Validate a request and return the create-shaped, normalised record. Trims all
  * strings and folds blank optionals to null so a caller cannot smuggle
@@ -107,6 +112,10 @@ export function assertCoAuthorization(request: CoAuthorizationRequest): void {
  */
 export function buildCoAuthorizationRecord(request: CoAuthorizationRequest): CoAuthorizationRecord {
   assertCoAuthorization(request);
+  return normalizedRecord(request);
+}
+
+function normalizedRecord(request: CoAuthorizationRequest): CoAuthorizationRecord {
   return {
     actingStaffProfileId: request.actingStaffProfileId.trim(),
     approvingStaffProfileId: request.approvingStaffProfileId.trim(),
@@ -117,4 +126,73 @@ export function buildCoAuthorizationRecord(request: CoAuthorizationRequest): CoA
     deviceId: optionalTrimmed(request.deviceId),
     terminalSessionId: optionalTrimmed(request.terminalSessionId),
   };
+}
+
+/** Server-only exception: no client flag can replace the live owner/roster/PIN checks.
+ * The co-authorization row itself is the durable audit, written with the action.
+ */
+export async function buildSoloOwnerCoAuthorization(
+  db: import('@/lib/tenancy/scoped-db').ScopedDb,
+  request: CoAuthorizationRequest,
+  branchId: string,
+  pin: string | undefined
+): Promise<CoAuthorizationRecord> {
+  validateRequest(request, true);
+  if (request.actingStaffProfileId.trim() !== request.approvingStaffProfileId.trim() || !pin) {
+    throw new CoAuthorizationError('Solo-owner approval requires PIN reauthentication.');
+  }
+  const profile = await db.restaurantStaffProfile.findUnique({
+    where: { id: request.actingStaffProfileId },
+    select: {
+      id: true,
+      status: true,
+      user: { select: { role: true, status: true, organizationRole: { select: { key: true } } } },
+      jobRoles: {
+        where: { branchId, jobRole: { key: 'owner', active: true } },
+        select: { id: true },
+      },
+    },
+  });
+  const tenantOwner =
+    profile?.user?.status === 'ACTIVE' &&
+    (profile.user.role === 'ADMIN' || profile.user.organizationRole?.key === 'owner');
+  if (profile?.status !== 'ACTIVE' || (!tenantOwner && !profile.jobRoles.length)) {
+    throw new CoAuthorizationError('Only a solo tenant or branch owner may self-approve.');
+  }
+  // Count people eligible at this branch, including role/override/secondary
+  // assignments. Staff with no branch binding are conservatively included.
+  const colleagues = await db.restaurantStaffProfile.count({
+    where: {
+      status: 'ACTIVE',
+      id: { not: profile.id },
+      OR: [
+        { primaryBranchId: branchId },
+        { primaryBranchId: null },
+        {
+          user: {
+            status: 'ACTIVE',
+            OR: [{ role: 'ADMIN' }, { organizationRole: { key: 'owner' } }],
+          },
+        },
+        { jobRoles: { some: { branchId } } },
+        { directCapabilityGrants: { some: { branchId } } },
+        { user: { restaurantBranchAssignments: { some: { branchId } } } },
+      ],
+    },
+  });
+  if (colleagues !== 0) throw new CoAuthorizationError('A second staff approver is required.');
+  const { rateLimit } = await import('@/lib/rate-limit');
+  if (!(await rateLimit(`restaurant:solo-approval:${profile.id}`, 5, 60_000)).ok) {
+    throw new CoAuthorizationError('Too many approval attempts.');
+  }
+  const { authenticateOperator } = await import('./terminal-auth');
+  const auth = await authenticateOperator(db, {
+    staffProfileId: profile.id,
+    deviceId: request.deviceId ?? undefined,
+    type: 'PIN',
+    secret: pin,
+    now: new Date(),
+  });
+  if (!auth.ok) throw new CoAuthorizationError('PIN reauthentication failed.');
+  return normalizedRecord({ ...request, reason: `[SOLO_OWNER_PIN_REAUTH] ${request.reason}` });
 }

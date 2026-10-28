@@ -35,8 +35,10 @@ async function customDecision(
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
+      role: true,
+      status: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: { key: true, permissions: { select: { capability: true, effect: true } } },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -45,6 +47,10 @@ async function customDecision(
     },
   });
   if (!user) return false;
+  // Tenant-scoped persisted identity, never a caller-supplied role. Owners and
+  // administrators retain all tenant capabilities, including newly added ones.
+  if (user.status === 'ACTIVE' && (user.role === 'ADMIN' || user.organizationRole?.key === 'owner'))
+    return true;
   const matchingRules = [
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),

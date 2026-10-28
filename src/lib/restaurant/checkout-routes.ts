@@ -229,12 +229,17 @@ export async function operatorHasCapability(
     select: {
       status: true,
       primaryBranchId: true,
-      jobRoles: { where: { branchId }, select: { branchId: true } },
+      jobRoles: {
+        where: { branchId },
+        select: { branchId: true, jobRole: { select: { key: true, active: true } } },
+      },
       directCapabilityGrants: { where: { branchId }, select: { branchId: true } },
       user: {
         select: {
+          role: true,
+          status: true,
           organizationRole: {
-            select: { permissions: { select: { capability: true, effect: true } } },
+            select: { key: true, permissions: { select: { capability: true, effect: true } } },
           },
           permissionOverrides: {
             where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -244,6 +249,19 @@ export async function operatorHasCapability(
       },
     },
   });
+  if (
+    profile?.status === 'ACTIVE' &&
+    profile.user?.status === 'ACTIVE' &&
+    (profile.user.role === 'ADMIN' || profile.user.organizationRole?.key === 'owner')
+  )
+    return true;
+  if (
+    profile?.status === 'ACTIVE' &&
+    profile.jobRoles.some(
+      (row) => row.branchId === branchId && row.jobRole?.active && row.jobRole.key === 'owner'
+    )
+  )
+    return true;
   if (
     !profile ||
     profile.status !== 'ACTIVE' ||

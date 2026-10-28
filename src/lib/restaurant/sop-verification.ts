@@ -3,6 +3,7 @@ import 'server-only';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   buildCoAuthorizationRecord,
+  buildSoloOwnerCoAuthorization,
   CoAuthorizationError,
 } from '@/lib/restaurant/co-authorization';
 
@@ -55,6 +56,7 @@ export type VerifyOccurrenceInput = {
   occurrenceId: string;
   actorStaffProfileId?: string | null;
   reason?: string | null;
+  approvalPin?: string;
   now?: Date;
 };
 
@@ -73,7 +75,15 @@ export async function verifyOccurrence(
   return runSopTx(db, async (tx) => {
     const occ = await tx.restaurantSopOccurrence.findUnique({
       where: { id: input.occurrenceId },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        branchId: true,
+        assignedStaffProfileId: true,
+        claimedByStaffProfileId: true,
+        steps: { select: { completedByStaffProfileId: true } },
+        evidence: { select: { uploaderStaffProfileId: true } },
+      },
     });
     if (!occ) throw new SopVerificationError('Occurrence not found.', 'NOT_FOUND');
     if (!(VERIFIABLE_STATUSES as readonly string[]).includes(occ.status)) {
@@ -81,6 +91,37 @@ export async function verifyOccurrence(
         `Cannot verify an occurrence in status ${occ.status}. Expected SUBMITTED or LATE.`,
         'INVALID_STATE'
       );
+    }
+    const actor = input.actorStaffProfileId;
+    const selfApproval =
+      actor &&
+      (occ.assignedStaffProfileId === actor ||
+        occ.claimedByStaffProfileId === actor ||
+        occ.steps?.some((step) => step.completedByStaffProfileId === actor) ||
+        occ.evidence?.some((proof) => proof.uploaderStaffProfileId === actor));
+    let coAuthorizationId: string | undefined;
+    if (selfApproval) {
+      try {
+        const record = await buildSoloOwnerCoAuthorization(
+          tx,
+          {
+            actingStaffProfileId: actor,
+            approvingStaffProfileId: actor,
+            capability: 'sop:verify',
+            reason: input.reason ?? 'Owner verified own SOP execution',
+            targetType: 'RestaurantSopOccurrence',
+            targetId: input.occurrenceId,
+          },
+          occ.branchId,
+          input.approvalPin
+        );
+        coAuthorizationId = (
+          await tx.restaurantCoAuthorization.create({ data: record, select: { id: true } })
+        ).id;
+      } catch (error) {
+        if (!(error instanceof CoAuthorizationError)) throw error;
+        throw new SopVerificationError(error.message, 'CO_AUTH_REQUIRED');
+      }
     }
     const [, verification] = await Promise.all([
       tx.restaurantSopOccurrence.update({
@@ -91,6 +132,7 @@ export async function verifyOccurrence(
         data: {
           occurrenceId: input.occurrenceId,
           action: 'VERIFY',
+          ...(coAuthorizationId ? { coAuthorizationId } : {}),
           actorStaffProfileId: input.actorStaffProfileId ?? null,
           reason: input.reason ?? null,
           createdAt: now,
@@ -167,6 +209,7 @@ export type WaiveOccurrenceInput = {
   actorStaffProfileId: string;
   /** A distinct approving manager is REQUIRED for a waiver (M2 co-authorization). */
   approvingStaffProfileId: string;
+  approvalPin?: string;
   reason: string;
   now?: Date;
 };
@@ -179,7 +222,7 @@ export async function waiveOccurrence(
   return runSopTx(db, async (tx) => {
     const occ = await tx.restaurantSopOccurrence.findUnique({
       where: { id: input.occurrenceId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, branchId: true },
     });
     if (!occ) throw new SopVerificationError('Occurrence not found.', 'NOT_FOUND');
     if (!(WAIVABLE_STATUSES as readonly string[]).includes(occ.status)) {
@@ -192,14 +235,18 @@ export async function waiveOccurrence(
     // Build the co-authorization record (validates distinct actors, reason required)
     let coAuthData: ReturnType<typeof buildCoAuthorizationRecord>;
     try {
-      coAuthData = buildCoAuthorizationRecord({
+      const request = {
         actingStaffProfileId: input.actorStaffProfileId,
         approvingStaffProfileId: input.approvingStaffProfileId,
         capability: 'sop:verify',
         reason: input.reason,
         targetType: 'RestaurantSopOccurrence',
         targetId: input.occurrenceId,
-      });
+      };
+      coAuthData =
+        input.actorStaffProfileId === input.approvingStaffProfileId
+          ? await buildSoloOwnerCoAuthorization(tx, request, occ.branchId, input.approvalPin)
+          : buildCoAuthorizationRecord(request);
     } catch (err) {
       const msg = err instanceof CoAuthorizationError ? err.message : 'Co-authorization failed.';
       throw new SopVerificationError(msg, 'CO_AUTH_REQUIRED');
