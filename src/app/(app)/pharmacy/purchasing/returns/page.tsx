@@ -1,3 +1,4 @@
+import { SoloApprovalPin } from '@/components/pharmacy/solo-approval-pin';
 import { FollowUpQueue } from './follow-up-queue';
 import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up';
 import type { Metadata } from 'next';
@@ -329,6 +330,7 @@ export default async function PharmacyReturnsPage({
         supplierCreditId: field(form, 'supplierCreditId'),
         debitNoteId: field(form, 'debitNoteId'),
         amountMinor: moneyFieldMinor(form, 'amountMinor', 'Amount'),
+        pin: optionalField(form, 'pin'),
       });
       revalidatePath(ROUTE);
       next = destination(
@@ -649,6 +651,7 @@ export default async function PharmacyReturnsPage({
                           action={allocateCredit}
                           className="mt-3 flex flex-wrap items-end gap-3"
                         >
+                          <SoloApprovalPin />
                           <input name="branchId" type="hidden" value={branchId} />
                           <input name="supplierCreditId" type="hidden" value={credit.id} />
                           <SelectField
@@ -834,6 +837,7 @@ function ReturnDetail({
                     action={onAllocate}
                     className="mt-3 flex flex-wrap items-end gap-3"
                   >
+                    <SoloApprovalPin />
                     <input name="branchId" type="hidden" value={branchId} />
                     <input name="debitNoteId" type="hidden" value={note.id} />
                     <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />

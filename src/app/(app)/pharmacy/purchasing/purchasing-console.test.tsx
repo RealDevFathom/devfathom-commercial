@@ -23,9 +23,11 @@ const mocks = vi.hoisted(() => ({
   createTRPCContext: vi.fn(),
   hasModule: vi.fn(),
   createCaller: vi.fn(),
+  soloEligible: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/pharmacy/solo-approval', () => ({ soloOwnerEligible: mocks.soloEligible }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.hasModule }));
@@ -172,6 +174,7 @@ function callerStub(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  mocks.soloEligible.mockResolvedValue(false);
   vi.clearAllMocks();
   vi.mocked(revalidatePath).mockReset();
   vi.unstubAllGlobals();
@@ -880,5 +883,60 @@ describe('goods-in scan and duplicate serial', () => {
       'This GTIN and serial were already received in this pharmacy. Treat it as a duplicate pack and do not stock it in again.'
     );
     expect(result.searchParams.get('field')).toBe('serialNumber');
+  });
+});
+
+describe('solo owner PIN forms', () => {
+  it('offers a masked validated PIN on its own submitted order and passes it to approval', async () => {
+    mocks.soloEligible.mockResolvedValue(true);
+    const approvePurchaseOrder = vi.fn().mockResolvedValue({ status: 'APPROVED' });
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        approvePurchaseOrder,
+        purchaseOrders: vi.fn().mockResolvedValue([
+          {
+            id: 'po-solo',
+            reference: 'PO-SOLO',
+            status: 'SUBMITTED',
+            supplier: { id: 'sup-ok', name: 'Supplier' },
+            branch: null,
+            branchId: null,
+            supplierId: 'sup-ok',
+            requisition: null,
+            lines: [],
+            approvals: [],
+            goodsReceipts: [],
+            createdByUserId: 'user-1',
+          },
+        ]),
+        landedCost: vi.fn().mockResolvedValue(null),
+      })
+    );
+    render(await OrdersPage({ searchParams: params({ po: 'po-solo' }) }));
+    const pin = screen.getByLabelText('Owner PIN');
+    expect(pin).toHaveAttribute('type', 'password');
+    expect(pin).toHaveAttribute('pattern', '[0-9]{4,8}');
+    const approve = screen.getByRole('button', { name: 'Approve' });
+    fireEvent.change(pin, { target: { value: '4729' } });
+    await act(async () => fireEvent.click(approve));
+    expect(approvePurchaseOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ purchaseOrderId: 'po-solo', pin: '4729', decision: 'APPROVED' })
+    );
+  });
+
+  it('makes direct purchasing available to an eligible solo owner with a PIN input and self option', async () => {
+    mocks.soloEligible.mockResolvedValue(true);
+    mocks.createCaller.mockReturnValue(
+      callerStub({ workspace: vi.fn().mockResolvedValue({ ...workspace, approvers: [] }) })
+    );
+    render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+    const pin = screen.getByLabelText('Owner PIN');
+    expect(pin).toHaveAttribute('type', 'password');
+    expect(pin).toHaveAttribute('pattern', '[0-9]{4,8}');
+    const approver = screen.getByLabelText('Approved by');
+    expect(within(approver).getByRole('option', { name: /Owner/ })).toHaveValue('user-1');
+    fireEvent.change(approver, { target: { value: 'user-1' } });
+    expect(approver).toHaveValue('user-1');
+    expect(screen.queryByText('No second person can approve a bypass')).not.toBeInTheDocument();
   });
 });

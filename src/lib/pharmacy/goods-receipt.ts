@@ -1,3 +1,4 @@
+import { authorizeSoloApproval, pinProfileBelongsToActor } from './solo-approval';
 /**
  * PH-PUR — PRD §6.3 PUR-02 (receiving), PUR-04 (three-way match exceptions and
  * reversal) and PUR-05 (direct purchase). The database half of receiving.
@@ -87,7 +88,7 @@ export async function verifyControlledPurchaseWitness(
   db: ScopedDb,
   scope: ReceivingScope,
   input: { goodsReceiptId: string; staffProfileId?: string; pin?: string }
-): Promise<{ blocked: string } | { pharmacistId: string | null }> {
+): Promise<{ blocked: string } | { pharmacistId: string | null; signatureRef?: string }> {
   const receipt = await db.pharmacyGoodsReceipt.findFirst({
     where: { id: input.goodsReceiptId, organizationId: scope.organizationId },
     select: {
@@ -112,6 +113,22 @@ export async function verifyControlledPurchaseWitness(
   if (!needsRegister) return { pharmacistId: null };
   if (!input.staffProfileId || !input.pin || !receipt.qualifiedPersonUserId) {
     return { blocked: WITNESS_BLOCKED };
+  }
+
+  if (
+    receipt.qualifiedPersonUserId === scope.actorId &&
+    (await pinProfileBelongsToActor(db, scope, input.staffProfileId))
+  ) {
+    if (
+      !(await authorizeSoloApproval(
+        db,
+        scope,
+        { type: 'ControlledPurchase', id: input.goodsReceiptId },
+        input.pin
+      ))
+    )
+      return { blocked: WITNESS_BLOCKED };
+    return { pharmacistId: scope.actorId, signatureRef: `solo-purchase:${input.goodsReceiptId}` };
   }
   await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
   const credential = await db.restaurantOperatorCredential.findFirst({
@@ -327,7 +344,7 @@ export async function postGoodsReceipt(
       branchId: scope.branchId,
       recordedByUserId: scope.actorId,
       witnessedByUserId: witness.pharmacistId,
-      signatureRef: `pin:${witness.pharmacistId}`,
+      signatureRef: witness.signatureRef ?? `pin:${witness.pharmacistId}`,
       lines: purchaseLines,
     });
   }

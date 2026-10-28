@@ -33,8 +33,9 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
   const user = await db.user.findUnique({
     where: { id: userId, status: 'ACTIVE' },
     select: {
+      role: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: { key: true, permissions: { select: { capability: true, effect: true } } },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -43,6 +44,12 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
     },
   });
   if (!user) return false;
+  const rules = matching([
+    ...user.permissionOverrides,
+    ...(user.organizationRole?.permissions ?? []),
+  ]);
+  if (user.role === 'ADMIN' || user.organizationRole?.key === 'owner') return true;
+  if (rules.some((rule) => rule.effect === 'DENY')) return false;
   return procurementCapabilityGranted({
     overrides: user.permissionOverrides,
     role: user.organizationRole?.permissions ?? [],

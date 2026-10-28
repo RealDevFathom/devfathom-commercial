@@ -19,13 +19,11 @@ function fixture() {
     $queryRaw: vi.fn(),
     user: { findFirst: vi.fn().mockResolvedValue({ id: 'actor', role: 'EMPLOYEE' }) },
     restaurantOperatorCredential: {
-      findFirst: vi
-        .fn()
-        .mockResolvedValue({
-          id: 'cred',
-          credentialHash: 'hash',
-          staffProfile: { status: 'ACTIVE', user: witness },
-        }),
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'cred',
+        credentialHash: 'hash',
+        staffProfile: { status: 'ACTIVE', user: witness },
+      }),
       update: vi.fn(),
     },
     pharmacySale: {
@@ -102,5 +100,7 @@ describe('fresh controlled restoration authorization', () => {
     expect(first.witnessedByUserId).toBe('new-witness');
     expect(first.signatureRef).not.toBe(second.signatureRef);
     expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
+    const reads = db.restaurantOperatorCredential.findFirst.mock.invocationCallOrder;
+    expect(db.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(reads[0]!);
   });
 });

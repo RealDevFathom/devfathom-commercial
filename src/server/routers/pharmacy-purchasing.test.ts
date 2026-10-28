@@ -66,6 +66,7 @@ function makeDb() {
     medicineBarcode: model(),
   };
   return Object.assign(db, {
+    $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
   });
 }

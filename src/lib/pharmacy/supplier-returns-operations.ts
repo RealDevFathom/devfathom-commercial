@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { authorizeSoloApproval } from './solo-approval';
 /**
  * PH-PUR / PUR-06 — purchase returns and expiry claims against the append-only
  * ledger, with debit notes, supplier credit and settlement allocation.
@@ -410,7 +412,13 @@ export async function recordSupplierCredit(
 export async function allocateSupplierCredit(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { supplierCreditId: string; debitNoteId: string; amountMinor: number; at: Date }
+  input: {
+    supplierCreditId: string;
+    debitNoteId: string;
+    amountMinor: number;
+    at: Date;
+    pin?: string;
+  }
 ) {
   const [credit, note] = await Promise.all([
     db.pharmacySupplierCredit.findFirst({
@@ -430,11 +438,21 @@ export async function allocateSupplierCredit(
     throw new PharmacySupplierReturnError('CROSS_TENANT_REFERENCE');
   }
   if (note.status === 'CANCELLED') throw new PharmacySupplierReturnError('INVALID_TRANSITION');
-  if (note.purchaseReturn.submittedByUserId) {
-    assertSettlementSegregation({
-      submittedByUserId: note.purchaseReturn.submittedByUserId,
-      allocatedByUserId: scope.actorId,
-    });
+  const allocationId = randomUUID();
+  if (note.purchaseReturn.submittedByUserId === scope.actorId) {
+    if (
+      !(await authorizeSoloApproval(
+        db,
+        scope,
+        { type: 'PharmacySupplierCreditAllocation', id: allocationId },
+        input.pin
+      ))
+    ) {
+      assertSettlementSegregation({
+        submittedByUserId: scope.actorId,
+        allocatedByUserId: scope.actorId,
+      });
+    }
   }
 
   const creditAllocated = await db.pharmacySupplierCreditAllocation.aggregate({
@@ -455,6 +473,7 @@ export async function allocateSupplierCredit(
 
   const allocation = await db.pharmacySupplierCreditAllocation.create({
     data: {
+      id: allocationId,
       organizationId: scope.organizationId,
       supplierCreditId: credit.id,
       debitNoteId: note.id,

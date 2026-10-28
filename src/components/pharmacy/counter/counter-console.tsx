@@ -296,9 +296,6 @@ function ScopedPharmacyCounterConsole({
     prescriberRegNo: '',
     refSerial: '',
   });
-  const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
-    enabled: safetyLicensed,
-  });
   const [patientId, setPatientId] = useState<string | null>(null);
   const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
@@ -342,6 +339,13 @@ function ScopedPharmacyCounterConsole({
   // Derived, not mirrored into state: the default branch is simply "the first
   // one" until the operator picks another, so an effect would only add a render.
   const branchId = selectedBranchId || (branches[0]?.id ?? '');
+  const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(
+    branchId ? { branchId } : undefined,
+    {
+      enabled: safetyLicensed,
+    }
+  );
+
   const recoveryScope = useMemo<TenderAttemptScope>(
     () => ({ organizationId, accountId, branchId }),
     [organizationId, accountId, branchId]

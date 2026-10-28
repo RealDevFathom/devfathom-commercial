@@ -75,7 +75,12 @@ function makeContext() {
       pharmacyInterbranchTransfer: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyRecallNotice: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyStockSignal: { findMany: vi.fn().mockResolvedValue([]) },
-      user: { findMany: vi.fn().mockResolvedValue([]) },
+      user: {
+        findMany: vi.fn().mockResolvedValue([]),
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ status: 'ACTIVE', role: 'EMPLOYEE', organizationId: 'org' }),
+      },
       pharmacyTemperatureLog: { findMany: vi.fn().mockResolvedValue([]) },
     },
   };

@@ -45,7 +45,7 @@ export function PharmacistQueueConsole() {
     } else setSelected(item);
   }
 
-  async function act(reviewItemId: string, kind: ReviewKind, reason?: string) {
+  async function act(reviewItemId: string, kind: ReviewKind, reason?: string, pin?: string) {
     if (pendingRef.current || !current || current.id !== reviewItemId) {
       throw new Error('This review is unavailable. Reload the queue before recording a decision.');
     }
@@ -53,7 +53,7 @@ export function PharmacistQueueConsole() {
     setPendingId(reviewItemId);
     setRefreshErrorId(null);
     try {
-      await decide.mutateAsync({ reviewItemId, kind, reason });
+      await decide.mutateAsync({ reviewItemId, kind, reason, ...(pin ? { pin } : {}) });
       // A refresh failure must not turn a confirmed write into a retryable decision draft.
       try {
         await utils.pharmacyDispensing.reviewQueue.invalidate();
@@ -159,13 +159,20 @@ export function PharmacistQueueConsole() {
             <div ref={actionsRef} tabIndex={-1}>
               <QueueActions
                 key={active.id}
-                canApprove={active.requestedByUserId !== queue.data.currentUserId}
+                canApprove={
+                  active.requestedByUserId !== queue.data.currentUserId ||
+                  Boolean(queue.data.soloReviewItemIds?.includes(active.id))
+                }
+                requirePin={
+                  active.requestedByUserId === queue.data.currentUserId &&
+                  Boolean(queue.data.soloReviewItemIds?.includes(active.id))
+                }
                 pending={pendingId === active.id}
                 disabled={!current}
                 onDirtyChange={(dirty) =>
                   setDirtyId((id) => (dirty ? active.id : id === active.id ? null : id))
                 }
-                onAction={(kind, reason) => act(active.id, kind, reason)}
+                onAction={(kind, reason, pin) => act(active.id, kind, reason, pin)}
               />
             </div>
             {refreshErrorId === active.id ? (

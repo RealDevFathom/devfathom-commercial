@@ -35,8 +35,10 @@ async function customDecision(
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
+      role: true,
+      status: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: { key: true, permissions: { select: { capability: true, effect: true } } },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -45,12 +47,21 @@ async function customDecision(
     },
   });
   if (!user) return false;
+  if (
+    user.status &&
+    user.status !== 'ACTIVE' &&
+    (user.role === 'ADMIN' || user.organizationRole?.key === 'owner')
+  )
+    return false;
   const matchingRules = [
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),
   ].filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
+  // Authority comes from the current tenant row, never a session/platform role.
+  if (user.status === 'ACTIVE' && (user.role === 'ADMIN' || user.organizationRole?.key === 'owner'))
+    return true;
   if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
   if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
   return null;

@@ -1,3 +1,4 @@
+import { authorizeSoloApproval, pinProfileBelongsToActor } from '@/lib/pharmacy/solo-approval';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
@@ -374,9 +375,10 @@ async function requireCounterReceiptAccess(
     where: { id: user.id },
     select: {
       status: true,
+      role: true,
       organizationId: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: { key: true, permissions: { select: { capability: true, effect: true } } },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
@@ -399,7 +401,10 @@ async function requireCounterReceiptAccess(
   // can accidentally outrun an explicit DENY on another alias.
   // Combine user overrides and role rules into ONE family decision so any
   // explicit DENY (user or role, on any alias) beats any ALLOW.
-  const capable = counterCapabilityDecision([...overrides, ...roleRules]) === 'ALLOW';
+  const owner =
+    member.status === 'ACTIVE' &&
+    (member.role === 'ADMIN' || member.organizationRole?.key === 'owner');
+  const capable = owner || counterCapabilityDecision([...overrides, ...roleRules]) === 'ALLOW';
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -427,9 +432,8 @@ async function requireCounterReceiptAccess(
   const assigned = new Set(rows.map((row) => row.branchId));
   if (assigned.has(branch)) return scope;
 
-  // Session role only. An organization-role key is not an administrator grant.
-  // An assigned admin still reaches every other active branch of this organization.
-  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
+  // Only current tenant authority grants automatic access to all active branches.
+  const orgAdmin = owner;
   if (orgAdmin) {
     annotateAudit(ctx, {
       targetType: 'PharmacyBranch',
@@ -1044,7 +1048,22 @@ export const pharmacySalesRouter = router({
           } as const;
           if (!authorization) return blocked;
           // Serialize credential attempts; returning a denial commits durable lockout counters.
-          await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${authorization.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
+
+          const solo = await pinProfileBelongsToActor(db, scope, authorization.staffProfileId);
+          if (
+            solo &&
+            !(await authorizeSoloApproval(
+              db,
+              scope,
+              { type: 'ControlledSale', id: input.saleId },
+              authorization.pin
+            ))
+          ) {
+            return blocked;
+          }
+          if (!solo) {
+            await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${authorization.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
+          }
           const credential = await db.restaurantOperatorCredential.findFirst({
             where: {
               organizationId: scope.organizationId,
@@ -1063,12 +1082,12 @@ export const pharmacySalesRouter = router({
             !pharmacist ||
             pharmacist.organizationId !== scope.organizationId ||
             pharmacist.status !== 'ACTIVE' ||
-            pharmacist.id === scope.actorId ||
             isLockedOut(credential, now)
           )
             return blocked;
           if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
           if (
+            !solo &&
             !(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))
           ) {
             await db.restaurantOperatorCredential.update({
@@ -1077,10 +1096,11 @@ export const pharmacySalesRouter = router({
             });
             return blocked;
           }
-          await db.restaurantOperatorCredential.update({
-            where: { id: credential.id },
-            data: clearLockout(),
-          });
+          if (!solo)
+            await db.restaurantOperatorCredential.update({
+              where: { id: credential.id },
+              data: clearLockout(),
+            });
           const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);
           if (authorization.refSerial && !refEntry) {
             return { blocked: 'That earlier register serial is not on this branch.' };
@@ -1148,7 +1168,7 @@ export const pharmacySalesRouter = router({
               refEntryId: refEntry?.id ?? null,
               recordedByUserId: scope.actorId,
               witnessedByUserId: pharmacist.id,
-              signatureRef: `pin:${pharmacist.id}`,
+              signatureRef: solo ? `solo-sale:${input.saleId}` : `pin:${pharmacist.id}`,
             });
             await db.pharmacyEmergencyRxFollowUp.create({
               data: {

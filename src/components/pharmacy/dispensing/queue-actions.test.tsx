@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { QueueActions } from './queue-actions';
 
@@ -26,5 +26,20 @@ describe('QueueActions', () => {
     expect(confirm).toBeDisabled();
     for (const checkbox of screen.getAllByRole('checkbox')) fireEvent.click(checkbox);
     expect(confirm).toBeEnabled();
+  });
+  it('requires a valid fresh solo-owner PIN and sends it with the clinical decision', async () => {
+    const onAction = vi.fn().mockResolvedValue(undefined);
+    render(<QueueActions canApprove requirePin onAction={onAction} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Verify' }));
+    const confirm = screen.getByRole('button', { name: 'Confirm verify' });
+    expect(confirm).toBeDisabled();
+    const pin = screen.getByLabelText('Owner PIN');
+    expect(pin).toHaveAttribute('type', 'password');
+    fireEvent.change(pin, { target: { value: 'abc' } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(pin, { target: { value: '4729' } });
+    await act(async () => fireEvent.click(confirm));
+    expect(onAction).toHaveBeenCalledExactlyOnceWith('VERIFY', undefined, '4729');
+    expect(screen.queryByLabelText('Owner PIN')).not.toBeInTheDocument();
   });
 });

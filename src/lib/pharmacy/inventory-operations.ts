@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { authorizeSoloApproval } from './solo-approval';
 /** PH-INV INV-06/07/08(manual)/09 workflows layered on the append-only ledger. */
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -114,7 +116,8 @@ export async function approveCount(
   db: ScopedDb,
   scope: LedgerScope,
   countId: string,
-  idempotencyKeyPrefix: string
+  idempotencyKeyPrefix: string,
+  pin?: string
 ) {
   const count = await db.pharmacyInventoryCount.findFirst({
     where: { id: countId, organizationId: scope.organizationId, branchId: scope.branchId },
@@ -122,7 +125,11 @@ export async function approveCount(
   });
   if (!count) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
   if (count.status === 'APPROVED') throw new PharmacyInventoryError('INVALID_STATE');
-  if (count.status === 'AWAITING_COAUTH' && count.createdById === scope.actorId)
+  if (
+    count.status === 'AWAITING_COAUTH' &&
+    count.createdById === scope.actorId &&
+    !(await authorizeSoloApproval(db, scope, { type: 'PharmacyInventoryCount', id: count.id }, pin))
+  )
     throw new PharmacyInventoryError('COAUTH_REQUIRED');
   for (const [index, line] of count.lines.entries()) {
     const variance = line.varianceUnits ?? 0;
@@ -158,13 +165,24 @@ export async function writeOff(
     stockLocationId: string;
     units: number;
     witnessId: string;
+    pin?: string;
     reason: string;
     evidenceRef: string;
     idempotencyKey: string;
   }
 ) {
   assertPositive(input.units);
-  if (input.witnessId === scope.actorId) throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  const custodyId = randomUUID();
+  if (
+    input.witnessId === scope.actorId &&
+    !(await authorizeSoloApproval(
+      db,
+      scope,
+      { type: 'PharmacyCustodyRecord', id: custodyId },
+      input.pin
+    ))
+  )
+    throw new PharmacyInventoryError('COAUTH_REQUIRED');
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: {
       id: input.inventoryLotId,
@@ -199,6 +217,7 @@ export async function writeOff(
   });
   const custody = await db.pharmacyCustodyRecord.create({
     data: {
+      id: custodyId,
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       movementId: movement.id,
@@ -329,12 +348,21 @@ export async function allocateTransfer(
   });
 }
 
-export async function approveTransfer(db: ScopedDb, scope: LedgerScope, transferId: string) {
+export async function approveTransfer(
+  db: ScopedDb,
+  scope: LedgerScope,
+  transferId: string,
+  pin?: string
+) {
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: { id: transferId, organizationId: scope.organizationId, fromBranchId: scope.branchId },
   });
   if (!transfer) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
-  if (transfer.status !== 'ALLOCATED' || transfer.allocatedById === scope.actorId)
+  if (
+    transfer.status !== 'ALLOCATED' ||
+    (transfer.allocatedById === scope.actorId &&
+      !(await authorizeSoloApproval(db, scope, { type: 'PharmacyTransfer', id: transfer.id }, pin)))
+  )
     throw new PharmacyInventoryError('COAUTH_REQUIRED');
   return db.pharmacyInterbranchTransfer.update({
     where: { id: transfer.id },

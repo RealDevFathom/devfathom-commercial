@@ -1,3 +1,4 @@
+import { soloOwnerEligible } from '@/lib/pharmacy/solo-approval';
 import type { Metadata } from 'next';
 import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
@@ -144,6 +145,19 @@ export default async function PharmacyReceivingPage({
   }
 
   const branchId = scope.branch.id;
+  const solo = await soloOwnerEligible(ctx.db, {
+    organizationId: ctx.entitlements.organizationId,
+    branchId,
+    actorId: ctx.session.user.id,
+  });
+  workspace.soloApprovalAllowed = solo;
+  if (solo && !workspace.approvers.some((person) => person.id === ctx.session!.user.id)) {
+    workspace.approvers.push({
+      id: ctx.session.user.id,
+      name: ctx.session.user.name ?? 'Owner (you)',
+      email: ctx.session.user.email ?? '',
+    });
+  }
   const exceptionStatus = param(query, 'exceptions') === 'resolved' ? 'RESOLVED' : 'OPEN';
 
   let receipts: GoodsReceiptDetail[];
@@ -197,7 +211,7 @@ export default async function PharmacyReceivingPage({
     (selectedReceipt.qualifiedPersonUserId ||
       selectedReceipt.lines.some((line) => line.medicine.controlled))
   );
-  const witnesses = needsWitness ? await caller.controlledWitnesses() : [];
+  const witnesses = needsWitness ? await caller.controlledWitnesses({ branchId }) : [];
 
   // ── actions ───────────────────────────────────────────────────────────────
 
@@ -307,6 +321,7 @@ export default async function PharmacyReceivingPage({
         directPurchase: {
           reason: field(form, 'bypassReason'),
           approvedByUserId: field(form, 'bypassApprovedByUserId'),
+          pin: optionalField(form, 'bypassPin'),
         },
         note: optionalField(form, 'directNote'),
         qualifiedPersonUserId: optionalField(form, 'directQualifiedPersonUserId'),
@@ -797,7 +812,7 @@ export default async function PharmacyReceivingPage({
               />
               <SelectField
                 emptyHint="Nobody else is active in this workspace."
-                hint="You cannot approve your own bypass, so you are not on this list."
+                hint="A second approver is required unless you are the sole active owner and enter your PIN."
                 label="Approved by"
                 name="bypassApprovedByUserId"
                 notice={notice}
@@ -807,6 +822,20 @@ export default async function PharmacyReceivingPage({
                 }))}
                 required
               />
+              {workspace.soloApprovalAllowed ? (
+                <TextField
+                  name="bypassPin"
+                  label="Owner PIN"
+                  type="password"
+                  minLength={4}
+                  maxLength={8}
+                  pattern="[0-9]{4,8}"
+                  inputMode="numeric"
+                  autoComplete="current-password"
+                  notice={notice}
+                  hint="Enter your PIN when approving your own direct purchase."
+                />
+              ) : null}
             </div>
             <div className="space-y-3">
               {DIRECT_SLOTS.map((slot) => (

@@ -16,7 +16,14 @@ describe('controlled witness tenant scope', () => {
       },
     ]);
     const result = await listControlledPinWitnesses(
-      { restaurantStaffProfile: { findMany } } as never,
+      {
+        restaurantStaffProfile: { findMany },
+        user: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValue({ status: 'ACTIVE', role: 'EMPLOYEE', organizationId: 'org' }),
+        },
+      } as never,
       'org',
       'actor'
     );

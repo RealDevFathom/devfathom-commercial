@@ -118,5 +118,8 @@ describe('verifyControlledPurchaseWitness', () => {
         { goodsReceiptId: 'receipt', staffProfileId: 'staff', pin: '1234' }
       )
     ).resolves.toEqual({ pharmacistId: 'pharmacist' });
+    expect(vi.mocked(db.$queryRaw).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(db.restaurantOperatorCredential.findFirst).mock.invocationCallOrder[0]!
+    );
   });
 });

@@ -1,3 +1,4 @@
+import { soloOwnerEligible } from './solo-approval';
 /**
  * PH-PUR read models — PRD §6.3 PUR-01..PUR-06 as the purchasing consoles need
  * to show them.
@@ -241,6 +242,7 @@ export type PurchasingWorkspace = {
   medicines: MedicineOption[];
   suppliers: SupplierSummary[];
   approvers: ApproverOption[];
+  soloApprovalAllowed?: boolean;
 };
 
 function conversionLabel(
@@ -271,6 +273,9 @@ export async function purchasingWorkspace(
   options: { at?: Date } = {}
 ): Promise<PurchasingWorkspace> {
   const at = options.at ?? new Date();
+  const solo = scope.actorId
+    ? await soloOwnerEligible(db, { ...scope, actorId: scope.actorId })
+    : false;
   const [branches, stockLocations, medicines, suppliers, approvers] = await Promise.all([
     db.pharmacyBranch.findMany({
       where: { organizationId: scope.organizationId, active: true },
@@ -322,7 +327,7 @@ export async function purchasingWorkspace(
       where: {
         organizationId: scope.organizationId,
         status: { not: 'INACTIVE' },
-        ...(scope.actorId ? { id: { not: scope.actorId } } : {}),
+        ...(scope.actorId && !solo ? { id: { not: scope.actorId } } : {}),
       },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
       select: {
@@ -350,8 +355,8 @@ export async function purchasingWorkspace(
     branches,
     stockLocations,
     suppliers,
-    approvers: eligibleApprovers
-      .map(({ id, name, email }) => ({ id, name, email })),
+    soloApprovalAllowed: solo,
+    approvers: eligibleApprovers.map(({ id, name, email }) => ({ id, name, email })),
     medicines: medicines.map((medicine) => ({
       id: medicine.id,
       productName: medicine.productName,
