@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { applySendAuthorityUpdate } from '../../../../tests/support/whatsapp-message-log-store';
+
 type LogRow = { id: string; organizationId: string; dedupeKey: string; [key: string]: unknown };
 
 const store = vi.hoisted(() => ({
@@ -57,6 +59,8 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         store.logs.push(created);
         return [{ id: created.id }];
       },
+      updateMany: async (args: Parameters<typeof applySendAuthorityUpdate>[1]) =>
+        applySendAuthorityUpdate(store.logs, args),
       update: async ({ where, data }: { where: { id: string }; data: object }) => {
         const log = store.logs.find((row) => row.id === where.id)!;
         Object.assign(log, data);
