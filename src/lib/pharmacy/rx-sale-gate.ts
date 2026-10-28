@@ -21,10 +21,16 @@ export function needsRxSaleGrant(
 }
 
 /**
- * #518: only someone central ABAC allows the exact pharmacy:dispense grant may sell an Rx or
- * restricted, non-controlled line: persisted role and user overrides, an explicit DENY wins, and
- * wildcards never qualify. There is deliberately no other way through (no owner policy, session
- * role or setting).
+ * #518: the exact pharmacy:dispense grant through central ABAC: persisted role and user
+ * overrides, an explicit DENY wins, and wildcards never qualify.
+ */
+export function hasRxSaleGrant(db: ScopedDb, scope: { actorId: string }): Promise<boolean> {
+  return can({ id: scope.actorId, role: 'EMPLOYEE' }, 'pharmacy:dispense', undefined, { db });
+}
+
+/**
+ * #518: only someone with that grant may sell an Rx or restricted, non-controlled line. There is
+ * deliberately no other way through (no owner policy, approval, session role or setting).
  */
 export async function assertRxSaleAllowed(
   db: ScopedDb,
@@ -32,7 +38,6 @@ export async function assertRxSaleAllowed(
   medicines: ReadonlyArray<{ rx: boolean; restricted: boolean; controlled: boolean } | undefined>
 ): Promise<void> {
   if (!medicines.some(needsRxSaleGrant)) return;
-  if (await can({ id: scope.actorId, role: 'EMPLOYEE' }, 'pharmacy:dispense', undefined, { db }))
-    return;
+  if (await hasRxSaleGrant(db, scope)) return;
   throw new PharmacyRxSaleDenied();
 }

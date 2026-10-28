@@ -110,6 +110,8 @@ vi.mock('@/lib/trpc', () => {
         'redeemPoints',
         'authenticatePack',
         'substituteProposals',
+        'rxApprovalAccess',
+        'approveRxLine',
       ]),
       pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
       pharmacySafety: router(['controlledPharmacists']),
@@ -262,6 +264,8 @@ beforeEach(() => {
   ])
     mocks.mutations[name] = vi.fn();
   mocks.mutations.tender!.mockResolvedValue(accepted());
+  mocks.queries.rxApprovalAccess = query();
+  mocks.mutations.approveRxLine = vi.fn();
   mocks.cancel.mockResolvedValue(undefined);
   mocks.receiptInvalidate.mockResolvedValue(undefined);
   mocks.refetch.mockImplementation(async () => {
@@ -1258,5 +1262,88 @@ describe('PharmacyCounterConsole module boundaries', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     expect(mocks.queryOptions).toHaveBeenCalledWith('controlledPharmacists', { enabled: true });
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
+  });
+});
+
+describe('PharmacyCounterConsole pharmacist approval of prescription-only lines (#341)', () => {
+  function rxBill(rxApproved: boolean) {
+    const bill = cart();
+    Object.assign(bill.lines[0]!, { rx: true, medicineName: 'Amoxicillin 500mg', rxApproved });
+    mocks.queries.counterCart!.data = bill;
+  }
+
+  it('keeps an unapproved line blocked and lets a pharmacist approve it with a reason', async () => {
+    rxBill(false);
+    mocks.queries.rxApprovalAccess = query({ canApprove: true });
+    mocks.mutations.approveRxLine!.mockResolvedValue({ saleLineId: 'line-a', replayed: false });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(mocks.queryOptions).toHaveBeenCalledWith(
+      'rxApprovalAccess',
+      expect.objectContaining({ enabled: true })
+    );
+    expect(screen.getByText(/This bill carries an unresolved safety block/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    const approve = screen.getByRole('button', { name: 'Approve as pharmacist' });
+    expect(approve).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Approval reason for Amoxicillin 500mg'), {
+      target: { value: '  Prescription seen: Dr Khan  ' },
+    });
+    await act(async () => fireEvent.click(approve));
+    expect(mocks.mutations.approveRxLine).toHaveBeenCalledWith({
+      branchId: 'branch-a',
+      saleId: 'sale-a',
+      saleLineId: 'line-a',
+      reason: 'Prescription seen: Dr Khan',
+    });
+    expect(mocks.cancel).toHaveBeenCalled();
+    expect(
+      await screen.findByText('Pharmacist approval recorded for this line.')
+    ).toBeInTheDocument();
+  });
+
+  it('shows the refusal and keeps the block when the server refuses the approval', async () => {
+    rxBill(false);
+    mocks.queries.rxApprovalAccess = query({ canApprove: true });
+    mocks.mutations.approveRxLine!.mockRejectedValue(
+      refused(
+        'FORBIDDEN',
+        'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.'
+      )
+    );
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Approval reason for Amoxicillin 500mg'), {
+      target: { value: 'Prescription seen' },
+    });
+    await act(async () =>
+      fireEvent.click(screen.getByRole('button', { name: 'Approve as pharmacist' }))
+    );
+    expect(
+      await screen.findByText(
+        'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+  });
+
+  it('asks a counter user without the dispensing permission to call a pharmacist', () => {
+    rxBill(false);
+    mocks.queries.rxApprovalAccess = query({ canApprove: false });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(
+      screen.getByText(/A pharmacist with the dispensing permission must approve and sell/)
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve as pharmacist' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+  });
+
+  it('clears the prescription block for an approved line and asks nothing more', () => {
+    rxBill(true);
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.queryByText(/This bill carries an unresolved safety block/)).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Pharmacist approval' })).toBeNull();
+    expect(mocks.queryOptions).toHaveBeenCalledWith(
+      'rxApprovalAccess',
+      expect.objectContaining({ enabled: false })
+    );
   });
 });

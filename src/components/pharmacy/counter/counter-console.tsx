@@ -32,6 +32,7 @@ import {
   type CounterReceiptSettlement,
 } from './counter-receipt-view';
 import { CounterReturnPanel } from './counter-return-panel';
+import { CounterRxApproval, rxApprovalReasonValid } from './counter-rx-approval';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
@@ -312,6 +313,8 @@ function ScopedPharmacyCounterConsole({
   const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  /** #341: the approval reason typed for each unapproved prescription-only line. */
+  const [rxApprovalReasons, setRxApprovalReasons] = useState<Record<string, string>>({});
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
   const [refreshingTenderBill, setRefreshingTenderBill] = useState(false);
@@ -514,6 +517,7 @@ function ScopedPharmacyCounterConsole({
   const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
   const redeemLoyalty = trpc.pharmacySales.redeemPoints.useMutation();
   const authenticatePack = trpc.pharmacySales.authenticatePack.useMutation();
+  const approveRxLine = trpc.pharmacySales.approveRxLine.useMutation();
 
   const refreshCart = useCallback(async () => {
     await refreshCounterQueries(utils.pharmacySales);
@@ -530,6 +534,7 @@ function ScopedPharmacyCounterConsole({
       setTenderOutcome(null);
       setTenderReadRequired(false);
       setRestoredAttempt(null);
+      setRxApprovalReasons({});
     },
     [discardReceiptIntent]
   );
@@ -538,6 +543,21 @@ function ScopedPharmacyCounterConsole({
 
   const cart = cartQuery.data ?? null;
   const patient = patientPanelQuery.data ?? null;
+  // #341: prescription-only/restricted, non-controlled lines of an open bill that a pharmacist
+  // has not approved yet.
+  const pendingRxApprovals = useMemo(
+    () =>
+      cart?.status === 'OPEN'
+        ? cart.lines
+            .filter((line) => (line.rx || line.restricted) && !line.controlled && !line.rxApproved)
+            .map((line) => ({ saleLineId: line.saleLineId, medicineName: line.medicineName }))
+        : [],
+    [cart]
+  );
+  const rxApprovalAccessQuery = trpc.pharmacySales.rxApprovalAccess.useQuery(
+    { branchId },
+    { enabled: Boolean(branchId) && pendingRxApprovals.length > 0, retry: false, staleTime: 60_000 }
+  );
   const patientAddress = patientAddressDraft ?? patient?.address ?? '';
 
   const selectedOption = useMemo(
@@ -629,6 +649,7 @@ function ScopedPharmacyCounterConsole({
         },
         blocked: [],
         emergencySupply: line.emergencySupply ?? false,
+        rxApproved: line.rxApproved ?? false,
         prescription: prescriptionLine
           ? {
               id: prescriptionLine.entry.prescriptionLineId,
@@ -1292,6 +1313,30 @@ function ScopedPharmacyCounterConsole({
     }
     return outcome;
   }, [branchAuthorized, refreshTenderBill, saleId, tenderOutcome, utils]);
+
+  /** #341: a pharmacist approves one prescription-only line, which clears its POS-09 block. */
+  const approvePrescriptionLine = useCallback(
+    async (saleLineId: string) => {
+      const reason = (rxApprovalReasons[saleLineId] ?? '').trim();
+      if (!saleId || busy || !rxApprovalReasonValid(reason)) return;
+      setPending(`rxApproval:${saleLineId}`);
+      try {
+        await approveRxLine.mutateAsync({ branchId, saleId, saleLineId, reason });
+        await refreshCart();
+        setRxApprovalReasons((current) => {
+          const next = { ...current };
+          delete next[saleLineId];
+          return next;
+        });
+        setNotice({ tone: 'success', message: 'Pharmacist approval recorded for this line.' });
+      } catch (error) {
+        setNotice({ tone: 'warning', message: messageFrom(error) });
+      } finally {
+        setPending(null);
+      }
+    },
+    [approveRxLine, branchId, busy, refreshCart, rxApprovalReasons, saleId]
+  );
 
   const attachCustomer = useCallback(async () => {
     if (!patient || busy) return;
@@ -2318,6 +2363,25 @@ function ScopedPharmacyCounterConsole({
               </kbd>
             }
           >
+            <CounterRxApproval
+              lines={pendingRxApprovals}
+              access={
+                rxApprovalAccessQuery.isError
+                  ? 'error'
+                  : rxApprovalAccessQuery.data
+                    ? rxApprovalAccessQuery.data.canApprove
+                      ? 'approver'
+                      : 'viewer'
+                    : 'loading'
+              }
+              reasons={rxApprovalReasons}
+              pendingLineId={pending?.startsWith('rxApproval:') ? pending.slice(11) : null}
+              disabled={busy}
+              onReasonChange={(saleLineId, reason) =>
+                setRxApprovalReasons((current) => ({ ...current, [saleLineId]: reason }))
+              }
+              onApprove={(saleLineId) => void approvePrescriptionLine(saleLineId)}
+            />
             <CounterRxPanel
               ref={rxPanelRef}
               controlled={

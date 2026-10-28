@@ -87,6 +87,12 @@ export type CounterAlertLine = {
    * is captured.
    */
   emergencySupply?: boolean;
+  /**
+   * #341: the server recorded a pharmacist's approval (or a validated prescription) for this
+   * prescription-only/restricted line. Only non-controlled lines honour it, and it clears the
+   * prescription checks alone: batch, recall and every other block still apply.
+   */
+  rxApproved?: boolean;
   requestedCanonicalUnits: number;
   /** Earliest safe expiry backing this line, for the near-expiry notice. */
   nearestSafeExpiry: Date | null;
@@ -130,7 +136,8 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
   }
 
   const needsPrescription = medicine.rx || medicine.controlled || medicine.restricted;
-  if (needsPrescription) {
+  const pharmacistApproved = line.rxApproved === true && !medicine.controlled;
+  if (needsPrescription && !pharmacistApproved) {
     const prescription = line.prescription;
     if (!prescription && medicine.controlled && line.emergencySupply) {
       push(alerts, {

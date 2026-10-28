@@ -122,6 +122,46 @@ describe('counterAlertsFor (POS-09)', () => {
     expect(alerts.every((alert) => alert.severity === 'SAFETY_BLOCK')).toBe(true);
   });
 
+  it('lets a recorded pharmacist approval clear the prescription checks of a non-controlled line only (#341)', () => {
+    const unverified = {
+      id: 'rx-1',
+      verified: false,
+      expiresAt: new Date('2026-01-01T00:00:00.000Z'),
+      remainingAuthorizedUnits: 0,
+    };
+    for (const flags of [{ rx: true }, { restricted: true }]) {
+      expect(
+        counterAlertsFor([line({ medicine: medicine(flags), rxApproved: true })], { at: AT })
+      ).toEqual([]);
+      expect(
+        counterAlertsFor(
+          [line({ medicine: medicine(flags), rxApproved: true, prescription: unverified })],
+          { at: AT }
+        )
+      ).toEqual([]);
+    }
+    // Without the approval the same line still blocks (POS-09 is unchanged).
+    expect(
+      hasBlockingAlert(
+        counterAlertsFor([line({ medicine: medicine({ rx: true }), rxApproved: false })], {
+          at: AT,
+        })
+      )
+    ).toBe(true);
+    // A controlled line never honours it, and stock blocks are never cleared by it.
+    expect(
+      counterAlertsFor([line({ medicine: medicine({ controlled: true }), rxApproved: true })], {
+        at: AT,
+      }).map((alert) => alert.code)
+    ).toEqual(['CONTROLLED_WITHOUT_PRESCRIPTION']);
+    expect(
+      counterAlertsFor(
+        [line({ medicine: medicine({ rx: true }), rxApproved: true, blocked: ['RECALLED'] })],
+        { at: AT }
+      ).map((alert) => alert.code)
+    ).toEqual(['STOCK_RECALLED']);
+  });
+
   it('never offers acknowledgement as a way past a block', () => {
     const alerts = counterAlertsFor(
       [
