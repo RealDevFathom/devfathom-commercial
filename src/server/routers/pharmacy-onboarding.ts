@@ -135,10 +135,11 @@ async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
       effectiveFrom: { lte: at },
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
     },
-    orderBy: [{ code: 'asc' }, { effectiveFrom: 'desc' }],
+    orderBy: [{ code: 'asc' }, { effectiveFrom: 'desc' }, { version: 'desc' }],
   });
   // One rule set per province — the first, because the ordering puts the most
-  // recently effective version of each code first.
+  // recently effective version of each code first, with the highest version
+  // winning when a correction has the same effective timestamp.
   const byCode = new Map<string, (typeof ruleSets)[number]>();
   for (const ruleSet of ruleSets) if (!byCode.has(ruleSet.code)) byCode.set(ruleSet.code, ruleSet);
   return [...byCode.values()].map((ruleSet) => {
