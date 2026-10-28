@@ -180,7 +180,7 @@ describe('demo Auth.js boundary', () => {
     mocks.resolveById.mockResolvedValue({ ...demoOrganization, id: 'org_real', isDemo: false });
     mocks.peekIntent.mockResolvedValue({
       email: demoUser.email,
-      candidates: [{ organizationId: 'org_real', userId: 'user_real' }],
+      candidates: [{ organizationId: 'org_real', userId: 'user_real', tokenVersion: 0 }],
     });
     mocks.withTenantDb.mockImplementation(async (_org, run) =>
       run({

@@ -218,6 +218,7 @@ beforeEach(async () => {
             {
               organizationId: organization.id,
               userId: 'user_alex',
+              tokenVersion: 0,
               slug: organization.slug,
               displayName: organization.displayName,
               ssoEnforced: false,
@@ -247,6 +248,14 @@ afterEach(() => {
 });
 
 describe('shared-host login rate limiting', () => {
+  it('rejects a password proof issued before reset without consuming it or clearing budgets', async () => {
+    const step1 = await credentialCheck(PASSWORD);
+    expect(step1.status).toBe(200);
+    mocks.findUniqueUser.mockResolvedValue(tenantUser({ tokenVersion: 1 }));
+    expect(await selectWorkspace(step1)).toBeNull();
+    expect([...mocks.intents.values()].every((intent) => !intent.used)).toBe(true);
+  });
+
   it('clears both failure budgets once a sign-in is fully verified', async () => {
     // One unit short of the account limit, then a success that must reset it.
     for (let i = 0; i < ACCOUNT_LIMIT - 1; i += 1) await expectWrongPassword();

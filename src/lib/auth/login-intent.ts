@@ -28,6 +28,7 @@ export type LoginIntentCandidate = {
   organizationId: string;
   userId: string;
   demoAccessExpiresAt?: number;
+  tokenVersion?: number;
 };
 
 export type ConsumedLoginIntent = {
@@ -180,6 +181,9 @@ function readCandidates(value: unknown): LoginIntentCandidate[] {
       {
         organizationId,
         userId,
+        ...(typeof record.tokenVersion === 'number' && Number.isSafeInteger(record.tokenVersion)
+          ? { tokenVersion: record.tokenVersion }
+          : {}),
         ...(typeof demoAccessExpiresAt === 'number' && Number.isFinite(demoAccessExpiresAt)
           ? { demoAccessExpiresAt }
           : {}),

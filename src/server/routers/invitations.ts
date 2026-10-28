@@ -91,6 +91,20 @@ export const invitationsRouter = router({
       // already rejects missing, accepted, and expired tokens without hashing,
       // so the work moved here is only ever spent on a token that looked usable.
       return ctx.db.$transaction(async (tx) => {
+        // Lock the same user before claiming a link as password recovery does.
+        // A reset that wins the lock expires this invitation; a failed claim
+        // rolls back this provisional password write.
+        await tx.user.update({
+          where: { id: invitation.userId },
+          data: {
+            password: hashed,
+            status: 'ACTIVE',
+            phone: input.phone,
+            bio: input.bio ?? undefined,
+            ...(input.skills ? { skills: input.skills } : {}),
+          },
+        });
+
         // Fresh, and read once: the same instant decides whether the invitation
         // is still live and stamps the acceptance.
         const now = new Date();
@@ -111,17 +125,6 @@ export const invitationsRouter = router({
           data: { acceptedAt: now },
         });
         if (claimed.count !== 1) throw invalidInvitation();
-
-        await tx.user.update({
-          where: { id: invitation.userId },
-          data: {
-            password: hashed,
-            status: 'ACTIVE',
-            phone: input.phone,
-            bio: input.bio ?? undefined,
-            ...(input.skills ? { skills: input.skills } : {}),
-          },
-        });
 
         return { email: invitation.user.email };
       });

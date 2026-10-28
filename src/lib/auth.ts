@@ -477,6 +477,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // decision, not a substitute for the state it was based on: the account
           // may have been deactivated, or SSO enforced, in the five minutes since.
           if (!user || user.email !== intent.email) return null;
+          // A pre-reset password proof cannot mint a session at the new version.
+          // Legacy intents lack a version and must restart password entry.
+          if (!organization.isDemo && candidate.tokenVersion !== user.tokenVersion) return null;
           if (organization.isDemo) {
             if (
               !demoPersona ||

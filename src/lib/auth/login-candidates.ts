@@ -34,6 +34,7 @@ export type LoginCandidate = {
   userId: string;
   organizationId: string;
   passwordHash: string | null;
+  tokenVersion: number;
   userStatus: UserStatus;
   organization: {
     id: string;
@@ -63,6 +64,7 @@ export async function findLoginCandidates(normalizedEmail: string): Promise<Logi
         id: true,
         organizationId: true,
         password: true,
+        tokenVersion: true,
         status: true,
         organization: {
           select: { id: true, slug: true, displayName: true, status: true },
@@ -81,6 +83,7 @@ export async function findLoginCandidates(normalizedEmail: string): Promise<Logi
       userId: row.id,
       organizationId: row.organizationId,
       passwordHash: row.password,
+      tokenVersion: row.tokenVersion,
       userStatus: row.status,
       organization: {
         id: row.organization.id,

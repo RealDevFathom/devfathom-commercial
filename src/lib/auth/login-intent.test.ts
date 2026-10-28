@@ -65,8 +65,8 @@ import {
 
 const HOST = 'www.devfathom.com';
 const CANDIDATES = [
-  { organizationId: 'org_a', userId: 'user_a' },
-  { organizationId: 'org_b', userId: 'user_b' },
+  { organizationId: 'org_a', userId: 'user_a', tokenVersion: 7 },
+  { organizationId: 'org_b', userId: 'user_b', tokenVersion: 9 },
 ];
 
 async function mint(host = HOST) {

@@ -42,6 +42,7 @@ function candidate(overrides: Record<string, unknown> = {}) {
     userId: `user_${index}`,
     organizationId: `org_${index}`,
     passwordHash: `$2b$10$hash${index}`,
+    tokenVersion: 3,
     userStatus: 'ACTIVE',
     organization: {
       id: `org_${index}`,

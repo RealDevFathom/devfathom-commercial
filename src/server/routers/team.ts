@@ -1,3 +1,4 @@
+import { revokePasswordResetCredentials } from '@/lib/auth/password-reset';
 import { z } from 'zod';
 import { hash, compare } from 'bcryptjs';
 import { TRPCError } from '@trpc/server';
@@ -883,15 +884,23 @@ export const teamRouter = router({
     .mutation(async ({ ctx, input }) => {
       const hashed = await hash(input.newPassword, 12);
       // AUTH-01: an admin reset must also revoke the member's existing sessions.
-      const user = await ctx.db.user.update({
-        where: { id: input.id },
-        data: {
-          password: hashed,
-          passwordChangedAt: null,
-          mustChangePassword: true,
-          tokenVersion: { increment: 1 },
-        },
-        select: { name: true },
+      const user = await ctx.db.$transaction(async (tx) => {
+        const user = await tx.user.update({
+          where: { id: input.id },
+          data: {
+            password: hashed,
+            passwordChangedAt: null,
+            mustChangePassword: true,
+            tokenVersion: { increment: 1 },
+          },
+          select: { name: true },
+        });
+        await revokePasswordResetCredentials(
+          tx as typeof ctx.db,
+          ctx.session.user.organizationId,
+          input.id
+        );
+        return user;
       });
       // The new password is redacted by the audit layer; record only that a
       // reset happened, by whom, and for whom.
