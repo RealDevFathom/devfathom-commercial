@@ -4,7 +4,11 @@ import {
   issueSupplierActionLink,
   submitSupplierEvidence,
   supplierLinkId,
+  SUPPLIER_LINK_LIMITS,
+  uploadSupplierDocument,
 } from './supplier-action-links';
+vi.mock('@/lib/storage', () => ({ putUpload: vi.fn().mockResolvedValue({}) }));
+import { putUpload } from '@/lib/storage';
 import { structuralSupplierFileScanner } from './supplier-file-scanner';
 
 const NOW = new Date('2026-09-04T12:00:00Z');
@@ -13,6 +17,7 @@ const LINK_TTL_MS = 60 * 60 * 1000;
 const linkExpiry = () => new Date(Date.now() + LINK_TTL_MS);
 
 function fakeDb() {
+  const documents: Record<string, unknown>[] = [];
   const stored: Record<string, unknown>[] = [];
   const relationship = {
     id: 'rel_a',
@@ -33,6 +38,8 @@ function fakeDb() {
     ],
   };
   const db = {
+    $transaction: vi.fn(async (fn: (tx: unknown) => unknown): Promise<unknown> => fn(db)),
+    $queryRaw: vi.fn(async () => []),
     pharmacySupplierRelationship: { findFirst: vi.fn(async () => relationship) },
     pharmacyPurchaseOrder: { findFirst: vi.fn(async () => purchaseOrder) },
     pharmacySupplierActionLink: {
@@ -46,8 +53,35 @@ function fakeDb() {
         return { ...link, relationship, purchaseOrder };
       }),
     },
+    pharmacySupplierDocument: {
+      findUnique: vi.fn(
+        async ({ where }) =>
+          documents.find(
+            (row) =>
+              row.submissionId === where.organizationId_submissionId_sha256.submissionId &&
+              row.sha256 === where.organizationId_submissionId_sha256.sha256
+          ) ?? null
+      ),
+      create: vi.fn(async ({ data }) => {
+        const row = { id: `doc-${documents.length}`, ...data };
+        documents.push(row);
+        return row;
+      }),
+    },
     pharmacySupplierSubmission: {
-      findUnique: vi.fn(async () => null),
+      findUnique: vi.fn(
+        async ({ where }) =>
+          stored.find(
+            (row) =>
+              row.actionLinkId === where.organizationId_actionLinkId_idempotencyKey.actionLinkId &&
+              row.idempotencyKey === where.organizationId_actionLinkId_idempotencyKey.idempotencyKey
+          ) ?? null
+      ),
+      findMany: vi.fn(async ({ where }) =>
+        stored.filter(
+          (row) => row.actionLinkId === where.actionLinkId && row.source === where.source
+        )
+      ),
       findFirst: vi.fn(async ({ where }) => stored.find((row) => row.id === where.id) ?? null),
       create: vi.fn(async ({ data }) => {
         stored.push(data);
@@ -109,9 +143,12 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
     });
     expect(result).toMatchObject({ kind: 'SUBSTITUTION_PROPOSAL', source: 'SIGNED_LINK' });
     expect(Object.keys(state.db)).toEqual([
+      '$transaction',
+      '$queryRaw',
       'pharmacySupplierRelationship',
       'pharmacyPurchaseOrder',
       'pharmacySupplierActionLink',
+      'pharmacySupplierDocument',
       'pharmacySupplierSubmission',
     ]);
   });
@@ -177,6 +214,7 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
 
   it('rejects forged, expired, and revoked links without revealing which condition failed', async () => {
     const state = await issued();
+    expect(supplierLinkId(`${state.token}.extra`)).toBeNull();
     expect(supplierLinkId(`${state.token}x`)).toBeNull();
     await expect(getSupplierActionPage(state.db, `${state.token}x`)).rejects.toMatchObject({
       reason: 'INVALID_LINK',
@@ -194,5 +232,113 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
     await expect(getSupplierActionPage(state.db, state.token)).rejects.toMatchObject({
       reason: 'INVALID_LINK',
     });
+  });
+});
+
+describe('supplier link lifetime budgets', () => {
+  beforeEach(() => {
+    vi.stubEnv('AUTH_SECRET', 'quota-test-key');
+    vi.mocked(putUpload).mockClear();
+  });
+  it('serializes concurrent submissions sharing a transaction and preserves retries at capacity', async () => {
+    const s = await issued();
+    for (let i = 0; i < SUPPLIER_LINK_LIMITS.submissions - 1; i++)
+      s.stored.push({
+        id: `old-${i}`,
+        actionLinkId: s.stored[0].id,
+        source: 'SIGNED_LINK',
+        kind: 'ACKNOWLEDGEMENT',
+        payload: {},
+      });
+    const input = {
+      token: s.token,
+      kind: 'ACKNOWLEDGEMENT' as const,
+      payload: {},
+      idempotencyKey: 'last',
+    };
+    const results = await Promise.allSettled([
+      submitSupplierEvidence(s.db, input),
+      submitSupplierEvidence(s.db, { ...input, idempotencyKey: 'over' }),
+    ]);
+    expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected']);
+    expect(results[1]).toMatchObject({ reason: { reason: 'LINK_LIMIT_EXCEEDED' } });
+    await expect(submitSupplierEvidence(s.db, input)).resolves.toMatchObject({
+      idempotencyKey: 'last',
+    });
+    await expect(
+      submitSupplierEvidence(s.db, { ...input, supersedesId: 'changed' })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    await expect(
+      submitSupplierEvidence(s.db, {
+        ...input,
+        idempotencyKey: 'correction-over',
+        supersedesId: (results[0] as PromiseFulfilledResult<{ id: string }>).value.id,
+      })
+    ).rejects.toMatchObject({ reason: 'LINK_LIMIT_EXCEEDED' });
+    expect(s.rawDb.pharmacySupplierSubmission.create).toHaveBeenCalledTimes(1);
+  });
+  it('bounds each payload and cumulative UTF-8 payload bytes, including corrections', async () => {
+    const s = await issued();
+    const input = {
+      token: s.token,
+      kind: 'ACKNOWLEDGEMENT' as const,
+      idempotencyKey: 'large',
+      payload: { text: 'é'.repeat(SUPPLIER_LINK_LIMITS.payloadBytes) },
+    };
+    await expect(submitSupplierEvidence(s.db, input)).rejects.toMatchObject({
+      reason: 'LINK_LIMIT_EXCEEDED',
+    });
+    s.stored.push({
+      actionLinkId: s.stored[0].id,
+      source: 'SIGNED_LINK',
+      kind: 'ACKNOWLEDGEMENT',
+      payload: { text: 'x'.repeat(SUPPLIER_LINK_LIMITS.totalPayloadBytes) },
+    });
+    await expect(submitSupplierEvidence(s.db, { ...input, payload: {} })).rejects.toMatchObject({
+      reason: 'LINK_LIMIT_EXCEEDED',
+    });
+    expect(s.rawDb.pharmacySupplierSubmission.create).not.toHaveBeenCalled();
+  });
+  it.each(['count', 'bytes'] as const)(
+    'reserves document %s before any blob write and skips storage for a retry',
+    async (limit) => {
+      const s = await issued();
+      const count = limit === 'count' ? SUPPLIER_LINK_LIMITS.documents - 1 : 1;
+      for (let i = 0; i < count; i++)
+        s.stored.push({
+          actionLinkId: s.stored[0].id,
+          source: 'SIGNED_LINK',
+          kind: 'DOCUMENT',
+          payload: { byteSize: limit === 'bytes' ? SUPPLIER_LINK_LIMITS.documentBytes - 8 : 1 },
+        });
+      const input = {
+        token: s.token,
+        idempotencyKey: 'last',
+        fileName: 'invoice.pdf',
+        declaredMimeType: 'application/pdf',
+        content: Buffer.from('%PDF-1.7'),
+      };
+      const results = await Promise.allSettled([
+        uploadSupplierDocument(s.db, input),
+        uploadSupplierDocument(s.db, { ...input, idempotencyKey: 'over' }),
+      ]);
+      expect(results.map((r) => r.status)).toEqual(['fulfilled', 'rejected']);
+      expect(results[1]).toMatchObject({ reason: { reason: 'LINK_LIMIT_EXCEEDED' } });
+      await expect(uploadSupplierDocument(s.db, input)).resolves.toMatchObject({
+        fileName: input.fileName,
+      });
+      expect(putUpload).toHaveBeenCalledTimes(1);
+    }
+  );
+  it('does not let submit manufacture a document reservation', async () => {
+    const s = await issued();
+    await expect(
+      submitSupplierEvidence(s.db, {
+        token: s.token,
+        kind: 'DOCUMENT',
+        idempotencyKey: 'fake',
+        payload: { byteSize: 0 },
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_UPLOAD' });
   });
 });

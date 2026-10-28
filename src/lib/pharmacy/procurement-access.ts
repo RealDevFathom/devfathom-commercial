@@ -48,3 +48,57 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
     role: user.organizationRole?.permissions ?? [],
   });
 }
+
+/** A real installed Owner, or an ADMIN explicitly granted all capabilities. */
+export async function actorIsPharmacyOwner(db: ScopedDb, organizationId: string, userId: string) {
+  const user = await db.user.findUnique({
+    where: { id: userId, organizationId, status: 'ACTIVE' },
+    select: {
+      role: true,
+      organizationRole: { select: { key: true, isSystem: true, permissions: true } },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        select: { capability: true, effect: true },
+      },
+    },
+  });
+  if (!user) return false;
+  const role = user.organizationRole;
+  return Boolean(
+    (role?.isSystem && ['owner', 'owner-operator'].includes(role.key)) ||
+    (user.role === 'ADMIN' &&
+      [...(role?.permissions ?? []), ...user.permissionOverrides].some(
+        (rule) => rule.capability === '*' && rule.effect === 'ALLOW'
+      ))
+  );
+}
+
+/** Read-only goods-in access never authorizes a purchasing mutation. */
+export async function actorCanReadPurchasing(db: ScopedDb, userId: string, now = new Date()) {
+  const user = await db.user.findUnique({
+    where: { id: userId, status: 'ACTIVE' },
+    select: {
+      organizationRole: { select: { permissions: { select: { capability: true, effect: true } } } },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+        select: { capability: true, effect: true },
+      },
+    },
+  });
+  if (!user) return false;
+  if (
+    procurementCapabilityGranted({
+      overrides: user.permissionOverrides,
+      role: user.organizationRole?.permissions ?? [],
+    })
+  )
+    return true;
+  const rules = [...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])].filter(
+    (rule) =>
+      (rule.effect === 'DENY' && covers(rule.capability, 'pharmacy:receiving-view')) ||
+      rule.capability === 'pharmacy:receiving-view'
+  );
+  return (
+    !rules.some((rule) => rule.effect === 'DENY') && rules.some((rule) => rule.effect === 'ALLOW')
+  );
+}

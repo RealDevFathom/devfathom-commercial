@@ -1,3 +1,6 @@
+import { can, subjectFromSession } from '@/lib/abac';
+import { actorCanProcure } from './procurement-access';
+import { soloOwnerApprovalAllowed } from './purchase-approval';
 /**
  * PH-PUR read models — PRD §6.3 PUR-01..PUR-06 as the purchasing consoles need
  * to show them.
@@ -20,7 +23,6 @@
  */
 
 import { z } from 'zod';
-import { can, subjectFromSession } from '@/lib/abac';
 import { parseGs1DataMatrix, type Gs1Warning } from './gs1-datamatrix';
 import { normalizeMedicineText } from './medicine';
 import { packConversions, type PackLevelNode } from './pack-conversion';
@@ -241,6 +243,7 @@ export type PurchasingWorkspace = {
   medicines: MedicineOption[];
   suppliers: SupplierSummary[];
   approvers: ApproverOption[];
+  procurementApprovers: ApproverOption[];
 };
 
 function conversionLabel(
@@ -261,9 +264,9 @@ function conversionLabel(
 /**
  * Everything the four consoles need to render a picker, in one round trip.
  *
- * `actorId` is excluded from the approver list on purpose: PUR-05 refuses a
- * bypass the receiver approved for themselves, and offering an option the
- * server will reject is UX rule 12's dead-end form.
+ * Clinical witnesses exclude the receiver. Procurement approvers include the
+ * owner only when eligible for the solo exception; mutations still require
+ * PIN reauthentication and authoritative scope checks.
  */
 export async function purchasingWorkspace(
   db: ScopedDb,
@@ -321,8 +324,21 @@ export async function purchasingWorkspace(
     db.user.findMany({
       where: {
         organizationId: scope.organizationId,
-        status: { not: 'INACTIVE' },
-        ...(scope.actorId ? { id: { not: scope.actorId } } : {}),
+        status: 'ACTIVE',
+        restaurantStaffProfiles: {
+          some: {
+            status: 'ACTIVE',
+            organizationId: scope.organizationId,
+            credentials: {
+              some: {
+                organizationId: scope.organizationId,
+                type: 'PIN',
+                revokedAt: null,
+                deviceId: null,
+              },
+            },
+          },
+        },
       },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
       select: {
@@ -341,17 +357,36 @@ export async function purchasingWorkspace(
   ]);
 
   const eligibleApprovers = [];
+  const procurementApprovers = [];
   for (const user of approvers) {
-    if (await can(subjectFromSession(user), 'pharmacy:dispense', undefined, { db, now: at })) {
+    // Clinical witnesses and procurement approvers are different capabilities.
+    // Retain the existing clinical projection for controlled receipt callers.
+    if (
+      user.id !== scope.actorId &&
+      (await can(subjectFromSession(user), 'pharmacy:dispense', undefined, { db, now: at }))
+    )
       eligibleApprovers.push(user);
+    if (
+      (await actorCanProcure(db, user.id)) &&
+      (user.id !== scope.actorId ||
+        (await soloOwnerApprovalAllowed(db, scope.organizationId, user.id)) ||
+        (
+          await Promise.all(
+            branches.map((branch) =>
+              soloOwnerApprovalAllowed(db, scope.organizationId, user.id, branch.id)
+            )
+          )
+        ).some(Boolean))
+    ) {
+      procurementApprovers.push(user);
     }
   }
   return {
     branches,
     stockLocations,
     suppliers,
-    approvers: eligibleApprovers
-      .map(({ id, name, email }) => ({ id, name, email })),
+    approvers: eligibleApprovers.map(({ id, name, email }) => ({ id, name, email })),
+    procurementApprovers: procurementApprovers.map(({ id, name, email }) => ({ id, name, email })),
     medicines: medicines.map((medicine) => ({
       id: medicine.id,
       productName: medicine.productName,

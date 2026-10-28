@@ -149,6 +149,7 @@ const workspace = {
   ],
   suppliers: [licensedSupplier, lapsedSupplier],
   approvers: [{ id: 'user-2', name: 'Bilal', email: 'bilal@example.test' }],
+  procurementApprovers: [{ id: 'user-2', name: 'Bilal', email: 'bilal@example.test' }],
 };
 
 function callerStub(overrides: Record<string, unknown> = {}) {
@@ -358,13 +359,15 @@ describe('pickers (UX rules 1, 12, 16)', () => {
 
   it('replaces an empty required picker with what is missing and where to fix it', async () => {
     mocks.createCaller.mockReturnValue(
-      callerStub({ workspace: vi.fn().mockResolvedValue({ ...workspace, approvers: [] }) })
+      callerStub({
+        workspace: vi.fn().mockResolvedValue({ ...workspace, procurementApprovers: [] }),
+      })
     );
 
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
 
     expect(
-      screen.getByRole('heading', { name: 'No second person can approve a bypass' })
+      screen.getByRole('heading', { name: 'No authorized approver is available' })
     ).toBeDefined();
     expect(screen.getByRole('link', { name: /Invite a colleague/ }).getAttribute('href')).toBe(
       '/team'
@@ -415,6 +418,7 @@ describe('preconditions (UX rule 13)', () => {
           medicines: [],
           suppliers: [],
           approvers: [],
+          procurementApprovers: [],
         }),
       })
     );
@@ -880,5 +884,58 @@ describe('goods-in scan and duplicate serial', () => {
       'This GTIN and serial were already received in this pharmacy. Treat it as a duplicate pack and do not stock it in again.'
     );
     expect(result.searchParams.get('field')).toBe('serialNumber');
+  });
+});
+
+describe('purchasing PIN controls', () => {
+  it('offers a masked, labelled approval PIN without autocomplete', async () => {
+    render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+    const pin = screen.getByLabelText('Approver PIN') as HTMLInputElement;
+    expect(pin.type).toBe('password');
+    expect(pin.autocomplete).toBe('off');
+    expect(pin.required).toBe(true);
+    expect(pin.getAttribute('inputmode')).toBe('numeric');
+  });
+  it('lets a receiving-view actor load the receiving surface', async () => {
+    const ctx = contextStub();
+    ctx.db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [{ capability: 'pharmacy:receiving-view', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [],
+    });
+    mocks.createTRPCContext.mockResolvedValue(ctx);
+    render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+    expect(screen.getByLabelText('Approver PIN')).toBeDefined();
+  });
+  it('offers a PIN-protected decision to a solo owner while preserving the multi-staff refusal', async () => {
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        workspace: vi.fn().mockResolvedValue({
+          ...workspace,
+          procurementApprovers: [{ id: 'user-1', name: 'Owner', email: 'owner@example.test' }],
+        }),
+        purchaseOrders: vi.fn().mockResolvedValue([
+          {
+            id: 'po-1',
+            reference: 'SOLO-PO',
+            status: 'SUBMITTED',
+            supplier: { id: 'sup-ok', name: 'Supplier' },
+            branch: null,
+            branchId: null,
+            supplierId: 'sup-ok',
+            requisition: null,
+            lines: [],
+            approvals: [],
+            goodsReceipts: [],
+            createdByUserId: 'user-1',
+          },
+        ]),
+        landedCost: vi.fn().mockResolvedValue(null),
+      })
+    );
+    render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
+    expect((screen.getByLabelText('Owner PIN') as HTMLInputElement).type).toBe('password');
+    expect(screen.getByRole('button', { name: /^Approve$/ })).toBeDefined();
   });
 });

@@ -107,15 +107,18 @@ async function main() {
       if (missing.length > 0) {
         throw new Error(`Catalog is missing ${missing.join(', ')} after a sync.`);
       }
-      for (const module of modules) {
+      for (const catalogModule of modules) {
         await tx.organizationModule.upsert({
           where: {
-            organizationId_moduleId: { organizationId: organization.id, moduleId: module.id },
+            organizationId_moduleId: {
+              organizationId: organization.id,
+              moduleId: catalogModule.id,
+            },
           },
           update: { status: 'ENABLED', startsAt: day(-1), expiresAt: null },
           create: {
             organizationId: organization.id,
-            moduleId: module.id,
+            moduleId: catalogModule.id,
             status: 'ENABLED',
             startsAt: day(-1),
           },
@@ -159,8 +162,8 @@ async function main() {
               password: passwordHash,
               department: 'pharmacy',
               title: index === 0 ? 'Receiving pharmacist' : 'Branch manager',
-              // The receiver is an ADMIN so the whole console is reachable; the
-              // approver only has to be somebody else for PUR-02 to be satisfied.
+              // Coarse ADMIN is not a procurement grant. Explicit capabilities
+              // and branch assignments are provisioned below for both people.
               role: index === 0 ? 'ADMIN' : 'EMPLOYEE',
               status: 'ACTIVE',
             },
@@ -183,6 +186,65 @@ async function main() {
         },
         select: { id: true },
       });
+
+      for (const person of [receiver, approver]) {
+        await tx.pharmacyBranchAssignment.upsert({
+          where: {
+            organizationId_branchId_userId: {
+              organizationId,
+              branchId: branch.id,
+              userId: person.id,
+            },
+          },
+          update: { active: true },
+          create: { organizationId, branchId: branch.id, userId: person.id },
+        });
+        for (const capability of ['pharmacy:procurement', 'reports:financial']) {
+          await tx.userPermissionOverride.upsert({
+            where: { userId_capability: { userId: person.id, capability } },
+            update: { effect: 'ALLOW', expiresAt: null },
+            create: {
+              organizationId,
+              userId: person.id,
+              capability,
+              effect: 'ALLOW',
+              reason: 'Purchasing acceptance fixture',
+            },
+          });
+        }
+        const profile =
+          (await tx.restaurantStaffProfile.findFirst({
+            where: { organizationId, userId: person.id, status: 'ACTIVE' },
+          })) ??
+          (await tx.restaurantStaffProfile.create({
+            data: {
+              organizationId,
+              userId: person.id,
+              displayName:
+                person.id === receiver.id ? FIXTURE.receiver.name : FIXTURE.approver.name,
+            },
+          }));
+        if (
+          !(await tx.restaurantOperatorCredential.findFirst({
+            where: {
+              organizationId,
+              staffProfileId: profile.id,
+              type: 'PIN',
+              revokedAt: null,
+              deviceId: null,
+            },
+          }))
+        ) {
+          await tx.restaurantOperatorCredential.create({
+            data: {
+              organizationId,
+              staffProfileId: profile.id,
+              type: 'PIN',
+              credentialHash: await bcrypt.hash('1234', 10),
+            },
+          });
+        }
+      }
 
       const [shelf, quarantine] = await Promise.all(
         [

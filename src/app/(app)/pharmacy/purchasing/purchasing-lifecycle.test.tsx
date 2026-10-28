@@ -134,6 +134,7 @@ const workspace = {
   ],
   suppliers: [licensedSupplier, lapsedSupplier],
   approvers: [{ id: 'user-2', name: 'Bilal', email: 'bilal@example.test' }],
+  procurementApprovers: [{ id: 'user-2', name: 'Bilal', email: 'bilal@example.test' }],
 };
 
 function callerStub(overrides: Record<string, unknown> = {}) {

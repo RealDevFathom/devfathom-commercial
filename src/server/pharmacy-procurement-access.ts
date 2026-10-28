@@ -1,5 +1,5 @@
 import { TRPCError } from '@trpc/server';
-import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import { actorCanProcure, actorCanReadPurchasing } from '@/lib/pharmacy/procurement-access';
 import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
 import type { TRPCContext } from './trpc';
 
@@ -28,4 +28,11 @@ export async function assertProcurementBranch(ctx: TRPCContext, branchId: string
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your pharmacy scope.' });
   }
   return { organizationId, branchId, actorId };
+}
+
+export async function assertPurchasingRead(ctx: TRPCContext) {
+  const actorId = ctx.session?.user?.id;
+  if (!actorId || !(await actorCanReadPurchasing(ctx.db, actorId))) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Purchasing read access required.' });
+  }
 }

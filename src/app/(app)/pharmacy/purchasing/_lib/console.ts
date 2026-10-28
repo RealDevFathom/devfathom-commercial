@@ -1,3 +1,4 @@
+import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
 import { ZodError } from 'zod';
 
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
@@ -142,6 +143,7 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
 };
 
 const KNOWN_REJECTIONS = new Set([
+  APPROVAL_BLOCKED,
   'DUPLICATE_SERIAL',
   'EXPIRED_PACK',
   'GS1_INVALID',

@@ -222,3 +222,41 @@ it('rechecks current authorization when the same caller is reused', async () => 
   await expect(actions.createRelationship()).rejects.toMatchObject({ code: 'FORBIDDEN' });
   expect(f.db.pharmacySupplierRelationship.create).not.toHaveBeenCalled();
 });
+
+describe.each(Object.keys(actions) as (keyof typeof actions)[])('%s owner access', (name) => {
+  it.each(['owner', 'admin'] as const)(
+    'retains all-capability %s access without assignments',
+    async (mode) => {
+      vi.stubEnv('AUTH_SECRET', 'owner-supplier-fixture-signing-key');
+      try {
+        f.db.user.findUnique.mockResolvedValue({
+          role: 'ADMIN',
+          organizationRole: {
+            key: mode,
+            isSystem: mode === 'owner',
+            permissions: [{ capability: '*', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        });
+        f.db.pharmacyBranch.findMany.mockResolvedValue([{ id: 'branch' }]);
+        f.db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+        f.db.pharmacySupplierRelationship.findFirst.mockResolvedValue({ supplierId: 'supplier' });
+        f.db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+          id: 'order',
+          supplierId: 'supplier',
+        });
+        f.db.pharmacySupplierActionLink.findFirst.mockResolvedValue({
+          id: 'link',
+          organizationId: 'org',
+          branchId: 'branch',
+          purchaseOrder: { lines: [] },
+        });
+        f.db.pharmacySupplierSubmission.findFirst.mockResolvedValue({ id: 'submission' });
+        await expect(actions[name]()).resolves.toBeDefined();
+        expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    }
+  );
+});

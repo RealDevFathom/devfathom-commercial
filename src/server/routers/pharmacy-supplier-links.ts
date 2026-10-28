@@ -33,7 +33,12 @@ function mapError(error: unknown): never {
   if (!(error instanceof SupplierLinkError)) throw error;
   if (error.reason === 'INVALID_LINK') throw genericLinkError();
   throw new TRPCError({
-    code: error.reason === 'IDEMPOTENCY_CONFLICT' ? 'CONFLICT' : 'BAD_REQUEST',
+    code:
+      error.reason === 'LINK_LIMIT_EXCEEDED'
+        ? 'TOO_MANY_REQUESTS'
+        : error.reason === 'IDEMPOTENCY_CONFLICT'
+          ? 'CONFLICT'
+          : 'BAD_REQUEST',
     message: error.reason,
   });
 }
