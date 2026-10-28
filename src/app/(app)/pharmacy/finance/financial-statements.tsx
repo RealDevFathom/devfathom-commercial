@@ -78,6 +78,44 @@ export async function FinancialStatements({
         {result.definition} Amounts shown in the recorded currency. Retrieved{' '}
         {result.freshness.retrievedAt.toISOString()}.
       </p>
+      <h3 className="mt-6 font-semibold">Net P&amp;L projection</h3>
+      <p className="mt-2 text-sm text-text-muted">
+        Posted journal movements in this window only. Revenue less discounts, cost of goods sold,
+        write-offs, shrinkage, operating expenses, loyalty redemption, and cash over/short. This is
+        not a statutory income statement, and unposted income or costs remain unknown.
+      </p>
+      {result.profitAndLoss.length ? (
+        <div className="mt-3 grid gap-4 lg:grid-cols-2">
+          {result.profitAndLoss.map((statement) => (
+            <section
+              key={statement.currency}
+              aria-label={`${statement.currency} net P&L projection`}
+              className="rounded-[var(--radius-sm)] border border-border-default p-4"
+            >
+              <h4 className="font-mono text-xs uppercase text-text-muted">
+                {statement.currency} · posted P&amp;L
+              </h4>
+              <dl className="mt-3 space-y-2 text-sm">
+                {statement.rows.map((row) => (
+                  <div
+                    key={row.accountCode}
+                    className="flex justify-between gap-3 border-b border-border-subtle py-1"
+                  >
+                    <dt>{row.accountCode.replaceAll('_', ' ')}</dt>
+                    <dd className="font-mono">{money(row.amountMinor)}</dd>
+                  </div>
+                ))}
+                <div className="flex justify-between gap-3 pt-2 font-semibold">
+                  <dt>NET {BigInt(statement.netProfitMinor) < BigInt(0) ? 'LOSS' : 'PROFIT'}</dt>
+                  <dd className="font-mono">{money(statement.netProfitMinor)}</dd>
+                </div>
+              </dl>
+            </section>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 text-sm">No posted P&amp;L movements in this window.</p>
+      )}
       <h3 className="mt-6 font-semibold">Receivables, payables and cash at cutoff</h3>
       <p className="mt-2 text-sm text-text-muted">
         Recorded ledger balances only. Goods received accrual is shown separately from invoiced

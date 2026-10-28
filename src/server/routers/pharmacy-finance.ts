@@ -150,7 +150,7 @@ export const pharmacyFinanceRouter = router({
     .query(async ({ ctx, input }) => ({
       ...ledgerMetadata(
         ctx.reportScope,
-        'Branch journal lines posted before the exclusive cutoff. Opening balances precede from; movements use [from,to). Receivables are debit balances; payables are credit balances. CASH and BANK are netted per entry, excluding internal transfers from cash inflow/outflow. Unposted activity and due-date aging remain unknown.'
+        'Branch journal lines posted before the exclusive cutoff. Opening balances precede from; movements use [from,to). Net P&L is projected only from canonical revenue, contra-revenue, and expense journal movements in that window. Receivables are debit balances; payables are credit balances. CASH and BANK are netted per entry, excluding internal transfers from cash inflow/outflow. Unposted activity and due-date aging remain unknown.'
       ),
       ...(await financialStatements(ctx.db, ctx.reportScope, {
         from: new Date(input.from),
