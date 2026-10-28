@@ -143,12 +143,21 @@ describe('CounterUnitToggle (POS-03)', () => {
     expect(props.onQuantityChange).toHaveBeenLastCalledWith(7);
   });
 
+  it('gives every quantity stepper control a 44px touch target', () => {
+    renderToggle();
+    expect(screen.getByRole('button', { name: 'Decrease quantity' })).toHaveClass('size-11');
+    expect(screen.getByLabelText('Quantity')).toHaveClass('h-11');
+    expect(screen.getByRole('button', { name: 'Increase quantity' })).toHaveClass('size-11');
+  });
+
   it('disables every control when the counter is busy', () => {
     renderToggle({ disabled: true });
     for (const radio of screen.getAllByRole('radio')) {
       expect((radio as HTMLButtonElement).disabled).toBe(true);
     }
+    expect(screen.getByRole('button', { name: 'Decrease quantity' })).toBeDisabled();
     expect((screen.getByLabelText('Quantity') as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Increase quantity' })).toBeDisabled();
   });
 
   it('explains itself when the lot has no priceable sale unit', () => {

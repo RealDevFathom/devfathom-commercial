@@ -121,6 +121,14 @@ describe('corrected reports', () => {
     expect(screen.getByText(/Keep the original source reference and payload/)).toBeVisible();
     expect(screen.queryByText(/new source reference/)).not.toBeInTheDocument();
   });
+  it('identifies every price table header as a column header', () => {
+    render(<PriceNoticesView {...base} data={data} />);
+    for (const table of screen.getAllByRole('table')) {
+      for (const header of within(table).getAllByRole('columnheader')) {
+        expect(header).toHaveAttribute('scope', 'col');
+      }
+    }
+  });
   it('shows preserved override amounts and review flags with accessible fallback states', () => {
     const override = {
       id: 'override',
@@ -153,7 +161,11 @@ describe('corrected reports', () => {
       name: 'Preserved branch override versions, PKR',
     });
     expect(region).toHaveAttribute('tabindex', '0');
-    expect(within(region).getByRole('table')).toBeVisible();
+    const table = within(region).getByRole('table');
+    expect(table).toBeVisible();
+    for (const header of within(table).getAllByRole('columnheader')) {
+      expect(header).toHaveAttribute('scope', 'col');
+    }
     expect(screen.getByText('Needs review')).toBeVisible();
     expect(screen.getByText('Reviewed')).toBeVisible();
     expect(screen.getAllByText(/123.00/)).toHaveLength(2);
