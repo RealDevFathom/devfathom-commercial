@@ -106,8 +106,15 @@ export const invitationsRouter = router({
         // `expiresAt` is re-checked here rather than trusted from the read.
         // Between the two statements the invitation can lapse, and expiry that is
         // only enforced on the read is enforced nowhere that the write can see.
+        // The hash must still match too: a resend replaces it on this same row,
+        // and an old request may have been hashing its password in the meantime.
         const claimed = await tx.invitation.updateMany({
-          where: { id: invitation.id, acceptedAt: null, expiresAt: { gt: now } },
+          where: {
+            id: invitation.id,
+            tokenHash: invitation.tokenHash,
+            acceptedAt: null,
+            expiresAt: { gt: now },
+          },
           data: { acceptedAt: now },
         });
         if (claimed.count !== 1) throw invalidInvitation();
