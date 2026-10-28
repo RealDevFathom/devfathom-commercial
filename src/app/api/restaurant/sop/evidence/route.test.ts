@@ -40,7 +40,7 @@ function request(overrides?: {
   form.set('occurrenceId', 'occurrence-1');
   form.set('occurrenceStepId', 'step-1');
   form.set('evidencePurpose', 'photo');
-  form.set('uploaderStaffProfileId', 'staff-1');
+  form.set('uploaderStaffProfileId', 'forged-staff');
   form.set('file', new File(['proof'], 'proof.jpg', { type: overrides?.type ?? 'image/jpeg' }));
   if (overrides && 'file' in overrides) {
     const get = form.get.bind(form);
@@ -66,7 +66,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
   mocks.createTRPCContext.mockResolvedValue({
-    db: {},
+    db: { restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([{ id: 'staff-1' }]) } },
+    entitlements: { organizationId: 'org-1' },
     organization: { id: 'org-1' },
     session: { user: { id: 'user-1' } },
   });
@@ -97,6 +98,23 @@ describe('POST SOP evidence', () => {
     );
   }
 
+  it.each([{ profiles: [] }, { profiles: [{ id: 'one' }, { id: 'two' }] }])(
+    'refuses proof without a unique active session staff profile: %j',
+    async ({ profiles }) => {
+      warnings();
+      mocks.createTRPCContext.mockResolvedValue({
+        db: { restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue(profiles) } },
+        entitlements: { organizationId: 'org-1' },
+        organization: { id: 'org-1' },
+        session: { user: { id: 'user-1' } },
+      });
+      const response = await POST(request());
+      expect(response.headers.get('location')).toContain('kind=error');
+      expect(mocks.putUpload).not.toHaveBeenCalled();
+      expect(mocks.attachEvidence).not.toHaveBeenCalled();
+    }
+  );
+
   it('hashes and stores accepted proof with tenant, staff, and purpose attribution', async () => {
     const warn = warnings();
     const response = await POST(
@@ -119,7 +137,7 @@ describe('POST SOP evidence', () => {
       'image/jpeg'
     );
     expect(mocks.attachEvidence).toHaveBeenCalledWith(
-      {},
+      expect.anything(),
       expect.objectContaining({
         occurrenceId: 'occurrence-1',
         occurrenceStepId: 'step-1',

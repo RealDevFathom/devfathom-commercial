@@ -19,9 +19,9 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * `restaurant_sop_evidence`). sha256 is computed server-side from the content
  * bytes supplied by the caller (base64-encoded body or a storageRef commitment).
  *
- * Actor attribution is best-effort: `completedByStaffProfileId` on steps and
- * `uploaderStaffProfileId` on evidence are nullable (per schema); this module
- * accepts them when provided.
+ * Staff IDs here are trusted server inputs: request adapters must resolve them
+ * from the authenticated session, never from request fields. Nullable attribution
+ * remains available for internal system workflows.
  */
 
 export type SopExecutionErrorReason =

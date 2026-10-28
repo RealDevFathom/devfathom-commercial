@@ -12,10 +12,22 @@ const mocks = vi.hoisted(() => ({
     return true;
   }),
   annotateAudit: vi.fn(),
+  authenticateOperator: vi.fn(),
+  staffHasCapability: vi.fn(),
 }));
 
+vi.mock('@/lib/restaurant/terminal-auth', () => ({
+  authenticateOperator: mocks.authenticateOperator,
+}));
+vi.mock('@/lib/restaurant/job-roles', () => ({ staffHasCapability: mocks.staffHasCapability }));
+
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(() => ({})),
+  withTenantDb: vi.fn(async (_org, work) =>
+    work({ $queryRawUnsafe: vi.fn().mockResolvedValue([]) })
+  ),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
@@ -87,6 +99,13 @@ let db: ReturnType<typeof makeDb>;
 
 beforeEach(() => {
   db = makeDb();
+  db.restaurantStaffProfile.findMany.mockResolvedValue([{ id: 'staff_a' }]);
+  mocks.authenticateOperator.mockResolvedValue({
+    ok: true,
+    staffProfileId: 'staff_b',
+    credentialId: 'cred_1',
+  });
+  mocks.staffHasCapability.mockResolvedValue(true);
   mocks.can.mockResolvedValue(true);
   mocks.annotateAudit.mockReset();
 });
@@ -149,6 +168,8 @@ describe('strict-zod boundary', () => {
       caller().waive({
         occurrenceId: OCC_ID,
         actorStaffProfileId: 'a',
+        approvingType: 'PIN',
+        approvingSecret: 'test-pin',
         approvingStaffProfileId: 'b',
         reason: 'r',
         extra: true,
@@ -376,8 +397,10 @@ describe('waive', () => {
     await expect(
       caller().waive({
         occurrenceId: OCC_ID,
-        actorStaffProfileId: 'same_person',
-        approvingStaffProfileId: 'same_person',
+        actorStaffProfileId: 'forged_actor',
+        approvingType: 'PIN',
+        approvingSecret: 'test-pin',
+        approvingStaffProfileId: 'staff_a',
         reason: 'test',
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -391,6 +414,8 @@ describe('waive', () => {
     const result = await caller().waive({
       occurrenceId: OCC_ID,
       actorStaffProfileId: 'staff_a',
+      approvingType: 'PIN',
+      approvingSecret: 'test-pin',
       approvingStaffProfileId: 'staff_b',
       reason: 'Emergency',
     });
@@ -446,6 +471,8 @@ describe('SOP depth entitlement gating', () => {
     occurrenceId: OCC_ID,
     actorStaffProfileId: 'staff_a',
     approvingStaffProfileId: 'staff_b',
+    approvingType: 'PIN' as const,
+    approvingSecret: 'test-pin',
     reason: 'Emergency',
   };
 
@@ -613,5 +640,149 @@ describe('SOP depth entitlement gating', () => {
     await expect(caller(ESSENTIALS).verify({ occurrenceId: OCC_ID })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
+  });
+});
+
+describe('authenticated SOP identities', () => {
+  it.each(['start', 'completeStep', 'submit', 'attachEvidence'] as const)(
+    '%s cannot impersonate the occurrence owner',
+    async (command) => {
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+        id: OCC_ID,
+        status: 'IN_PROGRESS',
+        assignedStaffProfileId: 'victim',
+        claimedByStaffProfileId: null,
+        poolJobRoleId: null,
+      });
+      const input = {
+        occurrenceId: OCC_ID,
+        actorStaffProfileId: 'victim',
+        templateStepId: 'step',
+        contentHashHex: 'a'.repeat(64),
+        mimeType: 'image/jpeg',
+        sizeBytes: 1,
+      };
+      const payload =
+        command === 'completeStep'
+          ? { occurrenceId: OCC_ID, templateStepId: 'step', actorStaffProfileId: 'victim' }
+          : command === 'attachEvidence'
+            ? {
+                occurrenceId: OCC_ID,
+                contentHashHex: input.contentHashHex,
+                mimeType: input.mimeType,
+                sizeBytes: 1,
+                uploaderStaffProfileId: 'victim',
+              }
+            : { occurrenceId: OCC_ID, actorStaffProfileId: 'victim' };
+      await expect(caller()[command](payload as never)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+      expect(db.restaurantSopEvidence.createMany).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([{ profiles: [] }, { profiles: [{ id: 'one' }, { id: 'two' }] }])(
+    'rejects absent or ambiguous session staff: %j',
+    async ({ profiles }) => {
+      db.restaurantStaffProfile.findMany.mockResolvedValue(profiles);
+      await expect(
+        caller().start({ occurrenceId: OCC_ID, actorStaffProfileId: 'victim' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['verify', 'reject', 'acknowledge'] as const)(
+    '%s records the session staff, ignoring forged identity',
+    async (command) => {
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'SUBMITTED' });
+      await caller()[command]({ occurrenceId: OCC_ID, actorStaffProfileId: 'victim' });
+      const delegate =
+        command === 'acknowledge' ? db.restaurantSopEscalationEvent : db.restaurantSopVerification;
+      expect(delegate.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ actorStaffProfileId: 'staff_a' }),
+        })
+      );
+      expect(db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { userId: 'user_1', organizationId: 'org_1', status: 'ACTIVE' },
+          take: 2,
+        })
+      );
+    }
+  );
+
+  const waiver = {
+    occurrenceId: OCC_ID,
+    actorStaffProfileId: 'victim',
+    approvingStaffProfileId: 'staff_b',
+    approvingType: 'PIN' as const,
+    approvingSecret: 'test-pin',
+    reason: 'Emergency',
+  };
+
+  it('refuses ID-only approval', async () => {
+    const input: Partial<typeof waiver> = { ...waiver };
+    delete input.approvingSecret;
+    await expect(caller().waive(input as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['INVALID', 'LOCKED'] as const)(
+    'refuses %s credentials without waiver writes',
+    async (reason) => {
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+        id: OCC_ID,
+        status: 'MISSED',
+        branchId: 'branch_1',
+      });
+      mocks.authenticateOperator.mockResolvedValue({ ok: false, reason });
+      await expect(caller().waive(waiver)).rejects.toMatchObject({
+        code: reason === 'LOCKED' ? 'TOO_MANY_REQUESTS' : 'FORBIDDEN',
+      });
+      expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+      expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('requires approver capability at the occurrence branch', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'MISSED',
+      branchId: 'branch_1',
+    });
+    mocks.staffHasCapability.mockResolvedValue(false);
+    await expect(caller().waive(waiver)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.staffHasCapability).toHaveBeenCalledWith(db, 'staff_b', 'branch_1', 'sop:verify');
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+  });
+
+  it('preserves waiver with credential-proven approval and session attribution', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'MISSED',
+      branchId: 'branch_1',
+    });
+    await caller().waive(waiver);
+    expect(mocks.authenticateOperator).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        staffProfileId: 'staff_b',
+        type: 'PIN',
+        secret: 'test-pin',
+        now: expect.any(Date),
+      })
+    );
+    expect(db.restaurantCoAuthorization.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          actingStaffProfileId: 'staff_a',
+          approvingStaffProfileId: 'staff_b',
+        }),
+      })
+    );
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), { skipInput: true });
   });
 });

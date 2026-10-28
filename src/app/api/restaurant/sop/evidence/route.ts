@@ -5,6 +5,7 @@ import { NextResponse } from 'next/server';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 import { can, subjectFromSession } from '@/lib/abac';
 import { publicRequestOrigin } from '@/lib/http-origin';
+import { requireSopActor } from '@/lib/restaurant/sop-actor';
 import { attachEvidence } from '@/lib/restaurant/sop-execution';
 import { deleteUpload, putUpload, StorageUnavailableError } from '@/lib/storage';
 import { createTRPCContext } from '@/server/trpc';
@@ -106,12 +107,11 @@ export async function POST(request: Request) {
     const purpose = String(form.get('evidencePurpose') ?? '').trim();
     const occurrenceId = String(form.get('occurrenceId') ?? '').trim();
     const occurrenceStepId = String(form.get('occurrenceStepId') ?? '').trim();
-    const uploaderStaffProfileId = String(form.get('uploaderStaffProfileId') ?? '').trim();
     const { baseType, bytes, extension } = await readEvidenceFile(file);
     if (purpose !== 'photo' && purpose !== 'signature') {
       throw new Error('Choose whether this file is photo or signature proof.');
     }
-    if (!occurrenceId || !occurrenceStepId || !uploaderStaffProfileId) {
+    if (!occurrenceId || !occurrenceStepId) {
       throw new Error('Occurrence, checklist step, and uploader are required.');
     }
 
@@ -126,6 +126,7 @@ export async function POST(request: Request) {
     });
     if (!allowed) throw new Error('You do not have permission to capture SOP proof.');
 
+    const uploaderStaffProfileId = await requireSopActor(ctx);
     const hash = crypto.createHash('sha256').update(bytes).digest('hex');
     storedFilename = `sop-${crypto.randomUUID()}.${extension}`;
     stage = 'storage';

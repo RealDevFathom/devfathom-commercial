@@ -606,7 +606,9 @@ function SopBoardView(props: SopBoardViewProps) {
                       businessDate={businessDate}
                       occurrenceId={selected.id}
                     />
-                    <StaffSelect label="Acting staff" staff={staff} />
+                    <p className="text-sm text-text-muted">
+                      Recorded as your signed-in staff profile.
+                    </p>
                     <div className="flex flex-wrap gap-2">
                       {startAllowed ? (
                         <Button
@@ -744,7 +746,9 @@ function SopBoardView(props: SopBoardViewProps) {
                                 name="templateStepId"
                                 value={step.templateStepId}
                               />
-                              <StaffSelect label="Completing staff" staff={staff} />
+                              <p className="text-sm text-text-muted">
+                                Recorded as your signed-in staff profile.
+                              </p>
                               <label className="text-sm text-text-body">
                                 Completion note
                                 <Input className="mt-1 min-h-11" maxLength={2000} name="note" />
@@ -776,7 +780,9 @@ function SopBoardView(props: SopBoardViewProps) {
                           businessDate={businessDate}
                           occurrenceId={selected.id}
                         />
-                        <StaffSelect label="Verifier" staff={staff} />
+                        <p className="text-sm text-text-muted">
+                          Recorded as your signed-in staff profile.
+                        </p>
                         <label className="text-sm text-text-body">
                           Verification reason
                           <Input
@@ -822,7 +828,9 @@ function SopBoardView(props: SopBoardViewProps) {
                           intent="waive"
                           occurrenceId={selected.id}
                         />
-                        <StaffSelect label="Acting verifier" required staff={staff} />
+                        <p className="text-sm text-text-muted">
+                          Acting verifier: your signed-in staff profile.
+                        </p>
                         <StaffSelect
                           label="Approving co-author"
                           name="approvingStaffProfileId"
@@ -830,8 +838,26 @@ function SopBoardView(props: SopBoardViewProps) {
                           staff={staff}
                         />
                         <p className="text-xs text-text-muted sm:col-span-2">
-                          Co-authorization requires two different active staff profiles.
+                          The approving manager must enter their own credential.
                         </p>
+                        <label className="text-sm text-text-body">
+                          Approving credential type
+                          <select name="approvingType" className={selectClass}>
+                            <option value="PIN">PIN</option>
+                            <option value="BADGE">Badge</option>
+                          </select>
+                        </label>
+                        <label className="text-sm text-text-body">
+                          Approving credential
+                          <Input
+                            name="approvingSecret"
+                            type="password"
+                            autoComplete="off"
+                            required
+                            maxLength={256}
+                            className="mt-1 min-h-11"
+                          />
+                        </label>
                         <label className="text-sm text-text-body sm:col-span-2">
                           Waiver reason
                           <Textarea
@@ -853,7 +879,9 @@ function SopBoardView(props: SopBoardViewProps) {
                     ) : null}
                     {!reviewAllowed && !waiveAllowed ? (
                       <div className="mt-3">
-                        <StaffSelect label="Verifier" staff={staff} />
+                        <p className="text-sm text-text-muted">
+                          Recorded as your signed-in staff profile.
+                        </p>
                         <p className="mt-2 text-sm text-text-muted">
                           No verifier action is valid for{' '}
                           {STATUS_LABEL[selected.status].toLowerCase()} occurrences.
@@ -1084,20 +1112,12 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
         }
         case 'waive': {
           const approvingStaffProfileId = field(form, 'approvingStaffProfileId');
-          if (
-            !actorStaffProfileId ||
-            !approvingStaffProfileId ||
-            actorStaffProfileId === approvingStaffProfileId
-          ) {
-            throw new TRPCError({
-              code: 'BAD_REQUEST',
-              message: 'Select two different active staff profiles for co-authorization.',
-            });
-          }
           await caller.waive({
             occurrenceId,
             actorStaffProfileId,
             approvingStaffProfileId,
+            approvingType: field(form, 'approvingType') as 'PIN' | 'BADGE',
+            approvingSecret: String(form.get('approvingSecret') ?? ''),
             reason: field(form, 'reason'),
           });
           success = 'SOP waived with co-authorization.';

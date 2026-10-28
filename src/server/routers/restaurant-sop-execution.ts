@@ -27,6 +27,11 @@ import {
 import { summarizeSopReport } from '@/lib/restaurant/sop-reporting';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { can, subjectFromSession } from '@/lib/abac';
+import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import { staffHasCapability } from '@/lib/restaurant/job-roles';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
+
+import { requireSopActor } from '@/lib/restaurant/sop-actor';
 
 /**
  * M7-L4 — the SOP execution router (branch-board reads + operator/verifier commands).
@@ -98,6 +103,8 @@ function mapExecutionError(err: unknown): never {
 // ── Shared schemas ────────────────────────────────────────────────────────────
 
 const OCCURRENCE_ID = z.string().min(1);
+// Legacy identity fields remain accepted for client compatibility; every command
+// overwrites them with the authenticated session staff profile before use.
 const OPTIONAL_ACTOR = z.string().min(1).nullable().optional();
 const OPTIONAL_REASON = z.string().max(2_000).nullable().optional();
 const REPORT_DATE = z
@@ -432,7 +439,10 @@ export const restaurantSopExecutionRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.execution');
       try {
-        const result = await startOccurrence(ctx.db, input);
+        const result = await startOccurrence(ctx.db, {
+          ...input,
+          actorStaffProfileId: await requireSopActor(ctx),
+        });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
           targetId: result.occurrenceId,
@@ -458,7 +468,10 @@ export const restaurantSopExecutionRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.execution');
       try {
-        return await completeStep(ctx.db, input);
+        return await completeStep(ctx.db, {
+          ...input,
+          actorStaffProfileId: await requireSopActor(ctx),
+        });
       } catch (err) {
         mapExecutionError(err);
       }
@@ -489,7 +502,7 @@ export const restaurantSopExecutionRouter = router({
           mimeType: input.mimeType,
           sizeBytes: input.sizeBytes,
           storageRef: input.storageRef,
-          uploaderStaffProfileId: input.uploaderStaffProfileId,
+          uploaderStaffProfileId: await requireSopActor(ctx),
         });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopEvidence',
@@ -514,7 +527,10 @@ export const restaurantSopExecutionRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.execution');
       try {
-        const result = await submitOccurrence(ctx.db, input);
+        const result = await submitOccurrence(ctx.db, {
+          ...input,
+          actorStaffProfileId: await requireSopActor(ctx),
+        });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
           targetId: result.occurrenceId,
@@ -541,7 +557,10 @@ export const restaurantSopExecutionRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.verification');
       try {
-        const result = await verifyOccurrence(ctx.db, input);
+        const result = await verifyOccurrence(ctx.db, {
+          ...input,
+          actorStaffProfileId: await requireSopActor(ctx),
+        });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
           targetId: input.occurrenceId,
@@ -566,7 +585,10 @@ export const restaurantSopExecutionRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.verification');
       try {
-        const result = await rejectOccurrence(ctx.db, input);
+        const result = await rejectOccurrence(ctx.db, {
+          ...input,
+          actorStaffProfileId: await requireSopActor(ctx),
+        });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
           targetId: input.occurrenceId,
@@ -583,16 +605,75 @@ export const restaurantSopExecutionRouter = router({
       z
         .object({
           occurrenceId: OCCURRENCE_ID,
-          actorStaffProfileId: z.string().min(1),
+          actorStaffProfileId: OPTIONAL_ACTOR,
+          approvingType: z.enum(['PIN', 'BADGE']),
+          approvingSecret: z.string().min(1).max(256),
           approvingStaffProfileId: z.string().min(1),
           reason: z.string().min(1).max(2_000),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
       assertSopDepth(ctx.entitlements, 'sop.waiver');
       try {
-        const result = await waiveOccurrence(ctx.db, input);
+        const actorStaffProfileId = await requireSopActor(ctx);
+        if (actorStaffProfileId === input.approvingStaffProfileId.trim()) {
+          throw new SopVerificationError(
+            'A distinct approving manager is required.',
+            'CO_AUTH_REQUIRED'
+          );
+        }
+        const occurrence = await ctx.db.restaurantSopOccurrence.findUnique({
+          where: { id: input.occurrenceId },
+          select: { branchId: true },
+        });
+        if (!occurrence) throw new SopVerificationError('Occurrence not found.', 'NOT_FOUND');
+        // Commit credential attempts independently of the request transaction: a
+        // refusal must not roll back the durable brute-force counters.
+        const auth = await withTenantDb(ctx.entitlements.organizationId!, async (db) => {
+          // Serialize attempts before reading counters or comparing a PIN. Parallel
+          // guesses must not overwrite each other's durable lockout progress.
+          await db.$queryRawUnsafe(
+            `SELECT id FROM restaurant_operator_credentials
+             WHERE "staffProfileId" = $1 AND type::text = $2
+               AND "deviceId" IS NULL AND "revokedAt" IS NULL
+             ORDER BY id FOR UPDATE`,
+            input.approvingStaffProfileId,
+            input.approvingType
+          );
+          return authenticateOperator(db, {
+            staffProfileId: input.approvingStaffProfileId,
+            type: input.approvingType,
+            secret: input.approvingSecret,
+            now: new Date(),
+          });
+        });
+        if (!auth.ok) {
+          throw new TRPCError({
+            code: auth.reason === 'LOCKED' ? 'TOO_MANY_REQUESTS' : 'FORBIDDEN',
+            message: 'Approving credential is invalid or locked.',
+          });
+        }
+        if (
+          !(await staffHasCapability(
+            ctx.db,
+            auth.staffProfileId,
+            occurrence.branchId,
+            'sop:verify'
+          ))
+        ) {
+          throw new SopVerificationError(
+            'Approver lacks SOP verification permission.',
+            'CO_AUTH_REQUIRED'
+          );
+        }
+        const result = await waiveOccurrence(ctx.db, {
+          occurrenceId: input.occurrenceId,
+          actorStaffProfileId,
+          approvingStaffProfileId: auth.staffProfileId,
+          reason: input.reason,
+        });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
           targetId: input.occurrenceId,
@@ -618,7 +699,10 @@ export const restaurantSopExecutionRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.escalation');
       try {
-        return await acknowledgeEscalation(ctx.db, input);
+        return await acknowledgeEscalation(ctx.db, {
+          ...input,
+          actorStaffProfileId: await requireSopActor(ctx),
+        });
       } catch (err) {
         if (err instanceof TRPCError) throw err;
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to acknowledge.' });
