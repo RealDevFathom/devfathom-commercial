@@ -67,6 +67,26 @@ describe('platform proxy authorization', () => {
     expect(mocks.getPlatformSession).toHaveBeenCalledWith(request);
   });
 
+  it('keeps the authenticated redirect fixed when the login URL has a callback', async () => {
+    const request = platformRequest('/platform/login?callbackUrl=https://attacker.invalid');
+    const response = await proxy(request);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe('http://admin.localhost:4319/platform');
+    expect(mocks.getPlatformSession).toHaveBeenCalledWith(request);
+  });
+
+  it('renders login after the server verifier rejects a missing session', async () => {
+    mocks.getPlatformSession.mockResolvedValueOnce(null);
+    const request = platformRequest('/platform/login', { cookie: '' });
+    const response = await proxy(request);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-middleware-next')).toBe('1');
+    expect(response.headers.get('location')).toBeNull();
+    expect(mocks.getPlatformSession).toHaveBeenCalledWith(request);
+  });
+
   it.each([
     ['forged', 'forged-platform-session-token-that-is-long-enough'],
     ['expired', 'expired-platform-session-token-that-is-long-enough'],

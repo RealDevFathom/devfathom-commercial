@@ -80,7 +80,9 @@ export async function proxy(request: Request) {
       return NextResponse.redirect(new URL('/dashboard', request.url));
     }
     if (pathname === '/platform/login') {
-      if (!hasPlatformSession) return next();
+      // The verifier is the source of truth here, rather than the presence of
+      // a cookie. This also keeps the successful destination server-owned and
+      // fixed instead of accepting a client-controlled callback.
       const identity = await getPlatformSession(request);
       return identity ? NextResponse.redirect(new URL('/platform', request.url)) : next();
     }
