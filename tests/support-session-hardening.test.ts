@@ -207,3 +207,13 @@ describe('support-session hardening', () => {
       expect(query.select).not.toHaveProperty(secret);
   });
 });
+
+it.each([NaN, Infinity, -Infinity])(
+  'rejects non-finite support duration %s',
+  async (durationMinutes) => {
+    await expect(createSupportSession({ ...input, durationMinutes })).rejects.toMatchObject({
+      status: 400,
+    });
+    expect(mocks.platformSupportSession.create).not.toHaveBeenCalled();
+  }
+);

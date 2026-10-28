@@ -276,3 +276,102 @@ describe('wrong-host session login destination', () => {
     expect(mocks.resolveOrganizationById).not.toHaveBeenCalled();
   });
 });
+
+describe('support actor route-handler boundary', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.isSharedHost.mockReturnValue(false);
+    mocks.requireOrganizationForRequest.mockResolvedValue({
+      id: 'org_other',
+      slug: 'other',
+      status: 'ACTIVE',
+    });
+    mocks.withTenantDb.mockResolvedValue({ id: 'admin_support', role: 'ADMIN', status: 'ACTIVE' });
+    mocks.getSupportSession.mockResolvedValue({
+      organizationId: 'org_other',
+      tenantUserId: 'admin_support',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+  });
+
+  it.each([
+    ['POST', '/api/upload'],
+    ['POST', '/api/assistant'],
+    ['POST', '/api/restaurant/devices/browser-enroll'],
+    ['POST', '/api/restaurant/print-bridge'],
+    ['PUT', '/api/restaurant/receipt-layout'],
+    ['POST', '/api/restaurant/sop/evidence'],
+    ['POST', '/api/pharmacy/print'],
+    ['GET', '/api/ably-token'],
+  ])('refuses support %s %s before granting an actor', async (method, path) => {
+    await expect(
+      resolveTenantActor({
+        request: new Request(`http://other.localhost${path}`, { method }),
+        session,
+      })
+    ).resolves.toBeNull();
+    expect(mocks.withTenantDb).not.toHaveBeenCalled();
+  });
+
+  it.each(['GET', 'POST'])('keeps tRPC %s subject to the procedure guard', async (method) => {
+    const actor = await resolveTenantActor({
+      request: new Request('http://other.localhost/api/trpc/apiTokens.create', { method }),
+      session,
+    });
+    expect(actor?.session.user).toMatchObject({ id: 'admin_support', isSupportSession: true });
+    expect(actor?.session.expires).toBe(
+      mocks.getSupportSession.mock.results[0] &&
+        (await mocks.getSupportSession.mock.results[0].value).expiresAt.toISOString()
+    );
+  });
+
+  it('allows tenant reads and does not substitute an ambient admin', async () => {
+    const actor = await resolveTenantActor({
+      request: new Request('http://other.localhost/api/files/document'),
+      session,
+    });
+    expect(actor?.session.user.id).toBe('admin_support');
+  });
+
+  it.each(['ACTIVE', 'ON_LEAVE'])('preserves normal %s admin HTTP writes', async (status) => {
+    mocks.getSupportSession.mockResolvedValue(null);
+    const actor = await resolveTenantActor({
+      request: new Request('http://other.localhost/api/upload', { method: 'POST' }),
+      session: sessionFor({ status }),
+    });
+    expect(actor?.session.user.id).toBe('user_1');
+  });
+
+  it('never falls back to an ambient admin for an expired or revoked support cookie', async () => {
+    mocks.getSupportSession.mockResolvedValue(null);
+    await expect(
+      resolveTenantActor({
+        request: new Request('http://other.localhost/api/upload', {
+          method: 'POST',
+          headers: { cookie: 'df_support_session=expired-support' },
+        }),
+        session,
+      })
+    ).resolves.toBeNull();
+  });
+
+  it('does not revive an ambient admin in server-component contexts after support expires', async () => {
+    mocks.getSupportSession.mockResolvedValue(null);
+    vi.mocked(headers).mockResolvedValue(
+      new Headers({
+        host: 'other.localhost',
+        cookie: 'df_support_session=expired-support',
+      }) as never
+    );
+    await expect(resolveTenantActor({ session })).resolves.toBeNull();
+    expect(mocks.withTenantDb).not.toHaveBeenCalled();
+  });
+
+  it.each(['INACTIVE', 'INVITED'])(
+    'rejects a target changed to %s during resolution',
+    async (status) => {
+      mocks.withTenantDb.mockResolvedValue({ id: 'admin_support', role: 'ADMIN', status });
+      await expect(resolveTenantActor({ request: request(), session })).resolves.toBeNull();
+    }
+  );
+});

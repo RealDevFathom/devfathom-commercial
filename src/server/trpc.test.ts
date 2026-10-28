@@ -52,6 +52,8 @@ vi.mock('@/lib/abac', async () => {
 
 import {
   adminProcedure,
+  auditedProtectedProcedure,
+  publicProcedure,
   capabilityProcedure,
   createTRPCContext,
   entitlementIndependentAdminProcedure,
@@ -85,6 +87,35 @@ describe('createTRPCContext request actor resolution', () => {
     expect(mocks.resolveTenantActor).toHaveBeenCalledWith({ request });
   });
 
+  it('uses the effective support actor over an ambient explicit tenant session', async () => {
+    const normal = {
+      expires: 'later',
+      user: { id: 'normal_admin', organizationId: 'org-1' },
+    } as never;
+    const effective = {
+      expires: new Date(Date.now() + 60_000).toISOString(),
+      user: { id: 'support_admin', organizationId: 'org-1', isSupportSession: true },
+    };
+    mocks.resolveTenantActor.mockResolvedValueOnce({
+      session: effective,
+      organization: { id: 'org-1' },
+      support: { supportSessionId: 'support-1' },
+    });
+    await expect(createTRPCContext({ session: normal })).resolves.toMatchObject({
+      session: effective,
+      support: { supportSessionId: 'support-1' },
+    });
+  });
+
+  it('does not revive an explicit session when actor resolution rejects its support cookie', async () => {
+    mocks.resolveTenantActor.mockResolvedValueOnce(null);
+    await expect(
+      createTRPCContext({
+        session: { user: { id: 'normal_admin', organizationId: 'org-1' } } as never,
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
   it('keeps the workspace guard and its internal error classification', async () => {
     const request = new Request('https://restaurant.devfathom.test/api/restaurant/sop/evidence');
     mocks.resolveTenantActor.mockResolvedValueOnce(null);
@@ -112,6 +143,10 @@ function contextFor(user: SessionUser | null, isDemo = false): TRPCContext {
 
 // One representative read and one representative write per procedure builder.
 const probe = router({
+  publicRead: publicProcedure.query(() => 'ok'),
+  publicWrite: publicProcedure.input(z.object({}).optional()).mutation(() => 'ok'),
+  auditedRead: auditedProtectedProcedure.query(() => 'ok'),
+  auditedWrite: auditedProtectedProcedure.input(z.object({}).optional()).mutation(() => 'ok'),
   protectedRead: protectedProcedure.query(() => 'ok'),
   protectedWrite: protectedProcedure.input(z.object({}).optional()).mutation(() => 'ok'),
   adminRead: adminProcedure.query(() => 'ok'),
@@ -411,5 +446,45 @@ describe('camera renewal audit redaction before resolver suppression (F3-R1)', (
       password: '[REDACTED]',
     });
     expect(value.previousGrantId).toBe('synthetic');
+  });
+});
+
+describe('support access cannot inherit tenant ADMIN write authority', () => {
+  it.each([
+    ...CALLS,
+    ['public read', (c: ReturnType<typeof probe.createCaller>) => c.publicRead()] as const,
+    ['public write', (c: ReturnType<typeof probe.createCaller>) => c.publicWrite({})] as const,
+    ['audited read', (c: ReturnType<typeof probe.createCaller>) => c.auditedRead()] as const,
+    ['audited write', (c: ReturnType<typeof probe.createCaller>) => c.auditedWrite({})] as const,
+  ])('allows only live support queries: %s', async (label, call) => {
+    const ctx = contextFor({ ...ADMIN, status: 'ACTIVE', isSupportSession: true });
+    ctx.session!.expires = new Date(Date.now() + 60_000).toISOString();
+    const result = call(probe.createCaller(ctx));
+    if (label.includes('write')) {
+      await expect(result).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Support sessions have read-only access.',
+      });
+    } else {
+      await expect(result).resolves.toBe('ok');
+    }
+  });
+
+  it.each(CALLS)('rejects expired support access: %s', async (_label, call) => {
+    const ctx = contextFor({ ...ADMIN, status: 'ACTIVE', isSupportSession: true });
+    ctx.session!.expires = new Date(Date.now() - 1).toISOString();
+    await expect(call(probe.createCaller(ctx))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('restricts a support identity even when the session flag is omitted', async () => {
+    const ctx = contextFor({ ...ADMIN, status: 'ACTIVE' });
+    ctx.session!.expires = new Date(Date.now() + 60_000).toISOString();
+    ctx.support = { expiresAt: new Date(Date.now() + 60_000) } as TRPCContext['support'];
+    await expect(probe.createCaller(ctx).adminWrite({})).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(probe.createCaller(ctx).adminRead()).resolves.toBe('ok');
+    ctx.support!.expiresAt = new Date(Date.now() - 1);
+    await expect(probe.createCaller(ctx).adminRead()).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });

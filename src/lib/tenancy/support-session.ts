@@ -55,6 +55,9 @@ export async function createSupportSession(input: {
   if (reason.length < 10 || reason.length > 500) {
     throw new PlatformSecurityError('Support access requires a 10–500 character reason.', 400);
   }
+  if (input.durationMinutes !== undefined && !Number.isFinite(input.durationMinutes)) {
+    throw new PlatformSecurityError('Support duration must be finite.', 400);
+  }
   const duration = Math.min(Math.max(input.durationMinutes ?? 30, 5), 60);
   const organization = await withPlatformDb((platformDb) =>
     platformDb.organization.findUnique({

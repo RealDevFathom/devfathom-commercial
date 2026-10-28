@@ -1,3 +1,4 @@
+import { supportAccessDenial } from '@/lib/tenancy/support-access';
 import { initTRPC, TRPCError } from '@trpc/server';
 import type { Session } from 'next-auth';
 import type { Prisma } from '@/generated/prisma/client';
@@ -50,7 +51,10 @@ export const createTRPCContext = async (opts?: {
             ? { request: opts?.req }
             : { request: opts?.req, session: explicitSession }
         );
-  const session = explicitSession !== undefined ? explicitSession : (actor?.session ?? null);
+  const session =
+    opts?.organization && explicitSession !== undefined
+      ? explicitSession
+      : (actor?.session ?? null);
   const organization = opts?.organization ?? actor?.organization ?? null;
   const headers = opts?.req?.headers ?? null;
   const organizationId = organization?.id ?? session?.user?.organizationId;
@@ -138,7 +142,15 @@ const t = initTRPC.context<TRPCContext>().create({
 });
 
 export const router = t.router;
-export const publicProcedure = t.procedure;
+function assertSupportAccess(ctx: TRPCContext, type: 'query' | 'mutation' | 'subscription') {
+  const message = supportAccessDenial(ctx, type);
+  if (message) throw new TRPCError({ code: 'FORBIDDEN', message });
+}
+
+export const publicProcedure = t.procedure.use(({ ctx, next, type }) => {
+  assertSupportAccess(ctx, type);
+  return next();
+});
 
 /**
  * Reject any session that is not provably usable (#16).
@@ -235,6 +247,7 @@ const requireActiveUser = t.middleware(async ({ ctx, next, path, type }) => {
       message: 'You must be logged in to access this resource',
     });
   }
+  assertSupportAccess(ctx, type);
   assertSessionUsable(ctx.session.user);
   assertTemporaryPasswordChanged(ctx.session.user, path);
   assertDemoProcedureAllowed(ctx, path, type);
@@ -278,6 +291,7 @@ function requireCapability(action: Action) {
         message: 'You must be logged in to access this resource',
       });
     }
+    assertSupportAccess(ctx, type);
     assertSessionUsable(ctx.session.user);
     assertTemporaryPasswordChanged(ctx.session.user, path);
     assertDemoProcedureAllowed(ctx, path, type);
