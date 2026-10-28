@@ -413,3 +413,31 @@ describe('camera renewal audit redaction before resolver suppression (F3-R1)', (
     expect(value.previousGrantId).toBe('synthetic');
   });
 });
+
+describe('support read scope and request-time expiry', () => {
+  it.each(CALLS)('%s enforces read scope with either identity signal', async (name, call) => {
+    for (const metadataOnly of [false, true]) {
+      const ctx = contextFor({ ...ADMIN, status: 'ACTIVE', isSupportSession: !metadataOnly });
+      ctx.session!.expires = new Date(Date.now() + 60000).toISOString();
+      if (metadataOnly)
+        ctx.support = { expiresAt: new Date(Date.now() + 60000) } as NonNullable<
+          TRPCContext['support']
+        >;
+      const result = call(probe.createCaller(ctx));
+      if (name.includes('write'))
+        await expect(result).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'Support access is read-only.',
+        });
+      else await expect(result).resolves.toBe('ok');
+    }
+  });
+  it.each(CALLS)(
+    '%s refuses support after expiry even on a previously resolved context',
+    async (_name, call) => {
+      const ctx = contextFor({ ...ADMIN, status: 'ACTIVE', isSupportSession: true });
+      ctx.session!.expires = new Date(Date.now() - 1).toISOString();
+      await expect(call(probe.createCaller(ctx))).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    }
+  );
+});

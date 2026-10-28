@@ -68,14 +68,19 @@ const db: MemberDb = {
   $transaction: (fn) => fn(db),
 };
 
-function caller(organizationId = 'org_a', entitlements = { activeSeats: 1, seatLimit: 10 }) {
+function caller(
+  organizationId = 'org_a',
+  entitlements = { activeSeats: 1, seatLimit: 10 },
+  supportSession = false
+) {
   return organizationAdminRouter.createCaller({
     db,
     entitlements: { enabledModules: [], ...entitlements },
     session: {
-      expires: 'later',
+      expires: new Date(Date.now() + 60000).toISOString(),
       user: {
         id: 'admin_a',
+        isSupportSession: supportSession,
         organizationId,
         role: 'ADMIN',
         department: 'COUNTER',
@@ -329,9 +334,10 @@ describe('organization member last-admin guard', () => {
           db: concurrentDb,
           entitlements: { enabledModules: [], activeSeats: 2, seatLimit: 10 },
           session: {
-            expires: 'later',
+            expires: new Date(Date.now() + 60000).toISOString(),
             user: {
               id: 'admin_a',
+              isSupportSession: false,
               organizationId: 'org_a',
               role: 'ADMIN',
               department: 'COUNTER',
@@ -352,5 +358,27 @@ describe('organization member last-admin guard', () => {
 
     expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
     expect(activeAdmins).toBe(1);
+  });
+});
+
+describe('support impersonation member boundary', () => {
+  it('cannot create members or elevate existing members through a direct server caller', async () => {
+    const support = caller('org_a', { activeSeats: 1, seatLimit: 10 }, true);
+    await expect(support.createMember(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Support access is read-only.',
+    });
+    await expect(
+      support.updateMember({
+        id: 'employee',
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationRoleId: null,
+        title: 'Admin',
+        department: 'COUNTER',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
 });

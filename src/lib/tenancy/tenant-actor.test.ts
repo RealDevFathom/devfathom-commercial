@@ -191,6 +191,46 @@ describe('resolveTenantActor', () => {
     ).resolves.toBeNull();
   });
 
+  it.each([
+    ['/api/files/example.txt', 'GET'],
+    ['/api/trpc/team.getAll', 'POST'],
+  ])('preserves support read transport %s %s', async (path, method) => {
+    mocks.getSupportSession.mockResolvedValue({
+      organizationId: 'org_other',
+      tenantUserId: 'user_support',
+      expiresAt: new Date(Date.now() + 60000),
+    });
+    mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_other' });
+    mocks.withTenantDb.mockImplementation(async (_id, run) =>
+      run({
+        user: { findUnique: async () => ({ id: 'user_support', role: 'ADMIN', status: 'ACTIVE' }) },
+      })
+    );
+    await expect(
+      resolveTenantActor({
+        request: new Request(`http://devfathom.localhost${path}`, { method }),
+        session,
+      })
+    ).resolves.toMatchObject({ session: { user: { id: 'user_support', isSupportSession: true } } });
+  });
+
+  it.each([
+    ['/api/upload', 'POST'],
+    ['/api/assistant', 'POST'],
+    ['/api/restaurant/devices/browser-enroll', 'POST'],
+    ['/api/ably-token', 'GET'],
+    ['/api/ably-token/', 'GET'],
+  ])('blocks support route bypass %s %s before tenant access', async (path, method) => {
+    mocks.getSupportSession.mockResolvedValue({ expiresAt: new Date(Date.now() + 60000) });
+    await expect(
+      resolveTenantActor({
+        request: new Request(`http://devfathom.localhost${path}`, { method }),
+        session,
+      })
+    ).resolves.toBeNull();
+    expect(mocks.withTenantDb).not.toHaveBeenCalled();
+  });
+
   // D14: `df_support_session` is domain-wide and outranks the tenant JWT, so an
   // operator with a live support session who opened the shared host would have
   // been handed an impersonated actor for a workspace they never opened.

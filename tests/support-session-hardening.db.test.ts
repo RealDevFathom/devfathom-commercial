@@ -139,6 +139,122 @@ describe.skipIf(!url)('support hardening on restricted PostgreSQL', () => {
     );
     expect(stored).toMatchObject({ status: 'ENDED', tokenCiphertext: null, launchTokenHash: null });
   });
+  it('keeps real support callers read-only without minting persistent credentials or changing members', async () => {
+    const { apiTokensRouter } = await import('@/server/routers/api-tokens');
+    const { organizationAdminRouter } = await import('@/server/routers/organization-admin');
+    const { teamRouter } = await import('@/server/routers/team');
+    const { router } = await import('@/server/trpc');
+    type Context = import('@/server/trpc').TRPCContext;
+    const routes = router({
+      apiTokens: apiTokensRouter,
+      organizationAdmin: organizationAdminRouter,
+      team: teamRouter,
+    });
+    const opened = await support.createSupportSession({
+      actor,
+      organizationId: orgId,
+      tenantUserId: adminId,
+      reason: 'Investigate read scope regression',
+    });
+    const launch = await support.consumeSupportLaunchTicket({
+      launchToken: opened.launchToken,
+      organizationId: orgId,
+    });
+    const request = new Request('http://support.localhost', {
+      headers: { cookie: `${support.SUPPORT_SESSION_COOKIE}=${launch.token}` },
+    });
+    const identity = await support.getSupportSession(request);
+    expect(identity).not.toBeNull();
+    const ctx = {
+      db: scoped.createTenantDb(orgId, adminId),
+      entitlements: {
+        enabledModules: ['api', 'identity'],
+        modules: [],
+        organizationId: orgId,
+        seatLimit: 10,
+        activeSeats: 2,
+        limits: {},
+      },
+      session: {
+        expires: identity!.expiresAt.toISOString(),
+        user: {
+          id: adminId,
+          organizationId: orgId,
+          role: 'ADMIN',
+          status: 'ACTIVE',
+          department: 'ADMINISTRATION',
+          isSupportSession: true,
+        },
+      },
+      organization: null,
+      support: identity,
+      requestMeta: { ip: null, userAgent: null },
+      audit: { detail: {} },
+    } as unknown as Context;
+    const caller = routes.createCaller(ctx);
+    await expect(caller.apiTokens.list()).resolves.toEqual([]);
+    await expect(
+      caller.apiTokens.create({ name: 'Support escape', scopes: ['*'] })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller.organizationAdmin.createMember({
+        name: 'Escape',
+        email: 'escape@example.test',
+        password: 'Temporary-123456',
+        title: 'Admin',
+        role: 'ADMIN',
+        department: 'ADMINISTRATION',
+        organizationRoleId: null,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller.organizationAdmin.updateMember({
+        id: employeeId,
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationRoleId: null,
+        title: 'Admin',
+        department: 'ADMINISTRATION',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller.organizationAdmin.createScimToken({ name: 'Support escape', expiresAt: null })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller.team.inviteMember({
+        name: 'Escape invite',
+        email: 'invite-escape@example.test',
+        role: 'ADMIN',
+        department: 'ADMINISTRATION',
+        title: 'Admin',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const state = await scoped.withTenantDb(orgId, async (tx) => ({
+      tokens: await tx.apiToken.count(),
+      members: await tx.user.count(),
+      employee: await tx.user.findUnique({ where: { id: employeeId }, select: { role: true } }),
+      scim: await tx.organizationScimToken.count(),
+    }));
+    expect(state).toEqual({ tokens: 0, members: 2, employee: { role: 'EMPLOYEE' }, scim: 0 });
+    // The same real administrator retains token creation outside impersonation.
+    const normal = routes.createCaller({
+      ...ctx,
+      support: null,
+      session: { ...ctx.session!, user: { ...ctx.session!.user, isSupportSession: false } },
+    });
+    const created = await normal.apiTokens.create({ name: 'Normal administrator', scopes: ['*'] });
+    expect(created.id).toBeTruthy();
+    await normal.apiTokens.revoke({ id: created.id });
+    ctx.support = { ...identity!, expiresAt: new Date(Date.now() - 1) };
+    await expect(caller.apiTokens.list()).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
+    await support.forceEndSupportSession({
+      actor,
+      supportSessionId: opened.supportSessionId,
+      reason: 'Finish read scope regression',
+    });
+    expect(await support.getSupportSession(request)).toBeNull();
+  });
+
   it('preserves support history by refusing organization deletion', async () => {
     await expect(
       scoped.withPlatformDb((tx) => tx.organization.delete({ where: { id: orgId } }))
