@@ -17,15 +17,17 @@ function fixture() {
   const witness = { id: 'new-witness', organizationId: 'org', status: 'ACTIVE', role: 'EMPLOYEE' };
   const db = {
     $queryRaw: vi.fn(),
-    user: { findFirst: vi.fn().mockResolvedValue({ id: 'actor', role: 'EMPLOYEE' }) },
+    user: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'actor', role: 'EMPLOYEE' }),
+      count: vi.fn().mockResolvedValue(2),
+    },
+    auditLog: { create: vi.fn() },
     restaurantOperatorCredential: {
-      findFirst: vi
-        .fn()
-        .mockResolvedValue({
-          id: 'cred',
-          credentialHash: 'hash',
-          staffProfile: { status: 'ACTIVE', user: witness },
-        }),
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'cred',
+        credentialHash: 'hash',
+        staffProfile: { status: 'ACTIVE', user: witness },
+      }),
       update: vi.fn(),
     },
     pharmacySale: {
@@ -102,5 +104,58 @@ describe('fresh controlled restoration authorization', () => {
     expect(first.witnessedByUserId).toBe('new-witness');
     expect(first.signatureRef).not.toBe(second.signatureRef);
     expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
+  });
+});
+
+describe('solo pharmacy owner restoration', () => {
+  it('requires a fresh valid PIN and audits owner self-approval', async () => {
+    const { db, witness } = fixture();
+    witness.id = 'actor';
+    db.user.count.mockResolvedValue(1);
+    await expect(authorizeControlledRestoration(db as never, scope)).rejects.toThrow(
+      /fresh witness PIN/
+    );
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(false);
+    await expect(authorizeControlledRestoration(db as never, scope, pin)).rejects.toThrow();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
+    await expect(authorizeControlledRestoration(db as never, scope, pin)).resolves.toMatchObject({
+      witnessedByUserId: 'actor',
+    });
+    expect(db.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org',
+          organizationRole: { organizationId: 'org', key: 'owner', isSystem: true },
+        }),
+      })
+    );
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorId: 'actor',
+        action: 'pharmacy.soloOwnerSelfApproval',
+        metadata: { branchId: 'branch', credentialId: 'cred', purpose: 'controlled-restoration' },
+      }),
+    });
+  });
+  it('still requires a second person with multiple active staff', async () => {
+    const { db, witness } = fixture();
+    witness.id = 'actor';
+    await expect(authorizeControlledRestoration(db as never, scope, pin)).rejects.toThrow();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+    witness.id = 'colleague';
+    await expect(authorizeControlledRestoration(db as never, scope, pin)).resolves.toMatchObject({
+      witnessedByUserId: 'colleague',
+    });
+  });
+  it('does not allow a solo non-owner to self-approve', async () => {
+    const { db, witness } = fixture();
+    witness.id = 'actor';
+    db.user.findFirst
+      .mockResolvedValueOnce({ id: 'actor', role: 'EMPLOYEE' })
+      .mockResolvedValueOnce(null as never);
+    db.user.count.mockResolvedValue(1);
+    await expect(authorizeControlledRestoration(db as never, scope, pin)).rejects.toThrow();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+import { isSoloPharmacyOwner } from './solo-owner';
 import { randomUUID } from 'node:crypto';
 import { can } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -25,8 +26,9 @@ export class ControlledRestorationDenied extends Error {
 /** Called inside the sale transaction, before any stock or status mutation. */
 export async function authorizeControlledRestoration(
   db: ScopedDb,
-  scope: LedgerScope,
-  input?: ControlledRestorationPin
+  scope: Omit<LedgerScope, 'branchId'> & { branchId: string | null },
+  input?: ControlledRestorationPin,
+  purpose: 'controlled-restoration' | 'purchase-order' = 'controlled-restoration'
 ): Promise<ControlledRestorationWitness> {
   const actor = await db.user.findFirst({
     where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
@@ -54,10 +56,13 @@ export async function authorizeControlledRestoration(
     !witness ||
     witness.organizationId !== scope.organizationId ||
     witness.status !== 'ACTIVE' ||
-    witness.id === scope.actorId ||
     isLockedOut(credential, now) ||
     !(await can(witness, 'pharmacy:dispense', undefined, { db, now }))
   ) {
+    throw new ControlledRestorationDenied();
+  }
+  const selfApproval = witness.id === scope.actorId;
+  if (selfApproval && !(await isSoloPharmacyOwner(db, scope.organizationId, scope.actorId))) {
     throw new ControlledRestorationDenied();
   }
   if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
@@ -71,5 +76,22 @@ export async function authorizeControlledRestoration(
     where: { id: credential.id },
     data: clearLockout(),
   });
+  if (selfApproval) {
+    await db.auditLog.create({
+      data: {
+        organizationId: scope.organizationId,
+        actorId: scope.actorId,
+        source: 'TRPC',
+        category: 'PHARMACY',
+        operation: 'UPDATE',
+        action: 'pharmacy.soloOwnerSelfApproval',
+        metadata: {
+          branchId: scope.branchId,
+          credentialId: credential.id,
+          purpose,
+        },
+      },
+    });
+  }
   return { witnessedByUserId: witness.id, signatureRef: `pin:${credential.id}:${randomUUID()}` };
 }

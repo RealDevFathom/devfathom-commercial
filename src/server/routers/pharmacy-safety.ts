@@ -1,3 +1,4 @@
+import { isSoloPharmacyOwner } from '@/lib/pharmacy/solo-owner';
 import { can, subjectFromSession } from '@/lib/abac';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -169,7 +170,8 @@ export const pharmacySafetyRouter = router({
             pharmacist &&
             pharmacist.organizationId === organizationId &&
             pharmacist.status === 'ACTIVE' &&
-            pharmacist.id !== actorId &&
+            (pharmacist.id !== actorId ||
+              (await isSoloPharmacyOwner(db, organizationId, actorId))) &&
             !isLockedOut(credential, now) &&
             (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
           if (!eligible || !credential || !pharmacist) {
@@ -186,6 +188,24 @@ export const pharmacySafetyRouter = router({
             where: { id: credential.id },
             data: clearLockout(),
           });
+          if (pharmacist.id === actorId) {
+            await db.auditLog.create({
+              data: {
+                organizationId,
+                actorId,
+                source: 'TRPC',
+                category: 'PHARMACY',
+                operation: 'UPDATE',
+                action: 'pharmacy.soloOwnerSelfApproval',
+                targetId: input.correctsEntryId,
+                metadata: {
+                  branchId: input.branchId,
+                  credentialId: credential.id,
+                  purpose: 'controlled-correction',
+                },
+              },
+            });
+          }
           return appendControlledCorrection(db, {
             organizationId,
             branchId: input.branchId,

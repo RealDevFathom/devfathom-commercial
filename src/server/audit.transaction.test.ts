@@ -18,7 +18,7 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 
 import { bindSideEffects } from '@/lib/side-effects/scope';
-import { flushAuditWritesForTest, recordTrpcAudit } from './audit';
+import { flushAuditWritesForTest, recordTrpcAudit, toAuditJson } from './audit';
 import { createTRPCContext, protectedProcedure, router, type TRPCContext } from './trpc';
 
 const organizationId = 'org_demo_restaurant_seat_1';
@@ -139,5 +139,11 @@ describe('transaction-bound seed audits', () => {
         session: ctx.session,
       })
     ).rejects.toThrow('Audit transaction must match');
+  });
+});
+
+it('redacts nested pharmacy owner PIN reauthentication from audit input', () => {
+  expect(toAuditJson({ ownerApproval: { staffProfileId: 'staff', pin: '473829' } })).toEqual({
+    ownerApproval: { staffProfileId: 'staff', pin: '[REDACTED]' },
   });
 });

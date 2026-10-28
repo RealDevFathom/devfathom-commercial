@@ -32,6 +32,11 @@ const credential = {
 function witnessDb() {
   const update = vi.fn();
   const db = {
+    user: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'pharmacist' }),
+      count: vi.fn().mockResolvedValue(1),
+    },
+    auditLog: { create: vi.fn() },
     pharmacyGoodsReceipt: {
       findFirst: vi.fn(async () => ({
         branchId: 'branch',
@@ -118,5 +123,38 @@ describe('verifyControlledPurchaseWitness', () => {
         { goodsReceiptId: 'receipt', staffProfileId: 'staff', pin: '1234' }
       )
     ).resolves.toEqual({ pharmacistId: 'pharmacist' });
+  });
+});
+
+describe('solo controlled purchase witness', () => {
+  it('accepts the solo owner PIN and audits self-witnessing', async () => {
+    const { db } = witnessDb();
+    vi.mocked(verifyOperatorCredential).mockResolvedValueOnce(true);
+    await expect(
+      verifyControlledPurchaseWitness(
+        db,
+        { organizationId: 'org', branchId: 'branch', actorId: 'pharmacist' },
+        { goodsReceiptId: 'receipt', staffProfileId: 'staff', pin: '1234' }
+      )
+    ).resolves.toEqual({ pharmacistId: 'pharmacist' });
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorId: 'pharmacist',
+        action: 'pharmacy.soloOwnerSelfApproval',
+        metadata: expect.objectContaining({ purpose: 'controlled-purchase' }),
+      }),
+    });
+  });
+  it('refuses self-witnessing when a colleague is active', async () => {
+    const { db } = witnessDb();
+    vi.mocked(db.user.count).mockResolvedValueOnce(2);
+    await expect(
+      verifyControlledPurchaseWitness(
+        db,
+        { organizationId: 'org', branchId: 'branch', actorId: 'pharmacist' },
+        { goodsReceiptId: 'receipt', staffProfileId: 'staff', pin: '1234' }
+      )
+    ).resolves.toHaveProperty('blocked');
+    expect(db.auditLog.create).not.toHaveBeenCalled();
   });
 });

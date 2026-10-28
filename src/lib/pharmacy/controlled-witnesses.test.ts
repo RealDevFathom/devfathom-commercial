@@ -16,7 +16,10 @@ describe('controlled witness tenant scope', () => {
       },
     ]);
     const result = await listControlledPinWitnesses(
-      { restaurantStaffProfile: { findMany } } as never,
+      {
+        restaurantStaffProfile: { findMany },
+        user: { findFirst: vi.fn().mockResolvedValue(null) },
+      } as never,
       'org',
       'actor'
     );
@@ -31,4 +34,28 @@ describe('controlled witness tenant scope', () => {
       })
     );
   });
+});
+
+it('includes the sole owner in PIN witnesses so the existing picker supports solo mode', async () => {
+  const owner = {
+    id: 'owner-profile',
+    displayName: 'Owner',
+    user: { id: 'actor', organizationId: 'org', status: 'ACTIVE' },
+  };
+  const findMany = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([owner]);
+  const db = {
+    restaurantStaffProfile: { findMany },
+    user: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'actor' }),
+      count: vi.fn().mockResolvedValue(1),
+    },
+  };
+  await expect(listControlledPinWitnesses(db as never, 'org', 'actor')).resolves.toEqual([
+    { id: 'owner-profile', name: 'Owner' },
+  ]);
+  expect(findMany).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      where: expect.objectContaining({ organizationId: 'org', userId: 'actor' }),
+    })
+  );
 });

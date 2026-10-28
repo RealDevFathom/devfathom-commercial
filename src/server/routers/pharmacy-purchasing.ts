@@ -1,3 +1,8 @@
+import { isSoloPharmacyOwner } from '@/lib/pharmacy/solo-owner';
+import {
+  ControlledRestorationDenied,
+  authorizeControlledRestoration,
+} from '@/lib/pharmacy/controlled-restoration-authorization';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -94,6 +99,9 @@ const bps = z.number().int().min(0).max(10_000);
 const branchId = z.string().trim().min(1).max(128);
 
 function domainError(error: unknown): never {
+  if (error instanceof ControlledRestorationDenied) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  }
   if (error instanceof CentralPurchasingError) {
     throw new TRPCError({
       code:
@@ -741,6 +749,10 @@ const purchasingRouter = router({
           purchaseOrderId: z.string().min(1),
           decision: z.enum(['APPROVED', 'REJECTED']),
           reason: z.string().trim().max(1000).optional(),
+          ownerApproval: z
+            .object({ staffProfileId: z.string().min(1), pin: z.string().min(1).max(100) })
+            .strict()
+            .optional(),
         })
         .strict()
     )
@@ -755,11 +767,36 @@ const purchasingRouter = router({
 
           const toStatus = input.decision === 'APPROVED' ? 'APPROVED' : 'DRAFT';
           assertPurchaseOrderTransition(order.status, toStatus);
-          assertApprovalAllowed({
-            approverId: ctx.session.user.id,
-            requestedById: order.requisition?.requestedByUserId ?? null,
-            createdById: order.createdByUserId,
-          });
+          const selfApproval =
+            order.createdByUserId === ctx.session.user.id ||
+            order.requisition?.requestedByUserId === ctx.session.user.id;
+          if (
+            selfApproval &&
+            (await isSoloPharmacyOwner(
+              tx as ScopedDb,
+              ctx.entitlements.organizationId,
+              ctx.session.user.id
+            ))
+          ) {
+            const verified = await authorizeControlledRestoration(
+              tx as ScopedDb,
+              {
+                organizationId: ctx.entitlements.organizationId,
+                branchId: order.branchId,
+                actorId: ctx.session.user.id,
+              },
+              input.ownerApproval,
+              'purchase-order'
+            );
+            if (verified.witnessedByUserId !== ctx.session.user.id)
+              throw new PharmacyPurchasingError('SELF_APPROVAL');
+          } else {
+            assertApprovalAllowed({
+              approverId: ctx.session.user.id,
+              requestedById: order.requisition?.requestedByUserId ?? null,
+              createdById: order.createdByUserId,
+            });
+          }
           if (input.decision === 'APPROVED') {
             // Authorization can lapse between drafting and approval.
             assertOrderableSupplier(

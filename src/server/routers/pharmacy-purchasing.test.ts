@@ -43,6 +43,9 @@ function model() {
 
 function makeDb() {
   const db = {
+    auditLog: model(),
+    restaurantOperatorCredential: model(),
+    $queryRaw: vi.fn(),
     medicine: model(),
     packLevel: model(),
     pharmacySupplier: model(),
@@ -61,7 +64,7 @@ function makeDb() {
     pharmacyDebitNote: model(),
     pharmacySupplierCredit: model(),
     pharmacyBranch: model(),
-    user: model(),
+    user: { ...model(), count: vi.fn().mockResolvedValue(2) },
     medicineBarcode: model(),
   };
   return Object.assign(db, {
@@ -1075,5 +1078,79 @@ describe('PUR-06 — the returns and settlement transport', () => {
         where: expect.objectContaining({ organizationId: 'org_a', branchId: 'branch_a' }),
       })
     );
+  });
+});
+
+describe('solo owner purchase order approval', () => {
+  async function prepare(staffCount: number) {
+    const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+    mocks.can.mockResolvedValue(true);
+    orderableSupplier();
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      branchId: 'branch',
+      status: 'SUBMITTED',
+      supplierId: 'supplier_a',
+      createdByUserId: 'user_a',
+      requisition: null,
+    });
+    db.user.findFirst.mockResolvedValue({
+      id: 'user_a',
+      organizationId: 'org_a',
+      status: 'ACTIVE',
+    });
+    db.user.count.mockResolvedValue(staffCount);
+    db.restaurantOperatorCredential.findFirst.mockResolvedValue({
+      id: 'credential',
+      credentialHash: await hashOperatorCredential('PIN', '473829'),
+      failedAttempts: 0,
+      lockedUntil: null,
+      staffProfile: {
+        status: 'ACTIVE',
+        user: { id: 'user_a', organizationId: 'org_a', status: 'ACTIVE' },
+      },
+    });
+  }
+  it('allows the sole owner with a real PIN and writes an audit event', async () => {
+    await prepare(1);
+    await caller().approvePurchaseOrder({
+      purchaseOrderId: 'po_a',
+      decision: 'APPROVED',
+      ownerApproval: { staffProfileId: 'staff', pin: '473829' },
+    });
+    expect(db.pharmacyPurchaseOrderApproval.create).toHaveBeenCalledOnce();
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorId: 'user_a',
+        action: 'pharmacy.soloOwnerSelfApproval',
+        metadata: expect.objectContaining({ purpose: 'purchase-order' }),
+      }),
+    });
+  });
+  it.each([undefined, { staffProfileId: 'staff', pin: '111111' }])(
+    'rejects missing or wrong PIN without approving',
+    async (ownerApproval) => {
+      await prepare(1);
+      await expect(
+        caller().approvePurchaseOrder({
+          purchaseOrderId: 'po_a',
+          decision: 'APPROVED',
+          ownerApproval,
+        })
+      ).rejects.toThrow();
+      expect(db.pharmacyPurchaseOrderApproval.create).not.toHaveBeenCalled();
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+    }
+  );
+  it('requires a second approver with two active staff even with a valid owner PIN', async () => {
+    await prepare(2);
+    await expect(
+      caller().approvePurchaseOrder({
+        purchaseOrderId: 'po_a',
+        decision: 'APPROVED',
+        ownerApproval: { staffProfileId: 'staff', pin: '473829' },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'SELF_APPROVAL' });
+    expect(db.pharmacyPurchaseOrderApproval.create).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+import { isSoloPharmacyOwner } from './solo-owner';
 /**
  * PH-PUR — PRD §6.3 PUR-02 (receiving), PUR-04 (three-way match exceptions and
  * reversal) and PUR-05 (direct purchase). The database half of receiving.
@@ -133,7 +134,8 @@ export async function verifyControlledPurchaseWitness(
     pharmacist.id === receipt.qualifiedPersonUserId &&
     pharmacist.organizationId === scope.organizationId &&
     pharmacist.status === 'ACTIVE' &&
-    pharmacist.id !== scope.actorId &&
+    (pharmacist.id !== scope.actorId ||
+      (await isSoloPharmacyOwner(db, scope.organizationId, scope.actorId))) &&
     !isLockedOut(credential, now) &&
     (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
   if (!eligible || !credential || !pharmacist) return { blocked: WITNESS_BLOCKED };
@@ -148,6 +150,24 @@ export async function verifyControlledPurchaseWitness(
     where: { id: credential.id },
     data: clearLockout(),
   });
+  if (pharmacist.id === scope.actorId) {
+    await db.auditLog.create({
+      data: {
+        organizationId: scope.organizationId,
+        actorId: scope.actorId,
+        source: 'TRPC',
+        category: 'PHARMACY',
+        operation: 'UPDATE',
+        action: 'pharmacy.soloOwnerSelfApproval',
+        targetId: input.goodsReceiptId,
+        metadata: {
+          branchId: scope.branchId,
+          credentialId: credential.id,
+          purpose: 'controlled-purchase',
+        },
+      },
+    });
+  }
   return { pharmacistId: pharmacist.id };
 }
 

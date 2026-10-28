@@ -1,3 +1,4 @@
+import { isSoloPharmacyOwner } from './solo-owner';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
@@ -501,6 +502,27 @@ export async function listControlledPinWitnesses(
       },
     },
   });
+  if (await isSoloPharmacyOwner(db, organizationId, actorId)) {
+    staff.push(
+      ...(await db.restaurantStaffProfile.findMany({
+        where: {
+          organizationId,
+          userId: actorId,
+          status: 'ACTIVE',
+          user: { organizationId, status: 'ACTIVE' },
+          credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
+        },
+        include: {
+          user: {
+            include: {
+              organizationRole: { include: { permissions: true } },
+              permissionOverrides: true,
+            },
+          },
+        },
+      }))
+    );
+  }
   const eligible: Array<{ id: string; name: string }> = [];
   for (const profile of staff) {
     if (

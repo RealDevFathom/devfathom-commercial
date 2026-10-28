@@ -135,6 +135,12 @@ const legacy: Record<string, string[]> = {
     );
     await client.query(migration);
     await client.query(managerProcurementMigration);
+    await client.query(
+      readFileSync(
+        'prisma/migrations/20261028100000_pharmacy_catalogue_owner_authorization/migration.sql',
+        'utf8'
+      )
+    );
   }, 60_000);
   afterAll(async () => {
     await client.query('ROLLBACK');
@@ -189,6 +195,9 @@ const legacy: Record<string, string[]> = {
     );
     expect(ownerOther.rows).toEqual([
       { capability: 'pharmacy:*', effect: 'ALLOW' },
+      { capability: 'pharmacy:catalogue-review', effect: 'ALLOW' },
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+      { capability: 'pharmacy:safety', effect: 'ALLOW' },
       { capability: 'reports:financial', effect: 'DENY' },
       { capability: 'reports:operational', effect: 'ALLOW' },
     ]);
