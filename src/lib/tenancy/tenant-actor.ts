@@ -133,6 +133,17 @@ async function resolveTenantActorUncached(
   // already has a tenant session, and avoids decoding a stale JWT first.
   const support = onSharedHost ? null : await getSupportSession(options.request);
   if (support) {
+    // Direct routes do not all pass through tRPC. The transport adapter must
+    // still resolve POST queries; its per-procedure guard rejects mutations,
+    // including mutations invoked through Server Actions without a Request.
+    if (!Number.isFinite(support.expiresAt.getTime()) || support.expiresAt.getTime() <= Date.now())
+      return null;
+    if (options.request) {
+      const pathname = new URL(options.request.url).pathname.replace(/\/+$/, '');
+      const isTrpc = pathname.startsWith('/api/trpc/');
+      const read = ['GET', 'HEAD', 'OPTIONS'].includes(options.request.method);
+      if ((!read && !isTrpc) || pathname === '/api/ably-token') return null;
+    }
     const organization = await organizationForActor(support.organizationId, options.request);
     if (!organization) return null;
     const user = await withTenantDb(organization.id, (tenantDb) =>

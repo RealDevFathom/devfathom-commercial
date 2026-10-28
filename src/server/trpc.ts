@@ -138,7 +138,22 @@ const t = initTRPC.context<TRPCContext>().create({
 });
 
 export const router = t.router;
-export const publicProcedure = t.procedure;
+// Shared by HTTP adapters and direct callers from Server Actions. Inspect both
+// identity signals so omitting ctx.support cannot turn impersonation into admin.
+const supportAccess = t.middleware(async ({ ctx, next, type }) => {
+  if (ctx.support || ctx.session?.user?.isSupportSession) {
+    const expiry = ctx.support?.expiresAt.getTime() ?? Date.parse(ctx.session?.expires ?? '');
+    if (!Number.isFinite(expiry) || expiry <= Date.now()) {
+      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Support access has expired.' });
+    }
+    if (type !== 'query') {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Support access is read-only.' });
+    }
+  }
+  return next();
+});
+const tenantProcedure = t.procedure.use(supportAccess);
+export const publicProcedure = tenantProcedure;
 
 /**
  * Reject any session that is not provably usable (#16).
@@ -300,18 +315,21 @@ function requireCapability(action: Action) {
 // Protected procedure — audit (outer) wraps the auth guard.
 export const protectedProcedure = t.procedure
   .use(auditMutations)
+  .use(supportAccess)
   .use(requireActiveUser)
   .use(requireLicensedModule);
 
 /** Authenticated, module-aware procedure for sensitive tenant reads. */
 export const auditedProtectedProcedure = t.procedure
   .use(auditAll)
+  .use(supportAccess)
   .use(requireActiveUser)
   .use(requireLicensedModule);
 
 /** Authenticated, audited tenant access to retained history after entitlement removal. */
 export const entitlementIndependentHistoryProcedure = t.procedure
   .use(auditAll)
+  .use(supportAccess)
   .use(requireActiveUser);
 
 // Admin-only procedure — now backed by the ABAC engine (policy: 'admin:access' =
@@ -319,6 +337,7 @@ export const entitlementIndependentHistoryProcedure = t.procedure
 // decision flows through the one engine. Audits mutations AND sensitive reads.
 export const adminProcedure = t.procedure
   .use(auditAll)
+  .use(supportAccess)
   .use(requireCapability('admin:access'))
   .use(requireLicensedModule);
 
@@ -329,11 +348,13 @@ export const adminProcedure = t.procedure
  */
 export const entitlementIndependentAdminProcedure = t.procedure
   .use(auditAll)
+  .use(supportAccess)
   .use(requireCapability('admin:access'));
 
 // HR console procedure — ADMIN or HR (policy: 'hr:access').
 export const hrProcedure = t.procedure
   .use(auditAll)
+  .use(supportAccess)
   .use(requireCapability('hr:access'))
   .use(requireLicensedModule);
 
@@ -342,5 +363,9 @@ export const hrProcedure = t.procedure
  * e.g. `capabilityProcedure('resignation:readAll')`. Audits like adminProcedure.
  */
 export function capabilityProcedure(action: Action) {
-  return t.procedure.use(auditAll).use(requireCapability(action)).use(requireLicensedModule);
+  return t.procedure
+    .use(auditAll)
+    .use(supportAccess)
+    .use(requireCapability(action))
+    .use(requireLicensedModule);
 }
