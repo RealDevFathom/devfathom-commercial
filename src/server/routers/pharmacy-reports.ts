@@ -42,6 +42,58 @@ import {
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
+
+type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
+
+function exactPharmacyManageDecision(input: {
+  overrides: readonly CapabilityRule[];
+  role: readonly CapabilityRule[];
+}): boolean | null {
+  const overrides = input.overrides.filter((rule) => rule.capability === 'pharmacy:manage');
+  if (overrides.some((rule) => rule.effect === 'DENY')) return false;
+  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
+
+  const role = input.role.filter((rule) => rule.capability === 'pharmacy:manage');
+  if (role.some((rule) => rule.effect === 'DENY')) return false;
+  if (role.some((rule) => rule.effect === 'ALLOW')) return true;
+  return null;
+}
+
+const pharmacyAdminRead = auditedProtectedProcedure.use(async ({ ctx, next }) => {
+  const actor = subjectFromSession(ctx.session!.user);
+  const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+  const user = await ctx.db.user
+    .findUnique({
+      where: { id: actor.id },
+      select: {
+        organizationRole: {
+          select: { permissions: { select: { capability: true, effect: true } } },
+        },
+        permissionOverrides: {
+          where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+          select: { capability: true, effect: true },
+        },
+      },
+    })
+    .catch(() => null);
+  const pharmacyDecision = user
+    ? exactPharmacyManageDecision({
+        overrides: user.permissionOverrides,
+        role: user.organizationRole?.permissions ?? [],
+      })
+    : false;
+
+  // An exact per-person/role pharmacy decision is authoritative. In particular,
+  // do not let a broad report grant bypass an explicit pharmacy administration deny.
+  const allowed =
+    pharmacyDecision === null
+      ? await can(actor, 'reports:operational', undefined, options)
+      : pharmacyDecision;
+  if (!allowed) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy administration access required.' });
+  }
+  return next();
+});
 const widget = z
   .object({
     key: z.enum(PHARMACY_WIDGET_KEYS),
@@ -319,7 +371,7 @@ export const pharmacyReportsRouter = router({
         })),
       };
     }),
-  branches: reports.query(({ ctx }) => scope(ctx)),
+  branches: pharmacyAdminRead.query(({ ctx }) => scope(ctx)),
   replenishment: reports.input(pharmacyReplenishmentReportInput).query(async ({ ctx, input }) => {
     // Existing capability middleware denies before report reads; scope enforces licensing.
     const available = await scope(ctx);
@@ -399,7 +451,7 @@ export const pharmacyReportsRouter = router({
       }
       return readPharmacyDailyWorkPack(ctx.db, resolved, readAt);
     }),
-  catalog: reports.query(async ({ ctx }) => ({
+  catalog: pharmacyAdminRead.query(async ({ ctx }) => ({
     reports: pharmacyReportCatalog(),
     metrics: PHARMACY_METRIC_CONTRACT,
     permissions: {
@@ -625,7 +677,7 @@ export const pharmacyReportsRouter = router({
       select: { branchId: true, enabled: true, timeMinutes: true, nextDueAt: true },
     });
   }),
-  getPreferences: reports.query(async ({ ctx }) => {
+  getPreferences: pharmacyAdminRead.query(async ({ ctx }) => {
     const user = await ctx.db.user.findUnique({
       where: { id: ctx.session!.user.id },
       select: { preferences: true },
