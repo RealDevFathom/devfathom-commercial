@@ -32,3 +32,33 @@ it('ships public and static assets before running the standalone server', () => 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+it('uses packaged assets without copying missing source directories or overwriting uploads', () => {
+  const root = mkdtempSync(join(tmpdir(), 'platform-staged-test-'));
+  try {
+    mkdirSync(join(root, '.next/standalone/public/uploads'), { recursive: true });
+    mkdirSync(join(root, '.next/standalone/.next/static'), { recursive: true });
+    writeFileSync(join(root, '.next/standalone/.assets-staged'), '');
+    writeFileSync(
+      join(root, '.next/standalone/public/uploads/persistent.txt'),
+      'persistent upload'
+    );
+    writeFileSync(join(root, '.next/standalone/.next/static/chunk.js'), 'staged chunk');
+    writeFileSync(
+      join(root, '.next/standalone/server.js'),
+      `
+      const fs = require('node:fs');
+      console.log(fs.readFileSync(__dirname + '/public/uploads/persistent.txt', 'utf8'));
+      console.log(fs.readFileSync(__dirname + '/.next/static/chunk.js', 'utf8'));
+    `
+    );
+    expect(
+      execFileSync(process.execPath, [resolve('scripts/start-standalone.mjs')], {
+        cwd: root,
+        encoding: 'utf8',
+      })
+    ).toBe('persistent upload\nstaged chunk\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

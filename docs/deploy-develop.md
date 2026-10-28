@@ -1,83 +1,214 @@
 # Develop continuous deployment
 
-`.github/workflows/deploy-develop.yml` deploys a gated `develop` commit to
-`https://develop.devfathom.com`. The workflow is triggered after the **QA gate**
-workflow completes on `develop`; that workflow contains both the WHA-1125 automated gate and the
-dependent WHA-1132 browser gate. Before deployment, the workflow queries the GitHub Actions API and
-requires a successful QA gate run for the exact commit. A manual run is also allowed, but only when
-dispatched from the `develop` branch and only after the same gate has succeeded.
+`deploy-develop.yml` builds the exact current `develop` SHA after a successful **push** run
+of `.github/workflows/qa.yml`. It verifies workflow ID, path, repository, branch, SHA, successful
+run and successful **WHA-1125 automated gate** and **WHA-1132 browser gate** jobs in that run.
+QA now runs for pushes to develop. A manual deploy from develop uses the same gate; manually
+dispatched QA runs cannot satisfy it (their optional checkout SHA can differ from the run SHA).
+Stale commits are rejected before build and again before upload. Workflow concurrency queues
+deployments; a server `flock` also serializes all activation work, including rollback and cleanup.
 
-The runner checks out that exact commit, installs with Bun 1.4.2, generates Prisma Client, and makes
-the standalone Next build. It uploads an immutable release under `/home/app/releases`, applies
-pending migrations with `/home/app/app.env`, atomically changes the release selected through
-`/home/app/web`, and restarts `devfathom.service`. Both HTTP 200 and 307 are healthy. If the public Caddy endpoint does not become
-healthy, the workflow checks Next directly on `127.0.0.1:3000`; if neither check succeeds, it restores
-the prior application release and restarts the unit. Database migrations are forward-only and are
-not reversed by an application rollback. The active and previous releases plus one additional recent
-release are retained.
+The Ubuntu runner uses Node 22 and Bun 1.4.2, frozen installs, Prisma generation and Next standalone
+build. Module evaluation requires AUTH_SECRET, so the build generates an ephemeral value in memory;
+the dedicated service must supply its own runtime secret. No server credentials are used to build.
+`scripts/deploy/package-develop.sh` packages only standalone output, staged static/public
+assets, startup script, package manifest, frozen lockfile, Prisma schema/migrations and config.
+The public app URL is set to `https://develop.devfathom.com` at build time; any additional
+`NEXT_PUBLIC_*` settings must likewise be configured at build time rather than only in systemd.
+Nested traced `node_modules` are retained; root dependencies, checkout secrets and `.env*` files
+are excluded. Uploads are excluded. Startup skips copies for the packaged `.assets-staged` marker;
+older layouts still copy public/static as before. Build on the same Linux architecture as the host.
 
-## GitHub environment and secrets
+GitHub OIDC credentials upload `develop/<sha>.tar.gz` to S3 and submit `AWS-RunShellScript` to one
+SSM-managed instance. The document executes the reviewed activation script through `runuser -u deploy`;
+download, extraction, production frozen install and migrations all run as deploy. Root only performs
+the user transition; deploy can sudo exactly the dedicated service restart. Prisma and dotenv must
+remain production dependencies, and the locally installed Prisma executable is used without bunx.
+The instance needs registry access for the production install; no build runs there.
 
-Create a protected GitHub environment named `develop`. Add these environment secrets (not repository
-variables):
+The server uses a unique release directory for each attempt. `/home/app/web` is a stable link to
+`/home/app/releases/current`; replacing `current` with `mv -T` atomically changes the release reached
+through web without allowing deploy to modify `/home/app` itself. After migrations, activation
+restarts **only `devfathom-develop.service`** and probes `http://127.0.0.1:3001/` up to twelve times
+(HTTP 200 or 307). Restart failure, unhealthy response or interruption restores the prior link and
+restarts that same unit, then reports failure. Database migrations are forward-only: rollback does
+not undo schema changes. Use backward-compatible expand/contract migrations. Initial deployments
+require an existing healthy predecessor, including its persistent uploads links.
 
-| Secret                    | Value                                                                                                         |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `DEVELOP_SSH_HOST`        | SSH host name or IP address of the develop EC2 instance                                                       |
-| `DEVELOP_SSH_USER`        | Unprivileged deployment account, normally `deploy`                                                            |
-| `DEVELOP_SSH_KEY`         | Private key for that account, including its BEGIN/END lines                                                   |
-| `DEVELOP_SSH_KNOWN_HOSTS` | Pinned `known_hosts` entry for the host (generate it out of band and verify its fingerprint before saving it) |
+The active release and predecessor plus three other newest directories are retained after success
+(about five). Failed attempts are cleaned by a later successful deployment. SSM delivery timeout is
+120 seconds, execution timeout 2400 seconds and polling is bounded to 45 minutes. The runner prints
+terminal SSM stdout/stderr/status and fails for every non-success status or timeout. A runner timeout
+does not prove the remote command stopped: inspect SSM before attempting operator recovery. Never
+enable shell tracing, print environment files or put credentials in SSM parameters/logs.
 
-The workflow writes the key and host entry to mode-0600 files and never prints their contents. Do not
-use an unverified `ssh-keyscan` result from the deployment job: pinning a previously verified host key
-is what protects the connection from interception.
+## GitHub environment
 
-## One-time Ubuntu server setup
+Create a protected environment **develop** and add these **environment secrets**. Restrict deployment
+refs to develop for dispatch and the trusted default branch for workflow_run (GitHub runs that
+workflow on the default-branch ref). If develop is the default, only develop is needed. The inline
+gate independently enforces the actual deploy branch and exact SHA. Protect both trusted refs:
 
-Run these steps as an administrator on the EC2 instance. Substitute the public key paired with
-`DEVELOP_SSH_KEY` for the placeholder. The application account, Bun installation,
-`/home/app/app.env`, Caddy configuration, local Postgres database, and `devfathom.service` are assumed
-to exist already.
+| Secret | Meaning |
+| --- | --- |
+| `AWS_DEPLOY_ROLE_ARN` | Dedicated GitHub OIDC deploy role |
+| `AWS_REGION` | Region containing bucket and managed instance |
+| `DEVELOP_ARTIFACT_BUCKET` | Dedicated private artifact bucket name |
+| `DEVELOP_INSTANCE_ID` | The single develop EC2 managed instance ID |
+
+No SSH keys, inbound SSH or long-lived AWS access keys are required. Protect develop and workflow
+changes through repository review rules. The deploy role can execute arbitrary shell commands as
+root through this SSM document, so workflow/environment protection is a critical trust boundary.
+
+## One-time server setup (administrator, out of band)
+
+These are setup instructions, not commands executed by CI. Use a dedicated develop instance, or
+first confirm no other environment uses `/home/app/web`, `/home/app/releases`, the uploads directory
+or port 3001. Do not replace or restart an existing production/shared service. If those paths are
+shared, isolate that service first during a separately approved maintenance window. Install AWS CLI,
+SSM Agent, Node 22, Bun 1.4.2 for deploy, tar, curl, util-linux (flock/runuser) and sudo. Ensure the
+SSM agent has outbound HTTPS to SSM/ssmmessages and the instance can reach S3 and the package registry.
+No inbound deployment ports are necessary.
+
+Create users `app` and `deploy` if absent. Add deploy to group app. `/home/app` must allow deploy
+traversal but remain administrator-owned and not writable by deploy. For a fresh isolated host:
 
 ```bash
-sudo apt-get update
-sudo apt-get install --yes acl
-sudo adduser --disabled-password --gecos '' deploy
-sudo install -d -m 700 -o deploy -g deploy /home/deploy/.ssh
-sudo sh -c "printf '%s\n' 'ssh-ed25519 REPLACE_WITH_VERIFIED_DEPLOY_PUBLIC_KEY github-develop-deploy' > /home/deploy/.ssh/authorized_keys"
-sudo chown deploy:deploy /home/deploy/.ssh/authorized_keys
-sudo chmod 600 /home/deploy/.ssh/authorized_keys
+sudo usermod -aG app deploy
+sudo chown root:app /home/app
+sudo chmod 0750 /home/app
+sudo install -d -o deploy -g app -m 2750 /home/app/releases
+sudo install -d -o root -g app -m 0750 /home/app/shared
+sudo install -d -o app -g app -m 2770 /home/app/shared/uploads
+sudo install -d -o root -g deploy -m 0750 /etc/devfathom
+# Provision the environment securely, then set its ownership/mode. Never echo its contents.
+sudo chown root:deploy /etc/devfathom/develop.env
+sudo chmod 0640 /etc/devfathom/develop.env
+# Provision a separate runtime-only file, without the migration URL.
+sudo chown root:root /etc/devfathom/develop-runtime.env
+sudo chmod 0600 /etc/devfathom/develop-runtime.env
+sudo ln -s /etc/devfathom/develop.env /home/app/develop.env
+```
 
-# The deploy account owns release storage. /home/app/web remains a stable,
-# administrator-owned link; deploy atomically replaces releases/current.
-sudo install -d -m 755 -o deploy -g app /home/app/releases
-sudo setfacl -m u:deploy:r /home/app/app.env
+Use shell-compatible quoted assignments in `develop.env` (no command substitutions) for
+develop-only `MIGRATION_DATABASE_URL` and any migration tooling settings. This file is available to
+deploy, not the app account. Put `NODE_ENV=production`, `PORT=3001`, `HOSTNAME=127.0.0.1`, runtime
+`DATABASE_URL` and develop auth/application settings in `develop-runtime.env` using systemd-compatible
+assignments. Do not put the migration URL in the runtime file. Use an isolated develop database and
+identity; the app database role stays NOSUPERUSER NOBYPASSRLS. Systemd reads the root-owned runtime
+file before changing user. The migration URL is elevated only as far as required for the develop
+schema. Never reuse production environment files. Keep application logs free of credentials.
 
-# Convert the existing plain deployment into the initial rollback release.
-sudo systemctl stop devfathom.service
-sudo mv /home/app/web /home/app/releases/initial
-sudo chown -R deploy:app /home/app/releases/initial
+Before first activation, use this packager to stage a known healthy develop release (including
+`.assets-staged`) at `/home/app/releases/initial`, owned deploy:app with group read/traverse permissions. Install its frozen production dependencies
+as deploy. Copy existing develop uploads into shared storage once, preserving files and setting group
+app, directories 2770 and files 0660; use a maintenance window so uploads cannot change during copying.
+Link both `initial/.next/standalone/public/uploads` and `initial/public/uploads` to shared storage.
+Remove only the old empty uploads directories after verifying the copy. Then create:
+
+```bash
 sudo -u deploy ln -s /home/app/releases/initial /home/app/releases/current
 sudo ln -s /home/app/releases/current /home/app/web
-sudo systemctl start devfathom.service
-
-# Permit only the service restart needed by the workflow.
-printf '%s\n' 'deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart devfathom.service' | sudo tee /etc/sudoers.d/devfathom-deploy
-sudo chmod 440 /etc/sudoers.d/devfathom-deploy
-sudo visudo -cf /etc/sudoers.d/devfathom-deploy
 ```
 
-Keep `/home/app/app.env` compatible with both systemd `EnvironmentFile` syntax and POSIX shell
-assignment syntax (one quoted `NAME=value` assignment per line, with no command substitutions). The
-read-only ACL lets the deployment process export those values for Prisma without printing them. Do
-not grant unrestricted `systemctl`, a shell, or general passwordless sudo. Finally, confirm that
-`devfathom.service` retains this layout:
+Create `/etc/systemd/system/devfathom-develop.service`:
 
 ```ini
+[Unit]
+Description=DevFathom develop workspace
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
 User=app
+Group=app
 WorkingDirectory=/home/app/web
-EnvironmentFile=/home/app/app.env
-ExecStart=/home/app/.bun/bin/bun scripts/start-standalone.mjs
+EnvironmentFile=/etc/devfathom/develop-runtime.env
+ExecStart=/usr/bin/node scripts/start-standalone.mjs
+UMask=0007
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-Caddy should continue proxying `develop.devfathom.com` to `127.0.0.1:3000`.
+The app needs read access to releases and write access to shared uploads. The 0007 service umask
+and setgid uploads directory preserve app-group write access for newly created uploads. Deploy must
+not own shared uploads exclusively; group app is the persistence contract across release switches.
+
+Permit exactly this command in `/etc/sudoers.d/devfathom-develop` (root-owned mode 0440), validating
+with `visudo -cf` before use:
+
+```sudoers
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart devfathom-develop.service
+```
+
+As administrator, run `systemctl daemon-reload`, enable/start only devfathom-develop.service, and
+verify localhost:3001 before enabling CI. Configure the develop hostname's reverse proxy to port
+3001; leave every other unit, port and environment untouched. A rollback restart failure is an
+operator incident, reported in SSM output.
+
+## AWS trust and least-privilege policies
+
+Register GitHub's `https://token.actions.githubusercontent.com` OIDC provider with audience
+`sts.amazonaws.com`. Replace ACCOUNT, OWNER, REPO, REGION, INSTANCE and BUCKET below. The role trust
+must use exact environment subject and audience, not a repository wildcard:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": {"Federated": "arn:aws:iam::ACCOUNT:oidc-provider/token.actions.githubusercontent.com"},
+    "Action": "sts:AssumeRoleWithWebIdentity",
+    "Condition": {"StringEquals": {
+      "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+      "token.actions.githubusercontent.com:sub": "repo:OWNER/REPO:environment:develop"
+    }}
+  }]
+}
+```
+
+Attach this permissions policy to the GitHub role. GetCommandInvocation does not support resource
+scoping, so its read-only wildcard is separate from the narrowly scoped SendCommand statement.
+The runner does not need S3 GetObject, ListBucket, SSH, IAM mutation or other-instance permissions.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Effect": "Allow", "Action": "s3:PutObject", "Resource": "arn:aws:s3:::BUCKET/develop/*"},
+    {"Effect": "Allow", "Action": "ssm:SendCommand", "Resource": [
+      "arn:aws:ec2:REGION:ACCOUNT:instance/INSTANCE",
+      "arn:aws:ssm:REGION::document/AWS-RunShellScript"
+    ]},
+    {"Effect": "Allow", "Action": "ssm:GetCommandInvocation", "Resource": "*"}
+  ]
+}
+```
+
+The instance profile needs the SSM managed-instance core permissions plus only
+`s3:GetObject` on `arn:aws:s3:::BUCKET/develop/*` for artifact access; do not grant it bucket writes.
+Block all public bucket access, require TLS, enable encryption and bucket versioning, and configure
+an artifact lifecycle appropriate to rollback/audit retention. Use default S3 encryption (SSE-S3),
+or add narrowly scoped KMS encrypt/decrypt permissions if choosing a customer-managed key.
+This deployment does not modify Azure infrastructure or contact a host through SSH.
+
+## Local regression checks
+
+With a local-only DATABASE_URL set without printing it:
+
+```bash
+bunx vitest run tests/deploy-develop.test.ts tests/start-standalone.test.ts tests/production-deployment-contract.test.ts
+shellcheck scripts/deploy/*.sh
+actionlint .github/workflows/deploy-develop.yml .github/workflows/qa.yml
+scripts/deploy/package-develop.sh . /tmp/develop-dry-run.tar.gz
+```
+
+The last command needs an existing local standalone build. The packaging regression also performs
+a complete fixture-based dry run, including nested dependencies, secret exclusion and staged assets.
+Activation tests mock AWS, systemctl and health probes; they never contact a server.
