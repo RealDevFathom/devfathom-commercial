@@ -21,7 +21,9 @@ The hardening report below is historical audit context.
 - `pharmacy:dispense`, `pharmacy:safety` (including the controlled-drugs register)
   and `pharmacy:catalogue-review` require explicit grants. No default role grant or
   wildcard ALLOW grants these sensitive actions; wildcard DENY still revokes them.
-  See [capability matching](./src/lib/abac/capabilities.ts).
+  See [capability matching](./src/lib/abac/capabilities.ts) and the
+  [authorization evaluator](./src/lib/abac/index.ts). Explicit grants in a named
+  pharmacy role are distinct from the legacy default-role fallback.
 - Production rate limiting uses shared PostgreSQL `rate_limit_buckets` with
   HMAC-keyed identifiers, rather than storing raw client IP/email keys. See
   [rate-limit.ts](./src/lib/rate-limit.ts).
@@ -91,7 +93,7 @@ Identity was a client-supplied query param; anyone could spoof presence, read/in
 
 ---
 
-## Intentional behavior changes (please confirm these match product intent)
+## Historical intentional behavior changes
 
 - **Project/board/task detail is now member-scoped.** Employees who are not members of a project can no longer open its board, tasks, or member list (this previously leaked member emails for arbitrary projects). If you want company-wide project _visibility_, relax the read guards — but keep the write/delete guards.
 - **Private chat channels / DMs** are now strictly members-only, including for admins.

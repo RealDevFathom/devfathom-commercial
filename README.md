@@ -52,7 +52,9 @@ FBR integrator is connected yet; sandbox results do not establish fiscal complia
 Card/wallet payments require a certified adapter; keep sandbox admission off in
 production. Refill reminders and owner digests must keep WhatsApp sending in mock
 mode until the owner approves the sender and templates. The owner-digest WhatsApp
-channel is currently a non-sending provider seam.
+channel is currently a non-sending provider seam. See the [fiscal adapter](./src/lib/pharmacy/fiscal.ts),
+[payment admission guard](./src/lib/pharmacy/payment-sandbox-admission.ts) and
+[WhatsApp provider](./src/lib/pharmacy/whatsapp/provider.ts) for these boundaries.
 
 ### 🍽️ Restaurant — `src/app/(app)/restaurant`, `src/app/(terminal)`
 
@@ -117,23 +119,23 @@ Front-desk operations (reservations, check-in/out, folios) are not built yet.
 
 ## Tech stack
 
-| Area         | Choice                                          |
-| ------------ | ----------------------------------------------- |
-| Framework    | Next.js 16 (App Router) · React 19              |
-| API          | tRPC v11 · TanStack Query                       |
-| Data         | Prisma 7 · PostgreSQL (RLS)                     |
-| Auth         | NextAuth v5 · TOTP · SAML/OIDC · SCIM           |
-| Styling      | Tailwind CSS v4 · shadcn/ui on `@base-ui/react` |
-| AI           | Vercel AI SDK                                   |
-| Realtime     | Ably (optional)                                 |
-| Runtime / PM | Bun **1.4.2**                                   |
-| Tests        | Vitest · Playwright                             |
+| Area         | Choice                                              |
+| ------------ | --------------------------------------------------- |
+| Framework    | Next.js 16 (App Router) · React 19                  |
+| API          | tRPC v11 · TanStack Query                           |
+| Data         | Prisma 7 · PostgreSQL (RLS)                         |
+| Auth         | NextAuth v5 · TOTP · SAML/OIDC · SCIM               |
+| Styling      | Tailwind CSS v4 · shadcn/ui on `@base-ui/react`     |
+| AI           | Vercel AI SDK                                       |
+| Realtime     | Ably chat · self-hosted LiveKit meetings (optional) |
+| Runtime / PM | Bun **1.4.2**                                       |
+| Tests        | Vitest · Playwright                                 |
 
 ## Local setup
 
 Requires Bun 1.4.2 and PostgreSQL. Full details: [docs/LOCAL_SETUP.md](./docs/LOCAL_SETUP.md).
 
-1. Copy `.env.example` to `.env` and fill in values. Minimum:
+1. Copy `.env.example` to `.env.local` and fill in values. Minimum:
    `DATABASE_URL` (RLS-bound app role), `MIGRATION_DATABASE_URL`,
    `EXTENSION_ADMIN_DATABASE_URL`, `AUTH_SECRET`, `AUTH_URL`,
    `NEXT_PUBLIC_APP_URL`, `PLATFORM_BASE_DOMAIN`, `PLATFORM_ENCRYPTION_KEY`,
@@ -141,7 +143,7 @@ Requires Bun 1.4.2 and PostgreSQL. Full details: [docs/LOCAL_SETUP.md](./docs/LO
    Set `EXTENSION_ADMIN_DATABASE_URL` to the extension-owner/admin connection used
    by `prisma/prepare-extensions.ts`: an extension object owner, a superuser, or
    a role with explicit SET privilege on every extension object owner.
-   Never commit `.env`.
+   Never commit `.env` or `.env.local`.
 
    Before seeding, set `SEED_PASSWORD` (or `ADMIN_PASSWORD` as its fallback) for
    seeded tenant users. If `ADMIN_EMAIL` is set, as in the template,
@@ -162,7 +164,9 @@ bun run db:seed
 bun run dev
 ```
 
-`db:push` is intentionally disabled — use migrations.
+`db:push` is intentionally disabled — use migrations. Before starting the app,
+grant its runtime role access to migrated tables and sequences as shown in
+[local setup](./docs/LOCAL_SETUP.md#3-install-and-initialize).
 
 For AI, set `AI_PROVIDER=groq`, `google` or `vertex`, a provider-specific `AI_MODEL`
 (no runtime default), and the corresponding credentials in `.env.example`.
@@ -171,6 +175,9 @@ For durable uploads, use `STORAGE_ADAPTER=s3` with `S3_UPLOADS_BUCKET` and
 uploads; `local` is permitted only in development/test. The legacy `azure` adapter
 and both `AZURE_STORAGE_*` variables are deprecated (Azure), not for new deployments.
 These selection rules are implemented in [storage.ts](./src/lib/storage.ts).
+For optional self-hosted meetings, configure `NEXT_PUBLIC_LIVEKIT_URL`
+(for example `wss://livekit.example.com`) and server-only `LIVEKIT_API_KEY` and
+`LIVEKIT_API_SECRET`. The public URL is fixed at build time.
 
 Open `http://devfathom.localhost:3000` for the tenant workspace and
 `http://admin.localhost:3000/platform` for the control desk.
