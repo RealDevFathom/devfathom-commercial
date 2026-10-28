@@ -32,6 +32,7 @@ import {
   dispatchTransfer,
   nearExpiryBoard,
   quarantinePart,
+  releaseQuarantine,
   recallTrace,
   receiveTransferLine,
   reserveSupplierClaim,
@@ -1030,6 +1031,7 @@ export const pharmacyInventoryRouter = router({
           reason: z.string().trim().min(1).max(500),
           evidenceRef: z.string().trim().min(1).max(500),
           idempotencyKey: z.string().trim().min(1).max(200),
+          disposition: z.enum(['AVAILABLE', 'QUARANTINE']).optional(),
         })
         .strict()
     )
@@ -1061,6 +1063,29 @@ export const pharmacyInventoryRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) =>
           quarantinePart(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  releaseQuarantine: inventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          inventoryLotId: z.string().min(1),
+          stockLocationId: z.string().min(1),
+          units: z.number().int().positive(),
+          reason: z.string().trim().min(1).max(500),
+          idempotencyKeyPrefix: z.string().trim().min(1).max(160),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          releaseQuarantine(txDb(tx), await scopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         domainError(error);

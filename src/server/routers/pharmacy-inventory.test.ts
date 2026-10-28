@@ -418,6 +418,28 @@ describe('#355 — remaining stock mutations require pharmacy:inventory', () => 
     ],
     ['acknowledgeSignal', { branchId: 'branch_a', signalId: 'signal_1' }],
     [
+      'quarantinePart',
+      {
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        reason: 'Manual recall hold',
+        idempotencyKeyPrefix: 'quarantine-1',
+      },
+    ],
+    [
+      'releaseQuarantine',
+      {
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        reason: 'Recall cleared',
+        idempotencyKeyPrefix: 'release-1',
+      },
+    ],
+    [
       'draftExpiryMarkdown',
       {
         branchId: 'branch_a',
