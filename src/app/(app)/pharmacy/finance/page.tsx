@@ -584,7 +584,12 @@ export default async function PharmacyFinancePage({
         </SectionCard>
       </div>
       <SectionCard title="Recent transactions" eyebrow="Balanced shared journal">
-        <div className="overflow-x-auto">
+        <div
+          className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-ring [&_[data-slot=table-container]]:overflow-visible"
+          role="region"
+          aria-label="Recent transactions"
+          tabIndex={0}
+        >
           {workspace.transactions.length ? (
             <Table>
               <TableHeader>
