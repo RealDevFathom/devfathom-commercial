@@ -43,6 +43,10 @@ ENV NEXT_BUILD_SKIP_TYPECHECK=1 \
 ARG NEXT_PUBLIC_APP_URL=
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 RUN AUTH_SECRET=container-build-only node node_modules/next/dist/bin/next build
+# Runtime scripts resolve selected modules through the @/* alias, so the runner
+# still needs src. Prepare that copy in the builder: pruning before the
+# cross-stage COPY keeps test content out of the runner's image layers entirely.
+RUN node scripts/prune-runtime-source.mjs src
 
 FROM oven/bun:1.4.2-slim AS runner
 WORKDIR /app
