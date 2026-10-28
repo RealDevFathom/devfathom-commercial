@@ -32,5 +32,7 @@ jobs:
             exit 1
           fi
       - uses: actions/checkout@v7
+      - name: Verify the Docker build contract
+        run: node --test scripts/check-docker-build-contract.test.mjs && node scripts/check-docker-build-contract.mjs
       - name: Build the image
         run: docker build --progress=plain .
