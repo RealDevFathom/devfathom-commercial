@@ -6,6 +6,14 @@
 
 ---
 
+## Reporting a vulnerability
+
+Submit a private report through
+[GitHub private vulnerability reporting](https://github.com/RealDevFathom/devfathom-commercial/security/advisories/new).
+Include the affected feature or version, impact, and steps to reproduce with
+redacted evidence. Do not include credentials or open a public issue.
+The hardening report below is historical audit context.
+
 ## ⚠️ Action required by an operator (cannot be done in code)
 
 1. **Rotate the four live credentials** that were sitting in plaintext `.env` (they were never committed to git, but treat them as compromised):
@@ -15,7 +23,7 @@
    - `BREVO_API_KEY` — roll in the Brevo dashboard.
    Then store them in a secret manager / Vercel encrypted env vars, not a file on disk. `.env.example` documents the surface with placeholders only.
 2. **Runtime-test the realtime socket server** end-to-end (see Socket section) — its auth rebuild can't be unit-verified.
-3. Set **`SEED_PASSWORD`** before running `prisma/seed.ts` (hardcoded demo password removed).
+3. Set **`SEED_PASSWORD`** (or **`ADMIN_PASSWORD`** as its fallback) before running `prisma/seed.ts` (hardcoded demo password removed). If `ADMIN_EMAIL` is set, `ADMIN_PASSWORD` is also required for the separate workspace administrator.
 
 ---
 

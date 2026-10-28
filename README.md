@@ -76,7 +76,7 @@ Currently setup/configuration only, under **Hotel settings**:
 
 - **Property** profile and staff property assignments
 - **Rooms** — room types, rooms, beds, room blocks and room status events
-- **Rates & meal plans**, **extras**
+- **Meal plans**, **extras**
 - **Function spaces** and space bookings
 - **Guest journey** templates
 
@@ -125,7 +125,18 @@ Requires Bun 1.4.2 and PostgreSQL. Full details: [docs/LOCAL_SETUP.md](./docs/LO
    `EXTENSION_ADMIN_DATABASE_URL`, `AUTH_SECRET`, `AUTH_URL`,
    `NEXT_PUBLIC_APP_URL`, `PLATFORM_BASE_DOMAIN`, `PLATFORM_ENCRYPTION_KEY`,
    `CAMERA_CREDENTIAL_KEY`. AI, email, storage and realtime keys are optional.
+   Set `EXTENSION_ADMIN_DATABASE_URL` to the extension-owner/admin connection used
+   by `prisma/prepare-extensions.ts`: an extension object owner, a superuser, or
+   a role with explicit SET privilege on every extension object owner.
    Never commit `.env`.
+
+   Before seeding, set `SEED_PASSWORD` (or `ADMIN_PASSWORD` as its fallback) for
+   seeded tenant users. If `ADMIN_EMAIL` is set, as in the template,
+   `ADMIN_PASSWORD` is also required for the separate workspace administrator.
+   For control-desk access, set both `PLATFORM_ADMIN_EMAIL` and
+   `PLATFORM_ADMIN_PASSWORD` before seeding; this creates or updates the platform
+   administrator, including its password on each seed run. Leaving both unset
+   skips that bootstrap; setting only one fails.
 2. Install and prepare the database:
 
 ```bash
@@ -155,6 +166,13 @@ bun run test:e2e:pharmacy-counter
 bun run test:e2e:restaurant-integrated
 ```
 
+Database tests need dedicated, migrated, disposable test databases; do not use
+an application database. `test:rls` requires `TEST_DATABASE_URL` and never falls
+back to `DATABASE_URL`. Use a local database with a role able to create and grant
+roles for that verifier. Vitest DB suites have their own URL and role
+requirements; some skip when these are missing, so a unit-test pass alone does
+not establish database coverage.
+
 **Zero-skip rule:** a PR must not add or leave skipped tests (`.skip`, `.todo`,
 conditional skips). Fix or delete the test instead.
 
@@ -177,8 +195,9 @@ feature branch → develop → staging → main
 
 ## Security
 
-Dependabot, secret scanning and push protection are enabled. Report
-vulnerabilities **privately** to the maintainers — see [SECURITY.md](./SECURITY.md).
+Report vulnerabilities **privately** through
+[GitHub private vulnerability reporting](https://github.com/RealDevFathom/devfathom-commercial/security/advisories/new)
+— see [SECURITY.md](./SECURITY.md) for reporting guidance.
 Do not open public issues for security problems.
 
 ## More docs
