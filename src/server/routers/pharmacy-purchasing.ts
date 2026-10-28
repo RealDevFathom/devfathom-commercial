@@ -328,6 +328,13 @@ const supplierFollowUpInput = purchasingReadBoundsSchema.safeExtend({ branchId }
 
 /** Both bounded and legacy financial readers enforce access before reading their source rows. */
 async function supplierFollowUpScope(ctx: TRPCContext, branch: string) {
+  const actorId = ctx.session?.user?.id;
+  if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  const active = await ctx.db.user.findUnique({
+    where: { id: actorId, status: 'ACTIVE' },
+    select: { id: true },
+  });
+  if (!active) throw new TRPCError({ code: 'FORBIDDEN' });
   // Direct subrouter callers have no pharmacyPurchasing path prefix for the shared module lookup.
   if (!hasModule(ctx.entitlements, 'pharmacy-procurement')) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy procurement access required.' });
@@ -980,13 +987,12 @@ const purchasingRouter = router({
             receivedByUserId: scope.actorId,
           });
         }
-        if (
-          input.purchaseOrderId &&
-          !(await ctx.db.pharmacyPurchaseOrder.findFirst({
+        if (input.purchaseOrderId) {
+          const order = await ctx.db.pharmacyPurchaseOrder.findFirst({
             where: { id: input.purchaseOrderId, supplierId: input.supplierId },
-          }))
-        ) {
-          throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+          });
+          if (!order) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+          if (order.branchId) await receivingScope(ctx, order.branchId);
         }
 
         const ownOrderLines = input.purchaseOrderId
@@ -1144,6 +1150,18 @@ const purchasingRouter = router({
       const scope = await receivingScope(ctx, input.branchId);
       // Lockout counters commit even when the PIN is refused. Stock posting is
       // a second transaction, so a refused PIN never leaves a half-posted receipt.
+      // Existing drafts also need the referenced order's branch grant before
+      // posting can move that order to RECEIVING.
+      const receipt = await ctx.db.pharmacyGoodsReceipt.findFirst({
+        where: {
+          id: input.goodsReceiptId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+        },
+        select: { purchaseOrder: { select: { branchId: true } } },
+      });
+      if (receipt?.purchaseOrder?.branchId)
+        await receivingScope(ctx, receipt.purchaseOrder.branchId);
       const attempt = await ctx.db.$transaction((tx) =>
         verifyControlledPurchaseWitness(txDb(tx), scope, {
           goodsReceiptId: input.goodsReceiptId,

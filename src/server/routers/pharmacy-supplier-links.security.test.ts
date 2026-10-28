@@ -34,6 +34,7 @@ function fixture() {
     pharmacyBranch: model(),
     pharmacySupplier: model(),
     pharmacySupplierRelationship: model(),
+    pharmacyPurchaseOrder: model(),
     pharmacySupplierActionLink: model(),
     pharmacySupplierSubmission: model(),
     pharmacySupplierSubmissionApproval: model(),
@@ -120,6 +121,14 @@ describe.each(Object.keys(actions) as (keyof typeof actions)[])(
       expect(f.db.pharmacySupplierActionLink.update).not.toHaveBeenCalled();
       expect(f.db.pharmacySupplierSubmissionApproval.create).not.toHaveBeenCalled();
     });
+    it('rejects an inactive or invisible branch despite an assignment', async () => {
+      f.db.pharmacyBranch.findFirst.mockResolvedValue(null);
+      await expect(actions[name]()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      for (const delegate of Object.values(f.db)) {
+        if ('create' in delegate) expect(delegate.create).not.toHaveBeenCalled();
+        if ('update' in delegate) expect(delegate.update).not.toHaveBeenCalled();
+      }
+    });
   }
 );
 it('creates a relationship only for the assigned tenant branch and tenant supplier', async () => {
@@ -151,4 +160,65 @@ it('does not revoke an invisible tenant link', async () => {
   f.db.pharmacySupplierActionLink.findFirst.mockResolvedValue(null);
   await expect(actions.revoke()).rejects.toMatchObject({ code: 'NOT_FOUND' });
   expect(f.db.pharmacySupplierActionLink.update).not.toHaveBeenCalled();
+});
+
+it('issues a signed link for an assigned procurement actor and matching supplier order', async () => {
+  vi.stubEnv('AUTH_SECRET', 'supplier-link-security-test-key');
+  try {
+    f.db.pharmacySupplierRelationship.findFirst.mockResolvedValue({ supplierId: 'supplier' });
+    f.db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'order', supplierId: 'supplier' });
+    const result = await actions.issue();
+    expect(result?.token).toEqual(expect.any(String));
+    expect(f.db.pharmacySupplierActionLink.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org',
+        branchId: 'branch',
+        createdByUserId: 'actor',
+        purchaseOrderId: 'order',
+        supplierRelationshipId: 'relationship',
+      }),
+    });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it('records manual evidence for the assigned branch', async () => {
+  f.db.pharmacySupplierActionLink.findFirst.mockResolvedValue({
+    id: 'link',
+    organizationId: 'org',
+    branchId: 'branch',
+    purchaseOrder: { lines: [] },
+  });
+  await actions.recordManual();
+  expect(f.db.pharmacySupplierSubmission.create).toHaveBeenCalledWith({
+    data: expect.objectContaining({
+      organizationId: 'org',
+      branchId: 'branch',
+      actionLinkId: 'link',
+      source: 'PHONE',
+    }),
+  });
+});
+
+it('approves a proposal for the assigned tenant branch', async () => {
+  f.db.pharmacySupplierSubmission.findFirst.mockResolvedValue({ id: 'submission' });
+  await actions.approveProposal();
+  expect(f.db.pharmacySupplierSubmissionApproval.create).toHaveBeenCalledWith({
+    data: expect.objectContaining({
+      organizationId: 'org',
+      branchId: 'branch',
+      actorUserId: 'actor',
+      submissionId: 'submission',
+      approved: true,
+    }),
+  });
+});
+
+it('rechecks current authorization when the same caller is reused', async () => {
+  await actions.createRelationship();
+  f.db.pharmacySupplierRelationship.create.mockClear();
+  f.db.user.findUnique.mockResolvedValue(null);
+  await expect(actions.createRelationship()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(f.db.pharmacySupplierRelationship.create).not.toHaveBeenCalled();
 });

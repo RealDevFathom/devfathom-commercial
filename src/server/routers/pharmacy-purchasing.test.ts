@@ -549,11 +549,12 @@ describe.each(['purchaseReturns', 'supplierCredits'] as const)(
       expect(source().findMany.mock.lastCall![0]).not.toHaveProperty('take');
     });
 
-    it.each(['permission', 'branch', 'module', 'actor'])(
+    it.each(['permission', 'branch', 'module', 'actor', 'inactive'])(
       'denies %s before source reads for both modes',
       async (reason) => {
         if (reason === 'permission') mocks.can.mockResolvedValue(false);
         if (reason === 'branch') db.pharmacyBranch.findFirst.mockResolvedValue(null);
+        if (reason === 'inactive') db.user.findUnique.mockResolvedValue(null);
         const reader = caller(
           reason === 'actor' ? '' : 'user_a',
           reason === 'module' ? [] : ['pharmacy-procurement']
@@ -567,6 +568,32 @@ describe.each(['purchaseReturns', 'supplierCredits'] as const)(
         if (reason !== 'branch') expect(db.pharmacyBranch.findFirst).not.toHaveBeenCalled();
       }
     );
+
+    it('preserves assigned financial-only readers without a procurement grant', async () => {
+      db.user.findUnique.mockResolvedValue({
+        id: 'user_a',
+        organizationRole: { permissions: [] },
+        permissionOverrides: [],
+      });
+      await expect(caller()[endpoint]({ branchId: 'branch_a' })).resolves.toEqual([]);
+      expect(source().findMany).toHaveBeenCalled();
+    });
+
+    it('rechecks deactivation and assignment removal on a reused financial caller', async () => {
+      const reader = caller();
+      await reader[endpoint]({ branchId: 'branch_a' });
+      source().findMany.mockClear();
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+      await expect(reader[endpoint]({ branchId: 'branch_a' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
+      db.user.findUnique.mockResolvedValue(null);
+      await expect(reader[endpoint]({ branchId: 'branch_a' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(source().findMany).not.toHaveBeenCalled();
+    });
 
     it.each([
       { organizationId: 'org_other' },
@@ -989,6 +1016,45 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'other_branch' }]);
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an assigned receipt that references an unassigned order branch', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      branchId: 'branch_b',
+    });
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['branch_a', 'branch_b', null])(
+    'preserves receipt creation for an accessible order branch %s',
+    async (orderBranch) => {
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([
+        { branchId: 'branch_a' },
+        { branchId: 'branch_b' },
+      ]);
+      db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+        id: 'po_a',
+        supplierId: 'supplier_a',
+        branchId: orderBranch,
+      });
+      await caller().createGoodsReceipt(RECEIPT);
+      expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalled();
+    }
+  );
+
+  it('refuses an existing draft referencing an unassigned order before posting or witness side effects', async () => {
+    db.pharmacyGoodsReceipt.findFirst.mockResolvedValue({
+      purchaseOrder: { branchId: 'branch_b' },
+    });
+    await expect(
+      caller().postGoodsReceipt({ branchId: 'branch_a', goodsReceiptId: 'receipt' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
+    expect(db.pharmacyGoodsReceipt.update).not.toHaveBeenCalled();
   });
 
   it('derives canonical units and the landed unit cost instead of trusting the payload', async () => {
