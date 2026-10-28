@@ -1,3 +1,5 @@
+import { authorizeSoloApproval } from '../solo-approval';
+import { can } from '@/lib/abac';
 import 'server-only';
 
 /**
@@ -598,9 +600,28 @@ function abs(value: bigint): bigint {
  * or any exception is still open. Co-authored like INV-06's count approval: the
  * pharmacist who opened the session cannot also be the one who signs it off.
  */
-export async function signOffOpeningSession(db: ScopedDb, scope: LedgerScope, sessionId: string) {
+export async function signOffOpeningSession(
+  db: ScopedDb,
+  scope: LedgerScope,
+  sessionId: string,
+  pin?: string
+) {
   const session = await requireSession(db, scope, sessionId, ['POSTED']);
-  if (session.createdByActorId === scope.actorId) {
+  if (
+    session.createdByActorId === scope.actorId &&
+    (!(await can(
+      { id: scope.actorId, role: 'EMPLOYEE', organizationId: scope.organizationId },
+      'pharmacy:inventory',
+      undefined,
+      { db }
+    )) ||
+      !(await authorizeSoloApproval(
+        db,
+        scope,
+        { type: 'PharmacyOpeningSession', id: session.id },
+        pin
+      )))
+  ) {
     throw new PharmacyOpeningError('COAUTH_REQUIRED');
   }
 

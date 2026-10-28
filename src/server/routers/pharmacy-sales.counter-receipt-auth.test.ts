@@ -609,6 +609,7 @@ describe('counter receipt authorization', () => {
     const inactive = fixture(dispense);
     inactive.db.user.findUnique.mockResolvedValue({
       status: 'INACTIVE',
+      organization: { vertical: 'PHARMACY' },
       role: 'EMPLOYEE',
       organizationId: 'org-a',
       organizationRole: { organizationId: 'org-a', isSystem: false, permissions: dispense },

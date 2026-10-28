@@ -19,7 +19,7 @@ const ORG_A = `org_wha1191_a_${suffix}`;
 // suite silently conflicts with the rows the first one left behind.
 const BRANCH_A = `branch_a_${suffix}`;
 
-const ACTOR = 'user_pharmacist';
+const ACTOR = `user_pharmacist_${suffix}`;
 
 const NOW = new Date('2026-09-02T09:00:00.000Z');
 const LATER = new Date('2027-10-01T00:00:00.000Z');

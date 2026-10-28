@@ -2,7 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { DEFAULT_MATERIALITY_THRESHOLD, missingAttributes } from './opening-stock';
+const approval = vi.hoisted(() => ({ authorize: vi.fn(), can: vi.fn() }));
+vi.mock('../solo-approval', () => ({ authorizeSoloApproval: approval.authorize }));
+vi.mock('@/lib/abac', () => ({ can: approval.can }));
+import {
+  DEFAULT_MATERIALITY_THRESHOLD,
+  missingAttributes,
+  signOffOpeningSession,
+} from './opening-stock';
 
 /** A line with every required attribute present. */
 function completeLine() {
@@ -77,5 +84,58 @@ describe('D05 materiality threshold default', () => {
       thresholdMinor: BigInt(0),
       thresholdUnits: 0,
     });
+  });
+});
+
+describe('opening stock solo sign-off', () => {
+  const scope = { organizationId: 'org', branchId: 'branch', actorId: 'owner' };
+  function fixture() {
+    return {
+      pharmacyOpeningSession: {
+        findFirst: vi.fn(async () => ({
+          id: 'session',
+          status: 'POSTED',
+          createdByActorId: 'owner',
+        })),
+        update: vi.fn(async ({ data }: { data: { status: string; signedOffBy: string } }) => data),
+      },
+      pharmacyMaterialityThreshold: { findFirst: vi.fn(async () => null) },
+      pharmacyOpeningStockLine: { findMany: vi.fn(async () => []) },
+      pharmacyOpeningException: { count: vi.fn(async () => 0) },
+    };
+  }
+  it('requires authorized solo PIN proof before self sign-off', async () => {
+    const db = fixture();
+    approval.can.mockResolvedValue(true);
+    approval.authorize.mockResolvedValue(false);
+    await expect(signOffOpeningSession(db as never, scope, 'session')).rejects.toMatchObject({
+      reason: 'COAUTH_REQUIRED',
+    });
+    expect(db.pharmacyOpeningSession.update).not.toHaveBeenCalled();
+    approval.authorize.mockResolvedValue(true);
+    await expect(
+      signOffOpeningSession(db as never, scope, 'session', '1234')
+    ).resolves.toMatchObject({ status: 'SIGNED_OFF', signedOffBy: 'owner' });
+    expect(approval.authorize).toHaveBeenLastCalledWith(
+      db,
+      scope,
+      { type: 'PharmacyOpeningSession', id: 'session' },
+      '1234'
+    );
+  });
+  it('keeps explicit DENY and unresolved exceptions stronger than a valid PIN', async () => {
+    const db = fixture();
+    approval.can.mockResolvedValue(false);
+    approval.authorize.mockClear().mockResolvedValue(true);
+    await expect(
+      signOffOpeningSession(db as never, scope, 'session', '1234')
+    ).rejects.toMatchObject({ reason: 'COAUTH_REQUIRED' });
+    expect(approval.authorize).not.toHaveBeenCalled();
+    approval.can.mockResolvedValue(true);
+    db.pharmacyOpeningException.count.mockResolvedValue(1);
+    await expect(
+      signOffOpeningSession(db as never, scope, 'session', '1234')
+    ).rejects.toMatchObject({ reason: 'OPEN_EXCEPTIONS' });
+    expect(db.pharmacyOpeningSession.update).not.toHaveBeenCalled();
   });
 });
