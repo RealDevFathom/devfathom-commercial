@@ -61,6 +61,7 @@ function makeDb() {
     pharmacyDebitNote: model(),
     pharmacySupplierCredit: model(),
     pharmacyBranch: model(),
+    pharmacyStockLocation: model(),
     pharmacyBranchAssignment: model(),
     user: model(),
     medicineBarcode: model(),
@@ -127,6 +128,7 @@ beforeEach(() => {
   db = makeDb();
   mocks.can.mockReset().mockResolvedValue(true);
   db.user.findUnique.mockResolvedValue({
+    status: 'ACTIVE',
     organizationRole: {
       permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
     },
@@ -370,6 +372,7 @@ describe('procurement write authorization', () => {
     'denies $procedure to a same-tenant member with only an unrelated capability',
     async ({ act }) => {
       db.user.findUnique.mockResolvedValue({
+        status: 'ACTIVE',
         organizationRole: {
           permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
         },
@@ -572,6 +575,7 @@ describe.each(['purchaseReturns', 'supplierCredits'] as const)(
 
     it('preserves assigned financial-only readers without a procurement grant', async () => {
       db.user.findUnique.mockResolvedValue({
+        status: 'ACTIVE',
         id: 'user_a',
         organizationRole: { permissions: [] },
         permissionOverrides: [],
@@ -993,6 +997,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     resolvableCatalog();
     resolvableOrder();
     db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
       organizationRole: {
         permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
       },
@@ -1532,6 +1537,7 @@ describe.each(Object.keys(sensitiveReads) as (keyof typeof sensitiveReads)[])(
     it.each(['cashier', 'deny', 'inactive'] as const)(
       'rejects %s before reading procurement data',
       async (mode) => {
+        mocks.can.mockResolvedValue(false);
         db.user.findUnique.mockResolvedValue(
           mode === 'inactive'
             ? null
@@ -1731,4 +1737,85 @@ describe('stored procurement branch boundaries', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
   });
+});
+
+describe('purchasing read scope and linked approval branches', () => {
+  it('filters requisitions at the database while preserving central demand', async () => {
+    await caller().requisitions();
+    expect(db.pharmacyRequisition.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_a',
+          OR: [{ branchId: null }, { branchId: { in: ['branch_a'] } }],
+        },
+      })
+    );
+  });
+  it('filters orders and their linked requisition and quote branches', async () => {
+    await caller().purchaseOrders();
+    expect(db.pharmacyPurchaseOrder.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org_a',
+          AND: expect.arrayContaining([
+            expect.objectContaining({
+              OR: expect.arrayContaining([{ branchId: null }, { branchId: { in: ['branch_a'] } }]),
+            }),
+          ]),
+        }),
+      })
+    );
+  });
+  it('refuses received quantities for an order outside the assigned branches', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'po', branchId: 'other' });
+    await expect(caller().receivedAgainstOrder({ purchaseOrderId: 'po' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyGoodsReceiptLine.findMany).not.toHaveBeenCalled();
+  });
+  it.each(['requisition', 'quote'] as const)(
+    'rechecks linked %s scope before PO approval evidence',
+    async (linked) => {
+      db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+        id: 'po',
+        branchId: 'branch_a',
+        status: 'SUBMITTED',
+        createdByUserId: 'other',
+        requisitionId: linked === 'requisition' ? 'req' : null,
+        quoteId: linked === 'quote' ? 'quote' : null,
+      });
+      db.pharmacyRequisition.findFirst.mockResolvedValue({ id: 'req', branchId: 'other_branch' });
+      db.pharmacyQuote.findFirst.mockResolvedValue({
+        id: 'quote',
+        requisitionId: 'req',
+        requisition: { branchId: 'other_branch' },
+      });
+      await expect(
+        caller().approvePurchaseOrder({ purchaseOrderId: 'po', decision: 'APPROVED' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.pharmacyPurchaseOrderApproval.create).not.toHaveBeenCalled();
+      expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
+    }
+  );
+});
+
+it('keeps the branch-filtered workspace available to financial-only readers', async () => {
+  db.user.findUnique.mockResolvedValue({
+    status: 'ACTIVE',
+    organizationId: 'org_a',
+    role: 'EMPLOYEE',
+    organizationRole: { permissions: [{ capability: 'reports:financial', effect: 'ALLOW' }] },
+    permissionOverrides: [],
+  });
+  mocks.can.mockImplementation(async (_subject, action) => action === 'reports:financial');
+  await expect(caller().workspace()).resolves.toHaveProperty('branches');
+  expect(mocks.can).toHaveBeenCalledWith(
+    expect.anything(),
+    'reports:financial',
+    undefined,
+    expect.objectContaining({ db })
+  );
+  expect(db.pharmacyBranch.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({ where: expect.objectContaining({ id: { in: ['branch_a'] } }) })
+  );
 });

@@ -1031,3 +1031,23 @@ describe('solo owner PIN forms', () => {
     expect(screen.queryByText('No second person can approve a bypass')).not.toBeInTheDocument();
   });
 });
+
+it('renders the returns board read-only for a financial-only reader without requesting procurement lots', async () => {
+  const ctx = contextStub();
+  ctx.db.user.findUnique.mockResolvedValue({
+    status: 'ACTIVE',
+    organizationRole: { permissions: [{ capability: 'reports:financial', effect: 'ALLOW' }] },
+    permissionOverrides: [],
+  });
+  mocks.createTRPCContext.mockResolvedValue(ctx);
+  const api = callerStub();
+  mocks.createCaller.mockReturnValue(api);
+  render(await ReturnsPage({ searchParams: params({ branch: 'branch-1' }) }));
+  expect(screen.getByText(/Read-only financial access/)).toBeInTheDocument();
+  expect(api.purchaseReturns).toHaveBeenCalledWith({ branchId: 'branch-1' });
+  expect(api.supplierCredits).toHaveBeenCalledWith({ branchId: 'branch-1' });
+  expect(api.returnableLots).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button', { name: 'Record credit' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Draft return' })).toBeNull();
+  expect(screen.queryByText('This surface could not load')).toBeNull();
+});

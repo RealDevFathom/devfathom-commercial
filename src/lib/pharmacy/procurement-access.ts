@@ -1,3 +1,4 @@
+import { isPharmacyOwner } from './owner';
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 
 const PROCUREMENT_ACTIONS = ['pharmacy.procurement', 'pharmacy:procurement'] as const;
@@ -33,9 +34,15 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
   const user = await db.user.findUnique({
     where: { id: userId, status: 'ACTIVE' },
     select: {
+      status: true,
+      organizationId: true,
       role: true,
       organizationRole: {
-        select: { key: true, permissions: { select: { capability: true, effect: true } } },
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -43,13 +50,14 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
       },
     },
   });
-  if (!user) return false;
-  const rules = matching([
-    ...user.permissionOverrides,
-    ...(user.organizationRole?.permissions ?? []),
-  ]);
-  if (rules.some((rule) => rule.effect === 'DENY')) return false;
-  if (user.role === 'ADMIN' || user.organizationRole?.key === 'owner') return true;
+  if (!user || user.status !== 'ACTIVE') return false;
+  const rules = [...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])];
+  if (matching(rules).some((rule) => rule.effect === 'DENY')) return false;
+  if (
+    user.role === 'ADMIN' ||
+    (user.organizationId && (await isPharmacyOwner(db, user.organizationId, userId)))
+  )
+    return true;
   return procurementCapabilityGranted({
     overrides: user.permissionOverrides,
     role: user.organizationRole?.permissions ?? [],

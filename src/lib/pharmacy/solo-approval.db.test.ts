@@ -1588,3 +1588,87 @@ describe('solo approval database guard regressions', () => {
     }
   });
 });
+
+it('signs off opening stock only with authorized solo PIN proof and retains multi-staff coauthorization', async () => {
+  const f = await fixture('owner');
+  const { signOffOpeningSession } = await import('./migration/opening-stock');
+  const create = () =>
+    withTenantDb(
+      f.org,
+      (db) =>
+        db.pharmacyOpeningSession.create({
+          data: {
+            branchId: f.branch,
+            openingAt: new Date(),
+            status: 'POSTED',
+            postedAt: new Date(),
+            postedByActorId: f.user,
+            createdByActorId: f.user,
+          },
+        }),
+      { skipDrain: true }
+    );
+  const session = await create();
+  await expect(
+    withTenantDb(f.org, (db) => signOffOpeningSession(db, scope(f), session.id), {
+      skipDrain: true,
+    })
+  ).rejects.toMatchObject({ reason: 'COAUTH_REQUIRED' });
+  await withTenantDb(
+    f.org,
+    async (db) => {
+      expect(await signOffOpeningSession(db, scope(f), session.id, pin)).toMatchObject({
+        status: 'SIGNED_OFF',
+        signedOffBy: f.user,
+      });
+      expect(
+        await db.auditLog.count({
+          where: {
+            action: 'PHARMACY:SOLO_OWNER_PIN',
+            targetType: 'PharmacyOpeningSession',
+            targetId: session.id,
+          },
+        })
+      ).toBe(1);
+    },
+    { skipDrain: true }
+  );
+  const staffed = await create();
+  await withTenantDb(
+    f.org,
+    (db) =>
+      db.user.create({
+        data: {
+          name: 'Unassigned colleague',
+          email: `${randomUUID()}@example.invalid`,
+          department: 'PHARMACY',
+          title: 'Staff',
+          status: 'ACTIVE',
+        },
+      }),
+    { skipDrain: true }
+  );
+  await expect(
+    withTenantDb(f.org, (db) => signOffOpeningSession(db, scope(f), staffed.id, pin), {
+      skipDrain: true,
+    })
+  ).rejects.toMatchObject({ reason: 'COAUTH_REQUIRED' });
+  await withTenantDb(
+    f.org,
+    async (db) => {
+      expect(
+        (
+          await db.pharmacyOpeningSession.findUniqueOrThrow({
+            where: { organizationId_id: { organizationId: f.org, id: staffed.id } },
+          })
+        ).status
+      ).toBe('POSTED');
+      expect(
+        await db.auditLog.count({
+          where: { action: 'PHARMACY:SOLO_OWNER_PIN', targetId: staffed.id },
+        })
+      ).toBe(0);
+    },
+    { skipDrain: true }
+  );
+});

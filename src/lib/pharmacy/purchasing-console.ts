@@ -280,14 +280,25 @@ export async function purchasingWorkspace(
   const solo = scope.actorId
     ? await soloOwnerEligible(db, { ...scope, actorId: scope.actorId })
     : false;
+  const allowedBranchIds = scope.actorId
+    ? await assignedRegisterBranchIds(db, scope.organizationId, scope.actorId)
+    : undefined;
   const [branches, stockLocations, medicines, suppliers, approvers] = await Promise.all([
     db.pharmacyBranch.findMany({
-      where: { organizationId: scope.organizationId, active: true },
+      where: {
+        organizationId: scope.organizationId,
+        active: true,
+        ...(allowedBranchIds ? { id: { in: allowedBranchIds } } : {}),
+      },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
       select: { id: true, code: true, name: true, city: true, defaultStockLocationId: true },
     }),
     db.pharmacyStockLocation.findMany({
-      where: { organizationId: scope.organizationId, active: true },
+      where: {
+        organizationId: scope.organizationId,
+        active: true,
+        ...(allowedBranchIds ? { branchId: { in: allowedBranchIds } } : {}),
+      },
       orderBy: [{ branchId: 'asc' }, { name: 'asc' }, { id: 'asc' }],
       select: {
         id: true,
@@ -394,9 +405,18 @@ export async function purchasingWorkspace(
 // PUR-02 — requisitions, quotes, purchase orders
 // ---------------------------------------------------------------------------
 
-export async function listRequisitions(db: ScopedDb, scope: OrganizationScope) {
+export async function listRequisitions(
+  db: ScopedDb,
+  scope: OrganizationScope & { actorId?: string }
+) {
+  const branchIds = scope.actorId
+    ? await assignedRegisterBranchIds(db, scope.organizationId, scope.actorId)
+    : undefined;
   return db.pharmacyRequisition.findMany({
-    where: { organizationId: scope.organizationId },
+    where: {
+      organizationId: scope.organizationId,
+      ...(branchIds ? { OR: [{ branchId: null }, { branchId: { in: branchIds } }] } : {}),
+    },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     include: {
       branch: { select: { id: true, name: true } },
@@ -411,16 +431,52 @@ export async function listRequisitions(db: ScopedDb, scope: OrganizationScope) {
           lines: { orderBy: { id: 'asc' } },
         },
       },
-      purchaseOrders: { select: { id: true, reference: true, status: true } },
+      purchaseOrders: {
+        ...(branchIds
+          ? { where: { OR: [{ branchId: null }, { branchId: { in: branchIds } }] } }
+          : {}),
+        select: { id: true, reference: true, status: true },
+      },
     },
   });
 }
 
 export type RequisitionDetail = Awaited<ReturnType<typeof listRequisitions>>[number];
 
-export async function listPurchaseOrders(db: ScopedDb, scope: OrganizationScope) {
+export async function listPurchaseOrders(
+  db: ScopedDb,
+  scope: OrganizationScope & { actorId?: string }
+) {
+  const branchIds = scope.actorId
+    ? await assignedRegisterBranchIds(db, scope.organizationId, scope.actorId)
+    : undefined;
   return db.pharmacyPurchaseOrder.findMany({
-    where: { organizationId: scope.organizationId },
+    where: {
+      organizationId: scope.organizationId,
+      ...(branchIds
+        ? {
+            AND: [
+              { OR: [{ branchId: null }, { branchId: { in: branchIds } }] },
+              {
+                OR: [
+                  { requisitionId: null },
+                  { requisition: { OR: [{ branchId: null }, { branchId: { in: branchIds } }] } },
+                ],
+              },
+              {
+                OR: [
+                  { quoteId: null },
+                  {
+                    quote: {
+                      requisition: { OR: [{ branchId: null }, { branchId: { in: branchIds } }] },
+                    },
+                  },
+                ],
+              },
+            ],
+          }
+        : {}),
+    },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     include: {
       supplier: { select: { id: true, name: true, authorized: true } },
