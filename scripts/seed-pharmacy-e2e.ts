@@ -284,7 +284,7 @@ async function seedCashier(passwordHash: string) {
       },
     });
     for (const [id, capability] of [
-      [PHARMACY_E2E.cashierCounterPermissionId, 'pharmacy.counter'],
+      [PHARMACY_E2E.cashierCounterPermissionId, 'pharmacy:counter'],
       [PHARMACY_E2E.cashierOrdersPermissionId, 'pharmacy:orders'],
     ] as const) {
       const existing = await tx.organizationRolePermission.findFirst({

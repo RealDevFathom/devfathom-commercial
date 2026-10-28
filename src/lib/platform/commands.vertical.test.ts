@@ -285,6 +285,7 @@ describe('organization.create vertical + package compatibility', () => {
       id: 'pkg_1',
       active: true,
       vertical: 'AGENCY',
+      defaultSeats: 25,
       moduleLinks: [],
     });
 
@@ -304,6 +305,7 @@ describe('organization.create vertical + package compatibility', () => {
       id: 'pkg_r',
       active: true,
       vertical: 'RESTAURANT',
+      defaultSeats: 25,
       moduleLinks: [{ moduleId: 'restaurant-core', enabled: true }],
     });
 
@@ -347,6 +349,7 @@ describe('organization.create vertical + package compatibility', () => {
       id: 'pkg_1',
       active: true,
       vertical: 'AGENCY',
+      defaultSeats: 25,
       moduleLinks: [],
     });
 
@@ -380,6 +383,7 @@ describe('organization.create vertical + package compatibility', () => {
       id: 'pkg_r',
       active: true,
       vertical: 'RESTAURANT',
+      defaultSeats: 25,
       moduleLinks: [{ moduleId: 'restaurant-core', enabled: true }],
     });
 
@@ -419,6 +423,7 @@ describe('organization.create vertical + package compatibility', () => {
       id: 'pkg_p',
       active: true,
       vertical: 'PHARMACY',
+      defaultSeats: 25,
       moduleLinks: [{ moduleId: 'pharmacy-core', enabled: true }],
     });
 
@@ -536,6 +541,7 @@ describe('organization.create vertical + package compatibility', () => {
       id: 'pkg_1',
       active: true,
       vertical: 'AGENCY',
+      defaultSeats: 25,
       moduleLinks: [],
     });
 

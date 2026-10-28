@@ -468,9 +468,10 @@ describe('counter receipt authorization', () => {
     expect(readCounterCart).not.toHaveBeenCalled();
   });
 
-  it('allows pharmacy.dispense and pharmacy:receipt when the branch is assigned', async () => {
+  it('allows each exact counter or receipt grant when the branch is assigned', async () => {
     for (const capability of [
       'pharmacy.dispense',
+      'pharmacy:counter',
       'pharmacy:receipt',
       'pharmacy.receipt',
     ] as const) {
@@ -480,6 +481,28 @@ describe('counter receipt authorization', () => {
         f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
       ).resolves.toMatchObject({ receiptNumber: 7 });
     }
+  });
+
+  it('keeps an exact counter DENY above an exact role ALLOW', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    f.db.user.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      organizationId: 'org-a',
+      organizationRole: {
+        permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [{ capability: 'pharmacy:counter', effect: 'DENY' }],
+    });
+
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+    expect(readCounterReceipt).not.toHaveBeenCalled();
   });
 
   it('denies an inactive database user and an inactive assignment', async () => {

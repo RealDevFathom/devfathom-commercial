@@ -59,6 +59,18 @@ function fixture() {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
+    },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
+    user: {
+      findUnique: vi.fn(async () => ({
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      })),
     },
     pharmacyInventoryLot: { findMany: lotRead },
     // Integrated tip: addLine first reads the medicine to route controlled lines; these are not.
