@@ -38,6 +38,14 @@ beforeEach(() => {
     branches: [{ id: 'branch', name: 'Branch', stockLocations: [] }],
     suppliers: [],
     medicines: [],
+    directPurchaseApprovers: [
+      {
+        id: 'user-2',
+        name: 'Bilal',
+        email: 'bilal@example.test',
+        branchIds: ['branch-1', 'branch-a'],
+      },
+    ],
     approvers: [],
   });
   reads.purchaseReturns.mockResolvedValue([]);

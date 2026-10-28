@@ -1286,7 +1286,7 @@ export const pharmacySalesRouter = router({
             refEntryId: refEntry?.id ?? null,
             recordedByUserId: scope.actorId,
             witnessedByUserId: pharmacist.id,
-            signatureRef: decision.id,
+            signatureRef: solo ? `solo-sale:${input.saleId}` : decision.id,
           });
           return result;
         });

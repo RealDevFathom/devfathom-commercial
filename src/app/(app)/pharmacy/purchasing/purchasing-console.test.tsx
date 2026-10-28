@@ -150,6 +150,14 @@ const workspace = {
     },
   ],
   suppliers: [licensedSupplier, lapsedSupplier],
+  directPurchaseApprovers: [
+    {
+      id: 'user-2',
+      name: 'Bilal',
+      email: 'bilal@example.test',
+      branchIds: ['branch-1', 'branch-a'],
+    },
+  ],
   approvers: [{ id: 'user-2', name: 'Bilal', email: 'bilal@example.test' }],
 };
 
@@ -359,9 +367,40 @@ describe('pickers (UX rules 1, 12, 16)', () => {
     expect(option.value).toBe('med-1|pack-1|10');
   });
 
+  it('offers procurement approvers only for the selected branch while retaining dispensing signers', async () => {
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        workspace: vi.fn().mockResolvedValue({
+          ...workspace,
+          directPurchaseApprovers: [
+            { id: 'buyer', name: 'Buyer', email: 'buyer@example.test', branchIds: ['branch-1'] },
+            {
+              id: 'other-buyer',
+              name: 'Other branch buyer',
+              email: 'other@example.test',
+              branchIds: ['branch-2'],
+            },
+          ],
+        }),
+      })
+    );
+    render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+    const picker = screen.getByLabelText('Approved by');
+    expect(picker).toHaveTextContent('Buyer (buyer@example.test)');
+    expect(picker).not.toHaveTextContent('Other branch buyer');
+    expect(picker).not.toHaveTextContent('Bilal');
+    expect(
+      screen.getAllByRole('option', { name: 'Bilal (bilal@example.test)' }).length
+    ).toBeGreaterThan(0);
+  });
+
   it('replaces an empty required picker with what is missing and where to fix it', async () => {
     mocks.createCaller.mockReturnValue(
-      callerStub({ workspace: vi.fn().mockResolvedValue({ ...workspace, approvers: [] }) })
+      callerStub({
+        workspace: vi
+          .fn()
+          .mockResolvedValue({ ...workspace, directPurchaseApprovers: [], approvers: [] }),
+      })
     );
 
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
@@ -417,6 +456,7 @@ describe('preconditions (UX rule 13)', () => {
           stockLocations: [],
           medicines: [],
           suppliers: [],
+          directPurchaseApprovers: [],
           approvers: [],
         }),
       })
@@ -927,7 +967,11 @@ describe('solo owner PIN forms', () => {
   it('makes direct purchasing available to an eligible solo owner with a PIN input and self option', async () => {
     mocks.soloEligible.mockResolvedValue(true);
     mocks.createCaller.mockReturnValue(
-      callerStub({ workspace: vi.fn().mockResolvedValue({ ...workspace, approvers: [] }) })
+      callerStub({
+        workspace: vi
+          .fn()
+          .mockResolvedValue({ ...workspace, directPurchaseApprovers: [], approvers: [] }),
+      })
     );
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
     const pin = screen.getByLabelText('Owner PIN');

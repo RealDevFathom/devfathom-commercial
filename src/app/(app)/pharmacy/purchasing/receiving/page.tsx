@@ -158,6 +158,17 @@ export default async function PharmacyReceivingPage({
       email: ctx.session.user.email ?? '',
     });
   }
+  const directPurchaseApprovers = workspace.directPurchaseApprovers.filter((person) =>
+    person.branchIds.includes(branchId)
+  );
+  if (solo && !directPurchaseApprovers.some((person) => person.id === ctx.session!.user.id)) {
+    directPurchaseApprovers.push({
+      id: ctx.session.user.id,
+      name: ctx.session.user.name ?? 'Owner (you)',
+      email: ctx.session.user.email ?? '',
+      branchIds: [branchId],
+    });
+  }
   const exceptionStatus = param(query, 'exceptions') === 'resolved' ? 'RESOLVED' : 'OPEN';
 
   let receipts: GoodsReceiptDetail[];
@@ -741,11 +752,11 @@ export default async function PharmacyReceivingPage({
           same as receiving against an order — the only difference is that a bypass reason and a
           named approver stand in place of the order.
         </p>
-        {workspace.approvers.length === 0 ? (
+        {directPurchaseApprovers.length === 0 ? (
           <div className="mt-4">
             <EmptyState
               title="No second person can approve a bypass"
-              detail="A direct purchase needs an approver who is not you, and this workspace has no other active user. Invite a colleague, or raise a purchase order instead."
+              detail="A direct purchase needs an active approver with procurement permission and access to this branch. Invite an eligible colleague, or raise a purchase order instead."
               steps={[
                 { label: 'Invite a colleague', href: '/team' },
                 { label: 'Raise a purchase order', href: `${PURCHASING_ROUTE}/orders` },
@@ -811,12 +822,12 @@ export default async function PharmacyReceivingPage({
                 hint="Recorded permanently with the receipt."
               />
               <SelectField
-                emptyHint="Nobody else is active in this workspace."
+                emptyHint="No eligible procurement approver has access to this branch."
                 hint="A second approver is required unless you are the sole active owner and enter your PIN."
                 label="Approved by"
                 name="bypassApprovedByUserId"
                 notice={notice}
-                options={workspace.approvers.map((approver) => ({
+                options={directPurchaseApprovers.map((approver) => ({
                   value: approver.id,
                   label: approver.name ? `${approver.name} (${approver.email})` : approver.email,
                 }))}

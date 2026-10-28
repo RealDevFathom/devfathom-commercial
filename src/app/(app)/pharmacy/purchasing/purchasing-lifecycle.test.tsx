@@ -133,6 +133,14 @@ const workspace = {
     },
   ],
   suppliers: [licensedSupplier, lapsedSupplier],
+  directPurchaseApprovers: [
+    {
+      id: 'user-2',
+      name: 'Bilal',
+      email: 'bilal@example.test',
+      branchIds: ['branch-1', 'branch-a'],
+    },
+  ],
   approvers: [{ id: 'user-2', name: 'Bilal', email: 'bilal@example.test' }],
 };
 

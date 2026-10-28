@@ -1,4 +1,6 @@
 import { soloOwnerEligible } from './solo-approval';
+import { actorCanProcure } from './procurement-access';
+import { assignedRegisterBranchIds } from './controlled-register';
 /**
  * PH-PUR read models — PRD §6.3 PUR-01..PUR-06 as the purchasing consoles need
  * to show them.
@@ -242,6 +244,8 @@ export type PurchasingWorkspace = {
   medicines: MedicineOption[];
   suppliers: SupplierSummary[];
   approvers: ApproverOption[];
+  /** Procurement permission and branch access, independent of dispensing eligibility. */
+  directPurchaseApprovers: (ApproverOption & { branchIds: string[] })[];
   soloApprovalAllowed?: boolean;
 };
 
@@ -326,7 +330,7 @@ export async function purchasingWorkspace(
     db.user.findMany({
       where: {
         organizationId: scope.organizationId,
-        status: { not: 'INACTIVE' },
+        status: 'ACTIVE',
         ...(scope.actorId && !solo ? { id: { not: scope.actorId } } : {}),
       },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
@@ -346,7 +350,12 @@ export async function purchasingWorkspace(
   ]);
 
   const eligibleApprovers = [];
+  const directPurchaseApprovers = [];
   for (const user of approvers) {
+    if (await actorCanProcure(db, user.id, at)) {
+      const branchIds = await assignedRegisterBranchIds(db, scope.organizationId, user.id);
+      directPurchaseApprovers.push({ id: user.id, name: user.name, email: user.email, branchIds });
+    }
     if (await can(subjectFromSession(user), 'pharmacy:dispense', undefined, { db, now: at })) {
       eligibleApprovers.push(user);
     }
@@ -356,6 +365,7 @@ export async function purchasingWorkspace(
     stockLocations,
     suppliers,
     soloApprovalAllowed: solo,
+    directPurchaseApprovers,
     approvers: eligibleApprovers.map(({ id, name, email }) => ({ id, name, email })),
     medicines: medicines.map((medicine) => ({
       id: medicine.id,

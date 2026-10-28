@@ -704,3 +704,192 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
     );
   });
 });
+
+it('records a solo owner-PIN controlled prescription sale with matching register and audit references', async () => {
+  const f = await fixture('owner');
+  const receipt = await withTenantDb(
+    f.org,
+    (db) => caller(db, f).createGoodsReceipt(receiptInput(f)),
+    { skipDrain: true }
+  );
+  const { postGoodsReceipt } = await import('./goods-receipt');
+  const { pharmacySalesRouter } = await import('@/server/routers/pharmacy-sales');
+  await withTenantDb(
+    f.org,
+    async (db) => {
+      await postGoodsReceipt(db, scope(f), {
+        goodsReceiptId: receipt.id,
+        at: new Date(),
+        staffProfileId: f.profile,
+        pin,
+      });
+      const pack = await db.packLevel.findUniqueOrThrow({ where: { id: f.pack } });
+      const patient = await db.pharmacyPatient.create({
+        data: { displayName: 'Regression patient', cnic: '1234567890123' },
+      });
+      const prescriber = await db.pharmacyPrescriber.create({
+        data: { name: 'Test prescriber', registrationNumber: randomUUID() },
+      });
+      await db.patientConsent.create({
+        data: {
+          patientId: patient.id,
+          purpose: 'DISPENSING',
+          channel: 'IN_PERSON',
+          version: 1,
+          granted: true,
+          recordedByUserId: f.user,
+        },
+      });
+      const rx = await db.prescription.create({
+        data: {
+          patientId: patient.id,
+          prescriberId: prescriber.id,
+          sourceKind: 'PAPER_IMAGE',
+          sourceFileRef: 'test-paper',
+          validFrom: new Date('2026-01-01'),
+          validUntil: new Date('2035-01-01'),
+          capturedByUserId: f.user,
+          lines: {
+            create: {
+              lineNumber: 1,
+              medicineId: f.medicine,
+              presentationId: pack.presentationId,
+              authorizedCanonicalUnits: 10,
+              directions: 'As prescribed',
+            },
+          },
+        },
+        include: { lines: true },
+      });
+      const api = pharmacySalesRouter.createCaller({
+        db,
+        entitlements: { organizationId: f.org, enabledModules: ['pharmacy-counter'], modules: [] },
+        session: {
+          expires: 'later',
+          user: { id: f.user, organizationId: f.org, role: 'EMPLOYEE', status: 'ACTIVE' },
+        },
+        organization: { id: f.org, vertical: 'PHARMACY' },
+        support: null,
+        requestMeta: { ip: null, userAgent: null },
+        audit: { detail: {}, db },
+      } as never);
+      const sale = await api.create({ branchId: f.branch });
+      const input = {
+        branchId: f.branch,
+        saleId: sale.id,
+        medicineId: f.medicine,
+        presentationId: pack.presentationId,
+        packLevelId: f.pack,
+        saleUnit: 'STRIP' as const,
+        quantity: 1,
+        canonicalUnitsPerSaleUnit: 10,
+        idempotencyKey: randomUUID(),
+        controlledAuthorization: {
+          prescriptionLineId: rx.lines[0].id,
+          patientId: patient.id,
+          patientAddress: 'Test address',
+          staffProfileId: f.profile,
+          pin,
+          rxSerialWritten: true,
+          emergency: false,
+        },
+      };
+      expect(
+        await api.addLine({
+          ...input,
+          controlledAuthorization: { ...input.controlledAuthorization, pin: '0000' },
+        })
+      ).toHaveProperty('blocked');
+      expect(
+        await db.prescriptionFill.count({ where: { prescriptionLineId: rx.lines[0].id } })
+      ).toBe(0);
+      const result = await api.addLine(input);
+      expect(result).toHaveProperty('line');
+      const entry = await db.pharmacyControlledRegisterEntry.findFirstOrThrow({
+        where: { prescriptionLineId: rx.lines[0].id, entryKind: 'SALE' },
+      });
+      expect(entry.signatureRef).toBe(`solo-sale:${sale.id}`);
+      expect(entry.recordedByUserId).toBe(f.user);
+      expect(entry.witnessedByUserId).toBe(f.user);
+      expect(
+        await db.prescriptionFill.count({ where: { prescriptionLineId: rx.lines[0].id } })
+      ).toBe(1);
+      expect(
+        await db.pharmacyPharmacistReviewDecision.count({
+          where: { actorUserId: f.user, kind: 'SIGN' },
+        })
+      ).toBe(1);
+      expect(
+        await db.auditLog.findFirstOrThrow({
+          where: {
+            targetId: sale.id,
+            targetType: 'ControlledSale',
+            action: 'PHARMACY:SOLO_OWNER_PIN',
+          },
+        })
+      ).toMatchObject({
+        actorId: f.user,
+        metadata: {
+          branchId: f.branch,
+          reauthentication: 'PIN',
+          policy: 'PHARMACY:SOLO_OWNER_PIN',
+        },
+      });
+    },
+    { skipDrain: true, timeout: 60_000 }
+  );
+});
+
+it('offers direct-purchase approvers by persisted procurement permission and branch access, including owners', async () => {
+  const f = await fixture('owner');
+  const { purchasingWorkspace } = await import('./purchasing-console');
+  await withTenantDb(
+    f.org,
+    async (db) => {
+      const staff = async (
+        key: string,
+        capability: string,
+        status: 'ACTIVE' | 'ON_LEAVE' = 'ACTIVE'
+      ) => {
+        const role = await db.organizationRole.create({
+          data: { key, name: key, permissions: { create: { capability, effect: 'ALLOW' } } },
+        });
+        const user = await db.user.create({
+          data: {
+            name: key,
+            email: `${randomUUID()}@example.invalid`,
+            department: 'PHARMACY',
+            title: 'Staff',
+            status,
+            organizationRoleId: role.id,
+          },
+        });
+        await db.pharmacyBranchAssignment.create({ data: { userId: user.id, branchId: f.other } });
+        return user;
+      };
+      const buyer = await staff('buyer', 'pharmacy:procurement');
+      const dispenser = await staff('dispenser', 'pharmacy:dispense');
+      const onLeave = await staff('on-leave', 'pharmacy:procurement', 'ON_LEAVE');
+      const workspace = await purchasingWorkspace(db, {
+        organizationId: f.org,
+        actorId: dispenser.id,
+      });
+      expect(workspace.directPurchaseApprovers.find((u) => u.id === buyer.id)).toMatchObject({
+        branchIds: [f.other],
+      });
+      expect(
+        workspace.directPurchaseApprovers.find((u) => u.id === f.user)?.branchIds.sort()
+      ).toEqual([f.branch, f.other].sort());
+      expect(
+        workspace.directPurchaseApprovers.some((u) => u.id === dispenser.id || u.id === onLeave.id)
+      ).toBe(false);
+      expect(workspace.approvers.some((u) => u.id === buyer.id)).toBe(false);
+      expect(
+        workspace.directPurchaseApprovers
+          .filter((u) => u.branchIds.includes(f.branch))
+          .map((u) => u.id)
+      ).toEqual([f.user]);
+    },
+    { skipDrain: true }
+  );
+});

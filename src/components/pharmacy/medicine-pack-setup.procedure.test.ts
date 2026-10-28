@@ -53,7 +53,16 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
       pharmacyBranch: { findMany: vi.fn(async () => []) },
       pharmacyStockLocation: { findMany: vi.fn(async () => []) },
       pharmacySupplier: { findMany: vi.fn(async () => []) },
-      user: { findMany: vi.fn(async () => []) },
+      user: {
+        findMany: vi.fn(async () => []),
+        findUnique: vi.fn(async () => ({
+          id: 'admin-a',
+          organizationId: 'org-a',
+          role: 'ADMIN',
+          status: 'ACTIVE',
+        })),
+      },
+      $queryRaw: vi.fn(async () => [{ allowed: true }]),
       medicine: {
         findMany: vi.fn(async () => [
           {
