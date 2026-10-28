@@ -73,3 +73,7 @@ docker/livekit/livekit.dev.keys.yaml
 
 # scratch QA output, never commit
 .qa-run/
+
+# Python bytecode
+__pycache__/
+*.pyc

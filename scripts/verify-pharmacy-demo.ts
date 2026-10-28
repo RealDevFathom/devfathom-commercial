@@ -5,11 +5,12 @@
 import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, writeFile, readFile, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, realpath, unlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MIGRATION_COUNT, type PharmacyDraftRequest } from './pharmacy-demo-contract';
 import {
+  pharmacyDisposablePassword,
   pharmacyHistoryGenesis,
   pharmacyHistoryPath,
   pharmacyMigrationManifest,
@@ -65,6 +66,7 @@ const socket = join(directory, 'socket');
 const data = join(directory, 'data');
 const role = 'wha1388_runtime';
 const bootstrap = 'wha1388_bootstrap';
+let password = '';
 const environment: NodeJS.ProcessEnv = {
   PATH: process.env.PATH,
   HOME: process.env.HOME,
@@ -87,12 +89,15 @@ function command(program: string, args: string[], input?: string, env = environm
     // All commands/inputs here target only the freshly created TEST cluster.
     writeFile(
       join(directory, 'failure-command.txt'),
-      `${program}\n${result.stderr}\n${result.stdout}`,
+      `${program}\n${redact(result.stderr)}\n${redact(result.stdout)}`,
       { mode: 0o600 }
     ).catch(() => {});
     throw new Error(`DISPOSABLE_COMMAND_FAILED:${basenameForLog(program)}:${result.status}`);
   }
   return result.stdout.trim();
+}
+function redact(text: string) {
+  return password ? text.replaceAll(password, '[REDACTED]') : text;
 }
 function basenameForLog(program: string) {
   return program.split('/').at(-1);
@@ -472,17 +477,35 @@ try {
     );
   }
   const migrations = await pharmacyMigrationManifest();
-  if (!retry)
-    command('initdb', [
-      '-D',
-      data,
-      '-U',
-      bootstrap,
-      '--auth-local=trust',
-      '--auth-host=reject',
-      '--no-locale',
-      '--encoding=UTF8',
-    ]);
+  if (retry) password = await pharmacyDisposablePassword(directory);
+  else {
+    password = randomBytes(24).toString('hex');
+    await writeFile(join(directory, 'cluster-password'), password + '\n', {
+      mode: 0o600,
+      flag: 'wx',
+    });
+  }
+  environment.PGPASSWORD = password;
+  if (!retry) {
+    const passwordFile = join(directory, 'initdb-password');
+    await writeFile(passwordFile, password + '\n', { mode: 0o600, flag: 'wx' });
+    try {
+      command('initdb', [
+        '-D',
+        data,
+        '-U',
+        bootstrap,
+        '--auth-local=scram-sha-256',
+        '--pwfile',
+        passwordFile,
+        '--auth-host=reject',
+        '--no-locale',
+        '--encoding=UTF8',
+      ]);
+    } finally {
+      await unlink(passwordFile);
+    }
+  }
   command('pg_ctl', [
     '-D',
     data,
@@ -508,7 +531,7 @@ try {
     ]) === '1';
   assert.ok(!databaseExists || retry, 'Only this initializing run can resume its database');
   if (!databaseExists) command('createdb', ['-h', socket, '-U', bootstrap, database]);
-  const adminUrl = `postgresql://${bootstrap}@localhost/${database}?host=${encodeURIComponent(socket)}`;
+  const adminUrl = `postgresql://${bootstrap}:${password}@localhost/${database}?host=${encodeURIComponent(socket)}`;
   // Normal repository deployment prerequisite; no migration/ACL guard is weakened.
   command(process.execPath, ['--no-env-file', 'prisma/prepare-extensions.ts'], undefined, {
     ...environment,
@@ -576,7 +599,7 @@ try {
       'Bootstrap resume cannot reset executed scenarios'
     );
   } else {
-    sql(`CREATE ROLE ${role} LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+    sql(`CREATE ROLE ${role} LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '${password}';
     GRANT CONNECT ON DATABASE ${database} TO ${role}; GRANT USAGE ON SCHEMA public TO ${role};
     GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${role};
     GRANT INSERT ON pharmacy_purchase_orders, pharmacy_purchase_order_lines, audit_logs TO ${role};
@@ -832,7 +855,9 @@ try {
   failed = true;
   await writeFile(
     join(directory, 'failure.txt'),
-    error instanceof Error ? `${error.name}: ${error.message}\n${error.stack}` : 'Unknown failure',
+    error instanceof Error
+      ? redact(`${error.name}: ${error.message}\n${error.stack}`)
+      : 'Unknown failure',
     { mode: 0o600 }
   );
   console.error('FAIL disposable verification; inspect retained owned evidence');

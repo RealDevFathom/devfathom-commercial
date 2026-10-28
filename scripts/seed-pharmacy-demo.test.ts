@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   MIGRATIONS_SHA256,
@@ -13,6 +13,7 @@ import {
   type DemoObservedRecord,
 } from './pharmacy-demo-contract';
 import {
+  pharmacyDisposablePassword,
   dryRun,
   evidenceDigest,
   main,
@@ -796,4 +797,33 @@ test('draft-only and pre-existing receipts keep their original reference baselin
     () => requireUnchangedReferences(prior, referenceRows(packRow({ unitsPerParent: 2 }))),
     (error: unknown) => error instanceof PharmacyDemoRefusal && error.code === 'CHANGED_REFERENCE'
   );
+});
+
+test('disposable authentication credential requires an owned private regular file', async () => {
+  const directory = await mkdtemp('/tmp/pharmacy-auth-test-');
+  const path = join(directory, 'cluster-password');
+  const password = 'a'.repeat(48);
+  try {
+    await assert.rejects(pharmacyDisposablePassword(directory));
+    await writeFile(path, password + '\n', { mode: 0o600, flag: 'wx' });
+    assert.equal(await pharmacyDisposablePassword(directory), password);
+    await chmod(path, 0o644);
+    await assert.rejects(pharmacyDisposablePassword(directory), /PRIVATE_DISPOSABLE_CREDENTIAL/);
+    await chmod(path, 0o600);
+    await link(path, join(directory, 'alias'));
+    await assert.rejects(pharmacyDisposablePassword(directory), /PRIVATE_DISPOSABLE_CREDENTIAL/);
+    await rm(join(directory, 'alias'));
+    await writeFile(path, 'z'.repeat(48) + '\n');
+    await assert.rejects(pharmacyDisposablePassword(directory), /INVALID_DISPOSABLE_CREDENTIAL/);
+    await rm(path);
+    await writeFile(join(directory, 'real'), password + '\n', { mode: 0o600 });
+    await symlink(join(directory, 'real'), path);
+    await assert.rejects(pharmacyDisposablePassword(directory));
+    await rm(path);
+    await writeFile(path, password + '\n', { mode: 0o600 });
+    await chmod(directory, 0o755);
+    await assert.rejects(pharmacyDisposablePassword(directory), /PRIVATE_DISPOSABLE_REQUIRED/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

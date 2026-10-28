@@ -454,6 +454,35 @@ export async function pharmacyMigrationManifest() {
   return migrations;
 }
 
+/** Owned disposable-cluster credential; never accept inherited database secrets. */
+export async function pharmacyDisposablePassword(directory: string): Promise<string> {
+  const info = await stat(directory);
+  requireFact(
+    info.isDirectory() && info.uid === process.getuid?.() && (info.mode & 0o077) === 0,
+    'PRIVATE_DISPOSABLE_REQUIRED'
+  );
+  const file = await open(
+    join(directory, 'cluster-password'),
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+  );
+  try {
+    const info = await file.stat();
+    requireFact(
+      info.isFile() &&
+        info.uid === process.getuid?.() &&
+        (info.mode & 0o777) === 0o600 &&
+        info.nlink === 1 &&
+        info.size === 49,
+      'PRIVATE_DISPOSABLE_CREDENTIAL_REQUIRED'
+    );
+    const password = await file.readFile('utf8');
+    requireFact(/^[a-f0-9]{48}\n$/.test(password), 'INVALID_DISPOSABLE_CREDENTIAL');
+    return password.trim();
+  } finally {
+    await file.close();
+  }
+}
+
 let boundDisposable: string | undefined;
 /** No arbitrary URL input. Private Unix socket + actual cluster/database/role checks below.
  * Only the fresh verifier provisions this TEST identity. LAN/Azure are unsupported. */
@@ -485,7 +514,7 @@ async function bindDisposable(target: DisposablePharmacyTarget) {
       !Object.hasOwn(process.env, 'DATABASE_URL') && !(globalThis as { prisma?: unknown }).prisma,
       'CLEAN_PROCESS_REQUIRED'
     );
-    process.env.DATABASE_URL = `postgresql://${RUNTIME_ROLE}@localhost/${target.database}?host=${encodeURIComponent(socket)}`;
+    process.env.DATABASE_URL = `postgresql://${RUNTIME_ROLE}:${await pharmacyDisposablePassword(directory)}@localhost/${target.database}?host=${encodeURIComponent(socket)}`;
     boundDisposable = key;
   }
   return import('../src/lib/tenancy/scoped-db');
