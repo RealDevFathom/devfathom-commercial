@@ -4,19 +4,23 @@ import os, pathlib, secrets, shutil, socket, subprocess, tempfile
 ROOT = pathlib.Path(__file__).resolve().parents[4]
 OUT = ROOT / 'evidence' / 'pharmacy-core-correction' / 'real-http-reconnect-final'
 OUT.mkdir(parents=True, exist_ok=True)
-PG = pathlib.Path('/opt/homebrew/opt/postgresql@16/bin')
-for port in (55620, 4331):
+PG = pathlib.Path(os.environ.get('BOUNDARY_PG_BIN', '/opt/homebrew/opt/postgresql@16/bin'))
+PG_PORT = int(os.environ.get('BOUNDARY_PG_PORT', '55678'))
+HTTP_PORT = int(os.environ.get('BOUNDARY_HTTP_PORT', '4473'))
+for port in (PG_PORT, HTTP_PORT):
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', port))
 if shutil.disk_usage(ROOT).free < 5 * 1024**3:
     raise RuntimeError('Disk below 5 GiB')
-base = pathlib.Path(tempfile.mkdtemp(prefix='boundary-pg-', dir=os.environ['PAPERCLIP_RUN_SCRATCH_DIR']))
+base = pathlib.Path(tempfile.mkdtemp(prefix='boundary-pg-', dir=os.environ.get('PAPERCLIP_RUN_SCRATCH_DIR')))
 password = secrets.token_hex(24)
 env = dict(os.environ)
 env['PGPASSWORD'] = password
-url = lambda role: f'postgresql://{role}:{password}@127.0.0.1:55620/boundary_disposable'
+env['BOUNDARY_PG_PORT'] = str(PG_PORT)
+env['BOUNDARY_HTTP_PORT'] = str(HTTP_PORT)
+url = lambda role: f'postgresql://{role}:{password}@127.0.0.1:{PG_PORT}/boundary_disposable'
 started = False
-awake = subprocess.Popen(['caffeinate', '-dimsu'])
+awake = subprocess.Popen(['caffeinate', '-dimsu']) if shutil.which('caffeinate') else None
 def run(name, args, extra=None, sql=None):
     with (OUT / (name + '.log')).open('w') as log:
         result = subprocess.run(args, cwd=ROOT, env=env | (extra or {}), input=sql, text=True, stdout=log, stderr=subprocess.STDOUT)
@@ -24,17 +28,18 @@ def run(name, args, extra=None, sql=None):
     if result.returncode:
         raise RuntimeError(f'{name} failed; inspect sanitized log')
 def psql(name, role, sql, database='boundary_disposable'):
-    run(name, [str(PG/'psql'), '-X', '-v', 'ON_ERROR_STOP=1', '-h', '127.0.0.1', '-p', '55620', '-U', role, '-d', database], sql=sql)
+    run(name, [str(PG/'psql'), '-X', '-v', 'ON_ERROR_STOP=1', '-h', '127.0.0.1', '-p', str(PG_PORT), '-U', role, '-d', database], sql=sql)
 try:
-    run('initdb', [str(PG/'initdb'), '-D', str(base/'data'), '-U', 'boundary_bootstrap', '--auth-local=trust', '--auth-host=trust'])
-    run('start', [str(PG/'pg_ctl'), '-D', str(base/'data'), '-l', str(base/'postgres.log'), '-o', f'-h 127.0.0.1 -p 55620 -c unix_socket_directories="" -c max_connections=25 -c shared_buffers=32MB', '-w', 'start'])
+    # mkstemp creates the password file with mode 0600, before any contents exist.
+    fd, password_path = tempfile.mkstemp(prefix='initdb-password-', dir=base)
+    try:
+        with os.fdopen(fd, 'w') as password_file:
+            password_file.write(password + '\n')
+        run('initdb', [str(PG/'initdb'), '-D', str(base/'data'), '-U', 'boundary_bootstrap', '--auth=scram-sha-256', '--pwfile', password_path])
+    finally:
+        os.unlink(password_path)
+    run('start', [str(PG/'pg_ctl'), '-D', str(base/'data'), '-l', str(base/'postgres.log'), '-o', f'-h 127.0.0.1 -p {PG_PORT} -c unix_socket_directories="" -c max_connections=25 -c shared_buffers=32MB', '-w', 'start'])
     started = True
-    # Set the bootstrap password over the loopback (still trust), then switch
-    # host auth to scram so the password is never written to disk.
-    psql('bootstrap-password', 'boundary_bootstrap', f"ALTER ROLE boundary_bootstrap PASSWORD '{password}';", 'postgres')
-    hba = base / 'data' / 'pg_hba.conf'
-    hba.write_text(hba.read_text().replace(' trust', ' scram-sha-256'))
-    run('reload', [str(PG/'pg_ctl'), '-D', str(base/'data'), 'reload'])
     psql('roles', 'boundary_bootstrap', f"CREATE ROLE boundary_owner LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '{password}'; CREATE ROLE boundary_runtime LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '{password}'; CREATE DATABASE boundary_disposable OWNER boundary_owner;", 'postgres')
     run('extensions', ['node', 'node_modules/tsx/dist/cli.mjs', 'prisma/prepare-extensions.ts'], {'EXTENSION_ADMIN_DATABASE_URL': url('boundary_bootstrap')})
     psql('extension-grant', 'boundary_bootstrap', 'GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO boundary_owner WITH GRANT OPTION;')
@@ -53,8 +58,9 @@ COMMIT;
 finally:
     if started:
         run('stop', [str(PG/'pg_ctl'), '-D', str(base/'data'), '-m', 'fast', '-w', 'stop'])
-    awake.terminate()
-    awake.wait()
+    if awake:
+        awake.terminate()
+        awake.wait()
     if (base/'postgres.log').exists():
         shutil.copyfile(base/'postgres.log', OUT/'postgres.log')
     # Only this runner's freshly allocated cluster and synthetic password.

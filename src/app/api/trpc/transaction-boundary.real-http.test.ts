@@ -117,7 +117,10 @@ const enabled = process.env.BOUNDARY_REAL_HTTP === '1';
 const suite = enabled ? describe : describe.skip;
 const A = 'boundary_org_a';
 const B = 'boundary_org_b';
-const endpoint = 'http://127.0.0.1:4473/api/trpc';
+// The runner owns port defaults and passes the same values to this probe.
+const pgPort = process.env.BOUNDARY_PG_PORT;
+const httpPort = Number(process.env.BOUNDARY_HTTP_PORT);
+const endpoint = `http://127.0.0.1:${httpPort}/api/trpc`;
 function client(tenant = A, headers: Record<string, string> = {}) {
   return createTRPCUntypedClient<AnyTRPCRouter>({
     links: [
@@ -158,7 +161,7 @@ suite('real restricted PostgreSQL through GET/POST over loopback HTTP', () => {
       const url = new URL(process.env[key]!);
       expect([url.hostname, url.port, url.pathname]).toEqual([
         '127.0.0.1',
-        '55678',
+        pgPort,
         '/boundary_disposable',
       ]);
     }
@@ -170,7 +173,7 @@ suite('real restricted PostgreSQL through GET/POST over loopback HTTP', () => {
       try {
         const chunks: Buffer[] = [];
         for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
-        const request = new Request(`http://127.0.0.1:4473${incoming.url}`, {
+        const request = new Request(`http://127.0.0.1:${httpPort}${incoming.url}`, {
           method: incoming.method,
           headers: incoming.headers as Record<string, string>,
           ...(incoming.method === 'POST' ? { body: Buffer.concat(chunks) } : {}),
@@ -185,7 +188,7 @@ suite('real restricted PostgreSQL through GET/POST over loopback HTTP', () => {
     });
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
-      server.listen(4473, '127.0.0.1', resolve);
+      server.listen(httpPort, '127.0.0.1', resolve);
     });
   });
   beforeEach(async () => {
