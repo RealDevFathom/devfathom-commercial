@@ -33,7 +33,10 @@ export function supportAccessDenial(
   ) {
     return SUPPORT_EXPIRED_MESSAGE;
   }
-  return operation === 'query' && path !== 'email.getMessage' ? null : SUPPORT_READ_ONLY_MESSAGE;
+  // These query handlers persist data: email hydrates message bodies; meetings
+  // materializes occurrence and participant rows before reading them.
+  const writesOnRead = path === 'email.getMessage' || path === 'meetings.getOccurrences';
+  return operation === 'query' && !writesOnRead ? null : SUPPORT_READ_ONLY_MESSAGE;
 }
 
 /** Explicitly reviewed HTTP reads; GET token issuers are not inspection. */

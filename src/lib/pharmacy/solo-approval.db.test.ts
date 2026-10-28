@@ -1073,3 +1073,327 @@ it('offers direct-purchase approvers by persisted procurement permission and bra
     { skipDrain: true }
   );
 });
+
+// Independent tenant-scoped connections make lock waits and MVCC snapshots real.
+async function tenantConnection(f: Fixture, isolation = 'READ COMMITTED') {
+  const client = new Client({ connectionString: configuredUrl });
+  await client.connect();
+  await client.query(`BEGIN ISOLATION LEVEL ${isolation}`);
+  await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
+  await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [f.org]);
+  await client.query(`SET LOCAL statement_timeout = '5s'`);
+  return client;
+}
+async function closeConnections(...clients: Client[]) {
+  for (const client of clients) {
+    await client.query('ROLLBACK');
+    await client.end();
+  }
+}
+async function waitUntilBlocked(client: Client) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const result = await owner.query(
+      'SELECT cardinality(pg_blocking_pids(pid)) > 0 AS blocked FROM pg_stat_activity WHERE pid=$1',
+      [(client as Client & { processID: number }).processID]
+    );
+    if (result.rows[0]?.blocked) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Expected database lock wait was not observed');
+}
+// Install transaction-bound evidence directly to isolate the SQL guard. The
+// router tests above independently exercise actual PIN reauthentication.
+async function sqlAudit(client: Client, f: Fixture, target: string) {
+  const id = randomUUID();
+  await client.query(
+    `INSERT INTO audit_logs (id,"organizationId","actorId",source,category,action,"targetType","targetId",metadata)
+     VALUES ($1,$2,$3,'TRPC','PHARMACY','PHARMACY:SOLO_OWNER_PIN','PharmacyPurchaseOrder',$4,$5::jsonb)`,
+    [id, f.org, f.user, target, JSON.stringify({ branchId: f.branch, reauthentication: 'PIN' })]
+  );
+  await client.query(`SELECT set_config('app.pharmacy_solo_audit_id',$1,true)`, [id]);
+}
+function sqlApprove(client: Client, f: Fixture, id: string) {
+  return client.query(
+    `UPDATE pharmacy_purchase_orders SET status='APPROVED',"approvedByUserId"=$1,"approvedAt"=now() WHERE id=$2`,
+    [f.user, id]
+  );
+}
+
+describe('solo approval database guard regressions', () => {
+  it('rechecks receiver-only changes but permits ordinary edits to historical receipts', async () => {
+    const f = await fixture();
+    const receipt = await withTenantDb(
+      f.org,
+      (db) => caller(db, f).createGoodsReceipt(receiptInput(f)),
+      { skipDrain: true }
+    );
+    const second = await withTenantDb(
+      f.org,
+      (db) =>
+        db.user.create({
+          data: {
+            name: 'Second receiver',
+            email: `${randomUUID()}@example.invalid`,
+            department: 'PHARMACY',
+            title: 'Staff',
+            status: 'ACTIVE',
+          },
+        }),
+      { skipDrain: true }
+    );
+    await withTenantDb(
+      f.org,
+      async (db) => {
+        await db.pharmacyGoodsReceipt.update({
+          where: { id: receipt.id },
+          data: { note: 'Historical evidence stays valid' },
+        });
+        await db.pharmacyGoodsReceipt.update({
+          where: { id: receipt.id },
+          data: { receivedByUserId: second.id },
+        });
+      },
+      { skipDrain: true }
+    );
+    await expect(
+      withTenantDb(
+        f.org,
+        (db) =>
+          db.pharmacyGoodsReceipt.update({
+            where: { id: receipt.id },
+            data: { receivedByUserId: f.user },
+          }),
+        { skipDrain: true }
+      )
+    ).rejects.toThrow(/direct purchase self approval requires solo owner PIN audit/);
+    await withTenantDb(
+      f.org,
+      async (db) => {
+        const stored = await db.pharmacyGoodsReceipt.findUniqueOrThrow({
+          where: { id: receipt.id },
+        });
+        expect(stored.receivedByUserId).toBe(second.id);
+        expect(stored.bypassApprovedByUserId).toBe(f.user);
+        expect(stored.bypassApprovedAt).toEqual(receipt.bypassApprovedAt);
+      },
+      { skipDrain: true }
+    );
+  });
+
+  it('requires fresh PIN audit when a receiver-only change restores eligible solo self approval', async () => {
+    const f = await fixture();
+    const receipt = await withTenantDb(
+      f.org,
+      (db) => caller(db, f).createGoodsReceipt(receiptInput(f)),
+      { skipDrain: true }
+    );
+    const receiver = await withTenantDb(
+      f.org,
+      async (db) => {
+        const user = await db.user.create({
+          data: {
+            name: 'Prior receiver',
+            email: `${randomUUID()}@example.invalid`,
+            department: 'PHARMACY',
+            title: 'Staff',
+            status: 'INACTIVE',
+          },
+        });
+        await db.pharmacyGoodsReceipt.update({
+          where: { id: receipt.id },
+          data: { receivedByUserId: user.id },
+        });
+        return user;
+      },
+      { skipDrain: true }
+    );
+    await expect(
+      withTenantDb(
+        f.org,
+        (db) =>
+          db.pharmacyGoodsReceipt.update({
+            where: { id: receipt.id },
+            data: { receivedByUserId: f.user },
+          }),
+        { skipDrain: true }
+      )
+    ).rejects.toThrow(/direct purchase self approval requires solo owner PIN audit/);
+    await withTenantDb(
+      f.org,
+      async (db) => {
+        expect(
+          (await db.pharmacyGoodsReceipt.findUniqueOrThrow({ where: { id: receipt.id } }))
+            .receivedByUserId
+        ).toBe(receiver.id);
+        expect(
+          await authorize(db, scope(f), { type: 'PharmacyGoodsReceipt', id: receipt.id }, pin)
+        ).toBe(true);
+        const updated = await db.pharmacyGoodsReceipt.update({
+          where: { id: receipt.id },
+          data: { receivedByUserId: f.user },
+        });
+        expect(updated.bypassApprovedAt).toEqual(receipt.bypassApprovedAt);
+        expect(updated.receivedByUserId).toBe(f.user);
+        expect(
+          await db.auditLog.count({
+            where: { targetId: receipt.id, action: 'PHARMACY:SOLO_OWNER_PIN' },
+          })
+        ).toBe(2);
+      },
+      { skipDrain: true }
+    );
+  });
+
+  it('allows simultaneous self approvals in different organizations', async () => {
+    const f = await fixture();
+    const g = await fixture();
+    const po = await order(f);
+    const other = await order(g);
+    const a = await tenantConnection(f);
+    const b = await tenantConnection(g);
+    try {
+      await sqlAudit(a, f, po.id);
+      await sqlAudit(b, g, other.id);
+      await sqlApprove(a, f, po.id);
+      // A remains uncommitted. B must finish without waiting for tenant A.
+      await sqlApprove(b, g, other.id);
+      await a.query('COMMIT');
+      await b.query('COMMIT');
+    } finally {
+      await closeConnections(a, b);
+    }
+  });
+
+  it('serializes simultaneous self approvals in one organization without lock upgrades', async () => {
+    const f = await fixture();
+    const first = await order(f);
+    const second = await order(f);
+    const a = await tenantConnection(f);
+    const b = await tenantConnection(f);
+    try {
+      // Foreign-key checks in an approval transaction may already hold KEY SHARE.
+      await a.query('SELECT id FROM organizations WHERE id=$1 FOR KEY SHARE', [f.org]);
+      await b.query('SELECT id FROM organizations WHERE id=$1 FOR KEY SHARE', [f.org]);
+      await sqlAudit(a, f, first.id);
+      await sqlAudit(b, f, second.id);
+      await sqlApprove(a, f, first.id);
+      const pending = sqlApprove(b, f, second.id);
+      await waitUntilBlocked(b);
+      await a.query('COMMIT');
+      await pending;
+      await b.query('COMMIT');
+    } finally {
+      await closeConnections(a, b);
+    }
+  });
+
+  it.each(['activation', 'assignment', 'unlinked staff', 'owner role'] as const)(
+    'rechecks solo eligibility after a concurrent %s change commits',
+    async (change) => {
+      const f = await fixture();
+      const po = await order(f);
+      const staff = await withTenantDb(
+        f.org,
+        async (db) => {
+          const role = await db.organizationRole.create({
+            data: { key: 'second-role', name: 'Staff' },
+          });
+          const user = await db.user.create({
+            data: {
+              name: 'Concurrent staff',
+              email: `${randomUUID()}@example.invalid`,
+              department: 'PHARMACY',
+              title: 'Staff',
+              status: change === 'activation' ? 'INACTIVE' : 'ACTIVE',
+              organizationRoleId: role.id,
+            },
+          });
+          if (change !== 'activation')
+            await db.pharmacyBranchAssignment.create({
+              data: { userId: user.id, branchId: f.other },
+            });
+          return { user, role };
+        },
+        { skipDrain: true }
+      );
+      const roster = await tenantConnection(f);
+      const approval = await tenantConnection(f);
+      try {
+        await sqlAudit(approval, f, po.id);
+        const before = await approval.query(
+          'SELECT pharmacy_solo_owner_eligible($1,$2,$3) AS eligible',
+          [f.org, f.branch, f.user]
+        );
+        expect(before.rows[0].eligible).toBe(true);
+        if (change === 'activation')
+          await roster.query(`UPDATE users SET status='ACTIVE' WHERE id=$1`, [staff.user.id]);
+        if (change === 'assignment')
+          await roster.query(
+            `UPDATE pharmacy_branch_assignments SET "branchId"=$1 WHERE "userId"=$2`,
+            [f.branch, staff.user.id]
+          );
+        if (change === 'unlinked staff')
+          await roster.query(
+            `INSERT INTO restaurant_staff_profiles (id,"organizationId","displayName","updatedAt") VALUES ($1,$2,'Unlinked',now())`,
+            [randomUUID(), f.org]
+          );
+        if (change === 'owner role')
+          await roster.query(`UPDATE organization_roles SET key='owner' WHERE id=$1`, [
+            staff.role.id,
+          ]);
+        const pending = sqlApprove(approval, f, po.id).catch((error: unknown) => error);
+        await waitUntilBlocked(approval);
+        await roster.query('COMMIT');
+        expect(await pending).toMatchObject({
+          code: '23514',
+          message: 'purchase self approval requires solo owner PIN audit',
+        });
+      } finally {
+        await closeConnections(roster, approval);
+      }
+    }
+  );
+
+  it('blocks same-tenant roster writes until approval commits while other tenants remain writable', async () => {
+    const f = await fixture();
+    const g = await fixture();
+    const po = await order(f);
+    const approval = await tenantConnection(f);
+    const roster = await tenantConnection(f);
+    const unrelated = await tenantConnection(g);
+    try {
+      await sqlAudit(approval, f, po.id);
+      await sqlApprove(approval, f, po.id);
+      const pending = roster.query(`UPDATE users SET status='INACTIVE' WHERE id=$1`, [f.user]);
+      await waitUntilBlocked(roster);
+      await unrelated.query(`UPDATE users SET status='INACTIVE' WHERE id=$1`, [g.user]);
+      await unrelated.query('COMMIT');
+      await approval.query('COMMIT');
+      await pending;
+      await roster.query('COMMIT');
+    } finally {
+      await closeConnections(approval, roster, unrelated);
+    }
+  });
+
+  it('fails safely when a repeatable-read approval snapshot predates a roster change', async () => {
+    const f = await fixture();
+    const po = await order(f);
+    const approval = await tenantConnection(f, 'REPEATABLE READ');
+    const roster = await tenantConnection(f);
+    try {
+      await sqlAudit(approval, f, po.id);
+      await approval.query('SELECT pharmacy_solo_owner_eligible($1,$2,$3)', [
+        f.org,
+        f.branch,
+        f.user,
+      ]);
+      await roster.query(`UPDATE users SET status='INACTIVE' WHERE id=$1`, [f.user]);
+      await roster.query('COMMIT');
+      await expect(sqlApprove(approval, f, po.id)).rejects.toMatchObject({ code: '40001' });
+    } finally {
+      await closeConnections(approval, roster);
+    }
+  });
+});

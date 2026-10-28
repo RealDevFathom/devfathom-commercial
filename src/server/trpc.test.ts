@@ -65,6 +65,7 @@ import {
 } from './trpc';
 import type { TRPCContext } from './trpc';
 import { apiTokensRouter } from './routers/api-tokens';
+import { meetingsRouter } from './routers/meetings';
 
 describe('createTRPCContext request actor resolution', () => {
   beforeEach(() => {
@@ -503,6 +504,22 @@ describe('support inspection scope', () => {
     expect(result.token).toMatch(/^df_/);
     expect(create).toHaveBeenCalledOnce();
     expect(result.expiresAt).toBeNull();
+  });
+
+  it('blocks occurrence materialization before the actual meetings resolver touches the database', async () => {
+    const ctx = supportContext();
+    const access = vi.fn(() => {
+      throw new Error('Meeting database must not be touched');
+    });
+    ctx.db = new Proxy({}, { get: access }) as TRPCContext['db'];
+    const caller = router({ meetings: meetingsRouter }).createCaller(ctx);
+    await expect(
+      caller.meetings.getOccurrences({ meetingId: 'meeting_one' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Support access is read-only.',
+    });
+    expect(access).not.toHaveBeenCalled();
   });
 
   it('refuses queries that persist external provider data', async () => {

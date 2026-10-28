@@ -8,6 +8,26 @@ const session = (expires: string, isSupportSession = true) =>
 const live = () => new Date(Date.now() + 60_000).toISOString();
 
 describe('support authority cannot outlive its session or gain writes', () => {
+  it.each(['email.getMessage', 'meetings.getOccurrences'])(
+    'denies side-effecting query %s for either support representation',
+    (path) => {
+      for (const ctx of [
+        { session: session(live()), support: null },
+        {
+          session: session(live(), false),
+          support: { expiresAt: new Date(live()) } as SupportIdentity,
+        },
+      ]) {
+        expect(supportAccessDenial(ctx, 'query', path)).toBe('Support access is read-only.');
+      }
+      expect(
+        supportAccessDenial({ session: session(live(), false), support: null }, 'query', path)
+      ).toBeNull();
+      expect(
+        supportAccessDenial({ session: session(live()), support: null }, 'query', 'meetings.getAll')
+      ).toBeNull();
+    }
+  );
   it.each(['mutation', 'subscription'] as const)(
     'denies %s even for a live support session',
     (type) => {

@@ -26,7 +26,8 @@ BEGIN
    THEN RAISE EXCEPTION 'purchase self approval requires solo owner PIN audit' USING ERRCODE = '23514'; END IF;
  ELSE
    IF TG_OP = 'UPDATE' AND NEW."bypassApprovedByUserId" IS NOT DISTINCT FROM OLD."bypassApprovedByUserId"
-      AND NEW."bypassApprovedAt" IS NOT DISTINCT FROM OLD."bypassApprovedAt" THEN RETURN NEW; END IF;
+      AND NEW."bypassApprovedAt" IS NOT DISTINCT FROM OLD."bypassApprovedAt"
+      AND NEW."receivedByUserId" IS NOT DISTINCT FROM OLD."receivedByUserId" THEN RETURN NEW; END IF;
    IF NEW."bypassApprovedByUserId" = NEW."receivedByUserId"
      AND NOT pharmacy_has_solo_audit(NEW."organizationId", NEW."branchId", NEW."receivedByUserId", 'PharmacyGoodsReceipt', NEW.id)
    THEN RAISE EXCEPTION 'direct purchase self approval requires solo owner PIN audit' USING ERRCODE = '23514'; END IF;
