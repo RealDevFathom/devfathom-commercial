@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -49,6 +50,8 @@ it('packages staged assets and nested traced dependencies, excluding checkout se
   const root = mkdtempSync(join(tmpdir(), 'develop-package-'));
   try {
     fixture(root);
+    // Standalone may omit its .next directory; packaging must create it.
+    expect(existsSync(join(root, '.next/standalone/.next'))).toBe(false);
     const archive = join(root, 'release.tar.gz');
     execFileSync(packageScript, [root, archive]);
     const entries = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' });
@@ -63,7 +66,17 @@ it('packages staged assets and nested traced dependencies, excluding checkout se
   }
 });
 
-for (const mode of ['success', 'restart-failure', 'health-failure', 'migration-failure']) {
+for (const mode of [
+  'success',
+  'restart-failure',
+  'health-failure',
+  'migration-failure',
+  'replace-inactive',
+  'replace-migration-failure',
+  'replace-restart-failure',
+  'same-sha',
+  'same-sha-unhealthy',
+]) {
   it(`activates safely with mocked AWS/systemctl: ${mode}`, () => {
     const root = mkdtempSync(join(tmpdir(), 'develop-activate-'));
     try {
@@ -71,15 +84,43 @@ for (const mode of ['success', 'restart-failure', 'health-failure', 'migration-f
       execFileSync(packageScript, [join(root, 'source'), join(root, 'release.tar.gz')]);
       mkdirSync(join(root, 'releases/previous'), { recursive: true });
       mkdirSync(join(root, 'shared/uploads'), { recursive: true });
+      put(root, 'shared/uploads/untouched', 'persistent');
+      chmodSync(join(root, 'shared/uploads/untouched'), 0o600);
+      const uploadBefore = statSync(join(root, 'shared/uploads/untouched'));
+      // Use a real local supplementary group for chgrp, without OS account changes.
+      const appGid =
+        process.getgroups!().find((gid) => gid !== process.getgid!()) ?? process.getgid!();
+      const repeat = mode.startsWith('same-sha');
+      const replacing = mode.startsWith('replace-');
+      if (repeat || replacing) {
+        put(root, `releases/${sha}/original`, 'existing release');
+      }
       for (let i = 0; i < 7; i++) mkdirSync(join(root, `releases/old-${i}`));
-      symlinkSync(join(root, 'releases/previous'), join(root, 'releases/current'));
+      symlinkSync(
+        join(root, repeat ? `releases/${sha}` : 'releases/previous'),
+        join(root, 'releases/current')
+      );
+      symlinkSync('/stale-after-sigkill', join(root, 'releases/.current-next'));
       symlinkSync(join(root, 'releases/current'), join(root, 'web'));
       put(root, 'develop.env', 'DATABASE_URL=postgresql://local:local@127.0.0.1:5432/local\n');
       const mocks: Record<string, string> = {
-        aws: 'cp "$TEST_ROOT/release.tar.gz" "$4"',
-        bun: `if [[ "$1" == install ]]; then mkdir -p node_modules/.bin node_modules/dotenv; touch node_modules/.bin/prisma; chmod +x node_modules/.bin/prisma; exit; fi\n[[ "$TEST_MODE" != migration-failure ]]`,
-        sudo: `echo "$*" >> "$TEST_ROOT/restarts"\nif [[ "$TEST_MODE" == restart-failure && ! -f "$TEST_ROOT/failed" ]]; then touch "$TEST_ROOT/failed"; exit 1; fi`,
-        curl: 'if [[ "$TEST_MODE" == health-failure ]]; then printf 503; else printf 200; fi',
+        chgrp: `args=("$@"); for i in "\${!args[@]}"; do if [[ "\${args[$i]}" == app ]]; then args[$i]=$TEST_APP_GID; fi; done; exec /usr/bin/chgrp "\${args[@]}"`,
+        aws: 'echo download >> "$TEST_ROOT/downloads"; cp "$TEST_ROOT/release.tar.gz" "$4"',
+        bun: `echo "$*" >> "$TEST_ROOT/bun-calls"
+if [[ "$1" == install ]]; then
+  mkdir -p node_modules/.bin node_modules/dotenv node_modules/restricted
+  touch node_modules/.bin/prisma node_modules/restricted/data
+  chmod +x node_modules/.bin/prisma
+  chmod 700 node_modules/restricted
+  chmod 600 node_modules/restricted/data
+  ln -s "$TEST_ROOT/shared/uploads" node_modules/external
+  exit
+fi
+[[ "$PWD" == "$TEST_ROOT/releases/.staging/"* ]]
+[[ ! -e "$TEST_ROOT/releases/$TEST_SHA" || -f "$TEST_ROOT/releases/$TEST_SHA/original" ]]
+[[ "$TEST_MODE" != *migration-failure ]]`,
+        sudo: `echo "$*" >> "$TEST_ROOT/restarts"\nif [[ "$TEST_MODE" == *restart-failure && ! -f "$TEST_ROOT/failed" ]]; then touch "$TEST_ROOT/failed"; exit 1; fi`,
+        curl: 'if [[ "$TEST_MODE" == health-failure || "$TEST_MODE" == same-sha-unhealthy ]]; then printf 503; else printf 200; fi',
         sleep: ':',
       };
       for (const [name, source] of Object.entries(mocks)) {
@@ -93,30 +134,89 @@ for (const mode of ['success', 'restart-failure', 'health-failure', 'migration-f
           DEVELOP_APP_ROOT: root,
           TEST_ROOT: root,
           TEST_MODE: mode,
+          TEST_APP_GID: String(appGid),
+          TEST_SHA: sha,
         },
         encoding: 'utf8',
       });
-      expect(result.status, result.stderr).toBe(mode === 'success' ? 0 : 1);
+      const success = ['success', 'replace-inactive', 'same-sha'].includes(mode);
+      expect(result.status, result.stderr).toBe(success ? 0 : 1);
+      expect(() => lstatSync(join(root, 'releases/.current-next'))).toThrow();
+      const uploadAfter = statSync(join(root, 'shared/uploads/untouched'));
+      expect([uploadAfter.mode, uploadAfter.gid, uploadAfter.uid]).toEqual([
+        uploadBefore.mode,
+        uploadBefore.gid,
+        uploadBefore.uid,
+      ]);
       const current = readlinkSync(join(root, 'releases/current'));
-      if (mode === 'success') {
-        expect(current).toContain(sha);
+      if (repeat) {
+        expect(current).toBe(join(root, 'releases', sha));
+        expect(readFileSync(join(current, 'original'), 'utf8')).toBe('existing release');
+        for (const file of ['downloads', 'bun-calls', 'restarts'])
+          expect(existsSync(join(root, file))).toBe(false);
+        return;
+      }
+      if (success) {
+        expect(current).toBe(join(root, 'releases', sha));
+        expect(existsSync(join(current, 'original'))).toBe(false);
+        expect(statSync(current).gid).toBe(appGid);
+        expect(statSync(current).uid).toBe(process.getuid!());
+        const restricted = statSync(join(current, 'node_modules/restricted'));
+        const data = statSync(join(current, 'node_modules/restricted/data'));
+        expect(restricted.mode & 0o750).toBe(0o750);
+        expect(data.mode & 0o640).toBe(0o640);
+        expect([restricted.gid, data.gid]).toEqual([appGid, appGid]);
+        const cache = statSync(join(current, '.next/standalone/.next/cache'));
+        expect(cache.gid).toBe(appGid);
+        expect(cache.mode & 0o7777).toBe(0o2770);
         expect(statSync(current).mode & 0o7777).toBe(0o2750);
         expect(
           readdirSync(join(root, 'releases')).filter(
-            (name) => statSync(join(root, 'releases', name)).isDirectory() && name !== 'current'
+            (name) =>
+              statSync(join(root, 'releases', name)).isDirectory() &&
+              !['current', '.staging'].includes(name)
           )
         ).toHaveLength(5);
         expect(existsSync(join(root, 'releases/previous'))).toBe(true);
+        if (mode === 'success') {
+          put(current, '.next/standalone/.next/cache/runtime-data', 'keep cache');
+          const inode = statSync(join(current, '.next/standalone/server.js')).ino;
+          const retry = spawnSync('bash', [activateScript, 'test-bucket', sha, 'us-east-1'], {
+            env: {
+              ...process.env,
+              PATH: `${root}/bin:${process.env.PATH}`,
+              DEVELOP_APP_ROOT: root,
+              TEST_ROOT: root,
+              TEST_MODE: mode,
+              TEST_APP_GID: String(appGid),
+              TEST_SHA: sha,
+            },
+            encoding: 'utf8',
+          });
+          expect(retry.status, retry.stderr).toBe(0);
+          expect(statSync(join(current, '.next/standalone/server.js')).ino).toBe(inode);
+          expect(
+            readFileSync(join(current, '.next/standalone/.next/cache/runtime-data'), 'utf8')
+          ).toBe('keep cache');
+          expect(readFileSync(join(root, 'downloads'), 'utf8').trim().split('\n')).toHaveLength(1);
+          expect(readFileSync(join(root, 'bun-calls'), 'utf8').trim().split('\n')).toHaveLength(2);
+        }
         for (const path of ['public/uploads', '.next/standalone/public/uploads']) {
           expect(readlinkSync(join(current, path))).toBe(join(root, 'shared/uploads'));
         }
       } else {
         expect(current).toBe(join(root, 'releases/previous'));
       }
-      if (mode === 'migration-failure') expect(existsSync(join(root, 'restarts'))).toBe(false);
+      if (replacing && mode.endsWith('migration-failure'))
+        expect(readFileSync(join(root, `releases/${sha}/original`), 'utf8')).toBe(
+          'existing release'
+        );
+      expect(readdirSync(join(root, 'releases/.staging'))).toEqual([]);
+      if (mode.endsWith('migration-failure'))
+        expect(existsSync(join(root, 'restarts'))).toBe(false);
       else {
         const restarts = readFileSync(join(root, 'restarts'), 'utf8').trim().split('\n');
-        expect(restarts).toHaveLength(mode === 'success' ? 1 : 2);
+        expect(restarts).toHaveLength(success ? 1 : 2);
         expect(
           restarts.every((line) => line === '/usr/bin/systemctl restart devfathom-develop.service')
         ).toBe(true);

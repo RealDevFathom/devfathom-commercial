@@ -26,7 +26,14 @@ the user transition; deploy can sudo exactly the dedicated service restart. Pris
 remain production dependencies, and the locally installed Prisma executable is used without bunx.
 The instance needs registry access for the production install; no build runs there.
 
-The server uses a unique release directory for each attempt. `/home/app/web` is a stable link to
+The server prepares each attempt under `/home/app/releases/.staging/<sha>.<random>`. Only after
+production install, migrations, permissions, cache and uploads setup succeed does it promote to the
+literal `/home/app/releases/<sha>`. A retry of the current SHA performs only a bounded health check:
+it never overwrites files, reinstalls dependencies, migrates or restarts, and fails if unhealthy.
+An existing inactive SHA directory is replaced only after preparation under the server lock; the
+currently running predecessor is preserved for rollback. SHA-path symlink aliases are refused.
+Stale `.current-next` links left by SIGKILL are removed under that same lock before any switch.
+`/home/app/web` is a stable link to
 `/home/app/releases/current`; replacing `current` with `mv -T` atomically changes the release reached
 through web without allowing deploy to modify `/home/app` itself. After migrations, activation
 restarts **only `devfathom-develop.service`** and probes `http://127.0.0.1:3001/` up to twelve times
@@ -36,7 +43,10 @@ not undo schema changes. Use backward-compatible expand/contract migrations. Ini
 require an existing healthy predecessor, including its persistent uploads links.
 
 The active release and predecessor plus three other newest directories are retained after success
-(about five). Failed attempts are cleaned by a later successful deployment. SSM delivery timeout is
+(about five), excluding `.staging`. Normal exits clean the temporary staging directory and archive.
+A SIGKILL can leave staging debris; an administrator may remove orphaned `.staging` entries while
+holding `.deploy.lock` and after confirming no SSM deployment is active. Never remove an active or
+rollback release during that cleanup. SSM delivery timeout is
 120 seconds, execution timeout 2400 seconds and polling is bounded to 45 minutes. The runner prints
 terminal SSM stdout/stderr/status and fails for every non-success status or timeout. A runner timeout
 does not prove the remote command stopped: inspect SSM before attempting operator recovery. Never
@@ -66,7 +76,12 @@ These are setup instructions, not commands executed by CI. Use a dedicated devel
 first confirm no other environment uses `/home/app/web`, `/home/app/releases`, the uploads directory
 or port 3001. Do not replace or restart an existing production/shared service. If those paths are
 shared, isolate that service first during a separately approved maintenance window. Install AWS CLI,
-SSM Agent, Node 22, Bun 1.4.2 for deploy, tar, curl, util-linux (flock/runuser) and sudo. Ensure the
+SSM Agent, system-wide Node 22 at `/usr/bin/node`, Bun 1.4.2 at
+`/home/deploy/.bun/bin/bun`, tar, curl, GNU coreutils/findutils, util-linux (flock/runuser) and sudo.
+Install Bun as deploy with `BUN_INSTALL=/home/deploy/.bun` and ensure deploy owns its home and Bun
+installation; do not reuse `/home/app/.bun` or a private administrator installation. The app uses
+system-wide Node, so it needs no access to deploy's home or Bun. Ripgrep is only used by the GitHub
+runner's send script, not by the instance activation script. Ensure the
 SSM agent has outbound HTTPS to SSM/ssmmessages and the instance can reach S3 and the package registry.
 No inbound deployment ports are necessary.
 
@@ -75,6 +90,10 @@ traversal but remain administrator-owned and not writable by deploy. For a fresh
 
 ```bash
 sudo usermod -aG app deploy
+# New runuser sessions pick up this supplementary group; primary group may remain deploy.
+sudo -u deploy -H id
+sudo -u deploy -H /home/deploy/.bun/bin/bun --version
+sudo -u app /usr/bin/node --version
 sudo chown root:app /home/app
 sudo chmod 0750 /home/app
 sudo install -d -o deploy -g app -m 2750 /home/app/releases
@@ -100,14 +119,21 @@ file before changing user. The migration URL is elevated only as far as required
 schema. Never reuse production environment files. Keep application logs free of credentials.
 
 Before first activation, use this packager to stage a known healthy develop release (including
-`.assets-staged`) at `/home/app/releases/initial`, owned deploy:app with group read/traverse permissions. Install its frozen production dependencies
-as deploy. Copy existing develop uploads into shared storage once, preserving files and setting group
+`.assets-staged`) at `/home/app/releases/<bootstrap-sha>`, owned deploy:app with group read/traverse
+permissions. Install its frozen production dependencies as deploy, then apply the same recursive
+`chgrp -hR -P app` and `chmod -R g+rX` preparation as activation, before adding uploads links.
+Create `.next/standalone/.next/cache` with group app and mode 2770, including group-write access to
+any existing cache files. Never recursively follow uploads symlinks when adjusting permissions.
+Copy existing develop uploads into shared storage once, preserving files and setting group
 app, directories 2770 and files 0660; use a maintenance window so uploads cannot change during copying.
-Link both `initial/.next/standalone/public/uploads` and `initial/public/uploads` to shared storage.
+Link both `<bootstrap-sha>/.next/standalone/public/uploads` and `<bootstrap-sha>/public/uploads`
+to shared storage.
 Remove only the old empty uploads directories after verifying the copy. Then create:
 
 ```bash
-sudo -u deploy ln -s /home/app/releases/initial /home/app/releases/current
+# Set INITIAL_SHA to the verified 40-character bootstrap commit, not a secret.
+[[ "$INITIAL_SHA" =~ ^[0-9a-f]{40}$ ]]
+sudo -u deploy ln -s "/home/app/releases/$INITIAL_SHA" /home/app/releases/current
 sudo ln -s /home/app/releases/current /home/app/web
 ```
 
@@ -136,7 +162,14 @@ NoNewPrivileges=true
 WantedBy=multi-user.target
 ```
 
-The app needs read access to releases and write access to shared uploads. The 0007 service umask
+Activation explicitly assigns the prepared release tree to group app (`chgrp -hR -P app`), adds
+group read/traverse access (`chmod -R g+rX`), and sets the release root to 2750 despite mktemp
+initially using 0700. All extracted and installed files remain owned by deploy, not root. Permission
+preparation happens before adding the persistent uploads links; nested symlink targets are not
+traversed. The standalone `.next/cache` directory is app-group writable with mode 2770; its existing
+contents also receive group-write access for image/runtime caches. The service runs only as app.
+The app needs read access to releases and write access to cache and shared uploads. The 0007 service
+umask
 and setgid uploads directory preserve app-group write access for newly created uploads. Deploy must
 not own shared uploads exclusively; group app is the persistence contract across release switches.
 
@@ -211,4 +244,8 @@ scripts/deploy/package-develop.sh . /tmp/develop-dry-run.tar.gz
 
 The last command needs an existing local standalone build. The packaging regression also performs
 a complete fixture-based dry run, including nested dependencies, secret exclusion and staged assets.
-Activation tests mock AWS, systemctl and health probes; they never contact a server.
+Activation tests mock AWS, systemctl and health probes; they never contact a server. They verify
+exact SHA promotion, current-SHA retry without replacement (healthy and unhealthy), inactive-SHA
+replacement and rollback, stale-link recovery, real group/mode changes, writable cache and no
+permission changes through uploads symlinks. Tests map the fixed app group to an available local
+supplementary group so no system account changes are required.
