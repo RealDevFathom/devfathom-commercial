@@ -1,3 +1,5 @@
+import { authorizeMakerChecker, type approvalPinSchema } from './maker-checker';
+import type { z } from 'zod';
 /**
  * PH-PUR / PUR-06 — purchase returns and expiry claims against the append-only
  * ledger, with debit notes, supplier credit and settlement allocation.
@@ -29,7 +31,6 @@ import {
   assertClaimable,
   assertPurchaseReturnTransition,
   assertReturnWindowOpen,
-  assertSettlementSegregation,
   creditPosition,
   expectedCreditForLines,
   PharmacySupplierReturnError,
@@ -407,10 +408,43 @@ export async function recordSupplierCredit(
  * both enforced, and the actor who submitted the return may not be the one
  * closing the money on it (§8A invariant 26).
  */
-export async function allocateSupplierCredit(
+type SupplierCreditAllocationInput = {
+  supplierCreditId: string;
+  debitNoteId: string;
+  amountMinor: number;
+  at: Date;
+  approvalPin?: z.infer<typeof approvalPinSchema>;
+};
+export function allocateSupplierCredit(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { supplierCreditId: string; debitNoteId: string; amountMinor: number; at: Date }
+  input: SupplierCreditAllocationInput & { approvalPin?: undefined }
+): Promise<
+  Exclude<Awaited<ReturnType<typeof allocateSupplierCreditInternal>>, { blocked: string }>
+>;
+export function allocateSupplierCredit(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: SupplierCreditAllocationInput
+): ReturnType<typeof allocateSupplierCreditInternal>;
+export function allocateSupplierCredit(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: SupplierCreditAllocationInput
+) {
+  return allocateSupplierCreditInternal(db, scope, input);
+}
+
+async function allocateSupplierCreditInternal(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: {
+    supplierCreditId: string;
+    debitNoteId: string;
+    amountMinor: number;
+    at: Date;
+    approvalPin?: z.infer<typeof approvalPinSchema>;
+  }
 ) {
   const [credit, note] = await Promise.all([
     db.pharmacySupplierCredit.findFirst({
@@ -431,10 +465,18 @@ export async function allocateSupplierCredit(
   }
   if (note.status === 'CANCELLED') throw new PharmacySupplierReturnError('INVALID_TRANSITION');
   if (note.purchaseReturn.submittedByUserId) {
-    assertSettlementSegregation({
-      submittedByUserId: note.purchaseReturn.submittedByUserId,
-      allocatedByUserId: scope.actorId,
+    const approval = await authorizeMakerChecker(db, {
+      organizationId: scope.organizationId,
+      actorId: scope.actorId,
+      makerIds: [note.purchaseReturn.submittedByUserId],
+      targetType: 'PharmacyDebitNote',
+      targetId: note.id,
+      pin: input.approvalPin,
     });
+    if ('blocked' in approval) {
+      if (!input.approvalPin) throw new PharmacySupplierReturnError('SELF_APPROVAL');
+      return approval;
+    }
   }
 
   const creditAllocated = await db.pharmacySupplierCreditAllocation.aggregate({

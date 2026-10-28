@@ -1,3 +1,4 @@
+import { isPharmacyOwner } from './branch-assignment';
 /**
  * PH-PUR read models — PRD §6.3 PUR-01..PUR-06 as the purchasing consoles need
  * to show them.
@@ -241,6 +242,8 @@ export type PurchasingWorkspace = {
   medicines: MedicineOption[];
   suppliers: SupplierSummary[];
   approvers: ApproverOption[];
+  businessApprovers?: ApproverOption[];
+  soloOwner?: boolean;
 };
 
 function conversionLabel(
@@ -321,16 +324,17 @@ export async function purchasingWorkspace(
     db.user.findMany({
       where: {
         organizationId: scope.organizationId,
-        status: { not: 'INACTIVE' },
-        ...(scope.actorId ? { id: { not: scope.actorId } } : {}),
+        status: { in: ['ACTIVE', 'ON_LEAVE'] },
       },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
       select: {
+        role: true,
+        status: true,
         id: true,
         name: true,
         email: true,
         organizationRole: {
-          select: { permissions: { select: { capability: true, effect: true } } },
+          select: { key: true, permissions: { select: { capability: true, effect: true } } },
         },
         permissionOverrides: {
           where: { OR: [{ expiresAt: null }, { expiresAt: { gt: at } }] },
@@ -341,17 +345,29 @@ export async function purchasingWorkspace(
   ]);
 
   const eligibleApprovers = [];
+  const businessApprovers: ApproverOption[] = [];
+  const soloOwner =
+    approvers.length === 1 && approvers[0].id === scope.actorId && isPharmacyOwner(approvers[0]);
   for (const user of approvers) {
-    if (await can(subjectFromSession(user), 'pharmacy:dispense', undefined, { db, now: at })) {
+    if (
+      user.id !== scope.actorId &&
+      (await can(subjectFromSession(user), 'pharmacy:dispense', undefined, { db, now: at }))
+    ) {
       eligibleApprovers.push(user);
     }
+    if (
+      (user.id !== scope.actorId || soloOwner) &&
+      (await can(subjectFromSession(user), 'pharmacy:procurement', undefined, { db, now: at }))
+    )
+      businessApprovers.push({ id: user.id, name: user.name, email: user.email });
   }
   return {
     branches,
     stockLocations,
     suppliers,
-    approvers: eligibleApprovers
-      .map(({ id, name, email }) => ({ id, name, email })),
+    soloOwner,
+    businessApprovers,
+    approvers: eligibleApprovers.map(({ id, name, email }) => ({ id, name, email })),
     medicines: medicines.map((medicine) => ({
       id: medicine.id,
       productName: medicine.productName,

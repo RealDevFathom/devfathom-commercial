@@ -236,7 +236,10 @@ export default async function PharmacyReceivingPage({
           { field: 'batchNumber' }
         );
       }
-      const receipt = await outcome.write(actionCaller.createGoodsReceipt)({
+      const receipt = await outcome.write(
+        actionCaller.createGoodsReceipt,
+        'bypassApprovalPin'
+      )({
         branchId: branch,
         reference: field(form, 'reference'),
         supplierId: order.supplierId,
@@ -296,7 +299,10 @@ export default async function PharmacyReceivingPage({
           }
         );
       }
-      const receipt = await outcome.write(actionCaller.createGoodsReceipt)({
+      const receipt = await outcome.write(
+        actionCaller.createGoodsReceipt,
+        'bypassApprovalPin'
+      )({
         branchId: branch,
         reference: field(form, 'directReference'),
         supplierId: field(form, 'supplierId'),
@@ -307,6 +313,7 @@ export default async function PharmacyReceivingPage({
         directPurchase: {
           reason: field(form, 'bypassReason'),
           approvedByUserId: field(form, 'bypassApprovedByUserId'),
+          approvalPin: { pin: field(form, 'bypassApprovalPin') },
         },
         note: optionalField(form, 'directNote'),
         qualifiedPersonUserId: optionalField(form, 'directQualifiedPersonUserId'),
@@ -340,25 +347,15 @@ export default async function PharmacyReceivingPage({
     try {
       const actionCaller = await purchasingCaller();
       if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
-      const result = await outcome.write(actionCaller.postGoodsReceipt)({
+      const result = await outcome.write(
+        actionCaller.postGoodsReceipt,
+        'witnessPin'
+      )({
         branchId: branch,
         goodsReceiptId,
         staffProfileId: optionalField(form, 'witnessStaffProfileId'),
         pin: optionalField(form, 'witnessPin'),
       });
-      if (result && 'blocked' in result) {
-        next = destination(
-          ROUTE,
-          {
-            message: result.blocked,
-            kind: 'error',
-            outcome: 'rejected',
-            field: 'witnessPin',
-          },
-          { branch, receipt: goodsReceiptId }
-        );
-        return next;
-      }
       revalidatePath(ROUTE);
       const raised = result.exceptions?.length ?? 0;
       next = destination(
@@ -726,7 +723,7 @@ export default async function PharmacyReceivingPage({
           same as receiving against an order — the only difference is that a bypass reason and a
           named approver stand in place of the order.
         </p>
-        {workspace.approvers.length === 0 ? (
+        {(workspace.businessApprovers ?? workspace.approvers).length === 0 ? (
           <div className="mt-4">
             <EmptyState
               title="No second person can approve a bypass"
@@ -797,15 +794,29 @@ export default async function PharmacyReceivingPage({
               />
               <SelectField
                 emptyHint="Nobody else is active in this workspace."
-                hint="You cannot approve your own bypass, so you are not on this list."
+                hint={
+                  workspace.soloOwner
+                    ? 'As the only active staff member, the owner may approve with a fresh PIN.'
+                    : 'A different authorized person must enter their PIN.'
+                }
                 label="Approved by"
                 name="bypassApprovedByUserId"
                 notice={notice}
-                options={workspace.approvers.map((approver) => ({
+                options={(workspace.businessApprovers ?? workspace.approvers).map((approver) => ({
                   value: approver.id,
                   label: approver.name ? `${approver.name} (${approver.email})` : approver.email,
                 }))}
                 required
+              />
+              <TextField
+                label="Approver PIN"
+                name="bypassApprovalPin"
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                notice={notice}
+                required
+                hint="The selected approver must enter their own PIN."
               />
             </div>
             <div className="space-y-3">

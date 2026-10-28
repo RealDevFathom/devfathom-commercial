@@ -393,10 +393,16 @@ export default async function PharmacyOrdersPage({
         await outcome.write(actionCaller.submitPurchaseOrder)({ purchaseOrderId });
         message = 'Order submitted for approval. Somebody else has to approve it.';
       } else if (action === 'approve' || action === 'reject') {
-        await outcome.write(actionCaller.approvePurchaseOrder)({
+        await outcome.write(
+          actionCaller.approvePurchaseOrder,
+          'approvalPin'
+        )({
           purchaseOrderId,
           decision: action === 'approve' ? 'APPROVED' : 'REJECTED',
           reason: optionalField(form, 'reason'),
+          ...(optionalField(form, 'approvalPin')
+            ? { approvalPin: { pin: field(form, 'approvalPin') } }
+            : {}),
         });
         message =
           action === 'approve'
@@ -609,6 +615,7 @@ export default async function PharmacyOrdersPage({
           {order ? (
             <OrderDetailPanel
               actorId={ctx.session.user.id}
+              soloOwner={workspace?.soloOwner ?? false}
               landed={landed}
               notice={notice}
               onAdvance={advanceOrder}
@@ -999,6 +1006,7 @@ function RequisitionDetailPanel({
 }
 
 function OrderDetailPanel({
+  soloOwner,
   order,
   landed,
   actorId,
@@ -1020,6 +1028,7 @@ function OrderDetailPanel({
     }[];
   } | null;
   actorId: string;
+  soloOwner: boolean;
   notice: Notice | null;
   onAdvance: (form: FormData) => Promise<string>;
 }) {
@@ -1143,7 +1152,7 @@ function OrderDetailPanel({
         ) : null}
 
         {order.status === 'SUBMITTED' ? (
-          selfApproval ? (
+          selfApproval && !soloOwner ? (
             <p className="text-sm text-text-muted">
               You raised this order, so you cannot approve it. That is the PUR-02 segregation of
               duties rule — ask a second person to decide.
@@ -1162,6 +1171,18 @@ function OrderDetailPanel({
                 notice={notice}
                 hint="Recorded with the decision, including a rejection."
               />
+              {selfApproval ? (
+                <TextField
+                  label="Owner approval PIN"
+                  name="approvalPin"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  notice={notice}
+                  required
+                  hint="Available only while you are the sole active staff member."
+                />
+              ) : null}
               <SubmitButton name="action" value="approve">
                 Approve
               </SubmitButton>

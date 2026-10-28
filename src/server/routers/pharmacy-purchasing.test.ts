@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import superjson from 'superjson';
+import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
 
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
@@ -43,6 +44,10 @@ function model() {
 
 function makeDb() {
   const db = {
+    $queryRaw: vi.fn(),
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch_a' }]) },
+    restaurantOperatorCredential: model(),
+    auditLog: model(),
     medicine: model(),
     packLevel: model(),
     pharmacySupplier: model(),
@@ -61,7 +66,7 @@ function makeDb() {
     pharmacyDebitNote: model(),
     pharmacySupplierCredit: model(),
     pharmacyBranch: model(),
-    user: model(),
+    user: { ...model(), count: vi.fn(async () => 2) },
     medicineBarcode: model(),
   };
   return Object.assign(db, {
@@ -82,7 +87,10 @@ function caller(userId = 'user_a', enabledModules = ['pharmacy-procurement']) {
       modules: [],
       limits: {},
     },
-    session: { expires: 'later', user: { id: userId, role: 'ADMIN', status: 'ACTIVE' } },
+    session: {
+      expires: 'later',
+      user: { id: userId, role: 'ADMIN', status: 'ACTIVE', organizationId: 'org_a' },
+    },
     organization: null,
     support: null,
     requestMeta: { ip: null, userAgent: null },
@@ -116,6 +124,12 @@ beforeEach(() => {
   db = makeDb();
   mocks.can.mockReset().mockResolvedValue(true);
   db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
+  db.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+    id: where.id,
+    organizationId: 'org_a',
+    status: 'ACTIVE',
+    role: 'ADMIN',
+  }));
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 
@@ -178,7 +192,7 @@ describe.each(['purchaseReturns', 'supplierCredits'] as const)(
         expect.objectContaining({ db, source: 'TRPC' })
       );
       expect(mocks.can.mock.invocationCallOrder[0]).toBeLessThan(
-        db.pharmacyBranch.findFirst.mock.invocationCallOrder[0]!
+        source().findMany.mock.invocationCallOrder[0]!
       );
       expect(db.pharmacyBranch.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
         source().findMany.mock.invocationCallOrder[0]!
@@ -207,7 +221,7 @@ describe.each(['purchaseReturns', 'supplierCredits'] as const)(
           });
         }
         expect(source().findMany).not.toHaveBeenCalled();
-        if (reason !== 'branch') expect(db.pharmacyBranch.findFirst).not.toHaveBeenCalled();
+        expect(source().findMany).not.toHaveBeenCalled();
       }
     );
 
@@ -270,6 +284,7 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
   it('refuses to send an approved order whose supplier has since been de-authorized', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
       id: 'po_a',
+      branchId: 'branch_a',
       status: 'APPROVED',
       supplierId: 'supplier_a',
     });
@@ -319,6 +334,7 @@ describe('PUR-02 approval', () => {
   it('refuses approval by the person who drafted the order', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
       id: 'po_a',
+      branchId: 'branch_a',
       status: 'SUBMITTED',
       supplierId: 'supplier_a',
       createdByUserId: 'user_a',
@@ -334,6 +350,7 @@ describe('PUR-02 approval', () => {
   it('refuses approval by the person who raised the requisition', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
       id: 'po_a',
+      branchId: 'branch_a',
       status: 'SUBMITTED',
       supplierId: 'supplier_a',
       createdByUserId: 'user_a',
@@ -348,6 +365,7 @@ describe('PUR-02 approval', () => {
   it('records the approval event with its actor and policy', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
       id: 'po_a',
+      branchId: 'branch_a',
       status: 'SUBMITTED',
       supplierId: 'supplier_a',
       createdByUserId: 'user_a',
@@ -374,6 +392,7 @@ describe('PUR-02 approval', () => {
   it('records a rejection and returns the order to DRAFT', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
       id: 'po_a',
+      branchId: 'branch_a',
       status: 'SUBMITTED',
       supplierId: 'supplier_a',
       createdByUserId: 'user_a',
@@ -395,6 +414,7 @@ describe('PUR-02 approval', () => {
   it('refuses to approve an order that was never submitted', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
       id: 'po_a',
+      branchId: 'branch_a',
       status: 'DRAFT',
       supplierId: 'supplier_a',
       createdByUserId: 'user_a',
@@ -608,6 +628,10 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     resolvableCatalog();
     resolvableOrder();
     db.user.findUnique.mockResolvedValue({
+      id: 'user_a',
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationId: 'org_a',
       organizationRole: {
         permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
       },
@@ -672,10 +696,38 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
-  it('records a direct purchase with its bypass reason and approver (PUR-05)', async () => {
+  it('refuses a named direct-purchase approver without their PIN', async () => {
+    await expect(
+      caller('user_counter').createGoodsReceipt({
+        ...withoutOrder(),
+        directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_manager' },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+  it('records a direct purchase with its PIN-authenticated approver (PUR-05)', async () => {
+    db.user.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+      id: where.id,
+      organizationId: 'org_a',
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      organizationRole: { permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    }));
+    db.restaurantOperatorCredential.findFirst.mockResolvedValue({
+      id: 'manager-pin',
+      credentialHash: await hashOperatorCredential('PIN', '493826'),
+      failedAttempts: 0,
+      lockedUntil: null,
+      staffProfile: { organizationId: 'org_a', userId: 'user_manager', status: 'ACTIVE' },
+    });
     await caller('user_counter').createGoodsReceipt({
       ...withoutOrder(),
-      directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_manager' },
+      directPurchase: {
+        reason: 'Emergency insulin.',
+        approvedByUserId: 'user_manager',
+        approvalPin: { staffProfileId: 'manager', pin: '493826' },
+      },
     });
     expect(db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data).toMatchObject({
       purchaseOrderId: null,
@@ -683,6 +735,15 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       bypassReason: 'Emergency insulin.',
       bypassApprovedByUserId: 'user_manager',
     });
+    expect(db.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'pharmacy.pinApproval',
+          actorId: 'user_manager',
+          metadata: expect.objectContaining({ requestedById: 'user_counter' }),
+        }),
+      })
+    );
   });
 
   it('refuses a bypass the receiver approved for themselves', async () => {

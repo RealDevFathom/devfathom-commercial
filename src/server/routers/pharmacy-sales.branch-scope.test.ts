@@ -1,14 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The drawer and close family, and the tender and refund that move cash through
-// the same drawer, take their branch from the input. `scopeFor` refuses a branch
-// that is not an active pharmacy branch of the caller's organization (one
-// `assertInOrganization` lookup); the counter's cash tender reaches it through
-// `branchScopeOrForbidden`, which words that refusal as a scope denial. Every one
-// of these nine procedures must refuse such a branch before the settlement
-// library takes a lock, reads a drawer or writes anything. The close procedures
-// keep their administrator gate in front of that check; no capability is added
-// for the counter.
+// Cash operations must reject an unavailable branch before touching settlement data.
+// The shared guard also requires live branch assignment, counter capability, and
+// a registered device where one is supplied. Close procedures retain their admin gate.
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -33,8 +27,8 @@ const BRANCH = 'branch-elsewhere';
 const businessDate = new Date('2026-10-20T00:00:00.000Z');
 /** `scopeFor`'s refusal. */
 const NOT_IN_WORKSPACE: Refusal = {
-  code: 'BAD_REQUEST',
-  message: 'That record is not in this workspace.',
+  code: 'FORBIDDEN',
+  message: 'Branch is outside your scope.',
 };
 /** The same refusal, as the counter's receipt-access path words it. */
 const OUTSIDE: Refusal = { code: 'FORBIDDEN', message: 'Branch is outside your scope.' };
@@ -125,7 +119,10 @@ let db: {
   $transaction: ReturnType<typeof vi.fn>;
   $queryRaw: ReturnType<typeof vi.fn>;
   $executeRaw: ReturnType<typeof vi.fn>;
-  pharmacyBranch: { findMany: ReturnType<typeof vi.fn> };
+  pharmacyBranch: { findFirst: ReturnType<typeof vi.fn> };
+  user: { findUnique: ReturnType<typeof vi.fn> };
+  pharmacyBranchAssignment: { findMany: ReturnType<typeof vi.fn> };
+  pharmacyRegisteredDevice: { findFirst: ReturnType<typeof vi.fn> };
   pharmacyDailyClose: { findFirst: ReturnType<typeof vi.fn> };
   pharmacyDrawerSession: { findFirst: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
   pharmacyDrawerMovement: { create: ReturnType<typeof vi.fn> };
@@ -153,7 +150,19 @@ beforeEach(() => {
     $queryRaw: vi.fn().mockResolvedValue([]),
     $executeRaw: vi.fn().mockResolvedValue(0),
     // Unknown, inactive and another tenant's branch all read as "no such active branch".
-    pharmacyBranch: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacyBranch: { findFirst: vi.fn().mockResolvedValue(null) },
+    user: {
+      findUnique: vi.fn(async () => ({
+        id: 'actor-1',
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        permissionOverrides: [],
+        organizationRole: null,
+      })),
+    },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: BRANCH }]) },
+    pharmacyRegisteredDevice: { findFirst: vi.fn(async () => ({ id: 'counter-device' })) },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyDrawerSession: {
       findFirst: vi.fn().mockResolvedValue(null),
@@ -169,8 +178,8 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
     '%s refuses a branch that is not an active branch of the organization, touching nothing',
     async (_name, run, refusal) => {
       await expect(run(caller())).rejects.toMatchObject(refusal);
-      expect(db.pharmacyBranch.findMany).toHaveBeenCalledExactlyOnceWith({
-        where: { id: { in: [BRANCH] }, organizationId: 'org-1', active: true },
+      expect(db.pharmacyBranch.findFirst).toHaveBeenCalledExactlyOnceWith({
+        where: { id: BRANCH, organizationId: 'org-1', active: true },
         select: { id: true },
       });
       // No day lock, no day, drawer or tender read, no write.
@@ -191,13 +200,13 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
         code: 'FORBIDDEN',
         message: 'Administrator access is required to reconcile and close a day.',
       });
-      expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+      expect(db.pharmacyBranch.findFirst).not.toHaveBeenCalled();
       expect(db.$transaction).not.toHaveBeenCalled();
     }
   );
 
   it('opens a drawer on an active branch of the organization, scoped to that branch', async () => {
-    db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+    db.pharmacyBranch.findFirst.mockResolvedValue({ id: BRANCH });
     await expect(
       caller('EMPLOYEE').openDrawer({
         branchId: BRANCH,

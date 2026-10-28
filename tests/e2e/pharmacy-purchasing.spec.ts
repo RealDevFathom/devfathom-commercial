@@ -95,7 +95,7 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
     .getByLabel('Purchase order')
     .first()
     .selectOption({ label: `${purchaseOrderReference} — ${FIXTURE.supplier.name} (1 lines)` });
-  await page.getByRole('button', { name: 'Find line' }).first().click();
+  await page.getByRole('button', { name: 'Open order', exact: true }).click();
 
   const capture = page
     .getByRole('group', { name: new RegExp(FIXTURE.medicine.productName) })
@@ -128,6 +128,7 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
   const filed = page.getByRole('status').filter({ hasText: 'drafted' }).first();
   await expect(filed).toBeVisible({ timeout: 20_000 });
   await expect(filed).toContainText('Nothing is in stock until you post it');
+  await page.getByRole('link', { name: 'View saved record' }).click();
 
   // ── 4. the draft is selected and posts into the ledger ──────────────────
   const receiptPanel = page.getByRole('heading', { level: 2, name: receiptReference }).first();
@@ -209,6 +210,7 @@ test('PUR-01 offers an unauthorized supplier as an explained, unselectable optio
   const added = page.getByRole('status').filter({ hasText: 'added' }).first();
   await expect(added).toBeVisible({ timeout: 20_000 });
   await expect(added).toContainText('Record a verified licence before ordering from it');
+  await page.getByRole('link', { name: 'View saved record' }).click();
   await expect(shellText(page, 'Trade with this supplier is not authorized')).toBeVisible();
 
   await page.goto(`${ROUTE}/orders`);
@@ -231,7 +233,10 @@ test('PUR-05 never offers the receiver as their own bypass approver', async ({ p
   await expect(
     approver.getByRole('option', { name: new RegExp(FIXTURE.receiver.email) })
   ).toHaveCount(0);
-  await expect(shellText(page, 'You cannot approve your own bypass')).toBeVisible();
+  await expect(
+    shellText(page, 'A different authorized person must enter their PIN.')
+  ).toBeVisible();
+  await expect(page.getByLabel('Approver PIN')).toHaveAttribute('type', 'password');
 });
 
 test('a validation failure names its field, focuses it, and keeps the rest valid', async ({
@@ -261,9 +266,12 @@ test('a validation failure names its field, focuses it, and keeps the rest valid
 
   const expires = page.getByLabel('Expires on').first();
   await expect(expires).toHaveAttribute('aria-invalid', 'true');
-  await expect(page.locator('#field-expiresAt-error').first()).toContainText(
-    'Expires at: A licence must expire after it was issued.'
+  const describedBy = await expires.getAttribute('aria-describedby');
+  expect(describedBy).toBeTruthy();
+  await expect(page.locator(`[id="${describedBy!.split(' ').pop()}"]`)).toContainText(
+    'A licence must expire after it was issued.'
   );
+  await expect(page.getByLabel('Licence number').first()).toHaveValue('DSL-INVALID-1');
   await expect(expires).toBeFocused();
   // One failure does not paint the whole form red.
   await expect(page.getByLabel('Licence number').first()).toHaveAttribute('aria-invalid', 'false');

@@ -50,13 +50,13 @@ const RETIRED = `harden_branch_retired_${suffix}`;
 const FOREIGN = `harden_branch_foreign_${suffix}`;
 const UNKNOWN = `harden_branch_unknown_${suffix}`;
 const ACTOR = `harden_actor_${suffix}`;
-const DEVICE = 'counter-device-1';
+const DEVICE = `counter-device-1-${suffix}`;
 const businessDate = new Date('2026-10-20T00:00:00.000Z');
 type Refusal = { code: string; message: string };
 /** `scopeFor`'s refusal. */
 const NOT_IN_WORKSPACE: Refusal = {
-  code: 'BAD_REQUEST',
-  message: 'That record is not in this workspace.',
+  code: 'FORBIDDEN',
+  message: 'Branch is outside your scope.',
 };
 /** The same refusal, as the counter's receipt-access path words it. */
 const OUTSIDE: Refusal = { code: 'FORBIDDEN', message: 'Branch is outside your scope.' };
@@ -153,9 +153,44 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
     await createBranch(ORG, ACTIVE);
     await createBranch(ORG, RETIRED);
     await createBranch(OTHER_ORG, FOREIGN);
+    await withTenantDb(ORG, async (db) => {
+      await db.organizationDepartment.create({ data: { key: 'COUNTER', name: 'Counter' } });
+      await db.user.create({
+        data: {
+          id: ACTOR,
+          name: 'Owner',
+          title: 'Owner',
+          department: 'COUNTER',
+          email: `${ACTOR}@test.invalid`,
+          password: 'test-only',
+          role: 'ADMIN',
+          status: 'ACTIVE',
+        },
+      });
+      for (const [id, branchId] of [
+        [DEVICE, ACTIVE, 'a'],
+        [`retired-${DEVICE}`, RETIRED, 'b'],
+      ]) {
+        await db.pharmacyRegisteredDevice.create({
+          data: {
+            id,
+            branchId,
+            name: 'Counter',
+            kind: 'PHARMACY_COUNTER',
+            deviceSecretHash: randomBytes(32).toString('hex'),
+            enrolledByActorId: ACTOR,
+          },
+        });
+      }
+    });
     // A drawer opened while the branch traded, then the branch was deactivated.
     const drawer = await asAdmin((c) =>
-      c.openDrawer({ branchId: RETIRED, deviceId: DEVICE, businessDate, openingFloatMinor: 500 })
+      c.openDrawer({
+        branchId: RETIRED,
+        deviceId: `retired-${DEVICE}`,
+        businessDate,
+        openingFloatMinor: 500,
+      })
     );
     retiredDrawerId = drawer!.id;
     await withTenantDb(ORG, (db) =>

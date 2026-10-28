@@ -324,11 +324,17 @@ export default async function PharmacyReturnsPage({
     try {
       const actionCaller = await purchasingCaller();
       if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
-      await outcome.write(actionCaller.allocateSupplierCredit)({
+      await outcome.write(
+        actionCaller.allocateSupplierCredit,
+        'approvalPin'
+      )({
         branchId: branch,
         supplierCreditId: field(form, 'supplierCreditId'),
         debitNoteId: field(form, 'debitNoteId'),
         amountMinor: moneyFieldMinor(form, 'amountMinor', 'Amount'),
+        ...(optionalField(form, 'approvalPin')
+          ? { approvalPin: { pin: field(form, 'approvalPin') } }
+          : {}),
       });
       revalidatePath(ROUTE);
       next = destination(
@@ -670,6 +676,15 @@ export default async function PharmacyReturnsPage({
                             notice={notice}
                             required
                           />
+                          <TextField
+                            label="Owner approval PIN"
+                            name="approvalPin"
+                            type="password"
+                            inputMode="numeric"
+                            autoComplete="off"
+                            notice={notice}
+                            hint="Required for self-approval when the owner is the only active staff member."
+                          />
                           <SubmitButton variant="secondary">Allocate</SubmitButton>
                         </PurchasingActionForm>
                       ) : null}
@@ -855,6 +870,15 @@ function ReturnDetail({
                       name="amountMinor"
                       notice={notice}
                       required
+                    />
+                    <TextField
+                      label="Owner approval PIN"
+                      name="approvalPin"
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      notice={notice}
+                      hint="Required for self-approval when the owner is the only active staff member."
                     />
                     <SubmitButton variant="secondary">Allocate</SubmitButton>
                   </PurchasingActionForm>

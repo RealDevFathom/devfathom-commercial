@@ -35,8 +35,12 @@ async function customDecision(
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
+      role: true,
+      status: true,
+      organizationId: true,
+      organization: { select: { vertical: true } },
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: { key: true, permissions: { select: { capability: true, effect: true } } },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -53,6 +57,17 @@ async function customDecision(
   );
   if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
   if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
+  // Tenant proprietors retain pharmacy capabilities; explicit DENYs still win.
+  if (
+    (action.startsWith('pharmacy:') ||
+      (['reports:operational', 'reports:financial'].includes(action) &&
+        user.organization?.vertical === 'PHARMACY')) &&
+    user.organizationId &&
+    ['ACTIVE', 'ON_LEAVE'].includes(user.status) &&
+    (user.role === 'ADMIN' ||
+      ['owner', 'owner-operator'].includes(user.organizationRole?.key ?? ''))
+  )
+    return true;
   return null;
 }
 

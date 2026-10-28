@@ -81,8 +81,7 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
     field: 'supplierId',
   },
   SELF_APPROVAL: {
-    message:
-      'Whoever raised the demand or drafted the order cannot approve it. Ask a second person to decide.',
+    message: 'Approval needs a different authorized person, or a solo owner with a valid PIN.',
   },
   INVALID_TRANSITION: {
     message: 'The document has already moved on. Reload the page to see its current state.',
@@ -142,6 +141,7 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
 };
 
 const KNOWN_REJECTIONS = new Set([
+  'SELF_APPROVAL',
   'DUPLICATE_SERIAL',
   'EXPIRED_PACK',
   'GS1_INVALID',
@@ -152,6 +152,7 @@ export type ActionFailure = { message: string; field?: string };
 
 /** Explicit local validation, never inferred from a generic Error message. */
 export class PurchasingValidationError extends Error {}
+class PurchasingRejectedError extends PurchasingValidationError {}
 
 /** One guard per action invocation. Argument parsing finishes before write starts.
  * Once a router mutation is invoked, even a typed rejection is conservative:
@@ -160,15 +161,32 @@ export class PurchasingValidationError extends Error {}
 export function purchasingOutcome() {
   let writeStarted = false;
   return {
-    write<Args extends unknown[], Result>(mutation: (...args: Args) => Promise<Result>) {
-      return (...args: Args): Promise<Result> => {
+    write<Args extends unknown[], Result>(
+      mutation: (...args: Args) => Promise<Result>,
+      blockedField?: string
+    ) {
+      return async (...args: Args): Promise<Exclude<Result, { blocked: string }>> => {
         writeStarted = true;
-        return mutation(...args);
+        const result = await mutation(...args);
+        if (
+          result &&
+          typeof result === 'object' &&
+          'blocked' in result &&
+          typeof result.blocked === 'string'
+        ) {
+          // The request has committed its failed-PIN counter before the form reports rejection.
+          throw Object.assign(
+            new PurchasingRejectedError(DOMAIN_MESSAGES[result.blocked]?.message ?? result.blocked),
+            { field: blockedField }
+          );
+        }
+        return result as Exclude<Result, { blocked: string }>;
       };
     },
     failure(error: unknown, fallback: string): ActionFailure & { outcome: 'rejected' | 'unknown' } {
       const raw = error instanceof Error ? error.message : '';
       const known =
+        error instanceof PurchasingRejectedError ||
         (!writeStarted && error instanceof PurchasingValidationError) ||
         zodFailure(error) !== null ||
         KNOWN_REJECTIONS.has(raw) ||

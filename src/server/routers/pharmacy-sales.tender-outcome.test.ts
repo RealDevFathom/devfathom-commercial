@@ -95,12 +95,15 @@ function fixture(raw: unknown = input) {
     // Tender requires canonical counter access plus a branch assignment.
     user: only({
       findUnique: vi.fn(async () => ({
+        id: 'actor-1',
+        role: 'EMPLOYEE',
         status: 'ACTIVE',
         organizationId: 'org-1',
         organizationRole: { permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }] },
         permissionOverrides: [],
       })),
     }),
+    pharmacyRegisteredDevice: only({ findFirst: vi.fn(async () => ({ id: parsed.deviceId })) }),
     pharmacyBranchAssignment: only({
       findMany: vi.fn(async () => [{ branchId: 'branch-1' }]),
     }),
@@ -210,6 +213,15 @@ describe('pharmacySales.tenderOutcome', () => {
     async (change) => {
       const f = fixture();
       f.saleRead.mockResolvedValue(null);
+      if (change.branchId) {
+        await expect(f.caller().tenderOutcome({ ...input, ...change })).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+        });
+        expect(f.saleRead).not.toHaveBeenCalled();
+        expect(f.keyRead).not.toHaveBeenCalled();
+        f.noWrites();
+        return;
+      }
       expect(await f.caller().tenderOutcome({ ...input, ...change })).toEqual({
         status: 'UNKNOWN',
         replayUnsafe: true,
@@ -224,17 +236,14 @@ describe('pharmacySales.tenderOutcome', () => {
     }
   );
 
-  it('uses the authenticated tenant, never the original key tenant', async () => {
+  it('denies a substituted tenant before looking up original key evidence', async () => {
     const f = fixture();
-    f.saleRead.mockResolvedValue(null);
-    expect(
-      await f
-        .caller({
-          entitlements: { ...f.context.entitlements, organizationId: 'org-2' },
-        })
+    await expect(
+      f
+        .caller({ entitlements: { ...f.context.entitlements, organizationId: 'org-2' } })
         .tenderOutcome(input)
-    ).toEqual({ status: 'UNKNOWN', replayUnsafe: true });
-    expect(f.saleRead.mock.calls[0][0].where.organizationId).toBe('org-2');
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.saleRead).not.toHaveBeenCalled();
     expect(f.keyRead).not.toHaveBeenCalled();
     f.noWrites();
   });

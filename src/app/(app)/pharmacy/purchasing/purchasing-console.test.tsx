@@ -1,4 +1,4 @@
-import { PurchasingValidationError } from './_lib/console';
+import { PurchasingValidationError, purchasingOutcome } from './_lib/console';
 import { revalidatePath } from 'next/cache';
 import ReturnsPage from './returns/page';
 import { Children, isValidElement, type ReactNode } from 'react';
@@ -356,6 +356,14 @@ describe('pickers (UX rules 1, 12, 16)', () => {
     expect(option.value).toBe('med-1|pack-1|10');
   });
 
+  it('requires the selected direct-purchase approver to enter a masked PIN', async () => {
+    render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+    const pin = screen.getByLabelText('Approver PIN') as HTMLInputElement;
+    expect(pin.type).toBe('password');
+    expect(pin.required).toBe(true);
+    expect(pin.autocomplete).toBe('off');
+  });
+
   it('replaces an empty required picker with what is missing and where to fix it', async () => {
     mocks.createCaller.mockReturnValue(
       callerStub({ workspace: vi.fn().mockResolvedValue({ ...workspace, approvers: [] }) })
@@ -616,6 +624,46 @@ describe('segregation of duties (PUR-02)', () => {
     expect(screen.getByText(/You raised this order, so you cannot approve it/)).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
   });
+  it('offers a fresh masked PIN for the sole active owner', async () => {
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        workspace: vi.fn().mockResolvedValue({ ...workspace, soloOwner: true }),
+        purchaseOrders: vi.fn().mockResolvedValue([
+          {
+            id: 'po-1',
+            reference: 'PO-1',
+            status: 'SUBMITTED',
+            supplier: { id: 'sup-ok', name: 'Karachi Distributors' },
+            branch: null,
+            branchId: null,
+            supplierId: 'sup-ok',
+            requisition: null,
+            lines: [],
+            approvals: [],
+            goodsReceipts: [],
+            // The signed-in user in this suite.
+            createdByUserId: 'user-1',
+          },
+        ]),
+        landedCost: vi.fn().mockResolvedValue({
+          payableMinor: 0,
+          landedCostMinor: 0,
+          taxMinor: 0,
+          chargesMinor: 0,
+          canonicalUnits: 0,
+          netCostMinor: 0,
+          lines: [],
+        }),
+      })
+    );
+
+    render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
+
+    const pin = screen.getByLabelText('Owner approval PIN') as HTMLInputElement;
+    expect(pin.type).toBe('password');
+    expect(pin.required).toBe(true);
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDefined();
+  });
 });
 
 function findAction(node: ReactNode, name: string): (form: FormData) => Promise<string> {
@@ -639,6 +687,21 @@ function findAction(node: ReactNode, name: string): (form: FormData) => Promise<
 }
 
 describe('explicit purchasing action outcomes', () => {
+  it('reports a committed PIN rejection as a known failure at the PIN field', async () => {
+    const outcome = purchasingOutcome();
+    const mutation = vi.fn(async () => ({ blocked: 'SELF_APPROVAL' }));
+    try {
+      await outcome.write(mutation, 'approvalPin')();
+      throw new Error('A blocked approval was reported as success');
+    } catch (error) {
+      expect(outcome.failure(error, 'Approval failed')).toEqual({
+        message: 'Approval needs a different authorized person, or a solo owner with a valid PIN.',
+        field: 'approvalPin',
+        outcome: 'rejected',
+      });
+    }
+  });
+
   it('returns a success destination after one authenticated supplier write', async () => {
     const createSupplier = vi.fn().mockResolvedValue({ id: 'new-supplier', name: 'New supplier' });
     mocks.createCaller.mockReturnValue(callerStub({ createSupplier }));

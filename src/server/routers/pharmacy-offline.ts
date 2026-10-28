@@ -1,3 +1,4 @@
+import { assertBranchAssignment } from '@/lib/pharmacy/branch-assignment';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -213,6 +214,7 @@ export async function replayCounterCommand(
   receiptSignature: string
 ) {
   const { db, scope, deviceId, deviceSecret } = ctx;
+  await assertBranchAssignment(db, scope, { counter: true, deviceId });
   // Take the exclusive lock before authentication's shared lock: concurrent
   // retries must not both hold SHARE and then deadlock upgrading to UPDATE.
   await db.$queryRaw(
@@ -465,7 +467,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         if (
           !(await can(
             subjectFromSession(actor.session.user),
-            manager ? 'admin:access' : 'pharmacy:orders',
+            manager ? 'admin:access' : 'pharmacy:counter',
             undefined,
             { db, source: 'REST', ip: clientIp(request) }
           ))
@@ -484,7 +486,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           deviceId: device.id,
           deviceSecret: secret,
         };
-        await activeBranch(db, ctx.scope.organizationId, ctx.scope.branchId);
+        await assertBranchAssignment(db, ctx.scope, { counter: true, deviceId: device.id });
         if (operation === 'establish') {
           z.object({}).strict().parse(body);
           return {

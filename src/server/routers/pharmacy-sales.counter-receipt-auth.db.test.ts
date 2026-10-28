@@ -343,8 +343,16 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
       ).resolves.toEqual([expect.objectContaining({ id: ids.saleB })]);
     });
     await withTenantDb(ids.orgA, (tx) =>
-      tx.pharmacyBranchAssignment.create({
-        data: { userId: ids.admin, branchId: ids.branchA },
+      tx.pharmacyBranchAssignment.upsert({
+        where: {
+          organizationId_branchId_userId: {
+            organizationId: ids.orgA,
+            userId: ids.admin,
+            branchId: ids.branchA,
+          },
+        },
+        create: { userId: ids.admin, branchId: ids.branchA },
+        update: { active: true },
       })
     );
     await act(ids.orgA, { id: ids.admin, role: 'ADMIN', organizationId: ids.orgA }, async (api) => {

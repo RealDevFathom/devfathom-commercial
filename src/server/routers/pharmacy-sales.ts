@@ -1,3 +1,4 @@
+import { assertBranchAssignment, isPharmacyOwner } from '@/lib/pharmacy/branch-assignment';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
@@ -107,7 +108,6 @@ import {
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
 
-import { assertInOrganization } from '../org-refs';
 import {
   adminProcedure,
   auditedProtectedProcedure,
@@ -149,12 +149,17 @@ const demandReason = z.enum([
 ]);
 const txDb = (tx: unknown) => tx as ScopedDb;
 
-async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+async function scopeFor(
+  ctx: TRPCContext,
+  branch: string,
+  options: { counter?: boolean; deviceId?: string } = {}
+): Promise<LedgerScope> {
   const organizationId = ctx.entitlements?.organizationId;
   const actorId = ctx.session?.user?.id;
   if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-  await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branch], { active: true });
-  return { organizationId, branchId: branch, actorId };
+  if (ctx.session?.user.organizationId !== organizationId)
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  return assertBranchAssignment(ctx.db, { organizationId, branchId: branch, actorId }, options);
 }
 
 async function khataScope(ctx: TRPCContext, branch: string) {
@@ -170,12 +175,6 @@ async function khataScope(ctx: TRPCContext, branch: string) {
     }))
   )
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
-  const available = await ctx.db.pharmacyBranch.findFirst({
-    where: { organizationId: scope.organizationId, id: branch, active: true },
-    select: { id: true },
-  });
-  if (!available)
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   return scope;
 }
 
@@ -333,9 +332,8 @@ function counterCapabilityDecision(
 /**
  * Dispense, receipt, or counter capability, then an active pharmacy branch
  * assignment in the session organization. Restaurant staff profiles are not
- * consulted. An empty assignment denies a non-admin. A session `ADMIN` of this
- * organization may use every active branch, including when they also have an
- * explicit assignment elsewhere. That exception is recorded on the audit.
+ * consulted. The shared assignment guard admits live tenant owners/admins
+ * across active branches and denies unassigned staff.
  */
 /** A branch outside the session organization is a scope denial, not a bad request. */
 async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
@@ -373,10 +371,11 @@ async function requireCounterReceiptAccess(
   const member = await ctx.db.user.findUnique({
     where: { id: user.id },
     select: {
+      role: true,
       status: true,
       organizationId: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: { key: true, permissions: { select: { capability: true, effect: true } } },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
@@ -399,7 +398,8 @@ async function requireCounterReceiptAccess(
   // can accidentally outrun an explicit DENY on another alias.
   // Combine user overrides and role rules into ONE family decision so any
   // explicit DENY (user or role, on any alias) beats any ALLOW.
-  const capable = counterCapabilityDecision([...overrides, ...roleRules]) === 'ALLOW';
+  const decision = counterCapabilityDecision([...overrides, ...roleRules]);
+  const capable = decision === 'ALLOW' || (decision !== 'DENY' && isPharmacyOwner(member));
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -407,44 +407,7 @@ async function requireCounterReceiptAccess(
     });
   }
 
-  const available = await ctx.db.pharmacyBranch.findFirst({
-    where: { id: branch, organizationId: scope.organizationId, active: true },
-    select: { id: true },
-  });
-  if (!available) {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
-  }
-
-  const rows = await ctx.db.pharmacyBranchAssignment.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      userId: user.id,
-      active: true,
-      branch: { organizationId: scope.organizationId, active: true },
-    },
-    select: { branchId: true },
-  });
-  const assigned = new Set(rows.map((row) => row.branchId));
-  if (assigned.has(branch)) return scope;
-
-  // Session role only. An organization-role key is not an administrator grant.
-  // An assigned admin still reaches every other active branch of this organization.
-  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
-  if (orgAdmin) {
-    annotateAudit(ctx, {
-      targetType: 'PharmacyBranch',
-      targetId: branch,
-      metadata: {
-        branchId: branch,
-        reason:
-          assigned.size === 0
-            ? 'org-admin-receipt-access-without-branch-assignment'
-            : 'org-admin-receipt-access',
-      },
-    });
-    return scope;
-  }
-  throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  return scope;
 }
 
 const closeDate = z
@@ -470,7 +433,11 @@ export const pharmacySalesRouter = router({
     annotateAudit(ctx, { skipInput: true });
     try {
       return await ctx.db.$transaction(async (tx) =>
-        executeSandboxPayment(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        executeSandboxPayment(
+          txDb(tx),
+          await scopeFor(ctx, input.branchId, { counter: true, deviceId: input.deviceId }),
+          input
+        )
       );
     } catch (error) {
       fail(error);
@@ -646,7 +613,11 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          redeemSalePoints(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          redeemSalePoints(
+            txDb(tx),
+            await scopeFor(ctx, input.branchId, { counter: true, deviceId: input.deviceId }),
+            input
+          )
         );
       } catch (error) {
         fail(error);
@@ -658,7 +629,7 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => ({
       openDrawer: await readOpenPharmacyDrawer(
         ctx.db,
-        await scopeFor(ctx, input.branchId),
+        await scopeFor(ctx, input.branchId, { counter: true, deviceId: input.deviceId }),
         input.deviceId
       ),
     })),
@@ -679,7 +650,11 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          openPharmacyDrawer(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          openPharmacyDrawer(
+            txDb(tx),
+            await scopeFor(ctx, input.branchId, { counter: true, deviceId: input.deviceId }),
+            input
+          )
         );
       } catch (error) {
         fail(error);
@@ -700,7 +675,11 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          recordPharmacyCashMovement(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          recordPharmacyCashMovement(
+            txDb(tx),
+            await scopeFor(ctx, input.branchId, { counter: true }),
+            input
+          )
         );
       } catch (error) {
         fail(error);
@@ -720,7 +699,11 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          closePharmacyDrawer(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          closePharmacyDrawer(
+            txDb(tx),
+            await scopeFor(ctx, input.branchId, { counter: true }),
+            input
+          )
         );
       } catch (error) {
         fail(error);
@@ -748,6 +731,7 @@ export const pharmacySalesRouter = router({
       }
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
+    await scopeFor(ctx, input.branchId, { counter: true, deviceId: input.deviceId });
     const scope =
       input.type === 'KHATA' || input.familyAccountId
         ? await khataScope(ctx, input.branchId)
@@ -755,6 +739,7 @@ export const pharmacySalesRouter = router({
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
   }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
+    await scopeFor(ctx, input.branchId, { counter: true, deviceId: input.deviceId });
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
         if (input.familyAccountId !== undefined || input.ownerOverride !== undefined)
@@ -839,7 +824,10 @@ export const pharmacySalesRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
+          const scope = await scopeFor(ctx, input.branchId, {
+            counter: true,
+            deviceId: input.deviceId,
+          });
           const tender = await db.pharmacyTender.findFirst({
             where: {
               id: input.originalTenderId,
@@ -1373,7 +1361,11 @@ export const pharmacySalesRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           try {
-            return await returnSaleLine(txDb(tx), await scopeFor(ctx, input.branchId), input);
+            return await returnSaleLine(
+              txDb(tx),
+              await scopeFor(ctx, input.branchId, { counter: true }),
+              input
+            );
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
               return { blocked: error.message };

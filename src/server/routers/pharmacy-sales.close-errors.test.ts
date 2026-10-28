@@ -72,7 +72,17 @@ function fixture() {
     pharmacyDrawerMovement: { create: vi.fn() },
     pharmacySale: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyRefund: { findMany: vi.fn().mockResolvedValue([]) },
-    user: { findMany: vi.fn().mockResolvedValue([{ id: 'actor-1', name: 'Ayesha Karim' }]) },
+    user: {
+      findUnique: vi.fn(async () => ({
+        id: 'owner-1',
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: null,
+        permissionOverrides: [],
+      })),
+      findMany: vi.fn().mockResolvedValue([{ id: 'actor-1', name: 'Ayesha Karim' }]),
+    },
   };
   const caller = app.createCaller({
     db,

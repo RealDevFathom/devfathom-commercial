@@ -54,8 +54,21 @@ function fixture() {
   const transaction = vi.fn(async (callback: (tx: unknown) => unknown) => callback(db));
   const lotRead = vi.fn();
   const db = {
+    user: {
+      findUnique: vi.fn(async () => ({
+        id: 'actor-1',
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: { permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }] },
+        permissionOverrides: [],
+      })),
+    },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
+    pharmacyRegisteredDevice: { findFirst: vi.fn(async () => ({ id: 'counter-device' })) },
     $transaction: transaction,
     pharmacyBranch: {
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),

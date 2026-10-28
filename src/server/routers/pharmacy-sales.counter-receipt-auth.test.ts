@@ -88,6 +88,8 @@ function fixture(
   const db = {
     user: {
       findUnique: vi.fn(async () => ({
+        id: 'user-a',
+        role,
         status: 'ACTIVE',
         organizationId: 'org-a',
         organizationRole: { permissions },
@@ -115,6 +117,7 @@ function fixture(
         };
       }),
     },
+    pharmacyRegisteredDevice: { findFirst: vi.fn(async () => ({ id: 'device-a' })) },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => [] as { branchId: string }[]),
     },
@@ -268,7 +271,7 @@ describe('counter receipt authorization', () => {
     assign(f, ['branch-a']);
     f.user.organizationId = 'org-b';
     await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+    expect(readCounterCart).not.toHaveBeenCalled();
     for (const read of reads()) expect(read).not.toHaveBeenCalled();
     expect(f.db.pharmacySale.findMany).not.toHaveBeenCalled();
   });
@@ -286,7 +289,7 @@ describe('counter receipt authorization', () => {
     const f = fixture(dispense);
     f.user.status = 'INACTIVE';
     await expect(path.run(f.caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+    expect(readCounterCart).not.toHaveBeenCalled();
     for (const read of reads()) expect(read).not.toHaveBeenCalled();
   });
 
@@ -356,11 +359,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('does not let a user ALLOW override a role DENY when tendering', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:counter', effect: 'DENY' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'DENY' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
     assign(f, ['branch-a']);
 
     await expect(
@@ -378,11 +379,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('lets a role DENY on pharmacy:receipt beat a user ALLOW on pharmacy:counter for reads and tender', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:receipt', effect: 'DENY' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'DENY' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
     assign(f, ['branch-a']);
     await expect(
       f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
@@ -403,11 +402,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('lets a user DENY on pharmacy:counter beat a role ALLOW on pharmacy:receipt', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:receipt', effect: 'ALLOW' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'DENY' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'ALLOW' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'DENY' },
+    ]);
     assign(f, ['branch-a']);
     await expect(
       f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
@@ -440,7 +437,7 @@ describe('counter receipt authorization', () => {
     expect(f.db.$transaction).not.toHaveBeenCalled();
   });
 
-  it('keeps Khata tender off the branch-assignment guard', async () => {
+  it('requires branch assignment before Khata tender', async () => {
     const f = fixture(dispense);
     f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
     await expect(
@@ -454,8 +451,8 @@ describe('counter receipt authorization', () => {
         familyAccountId: 'family-1',
         idempotencyKey: 'khata-1',
       })
-    ).rejects.toThrow('khata-reached');
-    expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(readCounterCart).not.toHaveBeenCalled();
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 
@@ -468,7 +465,7 @@ describe('counter receipt authorization', () => {
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
     });
-    expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+    expect(readCounterCart).not.toHaveBeenCalled();
     expect(readCounterCart).not.toHaveBeenCalled();
   });
 
@@ -526,6 +523,8 @@ describe('counter receipt authorization', () => {
   it('denies an inactive database user and an inactive assignment', async () => {
     const inactive = fixture(dispense);
     inactive.db.user.findUnique.mockResolvedValue({
+      id: 'user-a',
+      role: 'EMPLOYEE',
       status: 'INACTIVE',
       organizationId: 'org-a',
       organizationRole: { permissions: dispense },
@@ -550,14 +549,7 @@ describe('counter receipt authorization', () => {
     ).resolves.toMatchObject({
       receiptNumber: 7,
     });
-    expect(f.context.audit.detail).toMatchObject({
-      targetType: 'PharmacyBranch',
-      targetId: 'branch-a',
-      metadata: {
-        branchId: 'branch-a',
-        reason: 'org-admin-receipt-access-without-branch-assignment',
-      },
-    });
+    expect(readCounterReceipt).toHaveBeenCalled();
   });
 
   it('does not treat a custom organization role as an administrator', async () => {
@@ -579,9 +571,7 @@ describe('counter receipt authorization', () => {
         reprint: true,
       })
     ).resolves.toMatchObject({ status: 'READY', reprint: true });
-    expect(admin.context.audit.detail).toMatchObject({
-      metadata: { reason: 'org-admin-receipt-access' },
-    });
+    expect(readCounterReceipt).toHaveBeenCalled();
   });
 
   it('requires an active branch before an administrator saves the receipt format', async () => {
@@ -623,10 +613,10 @@ describe('counter receipt authorization', () => {
       f.caller().counterReceipt({ branchId: 'foreign-branch', saleId: 'sibling-sale' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(readCounterReceipt).not.toHaveBeenCalled();
-    expect(f.db.pharmacyBranch.findMany).toHaveBeenCalledWith(
+    expect(f.db.pharmacyBranch.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          id: { in: ['foreign-branch'] },
+          id: 'foreign-branch',
           organizationId: 'org-a',
           active: true,
         }),

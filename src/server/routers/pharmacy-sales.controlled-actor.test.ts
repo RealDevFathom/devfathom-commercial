@@ -50,12 +50,20 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
   const register = vi.fn();
   const db = {
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
-    pharmacyBranch: { findMany: async () => [{ id: 'branch-1' }] },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
+    pharmacyRegisteredDevice: { findFirst: vi.fn(async () => ({ id: 'device-1' })) },
+    pharmacyBranch: {
+      findMany: async () => [{ id: 'branch-1' }],
+      findFirst: async () => ({ id: 'branch-1' }),
+    },
     medicine: {
       findFirst: async () => ({ id: 'medicine-1', controlled: true, manufacturer: 'Maker' }),
     },
     user: {
       findUnique: async () => ({
+        id: 'cashier-1',
+        role: 'EMPLOYEE',
+        organizationId: 'org-1',
         status: 'ACTIVE',
         organizationRole: { permissions },
         permissionOverrides: [],
@@ -107,7 +115,7 @@ describe('pharmacySales.addLine controlled actor', () => {
 
   it('lets a pharmacist past the actor check', async () => {
     const { caller, credential } = callerFor([
-      { capability: 'pharmacy.dispense', effect: 'ALLOW' },
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
     ]);
     const { controlledAuthorization, ...plain } = line;
     void controlledAuthorization;

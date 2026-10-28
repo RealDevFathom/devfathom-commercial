@@ -42,6 +42,17 @@ const input = {
 };
 function fixture() {
   const db = {
+    user: {
+      findUnique: vi.fn(async () => ({
+        id: 'owner-a',
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationId: 'org-a',
+        organizationRole: null,
+        permissionOverrides: [],
+      })),
+    },
+    pharmacyRegisteredDevice: { findFirst: vi.fn(async () => ({ id: 'device-a' })) },
     $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
     pharmacyBranch: {

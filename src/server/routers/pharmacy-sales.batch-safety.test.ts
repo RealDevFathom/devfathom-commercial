@@ -31,18 +31,30 @@ const BRANCH = 'branch-1';
 
 function caller(granted = true) {
   const db = {
-    $transaction: vi.fn(
-      async (callback: (tx: unknown) => unknown): Promise<unknown> => callback(db)
+    $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
+      callback(db)
     ),
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
+    pharmacyRegisteredDevice: { findFirst: vi.fn(async () => ({ id: 'device-1' })) },
     pharmacyBranch: {
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
     },
     user: {
       findUnique: vi.fn(async () => ({
+        id: 'cashier-1',
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org-1',
         organizationRole: {
-          permissions: granted ? [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }] : [],
+          permissions: granted
+            ? [
+                { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+                { capability: 'pharmacy:counter', effect: 'ALLOW' },
+              ]
+            : [],
         },
         permissionOverrides: [],
       })),

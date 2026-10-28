@@ -1,3 +1,5 @@
+import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
+import { isPharmacyOwner } from './branch-assignment';
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 
 const PROCUREMENT_ACTIONS = ['pharmacy.procurement', 'pharmacy:procurement'] as const;
@@ -36,8 +38,11 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
+      role: true,
+      status: true,
+      organizationId: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: { key: true, permissions: { select: { capability: true, effect: true } } },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -46,6 +51,9 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
     },
   });
   if (!user) return false;
+  const rules = [...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])];
+  if (matching(rules).some((rule) => rule.effect === 'DENY')) return false;
+  if (user.organizationId && ACTIVE_STATUSES.has(user.status) && isPharmacyOwner(user)) return true;
   return procurementCapabilityGranted({
     overrides: user.permissionOverrides,
     role: user.organizationRole?.permissions ?? [],

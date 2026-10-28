@@ -170,7 +170,10 @@ async function expectRefusedEverywhere(
   const tendered = await pharmacistSale();
   await expect(payInCash(userId, tendered)).rejects.toMatchObject(tenderRefusal);
   const redeemed = await pharmacistSale({ customer: true });
-  await expect(payInPoints(userId, redeemed)).rejects.toMatchObject(DENIED);
+  await expect(payInPoints(userId, redeemed)).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: 'You do not have permission for this action.',
+  });
   for (const sale of [tendered, redeemed])
     expect(await cart(sale.saleId)).toMatchObject({ status: 'OPEN', totals: { tenderedMinor: 0 } });
 }
@@ -348,6 +351,19 @@ beforeAll(async () => {
         recordedByUserId: ids.pharmacist,
       },
     });
+  });
+  await withTenantDb(ids.org, async (tx) => {
+    for (const userId of [ids.cashier, ids.pharmacist, ids.userDenied, ids.roleDenied]) {
+      await tx.pharmacyRegisteredDevice.create({
+        data: {
+          id: deviceFor(userId),
+          branchId: ids.branch,
+          name: 'Counter',
+          deviceSecretHash: randomBytes(32).toString('hex'),
+          enrolledByActorId: userId,
+        },
+      });
+    }
   });
   for (const userId of [ids.cashier, ids.pharmacist, ids.userDenied, ids.roleDenied])
     await act(userId, (api) =>

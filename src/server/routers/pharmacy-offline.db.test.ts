@@ -19,7 +19,7 @@ const ORG_A = `org_wha1191_a_${suffix}`;
 // suite silently conflicts with the rows the first one left behind.
 const BRANCH_A = `branch_a_${suffix}`;
 
-const ACTOR = 'user_pharmacist';
+const ACTOR = `user_pharmacist_${suffix}`;
 
 const NOW = new Date('2026-09-02T09:00:00.000Z');
 const LATER = new Date('2027-10-01T00:00:00.000Z');
@@ -214,6 +214,24 @@ beforeAll(async () => {
       [ORG_A]
     )
   );
+  await scopedDb.withTenantDb(ORG_A, (db) =>
+    db.organizationDepartment.create({ data: { key: 'COUNTER', name: 'Counter' } })
+  );
+  await scopedDb.withTenantDb(ORG_A, (db) =>
+    db.user.create({
+      data: {
+        id: ACTOR,
+        organizationId: ORG_A,
+        name: 'Owner',
+        title: 'Owner',
+        department: 'COUNTER',
+        email: `${ACTOR}@test.invalid`,
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        password: 'not-a-password',
+      },
+    })
+  );
 }, 180_000);
 
 // Mock only the web identity/entitlement boundary; transactions, signatures,
@@ -351,6 +369,37 @@ async function setup() {
 }
 
 describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
+  it('denies an unassigned actor at establish, snapshot, replay and direct replay before effects', async () => {
+    const f = await setup();
+    const before = await f.counts();
+    await inOrg(ORG_A, (db) =>
+      db.user.update({ where: { id: ACTOR }, data: { role: 'EMPLOYEE' } })
+    );
+    try {
+      for (const operation of ['establish', 'snapshot', 'replay'] as const) {
+        expect((await f.call(operation, operation === 'replay' ? f.command : {})).status).toBe(403);
+      }
+      const { replayCounterCommand } = await import('./pharmacy-offline');
+      await expect(
+        inOrg(ORG_A, (db) =>
+          replayCounterCommand(
+            {
+              db,
+              scope: scopeOf(f.fixture),
+              deviceId: f.fixture.deviceId,
+              deviceSecret: f.fixture.deviceSecret,
+            },
+            f.command,
+            '',
+            ''
+          )
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(await f.counts()).toEqual(before);
+    } finally {
+      await inOrg(ORG_A, (db) => db.user.update({ where: { id: ACTOR }, data: { role: 'ADMIN' } }));
+    }
+  });
   it('replays identical concurrent Idempotency-Key requests into exactly one sale', async () => {
     const f = await setup();
     const responses = await Promise.all([f.replay(), f.replay()]);

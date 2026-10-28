@@ -107,15 +107,18 @@ async function main() {
       if (missing.length > 0) {
         throw new Error(`Catalog is missing ${missing.join(', ')} after a sync.`);
       }
-      for (const module of modules) {
+      for (const platformModule of modules) {
         await tx.organizationModule.upsert({
           where: {
-            organizationId_moduleId: { organizationId: organization.id, moduleId: module.id },
+            organizationId_moduleId: {
+              organizationId: organization.id,
+              moduleId: platformModule.id,
+            },
           },
           update: { status: 'ENABLED', startsAt: day(-1), expiresAt: null },
           create: {
             organizationId: organization.id,
-            moduleId: module.id,
+            moduleId: platformModule.id,
             status: 'ENABLED',
             startsAt: day(-1),
           },
@@ -182,6 +185,43 @@ async function main() {
           active: true,
         },
         select: { id: true },
+      });
+
+      // A named business approver must have live procurement capability and branch access.
+      const approvalRole = await tx.organizationRole.upsert({
+        where: { organizationId_key: { organizationId, key: 'purchasing-approver-e2e' } },
+        create: { organizationId, key: 'purchasing-approver-e2e', name: 'Purchasing approver' },
+        update: {},
+      });
+      await tx.organizationRolePermission.upsert({
+        where: {
+          organizationRoleId_capability: {
+            organizationRoleId: approvalRole.id,
+            capability: 'pharmacy:procurement',
+          },
+        },
+        create: {
+          organizationId,
+          organizationRoleId: approvalRole.id,
+          capability: 'pharmacy:procurement',
+          effect: 'ALLOW',
+        },
+        update: { effect: 'ALLOW' },
+      });
+      await tx.user.update({
+        where: { id: approver!.id },
+        data: { organizationRoleId: approvalRole.id },
+      });
+      await tx.pharmacyBranchAssignment.upsert({
+        where: {
+          organizationId_branchId_userId: {
+            organizationId,
+            branchId: branch.id,
+            userId: approver!.id,
+          },
+        },
+        create: { organizationId, branchId: branch.id, userId: approver!.id },
+        update: { active: true },
       });
 
       const [shelf, quarantine] = await Promise.all(
