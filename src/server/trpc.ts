@@ -1,3 +1,4 @@
+import { liveSupportExpiry, SUPPORT_READ_ONLY_MESSAGE } from '@/lib/tenancy/support-access';
 import { initTRPC, TRPCError } from '@trpc/server';
 import type { Session } from 'next-auth';
 import type { Prisma } from '@/generated/prisma/client';
@@ -138,22 +139,28 @@ const t = initTRPC.context<TRPCContext>().create({
 });
 
 export const router = t.router;
-// Shared by HTTP adapters and direct callers from Server Actions. Inspect both
-// identity signals so omitting ctx.support cannot turn impersonation into admin.
-const supportAccess = t.middleware(async ({ ctx, next, type }) => {
+// Apply to public procedures too: an impersonated actor cannot use anonymous
+// credential flows (or a custom publicProcedure auth guard) to acquire writes.
+const requireSupportRead = t.middleware(async ({ ctx, next, type, path }) => {
   if (ctx.support || ctx.session?.user?.isSupportSession) {
-    const expiry = ctx.support?.expiresAt.getTime() ?? Date.parse(ctx.session?.expires ?? '');
-    if (!Number.isFinite(expiry) || expiry <= Date.now()) {
-      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Support access has expired.' });
+    if (
+      (ctx.support && !liveSupportExpiry(ctx.support.expiresAt)) ||
+      !liveSupportExpiry(ctx.session?.expires) ||
+      (ctx.support?.organizationId !== undefined &&
+        ctx.support.organizationId !== ctx.session?.user?.organizationId) ||
+      (ctx.support?.tenantUserId !== undefined &&
+        ctx.support.tenantUserId !== ctx.session?.user?.id)
+    ) {
+      throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Support access has ended.' });
     }
-    if (type !== 'query') {
-      throw new TRPCError({ code: 'FORBIDDEN', message: 'Support access is read-only.' });
+    // getMessage lazily fetches and persists provider data on a read.
+    if (type !== 'query' || path === 'email.getMessage') {
+      throw new TRPCError({ code: 'FORBIDDEN', message: SUPPORT_READ_ONLY_MESSAGE });
     }
   }
   return next();
 });
-const tenantProcedure = t.procedure.use(supportAccess);
-export const publicProcedure = tenantProcedure;
+export const publicProcedure = t.procedure.use(requireSupportRead);
 
 /**
  * Reject any session that is not provably usable (#16).
@@ -315,21 +322,21 @@ function requireCapability(action: Action) {
 // Protected procedure — audit (outer) wraps the auth guard.
 export const protectedProcedure = t.procedure
   .use(auditMutations)
-  .use(supportAccess)
+  .use(requireSupportRead)
   .use(requireActiveUser)
   .use(requireLicensedModule);
 
 /** Authenticated, module-aware procedure for sensitive tenant reads. */
 export const auditedProtectedProcedure = t.procedure
   .use(auditAll)
-  .use(supportAccess)
+  .use(requireSupportRead)
   .use(requireActiveUser)
   .use(requireLicensedModule);
 
 /** Authenticated, audited tenant access to retained history after entitlement removal. */
 export const entitlementIndependentHistoryProcedure = t.procedure
   .use(auditAll)
-  .use(supportAccess)
+  .use(requireSupportRead)
   .use(requireActiveUser);
 
 // Admin-only procedure — now backed by the ABAC engine (policy: 'admin:access' =
@@ -337,7 +344,7 @@ export const entitlementIndependentHistoryProcedure = t.procedure
 // decision flows through the one engine. Audits mutations AND sensitive reads.
 export const adminProcedure = t.procedure
   .use(auditAll)
-  .use(supportAccess)
+  .use(requireSupportRead)
   .use(requireCapability('admin:access'))
   .use(requireLicensedModule);
 
@@ -348,13 +355,13 @@ export const adminProcedure = t.procedure
  */
 export const entitlementIndependentAdminProcedure = t.procedure
   .use(auditAll)
-  .use(supportAccess)
+  .use(requireSupportRead)
   .use(requireCapability('admin:access'));
 
 // HR console procedure — ADMIN or HR (policy: 'hr:access').
 export const hrProcedure = t.procedure
   .use(auditAll)
-  .use(supportAccess)
+  .use(requireSupportRead)
   .use(requireCapability('hr:access'))
   .use(requireLicensedModule);
 
@@ -365,7 +372,7 @@ export const hrProcedure = t.procedure
 export function capabilityProcedure(action: Action) {
   return t.procedure
     .use(auditAll)
-    .use(supportAccess)
+    .use(requireSupportRead)
     .use(requireCapability(action))
     .use(requireLicensedModule);
 }

@@ -139,6 +139,79 @@ describe.skipIf(!url)('support hardening on restricted PostgreSQL', () => {
     );
     expect(stored).toMatchObject({ status: 'ENDED', tokenCiphertext: null, launchTokenHash: null });
   });
+  it('cannot persist credentials or elevate members through support tRPC callers', async () => {
+    const { organizationAdminRouter } = await import('@/server/routers/organization-admin');
+    const { apiTokensRouter } = await import('@/server/routers/api-tokens');
+    const grant = await support.createSupportSession({
+      actor,
+      organizationId: orgId,
+      tenantUserId: adminId,
+      reason: 'Verify support inspection scope',
+    });
+    const launch = await support.consumeSupportLaunchTicket({
+      launchToken: grant.launchToken,
+      organizationId: orgId,
+    });
+    const identity = await support.getSupportSession(
+      new Request('http://support.localhost', {
+        headers: { cookie: `${support.SUPPORT_SESSION_COOKIE}=${launch.token}` },
+      })
+    );
+    expect(identity).not.toBeNull();
+    await scoped.withTenantDb(orgId, async (tx) => {
+      const before = await tx.user.findUniqueOrThrow({ where: { id: employeeId } });
+      const membersBefore = await tx.user.count();
+      const tokensBefore = await tx.apiToken.count();
+      const ctx = {
+        db: tx,
+        support: identity,
+        session: {
+          expires: grant.expiresAt.toISOString(),
+          user: {
+            id: adminId,
+            organizationId: orgId,
+            role: 'ADMIN',
+            status: 'ACTIVE',
+            isSupportSession: true,
+          },
+        },
+        organization: { id: orgId },
+        entitlements: {},
+        requestMeta: { ip: null, userAgent: null },
+        audit: { detail: {} },
+      } as unknown as import('@/server/trpc').TRPCContext;
+      const admin = organizationAdminRouter.createCaller(ctx);
+      await expect(
+        admin.createMember({
+          name: 'Escape',
+          email: 'escape@example.test',
+          password: 'Temporary-123456',
+          role: 'ADMIN',
+          title: 'Admin',
+          department: 'ADMINISTRATION',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        admin.updateMember({
+          id: employeeId,
+          role: 'ADMIN',
+          status: 'ACTIVE',
+          department: 'ADMINISTRATION',
+          title: 'Admin',
+          organizationRoleId: null,
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        admin.resetMemberPassword({ id: employeeId, password: 'Temporary-123456' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        apiTokensRouter.createCaller(ctx).create({ name: 'Escape', scopes: ['*'] })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(await tx.user.findUniqueOrThrow({ where: { id: employeeId } })).toEqual(before);
+      expect(await tx.user.count()).toBe(membersBefore);
+      expect(await tx.apiToken.count()).toBe(tokensBefore);
+    });
+  });
   it('keeps real support callers read-only without minting persistent credentials or changing members', async () => {
     const { apiTokensRouter } = await import('@/server/routers/api-tokens');
     const { organizationAdminRouter } = await import('@/server/routers/organization-admin');

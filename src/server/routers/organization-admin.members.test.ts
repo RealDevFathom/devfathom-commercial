@@ -71,16 +71,16 @@ const db: MemberDb = {
 function caller(
   organizationId = 'org_a',
   entitlements = { activeSeats: 1, seatLimit: 10 },
-  supportSession = false
+  support = false
 ) {
   return organizationAdminRouter.createCaller({
     db,
     entitlements: { enabledModules: [], ...entitlements },
     session: {
-      expires: new Date(Date.now() + 60000).toISOString(),
+      expires: new Date(Date.now() + 60_000).toISOString(),
       user: {
         id: 'admin_a',
-        isSupportSession: supportSession,
+        isSupportSession: support,
         organizationId,
         role: 'ADMIN',
         department: 'COUNTER',
@@ -88,7 +88,9 @@ function caller(
       },
     },
     organization: null,
-    support: null,
+    support: support
+      ? { organizationId, tenantUserId: 'admin_a', expiresAt: new Date(Date.now() + 60_000) }
+      : null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext);
@@ -334,10 +336,9 @@ describe('organization member last-admin guard', () => {
           db: concurrentDb,
           entitlements: { enabledModules: [], activeSeats: 2, seatLimit: 10 },
           session: {
-            expires: new Date(Date.now() + 60000).toISOString(),
+            expires: new Date(Date.now() + 60_000).toISOString(),
             user: {
               id: 'admin_a',
-              isSupportSession: false,
               organizationId: 'org_a',
               role: 'ADMIN',
               department: 'COUNTER',
@@ -358,6 +359,32 @@ describe('organization member last-admin guard', () => {
 
     expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
     expect(activeAdmins).toBe(1);
+  });
+});
+
+describe('support cannot establish durable administrator access', () => {
+  beforeEach(() => vi.clearAllMocks());
+  it('blocks creating an administrator with a known password', async () => {
+    await expect(
+      caller('org_a', undefined, true).createMember({ ...input, role: 'ADMIN' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
+  });
+  it('blocks elevating another member', async () => {
+    await expect(
+      caller('org_a', undefined, true).updateMember({ ...updateInput, role: 'ADMIN' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+  it('blocks resetting an administrator password', async () => {
+    await expect(
+      caller('org_a', undefined, true).resetMemberPassword({
+        id: 'admin_b',
+        password: input.password,
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
 });
 
