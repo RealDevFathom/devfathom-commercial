@@ -246,7 +246,7 @@ beforeAll(async () => {
       },
     });
   });
-});
+}, 60_000); // Fixture creation hashes every operator credential at the production cost.
 
 // Unlock/lockout journeys perform multiple real production-cost bcrypt checks.
 describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 }, () => {
