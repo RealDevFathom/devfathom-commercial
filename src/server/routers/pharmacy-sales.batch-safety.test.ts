@@ -31,8 +31,8 @@ const BRANCH = 'branch-1';
 
 function caller(granted = true) {
   const db = {
-    $transaction: vi.fn(
-      async (callback: (tx: unknown) => unknown): Promise<unknown> => callback(db)
+    $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
+      callback(db)
     ),
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
@@ -41,6 +41,9 @@ function caller(granted = true) {
     },
     user: {
       findUnique: vi.fn(async () => ({
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org_a',
         organizationRole: {
           permissions: granted ? [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }] : [],
         },

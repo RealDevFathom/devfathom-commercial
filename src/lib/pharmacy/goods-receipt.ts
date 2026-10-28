@@ -120,6 +120,9 @@ export async function verifyControlledPurchaseWitness(
     (await pinProfileBelongsToActor(db, scope, input.staffProfileId))
   ) {
     if (
+      !(await can({ id: scope.actorId, role: 'EMPLOYEE' }, 'pharmacy:dispense', undefined, {
+        db,
+      })) ||
       !(await authorizeSoloApproval(
         db,
         scope,

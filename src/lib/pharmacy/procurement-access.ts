@@ -48,8 +48,8 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),
   ]);
-  if (user.role === 'ADMIN' || user.organizationRole?.key === 'owner') return true;
   if (rules.some((rule) => rule.effect === 'DENY')) return false;
+  if (user.role === 'ADMIN' || user.organizationRole?.key === 'owner') return true;
   return procurementCapabilityGranted({
     overrides: user.permissionOverrides,
     role: user.organizationRole?.permissions ?? [],

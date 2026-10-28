@@ -13,14 +13,22 @@ function authorizationDb(options: {
   overrides?: Permission[];
   rolePermissions?: Permission[];
   throws?: boolean;
+  role?: string;
+  status?: string;
+  roleKey?: string;
+  activeUsers?: number;
 }): AuthzDb {
   return {
     user: {
+      count: vi.fn().mockResolvedValue(options.activeUsers ?? 2),
       findUnique: options.throws
         ? vi.fn().mockRejectedValue(new Error('database unavailable'))
         : vi.fn().mockResolvedValue({
+            organizationId: 'org',
+            role: options.role ?? 'EMPLOYEE',
+            status: options.status ?? 'ACTIVE',
             organizationRole: options.rolePermissions
-              ? { permissions: options.rolePermissions }
+              ? { key: options.roleKey ?? 'custom', permissions: options.rolePermissions }
               : null,
             permissionOverrides: options.overrides ?? [],
           }),
@@ -61,11 +69,18 @@ describe('opt-in pharmacy Owner / Operator access', () => {
   it.each(['admin:access', 'finance:read', 'team:setRole'] as const)(
     'requires tenant ADMIN alongside the template for %s',
     async (action) => {
-      const db = authorizationDb({ rolePermissions: permissionsFor('owner-operator') });
+      const db = authorizationDb({
+        role: 'ADMIN',
+        rolePermissions: permissionsFor('owner-operator'),
+      });
       expect(isAdmin(proprietor.role)).toBe(true);
       expect(isAdmin(employee.role)).toBe(false);
       await expect(can(proprietor, action, undefined, { db })).resolves.toBe(true);
-      await expect(can(employee, action, undefined, { db })).resolves.toBe(false);
+      await expect(
+        can(employee, action, undefined, {
+          db: authorizationDb({ rolePermissions: permissionsFor('owner-operator') }),
+        })
+      ).resolves.toBe(false);
     }
   );
 
@@ -157,7 +172,7 @@ describe('custom ABAC decisions', () => {
     ).resolves.toBe(true);
     await expect(
       can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
-        db: authorizationDb({}),
+        db: authorizationDb({ role: 'ADMIN' }),
       })
     ).resolves.toBe(true);
   });
@@ -343,5 +358,112 @@ describe('hospitality capability namespace', () => {
         can({ ...employee, role }, 'hotel:folio-adjust', undefined, { db })
       ).resolves.toBe(false);
     }
+  });
+});
+
+describe('persisted authority and mandatory resource constraints', () => {
+  it.each(['ADMIN', 'owner'])('honors DENY before persisted %s authority', async (kind) => {
+    for (const capability of ['*', 'pharmacy:*', 'pharmacy:dispense']) {
+      const db = authorizationDb({
+        role: kind === 'ADMIN' ? 'ADMIN' : 'EMPLOYEE',
+        roleKey: kind,
+        activeUsers: 1,
+        rolePermissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+        overrides: [{ capability, effect: 'DENY' }],
+      });
+      expect(await can(employee, 'pharmacy:dispense', undefined, { db })).toBe(false);
+    }
+  });
+
+  it.each(['*', 'pharmacy:*'])(
+    'requires exact sensitive grants for a staffed admin with %s',
+    async (capability) => {
+      const db = authorizationDb({
+        role: 'ADMIN',
+        rolePermissions: [{ capability, effect: 'ALLOW' }],
+      });
+      for (const action of [
+        'pharmacy:dispense',
+        'pharmacy:safety',
+        'pharmacy:catalogue-review',
+      ] as const)
+        expect(await can(employee, action, undefined, { db })).toBe(false);
+    }
+  );
+
+  it.each(['ADMIN', 'owner'])(
+    'preserves sole active %s capabilities without bypassing resource policies',
+    async (kind) => {
+      const db = authorizationDb({
+        role: kind === 'ADMIN' ? 'ADMIN' : 'EMPLOYEE',
+        roleKey: kind,
+        activeUsers: 1,
+        rolePermissions: [],
+      });
+      for (const action of ALL_ACTIONS) {
+        expect(
+          await can(
+            employee,
+            action,
+            { type: 'Resignation', userId: 'other', status: 'PENDING' },
+            { db }
+          ),
+          action
+        ).toBe(true);
+      }
+      for (const resource of [
+        { type: 'Resignation', userId: employee.id, status: 'PENDING' },
+        { type: 'Resignation', userId: 'other', status: 'APPROVED' },
+        { type: 'Resignation', userId: 'other', status: 'DECLINED' },
+      ])
+        expect(await can(employee, 'resignation:review', resource, { db })).toBe(false);
+    }
+  );
+
+  it('applies resignation constraints to exact and wildcard grants', async () => {
+    for (const capability of ['*', 'resignation:*', 'resignation:review']) {
+      const db = authorizationDb({ rolePermissions: [{ capability, effect: 'ALLOW' }] });
+      expect(
+        await can(
+          employee,
+          'resignation:review',
+          { type: 'Resignation', userId: 'other', status: 'PENDING' },
+          { db }
+        )
+      ).toBe(true);
+      expect(
+        await can(
+          employee,
+          'resignation:review',
+          { type: 'Resignation', userId: employee.id, status: 'PENDING' },
+          { db }
+        )
+      ).toBe(false);
+      expect(
+        await can(
+          employee,
+          'resignation:review',
+          { type: 'Resignation', userId: 'other', status: 'APPROVED' },
+          { db }
+        )
+      ).toBe(false);
+    }
+  });
+
+  it('uses persisted status and role, preserving ON_LEAVE admin access', async () => {
+    const db = authorizationDb({ role: 'ADMIN', status: 'ON_LEAVE' });
+    expect(await can(employee, 'admin:access', undefined, { db })).toBe(true);
+    expect(await can(employee, 'pharmacy:dispense', undefined, { db })).toBe(false);
+    expect(
+      await can({ ...employee, role: 'ADMIN' }, 'admin:access', undefined, {
+        db: authorizationDb({}),
+      })
+    ).toBe(false);
+    for (const status of ['INACTIVE', 'INVITED'])
+      expect(
+        await can(employee, 'admin:access', undefined, {
+          db: authorizationDb({ role: 'ADMIN', status }),
+        })
+      ).toBe(false);
   });
 });

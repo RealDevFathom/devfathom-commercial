@@ -66,7 +66,14 @@ const cameraRow = {
 function makeDb() {
   return {
     user: {
-      findUnique: vi.fn(async () => ({ organizationRole: null, permissionOverrides: [] })),
+      count: vi.fn().mockResolvedValue(2),
+      findUnique: vi.fn(async () => ({
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationId: 'org_a',
+        organizationRole: null,
+        permissionOverrides: [],
+      })),
     },
     pharmacyBranch: {
       findFirst: vi.fn(async ({ where }: { where: { id: string } }) =>
@@ -103,6 +110,13 @@ function makeDb() {
 
 let db = makeDb();
 function caller(overrides: { organizationId?: string; role?: string } = {}) {
+  db.user.findUnique.mockResolvedValue({
+    role: overrides.role ?? 'ADMIN',
+    status: 'ACTIVE',
+    organizationId: 'org_a',
+    organizationRole: null,
+    permissionOverrides: [],
+  });
   return pharmacyCamerasRouter.createCaller({
     db,
     entitlements: {

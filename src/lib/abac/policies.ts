@@ -111,6 +111,20 @@ const isHrOrAdmin: Policy = ({ subject }) => subject.role === 'ADMIN' || subject
 const isActiveMember: Policy = ({ subject }) =>
   Boolean(subject.status) && ACTIVE_STATUSES.has(subject.status!);
 
+/** Mandatory resource constraints, including when a custom grant allows access. */
+export const RESOURCE_POLICIES: Partial<Record<Action, Policy[]>> = {
+  'team:layoff': [
+    ({ subject, resource }) => !(subject.role === 'HR' && resource?.targetRole === 'ADMIN'),
+  ],
+  'resignation:review': [
+    ({ subject, resource }) =>
+      resource?.status === 'PENDING' &&
+      typeof resource.userId === 'string' &&
+      resource.userId !== subject.id &&
+      !(subject.role === 'HR' && resource.targetRole === 'ADMIN'),
+  ],
+};
+
 export const POLICIES: Record<Action, Policy[]> = {
   // ── Coarse role gates (back the tRPC procedures) ──────────────────────────
   'admin:access': [isAdmin],

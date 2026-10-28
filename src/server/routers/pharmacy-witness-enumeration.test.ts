@@ -19,6 +19,9 @@ function fixture(capability: string) {
   const db = {
     user: {
       findUnique: vi.fn().mockResolvedValue({
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org_a',
         organizationRole: { permissions: [{ capability, effect: 'ALLOW' }] },
         permissionOverrides: [],
       }),

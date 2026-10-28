@@ -87,6 +87,7 @@ function fixture(
 ) {
   const db = {
     user: {
+      count: vi.fn().mockResolvedValue(2),
       findUnique: vi.fn(async () => ({
         status: 'ACTIVE',
         role,

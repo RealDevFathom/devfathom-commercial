@@ -38,7 +38,11 @@ function fixture(role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN') {
       ),
     },
     user: {
+      count: vi.fn().mockResolvedValue(2),
       findUnique: vi.fn(async () => ({
+        role,
+        status: 'ACTIVE',
+        organizationId: 'org_a',
         organizationRole: { permissions: cashierRole.permissions },
         permissionOverrides: [],
       })),

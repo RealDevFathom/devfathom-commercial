@@ -82,7 +82,6 @@ async function fixture(kind: 'ADMIN' | 'owner' = 'ADMIN') {
           organizationId: org,
           key: kind === 'owner' ? 'owner' : 'ordinary',
           name: kind,
-          permissions: { create: { organizationId: org, capability: '*', effect: 'DENY' } },
         },
       });
       const user = await db.user.create({
@@ -269,7 +268,7 @@ function receiptInput(f: Fixture, suppliedPin = pin) {
 
 describe('solo approval on real PostgreSQL with enforced RLS', () => {
   it.each(['ADMIN', 'owner'] as const)(
-    'preserves every capability and all active branches for persisted %s despite DENY',
+    'preserves every capability and all active branches for persisted %s absent DENY',
     async (kind) => {
       const f = await fixture(kind);
       await withTenantDb(
@@ -281,10 +280,36 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
           expect(role[0]).toEqual({ rolsuper: false, rolbypassrls: false });
           for (const action of actions)
             expect(
-              await can({ id: f.user, role: 'EMPLOYEE' }, action, undefined, { db }),
+              await can(
+                { id: f.user, role: 'EMPLOYEE' },
+                action,
+                { type: 'Resignation', userId: 'other', status: 'PENDING' },
+                { db }
+              ),
               action
             ).toBe(true);
           expect(await procure(db, f.user)).toBe(true);
+          await db.userPermissionOverride.create({
+            data: {
+              userId: f.user,
+              capability: '*',
+              effect: 'DENY',
+              reason: 'Regression revocation',
+            },
+          });
+          for (const action of actions)
+            expect(
+              await can(
+                { id: f.user, role: 'ADMIN' },
+                action,
+                { type: 'Resignation', userId: 'other', status: 'PENDING' },
+                { db }
+              ),
+              action
+            ).toBe(false);
+          expect(await procure(db, f.user)).toBe(false);
+          await db.userPermissionOverride.deleteMany({ where: { userId: f.user } });
+
           expect((await branches(db, f.org, f.user)).sort()).toEqual([f.branch, f.other].sort());
           expect(await procure(db, 'foreign-user')).toBe(false);
           expect(await branches(db, f.org, 'foreign-user')).toEqual([]);
@@ -386,6 +411,47 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
             where: { action: 'PHARMACY:SOLO_OWNER_PIN', targetId: receipt.id },
           })
         ).toBe(2);
+      },
+      { skipDrain: true }
+    );
+  });
+
+  it('rejects a controlled self-witness with dispense DENY even with the owner PIN', async () => {
+    const f = await fixture();
+    const receipt = await withTenantDb(
+      f.org,
+      (db) => caller(db, f).createGoodsReceipt(receiptInput(f)),
+      { skipDrain: true }
+    );
+    const { verifyControlledPurchaseWitness } = await import('./goods-receipt');
+    await withTenantDb(
+      f.org,
+      async (db) => {
+        await db.userPermissionOverride.create({
+          data: {
+            userId: f.user,
+            capability: 'pharmacy:dispense',
+            effect: 'DENY',
+            reason: 'Revoked dispensing',
+          },
+        });
+        expect(await procure(db, f.user)).toBe(true);
+        expect(
+          await verifyControlledPurchaseWitness(db, scope(f), {
+            goodsReceiptId: receipt.id,
+            staffProfileId: f.profile,
+            pin,
+          })
+        ).toHaveProperty('blocked');
+        expect(
+          await db.auditLog.count({
+            where: {
+              action: 'PHARMACY:SOLO_OWNER_PIN',
+              targetType: 'ControlledPurchase',
+              targetId: receipt.id,
+            },
+          })
+        ).toBe(0);
       },
       { skipDrain: true }
     );
@@ -511,6 +577,20 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
   });
   it('counts every active owner across branches while allowing an ordinary sibling-branch staff member', async () => {
     const f = await fixture('owner');
+    // Once staffed, sensitive work requires an exact grant in addition to PIN.
+    await withTenantDb(
+      f.org,
+      (db) =>
+        db.userPermissionOverride.create({
+          data: {
+            userId: f.user,
+            capability: 'pharmacy:dispense',
+            effect: 'ALLOW',
+            reason: 'Qualified proprietor',
+          },
+        }),
+      { skipDrain: true }
+    );
     const sibling = await withTenantDb(
       f.org,
       async (db) => {
@@ -556,6 +636,20 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
 
   it('self-approves stock variance and controlled restoration with fresh PIN audits; multi-staff remains blocked', async () => {
     const f = await fixture();
+    // Once staffed, sensitive work requires an exact grant in addition to PIN.
+    await withTenantDb(
+      f.org,
+      (db) =>
+        db.userPermissionOverride.create({
+          data: {
+            userId: f.user,
+            capability: 'pharmacy:dispense',
+            effect: 'ALLOW',
+            reason: 'Qualified proprietor',
+          },
+        }),
+      { skipDrain: true }
+    );
     const receipt = await withTenantDb(
       f.org,
       (db) => caller(db, f).createGoodsReceipt(receiptInput(f)),
