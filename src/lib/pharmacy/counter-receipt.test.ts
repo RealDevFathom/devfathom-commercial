@@ -136,7 +136,7 @@ describe('buildCounterReceiptDocument (printing seam)', () => {
     const source = {
       ...receipt(),
       fiscal: { mode: 'SANDBOX', externalReference: 'SANDBOX-LOCAL-42', externalQr: null },
-    } as CounterReceipt & { fiscal: unknown };
+    } as unknown as CounterReceipt & { fiscal: unknown };
     const printed = JSON.stringify(buildCounterReceiptDocument(source, 'en'));
     expect(printed).not.toContain('SANDBOX-LOCAL-42');
     expect(printed).not.toContain('FBR');

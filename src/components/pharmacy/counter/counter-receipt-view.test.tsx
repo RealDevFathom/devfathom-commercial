@@ -324,3 +324,25 @@ it.each([undefined, null, []])('renders no evidence section for %j', (evidence) 
   render(<CounterReceiptView {...props({ evidence })} />);
   expect(screen.queryByRole('region', { name: 'Camera evidence' })).toBeNull();
 });
+
+it('shows a labeled sandbox QR for the saved FBR number', () => {
+  const input = props();
+  input.receipt!.fiscal = {
+    status: 'SUBMITTED',
+    mode: 'MOCK',
+    invoiceNumber: 'MOCK-FBR-0123456789abcdef01234567',
+  };
+  render(<CounterReceiptView {...input} />);
+  expect(screen.getByText(/not valid for tax verification/)).toBeTruthy();
+  expect(screen.getByAltText('FBR sandbox invoice QR').getAttribute('src')).toMatch(
+    /^data:image\/svg\+xml,/
+  );
+});
+
+it('shows a pending FBR status without a QR when submission failed', () => {
+  const input = props();
+  input.receipt!.fiscal = { status: 'PENDING', mode: 'MOCK', invoiceNumber: null };
+  render(<CounterReceiptView {...input} />);
+  expect(screen.getByText(/FBR sandbox submission pending/)).toBeTruthy();
+  expect(screen.queryByAltText('FBR sandbox invoice QR')).toBeNull();
+});

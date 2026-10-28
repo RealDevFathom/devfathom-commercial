@@ -1,3 +1,5 @@
+import { configuredFiscalAdapter } from '@/lib/fiscal/adapter';
+import { dispatchFbrInvoices } from '@/lib/fiscal/outbox';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { hasModule } from '@/lib/entitlements';
 import {
@@ -454,6 +456,19 @@ function requireCloseAccess(ctx: TRPCContext) {
 }
 
 export const pharmacySalesRouter = router({
+  retryFbrInvoices: adminProcedure
+    .input(z.object({ branchId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      if (!hasModule(ctx.entitlements, 'pharmacy-core')) throw new TRPCError({ code: 'FORBIDDEN' });
+      const organizationId = ctx.session?.user?.organizationId;
+      if (!organizationId || organizationId !== ctx.entitlements.organizationId)
+        throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const adapter = configuredFiscalAdapter();
+      if (!adapter)
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'FBR mock mode is disabled.' });
+      const scope = await scopeFor(ctx, input.branchId);
+      return ctx.db.$transaction((tx) => dispatchFbrInvoices(txDb(tx), scope, adapter));
+    }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
     try {

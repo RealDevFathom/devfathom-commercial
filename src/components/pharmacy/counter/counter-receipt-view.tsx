@@ -1,5 +1,6 @@
 'use client';
 
+import { fiscalReceiptDetails } from '@/lib/fiscal/receipt';
 import { useEffect, useRef, useState } from 'react';
 
 import { buildDispensingLabels, type DispensingLabelSource } from '@/lib/pharmacy/dispensing-label';
@@ -321,6 +322,7 @@ export function CounterReceiptView({
       'This receipt cannot be previewed. Reload it or ask support to check its source data.';
   }
 
+  const fiscal = fiscalReceiptDetails(receipt.fiscal);
   const settled = receipt.receiptNumber !== null && Boolean(receipt.completedAt);
   const thermalKey = `${receipt.saleId}:${locale}`;
   const thermalJob = thermal?.key === thermalKey ? thermal.job : null;
@@ -484,6 +486,17 @@ export function CounterReceiptView({
           ) : null}
           {reprint ? <p className="text-text-muted">{strings.reprint}</p> : null}
         </header>
+
+        {fiscal ? (
+          <div className="space-y-2 break-words text-text-muted" role="status">
+            <p>{fiscal.text}</p>
+            {fiscal.qr ? (
+              // Local QR data URI; no remote image or buyer data.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={fiscal.qr} width={96} height={96} alt="FBR sandbox invoice QR" />
+            ) : null}
+          </div>
+        ) : null}
 
         <ul className="divide-y divide-border-subtle">
           {receipt.lines.map((line) => {

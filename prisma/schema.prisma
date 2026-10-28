@@ -1081,6 +1081,8 @@ enum PharmacyCustomerOrderEventKind {
 }
 
 model PharmacySale {
+  fbrStatus                 String?
+  fbrInvoiceNumber          String?
   id                        String                       @id @default(cuid())
   organizationId            String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId                  String

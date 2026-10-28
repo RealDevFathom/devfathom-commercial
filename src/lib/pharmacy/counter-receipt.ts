@@ -57,6 +57,7 @@ export type CounterReceiptTender = {
 };
 
 export type CounterReceipt = {
+  fiscal?: { status: 'PENDING' | 'SUBMITTED'; invoiceNumber: string | null; mode: 'MOCK' } | null;
   dispensingLabelSources?: DispensingLabelSource[];
   saleId: string;
   /** Null until a tender settles the bill; never minted by a render. */

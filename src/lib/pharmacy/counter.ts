@@ -704,6 +704,13 @@ export async function readCounterReceipt(
   }));
 
   return {
+    fiscal: sale.fbrStatus
+      ? {
+          status: sale.fbrStatus === 'SUBMITTED' ? 'SUBMITTED' : 'PENDING',
+          invoiceNumber: sale.fbrInvoiceNumber,
+          mode: 'MOCK',
+        }
+      : null,
     saleId: sale.id,
     receiptNumber: sale.receiptNumber,
     branchName: branch.name,

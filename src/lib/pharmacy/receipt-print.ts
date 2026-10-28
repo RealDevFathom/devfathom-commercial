@@ -128,6 +128,8 @@ export function buildPharmacyReceiptPrintDocument(
   if (receipt.receiptNumber === null || !receipt.completedAt) {
     throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
   }
+  // Fiscal QR receipts use the browser path until the raw contract supports QR.
+  if (receipt.fiscal) throw new RawPrintValidationError('UNSUPPORTED_PRINT_TEXT');
   // The ESC/POS baseline has no Urdu code page; Urdu stays on the browser path.
   if (locale !== 'en') throw new RawPrintValidationError('UNSUPPORTED_PRINT_TEXT');
   const amounts = [

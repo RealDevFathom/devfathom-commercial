@@ -66,7 +66,7 @@ describe('isolated Pharmacy browser receipt', () => {
       fiscal: 'PRIVATE_FISCAL',
       returns: [{ refund: 'PRIVATE_RETURN' }],
     };
-    const html = buildCounterBrowserReceipt(source, 'en', 'THERMAL');
+    const html = buildCounterBrowserReceipt(source as unknown as CounterReceipt, 'en', 'THERMAL');
     const parsed = new DOMParser().parseFromString(html, 'text/html');
     expect(parsed.querySelector('script')).toBeNull();
     expect(parsed.body.textContent).toContain('Branch <script>bad()</script>');
@@ -112,7 +112,7 @@ describe('isolated Pharmacy browser receipt', () => {
       };
       const before = JSON.stringify(source);
       const parsed = new DOMParser().parseFromString(
-        buildCounterBrowserReceipt(source, 'en', format),
+        buildCounterBrowserReceipt(source as unknown as CounterReceipt, 'en', format),
         'text/html'
       );
       expect(parsed.querySelector('img')).toBeNull();
@@ -148,7 +148,7 @@ describe('isolated Pharmacy browser receipt', () => {
           },
         ],
       };
-      const html = buildCounterBrowserReceipt(source, locale, 'A4');
+      const html = buildCounterBrowserReceipt(source as unknown as CounterReceipt, locale, 'A4');
       expect(html).toContain(
         locale === 'en' ? 'Historical identity unavailable' : 'تاریخی شناخت دستیاب نہیں'
       );
@@ -219,5 +219,36 @@ describe('isolated Pharmacy browser receipt', () => {
     vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
     expect(() => printCounterBrowserReceipt(receipt, 'en', 'A4')).toThrow('Retry Print receipt');
     expect(popup.close).toHaveBeenCalledOnce();
+  });
+});
+
+describe('FBR sandbox receipt', () => {
+  it.each(['THERMAL', 'THERMAL_58', 'A4'] as const)(
+    'prints the persisted number and a local 7mm QR on %s',
+    (format) => {
+      const invoiceNumber = 'MOCK-FBR-0123456789abcdef01234567';
+      const html = buildCounterBrowserReceipt(
+        { ...receipt, fiscal: { status: 'SUBMITTED', mode: 'MOCK', invoiceNumber } },
+        'en',
+        format,
+        true
+      );
+      const parsed = new DOMParser().parseFromString(html, 'text/html');
+      expect(parsed.body.textContent).toContain(invoiceNumber);
+      expect(parsed.body.textContent).toContain('not valid for tax verification');
+      const qr = parsed.querySelector('img')!;
+      expect(qr.getAttribute('style')).toContain('width:7mm;height:7mm');
+      expect(decodeURIComponent(qr.getAttribute('src')!)).toContain('<svg');
+      expect(qr.getAttribute('src')).toMatch(/^data:image\/svg\+xml,/);
+    }
+  );
+  it('shows pending status without claiming a fiscal number or printing a QR', () => {
+    const html = buildCounterBrowserReceipt(
+      { ...receipt, fiscal: { status: 'PENDING', mode: 'MOCK', invoiceNumber: null } },
+      'ur',
+      'THERMAL'
+    );
+    expect(html).toContain('submission pending');
+    expect(new DOMParser().parseFromString(html, 'text/html').querySelector('img')).toBeNull();
   });
 });

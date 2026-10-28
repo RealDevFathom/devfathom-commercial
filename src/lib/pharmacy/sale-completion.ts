@@ -1,4 +1,6 @@
 import 'server-only';
+import { configuredFiscalAdapter } from '@/lib/fiscal/adapter';
+import { enqueueFbrInvoice, dispatchFbrInvoices } from '@/lib/fiscal/outbox';
 import { randomUUID } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -124,5 +126,25 @@ export async function completePaidPharmacySale(
     await postSaleLineEntry(db, scope, { saleLineId: line.id, at: issuedAt });
   }
 
+  const fiscalAdapter = configuredFiscalAdapter();
+  if (fiscalAdapter) {
+    await enqueueFbrInvoice(db, scope, sale.id, {
+      issuedAt: issuedAt.toISOString(),
+      totalMinor: sale.lines.reduce(
+        (sum, line) => sum + line.unitPriceMinor * line.quantity - line.discountMinor,
+        0
+      ),
+      discountMinor: sale.lines.reduce((sum, line) => sum + line.discountMinor, 0),
+      lines: sale.lines.map((line) => ({
+        code: line.medicineId,
+        description: line.medicine.productName,
+        quantity: line.quantity,
+        unitPriceMinor: line.unitPriceMinor,
+        discountMinor: line.discountMinor,
+      })),
+    });
+    // Mock is local and deterministic. Live I/O must run after commit in a worker.
+    await dispatchFbrInvoices(db, scope, fiscalAdapter, new Date(), sale.id);
+  }
   return receiptNumber;
 }
