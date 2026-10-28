@@ -8,7 +8,9 @@ async function main() {
   mkdirSync(evidence, { recursive: true });
   const baseURL = 'http://127.0.0.1:4324';
   const server = spawn(process.execPath, ['scripts/start-standalone.mjs'], {
-    env: { ...process.env, HOSTNAME: '127.0.0.1', PORT: '4324' },
+    // This lane owns the loopback app and models one local proxy hop, as
+    // the other production browser lanes do. Keep production startup checks active.
+    env: { ...process.env, HOSTNAME: '127.0.0.1', PORT: '4324', TRUSTED_PROXY_HOPS: '1' },
     stdio: [
       'ignore',
       openSync(resolve(evidence, 'app.stdout.log'), 'w'),
