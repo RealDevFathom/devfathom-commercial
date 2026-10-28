@@ -70,34 +70,40 @@ function caller(db: ScopedDb, userId: string) {
 }
 
 /** Pause each transaction only after its real SELECT has observed SUBMITTED. */
-function synchronizePurchaseOrderReads(databases: ScopedDb[]): ScopedDb[] {
+function synchronizePurchaseOrderReads(databases: ScopedDb[]) {
+  const observedStatuses: Array<string | undefined> = [];
   let reads = 0;
   let release!: () => void;
   const bothRead = new Promise<void>((resolve) => {
     release = resolve;
   });
 
-  return databases.map(
-    (database) =>
-      new Proxy(database, {
-        get(target, key, receiver) {
-          if (key !== 'pharmacyPurchaseOrder') return Reflect.get(target, key, receiver);
-          return new Proxy(target.pharmacyPurchaseOrder, {
-            get(delegate, operation, delegateReceiver) {
-              if (operation !== 'findFirst')
-                return Reflect.get(delegate, operation, delegateReceiver);
-              return async (args: Parameters<typeof delegate.findFirst>[0]) => {
-                const order = await delegate.findFirst(args);
-                reads += 1;
-                if (reads === databases.length) release();
-                await bothRead;
-                return order;
-              };
-            },
-          });
-        },
-      })
-  );
+  const wrap = (database: ScopedDb): ScopedDb =>
+    new Proxy(database, {
+      get(target, key, receiver) {
+        if (key === '$transaction') {
+          return (operation: (tx: ScopedDb) => Promise<unknown>) =>
+            target.$transaction((tx) => operation(wrap(tx as ScopedDb)));
+        }
+        if (key !== 'pharmacyPurchaseOrder') return Reflect.get(target, key, receiver);
+        return new Proxy(target.pharmacyPurchaseOrder, {
+          get(delegate, operation, delegateReceiver) {
+            if (operation !== 'findFirst')
+              return Reflect.get(delegate, operation, delegateReceiver);
+            return async (args: Parameters<typeof delegate.findFirst>[0]) => {
+              const order = await delegate.findFirst(args);
+              observedStatuses.push(order?.status);
+              reads += 1;
+              if (reads === databases.length) release();
+              await bothRead;
+              return order;
+            };
+          },
+        });
+      },
+    });
+
+  return { databases: databases.map(wrap), observedStatuses };
 }
 
 describeIfDatabase('purchase-order decision concurrency against PostgreSQL', () => {
@@ -150,7 +156,7 @@ describeIfDatabase('purchase-order decision concurrency against PostgreSQL', () 
       );
 
       const transactionDbs: ScopedDb[] = [];
-      let synchronizedDbs: ScopedDb[] | undefined;
+      let synchronized: ReturnType<typeof synchronizePurchaseOrderReads> | undefined;
       let releaseTransactions!: () => void;
       const transactionsReady = new Promise<void>((resolve) => (releaseTransactions = resolve));
       const decide = (userId: string, decision: 'APPROVED' | 'REJECTED') =>
@@ -158,8 +164,8 @@ describeIfDatabase('purchase-order decision concurrency against PostgreSQL', () 
           const index = transactionDbs.push(db) - 1;
           if (transactionDbs.length === 2) releaseTransactions();
           await transactionsReady;
-          synchronizedDbs ??= synchronizePurchaseOrderReads(transactionDbs);
-          return caller(synchronizedDbs[index]!, userId).approvePurchaseOrder({
+          synchronized ??= synchronizePurchaseOrderReads(transactionDbs);
+          return caller(synchronized.databases[index]!, userId).approvePurchaseOrder({
             purchaseOrderId,
             decision,
           });
@@ -169,6 +175,7 @@ describeIfDatabase('purchase-order decision concurrency against PostgreSQL', () 
       const second = decide('pur472_second_reviewer', secondDecision);
 
       const results = await Promise.allSettled([first, second]);
+      expect(synchronized?.observedStatuses).toEqual(['SUBMITTED', 'SUBMITTED']);
       expect(results.map((result) => result.status).sort()).toEqual(['fulfilled', 'rejected']);
       expect(results.find((result) => result.status === 'rejected')).toMatchObject({
         reason: { code: 'CONFLICT' },
