@@ -25,7 +25,10 @@
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
-import { appendControlledPurchaseEntries } from './controlled-register';
+import {
+  appendControlledPurchaseEntries,
+  appendControlledPurchaseReversals,
+} from './controlled-register';
 import {
   clearLockout,
   isLockedOut,
@@ -498,6 +501,18 @@ export async function reverseGoodsReceipt(
     movementIds: posted.map((movement) => movement.id),
     reason: input.reason,
     at: input.at,
+  });
+
+  // The ledger and register halves commit together, before the receipt is marked reversed.
+  await appendControlledPurchaseReversals(db, {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    movements: reversals.map((movement) => ({
+      sourceMovementId: movement.reversesMovementId!,
+      reversalMovementId: movement.id,
+    })),
+    recordedByUserId: scope.actorId,
+    reason: input.reason,
   });
 
   await db.pharmacyGoodsReceipt.update({
