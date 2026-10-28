@@ -296,6 +296,7 @@ beforeAll(async () => {
   const context = {
     db: scopedDb.createTenantDb(orgId),
     entitlements: {
+      organizationId: orgId,
       // WHA-264 gates SOP depth on the module set AND limit values. This battery
       // exercises co-authorized waivers and escalation chains, so the fixture
       // org is entitled to the depths those paths require.

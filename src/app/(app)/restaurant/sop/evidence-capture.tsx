@@ -29,7 +29,6 @@ export function EvidenceCapture({
   occurrenceId,
   occurrenceStepId,
   purpose,
-  staff,
 }: EvidenceCaptureProps) {
   const id = useId();
   const formRef = useRef<HTMLFormElement>(null);
@@ -103,7 +102,7 @@ export function EvidenceCapture({
           record.
         </p>
       </div>
-      <p className="text-xs text-text-muted">Proof is recorded as your signed-in staff profile.</p>
+      <p className="text-sm text-text-muted">Uploaded as your signed-in staff profile.</p>
       <label className="text-sm text-text-body" htmlFor={`${id}-file`}>
         {purpose === 'photo' ? 'Take or choose photo' : 'Choose signature image'}
         <Input
@@ -117,11 +116,7 @@ export function EvidenceCapture({
           type="file"
         />
       </label>
-      <Button
-        className="min-h-11 sm:col-span-2"
-        disabled={uploading || !staff.length}
-        type="submit"
-      >
+      <Button className="min-h-11 sm:col-span-2" disabled={uploading} type="submit">
         {uploading ? `Uploading ${state.progress}%` : `Upload ${label.toLowerCase()}`}
       </Button>
       {uploading ? (
@@ -135,11 +130,6 @@ export function EvidenceCapture({
       {state.kind === 'error' ? (
         <p className="text-sm text-destructive sm:col-span-2" role="alert">
           {state.message}
-        </p>
-      ) : null}
-      {!staff.length ? (
-        <p className="text-sm text-warning-foreground sm:col-span-2" role="status">
-          No active restaurant staff profile is available to attribute this proof.
         </p>
       ) : null}
     </form>

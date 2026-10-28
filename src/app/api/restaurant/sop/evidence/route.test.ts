@@ -67,6 +67,7 @@ beforeEach(() => {
   mocks.can.mockResolvedValue(true);
   mocks.createTRPCContext.mockResolvedValue({
     db: { restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([{ id: 'staff-1' }]) } },
+    entitlements: { organizationId: 'org-1' },
     organization: { id: 'org-1' },
     session: { user: { id: 'user-1' } },
   });
@@ -96,6 +97,23 @@ describe('POST SOP evidence', () => {
       })
     );
   }
+
+  it.each([{ profiles: [] }, { profiles: [{ id: 'one' }, { id: 'two' }] }])(
+    'refuses proof without a unique active session staff profile: %j',
+    async ({ profiles }) => {
+      warnings();
+      mocks.createTRPCContext.mockResolvedValue({
+        db: { restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue(profiles) } },
+        entitlements: { organizationId: 'org-1' },
+        organization: { id: 'org-1' },
+        session: { user: { id: 'user-1' } },
+      });
+      const response = await POST(request());
+      expect(response.headers.get('location')).toContain('kind=error');
+      expect(mocks.putUpload).not.toHaveBeenCalled();
+      expect(mocks.attachEvidence).not.toHaveBeenCalled();
+    }
+  );
 
   it('hashes and stores accepted proof with tenant, staff, and purpose attribution', async () => {
     const warn = warnings();
@@ -134,6 +152,7 @@ describe('POST SOP evidence', () => {
     warnings();
     mocks.createTRPCContext.mockResolvedValue({
       db: { restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([]) } },
+      entitlements: { organizationId: 'org-1' },
       organization: { id: 'org-1' },
       session: { user: { id: 'user-1' } },
     });

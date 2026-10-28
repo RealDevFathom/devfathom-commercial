@@ -14,8 +14,6 @@ const mocks = vi.hoisted(() => ({
   annotateAudit: vi.fn(),
   authenticateOperator: vi.fn(),
   operatorHasCapability: vi.fn(),
-  rateLimit: vi.fn(),
-  clearRateLimit: vi.fn(),
 }));
 
 vi.mock('@/lib/restaurant/terminal-auth', () => ({
@@ -24,13 +22,12 @@ vi.mock('@/lib/restaurant/terminal-auth', () => ({
 vi.mock('@/lib/restaurant/checkout-routes', () => ({
   operatorHasCapability: mocks.operatorHasCapability,
 }));
-vi.mock('@/lib/rate-limit', () => ({
-  rateLimit: mocks.rateLimit,
-  clearRateLimit: mocks.clearRateLimit,
-}));
 
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(() => ({})),
+  withTenantDb: vi.fn(async (_org, fn) => fn(db)),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: vi.fn(() => true),
@@ -94,6 +91,7 @@ function makeDb() {
       ),
     }),
   };
+  db.$queryRawUnsafe = vi.fn().mockResolvedValue([]);
   db.$transaction = vi.fn(async (fn: (tx: unknown) => unknown) => fn(db));
   return db as Record<string, Delegate> & { $transaction: ReturnType<typeof vi.fn> };
 }
@@ -106,7 +104,6 @@ beforeEach(() => {
   db.restaurantStaffProfile.findMany.mockResolvedValue([{ id: 'staff_a' }]);
   mocks.authenticateOperator.mockResolvedValue({ ok: true, staffProfileId: 'staff_b' });
   mocks.operatorHasCapability.mockResolvedValue(true);
-  mocks.rateLimit.mockResolvedValue({ ok: true });
   mocks.can.mockResolvedValue(true);
   mocks.annotateAudit.mockReset();
 });
@@ -713,7 +710,7 @@ describe('authenticated SOP identity boundary', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
     expect(db.restaurantStaffProfile.findMany).toHaveBeenCalledWith({
-      where: { userId: 'user_1', status: 'ACTIVE' },
+      where: { userId: 'user_1', organizationId: 'org_1', status: 'ACTIVE' },
       select: { id: true },
       take: 2,
     });
@@ -801,7 +798,9 @@ describe('authenticated SOP identity boundary', () => {
     async (reason) => {
       occurrence('MISSED');
       mocks.authenticateOperator.mockResolvedValue({ ok: false, reason });
-      await expect(caller().waive(waiver)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(caller().waive(waiver)).rejects.toMatchObject({
+        code: reason === 'LOCKED' ? 'TOO_MANY_REQUESTS' : 'FORBIDDEN',
+      });
       expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
       expect(db.restaurantSopVerification.create).not.toHaveBeenCalled();
       expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), { skipInput: true });
@@ -822,10 +821,16 @@ describe('authenticated SOP identity boundary', () => {
     expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
   });
 
-  it('limits attempts independently of the tenant transaction', async () => {
-    mocks.rateLimit.mockResolvedValue({ ok: false });
-    await expect(caller().waive(waiver)).rejects.toMatchObject({ code: 'TOO_MANY_REQUESTS' });
-    expect(mocks.authenticateOperator).not.toHaveBeenCalled();
+  it('locks credential rows before checking approval in an independent tenant transaction', async () => {
+    occurrence('MISSED');
+    await caller().waive(waiver);
+    expect(db.$queryRawUnsafe).toHaveBeenCalledWith(
+      expect.stringContaining('FOR UPDATE'),
+      'staff_b',
+      'PIN'
+    );
+    const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
+    expect(withTenantDb).toHaveBeenCalledWith('org_1', expect.any(Function));
   });
 
   it('records the session actor and credential-verified approving identity', async () => {
@@ -854,5 +859,155 @@ describe('authenticated SOP identity boundary', () => {
       code: 'BAD_REQUEST',
     });
     expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('authenticated SOP identities', () => {
+  it.each(['start', 'completeStep', 'submit', 'attachEvidence'] as const)(
+    '%s cannot impersonate the occurrence owner',
+    async (command) => {
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+        id: OCC_ID,
+        status: 'IN_PROGRESS',
+        assignedStaffProfileId: 'victim',
+        claimedByStaffProfileId: null,
+        poolJobRoleId: null,
+      });
+      const input = {
+        occurrenceId: OCC_ID,
+        actorStaffProfileId: 'victim',
+        templateStepId: 'step',
+        contentHashHex: 'a'.repeat(64),
+        mimeType: 'image/jpeg',
+        sizeBytes: 1,
+      };
+      const payload =
+        command === 'completeStep'
+          ? { occurrenceId: OCC_ID, templateStepId: 'step', actorStaffProfileId: 'victim' }
+          : command === 'attachEvidence'
+            ? {
+                occurrenceId: OCC_ID,
+                contentHashHex: input.contentHashHex,
+                mimeType: input.mimeType,
+                sizeBytes: 1,
+                uploaderStaffProfileId: 'victim',
+              }
+            : { occurrenceId: OCC_ID, actorStaffProfileId: 'victim' };
+      await expect(caller()[command](payload as never)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+      expect(db.restaurantSopEvidence.createMany).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([{ profiles: [] }, { profiles: [{ id: 'one' }, { id: 'two' }] }])(
+    'rejects absent or ambiguous session staff: %j',
+    async ({ profiles }) => {
+      db.restaurantStaffProfile.findMany.mockResolvedValue(profiles);
+      await expect(
+        caller().start({ occurrenceId: OCC_ID, actorStaffProfileId: 'victim' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['verify', 'reject', 'acknowledge'] as const)(
+    '%s records the session staff, ignoring forged identity',
+    async (command) => {
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, status: 'SUBMITTED' });
+      await caller()[command]({ occurrenceId: OCC_ID, actorStaffProfileId: 'victim' });
+      const delegate =
+        command === 'acknowledge' ? db.restaurantSopEscalationEvent : db.restaurantSopVerification;
+      expect(delegate.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ actorStaffProfileId: 'staff_a' }),
+        })
+      );
+      expect(db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { userId: 'user_1', organizationId: 'org_1', status: 'ACTIVE' },
+          take: 2,
+        })
+      );
+    }
+  );
+
+  const waiver = {
+    occurrenceId: OCC_ID,
+    actorStaffProfileId: 'victim',
+    approvingStaffProfileId: 'staff_b',
+    approvingType: 'PIN' as const,
+    approvingSecret: 'test-pin',
+    reason: 'Emergency',
+  };
+
+  it('refuses ID-only approval', async () => {
+    const input: Partial<typeof waiver> = { ...waiver };
+    delete input.approvingSecret;
+    await expect(caller().waive(input as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['INVALID', 'LOCKED'] as const)(
+    'refuses %s credentials without waiver writes',
+    async (reason) => {
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+        id: OCC_ID,
+        status: 'MISSED',
+        branchId: 'branch_1',
+      });
+      mocks.authenticateOperator.mockResolvedValue({ ok: false, reason });
+      await expect(caller().waive(waiver)).rejects.toMatchObject({
+        code: reason === 'LOCKED' ? 'TOO_MANY_REQUESTS' : 'FORBIDDEN',
+      });
+      expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+      expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('requires approver capability at the occurrence branch', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'MISSED',
+      branchId: 'branch_1',
+    });
+    mocks.operatorHasCapability.mockResolvedValue(false);
+    await expect(caller().waive(waiver)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.operatorHasCapability).toHaveBeenCalledWith(
+      db,
+      'staff_b',
+      'sop:verify',
+      expect.any(Date),
+      'branch_1'
+    );
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+  });
+
+  it('preserves waiver with credential-proven approval and session attribution', async () => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'MISSED',
+      branchId: 'branch_1',
+    });
+    await caller().waive(waiver);
+    expect(mocks.authenticateOperator).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        staffProfileId: 'staff_b',
+        type: 'PIN',
+        secret: 'test-pin',
+        now: expect.any(Date),
+      })
+    );
+    expect(db.restaurantCoAuthorization.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          actingStaffProfileId: 'staff_a',
+          approvingStaffProfileId: 'staff_b',
+        }),
+      })
+    );
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), { skipInput: true });
   });
 });

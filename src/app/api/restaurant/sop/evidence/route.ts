@@ -1,4 +1,4 @@
-import { requireSopSessionStaff } from '@/lib/restaurant/sop-identity';
+import { requireSopActor } from '@/lib/restaurant/sop-actor';
 
 import crypto from 'node:crypto';
 
@@ -127,7 +127,7 @@ export async function POST(request: Request) {
     });
     if (!allowed) throw new Error('You do not have permission to capture SOP proof.');
 
-    const uploaderStaffProfileId = await requireSopSessionStaff(ctx.db, ctx.session.user.id);
+    const uploaderStaffProfileId = await requireSopActor(ctx);
 
     const hash = crypto.createHash('sha256').update(bytes).digest('hex');
     storedFilename = `sop-${crypto.randomUUID()}.${extension}`;

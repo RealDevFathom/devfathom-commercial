@@ -79,8 +79,9 @@ function optionalTrimmed(value: string | null | undefined): string | null {
  * Structural validation only: callers MUST resolve the actor from an authenticated
  * session and verify approver credentials and capability server-side before persisting.
  * Assert the co-authorization invariants (C6/C7). Throws `CoAuthorizationError`
- * on any violation. The load-bearing rule is that the approving manager cannot
- * be the acting operator: a self-approval is not a co-authorization.
+ * on any violation. This validates record shape only: callers MUST authenticate
+ * both identities and authorize the approver before persisting it. The approving
+ * manager cannot be the acting operator: self-approval is not co-authorization.
  */
 export function assertCoAuthorization(request: CoAuthorizationRequest): void {
   const acting = requireNonEmpty(request.actingStaffProfileId, 'acting staff profile');

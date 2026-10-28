@@ -1,8 +1,3 @@
-import { requireSopSessionStaff } from '@/lib/restaurant/sop-identity';
-import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
-import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
-import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
-
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
@@ -32,6 +27,11 @@ import {
 import { summarizeSopReport } from '@/lib/restaurant/sop-reporting';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { can, subjectFromSession } from '@/lib/abac';
+import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
+
+import { requireSopActor } from '@/lib/restaurant/sop-actor';
 
 /**
  * M7-L4 — the SOP execution router (branch-board reads + operator/verifier commands).
@@ -103,7 +103,8 @@ function mapExecutionError(err: unknown): never {
 // ── Shared schemas ────────────────────────────────────────────────────────────
 
 const OCCURRENCE_ID = z.string().min(1);
-// Legacy identity fields remain accepted for API compatibility, but are never trusted.
+// Legacy identity fields remain accepted for client compatibility; every command
+// overwrites them with the authenticated session staff profile before use.
 const OPTIONAL_ACTOR = z.string().min(1).nullable().optional();
 const OPTIONAL_REASON = z.string().max(2_000).nullable().optional();
 const REPORT_DATE = z
@@ -440,7 +441,7 @@ export const restaurantSopExecutionRouter = router({
       try {
         const result = await startOccurrence(ctx.db, {
           ...input,
-          actorStaffProfileId: await requireSopSessionStaff(ctx.db, ctx.session?.user?.id),
+          actorStaffProfileId: await requireSopActor(ctx),
         });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
@@ -469,7 +470,7 @@ export const restaurantSopExecutionRouter = router({
       try {
         return await completeStep(ctx.db, {
           ...input,
-          actorStaffProfileId: await requireSopSessionStaff(ctx.db, ctx.session?.user?.id),
+          actorStaffProfileId: await requireSopActor(ctx),
         });
       } catch (err) {
         mapExecutionError(err);
@@ -501,7 +502,7 @@ export const restaurantSopExecutionRouter = router({
           mimeType: input.mimeType,
           sizeBytes: input.sizeBytes,
           storageRef: input.storageRef,
-          uploaderStaffProfileId: await requireSopSessionStaff(ctx.db, ctx.session?.user?.id),
+          uploaderStaffProfileId: await requireSopActor(ctx),
         });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopEvidence',
@@ -528,7 +529,7 @@ export const restaurantSopExecutionRouter = router({
       try {
         const result = await submitOccurrence(ctx.db, {
           ...input,
-          actorStaffProfileId: await requireSopSessionStaff(ctx.db, ctx.session?.user?.id),
+          actorStaffProfileId: await requireSopActor(ctx),
         });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
@@ -558,7 +559,7 @@ export const restaurantSopExecutionRouter = router({
       try {
         const result = await verifyOccurrence(ctx.db, {
           ...input,
-          actorStaffProfileId: await requireSopSessionStaff(ctx.db, ctx.session?.user?.id),
+          actorStaffProfileId: await requireSopActor(ctx),
         });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
@@ -586,7 +587,7 @@ export const restaurantSopExecutionRouter = router({
       try {
         const result = await rejectOccurrence(ctx.db, {
           ...input,
-          actorStaffProfileId: await requireSopSessionStaff(ctx.db, ctx.session?.user?.id),
+          actorStaffProfileId: await requireSopActor(ctx),
         });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
@@ -616,55 +617,63 @@ export const restaurantSopExecutionRouter = router({
       annotateAudit(ctx, { skipInput: true });
       assertSopDepth(ctx.entitlements, 'sop.waiver');
       try {
-        const actorStaffProfileId = await requireSopSessionStaff(ctx.db, ctx.session?.user?.id);
-        if (actorStaffProfileId === input.approvingStaffProfileId) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'A distinct approving manager is required.',
-          });
+        const actorStaffProfileId = await requireSopActor(ctx);
+        if (actorStaffProfileId === input.approvingStaffProfileId.trim()) {
+          throw new SopVerificationError(
+            'A distinct approving manager is required.',
+            'CO_AUTH_REQUIRED'
+          );
         }
-        // This independent bucket survives a failed request's tenant transaction rollback.
-        const approvalLimitKey = `sop-waiver:${ctx.entitlements.organizationId}:${input.approvingStaffProfileId}`;
-        const attempt = await rateLimit(approvalLimitKey, 5, 15 * 60_000);
-        if (!attempt.ok)
-          throw new TRPCError({
-            code: 'TOO_MANY_REQUESTS',
-            message: 'Approval attempts temporarily limited.',
-          });
-        const now = new Date();
-        const auth = await authenticateOperator(ctx.db, {
-          staffProfileId: input.approvingStaffProfileId,
-          type: input.approvingType,
-          secret: input.approvingSecret,
-          now,
-        });
-        if (!auth.ok)
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Invalid approving credential.' });
         const occurrence = await ctx.db.restaurantSopOccurrence.findUnique({
           where: { id: input.occurrenceId },
           select: { branchId: true },
         });
-        if (!occurrence)
-          throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+        if (!occurrence) throw new SopVerificationError('Occurrence not found.', 'NOT_FOUND');
+        // Commit credential attempts independently of the request transaction: a
+        // refusal must not roll back the durable brute-force counters.
+        const auth = await withTenantDb(ctx.entitlements.organizationId!, async (db) => {
+          // Serialize attempts before reading counters or comparing a PIN. Parallel
+          // guesses must not overwrite each other's durable lockout progress.
+          await db.$queryRawUnsafe(
+            `SELECT id FROM restaurant_operator_credentials
+             WHERE "staffProfileId" = $1 AND type::text = $2
+               AND "deviceId" IS NULL AND "revokedAt" IS NULL
+             ORDER BY id FOR UPDATE`,
+            input.approvingStaffProfileId,
+            input.approvingType
+          );
+          return authenticateOperator(db, {
+            staffProfileId: input.approvingStaffProfileId,
+            type: input.approvingType,
+            secret: input.approvingSecret,
+            now: new Date(),
+          });
+        });
+        if (!auth.ok) {
+          throw new TRPCError({
+            code: auth.reason === 'LOCKED' ? 'TOO_MANY_REQUESTS' : 'FORBIDDEN',
+            message: 'Approving credential is invalid or locked.',
+          });
+        }
         if (
           !(await operatorHasCapability(
             ctx.db,
             auth.staffProfileId,
             'sop:verify',
-            now,
+            new Date(),
             occurrence.branchId
           ))
         ) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'Approver lacks SOP verification permission.',
-          });
+          throw new SopVerificationError(
+            'Approver lacks SOP verification permission.',
+            'CO_AUTH_REQUIRED'
+          );
         }
-        await clearRateLimit(approvalLimitKey);
         const result = await waiveOccurrence(ctx.db, {
-          ...input,
+          occurrenceId: input.occurrenceId,
           actorStaffProfileId,
           approvingStaffProfileId: auth.staffProfileId,
+          reason: input.reason,
         });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
@@ -693,7 +702,7 @@ export const restaurantSopExecutionRouter = router({
       try {
         return await acknowledgeEscalation(ctx.db, {
           ...input,
-          actorStaffProfileId: await requireSopSessionStaff(ctx.db, ctx.session?.user?.id),
+          actorStaffProfileId: await requireSopActor(ctx),
         });
       } catch (err) {
         if (err instanceof TRPCError) throw err;

@@ -53,13 +53,11 @@ afterEach(() => {
 });
 
 describe('EvidenceCapture', () => {
-  it('attributes to the signed-in staff and offers mobile camera/file capture', () => {
+  it('uses session attribution and preserves mobile camera/file capture', () => {
     const { container } = render(<EvidenceCapture {...props} />);
 
-    expect(
-      screen.getByText('Proof is recorded as your signed-in staff profile.')
-    ).toBeInTheDocument();
-    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.getByText('Uploaded as your signed-in staff profile.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Uploading staff')).not.toBeInTheDocument();
     const file = screen.getByLabelText('Take or choose photo');
     expect(file).toHaveAttribute('accept', 'image/jpeg,image/png,image/webp');
     expect(file).toHaveAttribute('capture', 'environment');
@@ -104,11 +102,10 @@ describe('EvidenceCapture', () => {
     );
   });
 
-  it('keeps signature capture keyboard/file based and disables upload without active staff', () => {
+  it('keeps signature capture available without a caller-selected staff directory', () => {
     render(<EvidenceCapture {...props} purpose="signature" staff={[]} />);
 
     expect(screen.getByLabelText('Choose signature image')).not.toHaveAttribute('capture');
-    expect(screen.getByRole('button', { name: 'Upload signature proof' })).toBeDisabled();
-    expect(screen.getByRole('status')).toHaveTextContent('No active restaurant staff profile');
+    expect(screen.getByRole('button', { name: 'Upload signature proof' })).toBeEnabled();
   });
 });
