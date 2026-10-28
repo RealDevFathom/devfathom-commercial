@@ -79,7 +79,9 @@ function caller(role = 'ADMIN') {
   return pharmacyReportsRouter.createCaller({
     db: {
       $transaction: async (fn: (db: unknown) => unknown) => fn(dbForApproval()),
-      user: { findUnique: vi.fn().mockResolvedValue({ organizationId: 'org_1', role }) },
+      user: {
+        findUnique: vi.fn().mockResolvedValue({ organizationId: 'org_1', role, status: 'ACTIVE' }),
+      },
       pharmacyBranchAssignment: { findMany: mocks.assignments },
       pharmacyBranch: { findMany: mocks.branchFindMany, findFirst: mocks.branchFindFirst },
       pharmacyPharmacovigilanceReport: {
@@ -442,7 +444,7 @@ describe('pharmacovigilance authorization', () => {
   beforeEach(() => {
     mocks.can.mockResolvedValue(true);
     mocks.assignments.mockResolvedValue([]);
-    mocks.branchFindFirst.mockResolvedValue({ id: branchId });
+    mocks.branchFindFirst.mockReset().mockResolvedValue({ id: branchId });
     mocks.reportFindFirst.mockResolvedValue({
       id: 'pv_1',
       state: 'UNDER_REVIEW',

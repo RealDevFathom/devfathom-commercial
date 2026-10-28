@@ -1,3 +1,4 @@
+import { isTenantOwnerRecord } from '@/lib/authz/tenant-owner';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 /**
  * PUR-07 — the database half of the stock action centre: reading exact ledger
@@ -679,8 +680,17 @@ async function authorizeDraftIntent(
     where: { id: scope.actorId, organizationId: scope.organizationId },
     select: {
       status: true,
+      role: true,
+      organizationId: true,
       organization: { select: { status: true, vertical: true } },
-      organizationRole: { select: { permissions: { select: { capability: true, effect: true } } } },
+      organizationRole: {
+        select: {
+          organizationId: true,
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
+      },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: at } }] },
         select: { capability: true, effect: true },
@@ -705,9 +715,17 @@ async function authorizeDraftIntent(
   const rules = overrides.length
     ? overrides
     : (user.organizationRole?.permissions ?? []).filter(matches);
+  const owner = isTenantOwnerRecord(user, scope.organizationId);
+  const ownerDenied =
+    owner &&
+    [...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])]
+      .filter(matches)
+      .some((rule) => rule.effect === 'DENY');
   if (
-    rules.some((rule) => rule.effect === 'DENY') ||
-    !rules.some((rule) => rule.effect === 'ALLOW')
+    ownerDenied ||
+    (!owner &&
+      (rules.some((rule) => rule.effect === 'DENY') ||
+        !rules.some((rule) => rule.effect === 'ALLOW')))
   ) {
     throw new PharmacyDraftIntentError('FORBIDDEN', 'Draft capability is not authorized.');
   }

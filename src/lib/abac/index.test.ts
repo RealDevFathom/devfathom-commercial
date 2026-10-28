@@ -346,69 +346,115 @@ describe('hospitality capability namespace', () => {
   });
 });
 
-describe('PV-only verified owner exception', () => {
-  const organizationId = 'org_pv';
-  const subject = { ...employee, role: 'ADMIN' };
+describe('shared verified owner authority', () => {
+  const organizationId = 'org_owner';
+  const subject = { ...employee, organizationId };
   const templates = [...roleTemplatesForVertical('PHARMACY'), ...AGENCY_ROLE_TEMPLATES];
-  it.each([
-    ['standard owner', 'owner', true, 'EMPLOYEE', organizationId, true],
-    ['standard admin', 'admin', true, 'EMPLOYEE', organizationId, true],
-    ['tenant administrator', 'member', false, 'ADMIN', organizationId, true],
-    ['fake owner', 'owner', false, 'EMPLOYEE', organizationId, false],
-    ['foreign system owner', 'owner', true, 'EMPLOYEE', 'foreign', false],
-  ] as const)('%s is tenant verified', async (_label, key, isSystem, role, roleOrg, allowed) => {
-    const user = {
-      organizationId,
-      role,
-      organizationRole: {
-        key,
-        isSystem,
-        organizationId: roleOrg,
-        permissions: (templates.find((r) => r.key === key)?.capabilities ?? []).map(
-          (capability) => ({ capability, effect: 'ALLOW' })
-        ),
-      },
-      permissionOverrides: [],
-    };
-    const db = { user: { findUnique: vi.fn().mockResolvedValue(user) } } as unknown as AuthzDb;
-    expect(
-      await can(subject, 'pharmacy:safety', undefined, { db, pvOrganizationId: organizationId })
-    ).toBe(allowed);
-    expect(await can(subject, 'pharmacy:safety', undefined, { db })).toBe(false);
-  });
-  it.each(['*', 'pharmacy:*', 'pharmacy:safety'])(
-    'keeps %s DENY above owner authority',
-    async (capability) => {
-      const db = {
-        user: {
-          findUnique: vi.fn().mockResolvedValue({
-            organizationId,
-            role: 'ADMIN',
-            organizationRole: {
-              permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
-            },
-            permissionOverrides: [{ capability, effect: 'DENY' }],
-          }),
-        },
-      } as unknown as AuthzDb;
-      expect(
-        await can(subject, 'pharmacy:safety', undefined, { db, pvOrganizationId: organizationId })
-      ).toBe(false);
-    }
-  );
-  it('rejects a foreign tenant administrator', async () => {
-    const db = {
+  function ownerDb(
+    key = 'owner',
+    role = 'EMPLOYEE',
+    status = 'ACTIVE',
+    roleOrg = organizationId,
+    isSystem = true
+  ) {
+    return {
       user: {
         findUnique: vi.fn().mockResolvedValue({
-          organizationId: 'foreign',
-          role: 'ADMIN',
-          organizationRole: null,
+          organizationId,
+          role,
+          status,
+          organizationRole: {
+            key,
+            isSystem,
+            organizationId: roleOrg,
+            permissions: (templates.find((r) => r.key === key)?.capabilities ?? []).map(
+              (capability) => ({ capability, effect: 'ALLOW' })
+            ),
+          },
           permissionOverrides: [],
         }),
       },
     } as unknown as AuthzDb;
+  }
+  it.each(['owner', 'admin'])(
+    'default %s passes every capability for direct and session callers',
+    async (key) => {
+      const db = ownerDb(key);
+      for (const action of ALL_ACTIONS) {
+        expect(await can(subject, action, undefined, { db }), action).toBe(true);
+        expect(await can(subjectFromSession(subject), action, undefined, { db }), action).toBe(
+          true
+        );
+      }
+    }
+  );
+  it('existing owner and tenant ADMIN gain all capabilities without a template backfill', async () => {
+    for (const db of [ownerDb(), ownerDb('member', 'ADMIN')]) {
+      const user = await db.user.findUnique({
+        where: { id: subject.id },
+        include: {
+          organizationRole: { include: { permissions: true } },
+          permissionOverrides: true,
+        },
+      });
+      user!.organizationRole!.permissions = [];
+      for (const action of ALL_ACTIONS)
+        expect(await can(subject, action, undefined, { db }), action).toBe(true);
+    }
+  });
+  it.each(['*', 'pharmacy:*', 'pharmacy:safety'])(
+    'keeps %s DENY above owner authority',
+    async (capability) => {
+      for (const effectSource of ['role', 'override']) {
+        const db = ownerDb();
+        const user = await db.user.findUnique({
+          where: { id: subject.id },
+          include: {
+            organizationRole: { include: { permissions: true } },
+            permissionOverrides: true,
+          },
+        });
+        const rule = { capability, effect: 'DENY' };
+        if (effectSource === 'role') user!.organizationRole!.permissions.push(rule as never);
+        else user!.permissionOverrides.push(rule as never);
+        expect(await can(subject, 'pharmacy:safety', undefined, { db })).toBe(false);
+      }
+    }
+  );
+  it.each(['INACTIVE', 'TERMINATED', 'SUSPENDED'])(
+    'rejects a persisted %s owner even with exact grants',
+    async (status) => {
+      for (const action of ALL_ACTIONS)
+        expect(
+          await can(subject, action, undefined, { db: ownerDb('owner', 'ADMIN', status) })
+        ).toBe(false);
+    }
+  );
+  it('rejects foreign tenants and foreign role grants', async () => {
     expect(
-      await can(subject, 'pharmacy:safety', undefined, { db, pvOrganizationId: organizationId })
+      await can({ ...subject, organizationId: 'foreign' }, 'pharmacy:safety', undefined, {
+        db: ownerDb('owner', 'ADMIN'),
+      })
     ).toBe(false);
+    expect(
+      await can(subject, 'pharmacy:safety', undefined, {
+        db: ownerDb('owner', 'EMPLOYEE', 'ACTIVE', 'foreign'),
+      })
+    ).toBe(false);
+  });
+  it('does not turn a custom owner key or an ordinary wildcard into owner authority', async () => {
+    const db = ownerDb('owner', 'EMPLOYEE', 'ACTIVE', organizationId, false);
+    const user = await db.user.findUnique({
+      where: { id: subject.id },
+      include: { organizationRole: { include: { permissions: true } }, permissionOverrides: true },
+    });
+    user!.organizationRole!.permissions = [{ capability: '*', effect: 'ALLOW' }] as never;
+    for (const action of [
+      'pharmacy:safety',
+      'pharmacy:dispense',
+      'pharmacy:catalogue-review',
+    ] as const) {
+      expect(await can(subject, action, undefined, { db })).toBe(false);
+    }
   });
 });

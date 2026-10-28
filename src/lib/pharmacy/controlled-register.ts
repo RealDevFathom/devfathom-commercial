@@ -1,5 +1,7 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
+import { isTenantOwnerRecord } from '@/lib/authz/tenant-owner';
 import { can } from '@/lib/abac';
 
 /** Running balance after applying a signed delta. Null when the result is not a safe non-negative integer. */
@@ -471,8 +473,28 @@ export async function assignedRegisterBranchIds(
   organizationId: string,
   userId: string
 ) {
+  // Derived assignments cover existing tenants and every subsequently created branch.
+  // No provisioning/backfill race can leave an active owner outside their tenant scope.
+  const user = await db.user.findUnique({
+    where: { id: userId },
+    select: {
+      organizationId: true,
+      status: true,
+      role: true,
+      organizationRole: { select: { organizationId: true, key: true, isSystem: true } },
+    },
+  });
+  if (!user || user.organizationId !== organizationId || !ACTIVE_STATUSES.has(user.status))
+    return [];
+  if (isTenantOwnerRecord(user, organizationId)) {
+    const branches = await db.pharmacyBranch.findMany({
+      where: { organizationId, active: true },
+      select: { id: true },
+    });
+    return branches.map((branch) => branch.id);
+  }
   const rows = await db.pharmacyBranchAssignment.findMany({
-    where: { organizationId, userId, active: true },
+    where: { organizationId, userId, active: true, branch: { organizationId, active: true } },
     select: { branchId: true },
   });
   return rows.map((row) => row.branchId);

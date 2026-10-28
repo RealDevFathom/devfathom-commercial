@@ -12,7 +12,7 @@ import {
 } from '@/lib/pharmacy/replenishment-report';
 
 import { hasModule } from '@/lib/entitlements';
-import { can, isPvOwner, subjectFromSession } from '@/lib/abac';
+import { can, subjectFromSession } from '@/lib/abac';
 import {
   readPharmacyDailyWorkPack,
   validateDailyWorkPackInput,
@@ -40,6 +40,7 @@ import {
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
 import { capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { isTenantOwner } from '@/lib/authz/tenant-owner';
 import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
 import { annotateAudit } from '@/server/audit';
 import {
@@ -49,7 +50,7 @@ import {
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
 
-const safety = capabilityProcedure('pharmacy:safety', true);
+const safety = capabilityProcedure('pharmacy:safety');
 
 const reports = capabilityProcedure('reports:operational');
 const widget = z
@@ -106,12 +107,10 @@ const transitions: Record<z.infer<typeof pvState>, readonly z.infer<typeof pvSta
 async function requirePvBranch(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements.organizationId;
   const user = ctx.session!.user;
-  const owner = await isPvOwner(ctx.db, user.id, organizationId);
-  if (!owner) {
-    const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, user.id);
-    if (!assigned.includes(branchId))
-      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
-  }
+  const owner = await isTenantOwner(ctx.db, user.id, organizationId);
+  const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, user.id);
+  if (!assigned.includes(branchId))
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   const branch = await ctx.db.pharmacyBranch.findFirst({
     where: { id: branchId, organizationId, active: true },
   });
@@ -158,7 +157,7 @@ async function requireFinancialReports(ctx: TRPCContext) {
 async function ownerFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
   await requireFinancialReports(ctx);
   const available = await scope(ctx);
-  if (ctx.session!.user.role !== 'ADMIN')
+  if (!(await isTenantOwner(ctx.db, ctx.session!.user.id, available.organizationId)))
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
   const branchIds = input.branchId
     ? [input.branchId]
@@ -173,7 +172,7 @@ async function ownerFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
 
 async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
   const available = await scope(ctx);
-  if (ctx.session!.user.role !== 'ADMIN')
+  if (!(await isTenantOwner(ctx.db, ctx.session!.user.id, available.organizationId)))
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
   if (!available.branches.some((branch) => branch.id === branchId))
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
@@ -285,7 +284,7 @@ export const pharmacyReportsRouter = router({
             blocked: 'A second approver is required, or the sole active owner must reauthenticate.',
           };
           const auth = input.ownerAuthorization;
-          if (!auth || !(await isPvOwner(ctx.db, ctx.session.user.id, organizationId)))
+          if (!auth || !(await isTenantOwner(ctx.db, ctx.session.user.id, organizationId)))
             return blocked;
           const staff = await db.restaurantStaffProfile.findMany({
             where: { organizationId, status: 'ACTIVE' },
@@ -681,7 +680,7 @@ export const pharmacyReportsRouter = router({
   digestOverview: reports.query(async ({ ctx }) => {
     await requireFinancialReports(ctx);
     const available = await scope(ctx);
-    if (ctx.session!.user.role !== 'ADMIN')
+    if (!(await isTenantOwner(ctx.db, ctx.session!.user.id, available.organizationId)))
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
     const [settings, history] = await Promise.all([
       ctx.db.pharmacyOwnerDigestSetting.findMany({
@@ -722,7 +721,7 @@ export const pharmacyReportsRouter = router({
   updateDigestSetting: reports.input(digestSetting).mutation(async ({ ctx, input }) => {
     await requireFinancialReports(ctx);
     const available = await scope(ctx);
-    if (ctx.session!.user.role !== 'ADMIN')
+    if (!(await isTenantOwner(ctx.db, ctx.session!.user.id, available.organizationId)))
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
     if (!available.branches.some((branch) => branch.id === input.branchId))
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });

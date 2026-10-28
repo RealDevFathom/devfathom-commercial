@@ -11,6 +11,8 @@
  *     throw new TRPCError({ code: 'FORBIDDEN' });
  */
 import { capabilityMatches } from './capabilities';
+import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
+import { isTenantOwnerRecord } from '@/lib/authz/tenant-owner';
 import type { AuthzDb } from '@/lib/authz';
 import { POLICIES, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
@@ -20,8 +22,6 @@ export { ACTIVE_STATUSES } from './policies';
 export type { Subject, ResourceAttributes, Environment, Policy, PolicyContext } from './types';
 
 export type CanOptions = {
-  /** PV router only: preserve verified tenant owner/admin access after DENY checks. */
-  pvOrganizationId?: string;
   now?: Date;
   source?: Environment['source'];
   ip?: string | null;
@@ -32,13 +32,22 @@ async function customDecision(
   db: AuthzDb,
   userId: string,
   action: string,
-  now: Date
+  now: Date,
+  organizationId?: string | null
 ): Promise<boolean | null> {
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
+      organizationId: true,
+      status: true,
+      role: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: {
+          organizationId: true,
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -47,6 +56,13 @@ async function customDecision(
     },
   });
   if (!user) return false;
+  if (user.status && !ACTIVE_STATUSES.has(user.status)) return false;
+  if (organizationId && user.organizationId !== organizationId) return false;
+  if (
+    user.organizationRole?.organizationId &&
+    user.organizationRole.organizationId !== user.organizationId
+  )
+    return false;
   const matchingRules = [
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),
@@ -54,33 +70,9 @@ async function customDecision(
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
   if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
+  if (isTenantOwnerRecord(user, organizationId ?? user.organizationId)) return true;
   if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
   return null;
-}
-
-/** This exception belongs only to PV: exact safety grants remain required elsewhere.
- * Tenant ADMIN or a tenant-owned system owner/admin role qualifies; custom keys do not.
- * Call only after the capability engine has applied matching DENY rules.
- */
-export async function isPvOwner(db: AuthzDb, userId: string, organizationId: string) {
-  const user = await db.user.findUnique({
-    where: { id: userId },
-    select: {
-      organizationId: true,
-      role: true,
-      organizationRole: {
-        select: { organizationId: true, key: true, isSystem: true },
-      },
-    },
-  });
-  const role = user?.organizationRole;
-  return (
-    user?.organizationId === organizationId &&
-    (user.role === 'ADMIN' ||
-      (role?.organizationId === organizationId &&
-        role.isSystem &&
-        ['owner', 'admin'].includes(role.key)))
-  );
 }
 
 /** True iff some policy registered for `action` allows the subject + resource. */
@@ -101,11 +93,8 @@ export async function can(
     return false;
   }
   try {
-    const decision = await customDecision(db, subject.id, action, env.now);
+    const decision = await customDecision(db, subject.id, action, env.now, subject.organizationId);
     if (decision !== null) return decision;
-    if (action === 'pharmacy:safety' && opts.pvOrganizationId) {
-      if (await isPvOwner(db, subject.id, opts.pvOrganizationId)) return true;
-    }
   } catch (err) {
     console.error(`[abac] custom permission lookup for "${action}" threw:`, err);
     return false;
@@ -127,9 +116,11 @@ export function subjectFromSession(user: {
   role?: string | null;
   department?: string | null;
   status?: string | null;
+  organizationId?: string | null;
 }): Subject {
   return {
     id: user.id,
+    organizationId: user.organizationId,
     role: user.role ?? 'EMPLOYEE',
     department: user.department ?? null,
     status: user.status ?? null,

@@ -1,3 +1,4 @@
+import { isTenantOwnerRecord } from '@/lib/authz/tenant-owner';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
@@ -333,9 +334,9 @@ function counterCapabilityDecision(
 /**
  * Dispense, receipt, or counter capability, then an active pharmacy branch
  * assignment in the session organization. Restaurant staff profiles are not
- * consulted. An empty assignment denies a non-admin. A session `ADMIN` of this
- * organization may use every active branch, including when they also have an
- * explicit assignment elsewhere. That exception is recorded on the audit.
+ * consulted. Verified active tenant owners/admins receive every active branch,
+ * including when they also have an explicit assignment elsewhere. Shared owner
+ * access is recorded on the audit.
  */
 /** A branch outside the session organization is a scope denial, not a bad request. */
 async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
@@ -374,9 +375,15 @@ async function requireCounterReceiptAccess(
     where: { id: user.id },
     select: {
       status: true,
+      role: true,
       organizationId: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: {
+          organizationId: true,
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
@@ -399,7 +406,9 @@ async function requireCounterReceiptAccess(
   // can accidentally outrun an explicit DENY on another alias.
   // Combine user overrides and role rules into ONE family decision so any
   // explicit DENY (user or role, on any alias) beats any ALLOW.
-  const capable = counterCapabilityDecision([...overrides, ...roleRules]) === 'ALLOW';
+  const decision = counterCapabilityDecision([...overrides, ...roleRules]);
+  const owner = isTenantOwnerRecord(member, scope.organizationId);
+  const capable = decision === 'ALLOW' || (decision === null && owner);
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -427,10 +436,8 @@ async function requireCounterReceiptAccess(
   const assigned = new Set(rows.map((row) => row.branchId));
   if (assigned.has(branch)) return scope;
 
-  // Session role only. An organization-role key is not an administrator grant.
-  // An assigned admin still reaches every other active branch of this organization.
-  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
-  if (orgAdmin) {
+  // Shared verified owner authority includes every active tenant branch.
+  if (owner) {
     annotateAudit(ctx, {
       targetType: 'PharmacyBranch',
       targetId: branch,

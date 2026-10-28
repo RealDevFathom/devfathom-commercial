@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { PHARMACY_CHECKED_CAPABILITIES, PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
-import { EXACT_GRANT_ONLY_ACTIONS, capabilityMatches } from './capabilities';
+import { capabilityMatches } from './capabilities';
 import { ALL_ACTIONS } from './policies';
 
 export const intendedPharmacyGrants = {
-  owner: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+  owner: ['pharmacy:*', ...ALL_ACTIONS],
   'owner-operator': [
     'reports:operational',
     'reports:financial',
@@ -67,10 +67,7 @@ describe('canonical capability contract (#130)', () => {
     const owner = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner')!;
     for (const action of PHARMACY_CHECKED_CAPABILITIES) {
       expect(ALL_ACTIONS).toContain(action);
-      // The owner's pharmacy:* never reaches the exact-grant-only actions.
-      expect(owner.capabilities.some((grant) => capabilityMatches(grant, action))).toBe(
-        !EXACT_GRANT_ONLY_ACTIONS.has(action)
-      );
+      expect(owner.capabilities.some((grant) => capabilityMatches(grant, action))).toBe(true);
     }
   });
 

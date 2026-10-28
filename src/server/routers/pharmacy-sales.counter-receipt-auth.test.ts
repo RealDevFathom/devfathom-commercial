@@ -89,6 +89,7 @@ function fixture(
     user: {
       findUnique: vi.fn(async () => ({
         status: 'ACTIVE',
+        role,
         organizationId: 'org-a',
         organizationRole: { permissions },
         permissionOverrides: overrides,
@@ -356,11 +357,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('does not let a user ALLOW override a role DENY when tendering', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:counter', effect: 'DENY' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'DENY' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
     assign(f, ['branch-a']);
 
     await expect(
@@ -378,11 +377,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('lets a role DENY on pharmacy:receipt beat a user ALLOW on pharmacy:counter for reads and tender', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:receipt', effect: 'DENY' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'DENY' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
     assign(f, ['branch-a']);
     await expect(
       f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
@@ -403,11 +400,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('lets a user DENY on pharmacy:counter beat a role ALLOW on pharmacy:receipt', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:receipt', effect: 'ALLOW' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'DENY' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'ALLOW' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'DENY' },
+    ]);
     assign(f, ['branch-a']);
     await expect(
       f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
@@ -527,6 +522,7 @@ describe('counter receipt authorization', () => {
     const inactive = fixture(dispense);
     inactive.db.user.findUnique.mockResolvedValue({
       status: 'INACTIVE',
+      role: 'EMPLOYEE',
       organizationId: 'org-a',
       organizationRole: { permissions: dispense },
       permissionOverrides: [],
@@ -543,7 +539,7 @@ describe('counter receipt authorization', () => {
     expect(paused.db.pharmacySale.findMany).not.toHaveBeenCalled();
   });
 
-  it('lets a session admin of this organization read without an assignment and records why', async () => {
+  it('lets a verified tenant admin of this organization read without an assignment and records why', async () => {
     const f = fixture(dispense, 'ADMIN');
     await expect(
       f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
@@ -560,6 +556,51 @@ describe('counter receipt authorization', () => {
     });
   });
 
+  it.each(['owner', 'admin'])(
+    'uses shared system %s authority without stored grants or assignments',
+    async (key) => {
+      const f = fixture([]);
+      f.db.user.findUnique.mockResolvedValue({
+        status: 'ACTIVE',
+        role: 'EMPLOYEE',
+        organizationId: 'org-a',
+        organizationRole: {
+          organizationId: 'org-a',
+          key,
+          isSystem: true,
+          permissions: [],
+        } as never,
+        permissionOverrides: [],
+      });
+      await expect(
+        f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+      ).resolves.toMatchObject({ receiptNumber: 7 });
+      f.db.user.findUnique.mockResolvedValue({
+        status: 'ACTIVE',
+        role: 'EMPLOYEE',
+        organizationId: 'org-a',
+        organizationRole: {
+          organizationId: 'org-a',
+          key,
+          isSystem: true,
+          permissions: [],
+        } as never,
+        permissionOverrides: [{ capability: 'pharmacy:*', effect: 'DENY' }],
+      });
+      await expect(
+        f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+  );
+
+  it('does not trust a stale session ADMIN role after persisted demotion', async () => {
+    const f = fixture(dispense);
+    f.user.role = 'ADMIN';
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
   it('does not treat a custom organization role as an administrator', async () => {
     const custom = fixture([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
     custom.user.role = 'EMPLOYEE';
@@ -568,7 +609,7 @@ describe('counter receipt authorization', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
-  it('lets a session admin read a branch they are not assigned to even when another branch is', async () => {
+  it('lets a verified tenant admin read a branch they are not assigned to even when another branch is', async () => {
     const admin = fixture(dispense, 'ADMIN');
     assign(admin, ['branch-b']);
     await expect(

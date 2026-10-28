@@ -1,3 +1,4 @@
+import { ALL_ACTIONS } from '@/lib/abac/policies';
 import type { OrganizationVertical } from '@/generated/prisma/enums';
 
 /**
@@ -716,16 +717,15 @@ export type RoleTemplate = {
   name: string;
   /** System role templates are created during onboarding (§9 Step 6). */
   isSystem: boolean;
-  /** Capabilities granted by default. `['*']` = full administration, matching the
-   * bootstrap admin role, except that wildcards (`*`, `pharmacy:*`) never grant
-   * pharmacy:dispense, pharmacy:safety or pharmacy:catalogue-review: those must be
-   * granted exactly (separation of duties). A wildcard DENY still revokes them.
+  /** Capabilities granted by default. Ordinary wildcard grants exclude the exact-only
+   * pharmacy actions. Owner/admin templates use explicit grants; existing tenant
+   * owners also receive shared, verified authority in ABAC. DENY always wins.
    * All entries are provisional (Phase 0 / D10). */
   capabilities: readonly string[];
 };
 
 export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
-  { key: 'admin', name: 'Administrator', isSystem: true, capabilities: ['*'] },
+  { key: 'admin', name: 'Administrator', isSystem: true, capabilities: ['*', ...ALL_ACTIONS] },
   { key: 'member', name: 'Member', isSystem: true, capabilities: [] },
 ];
 
@@ -762,7 +762,7 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+    capabilities: ['pharmacy:*', ...ALL_ACTIONS],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN

@@ -16,6 +16,7 @@
 import type { AuthzDb } from '@/lib/authz';
 
 export type Subject = {
+  organizationId?: string | null;
   id: string;
   role: string;
   department?: string | null;

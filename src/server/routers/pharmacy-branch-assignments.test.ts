@@ -39,6 +39,9 @@ function fixture(role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN') {
     },
     user: {
       findUnique: vi.fn(async () => ({
+        organizationId: 'org-a',
+        status: 'ACTIVE',
+        role,
         organizationRole: { permissions: cashierRole.permissions },
         permissionOverrides: [],
       })),

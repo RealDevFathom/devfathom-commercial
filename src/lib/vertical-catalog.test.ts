@@ -1,3 +1,4 @@
+import { ALL_ACTIONS } from '@/lib/abac/policies';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -129,9 +130,9 @@ describe('pharmacy registry (PLAT-01)', () => {
       'auditor',
     ]);
     expect(
-      PHARMACY_ROLE_TEMPLATES.flatMap((role) => role.capabilities).every((capability) =>
-        PHARMACY_CAPABILITIES.includes(capability)
-      )
+      PHARMACY_ROLE_TEMPLATES.filter((role) => role.key !== 'owner')
+        .flatMap((role) => role.capabilities)
+        .every((capability) => PHARMACY_CAPABILITIES.includes(capability))
     ).toBe(true);
   });
 
@@ -503,14 +504,14 @@ describe('optional pharmacy Owner / Operator', () => {
     }
   });
 
-  it('preserves all eight standard roles and their existing grants', () => {
+  it('preserves standard staff grants and gives the owner every capability', () => {
     expect(
       PHARMACY_ROLE_TEMPLATES.filter((role) => role.key !== 'owner-operator').map((role) => ({
         key: role.key,
         capabilities: role.capabilities,
       }))
     ).toEqual([
-      { key: 'owner', capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'] },
+      { key: 'owner', capabilities: ['pharmacy:*', ...ALL_ACTIONS] },
       {
         key: 'pharmacist',
         capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
