@@ -30,24 +30,15 @@ export async function soloOwnerEligible(
   return rows?.[0]?.allowed === true;
 }
 
-/** Checks eligibility and PIN, persisting only credential lockout state. */
-export async function verifySoloOwnerPin(
-  db: ScopedDb,
-  scope: { organizationId: string; branchId: string | null; actorId: string },
-  pin?: string,
-  options: { requireSoloEligibility?: boolean } = {}
+/** Verifies a live user PIN with durable, serialized credential lockout state. */
+export async function verifyPharmacyUserPin(
+  scope: { organizationId: string; actorId: string },
+  pin?: string
 ): Promise<boolean> {
-  const { organizationId, branchId, actorId } = scope;
+  const { organizationId, actorId } = scope;
   if (!pin || !/^\d{4,8}$/.test(pin)) return false;
   if (!(await rateLimit(`pharmacy:solo-owner-pin:${organizationId}:${actorId}`, 5, 15 * 60_000)).ok)
     return false;
-  // The database guard repeats eligibility when the document changes.
-  if (options.requireSoloEligibility !== false) {
-    const eligible = await db.$queryRaw<Array<{ allowed: boolean }>>`
-      SELECT pharmacy_solo_owner_eligible(${organizationId}, ${branchId}, ${actorId})
-        AND EXISTS (SELECT 1 FROM organizations WHERE id=${organizationId} AND "pharmacyOperatingMode"='SOLO') AS allowed`;
-    if (!eligible?.[0]?.allowed) return false;
-  }
   // Failed attempts must survive rollback of the purchasing request. This
   // small independent transaction owns only the credential lock/counters.
   const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
@@ -85,6 +76,17 @@ export async function verifySoloOwnerPin(
   );
   if (valid) await clearRateLimit(`pharmacy:solo-owner-pin:${organizationId}:${actorId}`);
   return valid;
+}
+
+/** Eligibility must precede PIN verification and any success evidence. */
+export async function verifySoloOwnerPin(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string | null; actorId: string },
+  pin?: string
+): Promise<boolean> {
+  if (!pin || !/^\d{4,8}$/.test(pin)) return false;
+  if (!(await soloOwnerEligible(db, scope))) return false;
+  return verifyPharmacyUserPin(scope, pin);
 }
 
 /** Approval evidence must commit or roll back with the document. Never persists the PIN. */

@@ -1,7 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { can } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { authorizeSoloApproval, verifySoloOwnerPin } from './solo-approval';
+import { authorizeSoloApproval, verifyPharmacyUserPin } from './solo-approval';
 
 export type PharmacyApprovalKind =
   'RX' | 'OVERRIDE' | 'REFUND' | 'RETURN' | 'DISCOUNT' | 'ADJUSTMENT' | 'PURCHASE';
@@ -62,9 +62,7 @@ export async function enforceOperatingMode(
     if (eligible && !input.makerIds.includes(checkerId)) {
       if (
         checkerId !== scope.actorId &&
-        !(await verifySoloOwnerPin(db, { ...scope, actorId: checkerId }, input.pin, {
-          requireSoloEligibility: false,
-        }))
+        !(await verifyPharmacyUserPin({ ...scope, actorId: checkerId }, input.pin))
       )
         throw new TRPCError({
           code: 'FORBIDDEN',

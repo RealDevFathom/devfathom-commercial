@@ -1,6 +1,10 @@
 import { enforceOperatingMode } from '@/lib/pharmacy/operating-mode';
 import { randomUUID } from 'node:crypto';
-import { SOLO_APPROVAL_POLICY } from '@/lib/pharmacy/solo-approval';
+import {
+  authorizeSoloApproval,
+  verifyPharmacyUserPin,
+  SOLO_APPROVAL_POLICY,
+} from '@/lib/pharmacy/solo-approval';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -1068,6 +1072,20 @@ const purchasingRouter = router({
                 },
                 scope.branchId
               );
+              if (
+                !(await verifyPharmacyUserPin(
+                  {
+                    organizationId: scope.organizationId,
+                    actorId: input.directPurchase.approvedByUserId,
+                  },
+                  input.directPurchase.pin
+                ))
+              ) {
+                throw new TRPCError({
+                  code: 'FORBIDDEN',
+                  message: 'A fresh approver PIN is required.',
+                });
+              }
             }
           }
           if (input.purchaseOrderId) {

@@ -901,6 +901,59 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
     ).rejects.toThrow(/fresh witness PIN/);
   });
 
+  it('authenticates a direct purchase approver instead of trusting their submitted identity', async () => {
+    const f = await fixture();
+    const receiver = await withTenantDb(
+      f.org,
+      async (db) => {
+        const user = await db.user.create({
+          data: {
+            name: 'Receiver',
+            email: `${f.org}-receiver@example.invalid`,
+            department: 'PHARMACY',
+            title: 'Receiver',
+            status: 'ACTIVE',
+            role: 'ADMIN',
+          },
+        });
+        await db.pharmacyBranchAssignment.create({ data: { userId: user.id, branchId: f.branch } });
+        return user;
+      },
+      { skipDrain: true }
+    );
+    for (const suppliedPin of [undefined, '9999']) {
+      const input = receiptInput(f);
+      input.directPurchase.pin = suppliedPin as string;
+      await expect(
+        withTenantDb(
+          f.org,
+          (db) => caller(db, { ...f, user: receiver.id }).createGoodsReceipt(input),
+          { skipDrain: true }
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    await withTenantDb(
+      f.org,
+      async (db) => {
+        expect(await db.pharmacyGoodsReceipt.count()).toBe(0);
+        expect(await db.auditLog.count({ where: { action: 'PHARMACY:SOLO_OWNER_PIN' } })).toBe(0);
+        expect(
+          await db.restaurantOperatorCredential.findFirstOrThrow({
+            where: { staffProfileId: f.profile },
+          })
+        ).toMatchObject({ failedAttempts: 1 });
+      },
+      { skipDrain: true }
+    );
+    await expect(
+      withTenantDb(
+        f.org,
+        (db) => caller(db, { ...f, user: receiver.id }).createGoodsReceipt(receiptInput(f)),
+        { skipDrain: true }
+      )
+    ).resolves.toMatchObject({ receivedByUserId: receiver.id, bypassApprovedByUserId: f.user });
+  });
+
   it('retains actual second-approver purchase approval with multiple active staff', async () => {
     const f = await fixture();
     await owner.query(`UPDATE organizations SET "pharmacyOperatingMode"='STAFFED' WHERE id=$1`, [

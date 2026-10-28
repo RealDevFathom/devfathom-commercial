@@ -130,6 +130,7 @@ export const pharmacyDispensingRouter = router({
           select: { branchId: true },
         });
         if (!line) throw new TRPCError({ code: 'NOT_FOUND' });
+        await requirePharmacyReadBranch({ ...ctx, db: db as typeof ctx.db }, line.branchId);
         await enforceOperatingMode(
           db as typeof ctx.db,
           {
