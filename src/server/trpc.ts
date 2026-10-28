@@ -1,4 +1,4 @@
-import { supportAccessDenial } from '@/lib/tenancy/support-access';
+import { supportAccessDenial, SUPPORT_EXPIRED_MESSAGE } from '@/lib/tenancy/support-access';
 import { initTRPC, TRPCError } from '@trpc/server';
 import type { Session } from 'next-auth';
 import type { Prisma } from '@/generated/prisma/client';
@@ -142,15 +142,18 @@ const t = initTRPC.context<TRPCContext>().create({
 });
 
 export const router = t.router;
-function assertSupportAccess(ctx: TRPCContext, type: 'query' | 'mutation' | 'subscription') {
-  const message = supportAccessDenial(ctx, type);
-  if (message) throw new TRPCError({ code: 'FORBIDDEN', message });
-}
-
-export const publicProcedure = t.procedure.use(({ ctx, next, type }) => {
-  assertSupportAccess(ctx, type);
+// Apply to public procedures too: an impersonated actor cannot use anonymous
+// credential flows (or a custom publicProcedure auth guard) to acquire writes.
+const requireSupportRead = t.middleware(async ({ ctx, next, type, path }) => {
+  const message = supportAccessDenial(ctx, type, path);
+  if (message)
+    throw new TRPCError({
+      code: message === SUPPORT_EXPIRED_MESSAGE ? 'UNAUTHORIZED' : 'FORBIDDEN',
+      message,
+    });
   return next();
 });
+export const publicProcedure = t.procedure.use(requireSupportRead);
 
 /**
  * Reject any session that is not provably usable (#16).
@@ -247,7 +250,6 @@ const requireActiveUser = t.middleware(async ({ ctx, next, path, type }) => {
       message: 'You must be logged in to access this resource',
     });
   }
-  assertSupportAccess(ctx, type);
   assertSessionUsable(ctx.session.user);
   assertTemporaryPasswordChanged(ctx.session.user, path);
   assertDemoProcedureAllowed(ctx, path, type);
@@ -291,7 +293,6 @@ function requireCapability(action: Action) {
         message: 'You must be logged in to access this resource',
       });
     }
-    assertSupportAccess(ctx, type);
     assertSessionUsable(ctx.session.user);
     assertTemporaryPasswordChanged(ctx.session.user, path);
     assertDemoProcedureAllowed(ctx, path, type);
@@ -314,18 +315,21 @@ function requireCapability(action: Action) {
 // Protected procedure — audit (outer) wraps the auth guard.
 export const protectedProcedure = t.procedure
   .use(auditMutations)
+  .use(requireSupportRead)
   .use(requireActiveUser)
   .use(requireLicensedModule);
 
 /** Authenticated, module-aware procedure for sensitive tenant reads. */
 export const auditedProtectedProcedure = t.procedure
   .use(auditAll)
+  .use(requireSupportRead)
   .use(requireActiveUser)
   .use(requireLicensedModule);
 
 /** Authenticated, audited tenant access to retained history after entitlement removal. */
 export const entitlementIndependentHistoryProcedure = t.procedure
   .use(auditAll)
+  .use(requireSupportRead)
   .use(requireActiveUser);
 
 // Admin-only procedure — now backed by the ABAC engine (policy: 'admin:access' =
@@ -333,6 +337,7 @@ export const entitlementIndependentHistoryProcedure = t.procedure
 // decision flows through the one engine. Audits mutations AND sensitive reads.
 export const adminProcedure = t.procedure
   .use(auditAll)
+  .use(requireSupportRead)
   .use(requireCapability('admin:access'))
   .use(requireLicensedModule);
 
@@ -343,11 +348,13 @@ export const adminProcedure = t.procedure
  */
 export const entitlementIndependentAdminProcedure = t.procedure
   .use(auditAll)
+  .use(requireSupportRead)
   .use(requireCapability('admin:access'));
 
 // HR console procedure — ADMIN or HR (policy: 'hr:access').
 export const hrProcedure = t.procedure
   .use(auditAll)
+  .use(requireSupportRead)
   .use(requireCapability('hr:access'))
   .use(requireLicensedModule);
 
@@ -356,5 +363,9 @@ export const hrProcedure = t.procedure
  * e.g. `capabilityProcedure('resignation:readAll')`. Audits like adminProcedure.
  */
 export function capabilityProcedure(action: Action) {
-  return t.procedure.use(auditAll).use(requireCapability(action)).use(requireLicensedModule);
+  return t.procedure
+    .use(auditAll)
+    .use(requireSupportRead)
+    .use(requireCapability(action))
+    .use(requireLicensedModule);
 }

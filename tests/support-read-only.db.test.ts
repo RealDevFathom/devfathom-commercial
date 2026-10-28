@@ -232,7 +232,7 @@ describe.skipIf(!url)('support read-only authority on actual restricted PostgreS
     for (const attempt of attempts)
       await expect(attempt()).rejects.toMatchObject({
         code: 'FORBIDDEN',
-        message: 'Support sessions have read-only access.',
+        message: 'Support access is read-only.',
       });
     expect(await snapshot()).toEqual(before);
   });
@@ -289,7 +289,9 @@ describe.skipIf(!url)('support read-only authority on actual restricted PostgreS
   it('rejects expiration and revocation without falling back to the admin JWT', async () => {
     const ctx = await context();
     ctx.session!.expires = new Date(Date.now() - 1).toISOString();
-    await expect(tokenRouter.createCaller(ctx).list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(tokenRouter.createCaller(ctx).list()).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
     await scoped.withPlatformDb((tx) =>
       tx.platformSupportSession.update({
         where: { id: supportSessionId },

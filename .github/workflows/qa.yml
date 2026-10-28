@@ -7,6 +7,9 @@ on:
     types: [opened, synchronize, reopened, labeled]
     branches:
       - 'integration/**'
+      - develop
+      - staging
+      - main
   workflow_dispatch:
     inputs:
       sha:
@@ -18,7 +21,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: qa-${{ github.ref }}-${{ inputs.sha || github.sha }}
+  group: qa-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || inputs.sha || github.sha }}
   cancel-in-progress: true
 
 jobs:

@@ -5,7 +5,7 @@ import {
   isCanonicalDemoOrganization,
 } from '@/lib/tenancy/demo-identity';
 
-import { supportRequestAllowed, supportAccessDenial } from '@/lib/tenancy/support-access';
+import { supportRequestAllowed } from '@/lib/tenancy/support-access';
 import { parseCookie } from '@/lib/platform/security';
 import { cache } from 'react';
 import { tenantHostUrl, normalizeHost } from '@/lib/tenancy/host-routing';
@@ -200,13 +200,7 @@ async function resolveTenantActorUncached(
     // can forget the check, so the API is closed to a revoked token even when it
     // never loads a page. Audited support sessions keep their own validity model
     // (`getSupportSession` already enforces expiry and revocation).
-    if (!isSessionUsable(session.user)) return null;
-    if (
-      session.user.isSupportSession &&
-      (supportAccessDenial({ session, support: null }, 'query') ||
-        (options.request && !supportRequestAllowed(options.request)))
-    )
-      return null;
+    if (!isSessionUsable(session.user) || session.user.isSupportSession) return null;
     if (
       session.user.mustChangePassword === true &&
       options.request &&

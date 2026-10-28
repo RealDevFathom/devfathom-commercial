@@ -12,7 +12,7 @@ describe('support authority cannot outlive its session or gain writes', () => {
     'denies %s even for a live support session',
     (type) => {
       expect(supportAccessDenial({ session: session(live()), support: null }, type)).toBe(
-        'Support sessions have read-only access.'
+        'Support access is read-only.'
       );
     }
   );
@@ -20,7 +20,7 @@ describe('support authority cannot outlive its session or gain writes', () => {
     'fails closed on expiry %j, including reads',
     (expires) => {
       expect(supportAccessDenial({ session: session(expires), support: null }, 'query')).toBe(
-        'Support access has ended. Open a new support session.'
+        'Support access has ended.'
       );
     }
   );
