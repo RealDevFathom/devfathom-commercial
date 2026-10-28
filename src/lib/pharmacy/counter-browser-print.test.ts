@@ -95,7 +95,7 @@ describe('isolated Pharmacy browser receipt', () => {
     const html = buildCounterBrowserReceipt(settled, locale, format);
     expect(html).toContain('NTN: NTN-HISTORICAL');
     expect(html).toContain('STRN: STRN-HISTORICAL');
-    expect(html).toContain(
+    expect(html.replace(/\s+/g, ' ')).toContain(
       locale === 'ur'
         ? 'رسید کے ماخذ میں ٹیکس کی تفصیل دستیاب نہیں'
         : 'Tax breakdown unavailable in receipt source'

@@ -232,7 +232,7 @@ describe('counter receipt authorization', () => {
     });
     expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledWith(
       f.db,
-      { organizationId: 'org-a', branchId: 'branch-a' },
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
       new Date('2026-10-01T00:00:00.000Z')
     );
   });
