@@ -982,9 +982,10 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
 
     // Policy membership is recorded by the bill's pinned policy and basis, not by a
     // line's rounded allocation. A participating low-value line can legitimately
-    // have a 0.00 allocation. Re-price the remaining basis at the pinned rate and
-    // allocate that bill-level result afresh, rather than subtracting the old line
-    // allocation (which can leave both stale basis and a cent of rounding drift).
+    // have a 0.00 allocation. Re-price the remaining basis at the pinned rate,
+    // capped at this bill's current allocation: cutBills allocates rounding cents
+    // across the order, so independent bill rounding must never add a cent when
+    // comping a line. Reallocate the capped amount over the remaining lines.
     const participatesInServiceCharge = bill.serviceChargePolicyVersionId !== null;
     const remainingLines = participatesInServiceCharge
       ? await tx.restaurantBillLine.findMany({
@@ -999,7 +1000,10 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
     const serviceChargeTotal = participatesInServiceCharge
       ? serviceChargeBasis.isZero()
         ? ZERO
-        : roundMoney(multiply(serviceChargeBasis, bill.serviceChargeRate!))
+        : Prisma.Decimal.min(
+            bill.serviceChargeTotal,
+            roundMoney(multiply(serviceChargeBasis, bill.serviceChargeRate!))
+          )
       : bill.serviceChargeTotal;
     const remainingServiceCharges =
       participatesInServiceCharge && remainingLines.length > 0

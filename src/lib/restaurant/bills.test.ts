@@ -1330,6 +1330,101 @@ describeIfDatabase('bills command layer (real DB)', () => {
     );
   });
 
+  it.each(['BY_ITEM', 'BY_SEAT'] as const)(
+    'does not increase a %s split bill when comping a free line',
+    async (kind) => {
+      const policyStart = new Date(AT.getTime() + (kind === 'BY_ITEM' ? 5 : 7));
+      const policy = await read((tx) =>
+        tx.restaurantServiceChargePolicyVersion.create({
+          data: {
+            branchId: ids.branch,
+            rate: '0.100000',
+            effectiveFrom: policyStart,
+            effectiveTo: new Date(policyStart.getTime() + 1),
+            acknowledgedAt: AT,
+            acknowledgementRef: 'split-comp-regression',
+            idempotencyKey: `split_comp_${kind}_${suffix}`,
+            payloadHash: `split-comp-${kind}-${suffix}`,
+          },
+        })
+      );
+      const { orderId, itemIds, db } = await openWithItems(
+        [{ seat: 1 }, { seat: 2 }, { seat: 2 }],
+        policyStart
+      );
+      await read(async (tx) => {
+        for (const [index, id] of itemIds.entries()) {
+          await tx.restaurantOrderItem.update({
+            where: { id },
+            data: { unitPrice: index === 2 ? '0.00' : '0.05' },
+          });
+        }
+        await tx.restaurantOrder.update({
+          where: { id: orderId },
+          data: { serviceChargePolicyVersionId: policy.id },
+        });
+      });
+      const { billIds } = await deps.bills.cutBills(db, {
+        orderId,
+        branchId: ids.branch,
+        split:
+          kind === 'BY_ITEM'
+            ? { kind, groups: [[itemIds[0]!], [itemIds[1]!, itemIds[2]!]] }
+            : { kind },
+        actor: actor(),
+      });
+      const loadBills = () =>
+        read((tx) =>
+          tx.restaurantBill.findMany({
+            where: { id: { in: billIds } },
+            orderBy: { grandTotal: 'desc' },
+            include: { lines: { orderBy: { lineSubtotal: 'asc' } } },
+          })
+        );
+      const before = await loadBills();
+      expect(before.map((bill) => bill.serviceChargeTotal.toFixed(2))).toEqual(['0.01', '0.00']);
+      expect(before.map((bill) => bill.grandTotal.toFixed(2))).toEqual(['0.06', '0.05']);
+      const second = before[1]!;
+      const freeLine = second.lines[0]!;
+      expect(freeLine.lineSubtotal.toFixed(2)).toBe('0.00');
+      const input = {
+        billId: second.id,
+        branchId: ids.branch,
+        billLineId: freeLine.id,
+        reason: 'split free-line regression',
+        approvingStaffProfileId: ids.manager,
+        actor: actor(),
+      };
+      await deps.bills.compLine(db, input);
+      const after = await loadBills();
+      expect(after.map((bill) => bill.grandTotal.toFixed(2))).toEqual(['0.06', '0.05']);
+      expect(after[0]).toEqual(before[0]);
+      expect(after[1]!.serviceChargeBasis.toFixed(2)).toBe('0.05');
+      expect(after[1]!.serviceChargeTotal.toFixed(2)).toBe('0.00');
+      expect(after[1]!.serviceChargePolicyVersionId).toBe(policy.id);
+      expect(after[1]!.lines.map((line) => line.serviceChargeAmount.toFixed(2))).toEqual([
+        '0.00',
+        '0.00',
+      ]);
+      expect(after[1]!.lines.reduce((total, line) => total.add(line.lineTotal), D(0))).toEqual(
+        after[1]!.grandTotal
+      );
+      expect((await deps.bills.compLine(db, input)).replayed).toBe(true);
+      expect(await loadBills()).toEqual(after);
+
+      await deps.bills.compLine(db, {
+        ...input,
+        billLineId: second.lines[1]!.id,
+        actor: actor(),
+      });
+      const fullyComped = (await loadBills())[1]!;
+      expect(fullyComped.grandTotal.toFixed(2)).toBe('0.00');
+      expect(fullyComped.serviceChargeBasis.toFixed(2)).toBe('0.00');
+      expect(fullyComped.serviceChargeTotal.toFixed(2)).toBe('0.00');
+      expect(fullyComped.serviceChargePolicyVersionId).toBeNull();
+    }
+  );
+
   it('leaves the zero service-charge sentinel unchanged when comping a non-participating line', async () => {
     const { db, orderId } = await openWithItems([{}]);
     const { billIds } = await deps.bills.cutBills(db, {
