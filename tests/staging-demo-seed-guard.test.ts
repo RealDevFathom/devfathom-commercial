@@ -5,7 +5,7 @@ import {
 } from '../scripts/pharmacy-e2e-environment';
 
 const ENDPOINT = 'devfathom-staging.abc123.ap-southeast-1.rds.amazonaws.com';
-const URL_OK = `postgresql://app:pw@${ENDPOINT}:5432/devfathom`;
+const URL_OK = `postgresql://app@${ENDPOINT}:5432/devfathom`;
 const base = { DEPLOY_ENV: 'staging', STAGING_DB_ENDPOINT: ENDPOINT };
 const seedEnv = {
   ...base,
@@ -39,15 +39,15 @@ describe('assertStagingDemoTarget', () => {
   });
 
   it.each([
-    'postgresql://app:pw@devfathom-production.abc123.ap-southeast-1.rds.amazonaws.com:5432/devfathom',
-    `postgresql://app:pw@${ENDPOINT}.evil.example:5432/devfathom`,
-    'postgresql://app:pw@localhost:5432/devfathom',
+    'postgresql://app@devfathom-production.abc123.ap-southeast-1.rds.amazonaws.com:5432/devfathom',
+    `postgresql://app@${ENDPOINT}.evil.example:5432/devfathom`,
+    'postgresql://app@localhost:5432/devfathom',
   ])('refuses a host other than the staging endpoint: %s', (url) => {
     expect(() => assertStagingDemoTarget(url, base)).toThrow(/not the staging endpoint/);
   });
 
   it('refuses a non-PostgreSQL or malformed URL', () => {
-    expect(() => assertStagingDemoTarget(`mysql://app:pw@${ENDPOINT}/devfathom`, base)).toThrow(
+    expect(() => assertStagingDemoTarget(`mysql://app@${ENDPOINT}/devfathom`, base)).toThrow(
       /PostgreSQL/
     );
     expect(() => assertStagingDemoTarget('not a url', base)).toThrow(/valid URL/);

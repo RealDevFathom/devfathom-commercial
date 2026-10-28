@@ -22,7 +22,7 @@ const GALLERY: Array<{ name: string; label: string; content: EmailContent }> = [
       workspace: 'DevFathom',
       role: 'Admin · Leadership',
       email: 'usman@devfathom.com',
-      tempPassword: 'Devfathom@12345',
+      tempPassword: 'example-temp-password',
       loginUrl: `${APP}/login`,
       inviterName: 'Saad Ajmal',
     }),

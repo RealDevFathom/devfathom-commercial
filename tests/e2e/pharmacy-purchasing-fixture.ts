@@ -7,11 +7,14 @@
  * was collected.
  */
 
+/** Disposable e2e-only login; override with PH_PUR_E2E_PASSWORD. Never a real credential. */
+const E2E_PASSWORD = process.env.PH_PUR_E2E_PASSWORD ?? 'fake-e2e-only-password';
+
 export const FIXTURE = {
   organizationSlug: 'ph-pur-e2e',
   organizationName: 'PH-PUR Acceptance Pharmacy',
-  receiver: { email: 'receiver@ph-pur.test', name: 'Rabia Receiver', password: 'PhPurBench!2026' },
-  approver: { email: 'approver@ph-pur.test', name: 'Adnan Approver', password: 'PhPurBench!2026' },
+  receiver: { email: 'receiver@ph-pur.test', name: 'Rabia Receiver', password: E2E_PASSWORD },
+  approver: { email: 'approver@ph-pur.test', name: 'Adnan Approver', password: E2E_PASSWORD },
   branch: { code: 'MAIN', name: 'Saddar branch', city: 'Karachi' },
   shelf: { code: 'SHELF', name: 'Front shelf' },
   quarantine: { code: 'QUAR', name: 'Quarantine cage' },

@@ -178,7 +178,7 @@ describe('GET /api/ready', () => {
     leaky.message = [
       'Invalid `prisma.$queryRaw()` invocation:',
       'SELECT count(*) FROM "_prisma_migrations"',
-      'at postgresql://devfathomadmin:hunter2@db.privatelink.postgres.database.azure.com:5432',
+      'at postgresql://fakeuser:fake-test-secret@db.example.invalid:5432',
     ].join('\n');
     mocks.queryRaw.mockRejectedValue(leaky);
 
@@ -188,9 +188,9 @@ describe('GET /api/ready', () => {
     for (const secret of [
       'SELECT',
       '_prisma_migrations',
-      'hunter2',
-      'devfathomadmin',
-      'postgres.database.azure.com',
+      'fake-test-secret',
+      'fakeuser',
+      'db.example.invalid',
       'Invalid `prisma',
       'at ',
     ]) {

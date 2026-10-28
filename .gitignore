@@ -70,3 +70,6 @@ docker/livekit/livekit.dev.keys.yaml
 
 # codex cloud CLI log (may contain account metadata)
 /error.log
+
+# scratch QA output, never commit
+.qa-run/

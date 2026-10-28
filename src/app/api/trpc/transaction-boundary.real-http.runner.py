@@ -12,9 +12,6 @@ if shutil.disk_usage(ROOT).free < 5 * 1024**3:
     raise RuntimeError('Disk below 5 GiB')
 base = pathlib.Path(tempfile.mkdtemp(prefix='boundary-pg-', dir=os.environ['PAPERCLIP_RUN_SCRATCH_DIR']))
 password = secrets.token_hex(24)
-pwfile = base / 'password'
-pwfile.write_text(password)
-pwfile.chmod(0o600)
 env = dict(os.environ)
 env['PGPASSWORD'] = password
 url = lambda role: f'postgresql://{role}:{password}@127.0.0.1:55620/boundary_disposable'
@@ -29,9 +26,15 @@ def run(name, args, extra=None, sql=None):
 def psql(name, role, sql, database='boundary_disposable'):
     run(name, [str(PG/'psql'), '-X', '-v', 'ON_ERROR_STOP=1', '-h', '127.0.0.1', '-p', '55620', '-U', role, '-d', database], sql=sql)
 try:
-    run('initdb', [str(PG/'initdb'), '-D', str(base/'data'), '-U', 'boundary_bootstrap', '--pwfile', str(pwfile), '--auth-local=trust', '--auth-host=scram-sha-256'])
+    run('initdb', [str(PG/'initdb'), '-D', str(base/'data'), '-U', 'boundary_bootstrap', '--auth-local=trust', '--auth-host=trust'])
     run('start', [str(PG/'pg_ctl'), '-D', str(base/'data'), '-l', str(base/'postgres.log'), '-o', f'-h 127.0.0.1 -p 55620 -c unix_socket_directories="" -c max_connections=25 -c shared_buffers=32MB', '-w', 'start'])
     started = True
+    # Set the bootstrap password over the loopback (still trust), then switch
+    # host auth to scram so the password is never written to disk.
+    psql('bootstrap-password', 'boundary_bootstrap', f"ALTER ROLE boundary_bootstrap PASSWORD '{password}';", 'postgres')
+    hba = base / 'data' / 'pg_hba.conf'
+    hba.write_text(hba.read_text().replace(' trust', ' scram-sha-256'))
+    run('reload', [str(PG/'pg_ctl'), '-D', str(base/'data'), 'reload'])
     psql('roles', 'boundary_bootstrap', f"CREATE ROLE boundary_owner LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '{password}'; CREATE ROLE boundary_runtime LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD '{password}'; CREATE DATABASE boundary_disposable OWNER boundary_owner;", 'postgres')
     run('extensions', ['node', 'node_modules/tsx/dist/cli.mjs', 'prisma/prepare-extensions.ts'], {'EXTENSION_ADMIN_DATABASE_URL': url('boundary_bootstrap')})
     psql('extension-grant', 'boundary_bootstrap', 'GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO boundary_owner WITH GRANT OPTION;')
