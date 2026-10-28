@@ -284,6 +284,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_1',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -303,6 +304,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
       active: true,
+      defaultSeats: 25,
       vertical: 'RESTAURANT',
       moduleLinks: [{ moduleId: 'restaurant-core', enabled: true }],
     });
@@ -346,6 +348,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_1',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -379,6 +382,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
       active: true,
+      defaultSeats: 25,
       vertical: 'RESTAURANT',
       moduleLinks: [{ moduleId: 'restaurant-core', enabled: true }],
     });
@@ -418,6 +422,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_p',
       active: true,
+      defaultSeats: 25,
       vertical: 'PHARMACY',
       moduleLinks: [{ moduleId: 'pharmacy-core', enabled: true }],
     });
@@ -484,6 +489,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_p',
       active: true,
+      defaultSeats: 25,
       vertical: 'PHARMACY',
       moduleLinks: [],
     });
@@ -514,6 +520,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_p',
       active: true,
+      defaultSeats: 25,
       vertical: 'PHARMACY',
       moduleLinks: [],
     });
@@ -535,6 +542,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_1',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -553,6 +561,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_a',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -572,6 +581,7 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
       active: true,
+      defaultSeats: 25,
       vertical: 'RESTAURANT',
       moduleLinks: [],
     });
@@ -855,7 +865,7 @@ describe('catalog.package.upsert vertical metadata', () => {
       key: 'restaurant-essentials',
       name: 'Restaurant Essentials',
       vertical: 'RESTAURANT',
-      defaultSeats: 10,
+      defaultSeats: 25,
     });
 
     expect(mocks.pkgCreate).toHaveBeenCalledWith(
@@ -868,7 +878,7 @@ describe('catalog.package.upsert vertical metadata', () => {
       id: 'pkg_1',
       key: 'restaurant-essentials',
       name: 'Restaurant Essentials',
-      defaultSeats: 10,
+      defaultSeats: 25,
     });
 
     const updateArg = mocks.pkgUpdate.mock.calls[0]?.[0] as { data: Record<string, unknown> };
@@ -1110,9 +1120,18 @@ function pharmacyOrg() {
  */
 const VALID_PROFILE = {
   branchId: 'branch-p',
+  provinceCode: 'PK-PB',
+  premises: { addressLine: '12 Mall Road', city: 'Lahore' },
+  branch: {
+    active: true,
+    provinceCode: 'PK-PB',
+    addressLine: '12 Mall Road',
+    city: 'Lahore',
+  },
   licenceCategory: 'PHARMACY',
   licenceValidFrom: new Date('2026-01-01'),
   licenceValidTo: new Date('2027-01-01'),
+  licenceEvidenceFileRef: 'licence-1',
   permittedSchedules: ['RX'],
   qualifiedPersonRegistration: 'QP-1',
   qualifiedPersonValidFrom: new Date('2026-01-01'),

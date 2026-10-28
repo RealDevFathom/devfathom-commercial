@@ -115,6 +115,7 @@ async function readOverview(ctx: TRPCContext) {
     ctx.db.branchRegulatoryProfile.findFirst({
       where: {
         organizationId,
+        branch: { active: true },
         effectiveFrom: { lte: now },
         OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
       },
@@ -392,10 +393,22 @@ export const pharmacyOnboardingRouter = router({
 
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { organizationId, id: input.branchId, active: true },
-        select: { id: true },
+        select: { id: true, provinceCode: true, addressLine: true, city: true },
       });
       if (!branch) {
         throw badRequest('branchId', 'Choose one of this workspace’s active branches.');
+      }
+      if (input.provinceCode !== branch.provinceCode) {
+        throw badRequest('provinceCode', 'The regulatory province must match the selected branch.');
+      }
+      if (input.premisesAddressLine !== branch.addressLine) {
+        throw badRequest(
+          'premisesAddressLine',
+          'The premises address must match the selected branch.'
+        );
+      }
+      if (input.premisesCity !== branch.city) {
+        throw badRequest('premisesCity', 'The premises city must match the selected branch.');
       }
 
       const activePlaceholder = await ctx.db.branchRegulatoryProfile.findFirst({
