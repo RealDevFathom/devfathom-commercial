@@ -18,6 +18,7 @@ export class PharmacyLoyaltyError extends Error {
       | 'CUSTOMER_NOT_FOUND'
       | 'SALE_NOT_OPEN'
       | 'SALE_NOT_LINKED'
+      | 'PATIENT_MISMATCH'
       | 'INSUFFICIENT_POINTS'
       | 'INVALID_REDEMPTION'
       | 'IDEMPOTENCY_CONFLICT'
@@ -46,6 +47,30 @@ export async function linkCustomerToSale(
     },
   });
   if (!sale) throw new PharmacyLoyaltyError('SALE_NOT_OPEN');
+  // SEC (#236): if this sale already carries prescription-gated lines, they are
+  // bound to a patient. Re-link to a DIFFERENT patient would silently re-home
+  // those prescriptions to the wrong buyer, so refuse it.
+  const saleLines = await db.pharmacySaleLine.findMany({
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, saleId: sale.id },
+    select: { id: true },
+  });
+  if (saleLines.length > 0) {
+    const gated = await db.pharmacyRxLineAuthorization.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        saleLineId: { in: saleLines.map((line) => line.id) },
+        kind: 'PRESCRIPTION',
+        prescriptionLineId: { not: null },
+      },
+      select: { prescriptionLine: { select: { prescription: { select: { patientId: true } } } } },
+    });
+    if (
+      gated.some(
+        (row) => row.prescriptionLine && row.prescriptionLine.prescription.patientId !== input.patientId
+      )
+    )
+      throw new PharmacyLoyaltyError('PATIENT_MISMATCH');
+  }
   const customer = await db.pharmacyCustomer.upsert({
     where: {
       organizationId_patientId: {

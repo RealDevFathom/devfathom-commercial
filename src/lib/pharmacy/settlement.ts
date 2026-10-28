@@ -1,4 +1,5 @@
 import { requestCounterEvidence } from './counter-evidence';
+import { assertSaleLinesCleared } from './rx-gate';
 import 'server-only';
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -296,6 +297,8 @@ export async function applyPharmacyTender(
     include: completionSaleInclude,
   });
   if (!sale || sale.status !== 'OPEN') throw new PharmacySettlementError('SALE_NOT_OPEN');
+  // SEC: lock lines and re-validate current Rx/restricted/controlled flags before money moves.
+  await assertSaleLinesCleared(db, scope, input.saleId);
   const totalMinor = saleTotalMinor(sale.lines);
   const tenderedMinor = sale.tenders.reduce((sum, tender) => sum + tender.amountMinor, 0);
   if (input.amountMinor > totalMinor - tenderedMinor)

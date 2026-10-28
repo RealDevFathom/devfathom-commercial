@@ -41,7 +41,6 @@ const line = {
   packLevelId: 'pack-1',
   saleUnit: 'STRIP' as const,
   quantity: 1,
-  canonicalUnitsPerSaleUnit: 10,
   idempotencyKey: 'counter:sale-1:medicine-1',
 };
 const override = {
@@ -63,6 +62,15 @@ function fixture() {
     pharmacyInventoryLot: { findMany: lotRead },
     // Integrated tip: addLine first reads the medicine to route controlled lines; these are not.
     medicine: { findFirst: vi.fn(async () => null) },
+    presentation: {
+      findFirst: vi.fn(async () => ({
+        id: 'presentation-1',
+        packLevels: [
+          { id: 'pack-1', parentPackLevelId: null, unitsPerParent: 1 },
+          { id: 'unit-1', parentPackLevelId: 'pack-1', unitsPerParent: 10 },
+        ],
+      })),
+    },
   };
   const context = {
     db,

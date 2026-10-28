@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
+vi.mock('./finance-postings', () => ({ postTenderEntry: vi.fn() }));
 
 import { pointsForNetPaid, redemptionFor } from '@/lib/commerce/loyalty-arithmetic';
 
 import {
   accrueSalePoints,
+  redeemSalePoints,
   linkCustomerToSale,
   PharmacyLoyaltyError,
   readCustomerSnapshot,
@@ -38,6 +40,57 @@ describe('CRM-L01 pharmacy loyalty', () => {
       })
     );
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it('refuses to link a customer whose patient differs from an already-gated Rx line (SEC #236)', async () => {
+    const update = vi.fn();
+    const db = {
+      patientConsent: { findFirst: vi.fn().mockResolvedValue({ granted: true, revokedAt: null }) },
+      pharmacySale: { findFirst: vi.fn().mockResolvedValue({ id: 'sale-a' }), update },
+      pharmacySaleLine: { findMany: vi.fn().mockResolvedValue([{ id: 'line-a' }]) },
+      pharmacyRxLineAuthorization: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([{ prescriptionLine: { prescription: { patientId: 'patient-b' } } }]),
+      },
+      pharmacyCustomer: { upsert: vi.fn() },
+    };
+    await expect(
+      linkCustomerToSale(db as never, scope, {
+        saleId: 'sale-a',
+        patientId: 'patient-a',
+        displayName: 'Retail name',
+      })
+    ).rejects.toEqual(new PharmacyLoyaltyError('PATIENT_MISMATCH'));
+    expect(db.pharmacyCustomer.upsert).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('links when the already-gated Rx line belongs to the same patient (SEC #236)', async () => {
+    const update = vi.fn();
+    const db = {
+      patientConsent: { findFirst: vi.fn().mockResolvedValue({ granted: true, revokedAt: null }) },
+      pharmacySale: { findFirst: vi.fn().mockResolvedValue({ id: 'sale-a' }), update },
+      pharmacySaleLine: { findMany: vi.fn().mockResolvedValue([{ id: 'line-a' }]) },
+      pharmacyRxLineAuthorization: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([{ prescriptionLine: { prescription: { patientId: 'patient-a' } } }]),
+      },
+      pharmacyCustomer: {
+        upsert: vi
+          .fn()
+          .mockResolvedValue({ id: 'customer-a', displayName: 'Retail name', phoneLast4: null }),
+      },
+    };
+    await expect(
+      linkCustomerToSale(db as never, scope, {
+        saleId: 'sale-a',
+        patientId: 'patient-a',
+        displayName: 'Retail name',
+      })
+    ).resolves.toMatchObject({ id: 'customer-a' });
+    expect(update).toHaveBeenCalled();
   });
 
   it('accrues whole points from net paid excluding loyalty tender', async () => {
@@ -161,4 +214,49 @@ describe('CRM-L01 pharmacy loyalty', () => {
       })
     );
   });
+});
+
+it('blocks loyalty-only completion of a regulated line without authorization', async () => {
+  const db = {
+    $queryRaw: vi.fn(async (sql: { sql?: string }) =>
+      sql.sql?.includes('pharmacy_patients')
+        ? [{ id: 'patient-a' }]
+        : sql.sql?.includes('pharmacy_customers')
+          ? [{ patientId: 'patient-a' }]
+          : sql.sql?.includes('JOIN pharmacy_medicines')
+            ? [{ id: 'line-rx', rx: true, restricted: false, controlled: false }]
+            : []
+    ),
+    pharmacySale: {
+      findFirst: vi.fn(async () => ({
+        id: 'sale-a',
+        customerId: 'customer-a',
+        lines: [{ quantity: 1, unitPriceMinor: 100, discountMinor: 0 }],
+        tenders: [],
+      })),
+      update: vi.fn(),
+    },
+    pharmacyCustomer: { findFirst: vi.fn(async () => ({ patientId: 'patient-a' })) },
+    patientConsent: { findFirst: vi.fn(async () => ({ granted: true, revokedAt: null })) },
+    pharmacyLoyaltyPointsEntry: {
+      findUnique: vi.fn(async () => null),
+      aggregate: vi.fn(async () => ({ _sum: { points: 1 } })),
+      create: vi.fn(),
+    },
+    pharmacyTender: { create: vi.fn(async () => ({ id: 'tender-a', createdAt: new Date() })) },
+    pharmacyRxLineAuthorization: { findMany: vi.fn(async () => []) },
+    prescriptionFill: { findMany: vi.fn(async () => []) },
+    pharmacySaleEvent: { create: vi.fn() },
+  };
+  await expect(
+    redeemSalePoints(db as never, scope, {
+      saleId: 'sale-a',
+      points: 1,
+      deviceId: 'device-a',
+      businessDate: new Date('2026-10-21T00:00:00Z'),
+      idempotencyKey: 'redeem-rx',
+    })
+  ).rejects.toThrow('SAFETY_BLOCK');
+  expect(db.pharmacySale.update).not.toHaveBeenCalled();
+  expect(db.pharmacySaleEvent.create).not.toHaveBeenCalled();
 });

@@ -12,6 +12,8 @@
  */
 
 export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
+  SAFETY_BLOCK:
+    'Safety block: this bill contains medicine without valid authorization. Select its prescription line or record a pharmacist override before taking payment.',
   // Inventory (INV) — arrangement, stock and safety.
   // Raised in BOTH directions — too few loose units for a strip sale, and a
   // pack sale whose remainder after the loose pool is not a whole pack — so the

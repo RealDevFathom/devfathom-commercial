@@ -17,8 +17,20 @@ vi.mock('@/lib/pharmacy/sales', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/sales')>()),
   addSaleLine: vi.fn(),
 }));
+vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/restaurant/operator-credentials')>()),
+  verifyOperatorCredential: vi.fn(async () => true),
+}));
+vi.mock('@/lib/pharmacy/regulatory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/regulatory')>()),
+  assertStoredBranchMayOperate: vi.fn(async () => undefined),
+}));
 
 import { addSaleLine } from '@/lib/pharmacy/sales';
+import {
+  assertStoredBranchMayOperate,
+  BranchOperationDeniedError,
+} from '@/lib/pharmacy/regulatory';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 
@@ -32,7 +44,6 @@ const line = {
   packLevelId: 'pack-1',
   saleUnit: 'UNIT' as const,
   quantity: 2,
-  canonicalUnitsPerSaleUnit: 1,
   idempotencyKey: 'counter:sale-1:controlled',
   controlledAuthorization: {
     patientId: 'patient-1',
@@ -50,9 +61,16 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
   const register = vi.fn();
   const db = {
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
+    $queryRaw: vi.fn(async () => []),
     pharmacyBranch: { findMany: async () => [{ id: 'branch-1' }] },
     medicine: {
       findFirst: async () => ({ id: 'medicine-1', controlled: true, manufacturer: 'Maker' }),
+    },
+    presentation: {
+      findFirst: async () => ({
+        id: 'presentation-1',
+        packLevels: [{ id: 'pack-1', parentPackLevelId: null, unitsPerParent: 1 }],
+      }),
     },
     user: {
       findUnique: async () => ({
@@ -61,7 +79,7 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
         permissionOverrides: [],
       }),
     },
-    restaurantOperatorCredential: { findFirst: credential },
+    restaurantOperatorCredential: { findFirst: credential, update: vi.fn() },
     pharmacyControlledRegisterEntry: { create: register, findFirst: vi.fn(), aggregate: vi.fn() },
   };
   const context = {
@@ -115,6 +133,45 @@ describe('pharmacySales.addLine controlled actor', () => {
       blocked: expect.stringMatching(/pharmacist PIN/),
     });
     expect(credential).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('checks the branch permitted schedule before an emergency controlled supply', async () => {
+    const { caller, credential } = callerFor([
+      { capability: 'pharmacy.dispense', effect: 'ALLOW' },
+    ]);
+    credential.mockResolvedValue({
+      id: 'credential-1',
+      credentialHash: 'hash',
+      failedAttempts: 0,
+      lockedUntil: null,
+      staffProfile: {
+        status: 'ACTIVE',
+        user: {
+          id: 'pharmacist-1',
+          organizationId: 'org-1',
+          role: 'EMPLOYEE',
+          status: 'ACTIVE',
+          organizationRole: {
+            permissions: [{ capability: 'pharmacy.dispense', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        },
+      },
+    });
+    vi.mocked(assertStoredBranchMayOperate).mockRejectedValueOnce(
+      new BranchOperationDeniedError('SCHEDULE_NOT_PERMITTED')
+    );
+
+    await expect(caller.addLine(line)).resolves.toMatchObject({
+      blocked: expect.stringContaining('not permitted'),
+    });
+    expect(assertStoredBranchMayOperate).toHaveBeenCalledWith(
+      expect.anything(),
+      'org-1',
+      'branch-1',
+      expect.objectContaining({ schedule: 'CONTROLLED' })
+    );
     expect(addSaleLine).not.toHaveBeenCalled();
   });
 });

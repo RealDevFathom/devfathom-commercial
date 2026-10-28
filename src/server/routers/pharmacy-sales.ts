@@ -17,6 +17,13 @@ import {
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
 import {
+  prescriptionConsumedUnits,
+  prescriptionMatchesSalePatient,
+  prescriptionSalePatientStatus,
+} from '@/lib/pharmacy/rx-quantity';
+import { needsPrescription, PharmacySafetyBlockError } from '@/lib/pharmacy/rx-gate';
+import { assertStoredBranchMayOperate, BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
+import {
   isLockedOut,
   registerFailedAttempt,
   clearLockout,
@@ -142,6 +149,55 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   return { organizationId, branchId: branch, actorId };
 }
 
+/**
+ * Verifies an independent pharmacist's counter PIN. Locks the credential row so
+ * concurrent attempts serialize; a wrong PIN commits the lockout counter.
+ * Returns the pharmacist user, or null when refused.
+ */
+async function verifyPharmacistPin(
+  db: ScopedDb,
+  scope: LedgerScope,
+  staffProfileId: string,
+  pin: string
+) {
+  await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
+  const credential = await db.restaurantOperatorCredential.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      staffProfileId,
+      type: 'PIN',
+      revokedAt: null,
+      deviceId: null,
+    },
+    include: { staffProfile: { include: { user: true } } },
+  });
+  const pharmacist = credential?.staffProfile.user;
+  const now = new Date();
+  if (
+    !credential ||
+    credential.staffProfile.status !== 'ACTIVE' ||
+    !pharmacist ||
+    pharmacist.organizationId !== scope.organizationId ||
+    pharmacist.status !== 'ACTIVE' ||
+    pharmacist.id === scope.actorId ||
+    isLockedOut(credential, now)
+  )
+    return null;
+  if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return null;
+  if (!(await verifyOperatorCredential('PIN', pin, credential.credentialHash))) {
+    await db.restaurantOperatorCredential.update({
+      where: { id: credential.id },
+      data: registerFailedAttempt(credential, now),
+    });
+    return null;
+  }
+  await db.restaurantOperatorCredential.update({
+    where: { id: credential.id },
+    data: clearLockout(),
+  });
+  return pharmacist;
+}
+
 async function khataScope(ctx: TRPCContext, branch: string) {
   const scope = await scopeFor(ctx, branch);
   if (
@@ -174,7 +230,31 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
   return { ...input, type: input.type === 'KHATA' ? ('CREDIT' as const) : input.type };
 }
 
+// The DB fill trigger (pharmacy_rx_assert_fill_remaining) fails closed with a
+// 23514 when a race slips a fill past the app pre-check. Surface it as a clear,
+// user-correctable counter message rather than a raw Prisma 500.
+function isRxFillTriggerViolation(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const probe = error as { code?: unknown; meta?: unknown; message?: unknown };
+  const text = `${String(probe.message ?? '')} ${JSON.stringify(probe.meta ?? {})}`;
+  return (
+    text.includes('fill exceeds remaining authorized quantity') ||
+    text.includes('prescription line is unavailable')
+  );
+}
+
 function fail(error: unknown): never {
+  if (isRxFillTriggerViolation(error))
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Prescription quantity or repeat allowance is exhausted.',
+    });
+  if (error instanceof PharmacySafetyBlockError)
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message:
+        'SAFETY_BLOCK: a prescription-only, restricted or controlled line has no prescription or pharmacist authorization. Remove it or authorize it before payment.',
+    });
   if (error instanceof ControlledRestorationDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyPaymentSandboxError)
@@ -200,7 +280,9 @@ function fail(error: unknown): never {
       code:
         error.reason === 'CUSTOMER_NOT_FOUND'
           ? 'NOT_FOUND'
-          : error.reason === 'CONSENT_REQUIRED' || error.reason === 'SALE_NOT_LINKED'
+          : error.reason === 'CONSENT_REQUIRED' ||
+              error.reason === 'SALE_NOT_LINKED' ||
+              error.reason === 'PATIENT_MISMATCH'
             ? 'FORBIDDEN'
             : 'BAD_REQUEST',
       message: error.reason,
@@ -454,6 +536,11 @@ function requireCloseAccess(ctx: TRPCContext) {
 }
 
 export const pharmacySalesRouter = router({
+  rxOverridePermission: protectedProcedure.query(({ ctx }) =>
+    ctx.session!.user.role === 'ADMIN'
+      ? true
+      : can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, { db: ctx.db })
+  ),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
     try {
@@ -904,6 +991,28 @@ export const pharmacySalesRouter = router({
               path: ['prescriberName'],
             })
             .optional(),
+          // SEC: Rx / restricted (non-controlled) lines need a prescription line
+          // or an audited pharmacist override (capability, or an independent PIN).
+          rxAuthorization: z
+            .object({
+              prescriptionLineId: z.string().min(1).optional(),
+              override: z
+                .object({
+                  reason: z.string().trim().min(3).max(500),
+                  staffProfileId: z.string().min(1).optional(),
+                  pin: z
+                    .string()
+                    .regex(/^\d{4,8}$/)
+                    .optional(),
+                })
+                .strict()
+                .optional(),
+            })
+            .strict()
+            .refine((value) => Boolean(value.prescriptionLineId) !== Boolean(value.override), {
+              message: 'Give either a prescription line or a pharmacist override, not both.',
+            })
+            .optional(),
           branchId,
           saleId: z.string().min(1),
           medicineId: z.string().min(1),
@@ -911,7 +1020,6 @@ export const pharmacySalesRouter = router({
           packLevelId: z.string().min(1),
           saleUnit,
           quantity: z.number().int().positive(),
-          canonicalUnitsPerSaleUnit: z.number().int().positive(),
           discountKind: z.enum(['DISCOUNT', 'PROMOTION', 'COMPLIMENTARY']).optional(),
           discountMinor: z.number().int().nonnegative().optional(),
           approvedByUserId: z.string().min(1).optional(),
@@ -958,7 +1066,180 @@ export const pharmacySalesRouter = router({
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
-          if (!medicine?.controlled) return addSaleLine(db, scope, input);
+          const presentation = await db.presentation.findFirst({
+            where: {
+              id: input.presentationId,
+              medicineId: input.medicineId,
+              organizationId: scope.organizationId,
+            },
+            include: { packLevels: true },
+          });
+          const selectedPack = presentation?.packLevels.find((pack) => pack.id === input.packLevelId);
+          if (!selectedPack) return { blocked: 'The selected medicine pack is unavailable.' };
+          const children = new Map<string, Array<typeof selectedPack>>();
+          for (const pack of presentation.packLevels) {
+            if (!pack.parentPackLevelId) continue;
+            children.set(pack.parentPackLevelId, [
+              ...(children.get(pack.parentPackLevelId) ?? []),
+              pack,
+            ]);
+          }
+          let canonicalUnitsPerSaleUnit = 1;
+          let current = selectedPack;
+          const visited = new Set([current.id]);
+          for (;;) {
+            const next = children.get(current.id) ?? [];
+            if (next.length === 0) break;
+            if (next.length !== 1 || visited.has(next[0]!.id))
+              return { blocked: 'The selected medicine pack conversion is invalid.' };
+            current = next[0]!;
+            visited.add(current.id);
+            canonicalUnitsPerSaleUnit *= current.unitsPerParent;
+            if (!Number.isSafeInteger(canonicalUnitsPerSaleUnit) || canonicalUnitsPerSaleUnit <= 0)
+              return { blocked: 'The selected medicine pack conversion is invalid.' };
+          }
+          const saleLineInput = { ...input, canonicalUnitsPerSaleUnit };
+          if (!medicine?.controlled) {
+            if (!needsPrescription(medicine)) return addSaleLine(db, scope, saleLineInput);
+            const rxBlocked = {
+              blocked:
+                'Prescription-only or restricted medicine needs a valid prescription or a pharmacist override with a reason.',
+            } as const;
+            // #237: a patient mismatch must read differently from a missing Rx so
+            // the counter knows to link the patient, not to hunt for a script.
+            const rxPatientMismatch = {
+              blocked:
+                'This prescription is not for the patient linked to this sale. Link the correct patient to the sale before dispensing.',
+            } as const;
+            const rxAuth = input.rxAuthorization;
+            if (!rxAuth) return rxBlocked;
+            const now = new Date();
+            let pharmacistUserId = scope.actorId;
+            let prescriptionFill:
+              { prescriptionLineId: string; fillSequence: number; units: number } | undefined;
+            if (rxAuth.prescriptionLineId) {
+              await db.$queryRaw`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${rxAuth.prescriptionLineId} FOR UPDATE`;
+              const rx = await db.prescriptionLine.findFirst({
+                where: {
+                  id: rxAuth.prescriptionLineId,
+                  organizationId: scope.organizationId,
+                  medicineId: input.medicineId,
+                  presentationId: input.presentationId,
+                },
+                include: { prescription: true, fills: true },
+              });
+              const units = input.quantity * canonicalUnitsPerSaleUnit;
+              if (
+                !rx ||
+                rx.prescription.validFrom > now ||
+                rx.prescription.validUntil <= now ||
+                !Number.isSafeInteger(units)
+              )
+                return rxBlocked;
+              const salePatientStatus = await prescriptionSalePatientStatus(
+                db,
+                scope,
+                input.saleId,
+                rx.prescription.patientId
+              );
+              if (salePatientStatus === 'MISSING') return rxBlocked;
+              if (salePatientStatus === 'MISMATCH') return rxPatientMismatch;
+              const previous = await db.pharmacySaleLine.findFirst({
+                where: {
+                  organizationId: scope.organizationId,
+                  branchId: scope.branchId,
+                  saleId: input.saleId,
+                  idempotencyKey: input.idempotencyKey,
+                },
+              });
+              if (previous) {
+                const authorization = await db.pharmacyRxLineAuthorization.findFirst({
+                  where: {
+                    organizationId: scope.organizationId,
+                    saleLineId: previous.id,
+                    prescriptionLineId: rx.id,
+                    kind: 'PRESCRIPTION',
+                  },
+                });
+                if (authorization) return addSaleLine(db, scope, saleLineInput);
+                return rxBlocked;
+              }
+              if (
+                (await prescriptionConsumedUnits(db, scope.organizationId, rx.id)) + units >
+                rx.authorizedCanonicalUnits * (1 + rx.prescription.authorizedRepeats)
+              )
+                return rxBlocked;
+              prescriptionFill = {
+                prescriptionLineId: rx.id,
+                fillSequence: rx.fills.length + 1,
+                units,
+              };
+            } else {
+              const override = rxAuth.override!;
+              const actorIsPharmacist = await can(
+                subjectFromSession(ctx.session!.user),
+                'pharmacy:dispense',
+                undefined,
+                { db, now }
+              );
+              if (!actorIsPharmacist) {
+                if (!override.staffProfileId || !override.pin) return rxBlocked;
+                const pharmacist = await verifyPharmacistPin(
+                  db,
+                  scope,
+                  override.staffProfileId,
+                  override.pin
+                );
+                if (!pharmacist) return rxBlocked;
+                pharmacistUserId = pharmacist.id;
+              }
+              annotateAudit(ctx, {
+                category: 'PHARMACY_SAFETY',
+                action: 'rx_override',
+                targetType: 'PharmacySale',
+                targetId: input.saleId,
+                description: 'Pharmacist overrode the prescription requirement at the counter.',
+                metadata: {
+                  branchId: input.branchId,
+                  medicineId: input.medicineId,
+                  pharmacistUserId,
+                  reason: override.reason,
+                },
+              });
+            }
+            const result = await addSaleLine(db, scope, saleLineInput);
+            const existing = await db.pharmacyRxLineAuthorization.findFirst({
+              where: { organizationId: scope.organizationId, saleLineId: result.line.id },
+              select: { id: true },
+            });
+            if (!existing) {
+              if (prescriptionFill)
+                await db.prescriptionFill.create({
+                  data: {
+                    organizationId: scope.organizationId,
+                    prescriptionLineId: prescriptionFill.prescriptionLineId,
+                    fillSequence: prescriptionFill.fillSequence,
+                    quantityCanonicalUnits: prescriptionFill.units,
+                    dispensedByUserId: pharmacistUserId,
+                    idempotencyKey: `rx:${result.line.id}`,
+                  },
+                });
+              await db.pharmacyRxLineAuthorization.create({
+                data: {
+                  organizationId: scope.organizationId,
+                  branchId: scope.branchId,
+                  saleLineId: result.line.id,
+                  medicineId: input.medicineId,
+                  kind: rxAuth.prescriptionLineId ? 'PRESCRIPTION' : 'OVERRIDE',
+                  prescriptionLineId: rxAuth.prescriptionLineId ?? null,
+                  pharmacistUserId,
+                  recordedByUserId: scope.actorId,
+                  reason: rxAuth.override?.reason ?? null,
+                },
+              });
+            }
+            return result;
+          }
           if (
             !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
               db,
@@ -975,54 +1256,36 @@ export const pharmacySalesRouter = router({
               'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
           } as const;
           if (!authorization) return blocked;
-          // Serialize credential attempts; returning a denial commits durable lockout counters.
-          await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${authorization.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
-          const credential = await db.restaurantOperatorCredential.findFirst({
-            where: {
-              organizationId: scope.organizationId,
-              staffProfileId: authorization.staffProfileId,
-              type: 'PIN',
-              revokedAt: null,
-              deviceId: null,
-            },
-            include: { staffProfile: { include: { user: true } } },
-          });
-          const pharmacist = credential?.staffProfile.user;
+          const pharmacist = await verifyPharmacistPin(
+            db,
+            scope,
+            authorization.staffProfileId,
+            authorization.pin
+          );
+          if (!pharmacist) return blocked;
           const now = new Date();
-          if (
-            !credential ||
-            credential.staffProfile.status !== 'ACTIVE' ||
-            !pharmacist ||
-            pharmacist.organizationId !== scope.organizationId ||
-            pharmacist.status !== 'ACTIVE' ||
-            pharmacist.id === scope.actorId ||
-            isLockedOut(credential, now)
-          )
-            return blocked;
-          if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
-          if (
-            !(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))
-          ) {
-            await db.restaurantOperatorCredential.update({
-              where: { id: credential.id },
-              data: registerFailedAttempt(credential, now),
-            });
-            return blocked;
-          }
-          await db.restaurantOperatorCredential.update({
-            where: { id: credential.id },
-            data: clearLockout(),
-          });
+          // verifyPharmacistPin already serialized the credential row and enforced the
+          // lockout, dispense-permission and independent-PIN checks for this pharmacist.
           const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);
           if (authorization.refSerial && !refEntry) {
             return { blocked: 'That earlier register serial is not on this branch.' };
           }
           if (authorization.emergency) {
+            try {
+              await assertStoredBranchMayOperate(db, scope.organizationId, scope.branchId, {
+                name: 'emergency controlled medicine supply',
+                schedule: 'CONTROLLED',
+              });
+            } catch (error) {
+              if (error instanceof BranchOperationDeniedError)
+                return { blocked: 'This branch is not permitted to supply this medicine schedule.' };
+              throw error;
+            }
             const patient = await db.pharmacyPatient.findFirst({
               where: { id: authorization.patientId, organizationId: scope.organizationId },
             });
             if (!patient?.cnic?.trim() || !authorization.prescriberName) return blocked;
-            const units = input.quantity * input.canonicalUnitsPerSaleUnit;
+            const units = input.quantity * canonicalUnitsPerSaleUnit;
             const since = new Date(now.getTime() - EMERGENCY_NO_RX_WINDOW_MS);
             const recentSupplies = await db.pharmacyControlledRegisterEntry.count({
               where: {
@@ -1061,7 +1324,7 @@ export const pharmacySalesRouter = router({
               return { blocked: 'Patient dispensing consent is required.' };
             }
             await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
-            const result = await addSaleLine(db, scope, input);
+            const result = await addSaleLine(db, scope, saleLineInput);
             await appendControlledSaleEntries(db, {
               organizationId: scope.organizationId,
               branchId: scope.branchId,
@@ -1115,13 +1378,19 @@ export const pharmacySalesRouter = router({
           if (
             !rx ||
             rx.prescription.patientId !== authorization.patientId ||
+            !(await prescriptionMatchesSalePatient(
+              db,
+              scope,
+              input.saleId,
+              rx.prescription.patientId
+            )) ||
             !rx.prescription.patient.cnic?.trim() ||
             !rx.prescription.prescriber.registrationNumber.trim() ||
             rx.prescription.validFrom > now ||
             rx.prescription.validUntil <= now
           )
             return blocked;
-          const units = input.quantity * input.canonicalUnitsPerSaleUnit;
+          const units = input.quantity * canonicalUnitsPerSaleUnit;
           const previous = await db.pharmacySaleLine.findFirst({
             where: {
               organizationId: scope.organizationId,
@@ -1137,9 +1406,8 @@ export const pharmacySalesRouter = router({
             };
           if (
             !Number.isSafeInteger(units) ||
-            rx.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0) + units >
-              rx.authorizedCanonicalUnits ||
-            rx.fills.length > rx.prescription.authorizedRepeats
+            (await prescriptionConsumedUnits(db, scope.organizationId, rx.id)) + units >
+              rx.authorizedCanonicalUnits * (1 + rx.prescription.authorizedRepeats)
           )
             return { blocked: 'Prescription quantity or repeat allowance is exhausted.' };
           const consent = await db.patientConsent.findFirst({
@@ -1152,7 +1420,7 @@ export const pharmacySalesRouter = router({
           });
           if (!consent?.granted || consent.revokedAt)
             return { blocked: 'Patient dispensing consent is required.' };
-          const result = await addSaleLine(db, scope, input);
+          const result = await addSaleLine(db, scope, saleLineInput);
           await db.prescriptionFill.create({
             data: {
               organizationId: scope.organizationId,
@@ -1212,6 +1480,103 @@ export const pharmacySalesRouter = router({
           });
         }
         return outcome;
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  // #235: let a pharmacist sign (verify) a prescription-linked Rx line from the
+  // counter. A cashier who holds no dispense capability must present an
+  // independent pharmacist PIN; a pharmacist actor signs with their session.
+  // Signing records the RX-03 SIGN decision the panel reads as "verified".
+  signRxLine: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleLineId: z.string().min(1),
+          staffProfileId: z.string().min(1).optional(),
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = await scopeFor(ctx, input.branchId);
+          await db.$queryRaw`SELECT id FROM pharmacy_sale_lines WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND id=${input.saleLineId} FOR UPDATE`;
+          const authorization = await db.pharmacyRxLineAuthorization.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              saleLineId: input.saleLineId,
+              kind: 'PRESCRIPTION',
+              prescriptionLineId: { not: null },
+            },
+            select: { prescriptionLineId: true },
+          });
+          if (!authorization?.prescriptionLineId)
+            return { blocked: 'This line has no linked prescription to sign.' };
+          const now = new Date();
+          let signerId = scope.actorId;
+          if (!(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+            db,
+            now,
+          }))) {
+            if (!input.staffProfileId || !input.pin)
+              return { blocked: 'A pharmacist PIN is required to sign this prescription.' };
+            const pharmacist = await verifyPharmacistPin(
+              db,
+              scope,
+              input.staffProfileId,
+              input.pin
+            );
+            if (!pharmacist)
+              return { blocked: 'A pharmacist PIN is required to sign this prescription.' };
+            signerId = pharmacist.id;
+          }
+          const review = await db.pharmacyPharmacistReviewItem.upsert({
+            where: {
+              organizationId_saleLineId: {
+                organizationId: scope.organizationId,
+                saleLineId: input.saleLineId,
+              },
+            },
+            update: {},
+            create: {
+              organizationId: scope.organizationId,
+              prescriptionLineId: authorization.prescriptionLineId,
+              saleLineId: input.saleLineId,
+              requestedByUserId: scope.actorId,
+            },
+          });
+          await db.pharmacyPharmacistReviewDecision.create({
+            data: {
+              organizationId: scope.organizationId,
+              reviewItemId: review.id,
+              kind: 'SIGN',
+              actorUserId: signerId,
+              signedAt: now,
+            },
+          });
+          annotateAudit(ctx, {
+            category: 'PHARMACY_SAFETY',
+            action: 'rx_sign',
+            targetType: 'PharmacySale',
+            targetId: input.saleLineId,
+            description: 'Pharmacist signed a prescription line at the counter.',
+            metadata: {
+              branchId: input.branchId,
+              saleLineId: input.saleLineId,
+              pharmacistUserId: signerId,
+            },
+          });
+          return { signed: true };
+        });
       } catch (error) {
         fail(error);
       }

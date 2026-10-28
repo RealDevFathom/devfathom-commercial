@@ -66,7 +66,11 @@ import {
 import { COUNTER_ERROR_MESSAGES, counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { PaymentSandboxPanel } from './payment-sandbox-panel';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
-import { previewSaleLine, type SaleUnitKind } from '@/lib/pharmacy/counter-pricing';
+import {
+  previewSaleLine,
+  type SaleUnitKind,
+  type SaleUnitOption,
+} from '@/lib/pharmacy/counter-pricing';
 import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
 import {
   buildCounterBrowserReceipt,
@@ -220,7 +224,7 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
     !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
   ) {
     return (
-      <SectionCard title="Counter unavailable">
+      <SectionCard titleLevel={2} title="Counter unavailable">
         <p role="status" className="text-sm text-text-body">
           {status === 'loading'
             ? 'Checking counter access…'
@@ -288,6 +292,13 @@ function ScopedPharmacyCounterConsole({
     prescriberRegNo: '',
     refSerial: '',
   });
+  const [rxAuth, setRxAuth] = useState({
+    prescriptionLineId: '',
+    reason: '',
+    staffProfileId: '',
+    pin: '',
+  });
+  const rxPermission = trpc.pharmacySales.rxOverridePermission.useQuery();
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery();
   const [patientId, setPatientId] = useState<string | null>(null);
   const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
@@ -493,6 +504,7 @@ function ScopedPharmacyCounterConsole({
 
   const createSale = trpc.pharmacySales.create.useMutation();
   const addLine = trpc.pharmacySales.addLine.useMutation();
+  const signRxLine = trpc.pharmacySales.signRxLine.useMutation();
   const transition = trpc.pharmacySales.transition.useMutation();
   const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
@@ -621,9 +633,14 @@ function ScopedPharmacyCounterConsole({
               id: prescriptionLine.entry.prescriptionLineId,
               verified: prescriptionLine.entry.verified,
               expiresAt: new Date(prescriptionLine.prescription.validUntil),
+              // The panel's remaining already subtracts the fill THIS cart line
+              // wrote when it was gated in, so add that line's units back to
+              // judge whether the line itself fits. Applies to every regulated
+              // line backed by a prescription (#235: a fill equal to the full
+              // authorization must not read as over-quantity), not just signed
+              // controlled lines — signing is a separate safety block.
               remainingAuthorizedUnits:
-                prescriptionLine.entry.remainingAuthorizedUnits +
-                (line.controlled && prescriptionLine.entry.verified ? line.canonicalUnits : 0),
+                prescriptionLine.entry.remainingAuthorizedUnits + line.canonicalUnits,
             }
           : null,
         requestedCanonicalUnits: line.canonicalUnits,
@@ -829,9 +846,59 @@ function ScopedPharmacyCounterConsole({
   const stageRow = useCallback((row: CounterSearchRow) => {
     setActiveRow(row);
     setQuantity(1);
-    setSaleUnit(row.saleUnits[0]?.kind ?? null);
+    // #241: a regulated line defaults to the SMALLEST sale unit, so one add
+    // never silently consumes a whole pack's worth of a prescription. OTC lines
+    // keep the first (largest) sale unit the search returned.
+    const regulated =
+      row.restriction.rx || row.restriction.restricted || row.restriction.controlled;
+    const smallest = row.saleUnits.reduce<SaleUnitOption | null>(
+      (best, option) =>
+        !best || option.canonicalUnitsPerSaleUnit < best.canonicalUnitsPerSaleUnit ? option : best,
+      null
+    );
+    setSaleUnit((regulated ? smallest : row.saleUnits[0])?.kind ?? null);
     setLotOverride(null);
   }, []);
+
+  // #235: a pharmacist signs the Rx line that is already in the cart. A cashier
+  // actor must have entered an independent pharmacist PIN (reusing the Rx
+  // authorization PIN field); a pharmacist actor signs with their own session.
+  const signRxPrescriptionLine = useCallback(
+    async (prescriptionLineId: string) => {
+      const entry = patient?.prescriptions
+        .flatMap((prescription) => prescription.lines)
+        .find((rxLine) => rxLine.prescriptionLineId === prescriptionLineId);
+      const cartLine = entry
+        ? (cart?.lines ?? []).find((cartRow) => cartRow.medicineId === entry.medicineId)
+        : undefined;
+      if (!branchId || !cartLine) {
+        setNotice({
+          tone: 'warning',
+          message: 'Add this prescription line to the cart before a pharmacist signs it.',
+        });
+        return;
+      }
+      try {
+        const result = await signRxLine.mutateAsync({
+          branchId,
+          saleLineId: cartLine.saleLineId,
+          ...(rxPermission.data === true
+            ? {}
+            : { staffProfileId: rxAuth.staffProfileId, pin: rxAuth.pin }),
+        });
+        if (result && 'blocked' in result && typeof result.blocked === 'string') {
+          setNotice({ tone: 'warning', message: result.blocked });
+          return;
+        }
+        setRxAuth((current) => ({ ...current, pin: '' }));
+        await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
+        setNotice({ tone: 'success', message: 'Prescription signed by the pharmacist.' });
+      } catch (error) {
+        setNotice({ tone: 'danger', message: messageFrom(error) });
+      }
+    },
+    [branchId, cart, patient, rxAuth, rxPermission.data, signRxLine, utils]
+  );
 
   const ensureSale = useCallback(async () => {
     if (saleId) return saleId;
@@ -881,8 +948,36 @@ function ScopedPharmacyCounterConsole({
         rxPanelRef.current?.focus();
         return;
       }
+      const regulated =
+        !controlled && (activeRow.restriction.rx || activeRow.restriction.restricted);
+      if (
+        regulated &&
+        !rxAuth.prescriptionLineId &&
+        (rxAuth.reason.trim().length < 3 ||
+          (rxPermission.data !== true && (!rxAuth.staffProfileId || !/^\d{4,8}$/.test(rxAuth.pin))))
+      ) {
+        setNotice({
+          tone: 'danger',
+          message:
+            'Select a prescription line in the prescription panel or complete the pharmacist override.',
+        });
+        rxPanelRef.current?.focus();
+        return;
+      }
       const refSerial = Number(controlledAuth.refSerial);
       const added = await addLine.mutateAsync({
+        rxAuthorization: regulated
+          ? rxAuth.prescriptionLineId
+            ? { prescriptionLineId: rxAuth.prescriptionLineId }
+            : {
+                override: {
+                  reason: rxAuth.reason.trim(),
+                  ...(rxPermission.data === true
+                    ? {}
+                    : { staffProfileId: rxAuth.staffProfileId, pin: rxAuth.pin }),
+                },
+              }
+          : undefined,
         controlledAuthorization:
           controlled && patient
             ? {
@@ -905,7 +1000,6 @@ function ScopedPharmacyCounterConsole({
         packLevelId: selectedOption.packLevelId,
         saleUnit: selectedOption.kind,
         quantity,
-        canonicalUnitsPerSaleUnit: selectedOption.canonicalUnitsPerSaleUnit,
         // A stable key per (sale, medicine, unit, quantity) so a double-press of
         // the add chord cannot post the same line twice.
         idempotencyKey: `counter:${activeSaleId}:${activeRow.medicineId}:${selectedOption.packLevelId}:${selectedOption.kind}:${quantity}${overrideLotId ? `:${overrideLotId}` : ''}`,
@@ -920,7 +1014,7 @@ function ScopedPharmacyCounterConsole({
           : {}),
       });
       if ('blocked' in added) {
-        setNotice({ tone: 'warning', message: added.blocked });
+        setNotice({ tone: 'danger', message: added.blocked });
         return;
       }
       await refreshCart();
@@ -945,12 +1039,15 @@ function ScopedPharmacyCounterConsole({
       });
     } finally {
       setControlledAuth((value) => ({ ...value, pin: '' }));
+      setRxAuth((value) => ({ ...value, pin: '' }));
       setPending(null);
     }
   }, [
     activeRow,
     addLine,
     controlledAuth,
+    rxAuth,
+    rxPermission.data,
     patient,
     patientAddress,
     branchId,
@@ -1566,7 +1663,7 @@ function ScopedPharmacyCounterConsole({
     return (
       <div className="space-y-6">
         <PageHeader eyebrow="Pharmacy" heading="Counter" description="Loading this workspace." />
-        <SectionCard title="Loading">
+        <SectionCard titleLevel={2} title="Loading">
           <p className="text-sm text-text-muted" role="status">
             Loading branches…
           </p>
@@ -1583,7 +1680,7 @@ function ScopedPharmacyCounterConsole({
           heading="Counter"
           description="This counter is unavailable."
         />
-        <SectionCard title="Branches unavailable">
+        <SectionCard titleLevel={2} title="Branches unavailable">
           <div className="space-y-3" role="alert">
             <p className="text-sm text-destructive">{messageFrom(branchesQuery.error)}</p>
             <Button
@@ -1616,7 +1713,7 @@ function ScopedPharmacyCounterConsole({
           this lane owns the counter, not that surface, so it links there rather
           than duplicating it.
         */}
-        <SectionCard title="Before this counter can sell">
+        <SectionCard titleLevel={2} title="Before this counter can sell">
           <div className="space-y-3">
             <p className="text-sm text-text-body">
               A counter dispenses from one active pharmacy branch. Two things must exist first:
@@ -1663,7 +1760,7 @@ function ScopedPharmacyCounterConsole({
 
   if (!branchAuthorized) {
     return (
-      <SectionCard title="Counter unavailable">
+      <SectionCard titleLevel={2} title="Counter unavailable">
         <p role="alert" className="text-sm text-text-body">
           This branch could not be verified for your account. Restore branch access before opening a
           saved payment.
@@ -2295,6 +2392,7 @@ function ScopedPharmacyCounterConsole({
             }
           >
             <CounterRxPanel
+              canCapturePrescription={rxPermission.data === true}
               ref={rxPanelRef}
               controlled={
                 // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A
@@ -2324,8 +2422,19 @@ function ScopedPharmacyCounterConsole({
                       },
                     }
               }
+              rxAuthorization={{
+                ...rxAuth,
+                actorCanDispense: rxPermission.data === true,
+                pharmacists: pharmacistsQuery.data ?? [],
+                loading: pharmacistsQuery.isLoading || rxPermission.isLoading,
+                error: pharmacistsQuery.isError || rxPermission.isError,
+                onChange: (field, value) =>
+                  setRxAuth((current) => ({ ...current, [field]: value })),
+              }}
               alerts={alerts}
               patient={patient}
+              onSignPrescriptionLine={signRxPrescriptionLine}
+              signing={signRxLine.isPending}
               candidates={patientsQuery.data?.patients ?? []}
               query={patientQuery}
               state={
@@ -2353,10 +2462,12 @@ function ScopedPharmacyCounterConsole({
               onSearch={() => setSubmittedPatientQuery(patientQuery.trim())}
               onSelectPatient={(id) => {
                 setPatientId(id);
+                setRxAuth({ prescriptionLineId: '', reason: '', staffProfileId: '', pin: '' });
                 setPatientAddressDraft(null);
               }}
               onClearPatient={() => {
                 setPatientId(null);
+                setRxAuth({ prescriptionLineId: '', reason: '', staffProfileId: '', pin: '' });
                 setPatientAddressDraft(null);
                 setSubmittedPatientQuery('');
                 setPatientQuery('');

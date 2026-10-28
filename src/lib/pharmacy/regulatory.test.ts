@@ -59,8 +59,21 @@ describe('assertBranchMayOperate', () => {
 
   it('fails closed and audits an expired licence', () => {
     const state = validState();
-    state.licenceValidTo = at;
+    state.licenceValidTo = new Date('2026-09-01T00:00:00Z');
     expectDenied(state, 'LICENCE_INVALID');
+  });
+
+  it.each([
+    ['2026-10-21T00:00:00Z', true],
+    ['2026-10-21T18:59:59.999Z', true],
+    ['2026-10-21T19:00:00Z', false],
+  ])('checks inclusive Karachi licence expiry at %s', (timestamp, allowed) => {
+    const state = validState();
+    state.licenceValidTo = new Date('2026-10-21T00:00:00Z');
+    const operate = () =>
+      assertBranchMayOperate(state, { name: 'DISPENSE', at: new Date(timestamp) });
+    if (allowed) expect(operate).not.toThrow();
+    else expect(operate).toThrowError(new BranchOperationDeniedError('LICENCE_INVALID'));
   });
 
   it('fails closed and audits missing qualified-person coverage', () => {

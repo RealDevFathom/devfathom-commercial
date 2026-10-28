@@ -82,6 +82,7 @@ vi.mock('@/lib/trpc', () => {
     trpc: {
       useUtils: () => utils,
       pharmacySales: router([
+        'rxOverridePermission',
         'counterBranches',
         'counterKeymap',
         'counterSaveKeymap',
@@ -94,6 +95,7 @@ vi.mock('@/lib/trpc', () => {
         'drawerStatus',
         'create',
         'addLine',
+        'signRxLine',
         'transition',
         'tender',
         'openDrawer',
@@ -227,6 +229,7 @@ beforeEach(() => {
     'customerSnapshot',
     'substituteProposals',
     'counterPatients',
+    'rxOverridePermission',
     'counterPatientPanel',
     'controlledPharmacists',
   ])

@@ -189,25 +189,28 @@ export function CounterUnitToggle({
             </dd>
           </div>
           <div className="col-span-2 sm:col-span-4">
-            {preview.sufficient ? (
-              <StatusPill
-                status="in-stock"
-                tone="success"
-                label={`Covered · ${preview.availableUnits} units on hand`}
-              />
-            ) : (
-              <span role="alert" className="flex flex-wrap items-center gap-2">
+            <dt className="sr-only">Stock availability</dt>
+            <dd>
+              {preview.sufficient ? (
                 <StatusPill
-                  status="short"
-                  tone="warning"
-                  label={`Short by ${preview.shortfallUnits} units`}
+                  status="in-stock"
+                  tone="success"
+                  label={`Covered · ${preview.availableUnits} units on hand`}
                 />
-                <span className="text-sm text-text-body">
-                  Only {preview.availableUnits} safe units are on hand. Reduce the quantity or
-                  capture the shortfall as unfulfilled demand.
+              ) : (
+                <span role="alert" className="flex flex-wrap items-center gap-2">
+                  <StatusPill
+                    status="short"
+                    tone="warning"
+                    label={`Short by ${preview.shortfallUnits} units`}
+                  />
+                  <span className="text-sm text-text-body">
+                    Only {preview.availableUnits} safe units are on hand. Reduce the quantity or
+                    capture the shortfall as unfulfilled demand.
+                  </span>
                 </span>
-              </span>
-            )}
+              )}
+            </dd>
           </div>
         </dl>
       ) : null}

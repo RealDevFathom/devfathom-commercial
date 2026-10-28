@@ -79,6 +79,8 @@ function fixture() {
       .mockResolvedValueOnce(authenticatedRow)
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
+      // Rx gate: locked sale lines with current medicine flags (none regulated).
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ receipt_number: 41 }])
       .mockResolvedValue(authenticatedRow),
     // F3: the business day is open (no daily close row).
@@ -237,6 +239,7 @@ describe('leased receipt replay', () => {
       .mockResolvedValueOnce(authenticatedRow)
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
     await expect(
       applyPharmacyTender(db as never, scope, { ...input, idempotencyKey: 'another-command' })
@@ -297,5 +300,76 @@ describe('device command authentication', () => {
         )
       ).rejects.toThrow('INVALID_COMMAND_SIGNATURE');
     }
+  });
+});
+
+describe('tender re-validates regulated lines (SEC rx gate)', () => {
+  function gated(
+    row: { rx: boolean; restricted: boolean; controlled: boolean },
+    authorized: boolean
+  ) {
+    const f = fixture();
+    f.db.$queryRaw
+      .mockReset()
+      .mockResolvedValueOnce(authenticatedRow)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      // The gate's locked read of the sale lines with CURRENT medicine flags.
+      .mockResolvedValueOnce([{ id: 'line-1', ...row }])
+      .mockResolvedValue([{ receipt_number: 41 }]);
+    Object.assign(f.db, {
+      pharmacyRxLineAuthorization: {
+        findMany: vi.fn().mockResolvedValue(authorized ? [{ saleLineId: 'line-1' }] : []),
+      },
+      prescriptionFill: { findMany: vi.fn().mockResolvedValue([]) },
+    });
+    return f;
+  }
+
+  it('refuses a line inserted straight into the DB with no authorization', async () => {
+    const { db, input, tenderCreate } = gated(
+      { rx: true, restricted: false, controlled: false },
+      false
+    );
+    await expect(applyPharmacyTender(db as never, scope, input)).rejects.toThrow('SAFETY_BLOCK');
+    expect(tenderCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a line whose medicine was flipped to controlled after an Rx authorization', async () => {
+    const { db, input, tenderCreate } = gated(
+      { rx: true, restricted: false, controlled: true },
+      true
+    );
+    await expect(applyPharmacyTender(db as never, scope, input)).rejects.toThrow('SAFETY_BLOCK');
+    expect(tenderCreate).not.toHaveBeenCalled();
+  });
+
+  it('refuses an OTC line flipped to restricted after addLine', async () => {
+    const { db, input, tenderCreate } = gated(
+      { rx: false, restricted: true, controlled: false },
+      false
+    );
+    await expect(applyPharmacyTender(db as never, scope, input)).rejects.toThrow('SAFETY_BLOCK');
+    expect(tenderCreate).not.toHaveBeenCalled();
+  });
+
+  it('locks the sale lines FOR UPDATE and reads the medicine flags in the same statement', async () => {
+    const { db, input } = gated({ rx: true, restricted: false, controlled: false }, false);
+    await applyPharmacyTender(db as never, scope, input).catch(() => undefined);
+    const sql = db.$queryRaw.mock.calls.map(([query]) => query.sql).join(' ');
+    expect(sql).toMatch(
+      /FROM pharmacy_sale_lines[\s\S]*JOIN pharmacy_medicines[\s\S]*FOR UPDATE OF l/
+    );
+  });
+
+  it('lets an authorized Rx line through to payment', async () => {
+    const { db, input, tenderCreate } = gated(
+      { rx: true, restricted: false, controlled: false },
+      true
+    );
+    await expect(applyPharmacyTender(db as never, scope, input)).resolves.toMatchObject({
+      receiptNumber: 41,
+    });
+    expect(tenderCreate).toHaveBeenCalledOnce();
   });
 });
