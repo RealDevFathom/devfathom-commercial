@@ -47,6 +47,13 @@ platform control desk used by DevFathom operators to onboard and run tenants.
   parallel-run comparison and cutover
 - **Reports** and multi-branch assignment
 
+Fiscal documents and receipt numbering are local operational records: no licensed
+FBR integrator is connected yet; sandbox results do not establish fiscal compliance.
+Card/wallet payments require a certified adapter; keep sandbox admission off in
+production. Refill reminders and owner digests must keep WhatsApp sending in mock
+mode until the owner approves the sender and templates. The owner-digest WhatsApp
+channel is currently a non-sending provider seam.
+
 ### 🍽️ Restaurant — `src/app/(app)/restaurant`, `src/app/(terminal)`
 
 - **POS and KDS terminals** — `/pos` and `/kds` terminal routes, registered
@@ -70,7 +77,12 @@ platform control desk used by DevFathom operators to onboard and run tenants.
 - **Notifications, integrations & webhooks**, printers and a local print bridge
 - **Cameras**, **reports**, **insights** and **growth** recommendations
 
-### 🏨 Hotel — `src/app/(app)/hotel` *(in progress)*
+Restaurant card tenders are operator-confirmed mock/adapter-only flows, not proof
+of live gateway authorization. Printing supports browser output and a local ESC/POS
+bridge running on the till PC. Physical hardware has not been validated, and cash
+drawer kick is not implemented. See [printing operations](./docs/product/modules/printing.md).
+
+### 🏨 Hotel — `src/app/(app)/hotel` _(in progress)_
 
 Currently setup/configuration only, under **Hotel settings**:
 
@@ -96,7 +108,8 @@ Front-desk operations (reservations, check-in/out, folios) are not built yet.
   contracts and licenses, catalog, deployments, jobs, operators, support,
   health and audit, with its own MFA.
 - **AI** — "Ask Fathom" assistant with tools, AI menu import, and growth
-  recommendations. Provider is configurable (Groq, Google, Vertex, Azure).
+  recommendations. Providers are Groq, Google and Google Vertex. Azure OpenAI remains a
+  deprecated compatibility adapter and must not be used for new deployments.
 - **Cameras** — gateway-based cameras with encrypted credentials and
   short-lived stream grants (pharmacy and restaurant).
 - **Workspace** — dashboard, projects/Kanban (Trello import), clients, finance,
@@ -104,17 +117,17 @@ Front-desk operations (reservations, check-in/out, folios) are not built yet.
 
 ## Tech stack
 
-| Area          | Choice                                          |
-| ------------- | ----------------------------------------------- |
-| Framework     | Next.js 16 (App Router) · React 19              |
-| API           | tRPC v11 · TanStack Query                       |
-| Data          | Prisma 7 · PostgreSQL (RLS)                     |
-| Auth          | NextAuth v5 · TOTP · SAML/OIDC · SCIM           |
-| Styling       | Tailwind CSS v4 · shadcn/ui on `@base-ui/react` |
-| AI            | Vercel AI SDK                                   |
-| Realtime      | Ably (optional)                                 |
-| Runtime / PM  | Bun **1.4.2**                                   |
-| Tests         | Vitest · Playwright                             |
+| Area         | Choice                                          |
+| ------------ | ----------------------------------------------- |
+| Framework    | Next.js 16 (App Router) · React 19              |
+| API          | tRPC v11 · TanStack Query                       |
+| Data         | Prisma 7 · PostgreSQL (RLS)                     |
+| Auth         | NextAuth v5 · TOTP · SAML/OIDC · SCIM           |
+| Styling      | Tailwind CSS v4 · shadcn/ui on `@base-ui/react` |
+| AI           | Vercel AI SDK                                   |
+| Realtime     | Ably (optional)                                 |
+| Runtime / PM | Bun **1.4.2**                                   |
+| Tests        | Vitest · Playwright                             |
 
 ## Local setup
 
@@ -137,6 +150,7 @@ Requires Bun 1.4.2 and PostgreSQL. Full details: [docs/LOCAL_SETUP.md](./docs/LO
    `PLATFORM_ADMIN_PASSWORD` before seeding; this creates or updates the platform
    administrator, including its password on each seed run. Leaving both unset
    skips that bootstrap; setting only one fails.
+
 2. Install and prepare the database:
 
 ```bash
@@ -149,6 +163,14 @@ bun run dev
 ```
 
 `db:push` is intentionally disabled — use migrations.
+
+For AI, set `AI_PROVIDER=groq`, `google` or `vertex`, a provider-specific `AI_MODEL`
+(no runtime default), and the corresponding credentials in `.env.example`.
+For durable uploads, use `STORAGE_ADAPTER=s3` with `S3_UPLOADS_BUCKET` and
+`AWS_REGION`; credentials come from the runtime role. Unset/`disabled` disables
+uploads; `local` is permitted only in development/test. The legacy `azure` adapter
+and both `AZURE_STORAGE_*` variables are deprecated (Azure), not for new deployments.
+These selection rules are implemented in [storage.ts](./src/lib/storage.ts).
 
 Open `http://devfathom.localhost:3000` for the tenant workspace and
 `http://admin.localhost:3000/platform` for the control desk.
@@ -172,6 +194,10 @@ back to `DATABASE_URL`. Use a local database with a role able to create and gran
 roles for that verifier. Vitest DB suites have their own URL and role
 requirements; some skip when these are missing, so a unit-test pass alone does
 not establish database coverage.
+
+Test/e2e variables (`TEST_DATABASE_URL`, `*_TEST_*_DATABASE_URL`, `PLAYWRIGHT_*`,
+`*_E2E_*`) are documented in [local setup](./docs/LOCAL_SETUP.md); the environment
+template intentionally does not enumerate all suite-specific settings.
 
 **Zero-skip rule:** a PR must not add or leave skipped tests (`.skip`, `.todo`,
 conditional skips). Fix or delete the test instead.
@@ -204,4 +230,4 @@ Do not open public issues for security problems.
 
 [Brand](./BRAND.md) · [Admin platform](./docs/admin-platform/README.md) ·
 [Pharmacy](./docs/pharmacy) · [Restaurant](./docs/restaurant) ·
-[Technical overview](./docs/technical-overview.md)
+[Product documentation](./docs/product) · [Technical overview](./docs/technical-overview.md)
