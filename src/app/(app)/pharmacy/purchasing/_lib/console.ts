@@ -82,7 +82,7 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
   },
   SELF_APPROVAL: {
     message:
-      'Whoever raised the demand or drafted the order cannot approve it. Ask a second person to decide.',
+      'Ask a second person to decide. A sole active owner can self-approve with a valid owner PIN; check the PIN or wait if attempts were locked.',
   },
   INVALID_TRANSITION: {
     message: 'The document has already moved on. Reload the page to see its current state.',

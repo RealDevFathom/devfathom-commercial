@@ -22,12 +22,9 @@ export function procurementCapabilityGranted(input: {
   overrides: readonly CapabilityRule[];
   role: readonly CapabilityRule[];
 }): boolean {
-  const overrides = matching(input.overrides);
-  if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
-  const role = matching(input.role);
-  if (role.some((rule) => rule.effect === 'DENY')) return false;
-  return role.some((rule) => rule.effect === 'ALLOW');
+  const rules = matching([...input.overrides, ...input.role]);
+  if (rules.some((rule) => rule.effect === 'DENY')) return false;
+  return rules.some((rule) => rule.effect === 'ALLOW');
 }
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -36,8 +33,13 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
+      role: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -46,6 +48,14 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
     },
   });
   if (!user) return false;
+  const rules = [...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])];
+  if (matching(rules).some((rule) => rule.effect === 'DENY')) return false;
+  if (
+    user.role === 'ADMIN' ||
+    (user.organizationRole?.isSystem &&
+      ['owner', 'owner-operator'].includes(user.organizationRole.key))
+  )
+    return true;
   return procurementCapabilityGranted({
     overrides: user.permissionOverrides,
     role: user.organizationRole?.permissions ?? [],

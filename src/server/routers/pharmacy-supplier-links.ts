@@ -1,6 +1,9 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { assertInOrganization } from '../org-refs';
+import {
+  requireProcurement,
+  requireProcurementBranch,
+} from '@/lib/pharmacy/procurement-authorization';
 import { publicProcedure, protectedProcedure, router, type TRPCContext } from '../trpc';
 import {
   SupplierLinkError,
@@ -27,7 +30,8 @@ const genericLinkError = () =>
 async function assertBranch(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements.organizationId;
   if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-  await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branchId], { active: true });
+  await requireProcurement(ctx.db, ctx.session!.user.id);
+  await requireProcurementBranch(ctx.db, organizationId, ctx.session!.user.id, branchId);
 }
 
 function mapError(error: unknown): never {
@@ -116,12 +120,20 @@ export const pharmacySupplierLinksRouter = router({
         mapError(error);
       }
     }),
-  revoke: protectedProcedure.input(z.object({ linkId: id }).strict()).mutation(({ ctx, input }) =>
-    ctx.db.pharmacySupplierActionLink.update({
-      where: { id: input.linkId },
-      data: { revokedAt: new Date() },
-    })
-  ),
+  revoke: protectedProcedure
+    .input(z.object({ linkId: id }).strict())
+    .mutation(async ({ ctx, input }) => {
+      await requireProcurement(ctx.db, ctx.session.user.id);
+      const link = await ctx.db.pharmacySupplierActionLink.findFirst({
+        where: { id: input.linkId, organizationId: ctx.entitlements.organizationId },
+      });
+      if (!link) throw new TRPCError({ code: 'NOT_FOUND' });
+      await assertBranch(ctx, link.branchId);
+      return ctx.db.pharmacySupplierActionLink.update({
+        where: { id: link.id },
+        data: { revokedAt: new Date() },
+      });
+    }),
   recordManual: protectedProcedure
     .input(
       z

@@ -1,3 +1,5 @@
+import { TRPCError } from '@trpc/server';
+import { soloOwnerApprovalEligible } from '@/lib/pharmacy/solo-owner-approval';
 import type { Metadata } from 'next';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
@@ -7,7 +9,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { hasModule } from '@/lib/entitlements';
-import type { QuoteComparisonRow } from '@/lib/pharmacy/purchasing';
+import { PharmacyPurchasingError, type QuoteComparisonRow } from '@/lib/pharmacy/purchasing';
 import type {
   MedicineOption,
   PurchaseOrderDetail,
@@ -145,6 +147,17 @@ export default async function PharmacyOrdersPage({
       landed = null;
     }
   }
+
+  const soloOwner =
+    order?.status === 'SUBMITTED' &&
+    (order.createdByUserId === ctx.session.user.id ||
+      order.requisition?.requestedByUserId === ctx.session.user.id)
+      ? await soloOwnerApprovalEligible(ctx.db, {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: order.branchId,
+          actorId: ctx.session.user.id,
+        })
+      : false;
 
   async function createRequisition(form: FormData) {
     'use server';
@@ -391,12 +404,14 @@ export default async function PharmacyOrdersPage({
       let message: string;
       if (action === 'submit') {
         await outcome.write(actionCaller.submitPurchaseOrder)({ purchaseOrderId });
-        message = 'Order submitted for approval. Somebody else has to approve it.';
+        message =
+          'Order submitted for approval. A second approver is required unless you are the sole active owner and re-enter your PIN.';
       } else if (action === 'approve' || action === 'reject') {
         await outcome.write(actionCaller.approvePurchaseOrder)({
           purchaseOrderId,
           decision: action === 'approve' ? 'APPROVED' : 'REJECTED',
           reason: optionalField(form, 'reason'),
+          pin: optionalField(form, 'pin'),
         });
         message =
           action === 'approve'
@@ -411,9 +426,21 @@ export default async function PharmacyOrdersPage({
       revalidatePath(ROUTE);
       next = destination(ROUTE, { message, kind: 'success' }, { po: purchaseOrderId });
     } catch (error) {
+      // This typed denial precedes the approval write and exits its transaction.
+      // Unknown failures keep the purchasing outcome lock and must not be retried.
+      const pinDenied =
+        (action === 'approve' || action === 'reject') &&
+        error instanceof TRPCError &&
+        error.code === 'FORBIDDEN' &&
+        error.cause instanceof PharmacyPurchasingError &&
+        error.cause.reason === 'SELF_APPROVAL';
       next = destination(
         ROUTE,
-        { ...outcome.failure(error, 'Could not move the order on.'), kind: 'error' },
+        {
+          ...outcome.failure(error, 'Could not move the order on.'),
+          ...(pinDenied ? { outcome: 'rejected' as const, field: 'pin' } : {}),
+          kind: 'error',
+        },
         { po: purchaseOrderId }
       );
     }
@@ -609,6 +636,7 @@ export default async function PharmacyOrdersPage({
           {order ? (
             <OrderDetailPanel
               actorId={ctx.session.user.id}
+              soloOwner={soloOwner}
               landed={landed}
               notice={notice}
               onAdvance={advanceOrder}
@@ -1002,6 +1030,7 @@ function OrderDetailPanel({
   order,
   landed,
   actorId,
+  soloOwner,
   notice,
   onAdvance,
 }: {
@@ -1020,6 +1049,7 @@ function OrderDetailPanel({
     }[];
   } | null;
   actorId: string;
+  soloOwner: boolean;
   notice: Notice | null;
   onAdvance: (form: FormData) => Promise<string>;
 }) {
@@ -1143,7 +1173,7 @@ function OrderDetailPanel({
         ) : null}
 
         {order.status === 'SUBMITTED' ? (
-          selfApproval ? (
+          selfApproval && !soloOwner ? (
             <p className="text-sm text-text-muted">
               You raised this order, so you cannot approve it. That is the PUR-02 segregation of
               duties rule — ask a second person to decide.
@@ -1162,6 +1192,18 @@ function OrderDetailPanel({
                 notice={notice}
                 hint="Recorded with the decision, including a rejection."
               />
+              {selfApproval && soloOwner ? (
+                <TextField
+                  label="Owner approval PIN"
+                  name="pin"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  required
+                  notice={notice}
+                  hint="As the sole active owner here, re-enter your PIN. This approval is audited."
+                />
+              ) : null}
               <SubmitButton name="action" value="approve">
                 Approve
               </SubmitButton>

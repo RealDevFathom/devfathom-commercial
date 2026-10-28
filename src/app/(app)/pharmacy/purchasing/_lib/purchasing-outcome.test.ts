@@ -40,6 +40,9 @@ describe('purchasingOutcome', () => {
   });
 
   it('keeps an unknown failure locked when the write may have committed', async () => {
+    await expect(fail(new Error('SELF_APPROVAL'), true)).resolves.toMatchObject({
+      outcome: 'unknown',
+    });
     await expect(fail(new Error('CROSS_TENANT_REFERENCE'), true)).resolves.toMatchObject({
       outcome: 'unknown',
     });

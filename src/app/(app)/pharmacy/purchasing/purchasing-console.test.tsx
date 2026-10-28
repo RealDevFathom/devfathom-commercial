@@ -1,3 +1,5 @@
+import { TRPCError } from '@trpc/server';
+import { PharmacyPurchasingError } from '@/lib/pharmacy/purchasing';
 import { PurchasingValidationError } from './_lib/console';
 import { revalidatePath } from 'next/cache';
 import ReturnsPage from './returns/page';
@@ -880,5 +882,108 @@ describe('goods-in scan and duplicate serial', () => {
       'This GTIN and serial were already received in this pharmacy. Treat it as a duplicate pack and do not stock it in again.'
     );
     expect(result.searchParams.get('field')).toBe('serialNumber');
+  });
+});
+
+describe('sole owner approval PIN', () => {
+  const order = {
+    id: 'po-solo',
+    reference: 'PO-SOLO',
+    status: 'SUBMITTED',
+    supplier: { id: 'sup-ok', name: 'Supplier' },
+    branch: null,
+    branchId: null,
+    supplierId: 'sup-ok',
+    requisition: null,
+    lines: [],
+    approvals: [],
+    goodsReceipts: [],
+    createdByUserId: 'user-1',
+  };
+  function ownerContext(secondStaff = false) {
+    const ctx = contextStub();
+    ctx.db.user.findUnique.mockResolvedValue({
+      id: 'user-1',
+      organizationId: 'org-1',
+      status: 'ACTIVE',
+      role: 'EMPLOYEE',
+      organizationRole: { key: 'owner', isSystem: true, permissions: [] },
+      permissionOverrides: [],
+    });
+    Object.assign(ctx.db.user, {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: 'user-1',
+          organizationRole: { key: 'owner', isSystem: true },
+          pharmacyBranchAssignments: [],
+        },
+        ...(secondStaff
+          ? [{ id: 'user-2', organizationRole: null, pharmacyBranchAssignments: [] }]
+          : []),
+      ]),
+    });
+    return ctx;
+  }
+  it('shows a masked fresh PIN control to the sole owner and submits it with the decision', async () => {
+    mocks.createTRPCContext.mockResolvedValue(ownerContext());
+    const approvePurchaseOrder = vi.fn().mockResolvedValue({ status: 'APPROVED' });
+    mocks.createCaller.mockReturnValue(
+      callerStub({ purchaseOrders: vi.fn().mockResolvedValue([order]), approvePurchaseOrder })
+    );
+    render(await OrdersPage({ searchParams: params({ po: order.id }) }));
+    const input = screen.getByLabelText('Owner approval PIN');
+    expect(input).toHaveAttribute('type', 'password');
+    expect(input).toHaveAttribute('required');
+    fireEvent.change(input, { target: { value: '482916' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    });
+    expect(approvePurchaseOrder).toHaveBeenCalledWith({
+      purchaseOrderId: order.id,
+      decision: 'APPROVED',
+      reason: undefined,
+      pin: '482916',
+    });
+    expect(await screen.findByText(/Order approved. Send it once/)).toBeVisible();
+  });
+  it('shows a typed PIN denial as retryable and allows a fresh correct PIN', async () => {
+    mocks.createTRPCContext.mockResolvedValue(ownerContext());
+    const approvePurchaseOrder = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'SELF_APPROVAL',
+          cause: new PharmacyPurchasingError('SELF_APPROVAL'),
+        })
+      )
+      .mockResolvedValue({ status: 'APPROVED' });
+    mocks.createCaller.mockReturnValue(
+      callerStub({ purchaseOrders: vi.fn().mockResolvedValue([order]), approvePurchaseOrder })
+    );
+    render(await OrdersPage({ searchParams: params({ po: order.id }) }));
+    fireEvent.change(screen.getByLabelText('Owner approval PIN'), { target: { value: '999999' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    });
+    expect(screen.getAllByText(/Ask a second person to decide/)[0]).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled();
+    expect(screen.getByLabelText('Owner approval PIN')).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.change(screen.getByLabelText('Owner approval PIN'), { target: { value: '482916' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    });
+    expect(approvePurchaseOrder).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText(/Order approved. Send it once/)).toBeVisible();
+  });
+  it('keeps the second-person requirement for an owner with multiple active staff', async () => {
+    mocks.createTRPCContext.mockResolvedValue(ownerContext(true));
+    mocks.createCaller.mockReturnValue(
+      callerStub({ purchaseOrders: vi.fn().mockResolvedValue([order]) })
+    );
+    render(await OrdersPage({ searchParams: params({ po: order.id }) }));
+    expect(screen.queryByLabelText('Owner approval PIN')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.getByText(/ask a second person to decide/)).toBeVisible();
   });
 });
