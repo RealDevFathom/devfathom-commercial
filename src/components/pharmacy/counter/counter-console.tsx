@@ -329,15 +329,29 @@ function ScopedPharmacyCounterConsole({
   // Derived, not mirrored into state: the default branch is simply "the first
   // one" until the operator picks another, so an effect would only add a render.
   const branchId = selectedBranchId || (branches[0]?.id ?? '');
-  const recoveryScope = useMemo<TenderAttemptScope>(
-    () => ({ organizationId, accountId, branchId }),
-    [organizationId, accountId, branchId]
-  );
   const branchAuthorized =
     branchesQuery.isSuccess &&
     !branchesQuery.isError &&
     branches.some((branch) => branch.id === branchId);
 
+  // Keep the active bill recoverable by the server-rendered page after a plain
+  // browser reload. replaceState avoids adding a history entry for every bill
+  // transition while preserving any unrelated counter query parameters. Do not
+  // reflect an untrusted branch/sale pair from the query string until the
+  // account's branch query has explicitly authorized that branch.
+  useEffect(() => {
+    if (!branchAuthorized) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('branchId', branchId);
+    if (saleId) url.searchParams.set('orderSaleId', saleId);
+    else url.searchParams.delete('orderSaleId');
+    window.history.replaceState(window.history.state, '', url);
+  }, [branchAuthorized, branchId, saleId]);
+
+  const recoveryScope = useMemo<TenderAttemptScope>(
+    () => ({ organizationId, accountId, branchId }),
+    [organizationId, accountId, branchId]
+  );
   const discardReceiptIntent = useCallback(() => {
     receiptIntent.current?.printReservation?.cancel();
     receiptIntent.current = null;
