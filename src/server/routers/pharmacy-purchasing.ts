@@ -129,6 +129,7 @@ function domainError(error: unknown): never {
               error.reason === 'CROSS_BRANCH_REFERENCE' ||
               error.reason === 'SUPPLIER_NOT_AUTHORIZED' ||
               error.reason === 'SUPPLIER_LICENCE_EXPIRED' ||
+              error.reason === 'APPROVER_NOT_AUTHORIZED' ||
               error.reason === 'SELF_APPROVAL'
             ? 'FORBIDDEN'
             : 'BAD_REQUEST',
@@ -980,6 +981,17 @@ const purchasingRouter = router({
             bypassApprovedByUserId: input.directPurchase.approvedByUserId,
             receivedByUserId: scope.actorId,
           });
+          const approver = await ctx.db.user.findFirst({
+            where: {
+              id: input.directPurchase.approvedByUserId,
+              organizationId: scope.organizationId,
+              status: 'ACTIVE',
+            },
+            select: { id: true },
+          });
+          if (!approver || !(await actorCanProcure(ctx.db, approver.id))) {
+            throw new PharmacyReceivingError('APPROVER_NOT_AUTHORIZED');
+          }
         }
         if (
           input.purchaseOrderId &&
