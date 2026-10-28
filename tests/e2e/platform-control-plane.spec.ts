@@ -512,7 +512,7 @@ test('shared-host login succeeds and forged tenant selection is generic', async 
     page,
     sharedBaseUrl!,
     platformFixture.tenant,
-    /\/restaurant\/orders(?:\?|$)/
+    /\/restaurant\/menus(?:\?|$)/
   );
   expect(page.url()).not.toMatch(/organizationId|workspace|org_/);
 

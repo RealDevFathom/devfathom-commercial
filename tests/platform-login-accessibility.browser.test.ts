@@ -54,7 +54,11 @@ describe.runIf(Boolean(baseURL))('platform login Studio accessibility', () => {
             page.on('console', (message) => {
               if (message.type() === 'error') errors.push(message.text());
             });
-            await page.route('**/api/platform/mfa', (route) => route.fulfill({ json: {} }));
+            const mfaProbes: string[] = [];
+            page.on('request', (request) => {
+              if (new URL(request.url()).pathname === '/api/platform/mfa')
+                mfaProbes.push(request.method());
+            });
             await page.goto(platformLoginURL!.href);
             await page.getByLabel('Work email').waitFor();
             await page.waitForFunction(() =>
@@ -92,6 +96,7 @@ describe.runIf(Boolean(baseURL))('platform login Studio accessibility', () => {
               fullPage: true,
             });
             expect(errors).toEqual([]);
+            expect(mfaProbes).toEqual([]);
           } finally {
             await context.close();
           }

@@ -78,6 +78,7 @@ import {
   canPlatform,
   createPlatformSession,
   getPlatformSession,
+  platformLoginNeedsEnrollment,
   requirePlatformSession,
   requirePlatformMfaSession,
   revokePlatformSession,
@@ -130,6 +131,7 @@ describe('restricted enrollment sessions', () => {
       expect(session.expiresAt.getTime() - Date.now()).toBeLessThanOrEqual(600000);
       expect(canPlatform(session.identity, 'organizations:read')).toBe(false);
       expect(await getPlatformSession(request(session.token))).toBeNull();
+      expect(await platformLoginNeedsEnrollment(request(session.token))).toBe(true);
       await expect(requirePlatformSession(request(session.token))).rejects.toMatchObject({
         status: 401,
       });
@@ -152,6 +154,7 @@ describe('restricted enrollment sessions', () => {
     const session = await signIn();
     expect(session.identity.enrollmentOnly).toBe(false);
     expect(await getPlatformSession(request(session.token))).not.toBeNull();
+    expect(await platformLoginNeedsEnrollment(request(session.token))).toBe(false);
   });
   it('allows the explicit test override but still honors user policy', async () => {
     vi.stubEnv('PLATFORM_MFA_ENFORCE', 'false');

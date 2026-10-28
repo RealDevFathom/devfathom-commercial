@@ -87,7 +87,8 @@ async function main() {
       for (const role of roles.filter((role) => role !== ownerRole)) {
         await setup.query(`GRANT USAGE ON SCHEMA public TO ${quote(role)};
           GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${quote(role)};
-          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${quote(role)};`);
+          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${quote(role)};
+          GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO ${quote(role)};`);
       }
     } finally {
       await setup.end();

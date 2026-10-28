@@ -58,6 +58,7 @@ it('starts the catering server with loopback proxy trust and reaches the browser
     HOSTNAME: '127.0.0.1',
     PORT: '4483',
     TRUSTED_PROXY_CIDRS: '127.0.0.1/32,::1/128',
+    CLIENT_IP_HEADER: '',
   });
   // Next standalone enforces production configuration even though fixture seeding uses test mode.
   const productionEnv = { ...options.env, NODE_ENV: 'production' };

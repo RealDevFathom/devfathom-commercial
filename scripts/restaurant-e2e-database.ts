@@ -141,6 +141,10 @@ export function restaurantE2eEnvironment(
     ...env,
     DATABASE_URL: databaseUrl,
     TEST_DATABASE_URL: databaseUrl,
+    // Browser and job worker share explicit disposable-only extraction/storage.
+    NODE_ENV: 'test',
+    MENU_IMPORT_ADAPTER: 'FIXTURE',
+    STORAGE_ADAPTER: 'local',
     // Set, never merged: the value has to hash to the seeded row, so a caller
     // override could only ever break the case it is meant to enable.
     RESTAURANT_E2E_REVOKED_BRIDGE_DEVICE_SECRET,

@@ -23,6 +23,17 @@ const TWO_LEVEL: PackLevelNode[] = [
 ];
 
 describe('saleUnitOptions (POS-03 toggle)', () => {
+  it('sells a standalone receiving pack using its frozen canonical conversion', () => {
+    const pack = { id: 'flat', level: 'STRIP', parentPackLevelId: null, unitsPerParent: 10 };
+    expect(
+      saleUnitOptions({ packLevels: [pack], rootPackLevelId: 'flat', unitsPerPack: 10 })
+    ).toEqual([
+      { kind: 'PACK', packLevelId: 'flat', levelLabel: 'STRIP', canonicalUnitsPerSaleUnit: 10 },
+    ]);
+    expect(() =>
+      saleUnitOptions({ packLevels: [pack], rootPackLevelId: 'flat', unitsPerPack: 20 })
+    ).toThrowError(PharmacyMedicineError);
+  });
   it('derives pack, strip and unit from the received pack hierarchy', () => {
     expect(
       saleUnitOptions({ packLevels: THREE_LEVEL, rootPackLevelId: 'box', unitsPerPack: 100 })

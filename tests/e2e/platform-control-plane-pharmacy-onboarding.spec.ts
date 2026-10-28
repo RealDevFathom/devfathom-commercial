@@ -115,6 +115,21 @@ test.beforeAll(async () => {
     // A jurisdiction whose rules counsel has confirmed. The migration ships only
     // a provisional Punjab, on which no branch may operate — the form must offer
     // both and the gate must flip only on the confirmed one.
+    // Own the provisional version too: the lifecycle sibling confirms Punjab.
+    await db.query(`UPDATE pharmacy_jurisdiction_rule_sets
+      SET "effectiveTo"=now()-interval '1 minute'
+      WHERE code='PK-PB' AND "effectiveTo" IS NULL`);
+    await db.query(`INSERT INTO pharmacy_jurisdiction_rule_sets
+      (id,code,version,"effectiveFrom","licenceCategories","permittedSchedules",
+       "prescriptionOnlyClasses","prescriptionRetentionDays","controlledRegisterFlags",
+       "pharmacistCoverageRule","recordRetentionByClass")
+      SELECT 'e2e_onboarding_pb_provisional','PK-PB',
+        (SELECT max(version)+1 FROM pharmacy_jurisdiction_rule_sets WHERE code='PK-PB'),
+        now()-interval '1 minute',"licenceCategories","permittedSchedules",
+        "prescriptionOnlyClasses","prescriptionRetentionDays","controlledRegisterFlags",
+        "pharmacistCoverageRule","recordRetentionByClass"
+      FROM pharmacy_jurisdiction_rule_sets WHERE id='pk_pb_provisional_v1'
+      ON CONFLICT (id) DO UPDATE SET "effectiveFrom"=EXCLUDED."effectiveFrom", "effectiveTo"=NULL`);
     await db.query(
       `INSERT INTO pharmacy_jurisdiction_rule_sets
          (id, code, version, "effectiveFrom", "licenceCategories", "permittedSchedules",
@@ -343,9 +358,7 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
   await expect(page).toHaveURL(/\/pharmacy\/regulatory$/);
 
   // The branch is a picker over this organization's own records — never an id.
-  await expect(page.getByLabel('Which branch is this profile for?')).toHaveValue(
-    `branch_${suffix}`
-  );
+  await expect(page.getByLabel('Which branch is this profile for?')).toHaveValue(branchId);
   await expect(page.getByRole('option', { name: /Clifton Chemist/ })).toBeAttached();
 
   // Punjab's rules are provisional and say so; Sindh's are confirmed.

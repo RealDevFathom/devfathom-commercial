@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -8,30 +8,15 @@ import { Button } from '@/components/ui/button';
 const inputClass =
   'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-muted transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
 
-export function PlatformLoginForm() {
+export function PlatformLoginForm({ initialEnrollment = false }: { initialEnrollment?: boolean }) {
   const router = useRouter();
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [enrollment, setEnrollment] = useState(false);
+  const [enrollment, setEnrollment] = useState(initialEnrollment);
   const [secret, setSecret] = useState('');
   const [code, setCode] = useState('');
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
-
-  useEffect(() => {
-    let active = true;
-    void fetch('/api/platform/mfa', { cache: 'no-store' })
-      .then(async (response) => (response.ok ? response.json() : null))
-      .then((status) => {
-        if (active && status?.enrollmentOnly) setEnrollment(true);
-      })
-      .catch(() => {
-        /* A failed status probe leaves credential sign-in available. */
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   async function enroll(action: 'begin' | 'confirm') {
     setPending(true);

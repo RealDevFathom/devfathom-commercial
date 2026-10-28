@@ -162,7 +162,7 @@ test('SuperAdmin completes the audited PHARMACY lifecycle and cross-vertical req
     const regulatoryProfiles = await db.query(
       `SELECT version,"jurisdictionRuleSetId","effectiveFrom","effectiveTo"
        FROM pharmacy_branch_regulatory_profiles
-       WHERE "organizationId"=$1 AND "branchId"='e2e_pharmacy_branch'
+       WHERE "organizationId"=$1 AND "branchId"=(SELECT id FROM pharmacy_branches WHERE "organizationId"=$1 AND code='MAIN')
        ORDER BY version`,
       [organizationId]
     );
@@ -274,7 +274,7 @@ async function seedMinimalReadiness(organizationId: string) {
       [organizationId]
     );
     await db.query(
-      `INSERT INTO pharmacy_medicine_provenance (id,"organizationId","medicineId",field,source,"sourceType","retrievedAt",status,"assertedValue") VALUES ('e2e_assertion',$1,'e2e_medicine','productName','E2E','USER',now(),'ACCEPTED','"E2E Medicine"')`,
+      `INSERT INTO pharmacy_medicine_provenance (id,"organizationId","medicineId",field,source,"sourceType","retrievedAt",status,"assertedValue",reviewer) VALUES ('e2e_assertion',$1,'e2e_medicine','productName','E2E','USER',now(),'ACCEPTED','"E2E Medicine"','e2e_platform_admin')`,
       [organizationId]
     );
     await db.query(
@@ -290,7 +290,7 @@ async function seedMinimalReadiness(organizationId: string) {
       [organizationId]
     );
     await db.query(
-      `INSERT INTO pharmacy_inventory_lots (id,"organizationId","branchId","manufacturingBatchId","packLevelId","unitsPerPack","supplierName","supplierInvoiceRef","unitCostMinor","printedMrpMinor","receivedExpiresAt","receivedExpiryPrecision","receivedAt","updatedAt") VALUES ('e2e_lot',$1,'e2e_pharmacy_branch','e2e_batch','e2e_pack',10,'E2E Supplier','INV-1',100,150,now()+interval '1 year','DAY',now(),now())`,
+      `INSERT INTO pharmacy_inventory_lots (id,"organizationId","branchId","manufacturingBatchId","packLevelId","unitsPerPack","supplierName","supplierInvoiceRef","unitCostMinor","printedMrpMinor","receivedExpiresAt","receivedExpiryPrecision","receivedAt","updatedAt") VALUES ('e2e_lot',$1,(SELECT id FROM pharmacy_branches WHERE "organizationId"=$1 AND code='MAIN'),'e2e_batch','e2e_pack',10,'E2E Supplier','INV-1',100,150,now()+interval '1 year','DAY',now(),now())`,
       [organizationId]
     );
     await db.query(
@@ -303,7 +303,7 @@ async function seedMinimalReadiness(organizationId: string) {
     );
     await db.query(
       `INSERT INTO pharmacy_onboarding_gate_states (id,"organizationId",gate,status,"evidenceRef","branchId","actorId","recordedAt","updatedAt")
-       SELECT 'e2e_gate_'||gate,$1,gate::"PharmacyOnboardingGate",'PASSED','evidence://'||gate,CASE WHEN gate IN ('PREMISES_AND_LICENCES','BRANCHES_AND_LOCATIONS') THEN 'e2e_pharmacy_branch' END,'e2e_platform_admin',now(),now()
+       SELECT 'e2e_gate_'||gate,$1,gate::"PharmacyOnboardingGate",'PASSED','evidence://'||gate,CASE WHEN gate IN ('PREMISES_AND_LICENCES','BRANCHES_AND_LOCATIONS') THEN (SELECT id FROM pharmacy_branches WHERE "organizationId"=$1 AND code='MAIN') END,'e2e_platform_admin',now(),now()
        FROM unnest(enum_range(NULL::"PharmacyOnboardingGate")::text[]) gate`,
       [organizationId]
     );

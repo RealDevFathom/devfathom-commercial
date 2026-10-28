@@ -39,7 +39,9 @@ export default defineConfig({
       PHARMACY_E2E: '1',
       AUTH_SECRET: process.env.AUTH_SECRET ?? '',
       AUTH_TRUST_HOST: 'true',
-      SHARED_APP_HOSTS: '127.0.0.1',
+      AUTH_URL: process.env.PHARMACY_FIRST_SALE_TENANT_ORIGIN ?? process.env.AUTH_URL ?? baseURL,
+      SHARED_APP_HOSTS: '127.0.0.1,www.localhost',
+      PLATFORM_BASE_DOMAIN: 'localhost',
     },
   },
 });

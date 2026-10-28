@@ -926,16 +926,24 @@ test('cash receipt and refund reconcile the actual drawer without stock or sales
 
 test('disabled Core refuses money UI without ledger writes', async ({ page }) => {
   const order = await moneyOrder(page, 'Acceptance disabled module');
+  const coreModuleId = await withTenantClient(async (client) => {
+    await client.query("SELECT set_config('app.is_platform_admin', 'true', true)");
+    const modules = await client.query<{ id: string }>(
+      "SELECT id FROM platform_modules WHERE key='restaurant-core'"
+    );
+    expect(modules.rows).toHaveLength(1);
+    return modules.rows[0].id;
+  });
   const previous = await tenantQuery<{ id: string; status: string }>(
-    `SELECT id,status::text FROM organization_modules WHERE "organizationId"=$1 AND "moduleId"='demo_module_restaurant-core'`,
-    [fixture.organizationId]
+    `SELECT id,status::text FROM organization_modules WHERE "organizationId"=$1 AND "moduleId"=$2`,
+    [fixture.organizationId, coreModuleId]
   );
   try {
     const disabled = await tenantQuery(
       `INSERT INTO organization_modules (id,"organizationId","moduleId",status,"createdAt","updatedAt")
-      VALUES ('acceptance_disabled_core',$1,'demo_module_restaurant-core','DISABLED',now(),now())
+      VALUES ('acceptance_disabled_core',$1,$2,'DISABLED',now(),now())
       ON CONFLICT ("organizationId","moduleId") DO UPDATE SET status='DISABLED',"updatedAt"=now() RETURNING status::text`,
-      [fixture.organizationId]
+      [fixture.organizationId, coreModuleId]
     );
     expect(disabled.rows).toEqual([{ status: 'DISABLED' }]);
     await page.reload();

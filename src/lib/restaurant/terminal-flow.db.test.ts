@@ -274,6 +274,7 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
         displayName: string;
         role: string;
         canApprove: boolean;
+        canSelfApprove: boolean;
       }[];
     };
 
@@ -283,7 +284,12 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
         .map((staff) => staff.id)
         .sort()
     );
-    expect(body.operators.every((operator) => Object.keys(operator).length === 4)).toBe(true);
+    for (const operator of body.operators) {
+      expect(Object.keys(operator).sort()).toEqual(
+        ['staffProfileId', 'displayName', 'role', 'canApprove', 'canSelfApprove'].sort()
+      );
+      expect(operator.canSelfApprove).toBe(false);
+    }
     expect(JSON.stringify(body)).not.toContain('Other Branch Operator');
     expect(JSON.stringify(body)).not.toContain('Inactive Operator');
     expect(JSON.stringify(body)).not.toContain('Foreign Operator');
@@ -574,5 +580,106 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
         }
       ).approvingStaffProfileId
     ).toBe(STAFF.M.id);
+  });
+  it('requires a fresh sole-owner PIN and persists self-approval audit evidence', async () => {
+    const { deviceId, secret } = await enroll('sole-owner');
+    const { token, sessionId } = await establish(secret);
+    const active = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantStaffProfile.findMany({ where: { status: 'ACTIVE' }, select: { id: true } })
+    );
+    const ownerRoleId = `sole_owner_role_${suffix}`;
+    try {
+      await deps.withTenantDb(orgId, async (tx) => {
+        await tx.restaurantStaffProfile.updateMany({
+          where: { id: { not: STAFF.A.id }, status: 'ACTIVE' },
+          data: { status: 'SUSPENDED' },
+        });
+        await tx.restaurantJobRole.create({
+          data: {
+            id: ownerRoleId,
+            key: 'owner',
+            name: 'Owner',
+            capabilities: { create: { capability: 'coauth:approve' } },
+          },
+        });
+        await tx.restaurantStaffJobRole.create({
+          data: { staffProfileId: STAFF.A.id, jobRoleId: ownerRoleId, branchId },
+        });
+      });
+      expect(
+        (
+          await call(deps.routes.unlock, {
+            secret,
+            session: token,
+            body: { staffProfileId: STAFF.A.id, type: 'PIN', secret: STAFF.A.pin },
+          })
+        ).status
+      ).toBe(200);
+      const approval = {
+        approvingStaffProfileId: STAFF.A.id,
+        type: 'PIN',
+        capability: 'orders:void',
+        reason: 'Owner corrected duplicate',
+        targetType: 'Order',
+        targetId: `sole_owner_order_${suffix}`,
+      };
+      expect(
+        (
+          await call(deps.routes.coAuthorize, {
+            secret,
+            session: token,
+            body: { ...approval, secret: '000000' },
+          })
+        ).status
+      ).toBe(401);
+      expect(
+        await deps.withTenantDb(orgId, (tx) =>
+          tx.restaurantCoAuthorization.count({ where: { terminalSessionId: sessionId } })
+        )
+      ).toBe(0);
+      expect(
+        (
+          await call(deps.routes.coAuthorize, {
+            secret,
+            session: token,
+            body: { ...approval, secret: STAFF.A.pin },
+          })
+        ).status
+      ).toBe(201);
+      const record = await deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantCoAuthorization.findFirst({ where: { terminalSessionId: sessionId } })
+      );
+      expect(record).toMatchObject({
+        actingStaffProfileId: STAFF.A.id,
+        approvingStaffProfileId: STAFF.A.id,
+        deviceId,
+        terminalSessionId: sessionId,
+        reason: 'Owner corrected duplicate [Owner PIN reauthentication]',
+      });
+      await deps.flushAuditWrites();
+      const audits = await deps.withTenantDb(orgId, (tx) =>
+        tx.auditLog.findMany({
+          where: { action: 'restaurant.terminal.co-authorize', actorStaffProfileId: STAFF.A.id },
+        })
+      );
+      const audit = audits.find(
+        (row) =>
+          (row.metadata as { terminalSessionId?: string } | null)?.terminalSessionId === sessionId
+      );
+      expect(audit?.metadata).toMatchObject({
+        approvalMode: 'OWNER_PIN_REAUTHENTICATION',
+        approvingStaffProfileId: STAFF.A.id,
+        deviceId,
+        terminalSessionId: sessionId,
+      });
+    } finally {
+      await deps.withTenantDb(orgId, async (tx) => {
+        await tx.restaurantJobRole.deleteMany({ where: { id: ownerRoleId } });
+        await tx.restaurantStaffProfile.updateMany({
+          where: { id: { in: active.map((staff) => staff.id) } },
+          data: { status: 'ACTIVE' },
+        });
+      });
+    }
   });
 });

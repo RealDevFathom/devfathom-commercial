@@ -58,6 +58,7 @@ async function main() {
     DEFAULT_ORGANIZATION_ID: 'org_chai_chowk',
     AUTH_URL: acceptanceOrigin,
     AUTH_TRUST_HOST: 'true',
+    CLIENT_IP_HEADER: '',
     NODE_ENV: 'test',
     RESTAURANT_E2E_RELAX_TERMINAL_FLOOD_LIMITS: '1',
   };

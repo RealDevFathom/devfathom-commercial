@@ -100,6 +100,23 @@ export function saleUnitOptions(input: {
 }): SaleUnitOption[] {
   assertPositiveInteger(input.unitsPerPack);
   const chain = chainFrom(input.packLevels, input.rootPackLevelId);
+  // The receiving setup also supports a standalone pack counted directly in
+  // canonical units. It offers only that sealed pack, with no invented strip.
+  if (chain.length === 1) {
+    const pack = chain[0]!;
+    assertPositiveInteger(pack.unitsPerParent);
+    if (pack.unitsPerParent !== input.unitsPerPack) {
+      throw new PharmacyMedicineError('INVALID_CONVERSION');
+    }
+    return [
+      {
+        kind: 'PACK',
+        packLevelId: pack.id,
+        levelLabel: pack.level,
+        canonicalUnitsPerSaleUnit: pack.unitsPerParent,
+      },
+    ];
+  }
 
   // Cumulative canonical units, computed from the base unit upwards.
   const canonical: number[] = new Array(chain.length).fill(1);

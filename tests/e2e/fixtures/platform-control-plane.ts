@@ -132,7 +132,7 @@ export async function prepareControlPlaneFixture() {
 }
 
 // Disposable fixture authenticator: exercise MFA rather than disabling enforcement.
-async function platformAuthentication(identity: { email: string; password: string }) {
+export async function platformAuthentication(identity: { email: string; password: string }) {
   if (!runtimeUrl || !adminUrl || !/(?:test|e2e)/i.test(databaseName(runtimeUrl)))
     throw new Error('MFA fixture requires the disposable control-plane database.');
   const rawKey = process.env.PLATFORM_ENCRYPTION_KEY?.trim();
