@@ -1,0 +1,193 @@
+name: Deploy develop
+
+# Required environment secrets (environment: develop):
+# DEVELOP_SSH_HOST, DEVELOP_SSH_USER, DEVELOP_SSH_KEY,
+# DEVELOP_SSH_KNOWN_HOSTS. See docs/deploy-develop.md for setup details.
+on:
+  workflow_run:
+    # QA gate contains both the WHA-1125 automated gate and the dependent
+    # WHA-1132 browser gate. Add a name here if either gate is split out later.
+    workflows: ['QA gate']
+    types: [completed]
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: deploy-develop
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # A dispatch made from any ref other than develop exits without acquiring
+    # environment secrets. workflow_run events must themselves be successful.
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop')
+    runs-on: ubuntu-latest
+    environment: develop
+    env:
+      DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Verify every required gate passed for this commit
+        id: gates
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const sha = process.env.DEPLOY_SHA;
+            const required = ['QA gate'];
+            const runs = await github.paginate(
+              github.rest.actions.listWorkflowRunsForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                branch: 'develop',
+                head_sha: sha,
+                status: 'completed',
+                per_page: 100,
+              },
+            );
+
+            const missing = required.filter((name) =>
+              !runs.some((run) =>
+                run.name === name &&
+                run.head_sha === sha &&
+                run.head_branch === 'develop' &&
+                run.conclusion === 'success',
+              ),
+            );
+            if (missing.length) {
+              core.notice(`Deployment skipped: no successful ${missing.join(', ')} run for ${sha} on develop.`);
+              core.setOutput('deploy', 'false');
+              return;
+            }
+            core.info(`All required gates passed for ${sha}.`);
+            core.setOutput('deploy', 'true');
+
+      - name: Check out the gated commit
+        if: steps.gates.outputs.deploy == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+          fetch-depth: 1
+
+      - name: Set up Bun
+        if: steps.gates.outputs.deploy == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Install and build
+        if: steps.gates.outputs.deploy == 'true'
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
+          bun install --frozen-lockfile
+          bunx prisma generate
+          bunx next build
+
+      - name: Configure SSH
+        if: steps.gates.outputs.deploy == 'true'
+        env:
+          SSH_KEY: ${{ secrets.DEVELOP_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEVELOP_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          install -m 600 /dev/null ~/.ssh/develop
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/develop
+          install -m 600 /dev/null ~/.ssh/known_hosts
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Upload immutable release
+        if: steps.gates.outputs.deploy == 'true'
+        env:
+          SSH_HOST: ${{ secrets.DEVELOP_SSH_HOST }}
+          SSH_USER: ${{ secrets.DEVELOP_SSH_USER }}
+        run: |
+          set -euo pipefail
+          release="${DEPLOY_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ssh=(ssh -i ~/.ssh/develop -o BatchMode=yes -o StrictHostKeyChecking=yes)
+          "${ssh[@]}" "$SSH_USER@$SSH_HOST" "mkdir -p '/home/app/releases/$release'"
+          rsync -az --delete \
+            --exclude='.git/' \
+            --exclude='node_modules/' \
+            --exclude='.env*' \
+            -e "ssh -i $HOME/.ssh/develop -o BatchMode=yes -o StrictHostKeyChecking=yes" \
+            ./ "$SSH_USER@$SSH_HOST:/home/app/releases/$release/"
+          printf '%s' "$release" > "$RUNNER_TEMP/release"
+
+      - name: Migrate, activate, and verify release
+        if: steps.gates.outputs.deploy == 'true'
+        env:
+          SSH_HOST: ${{ secrets.DEVELOP_SSH_HOST }}
+          SSH_USER: ${{ secrets.DEVELOP_SSH_USER }}
+        run: |
+          set -euo pipefail
+          release=$(cat "$RUNNER_TEMP/release")
+          ssh -i ~/.ssh/develop -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" bash -s -- "$release" <<'REMOTE'
+          set -euo pipefail
+          release=$1
+          releases=/home/app/releases
+          target="$releases/$release"
+          link="$releases/current"
+
+          test -d "$target/.next/standalone"
+          test -d "$target/.next/static"
+          test -f "$target/scripts/start-standalone.mjs"
+          test -L "$link"
+          previous=$(readlink -f "$link")
+          test -d "$previous"
+
+          # app.env is deliberately shell-compatible as well as systemd-compatible.
+          # Read it without printing values, then migrate from the new release.
+          set -a
+          # shellcheck disable=SC1091
+          . /home/app/app.env
+          set +a
+          (cd "$target" && /home/app/.bun/bin/bunx prisma migrate deploy)
+
+          rm -f "$releases/.current-next" "$releases/.current-rollback"
+          ln -s "$target" "$releases/.current-next"
+          mv -Tf "$releases/.current-next" "$link"
+          sudo systemctl restart devfathom.service
+
+          status=''
+          for attempt in $(seq 1 12); do
+            status=$(curl --silent --show-error --output /dev/null \
+              --write-out '%{http_code}' --max-time 15 https://develop.devfathom.com || true)
+            case "$status" in 200|307) break ;; esac
+            sleep 5
+          done
+          if [ "$status" != 200 ] && [ "$status" != 307 ]; then
+            status=$(curl --silent --show-error --output /dev/null \
+              --write-out '%{http_code}' --max-time 15 http://127.0.0.1:3000 || true)
+          fi
+
+          if [ "$status" != 200 ] && [ "$status" != 307 ]; then
+            echo "Release health check failed with HTTP ${status:-unavailable}; restoring the previous release." >&2
+            ln -s "$previous" "$releases/.current-rollback"
+            mv -Tf "$releases/.current-rollback" "$link"
+            sudo systemctl restart devfathom.service
+            exit 1
+          fi
+
+          # Keep the active release, its rollback predecessor, and the newest
+          # remaining release. Never remove either symlink target.
+          mapfile -t old < <(find "$releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-)
+          kept=0
+          for candidate in "${old[@]}"; do
+            if [ "$candidate" = "$target" ] || [ "$candidate" = "$previous" ]; then
+              continue
+            fi
+            kept=$((kept + 1))
+            if [ "$kept" -gt 1 ]; then rm -rf -- "$candidate"; fi
+          done
+          REMOTE
