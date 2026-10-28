@@ -53,10 +53,13 @@ afterEach(() => {
 });
 
 describe('EvidenceCapture', () => {
-  it('offers named tenant staff and mobile camera/file capture without exposing IDs as copy', () => {
+  it('attributes to the signed-in staff and offers mobile camera/file capture', () => {
     const { container } = render(<EvidenceCapture {...props} />);
 
-    expect(screen.getByLabelText('Uploading staff')).toHaveTextContent('Mina Khan');
+    expect(
+      screen.getByText('Proof is recorded as your signed-in staff profile.')
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
     const file = screen.getByLabelText('Take or choose photo');
     expect(file).toHaveAttribute('accept', 'image/jpeg,image/png,image/webp');
     expect(file).toHaveAttribute('capture', 'environment');
@@ -70,9 +73,6 @@ describe('EvidenceCapture', () => {
     render(<EvidenceCapture {...props} />);
 
     const proof = new File(['proof'], 'proof.jpg', { type: 'image/jpeg' });
-    fireEvent.change(screen.getByLabelText('Uploading staff'), {
-      target: { value: 'staff-internal' },
-    });
     const fileInput = screen.getByLabelText('Take or choose photo');
     Object.defineProperty(fileInput, 'files', {
       configurable: true,

@@ -606,7 +606,9 @@ function SopBoardView(props: SopBoardViewProps) {
                       businessDate={businessDate}
                       occurrenceId={selected.id}
                     />
-                    <StaffSelect label="Acting staff" staff={staff} />
+                    <p className="text-xs text-text-muted">
+                      Recorded as your signed-in staff profile.
+                    </p>
                     <div className="flex flex-wrap gap-2">
                       {startAllowed ? (
                         <Button
@@ -744,7 +746,9 @@ function SopBoardView(props: SopBoardViewProps) {
                                 name="templateStepId"
                                 value={step.templateStepId}
                               />
-                              <StaffSelect label="Completing staff" staff={staff} />
+                              <p className="text-xs text-text-muted">
+                                Recorded as your signed-in staff profile.
+                              </p>
                               <label className="text-sm text-text-body">
                                 Completion note
                                 <Input className="mt-1 min-h-11" maxLength={2000} name="note" />
@@ -776,7 +780,9 @@ function SopBoardView(props: SopBoardViewProps) {
                           businessDate={businessDate}
                           occurrenceId={selected.id}
                         />
-                        <StaffSelect label="Verifier" staff={staff} />
+                        <p className="text-xs text-text-muted">
+                          Recorded as your signed-in staff profile.
+                        </p>
                         <label className="text-sm text-text-body">
                           Verification reason
                           <Input
@@ -822,13 +828,33 @@ function SopBoardView(props: SopBoardViewProps) {
                           intent="waive"
                           occurrenceId={selected.id}
                         />
-                        <StaffSelect label="Acting verifier" required staff={staff} />
+                        <p className="text-xs text-text-muted">
+                          Recorded as your signed-in staff profile.
+                        </p>
                         <StaffSelect
                           label="Approving co-author"
                           name="approvingStaffProfileId"
                           required
                           staff={staff}
                         />
+                        <label className="text-sm text-text-body">
+                          Approving credential type
+                          <select className={selectClass} name="approvingType" defaultValue="PIN">
+                            <option value="PIN">PIN</option>
+                            <option value="BADGE">Badge</option>
+                          </select>
+                        </label>
+                        <label className="text-sm text-text-body">
+                          Approving manager credential
+                          <Input
+                            className="mt-1"
+                            name="approvingSecret"
+                            type="password"
+                            autoComplete="off"
+                            required
+                            maxLength={256}
+                          />
+                        </label>
                         <p className="text-xs text-text-muted sm:col-span-2">
                           Co-authorization requires two different active staff profiles.
                         </p>
@@ -853,7 +879,9 @@ function SopBoardView(props: SopBoardViewProps) {
                     ) : null}
                     {!reviewAllowed && !waiveAllowed ? (
                       <div className="mt-3">
-                        <StaffSelect label="Verifier" staff={staff} />
+                        <p className="text-xs text-text-muted">
+                          Recorded as your signed-in staff profile.
+                        </p>
                         <p className="mt-2 text-sm text-text-muted">
                           No verifier action is valid for{' '}
                           {STATUS_LABEL[selected.status].toLowerCase()} occurrences.
@@ -1024,13 +1052,12 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
       if (!actionCtx) throw new Error(NO_ACTOR);
       const caller = restaurantSopExecutionRouter.createCaller(actionCtx);
       const occurrenceId = field(form, 'occurrenceId');
-      const actorStaffProfileId = optionalField(form, 'actorStaffProfileId');
       const intent = field(form, 'intent');
       let success: string;
 
       switch (intent) {
         case 'start':
-          await caller.start({ occurrenceId, actorStaffProfileId });
+          await caller.start({ occurrenceId });
           success = 'SOP started.';
           break;
         case 'completeStep':
@@ -1038,7 +1065,6 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
             occurrenceId,
             templateStepId: field(form, 'templateStepId'),
             note: optionalField(form, 'note'),
-            actorStaffProfileId,
           });
           success = 'Checklist step completed.';
           break;
@@ -1050,18 +1076,16 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
             mimeType: field(form, 'mimeType'),
             sizeBytes: Number(field(form, 'sizeBytes')),
             storageRef: optionalField(form, 'storageRef'),
-            uploaderStaffProfileId: optionalField(form, 'uploaderStaffProfileId'),
           });
           success = 'Evidence metadata attached.';
           break;
         case 'submit':
-          await caller.submit({ occurrenceId, actorStaffProfileId });
+          await caller.submit({ occurrenceId });
           success = 'SOP submitted for review.';
           break;
         case 'verify':
           await caller.verify({
             occurrenceId,
-            actorStaffProfileId,
             reason: optionalField(form, 'reason'),
           });
           success = 'SOP verified.';
@@ -1076,7 +1100,6 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
           }
           await caller.reject({
             occurrenceId,
-            actorStaffProfileId,
             reason,
           });
           success = 'SOP rejected for rework.';
@@ -1084,11 +1107,7 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
         }
         case 'waive': {
           const approvingStaffProfileId = field(form, 'approvingStaffProfileId');
-          if (
-            !actorStaffProfileId ||
-            !approvingStaffProfileId ||
-            actorStaffProfileId === approvingStaffProfileId
-          ) {
+          if (!approvingStaffProfileId) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
               message: 'Select two different active staff profiles for co-authorization.',
@@ -1096,15 +1115,16 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
           }
           await caller.waive({
             occurrenceId,
-            actorStaffProfileId,
             approvingStaffProfileId,
+            approvingType: field(form, 'approvingType') === 'BADGE' ? 'BADGE' : 'PIN',
+            approvingSecret: field(form, 'approvingSecret'),
             reason: field(form, 'reason'),
           });
           success = 'SOP waived with co-authorization.';
           break;
         }
         case 'acknowledge':
-          await caller.acknowledge({ occurrenceId, actorStaffProfileId });
+          await caller.acknowledge({ occurrenceId });
           success = 'Escalation acknowledged.';
           break;
         default:

@@ -104,3 +104,54 @@ describe('SopPage load failure', () => {
     expect(screen.queryByText(/private\.internal/)).not.toBeInTheDocument();
   });
 });
+
+describe('SOP credential approval form', () => {
+  it('requires a masked approving credential, supports PIN and badge, and attributes actors to the session', async () => {
+    mocks.resolveTenantActor.mockResolvedValue(actor);
+    const ctx = contextStub();
+    ctx.db.restaurantBranch.findMany.mockResolvedValue([
+      {
+        id: 'branch-1',
+        name: 'Main branch',
+        timezone: 'UTC',
+        businessDayCutoff: '00:00',
+      },
+    ] as never);
+    ctx.db.restaurantStaffProfile.findMany.mockResolvedValue([
+      {
+        id: 'staff-1',
+        displayName: 'Approving manager',
+      },
+    ] as never);
+    mocks.createTRPCContext.mockResolvedValue(ctx);
+    const date = new Date('2026-08-29T12:00:00Z');
+    const detail = {
+      id: 'occ-1',
+      status: 'MISSED',
+      businessDate: date,
+      dueAt: date,
+      windowEndsAt: date,
+      assignment: { template: { name: 'Opening check', category: 'Operations' } },
+      templateVersion: { versionNumber: 1, steps: [] },
+      steps: [],
+      evidence: [],
+      verifications: [],
+      escalationEvents: [],
+    };
+    mocks.createCaller.mockReturnValue({
+      listOccurrences: vi.fn(async ({ status }: { status: string }) => ({
+        items: status === 'MISSED' ? [detail] : [],
+        nextCursor: null,
+      })),
+      getOccurrence: vi.fn(async () => detail),
+    });
+    const view = await SopPage({ searchParams });
+    const { container } = render(view);
+    const credential = screen.getByLabelText('Approving manager credential');
+    expect(credential).toHaveAttribute('type', 'password');
+    expect(credential).toBeRequired();
+    expect(screen.getByLabelText('Approving credential type')).toHaveTextContent('PINBadge');
+    expect(container.querySelector('[name="actorStaffProfileId"]')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Waive occurrence' })).toBeEnabled();
+  });
+});

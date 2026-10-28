@@ -76,6 +76,8 @@ function optionalTrimmed(value: string | null | undefined): string | null {
 }
 
 /**
+ * Structural validation only: callers MUST resolve the actor from an authenticated
+ * session and verify approver credentials and capability server-side before persisting.
  * Assert the co-authorization invariants (C6/C7). Throws `CoAuthorizationError`
  * on any violation. The load-bearing rule is that the approving manager cannot
  * be the acting operator: a self-approval is not a co-authorization.

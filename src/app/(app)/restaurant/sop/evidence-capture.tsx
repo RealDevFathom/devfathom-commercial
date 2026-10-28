@@ -103,23 +103,7 @@ export function EvidenceCapture({
           record.
         </p>
       </div>
-      <label className="text-sm text-text-body" htmlFor={`${id}-staff`}>
-        Uploading staff
-        <select
-          className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50"
-          disabled={uploading}
-          id={`${id}-staff`}
-          name="uploaderStaffProfileId"
-          required
-        >
-          <option value="">Select active staff</option>
-          {staff.map((person) => (
-            <option key={person.id} value={person.id}>
-              {person.displayName}
-            </option>
-          ))}
-        </select>
-      </label>
+      <p className="text-xs text-text-muted">Proof is recorded as your signed-in staff profile.</p>
       <label className="text-sm text-text-body" htmlFor={`${id}-file`}>
         {purpose === 'photo' ? 'Take or choose photo' : 'Choose signature image'}
         <Input
