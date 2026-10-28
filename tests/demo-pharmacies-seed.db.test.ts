@@ -46,6 +46,24 @@ describe('persisted demo pharmacy seed', () => {
       await expect(seedDemoPharmacies(prisma, missing, testPlans)).rejects.toThrow(key);
     }
   });
+  it('refuses an ordinary pharmacy occupying the seed namespace', async () => {
+    const plan = { ...testPlans[0]!, slug: `occupied-pharmacy-${randomUUID()}` };
+    const existing = await prisma.organization.create({
+      data: {
+        slug: plan.slug,
+        legalName: 'Existing pharmacy',
+        displayName: 'Existing pharmacy',
+        vertical: 'PHARMACY',
+        status: 'ACTIVE',
+      },
+    });
+    await expect(seedDemoPharmacies(prisma, env, [plan])).rejects.toThrow(
+      'Demo namespace belongs to a non-demo organization'
+    );
+    expect(
+      await prisma.organization.findUniqueOrThrow({ where: { id: existing.id } })
+    ).toMatchObject({ isDemo: false, notes: null, displayName: 'Existing pharmacy' });
+  });
   it('persists both complete pharmacies and reruns without duplicating immutable evidence', async () => {
     await seedDemoPharmacies(prisma, env, testPlans);
     const snapshot = async () => {
@@ -60,6 +78,8 @@ describe('persisted demo pharmacy seed', () => {
           include: { organizationRole: true },
         });
         expect(organization.pharmacyOperatingMode).toBe(plan.mode);
+        expect(organization.isDemo).toBe(false);
+        expect(organization.notes).toContain('seed-demo-pharmacies:v1');
         expect(users.map((user) => user.organizationRole!.key).sort()).toEqual(
           [...plan.roles].sort()
         );
@@ -134,6 +154,11 @@ describe('persisted demo pharmacy seed', () => {
       return results;
     };
     const first = await snapshot();
+    // Upgrade the old seed marker without losing accounts or immutable history.
+    await prisma.organization.update({
+      where: { slug: testPlans[0]!.slug },
+      data: { isDemo: true, notes: null },
+    });
     await seedDemoPharmacies(prisma, env, testPlans);
     expect(await snapshot()).toEqual(first);
     expect(demoMedicineCatalog.every((m) => m.manufacturer && m.strength && m.mrpPkr > 0)).toBe(

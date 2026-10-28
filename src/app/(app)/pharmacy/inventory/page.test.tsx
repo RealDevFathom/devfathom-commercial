@@ -110,12 +110,12 @@ afterEach(cleanup);
 
 describe('Inventory pack-action integration', () => {
   it.each([
-    ['OPEN', 'user', true, false],
+    ['OPEN', 'user', true, true],
     ['AWAITING_COAUTH', 'user', true, true],
-    ['AWAITING_COAUTH', 'other', true, false],
+    ['AWAITING_COAUTH', 'other', true, true],
     ['AWAITING_COAUTH', 'user', false, false],
   ] as const)(
-    'requires a count PIN only for solo self coauthorization (%s, %s, solo=%s)',
+    'requires a count PIN for every SOLO approval (%s, %s, solo=%s)',
     async (status, createdById, solo, requiresPin) => {
       ctx.db.$queryRaw.mockResolvedValue([{ allowed: solo }]);
       ctx.db.user.findUnique.mockResolvedValue({

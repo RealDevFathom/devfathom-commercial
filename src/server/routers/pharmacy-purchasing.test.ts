@@ -6,10 +6,6 @@ const mocks = vi.hoisted(() => {
   hasModule.mockReturnValue(true);
   return { hasModule, can: vi.fn(), verifyPharmacyUserPin: vi.fn() };
 });
-vi.mock('@/lib/pharmacy/solo-approval', async () => ({
-  ...(await vi.importActual('@/lib/pharmacy/solo-approval')),
-  verifyPharmacyUserPin: mocks.verifyPharmacyUserPin,
-}));
 vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -27,6 +23,7 @@ vi.mock('@/server/audit', () => ({
 vi.mock('@/lib/pharmacy/solo-approval', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/solo-approval')>()),
   verifySoloOwnerPin: vi.fn(async (_db, _scope, pin) => pin === '4729'),
+  verifyPharmacyUserPin: mocks.verifyPharmacyUserPin,
 }));
 
 import { pharmacyPurchasingRouter } from './pharmacy-purchasing';

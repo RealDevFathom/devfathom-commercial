@@ -6,7 +6,7 @@ import { assertBranchAssignment } from './branch-assignment';
 import {
   authorizeSoloApproval,
   pinProfileBelongsToActor,
-  verifySoloOwnerPin,
+  verifyPharmacyUserPin,
   soloOwnerEligible,
   SOLO_APPROVAL_POLICY,
 } from './solo-approval';
@@ -79,7 +79,7 @@ export async function authorizeMakerChecker(
     ))
       ? { policy: SOLO_OWNER_POLICY }
       : { ...blocked, pinRejected: true };
-  return (await verifySoloOwnerPin(db, scope, input.pin.pin, { requireSoloEligibility: false }))
+  return (await verifyPharmacyUserPin(scope, input.pin.pin))
     ? { policy: 'PUR-02:SEGREGATION_OF_DUTIES' }
     : blocked;
 }

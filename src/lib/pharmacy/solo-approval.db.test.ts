@@ -879,6 +879,32 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
             where: { targetId: count.id, action: 'PHARMACY:SOLO_OWNER_PIN' },
           })
         ).toBe(1);
+        const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+          where: { branchId: f.branch },
+        });
+        const open = await createCount(db, scope(f), {
+          varianceThreshold: 100,
+          readings: [
+            {
+              inventoryLotId: lot.id,
+              stockLocationId: f.location,
+              countedSealedPacks: 0,
+              countedLooseUnits: 0,
+            },
+          ],
+        });
+        expect(open.status).toBe('OPEN');
+        await expect(approveCount(db, scope(f), open.id, 'open-no-pin')).rejects.toMatchObject({
+          reason: 'COAUTH_REQUIRED',
+        });
+        await expect(
+          approveCount(db, scope(f), open.id, 'open-with-pin', pin)
+        ).resolves.toMatchObject({ status: 'APPROVED', approvedById: f.user });
+        expect(
+          await db.auditLog.count({
+            where: { targetId: open.id, action: 'PHARMACY:SOLO_OWNER_PIN' },
+          })
+        ).toBe(1);
         await db.user.create({
           data: {
             organizationId: f.org,
@@ -903,6 +929,9 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
 
   it('authenticates a direct purchase approver instead of trusting their submitted identity', async () => {
     const f = await fixture();
+    await owner.query(`UPDATE organizations SET "pharmacyOperatingMode"='STAFFED' WHERE id=$1`, [
+      f.org,
+    ]);
     const receiver = await withTenantDb(
       f.org,
       async (db) => {

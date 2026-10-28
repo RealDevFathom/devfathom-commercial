@@ -990,6 +990,16 @@ export const pharmacySalesRouter = router({
             .string()
             .regex(/^\d{4,8}$/)
             .optional(),
+          prescriptionApproval: z
+            .object({
+              checkerId: z.string().min(1).optional(),
+              pin: z
+                .string()
+                .regex(/^\d{4,8}$/)
+                .optional(),
+            })
+            .strict()
+            .optional(),
           discountKind: z.enum(['DISCOUNT', 'PROMOTION', 'COMPLIMENTARY']).optional(),
           discountMinor: z.number().int().nonnegative().optional(),
           approvedByUserId: z.string().min(1).optional(),
@@ -1071,17 +1081,31 @@ export const pharmacySalesRouter = router({
                   branchId: scope.branchId,
                 },
               });
+              const checkerId = input.prescriptionApproval?.checkerId;
+              if (checkerId && checkerId !== scope.actorId) {
+                await assertBranchAssignment(db, { ...scope, actorId: checkerId });
+              }
               await enforceOperatingMode(db, scope, {
                 kind: 'RX',
                 makerIds: [sale?.createdByUserId ?? scope.actorId],
                 targetType: 'PrescriptionSale',
                 targetId: input.saleId,
-                pin: input.prescription?.approvalPin ?? input.approvalPin,
+                pin:
+                  input.prescriptionApproval?.pin ??
+                  input.prescription?.approvalPin ??
+                  input.approvalPin,
+                checkerId,
               });
             }
 
-            const { prescription, approvalPin: _linePin, ...lineInput } = input;
+            const {
+              prescription,
+              prescriptionApproval: _rxApproval,
+              approvalPin: _linePin,
+              ...lineInput
+            } = input;
             void _linePin;
+            void _rxApproval;
             if (!prescription) return addSaleLine(db, scope, lineInput);
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (
@@ -1704,6 +1728,25 @@ export const pharmacySalesRouter = router({
     ),
 
   // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────
+
+  /** Live branch-scoped identities; the write repeats role, permission and PIN checks. */
+  rxApprovers: protectedProcedure.input(z.object({ branchId })).query(async ({ ctx, input }) => {
+    const scope = await scopeFor(ctx, input.branchId);
+    const organization = await ctx.db.organization.findUniqueOrThrow({
+      where: { id: scope.organizationId },
+      select: { pharmacyOperatingMode: true },
+    });
+    const users = await ctx.db.user.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        status: 'ACTIVE',
+        organizationRole: { key: 'pharmacist' },
+        pharmacyBranchAssignments: { some: { branchId: input.branchId, active: true } },
+      },
+      select: { id: true, name: true, email: true },
+    });
+    return { mode: organization.pharmacyOperatingMode, users };
+  }),
 
   /** The branches this counter may open a bill against, with the money format. */
   counterBranches: protectedProcedure.query(async ({ ctx }) => {

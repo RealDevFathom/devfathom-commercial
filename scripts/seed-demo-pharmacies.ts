@@ -170,11 +170,16 @@ export async function seedDemoPharmacies(
         await tx.$executeRaw`SELECT set_config('app.is_platform_admin', 'true', true)`;
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${plan.slug}, 0))`;
         const existing = await tx.organization.findUnique({ where: { slug: plan.slug } });
-        if (existing && (!existing.isDemo || existing.vertical !== 'PHARMACY'))
+        const seedMarker = 'Synthetic pharmacy demonstration fixture (seed-demo-pharmacies:v1)';
+        if (
+          existing &&
+          (existing.vertical !== 'PHARMACY' || (!existing.isDemo && existing.notes !== seedMarker))
+        )
           throw new Error('Demo namespace belongs to a non-demo organization');
         const org = await tx.organization.upsert({
           where: { slug: plan.slug },
-          update: {},
+          // isDemo is reserved for the access-code-only restaurant demo seats.
+          update: { isDemo: false, notes: seedMarker },
           create: {
             slug: plan.slug,
             legalName: plan.name,
@@ -184,7 +189,8 @@ export async function seedDemoPharmacies(
             currency: 'PKR',
             timezone: 'Asia/Karachi',
             locale: 'en-PK',
-            isDemo: true,
+            isDemo: false,
+            notes: seedMarker,
             seatLimit: plan.roles.length,
             pharmacyOperatingMode: plan.mode,
           },

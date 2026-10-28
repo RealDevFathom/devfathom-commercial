@@ -286,6 +286,8 @@ function ScopedPharmacyCounterConsole({
   const [heldSaleId, setHeldSaleId] = useState<string | null>(null);
   const [patientQuery, setPatientQuery] = useState('');
   const [submittedPatientQuery, setSubmittedPatientQuery] = useState('');
+  const [rxApprovalPin, setRxApprovalPin] = useState('');
+  const [rxCheckerId, setRxCheckerId] = useState('');
   const [controlledAuth, setControlledAuth] = useState({
     prescriptionLineId: '',
     staffProfileId: '',
@@ -339,6 +341,10 @@ function ScopedPharmacyCounterConsole({
   // Derived, not mirrored into state: the default branch is simply "the first
   // one" until the operator picks another, so an effect would only add a render.
   const branchId = selectedBranchId || (branches[0]?.id ?? '');
+  const rxApproversQuery = trpc.pharmacySales.rxApprovers.useQuery(
+    { branchId },
+    { enabled: Boolean(branchId) }
+  );
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(
     branchId ? { branchId } : undefined,
     {
@@ -900,6 +906,10 @@ function ScopedPharmacyCounterConsole({
       }
       const refSerial = Number(controlledAuth.refSerial);
       const added = await addLine.mutateAsync({
+        prescriptionApproval:
+          !controlled && (activeRow.restriction.rx || activeRow.restriction.restricted)
+            ? { pin: rxApprovalPin || undefined, checkerId: rxCheckerId || undefined }
+            : undefined,
         controlledAuthorization:
           controlled && patient
             ? {
@@ -962,12 +972,15 @@ function ScopedPharmacyCounterConsole({
       });
     } finally {
       setControlledAuth((value) => ({ ...value, pin: '' }));
+      setRxApprovalPin('');
       setPending(null);
     }
   }, [
     activeRow,
     addLine,
     controlledAuth,
+    rxApprovalPin,
+    rxCheckerId,
     patient,
     patientAddress,
     branchId,
@@ -1891,6 +1904,8 @@ function ScopedPharmacyCounterConsole({
                     onChange={(event) => {
                       scannerRevision.current += 1;
                       setSelectedBranchId(event.target.value);
+                      setRxApprovalPin('');
+                      setRxCheckerId('');
                       setActiveRow(null);
                       setActiveSale(null);
                       setHeldSaleId(null);
@@ -2331,6 +2346,54 @@ function ScopedPharmacyCounterConsole({
               </kbd>
             }
           >
+            {activeRow &&
+            !activeRow.restriction.controlled &&
+            (activeRow.restriction.rx || activeRow.restriction.restricted) ? (
+              <div className="mb-4 space-y-3">
+                {rxApproversQuery.data?.mode !== 'SOLO' ? (
+                  <div>
+                    <Label htmlFor="rx-checker">Approving pharmacist</Label>
+                    <select
+                      id="rx-checker"
+                      className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm"
+                      value={rxCheckerId}
+                      onChange={(event) => setRxCheckerId(event.target.value)}
+                      disabled={busy || rxApproversQuery.isLoading || rxApproversQuery.isError}
+                    >
+                      <option value="">Select independent pharmacist</option>
+                      {rxApproversQuery.data?.users.map((checker) => (
+                        <option key={checker.id} value={checker.id}>
+                          {checker.name || checker.email}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+                <Label htmlFor="rx-approval-pin">
+                  {rxApproversQuery.data?.mode === 'SOLO'
+                    ? 'Owner PIN'
+                    : 'Approving pharmacist PIN'}
+                </Label>
+                <Input
+                  className="min-h-11"
+                  id="rx-approval-pin"
+                  type="password"
+                  autoComplete="off"
+                  inputMode="numeric"
+                  pattern="[0-9]{4,8}"
+                  minLength={4}
+                  maxLength={8}
+                  disabled={busy}
+                  value={rxApprovalPin}
+                  onChange={(event) => setRxApprovalPin(event.target.value)}
+                />
+                {rxApproversQuery.isError ? (
+                  <p role="alert" className="text-sm text-destructive">
+                    Unable to load prescription approvers. Retry this page.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             <CounterRxPanel
               branchId={branchId}
               ref={rxPanelRef}

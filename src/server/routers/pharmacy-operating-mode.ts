@@ -1,7 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
-import { verifySoloOwnerPin } from '@/lib/pharmacy/solo-approval';
+import { verifyPharmacyUserPin } from '@/lib/pharmacy/solo-approval';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { TRPCContext } from '../trpc';
 import { protectedProcedure, router } from '../trpc';
@@ -50,14 +50,7 @@ export const pharmacyOperatingModeRouter = router({
         });
         // Mode changes require the owner's credential even when staff were added
         // while SOLO was selected. Document self-approval still requires #683 eligibility.
-        const valid = await verifySoloOwnerPin(
-          tx,
-          { organizationId, actorId, branchId: null },
-          input.pin,
-          {
-            requireSoloEligibility: false,
-          }
-        );
+        const valid = await verifyPharmacyUserPin({ organizationId, actorId }, input.pin);
         if (!valid)
           throw new TRPCError({
             code: 'UNAUTHORIZED',

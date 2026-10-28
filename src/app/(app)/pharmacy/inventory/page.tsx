@@ -760,11 +760,7 @@ export default async function PharmacyInventoryPage({
                     <input name="action" type="hidden" value="approve-count" />
                     <input name="branchId" type="hidden" value={branch.id} />
                     <input name="countId" type="hidden" value={count.id} />
-                    {solo &&
-                    count.status === 'AWAITING_COAUTH' &&
-                    count.createdById === ctx.session!.user.id ? (
-                      <SoloApprovalPin required />
-                    ) : null}
+                    {solo ? <SoloApprovalPin required /> : null}
                     <Submit>
                       {count.status === 'AWAITING_COAUTH'
                         ? 'Co-authorize variance'

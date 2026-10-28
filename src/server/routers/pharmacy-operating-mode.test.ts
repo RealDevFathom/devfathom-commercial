@@ -6,7 +6,7 @@ vi.mock('../trpc', () => {
   return { protectedProcedure: t.procedure, router: t.router };
 });
 vi.mock('@/lib/pharmacy/solo-approval', () => ({
-  verifySoloOwnerPin: mocks.verify,
+  verifyPharmacyUserPin: mocks.verify,
   authorizeSoloApproval: mocks.authorize,
 }));
 import { pharmacyOperatingModeRouter } from './pharmacy-operating-mode';
@@ -32,7 +32,7 @@ function fixture(mode = 'STAFFED', role = 'owner') {
 }
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.verify.mockImplementation(async (_db, _scope, pin) => pin === '4729');
+  mocks.verify.mockImplementation(async (_scope, pin) => pin === '4729');
   mocks.authorize.mockImplementation(async (_db, _scope, _target, pin) => pin === '4729');
 });
 describe('owner-only operating-mode toggle', () => {

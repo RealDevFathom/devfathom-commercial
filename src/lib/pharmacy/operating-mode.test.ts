@@ -3,7 +3,7 @@ import { enforceOperatingMode, type PharmacyApprovalKind } from './operating-mod
 const mocks = vi.hoisted(() => ({ solo: vi.fn(), can: vi.fn() }));
 vi.mock('./solo-approval', () => ({
   authorizeSoloApproval: mocks.solo,
-  verifySoloOwnerPin: mocks.solo,
+  verifyPharmacyUserPin: vi.fn(async (_scope, pin) => pin === '4729'),
 }));
 vi.mock('@/lib/abac', () => ({ can: mocks.can }));
 const scope = { organizationId: 'org', branchId: 'branch', actorId: 'actor' };

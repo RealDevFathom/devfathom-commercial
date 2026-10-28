@@ -1,3 +1,4 @@
+import { assertBranchAssignment } from '@/lib/pharmacy/branch-assignment';
 import { enforceOperatingMode } from '@/lib/pharmacy/operating-mode';
 import { requirePharmacyReadBranch } from '../pharmacy-branch-access';
 import { soloOwnerEligible } from '@/lib/pharmacy/solo-approval';
@@ -130,7 +131,11 @@ export const pharmacyDispensingRouter = router({
           select: { branchId: true },
         });
         if (!line) throw new TRPCError({ code: 'NOT_FOUND' });
-        await requirePharmacyReadBranch({ ...ctx, db: db as typeof ctx.db }, line.branchId);
+        await assertBranchAssignment(db as typeof ctx.db, {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: line.branchId,
+          actorId: ctx.session!.user.id,
+        });
         await enforceOperatingMode(
           db as typeof ctx.db,
           {

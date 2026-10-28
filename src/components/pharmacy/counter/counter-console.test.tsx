@@ -100,6 +100,7 @@ vi.mock('@/lib/trpc', () => {
         'customerSnapshot',
         'drawerStatus',
         'create',
+        'rxApprovers',
         'addLine',
         'transition',
         'tender',
@@ -239,6 +240,7 @@ beforeEach(() => {
     'counterPatients',
     'counterPatientPanel',
     'controlledPharmacists',
+    'rxApprovers',
   ])
     mocks.queries[name] = query();
   mocks.queries.drawerStatus = query({ openDrawer: null });
@@ -1114,6 +1116,86 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(screen.queryByText(/OPEN_DRAWER|prisma|Unique constraint/)).not.toBeInTheDocument();
     await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
   });
+
+  it.each(['SOLO', 'STAFFED'] as const)(
+    'submits fresh %s authorization for a non-controlled Rx line',
+    async (mode) => {
+      const row = {
+        medicineId: 'med-barcode',
+        displayName: 'Paracetamol',
+        brandName: null,
+        manufacturer: null,
+        strength: '500 mg',
+        presentationId: 'presentation-a',
+        presentation: 'Tablet',
+        dosageForm: 'Tablet',
+        route: 'Oral',
+        matchedOn: 'BARCODE',
+        recommendedLotId: 'lot-a',
+        packLevelId: 'pack-a',
+        unitsPerPack: 1,
+        printedMrpMinor: 10000,
+        roundingIncrementMinor: 1,
+        batchNumber: 'B-1',
+        nearestSafeExpiry: '2028-06-30T00:00:00.000Z',
+        onHandUnits: 10,
+        saleableUnits: [],
+        saleUnits: [
+          {
+            kind: 'UNIT',
+            packLevelId: 'pack-a',
+            levelLabel: 'UNIT',
+            canonicalUnitsPerSaleUnit: 1,
+          },
+        ],
+        restriction: {
+          rx: true,
+          otc: false,
+          restricted: false,
+          controlled: false,
+          highAlert: false,
+          lasa: false,
+        },
+        storage: {
+          coldChain: false,
+          locationKind: 'STORE',
+          locationCode: 'A',
+          locationName: 'Store',
+        },
+        blocked: [],
+      };
+      mocks.queries.rxApprovers = query({ mode, users: [{ id: 'pharmacist', name: 'Checker' }] });
+      mocks.queries.counterSearch = query({ rows: [row] });
+      mocks.mutations.addLine!.mockResolvedValue({});
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: '123456' } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+      const pin = await screen.findByLabelText(
+        mode === 'SOLO' ? 'Owner PIN' : 'Approving pharmacist PIN'
+      );
+      expect(pin).toHaveAttribute('type', 'password');
+      expect(pin).toHaveAttribute('autoComplete', 'off');
+      fireEvent.change(pin, { target: { value: '4729' } });
+      if (mode === 'STAFFED')
+        fireEvent.change(screen.getByLabelText('Approving pharmacist'), {
+          target: { value: 'pharmacist' },
+        });
+      fireEvent.click(screen.getByRole('button', { name: /Add.*cart/i }));
+      await waitFor(() =>
+        expect(mocks.mutations.addLine).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            prescriptionApproval: {
+              pin: '4729',
+              checkerId: mode === 'STAFFED' ? 'pharmacist' : undefined,
+            },
+            controlledAuthorization: undefined,
+          })
+        )
+      );
+      await waitFor(() => expect(pin).toHaveValue(''));
+    }
+  );
 
   it('adds a barcode on Enter only when the search returns that single medicine', async () => {
     const row = {

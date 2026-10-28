@@ -42,6 +42,7 @@ export function OperatingModeSettings({ initialMode }: { initialMode: 'SOLO' | '
         <Label htmlFor="operating-mode-pin">Owner PIN</Label>
         <input
           id="operating-mode-pin"
+          type="password"
           className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
           inputMode="numeric"
           autoComplete="off"

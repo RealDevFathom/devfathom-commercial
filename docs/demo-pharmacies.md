@@ -14,6 +14,8 @@ Supply all four password environment variables through your secret manager or sh
 - `DEMO_STAFFED_PHARMACIST_PASSWORD`
 - `DEMO_STAFFED_CASHIER_PASSWORD`
 
+These are synthetic password-authenticated tenants. The seed records its ownership in organization notes; `isDemo` stays false because that flag is reserved for the restaurant access-code demo seats. Reruns upgrade the seed's older pharmacy fixtures without changing their accounts or history.
+
 Missing or blank variables stop the command before database writes. There are no password defaults, command-line password arguments, or logged passwords/hashes. Passwords are bcrypt hashed for newly created accounts. A rerun preserves existing credentials and operating-mode choices; use the application's password and mode workflows to change them. The `.example` addresses are sign-in identities, not delivery addresses.
 
 Each pharmacy receives 40 familiar Pakistani-market medicines with brand, generic alias, strength, dosage form, manufacturer, and illustrative retail pack MRP in PKR. Prices are fixture values, not a current regulated-price feed. Each medicine has two manufacturing batches, printed MRPs, and received lots. Expired, near-expiry, and low-stock batches are included. Insulin is stored in the refrigerator; controlled medicines are catalog/stock examples and are not sold by the fixture.

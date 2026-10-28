@@ -9,8 +9,8 @@ export const metadata: Metadata = { title: 'Pharmacy operating mode' };
 
 export default async function OperatingModePage() {
   const caller = pharmacyOperatingModeRouter.createCaller(await createTRPCContext());
-  try {
-    const settings = await caller.get();
+  const settings = await caller.get().catch(() => null);
+  if (settings) {
     return (
       <main className="min-w-0 space-y-6">
         <PageHeader
@@ -23,7 +23,7 @@ export default async function OperatingModePage() {
         </SectionCard>
       </main>
     );
-  } catch {
+  } else {
     return (
       <main className="min-w-0 space-y-6">
         <PageHeader
