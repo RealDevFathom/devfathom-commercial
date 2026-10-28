@@ -371,7 +371,9 @@ beforeAll(async () => {
       ensureRestaurantTaxProfile(tx, orgA, ctx.branchReplay),
     ]);
     // Match the issue's customer-supplied profile without mutating published evidence.
-    const source = await tx.restaurantTaxOfficialSource.findFirstOrThrow();
+    const source = await tx.restaurantTaxOfficialSource.findFirstOrThrow({
+      where: { organizationId: orgA },
+    });
     const effectiveFrom = new Date('2026-08-01T00:00:00.000Z');
     await tx.restaurantTaxProfileVersion.create({
       data: {
@@ -1164,18 +1166,29 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       });
       expect(deniedRecut.status).toBe(404);
 
-      const deniedComp = await call(deps.routes.comp, {
-        secret: ctx.posA.secret,
-        session: tokenA,
-        key: uniqueKey('wha977-cross-branch-comp'),
-        body: {
-          billId: branchBBillId,
-          billLineId: branchBLineId,
-          reason: 'must not cross branch',
-          approving: { staffProfileId: ctx.managerA, type: 'PIN', secret: PIN },
-        },
-      });
-      expect(deniedComp.status).toBe(404);
+      const pinState = () =>
+        deps.withTenantDb(orgA, (tx) =>
+          tx.restaurantOperatorCredential.findFirstOrThrow({
+            where: { staffProfileId: ctx.managerA, type: 'PIN' },
+            select: { failedAttempts: true, lockedUntil: true },
+          })
+        );
+      const beforePin = await pinState();
+      for (const billId of [branchBBillId, `missing_bill_${suffix}`]) {
+        const deniedComp = await call(deps.routes.comp, {
+          secret: ctx.posA.secret,
+          session: tokenA,
+          key: uniqueKey('wha977-cross-branch-comp'),
+          body: {
+            billId,
+            billLineId: branchBLineId,
+            reason: 'must not cross branch',
+            approving: { staffProfileId: ctx.managerA, type: 'PIN', secret: '000000' },
+          },
+        });
+        expect(deniedComp.status).toBe(404);
+        expect(await pinState()).toEqual(beforePin);
+      }
 
       await deps.withTenantDb(orgA, (tx) =>
         tx.restaurantRegisteredDevice.update({

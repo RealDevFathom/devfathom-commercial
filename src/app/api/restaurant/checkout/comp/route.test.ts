@@ -39,7 +39,7 @@ describe('checkout comp route authorization', () => {
       vi.mocked(requireBillInDeviceBranch).mockResolvedValue(false);
       const response = (await run(args)) as Response;
       expect(response.status).toBe(404);
-      expect(await response.json()).toEqual({ error: 'No settled bill with that id.' });
+      expect(await response.json()).toEqual({ error: 'The bill does not exist.' });
       expect(requireBillInDeviceBranch).toHaveBeenCalledWith(args.ctx.db, 'bill', 'branch-local');
       expect(resolveApprover).not.toHaveBeenCalled();
       expect(compLine).not.toHaveBeenCalled();
