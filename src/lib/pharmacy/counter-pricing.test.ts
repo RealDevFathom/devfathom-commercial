@@ -34,6 +34,32 @@ describe('saleUnitOptions (POS-03 toggle)', () => {
       saleUnitOptions({ packLevels: [pack], rootPackLevelId: 'flat', unitsPerPack: 20 })
     ).toThrowError(PharmacyMedicineError);
   });
+  it('sells a receipt at the hierarchy leaf as one canonical unit', () => {
+    const options = saleUnitOptions({
+      packLevels: THREE_LEVEL,
+      rootPackLevelId: 'unit',
+      unitsPerPack: 1,
+    });
+    expect(options).toEqual([
+      { kind: 'PACK', packLevelId: 'unit', levelLabel: 'UNIT', canonicalUnitsPerSaleUnit: 1 },
+    ]);
+    expect(
+      previewSaleLine({
+        option: options[0]!,
+        quantity: 3,
+        printedMrpMinor: 125,
+        unitsPerPack: 1,
+        availableUnits: 5,
+      })
+    ).toMatchObject({ canonicalUnits: 3, unitPriceMinor: 125, grossMinor: 375, sufficient: true });
+  });
+
+  it('rejects a leaf receipt that uses its parent conversion as units per pack', () => {
+    expect(() =>
+      saleUnitOptions({ packLevels: THREE_LEVEL, rootPackLevelId: 'unit', unitsPerPack: 10 })
+    ).toThrowError(PharmacyMedicineError);
+  });
+
   it('derives pack, strip and unit from the received pack hierarchy', () => {
     expect(
       saleUnitOptions({ packLevels: THREE_LEVEL, rootPackLevelId: 'box', unitsPerPack: 100 })

@@ -346,7 +346,13 @@ beforeAll(async () => {
       category: 'Operations',
     });
     await tx.organizationModule.create({
-      data: { organizationId: orgA, moduleId: posModule.id },
+      data: {
+        organizationId: orgA,
+        moduleId: posModule.id,
+        // Daily-close tests rewind to noon. Keep the entitlement effective
+        // throughout that business day, regardless of the real CI start time.
+        startsAt: new Date(`${TODAY}T00:00:00.000Z`),
+      },
     });
     await tx.organizationLimit.create({
       data: {
