@@ -7,6 +7,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { db } from '@/lib/db';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
+import { EXACT_GRANT_ONLY_ACTIONS } from '@/lib/abac/capabilities';
+import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
+import { organizationAdminRouter } from '@/server/routers/organization-admin';
 import { ALL_ACTIONS } from '@/lib/abac/policies';
 import { requireProcurementBranch } from '@/lib/pharmacy/procurement-authorization';
 import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
@@ -31,9 +34,18 @@ async function fixture(run: (tx: ScopedDb, ctx: TRPCContext) => Promise<void>) {
         await tx.$queryRaw`SELECT set_config('app.is_platform_admin', 'true', true)`;
         await tx.$executeRaw`INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"createdAt","updatedAt") VALUES (${org},${org},${org},${org},'ACTIVE','SHARED','PHARMACY',now(),now())`;
         await tx.$queryRaw`SELECT set_config('app.is_platform_admin', 'false', true)`;
-        await tx.organizationDepartment.create({ data: { key: 'Pharmacy', name: 'Pharmacy' } });
+        await tx.organizationDepartment.create({ data: { key: 'PHARMACY', name: 'PHARMACY' } });
         const role = await tx.organizationRole.create({
           data: { key: 'owner', name: 'Owner', isSystem: true },
+        });
+        await tx.organizationRolePermission.createMany({
+          data: roleTemplatesForVertical('PHARMACY')
+            .find((r) => r.key === 'owner-operator')!
+            .capabilities.map((capability) => ({
+              organizationRoleId: role.id,
+              capability,
+              effect: 'ALLOW' as const,
+            })),
         });
         await tx.pharmacyBranch.create({
           data: {
@@ -50,7 +62,7 @@ async function fixture(run: (tx: ScopedDb, ctx: TRPCContext) => Promise<void>) {
             id: `${org}_owner`,
             name: 'Owner',
             email: `${org}@example.test`,
-            department: 'Pharmacy',
+            department: 'PHARMACY',
             title: 'Owner',
             organizationRoleId: role.id,
           },
@@ -137,13 +149,13 @@ describe.skipIf(!url || !ownerUrl)('procurement authorization with real PostgreS
   afterAll(async () => db.$disconnect());
   beforeEach(async () => clearRateLimit(`pharmacy:solo-owner-pin:${org}:${org}_owner`));
 
-  it('grants every capability to a system owner and tenant admin; automatically assigns current and future branches', async () =>
+  it('grants owner capabilities and requires exact sensitive grants for admins; assigns current and future branches', async () =>
     fixture(async (tx, ctx) => {
       const actorId = ctx.session!.user.id;
       for (const action of ALL_ACTIONS)
         expect(
           await can(
-            { id: actorId, role: 'EMPLOYEE', status: 'ACTIVE', department: 'Pharmacy' },
+            { id: actorId, role: 'EMPLOYEE', status: 'ACTIVE', department: 'PHARMACY' },
             action,
             undefined,
             { db: tx }
@@ -173,14 +185,70 @@ describe.skipIf(!url || !ownerUrl)('procurement authorization with real PostgreS
       for (const action of ALL_ACTIONS)
         expect(
           await can(
-            { id: actorId, role: 'ADMIN', status: 'ACTIVE', department: 'Pharmacy' },
+            { id: actorId, role: 'ADMIN', status: 'ACTIVE', department: 'PHARMACY' },
             action,
             undefined,
             { db: tx }
           )
-        ).toBe(true);
+        ).toBe(!EXACT_GRANT_ONLY_ACTIONS.has(action));
       await requireProcurementBranch(tx, org, actorId, `${org}_branch`);
     }));
+
+  it('revokes automatic owner branches on demotion through updateMember', async () =>
+    fixture(async (tx, ctx) => {
+      const actorId = ctx.session!.user.id;
+      // A separate administrator performs the demotion.
+      await tx.user.create({
+        data: {
+          id: `${org}_admin`,
+          name: 'Admin',
+          email: `${org}_admin@example.test`,
+          role: 'ADMIN',
+          department: 'PHARMACY',
+          title: 'Admin',
+        },
+      });
+      ctx.session!.user.id = `${org}_admin`;
+      ctx.session!.user.role = 'ADMIN';
+      await organizationAdminRouter.createCaller(ctx).updateMember({
+        id: actorId,
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationRoleId: null,
+        title: 'Buyer',
+        department: 'PHARMACY',
+      });
+      expect(
+        await tx.pharmacyBranchAssignment.count({ where: { userId: actorId, active: true } })
+      ).toBe(0);
+      await expect(
+        requireProcurementBranch(tx, org, actorId, `${org}_branch`)
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }));
+
+  it.each(['ADMIN', 'EMPLOYEE'] as const)(
+    'creates a %s owner with explicit branch selections without duplicate assignments',
+    async (role) =>
+      fixture(async (tx, ctx) => {
+        await tx.user.update({ where: { id: ctx.session!.user.id }, data: { role: 'ADMIN' } });
+        ctx.session!.user.role = 'ADMIN';
+        ctx.entitlements.seatLimit = 10;
+        const ownerRole = await tx.organizationRole.findFirstOrThrow({ where: { key: 'owner' } });
+        const member = await organizationAdminRouter.createCaller(ctx).createMember({
+          name: 'New owner',
+          email: `${org}_new@example.test`,
+          password: 'Temporary-123456',
+          title: 'Owner',
+          role,
+          department: 'PHARMACY',
+          organizationRoleId: ownerRole.id,
+          branchIds: [`${org}_branch`],
+        });
+        expect(
+          await tx.pharmacyBranchAssignment.count({ where: { userId: member.id, active: true } })
+        ).toBe(1);
+      })
+  );
 
   it('allows sole owner self approval with a fresh PIN and atomically records audit and policy', async () =>
     fixture(async (tx, ctx) => {
@@ -235,7 +303,7 @@ describe.skipIf(!url || !ownerUrl)('procurement authorization with real PostgreS
           data: {
             name: 'Second',
             email: `second_${org}@example.test`,
-            department: 'Pharmacy',
+            department: 'PHARMACY',
             title: 'Buyer',
             organizationRoleId: role.id,
           },
@@ -345,7 +413,7 @@ describe.skipIf(!url || !ownerUrl)('procurement authorization with real PostgreS
         data: {
           name: 'Other branch staff',
           email: `elsewhere_${org}@example.test`,
-          department: 'Pharmacy',
+          department: 'PHARMACY',
           title: 'Staff',
         },
       });
@@ -386,7 +454,7 @@ describe.skipIf(!url || !ownerUrl)('procurement authorization with real PostgreS
       });
       expect(
         await can(
-          { id: ctx.session!.user.id, role: 'EMPLOYEE', status: 'ACTIVE', department: 'Pharmacy' },
+          { id: ctx.session!.user.id, role: 'EMPLOYEE', status: 'ACTIVE', department: 'PHARMACY' },
           'pharmacy:procurement',
           undefined,
           { db: tx }

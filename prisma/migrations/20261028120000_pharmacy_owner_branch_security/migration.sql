@@ -5,6 +5,18 @@ SELECT set_config('app.is_platform_admin', 'true', true);
 CREATE OR REPLACE FUNCTION pharmacy_assign_owner_branches() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
+  -- Deterministic pba_ ids mark assignments provisioned by this migration.
+  -- Revoke only automatic grants, retaining independently assigned branch access.
+  UPDATE pharmacy_branch_assignments a SET active = false, "updatedAt" = CURRENT_TIMESTAMP
+  WHERE a."organizationId" = NEW."organizationId"
+    AND a.id = 'pba_' || md5(a."organizationId" || ':' || a."branchId" || ':' || a."userId")
+    AND NOT EXISTS (
+      SELECT 1 FROM users u LEFT JOIN organization_roles r
+        ON r.id = u."organizationRoleId" AND r."organizationId" = u."organizationId"
+      WHERE u.id = a."userId" AND u."organizationId" = a."organizationId"
+        AND u.status IN ('ACTIVE', 'ON_LEAVE')
+        AND (u.role = 'ADMIN' OR (r."isSystem" AND r.key IN ('owner', 'owner-operator')))
+    );
   INSERT INTO pharmacy_branch_assignments
     (id, "organizationId", "branchId", "userId", active, "updatedAt")
   SELECT 'pba_' || md5(u."organizationId" || ':' || b.id || ':' || u.id),

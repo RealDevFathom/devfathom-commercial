@@ -10,7 +10,7 @@
  *   if (!(await can(subject, 'resignation:review', { type: 'Resignation', ... })))
  *     throw new TRPCError({ code: 'FORBIDDEN' });
  */
-import { capabilityMatches } from './capabilities';
+import { capabilityMatches, EXACT_GRANT_ONLY_ACTIONS } from './capabilities';
 import type { AuthzDb } from '@/lib/authz';
 import { POLICIES, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
@@ -58,9 +58,10 @@ async function customDecision(
   );
   if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
   if (
-    user.role === 'ADMIN' ||
-    (user.organizationRole?.isSystem &&
-      ['owner', 'owner-operator'].includes(user.organizationRole.key))
+    !EXACT_GRANT_ONLY_ACTIONS.has(action) &&
+    (user.role === 'ADMIN' ||
+      (user.organizationRole?.isSystem &&
+        ['owner', 'owner-operator'].includes(user.organizationRole.key)))
   )
     return true;
   if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;

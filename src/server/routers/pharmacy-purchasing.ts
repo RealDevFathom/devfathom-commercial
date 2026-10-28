@@ -95,6 +95,38 @@ import type { TRPCContext } from '../trpc';
  */
 
 const bps = z.number().int().min(0).max(10_000);
+/** Resolve all linked branch boundaries before reading or changing an order. */
+async function orderBranch(
+  ctx: TRPCContext,
+  order: { branchId?: string | null; requisitionId?: string | null; quoteId?: string | null },
+  db = ctx.db
+) {
+  const branches = new Set<string>();
+  if (order.branchId) branches.add(order.branchId);
+  if (order.requisitionId) {
+    const requisition = await db.pharmacyRequisition.findFirst({
+      where: { id: order.requisitionId },
+    });
+    if (!requisition) throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
+    if (requisition.branchId) branches.add(requisition.branchId);
+  }
+  if (order.quoteId) {
+    const quote = await db.pharmacyQuote.findFirst({
+      where: { id: order.quoteId },
+      include: { requisition: true },
+    });
+    if (!quote) throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
+    if (order.requisitionId && quote.requisitionId !== order.requisitionId)
+      throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
+    if (quote.requisition?.branchId) branches.add(quote.requisition.branchId);
+  }
+  if (branches.size > 1)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Purchase order branches must match.' });
+  const branch = [...branches][0] ?? null;
+  await assertProcurementBranch(ctx, branch, db);
+  return branch;
+}
+
 const branchId = z.string().trim().min(1).max(128);
 
 function domainError(error: unknown): never {
@@ -725,10 +757,12 @@ const purchasingRouter = router({
           otherChargesMinor: input.otherChargesMinor,
         });
 
+        const resolvedBranch = await orderBranch(ctx, input);
         const { lines, ...purchaseOrder } = input;
         return await ctx.db.pharmacyPurchaseOrder.create({
           data: {
             ...purchaseOrder,
+            branchId: resolvedBranch,
             createdByUserId: ctx.session.user.id,
             lines: {
               create: lines.map((line, index) => ({
@@ -756,11 +790,15 @@ const purchasingRouter = router({
           where: { id: input.purchaseOrderId },
         });
         if (!order) throw new PharmacyPurchasingError('NOT_FOUND');
-        await assertProcurementBranch(ctx, order.branchId);
+        const resolvedBranch = await orderBranch(ctx, order);
         assertPurchaseOrderTransition(order.status, 'SUBMITTED');
         return await ctx.db.pharmacyPurchaseOrder.update({
           where: { id: order.id },
-          data: { status: 'SUBMITTED', submittedAt: new Date() },
+          data: {
+            status: 'SUBMITTED',
+            submittedAt: new Date(),
+            branchId: resolvedBranch,
+          },
         });
       } catch (error) {
         domainError(error);
@@ -799,7 +837,14 @@ const purchasingRouter = router({
             include: { requisition: true },
           });
           if (!order) throw new PharmacyPurchasingError('NOT_FOUND');
-          await assertProcurementBranch(ctx, order.branchId, txDb(tx));
+          const resolvedBranch = await orderBranch(ctx, order, txDb(tx));
+          if (resolvedBranch !== (order.branchId ?? null)) {
+            await tx.pharmacyPurchaseOrder.update({
+              where: { id: order.id },
+              data: { branchId: resolvedBranch },
+            });
+            order.branchId = resolvedBranch;
+          }
 
           const toStatus = input.decision === 'APPROVED' ? 'APPROVED' : 'DRAFT';
           assertPurchaseOrderTransition(order.status, toStatus);
@@ -874,7 +919,7 @@ const purchasingRouter = router({
           where: { id: input.purchaseOrderId },
         });
         if (!order) throw new PharmacyPurchasingError('NOT_FOUND');
-        await assertProcurementBranch(ctx, order.branchId);
+        const resolvedBranch = await orderBranch(ctx, order);
         assertPurchaseOrderTransition(order.status, 'SENT');
         // PUR-01 again: the supplier must still be orderable at the moment it is sent.
         assertOrderableSupplier(
@@ -886,7 +931,7 @@ const purchasingRouter = router({
         );
         return await ctx.db.pharmacyPurchaseOrder.update({
           where: { id: order.id },
-          data: { status: 'SENT', sentAt: new Date() },
+          data: { status: 'SENT', sentAt: new Date(), branchId: resolvedBranch },
         });
       } catch (error) {
         domainError(error);
@@ -903,7 +948,7 @@ const purchasingRouter = router({
           include: { lines: { orderBy: { lineNumber: 'asc' } } },
         });
         if (!order) throw new PharmacyPurchasingError('NOT_FOUND');
-        await assertProcurementBranch(ctx, order.branchId);
+        await orderBranch(ctx, order);
         const costed = landedCost({
           lines: order.lines.map((line) => ({
             orderedPacks: line.orderedPacks,
@@ -1052,8 +1097,8 @@ const purchasingRouter = router({
             where: { id: input.purchaseOrderId, supplierId: input.supplierId },
           });
           if (!order) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-          await assertProcurementBranch(ctx, order.branchId);
-          if (order.branchId && order.branchId !== input.branchId)
+          const resolvedBranch = await orderBranch(ctx, order);
+          if (resolvedBranch && resolvedBranch !== input.branchId)
             throw new PharmacyReceivingError('CROSS_BRANCH_REFERENCE');
         }
 

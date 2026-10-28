@@ -642,6 +642,7 @@ export const organizationAdminRouter = router({
         }
         if (branchIds.length > 0) {
           await tx.pharmacyBranchAssignment.createMany({
+            skipDuplicates: true,
             data: branchIds.map((branchId) => ({
               organizationId: id,
               branchId,

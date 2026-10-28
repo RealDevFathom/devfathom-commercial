@@ -1,4 +1,5 @@
 import 'server-only';
+import { createHash } from 'node:crypto';
 
 import { TRPCError } from '@trpc/server';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -63,7 +64,13 @@ export async function requireProcurementBranch(
         where: {
           organizationId_branchId_userId: { organizationId, branchId: branch.id, userId: actorId },
         },
-        create: { organizationId, branchId: branch.id, userId: actorId, active: true },
+        create: {
+          id: `pba_${createHash('md5').update(`${organizationId}:${branch.id}:${actorId}`).digest('hex')}`,
+          organizationId,
+          branchId: branch.id,
+          userId: actorId,
+          active: true,
+        },
         update: { active: true },
       });
     return;

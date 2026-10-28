@@ -129,6 +129,7 @@ beforeEach(() => {
   db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment' });
   db.user.findUnique.mockResolvedValue({
     organizationId: 'org_a',
+    role: 'EMPLOYEE',
     status: 'ACTIVE',
     organizationRole: { permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }] },
     permissionOverrides: [],
@@ -302,6 +303,39 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
     expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
   });
 
+  it.each(['requisition', 'quote'] as const)(
+    'persists the branch derived from a linked %s',
+    async (source) => {
+      resolvableCatalog();
+      orderableSupplier();
+      db.pharmacyRequisition.findFirst.mockResolvedValue({ branchId: 'branch_b' });
+      db.pharmacyQuote.findFirst.mockResolvedValue({ requisition: { branchId: 'branch_b' } });
+      await caller().createPurchaseOrder({
+        reference: 'PO-1',
+        supplierId: 'supplier_a',
+        lines: [ORDER_LINE],
+        ...(source === 'requisition' ? { requisitionId: 'req_a' } : { quoteId: 'quote_a' }),
+      });
+      expect(db.pharmacyPurchaseOrder.create.mock.calls[0]![0].data.branchId).toBe('branch_b');
+    }
+  );
+
+  it('refuses an explicit branch conflicting with a linked requisition', async () => {
+    resolvableCatalog();
+    orderableSupplier();
+    db.pharmacyRequisition.findFirst.mockResolvedValue({ branchId: 'branch_b' });
+    await expect(
+      caller().createPurchaseOrder({
+        reference: 'PO-1',
+        supplierId: 'supplier_a',
+        branchId: 'branch_a',
+        requisitionId: 'req_a',
+        lines: [ORDER_LINE],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+  });
+
   it('creates the order and mirrors packs into integer canonical units', async () => {
     resolvableCatalog();
     orderableSupplier();
@@ -332,6 +366,62 @@ describe('PUR-02 approval', () => {
   beforeEach(() => {
     orderableSupplier();
   });
+
+  it.each(['APPROVED', 'REJECTED'] as const)(
+    'checks linked branch scope for %s on a branchless order',
+    async (decision) => {
+      db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+        id: 'po_a',
+        status: 'SUBMITTED',
+        createdByUserId: 'maker',
+        branchId: null,
+        requisitionId: 'req_a',
+        quoteId: 'quote_a',
+      });
+      db.pharmacyRequisition.findFirst.mockResolvedValue({ branchId: 'branch_b' });
+      db.pharmacyQuote.findFirst.mockResolvedValue({
+        requisitionId: 'req_a',
+        requisition: { branchId: 'branch_b' },
+      });
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      await expect(
+        caller().approvePurchaseOrder({ purchaseOrderId: 'po_a', decision })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.pharmacyPurchaseOrderApproval.create).not.toHaveBeenCalled();
+      expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects inconsistent linked branches', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      status: 'SUBMITTED',
+      branchId: 'branch_a',
+      quoteId: 'quote_a',
+    });
+    db.pharmacyQuote.findFirst.mockResolvedValue({ requisition: { branchId: 'branch_b' } });
+    await expect(
+      caller().approvePurchaseOrder({ purchaseOrderId: 'po_a', decision: 'APPROVED' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyPurchaseOrderApproval.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['submitPurchaseOrder', 'sendPurchaseOrder'] as const)(
+    'checks linked scope during %s',
+    async (method) => {
+      db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+        id: 'po_a',
+        branchId: null,
+        quoteId: 'quote_a',
+      });
+      db.pharmacyQuote.findFirst.mockResolvedValue({ requisition: { branchId: 'branch_b' } });
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      await expect(caller()[method]({ purchaseOrderId: 'po_a' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
+    }
+  );
 
   it('refuses approval by the person who drafted the order', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({

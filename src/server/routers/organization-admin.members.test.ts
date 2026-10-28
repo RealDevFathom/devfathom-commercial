@@ -236,6 +236,7 @@ describe('organization member creation', () => {
       select: { id: true },
     });
     expect(mocks.assignmentCreateMany).toHaveBeenCalledWith({
+      skipDuplicates: true,
       data: [
         { organizationId: 'org_a', branchId: 'branch_clifton', userId: 'user_new', active: true },
         { organizationId: 'org_a', branchId: 'branch_dha', userId: 'user_new', active: true },

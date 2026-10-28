@@ -10,6 +10,8 @@ import { ALL_ACTIONS, POLICIES, type Action } from './policies';
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 
 function authorizationDb(options: {
+  role?: string;
+  ownerKey?: string;
   overrides?: Permission[];
   rolePermissions?: Permission[];
   throws?: boolean;
@@ -19,9 +21,15 @@ function authorizationDb(options: {
       findUnique: options.throws
         ? vi.fn().mockRejectedValue(new Error('database unavailable'))
         : vi.fn().mockResolvedValue({
-            organizationRole: options.rolePermissions
-              ? { permissions: options.rolePermissions }
-              : null,
+            role: options.role ?? 'EMPLOYEE',
+            organizationRole:
+              options.rolePermissions || options.ownerKey
+                ? {
+                    key: options.ownerKey ?? 'custom',
+                    isSystem: !!options.ownerKey,
+                    permissions: options.rolePermissions ?? [],
+                  }
+                : null,
             permissionOverrides: options.overrides ?? [],
           }),
     },
@@ -106,6 +114,58 @@ describe('opt-in pharmacy Owner / Operator access', () => {
             }),
           })
         ).resolves.toBe(false);
+      }
+    }
+  );
+
+  it.each(['pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review'] as const)(
+    'requires an exact admin grant for %s',
+    async (action) => {
+      await expect(
+        can(proprietor, action, undefined, { db: authorizationDb({ role: 'ADMIN' }) })
+      ).resolves.toBe(false);
+      const rolePermissions: Permission[] = [{ capability: action, effect: 'ALLOW' }];
+      await expect(
+        can(proprietor, action, undefined, {
+          db: authorizationDb({ role: 'ADMIN', rolePermissions }),
+        })
+      ).resolves.toBe(true);
+      await expect(
+        can(proprietor, action, undefined, {
+          db: authorizationDb({
+            role: 'ADMIN',
+            rolePermissions,
+            overrides: [{ capability: '*', effect: 'DENY' }],
+          }),
+        })
+      ).resolves.toBe(false);
+    }
+  );
+
+  it.each(['owner', 'owner-operator'])(
+    'requires exact sensitive grants for the system %s',
+    async (ownerKey) => {
+      for (const action of [
+        'pharmacy:dispense',
+        'pharmacy:safety',
+        'pharmacy:catalogue-review',
+      ] as const) {
+        await expect(
+          can(employee, action, undefined, {
+            db: authorizationDb({
+              ownerKey,
+              rolePermissions: [{ capability: 'pharmacy:*', effect: 'ALLOW' }],
+            }),
+          })
+        ).resolves.toBe(false);
+        await expect(
+          can(employee, action, undefined, {
+            db: authorizationDb({
+              ownerKey,
+              rolePermissions: [{ capability: action, effect: 'ALLOW' }],
+            }),
+          })
+        ).resolves.toBe(true);
       }
     }
   );
