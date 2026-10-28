@@ -25,7 +25,8 @@ export async function soloOwnerEligible(
   scope: { organizationId: string; branchId?: string | null; actorId: string }
 ) {
   const rows = await db.$queryRaw<Array<{ allowed: boolean }>>`
-    SELECT pharmacy_solo_owner_eligible(${scope.organizationId}, ${scope.branchId ?? null}, ${scope.actorId}) AS allowed`;
+    SELECT pharmacy_solo_owner_eligible(${scope.organizationId}, ${scope.branchId ?? null}, ${scope.actorId})
+      AND EXISTS (SELECT 1 FROM organizations WHERE id=${scope.organizationId} AND "pharmacyOperatingMode"='SOLO') AS allowed`;
   return rows?.[0]?.allowed === true;
 }
 
@@ -43,7 +44,8 @@ export async function verifySoloOwnerPin(
   // The database guard repeats eligibility when the document changes.
   if (options.requireSoloEligibility !== false) {
     const eligible = await db.$queryRaw<Array<{ allowed: boolean }>>`
-      SELECT pharmacy_solo_owner_eligible(${organizationId}, ${branchId}, ${actorId}) AS allowed`;
+      SELECT pharmacy_solo_owner_eligible(${organizationId}, ${branchId}, ${actorId})
+        AND EXISTS (SELECT 1 FROM organizations WHERE id=${organizationId} AND "pharmacyOperatingMode"='SOLO') AS allowed`;
     if (!eligible?.[0]?.allowed) return false;
   }
   // Failed attempts must survive rollback of the purchasing request. This
@@ -108,6 +110,7 @@ export async function authorizeSoloApproval(
         policy: SOLO_APPROVAL_POLICY,
         reauthentication: 'PIN',
         operatingMode: 'SOLO',
+        activeStaffCount: 1,
       },
     },
   });

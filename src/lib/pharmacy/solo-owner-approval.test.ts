@@ -47,6 +47,7 @@ function fixture(solo = true) {
         ? [{ userId: 'owner' }]
         : [{ allowed: solo }]
     ),
+    organization: { findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: 'SOLO' })) },
     user: { findFirst: vi.fn(async () => actor) },
     restaurantOperatorCredential: {
       findFirst: vi.fn(async () => ({

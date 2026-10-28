@@ -46,7 +46,10 @@ const input = {
 function fixture(returnedUnits: number, priorRefunds: number[] = []) {
   let payloadHash = '';
   const db = {
+    organization: { findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: 'STAFFED' })) },
+    auditLog: { create: vi.fn(async () => ({ id: 'approval-audit' })) },
     user: {
+      findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager' } })),
       findUnique: vi.fn(async () => ({
         id: 'actor-1',
         role: 'EMPLOYEE',
@@ -77,7 +80,7 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
         type: 'CASH',
         amountMinor: 1000,
         refunds: [],
-        sale: { customerId: null },
+        sale: { customerId: null, createdByUserId: 'cashier-maker' },
       }),
     },
     pharmacySale: {

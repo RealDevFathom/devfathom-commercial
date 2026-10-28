@@ -1,3 +1,4 @@
+import { enforceOperatingMode } from './operating-mode';
 import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
@@ -28,7 +29,28 @@ export async function authorizeMakerChecker(
   }
 ): Promise<{ policy: string } | { blocked: string; pinRejected?: true }> {
   const self = input.makerIds.includes(input.actorId);
-  if (!self && !input.requirePin) return { policy: 'PUR-02:SEGREGATION_OF_DUTIES' };
+  if (!self && !input.requirePin) {
+    try {
+      await enforceOperatingMode(
+        db,
+        {
+          organizationId: input.organizationId,
+          actorId: input.actorId,
+          branchId: input.branchId ?? null,
+        },
+        {
+          kind: 'PURCHASE',
+          makerIds: input.makerIds,
+          targetType: input.targetType,
+          targetId: input.targetId,
+          pin: input.pin?.pin,
+        }
+      );
+      return { policy: 'PUR-02:SEGREGATION_OF_DUTIES' };
+    } catch {
+      return { blocked: 'SELF_APPROVAL' };
+    }
+  }
   const blocked = { blocked: 'SELF_APPROVAL' };
   const scope = { ...input, branchId: input.branchId ?? null };
   if (!input.pin) return blocked;
@@ -57,7 +79,7 @@ export async function authorizeMakerChecker(
     ))
       ? { policy: SOLO_OWNER_POLICY }
       : { ...blocked, pinRejected: true };
-  return (await verifySoloOwnerPin(db, scope, input.pin.pin))
+  return (await verifySoloOwnerPin(db, scope, input.pin.pin, { requireSoloEligibility: false }))
     ? { policy: 'PUR-02:SEGREGATION_OF_DUTIES' }
     : blocked;
 }

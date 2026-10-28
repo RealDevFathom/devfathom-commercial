@@ -91,6 +91,7 @@ describe('opening stock solo sign-off', () => {
   const scope = { organizationId: 'org', branchId: 'branch', actorId: 'owner' };
   function fixture() {
     return {
+      organization: { findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: 'SOLO' })) },
       $queryRaw: vi.fn(async () => []),
       pharmacyOpeningSession: {
         findFirst: vi.fn(async () => ({

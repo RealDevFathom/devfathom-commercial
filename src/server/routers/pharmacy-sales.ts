@@ -1,10 +1,7 @@
+import { enforceOperatingMode } from '@/lib/pharmacy/operating-mode';
 import { isPharmacyOwner } from '@/lib/pharmacy/owner';
 import { assertBranchAssignment } from '@/lib/pharmacy/branch-assignment';
-import {
-  authorizeSoloApproval,
-  pinProfileBelongsToActor,
-  soloOwnerEligible,
-} from '@/lib/pharmacy/solo-approval';
+import { authorizeSoloApproval, pinProfileBelongsToActor } from '@/lib/pharmacy/solo-approval';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
@@ -853,6 +850,10 @@ export const pharmacySalesRouter = router({
       z
         .object({
           branchId,
+          approvalPin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
           originalTenderId: z.string().min(1),
           deviceId: z.string().min(1),
           businessDate: z.date(),
@@ -877,9 +878,18 @@ export const pharmacySalesRouter = router({
               organizationId: scope.organizationId,
               branchId: scope.branchId,
             },
-            select: { type: true },
+            select: { type: true, sale: { select: { createdByUserId: true } } },
           });
-          if (tender?.type !== 'CREDIT') return refundPharmacyTender(db, scope, input);
+          await enforceOperatingMode(db, scope, {
+            kind: 'REFUND',
+            makerIds: [tender?.sale.createdByUserId ?? scope.actorId],
+            targetType: 'PharmacyTender',
+            targetId: input.originalTenderId,
+            pin: input.approvalPin,
+          });
+          const { approvalPin: _approvalPin, ...refundInput } = input;
+          void _approvalPin;
+          if (tender?.type !== 'CREDIT') return refundPharmacyTender(db, scope, refundInput);
           await khataScope(ctx, input.branchId);
           await bindKhataBranch(db, scope);
           const charge = await db.pharmacyKhataEvent.findFirst({
@@ -894,7 +904,7 @@ export const pharmacySalesRouter = router({
               Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${charge.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
             );
           }
-          const result = await refundPharmacyTender(db, scope, input);
+          const result = await refundPharmacyTender(db, scope, refundInput);
           if (charge && 'refundId' in result && typeof result.refundId === 'string') {
             const id = `khata-refund:${result.refundId}`;
             const prior = await db.pharmacyKhataEvent.findFirst({
@@ -976,6 +986,10 @@ export const pharmacySalesRouter = router({
           saleUnit,
           quantity: z.number().int().positive(),
           canonicalUnitsPerSaleUnit: z.number().int().positive(),
+          approvalPin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
           discountKind: z.enum(['DISCOUNT', 'PROMOTION', 'COMPLIMENTARY']).optional(),
           discountMinor: z.number().int().nonnegative().optional(),
           approvedByUserId: z.string().min(1).optional(),
@@ -1022,6 +1036,26 @@ export const pharmacySalesRouter = router({
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
+          if (input.override || (input.discountMinor ?? 0) > 0) {
+            const sale = await db.pharmacySale.findFirst({
+              where: {
+                id: input.saleId,
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+              },
+            });
+            const approval = await enforceOperatingMode(db, scope, {
+              kind: input.override ? 'OVERRIDE' : 'DISCOUNT',
+              makerIds: [sale?.createdByUserId ?? scope.actorId],
+              targetType: 'PharmacySale',
+              targetId: input.saleId,
+              pin: input.approvalPin,
+              checkerId: input.approvedByUserId,
+            });
+            input.approvedByUserId = approval.actorId;
+            input.approvalPolicy = approval.policy;
+          }
+
           if (!medicine?.controlled) {
             // #518: a controlled authorization, and the prescription reference inside it, means
             // nothing on this line, so it is refused instead of being silently ignored.
@@ -1029,23 +1063,31 @@ export const pharmacySalesRouter = router({
               throw new PharmacyRxReferenceError('CONTROLLED_AUTHORIZATION_NOT_APPLICABLE');
             // #518: an Rx/restricted line needs the exact dispense grant (DENY wins).
             if (medicine) await assertRxSaleAllowed(db, scope, [medicine]);
-            const { prescription, ...lineInput } = input;
+            if (medicine && (medicine.rx || medicine.restricted || input.prescription)) {
+              const sale = await db.pharmacySale.findFirst({
+                where: {
+                  id: input.saleId,
+                  organizationId: scope.organizationId,
+                  branchId: scope.branchId,
+                },
+              });
+              await enforceOperatingMode(db, scope, {
+                kind: 'RX',
+                makerIds: [sale?.createdByUserId ?? scope.actorId],
+                targetType: 'PrescriptionSale',
+                targetId: input.saleId,
+                pin: input.prescription?.approvalPin ?? input.approvalPin,
+              });
+            }
+
+            const { prescription, approvalPin: _linePin, ...lineInput } = input;
+            void _linePin;
             if (!prescription) return addSaleLine(db, scope, lineInput);
             // Recording a prescription fill is a pharmacist's act, whatever the medicine.
             if (
               !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
                 db,
               }))
-            )
-              throw new PharmacyRxReferenceError('PRESCRIPTION_NEEDS_PHARMACIST');
-            if (
-              (await soloOwnerEligible(db, scope)) &&
-              !(await authorizeSoloApproval(
-                db,
-                scope,
-                { type: 'PrescriptionSale', id: input.saleId },
-                prescription.approvalPin
-              ))
             )
               throw new PharmacyRxReferenceError('PRESCRIPTION_NEEDS_PHARMACIST');
             const units = input.quantity * input.canonicalUnitsPerSaleUnit;
@@ -1144,6 +1186,25 @@ export const pharmacySalesRouter = router({
               where: { id: credential.id },
               data: clearLockout(),
             });
+          if (!solo) {
+            const sale = await db.pharmacySale.findFirst({
+              where: {
+                id: input.saleId,
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+              },
+            });
+            await enforceOperatingMode(
+              db,
+              { ...scope, actorId: pharmacist.id },
+              {
+                kind: 'RX',
+                makerIds: [scope.actorId, sale?.createdByUserId ?? scope.actorId],
+                targetType: 'ControlledPrescriptionSale',
+                targetId: input.saleId,
+              }
+            );
+          }
           const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);
           if (authorization.refSerial && !refEntry) {
             return { blocked: 'That earlier register serial is not on this branch.' };
@@ -1416,6 +1477,10 @@ export const pharmacySalesRouter = router({
       z
         .object({
           branchId,
+          approvalPin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
           saleLineId: z.string().min(1),
           controlledWitness: z
             .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
@@ -1436,7 +1501,26 @@ export const pharmacySalesRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           try {
-            return await returnSaleLine(txDb(tx), await scopeFor(ctx, input.branchId), input);
+            const db = txDb(tx),
+              scope = await scopeFor(ctx, input.branchId);
+            const line = await db.pharmacySaleLine.findFirst({
+              where: {
+                id: input.saleLineId,
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+              },
+              include: { sale: true },
+            });
+            await enforceOperatingMode(db, scope, {
+              kind: 'RETURN',
+              makerIds: [line?.sale.createdByUserId ?? scope.actorId],
+              targetType: 'PharmacySaleLine',
+              targetId: input.saleLineId,
+              pin: input.approvalPin,
+            });
+            const { approvalPin: _approvalPin, ...returnInput } = input;
+            void _approvalPin;
+            return await returnSaleLine(db, scope, returnInput);
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
               return { blocked: error.message };

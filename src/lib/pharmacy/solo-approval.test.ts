@@ -68,6 +68,7 @@ describe('solo owner PIN reauthentication', () => {
           policy: SOLO_APPROVAL_POLICY,
           reauthentication: 'PIN',
           activeStaffCount: 1,
+          operatingMode: 'SOLO',
         },
       }),
     });

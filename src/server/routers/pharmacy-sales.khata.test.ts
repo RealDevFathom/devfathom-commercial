@@ -42,7 +42,10 @@ const input = {
 };
 function fixture() {
   const db = {
+    organization: { findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: 'STAFFED' })) },
+    auditLog: { create: vi.fn(async () => ({ id: 'approval-audit' })) },
     user: {
+      findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager' } })),
       findUnique: vi.fn(async () => ({
         id: 'owner-a',
         role: 'EMPLOYEE',
@@ -59,7 +62,11 @@ function fixture() {
         where.id.in.map((id) => ({ id }))
       ),
     },
-    pharmacyTender: { findFirst: vi.fn().mockResolvedValue({ type: 'CREDIT' }) },
+    pharmacyTender: {
+      findFirst: vi
+        .fn()
+        .mockResolvedValue({ type: 'CREDIT', sale: { createdByUserId: 'cashier-maker' } }),
+    },
     pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
     pharmacyFamilyAccount: {
       findMany: vi.fn().mockResolvedValue([
@@ -250,13 +257,11 @@ it.each(['CASH', 'CARD', 'KHATA'] as const)(
     const f = fixture();
     f.db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
     await expect(
-      f
-        .caller()
-        .tenderOutcome({
-          ...input,
-          type,
-          ...(type === 'KHATA' ? {} : { familyAccountId: undefined }),
-        })
+      f.caller().tenderOutcome({
+        ...input,
+        type,
+        ...(type === 'KHATA' ? {} : { familyAccountId: undefined }),
+      })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(readPharmacyTenderOutcome).not.toHaveBeenCalled();
   }

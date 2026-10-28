@@ -115,6 +115,7 @@ async function fixture(kind: 'ADMIN' | 'owner' | 'provisioned' = 'ADMIN') {
   return withTenantDb(
     org,
     async (db) => {
+      await db.organization.update({ where: { id: org }, data: { pharmacyOperatingMode: 'SOLO' } });
       if (kind !== 'provisioned')
         await db.organizationDepartment.create({
           data: { organizationId: org, key: 'PHARMACY', name: 'PHARMACY' },
@@ -902,6 +903,9 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
 
   it('retains actual second-approver purchase approval with multiple active staff', async () => {
     const f = await fixture();
+    await owner.query(`UPDATE organizations SET "pharmacyOperatingMode"='STAFFED' WHERE id=$1`, [
+      f.org,
+    ]);
     const po = await order(f);
     const second = await withTenantDb(
       f.org,

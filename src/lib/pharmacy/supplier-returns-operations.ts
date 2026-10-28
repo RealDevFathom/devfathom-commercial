@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { authorizeSoloApproval } from './solo-approval';
+import { enforceOperatingMode } from './operating-mode';
 /**
  * PH-PUR / PUR-06 — purchase returns and expiry claims against the append-only
  * ledger, with debit notes, supplier credit and settlement allocation.
@@ -31,7 +31,6 @@ import {
   assertClaimable,
   assertPurchaseReturnTransition,
   assertReturnWindowOpen,
-  assertSettlementSegregation,
   creditPosition,
   expectedCreditForLines,
   PharmacySupplierReturnError,
@@ -439,20 +438,16 @@ export async function allocateSupplierCredit(
   }
   if (note.status === 'CANCELLED') throw new PharmacySupplierReturnError('INVALID_TRANSITION');
   const allocationId = randomUUID();
-  if (note.purchaseReturn.submittedByUserId === scope.actorId) {
-    if (
-      !(await authorizeSoloApproval(
-        db,
-        scope,
-        { type: 'PharmacySupplierCreditAllocation', id: allocationId },
-        input.pin
-      ))
-    ) {
-      assertSettlementSegregation({
-        submittedByUserId: scope.actorId,
-        allocatedByUserId: scope.actorId,
-      });
-    }
+  try {
+    await enforceOperatingMode(db, scope, {
+      kind: 'PURCHASE',
+      makerIds: [note.purchaseReturn.submittedByUserId],
+      targetType: 'PharmacySupplierCreditAllocation',
+      targetId: allocationId,
+      pin: input.pin,
+    });
+  } catch {
+    throw new PharmacySupplierReturnError('SELF_APPROVAL');
   }
 
   const creditAllocated = await db.pharmacySupplierCreditAllocation.aggregate({

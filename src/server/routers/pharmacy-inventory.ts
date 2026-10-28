@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { authorizeSoloApproval } from '@/lib/pharmacy/solo-approval';
+import { enforceOperatingMode } from '@/lib/pharmacy/operating-mode';
 /**
  * PH-INV / INV-01..04 — the minimal procedures behind the `pharmacy-inventory`
  * entitlement (module-catalog).
@@ -526,15 +526,20 @@ async function receiveTransferWithVariance(
     if (step.varianceUnits === 0) continue;
     const evidence = input.variance!;
     const custodyId = randomUUID();
-    if (
-      evidence.witnessId === scope.actorId &&
-      !(await authorizeSoloApproval(
+    try {
+      await enforceOperatingMode(
         db,
         { ...scope, branchId: transfer.fromBranchId },
-        { type: 'PharmacyCustodyRecord', id: custodyId },
-        evidence.pin
-      ))
-    ) {
+        {
+          kind: 'ADJUSTMENT',
+          makerIds: [scope.actorId],
+          checkerId: evidence.witnessId,
+          targetType: 'PharmacyCustodyRecord',
+          targetId: custodyId,
+          pin: evidence.pin,
+        }
+      );
+    } catch {
       throw new PharmacyInventoryError('COAUTH_REQUIRED');
     }
     const movement = await db.pharmacyStockMovement.create({

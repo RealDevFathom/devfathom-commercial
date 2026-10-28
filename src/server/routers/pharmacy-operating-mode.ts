@@ -1,7 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
-import { authorizeSoloApproval, verifySoloOwnerPin } from '@/lib/pharmacy/solo-approval';
+import { verifySoloOwnerPin } from '@/lib/pharmacy/solo-approval';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { TRPCContext } from '../trpc';
 import { protectedProcedure, router } from '../trpc';
@@ -42,24 +42,22 @@ export const pharmacyOperatingModeRouter = router({
       const actorId = ctx.session.user.id;
       return ctx.db.$transaction(async (transaction) => {
         const tx = transaction as ScopedDb;
+        await tx.$queryRaw`SELECT id FROM organizations WHERE id=${organizationId} FOR NO KEY UPDATE`;
+        await requireOwner({ ...ctx, db: tx });
         const organization = await tx.organization.findFirstOrThrow({
           where: { id: organizationId, vertical: 'PHARMACY' },
           select: { pharmacyOperatingMode: true },
         });
-        if (organization.pharmacyOperatingMode === input.mode) return organization;
-        // Entering SOLO cannot use SOLO eligibility before the mode is changed.
-        // Reuse #683's credential verifier; leaving SOLO uses the full audited helper.
-        const valid =
-          organization.pharmacyOperatingMode === 'SOLO'
-            ? await authorizeSoloApproval(
-                tx,
-                { organizationId, actorId, branchId: null },
-                { type: 'OrganizationOperatingMode', id: organizationId },
-                input.pin
-              )
-            : await verifySoloOwnerPin(tx, { organizationId, actorId, branchId: null }, input.pin, {
-                requireSoloEligibility: false,
-              });
+        // Mode changes require the owner's credential even when staff were added
+        // while SOLO was selected. Document self-approval still requires #683 eligibility.
+        const valid = await verifySoloOwnerPin(
+          tx,
+          { organizationId, actorId, branchId: null },
+          input.pin,
+          {
+            requireSoloEligibility: false,
+          }
+        );
         if (!valid)
           throw new TRPCError({
             code: 'UNAUTHORIZED',

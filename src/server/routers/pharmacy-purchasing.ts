@@ -1,5 +1,6 @@
+import { enforceOperatingMode } from '@/lib/pharmacy/operating-mode';
 import { randomUUID } from 'node:crypto';
-import { authorizeSoloApproval, SOLO_APPROVAL_POLICY } from '@/lib/pharmacy/solo-approval';
+import { SOLO_APPROVAL_POLICY } from '@/lib/pharmacy/solo-approval';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -39,7 +40,6 @@ import {
   type SupplierCreditDetail,
 } from '@/lib/pharmacy/purchasing-console';
 import {
-  assertApprovalAllowed,
   assertPurchaseOrderTransition,
   assertRequisitionTransition,
   assertSupplierEligible,
@@ -798,30 +798,26 @@ const purchasingRouter = router({
 
           const toStatus = input.decision === 'APPROVED' ? 'APPROVED' : 'DRAFT';
           assertPurchaseOrderTransition(order.status, toStatus);
-          const makerIds = [order.createdByUserId, order.requisition?.requestedByUserId];
+          const makerIds = [order.createdByUserId, order.requisition?.requestedByUserId ?? null];
           const selfApproval = makerIds.includes(ctx.session.user.id);
-          if (selfApproval) {
-            if (
-              !input.pin ||
-              !(await authorizeSoloApproval(
-                txDb(tx),
-                {
-                  organizationId: ctx.entitlements!.organizationId,
-                  branchId: order.branchId,
-                  actorId: ctx.session.user.id,
-                },
-                { type: 'PharmacyPurchaseOrder', id: order.id },
-                input.pin
-              ))
-            ) {
-              throw new PharmacyPurchasingError('SELF_APPROVAL');
-            }
-          } else {
-            assertApprovalAllowed({
-              approverId: ctx.session.user.id,
-              requestedById: order.requisition?.requestedByUserId ?? null,
-              createdById: order.createdByUserId,
-            });
+          try {
+            await enforceOperatingMode(
+              txDb(tx),
+              {
+                organizationId: ctx.entitlements!.organizationId,
+                branchId: order.branchId,
+                actorId: ctx.session.user.id,
+              },
+              {
+                kind: 'PURCHASE',
+                makerIds,
+                targetType: 'PharmacyPurchaseOrder',
+                targetId: order.id,
+                pin: input.pin,
+              }
+            );
+          } catch {
+            throw new PharmacyPurchasingError('SELF_APPROVAL');
           }
           if (input.decision === 'APPROVED') {
             // Authorization can lapse between drafting and approval.
@@ -1042,19 +1038,15 @@ const purchasingRouter = router({
           );
           const receiptId = randomUUID();
           if (input.directPurchase) {
-            if (input.directPurchase.approvedByUserId === scope.actorId) {
-              if (
-                !input.directPurchase.pin ||
-                !(await authorizeSoloApproval(
-                  txDb(db),
-                  scope,
-                  { type: 'PharmacyGoodsReceipt', id: receiptId },
-                  input.directPurchase.pin
-                ))
-              ) {
-                throw new PharmacyReceivingError('SELF_APPROVAL');
-              }
-            } else {
+            await enforceOperatingMode(db, scope, {
+              kind: 'PURCHASE',
+              makerIds: [scope.actorId],
+              checkerId: input.directPurchase.approvedByUserId,
+              targetType: 'PharmacyGoodsReceipt',
+              targetId: receiptId,
+              pin: input.directPurchase.pin,
+            });
+            if (input.directPurchase.approvedByUserId !== scope.actorId) {
               assertDirectPurchaseAuthorized({
                 bypassReason: input.directPurchase.reason,
                 bypassApprovedByUserId: input.directPurchase.approvedByUserId,

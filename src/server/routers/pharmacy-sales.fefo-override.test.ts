@@ -54,7 +54,11 @@ function fixture() {
   const transaction = vi.fn(async (callback: (tx: unknown) => unknown) => callback(db));
   const lotRead = vi.fn();
   const db = {
+    $queryRaw: vi.fn(async () => []),
+    organization: { findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: 'STAFFED' })) },
+    auditLog: { create: vi.fn(async () => ({ id: 'approval-audit' })) },
     user: {
+      findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager' } })),
       findUnique: vi.fn(async () => ({
         id: 'actor-1',
         role: 'EMPLOYEE',
@@ -71,6 +75,7 @@ function fixture() {
       ),
     },
     pharmacyInventoryLot: { findMany: lotRead },
+    pharmacySale: { findFirst: vi.fn(async () => ({ createdByUserId: 'cashier-maker' })) },
     // Integrated tip: addLine first reads the medicine to route controlled lines; these are not.
     medicine: { findFirst: vi.fn(async () => null) },
   };

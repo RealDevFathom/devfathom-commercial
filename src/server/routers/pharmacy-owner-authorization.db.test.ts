@@ -58,6 +58,7 @@ beforeAll(async () => {
     await db.organization.create({
       data: {
         id: org,
+        pharmacyOperatingMode: 'SOLO',
         slug: org,
         legalName: 'Owner security test',
         displayName: 'Owner security test',
@@ -392,6 +393,10 @@ suite('owner provisioning, branch access and PIN maker/checker in Postgres', () 
   });
   it('requires another approver when a second active staff member exists', async () => {
     await tenant(org, async (db) => {
+      await db.organization.update({
+        where: { id: org },
+        data: { pharmacyOperatingMode: 'STAFFED' },
+      });
       const pharmacist = await db.organizationRole.create({
         data: {
           key: 'pharmacist',

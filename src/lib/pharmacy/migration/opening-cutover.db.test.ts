@@ -40,8 +40,8 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const ORG_A = `org_wha1188_a_${suffix}`;
 const ORG_B = `org_wha1188_b_${suffix}`;
-const ACTOR = 'user_migration_lead';
-const SIGNER = 'user_pharmacist_incharge';
+const ACTOR = `user_migration_lead_${suffix}`;
+const SIGNER = `user_inventory_manager_${suffix}`;
 
 /** Fixed instants, so no case depends on the wall clock. */
 const OPENING_AT = new Date('2026-09-01T04:00:00.000Z');
@@ -248,9 +248,29 @@ beforeAll(async () => {
         legalName: `PH-MIG ${index === 0 ? 'A' : 'B'}`,
         displayName: `PH-MIG ${index === 0 ? 'A' : 'B'}`,
         status: 'ACTIVE' as const,
+        vertical: 'PHARMACY' as const,
         deploymentMode: 'SHARED' as const,
       })),
       skipDuplicates: true,
+    });
+  });
+  await inOrg(ORG_A, async (db) => {
+    await db.organizationDepartment.create({ data: { key: 'pharmacy', name: 'Pharmacy' } });
+    const role = await db.organizationRole.create({
+      data: { key: 'manager', name: 'Inventory manager' },
+    });
+    await db.organizationRolePermission.create({
+      data: { organizationRoleId: role.id, capability: 'pharmacy:inventory' },
+    });
+    await db.user.create({
+      data: {
+        id: SIGNER,
+        name: 'Independent inventory checker',
+        email: `${suffix}-checker@example.invalid`,
+        department: 'pharmacy',
+        title: 'Manager',
+        organizationRoleId: role.id,
+      },
     });
   });
 }, 120_000);

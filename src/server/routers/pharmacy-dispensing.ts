@@ -1,5 +1,6 @@
+import { enforceOperatingMode } from '@/lib/pharmacy/operating-mode';
 import { requirePharmacyReadBranch } from '../pharmacy-branch-access';
-import { authorizeSoloApproval, soloOwnerEligible } from '@/lib/pharmacy/solo-approval';
+import { soloOwnerEligible } from '@/lib/pharmacy/solo-approval';
 import { z } from 'zod';
 import { capabilityProcedure, router, type TRPCContext } from '../trpc';
 import { TRPCError } from '@trpc/server';
@@ -128,24 +129,22 @@ export const pharmacyDispensingRouter = router({
           where: { id: item.saleLineId },
           select: { branchId: true },
         });
-        if (
-          item.requestedByUserId === ctx.session!.user.id &&
-          !(await authorizeSoloApproval(
-            db as typeof ctx.db,
-            {
-              organizationId: ctx.entitlements.organizationId,
-              branchId: line?.branchId ?? null,
-              actorId: ctx.session!.user.id,
-            },
-            { type: 'PharmacyReviewItem', id: item.id },
-            input.pin
-          ))
-        ) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'A second pharmacist or a solo owner PIN is required.',
-          });
-        }
+        if (!line) throw new TRPCError({ code: 'NOT_FOUND' });
+        await enforceOperatingMode(
+          db as typeof ctx.db,
+          {
+            organizationId: ctx.entitlements.organizationId,
+            branchId: line.branchId,
+            actorId: ctx.session!.user.id,
+          },
+          {
+            kind: 'RX',
+            makerIds: [item.requestedByUserId],
+            targetType: 'PharmacyReviewItem',
+            targetId: item.id,
+            pin: input.pin,
+          }
+        );
         const decision = {
           reviewItemId: input.reviewItemId,
           kind: input.kind,

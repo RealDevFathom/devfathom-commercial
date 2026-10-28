@@ -46,6 +46,7 @@ beforeAll(async () => {
     )
   );
   await inOrg(async (db) => {
+    await db.organization.update({ where: { id: org }, data: { pharmacyOperatingMode: 'SOLO' } });
     await db.organizationDepartment.create({ data: { key: 'COUNTER', name: 'Counter' } });
     const ownerRole = await db.organizationRole.create({
       data: {
@@ -452,7 +453,33 @@ describe.sequential('shared pharmacy branch and owner security (forced RLS)', ()
     const { pharmacyPurchasingRouter } = await import('./pharmacy-purchasing');
     const { clearRateLimit } = await import('@/lib/rate-limit');
     await clearRateLimit(`pharmacy:solo-owner-pin:${org}:${owner}`);
-    await inOrg(async (db) => {
+    const createOrder = (db: ScopedDb, supplierId: string, reference: string) =>
+      db.pharmacyPurchaseOrder.create({
+        data: {
+          reference,
+          branchId: branchA,
+          supplierId,
+          createdByUserId: owner,
+          status: 'SUBMITTED',
+        },
+      });
+    const api = (db: ScopedDb, actorId: string) =>
+      pharmacyPurchasingRouter.createCaller({
+        db,
+        entitlements: { organizationId: org, enabledModules: ['pharmacy-procurement'] },
+        session: {
+          user: {
+            id: actorId,
+            role: actorId === owner ? 'ADMIN' : 'EMPLOYEE',
+            organizationId: org,
+            status: 'ACTIVE',
+          },
+        },
+        organization: { id: org, vertical: 'PHARMACY' },
+        support: null,
+        requestMeta: { ip: null, userAgent: null },
+      } as never);
+    const supplierId = await inOrg(async (db) => {
       const supplier = await db.pharmacySupplier.create({
         data: {
           name: 'Licensed supplier',
@@ -470,34 +497,8 @@ describe.sequential('shared pharmacy branch and owner security (forced RLS)', ()
           },
         },
       });
-      const createOrder = (reference: string) =>
-        db.pharmacyPurchaseOrder.create({
-          data: {
-            reference,
-            branchId: branchA,
-            supplierId: supplier.id,
-            createdByUserId: owner,
-            status: 'SUBMITTED',
-          },
-        });
-      const api = (actorId: string) =>
-        pharmacyPurchasingRouter.createCaller({
-          db,
-          entitlements: { organizationId: org, enabledModules: ['pharmacy-procurement'] },
-          session: {
-            user: {
-              id: actorId,
-              role: actorId === owner ? 'ADMIN' : 'EMPLOYEE',
-              organizationId: org,
-              status: 'ACTIVE',
-            },
-          },
-          organization: { id: org, vertical: 'PHARMACY' },
-          support: null,
-          requestMeta: { ip: null, userAgent: null },
-        } as never);
-      const solo = await createOrder('SOLO');
-      const approved = await api(owner).approvePurchaseOrder({
+      const solo = await createOrder(db, supplier.id, 'SOLO');
+      const approved = await api(db, owner).approvePurchaseOrder({
         purchaseOrderId: solo.id,
         decision: 'APPROVED',
         pin: '493826',
@@ -516,10 +517,14 @@ describe.sequential('shared pharmacy branch and owner security (forced RLS)', ()
           where: { targetId: solo.id, action: 'PHARMACY:SOLO_OWNER_PIN' },
         })
       ).toBe(1);
+      return supplier.id;
+    });
+    // Committed SOLO approval remains historical evidence when staffing/mode changes.
+    await inOrg(async (db) => {
       await db.user.update({ where: { id: cashier }, data: { status: 'ACTIVE' } });
-      const multi = await createOrder('MULTI');
+      const multi = await createOrder(db, supplierId, 'MULTI');
       await expect(
-        api(owner).approvePurchaseOrder({
+        api(db, owner).approvePurchaseOrder({
           purchaseOrderId: multi.id,
           decision: 'APPROVED',
           pin: '493826',
@@ -536,7 +541,14 @@ describe.sequential('shared pharmacy branch and owner security (forced RLS)', ()
           effect: 'ALLOW',
         },
       });
-      await api(cashier).approvePurchaseOrder({ purchaseOrderId: multi.id, decision: 'APPROVED' });
+      await db.organization.update({
+        where: { id: org },
+        data: { pharmacyOperatingMode: 'STAFFED' },
+      });
+      await api(db, cashier).approvePurchaseOrder({
+        purchaseOrderId: multi.id,
+        decision: 'APPROVED',
+      });
       expect(
         (
           await db.pharmacyPurchaseOrderApproval.findFirstOrThrow({

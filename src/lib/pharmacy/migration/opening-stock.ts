@@ -1,4 +1,4 @@
-import { authorizeSoloApproval } from '../solo-approval';
+import { enforceOperatingMode } from '../operating-mode';
 import { can } from '@/lib/abac';
 import 'server-only';
 
@@ -608,26 +608,25 @@ export async function signOffOpeningSession(
   pin?: string
 ) {
   const session = await requireSession(db, scope, sessionId, ['POSTED']);
-  if (session.createdByActorId === scope.actorId) {
-    // Opening sessions have no maker/checker posting trigger: hold the same
-    // tenant membership lock while checking PIN proof and writing sign-off.
-    await db.$queryRaw`SELECT id FROM organizations WHERE id=${scope.organizationId} FOR NO KEY UPDATE`;
-    if (
-      !(await can(
-        { id: scope.actorId, role: 'EMPLOYEE', organizationId: scope.organizationId },
-        'pharmacy:inventory',
-        undefined,
-        { db }
-      )) ||
-      !(await authorizeSoloApproval(
-        db,
-        scope,
-        { type: 'PharmacyOpeningSession', id: session.id },
-        pin
-      ))
-    ) {
-      throw new PharmacyOpeningError('COAUTH_REQUIRED');
-    }
+  if (
+    !(await can(
+      { id: scope.actorId, role: 'EMPLOYEE', organizationId: scope.organizationId },
+      'pharmacy:inventory',
+      undefined,
+      { db }
+    ))
+  )
+    throw new PharmacyOpeningError('COAUTH_REQUIRED');
+  try {
+    await enforceOperatingMode(db, scope, {
+      kind: 'ADJUSTMENT',
+      makerIds: [session.createdByActorId],
+      targetType: 'PharmacyOpeningSession',
+      targetId: session.id,
+      pin,
+    });
+  } catch {
+    throw new PharmacyOpeningError('COAUTH_REQUIRED');
   }
 
   const report = await openingVarianceReport(db, scope, sessionId);

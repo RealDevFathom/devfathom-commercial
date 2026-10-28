@@ -22,7 +22,11 @@ const model = () => ({
 });
 function fixture() {
   const db = {
+    $queryRaw: vi.fn(async () => []),
+    organization: { findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: 'STAFFED' })) },
+    auditLog: model(),
     user: {
+      findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager' } })),
       findUnique: vi.fn().mockResolvedValue({
         id: 'actor',
         status: 'ACTIVE',
@@ -54,7 +58,11 @@ function fixture() {
     requestMeta: { ip: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
-  return { db, caller: pharmacySupplierLinksRouter.createCaller(ctx) };
+  const transactionalDb = Object.assign(db, {
+    $transaction: vi.fn(async (run: (tx: typeof db) => unknown) => run(db)),
+  });
+  ctx.db = transactionalDb as never;
+  return { db: transactionalDb, caller: pharmacySupplierLinksRouter.createCaller(ctx) };
 }
 let f: ReturnType<typeof fixture>;
 beforeEach(() => {

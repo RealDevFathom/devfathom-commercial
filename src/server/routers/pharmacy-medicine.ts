@@ -212,6 +212,11 @@ export const pharmacyMedicineRouter = router({
           branchId: z.string().min(1).optional(),
           mrpMinor: z.number().int().min(0).max(2147483647),
           sellingPriceMinor: z.number().int().min(0).max(2147483647).nullable(),
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
+          approvedByUserId: z.string().min(1).optional(),
           effectiveFrom: z.date(),
         })
         .strict()

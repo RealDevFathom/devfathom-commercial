@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { authorizeSoloApproval } from './solo-approval';
+import { enforceOperatingMode } from './operating-mode';
 /** PH-INV INV-06/07/08(manual)/09 workflows layered on the append-only ledger. */
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -125,12 +125,17 @@ export async function approveCount(
   });
   if (!count) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
   if (count.status === 'APPROVED') throw new PharmacyInventoryError('INVALID_STATE');
-  if (
-    count.status === 'AWAITING_COAUTH' &&
-    count.createdById === scope.actorId &&
-    !(await authorizeSoloApproval(db, scope, { type: 'PharmacyInventoryCount', id: count.id }, pin))
-  )
+  try {
+    await enforceOperatingMode(db, scope, {
+      kind: 'ADJUSTMENT',
+      makerIds: [count.createdById],
+      targetType: 'PharmacyInventoryCount',
+      targetId: count.id,
+      pin,
+    });
+  } catch {
     throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  }
   for (const [index, line] of count.lines.entries()) {
     const variance = line.varianceUnits ?? 0;
     if (!variance) continue;
@@ -173,16 +178,18 @@ export async function writeOff(
 ) {
   assertPositive(input.units);
   const custodyId = randomUUID();
-  if (
-    input.witnessId === scope.actorId &&
-    !(await authorizeSoloApproval(
-      db,
-      scope,
-      { type: 'PharmacyCustodyRecord', id: custodyId },
-      input.pin
-    ))
-  )
+  try {
+    await enforceOperatingMode(db, scope, {
+      kind: 'ADJUSTMENT',
+      makerIds: [scope.actorId],
+      checkerId: input.witnessId,
+      targetType: 'PharmacyCustodyRecord',
+      targetId: custodyId,
+      pin: input.pin,
+    });
+  } catch {
     throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  }
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: {
       id: input.inventoryLotId,
@@ -358,12 +365,18 @@ export async function approveTransfer(
     where: { id: transferId, organizationId: scope.organizationId, fromBranchId: scope.branchId },
   });
   if (!transfer) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
-  if (
-    transfer.status !== 'ALLOCATED' ||
-    (transfer.allocatedById === scope.actorId &&
-      !(await authorizeSoloApproval(db, scope, { type: 'PharmacyTransfer', id: transfer.id }, pin)))
-  )
+  if (transfer.status !== 'ALLOCATED') throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  try {
+    await enforceOperatingMode(db, scope, {
+      kind: 'ADJUSTMENT',
+      makerIds: [transfer.allocatedById],
+      targetType: 'PharmacyTransfer',
+      targetId: transfer.id,
+      pin,
+    });
+  } catch {
     throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  }
   return db.pharmacyInterbranchTransfer.update({
     where: { id: transfer.id },
     data: { status: 'APPROVED', approvedById: scope.actorId },

@@ -20,6 +20,11 @@ vi.mock('@/server/audit', () => ({
   recordTrpcAudit: vi.fn(),
 }));
 
+vi.mock('@/lib/pharmacy/solo-approval', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/solo-approval')>()),
+  verifySoloOwnerPin: vi.fn(async (_db, _scope, pin) => pin === '4729'),
+}));
+
 import { pharmacyPurchasingRouter } from './pharmacy-purchasing';
 import type { TRPCContext } from '../trpc';
 import { moduleForProcedure } from '@/lib/module-catalog';
@@ -43,6 +48,11 @@ function model() {
 
 function makeDb() {
   const db = {
+    organization: {
+      ...model(),
+      findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: 'STAFFED' })),
+    },
+    auditLog: model(),
     medicine: model(),
     packLevel: model(),
     pharmacySupplier: model(),
@@ -127,6 +137,7 @@ const RETURN_LINE = {
 beforeEach(() => {
   db = makeDb();
   mocks.can.mockReset().mockResolvedValue(true);
+  db.user.findFirst.mockResolvedValue({ organizationRole: { key: 'manager' } });
   db.user.findUnique.mockResolvedValue({
     status: 'ACTIVE',
     organizationRole: {
@@ -1110,7 +1121,11 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   it('records a direct purchase with its bypass reason and approver (PUR-05)', async () => {
     await caller('user_counter').createGoodsReceipt({
       ...withoutOrder(),
-      directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_manager' },
+      directPurchase: {
+        reason: 'Emergency insulin.',
+        approvedByUserId: 'user_manager',
+        pin: '4729',
+      },
     });
     expect(db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data).toMatchObject({
       purchaseOrderId: null,
