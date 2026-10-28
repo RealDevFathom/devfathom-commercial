@@ -110,10 +110,10 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     }
   );
 
-  it('requires an exact dispense grant for admins and lets a wildcard DENY win', async () => {
+  it('retains administrator dispense access and lets a wildcard DENY win', async () => {
     await expect(
       can(proprietor, 'pharmacy:dispense', undefined, { db: authorizationDb({}) })
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
 
     const exactAllow = [{ capability: 'pharmacy:dispense', effect: 'ALLOW' as const }];
     await expect(
@@ -265,7 +265,7 @@ describe('custom ABAC decisions', () => {
     expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
-      expect(POLICIES[action]).toHaveLength(0);
+      expect(POLICIES[action]).toHaveLength(action.startsWith('pharmacy:') ? 1 : 0);
       await expect(can(employee, action, undefined, { db: authorizationDb({}) })).resolves.toBe(
         false
       );
@@ -344,4 +344,31 @@ describe('hospitality capability namespace', () => {
       ).resolves.toBe(false);
     }
   });
+});
+
+describe('full pharmacy owner and administrator compatibility', () => {
+  const pharmacyActions = ALL_ACTIONS.filter((action) => action.startsWith('pharmacy:'));
+  it.each(pharmacyActions)('retains ADMIN %s while respecting explicit denial', async (action) => {
+    const admin = { ...employee, role: 'ADMIN' };
+    await expect(can(admin, action, undefined, { db: authorizationDb({}) })).resolves.toBe(true);
+    await expect(
+      can(admin, action, undefined, {
+        db: authorizationDb({ overrides: [{ capability: 'pharmacy:*', effect: 'DENY' }] }),
+      })
+    ).resolves.toBe(false);
+  });
+  it.each(pharmacyActions)(
+    'grants owner template %s without broadening ordinary staff',
+    async (action) => {
+      const rolePermissions = roleTemplatesForVertical('PHARMACY')
+        .find((role) => role.key === 'owner')!
+        .capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }));
+      await expect(
+        can(employee, action, undefined, { db: authorizationDb({ rolePermissions }) })
+      ).resolves.toBe(true);
+      await expect(can(employee, action, undefined, { db: authorizationDb({}) })).resolves.toBe(
+        false
+      );
+    }
+  );
 });

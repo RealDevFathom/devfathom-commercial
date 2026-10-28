@@ -1,0 +1,315 @@
+/** PV boundary and owner branch lifecycle against inherited local PostgreSQL. */
+import { randomUUID } from 'node:crypto';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { Client } from 'pg';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { TRPCContext } from '../trpc';
+
+// The successful solo audit is real and transactional. Suppress only the normal
+// asynchronous request audit so rollback-only fixtures never leak pending writes.
+vi.mock('@/server/audit', async (original) => ({
+  ...(await original<typeof import('@/server/audit')>()),
+  recordTrpcAudit: vi.fn(),
+}));
+
+const suite = process.env.DATABASE_URL ? describe : describe.skip;
+let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
+let router: typeof import('./pharmacy-reports').pharmacyReportsRouter;
+let hashPin: typeof import('@/lib/restaurant/operator-credentials').hashOperatorCredential;
+let seedDepartments: typeof import('@/lib/test-support/departments').seedDepartments;
+let pinHash: string;
+let testRole: string | null = null;
+const rollback = new Error('rollback-only security fixture');
+
+beforeAll(async () => {
+  ({ withTenantDb } = await import('@/lib/tenancy/scoped-db'));
+  ({ pharmacyReportsRouter: router } = await import('./pharmacy-reports'));
+  ({ hashOperatorCredential: hashPin } = await import('@/lib/restaurant/operator-credentials'));
+  ({ seedDepartments } = await import('@/lib/test-support/departments'));
+  pinHash = await hashPin('PIN', '1234');
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  try {
+    const [role] = (
+      await client.query('SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user')
+    ).rows;
+    if (role.rolsuper || role.rolbypassrls) {
+      testRole = `pv_qa_${randomUUID().replaceAll('-', '')}`;
+      await client.query(`CREATE ROLE "${testRole}" NOLOGIN NOSUPERUSER NOBYPASSRLS`);
+      await client.query(`GRANT USAGE ON SCHEMA public TO "${testRole}"`);
+      await client.query(
+        `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${testRole}"`
+      );
+      await client.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "${testRole}"`);
+    }
+  } finally {
+    await client.end();
+  }
+}, 60_000);
+
+afterAll(async () => {
+  if (!testRole) return;
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  try {
+    await client.query(`DROP OWNED BY "${testRole}"`);
+    await client.query(`DROP ROLE "${testRole}"`);
+  } finally {
+    await client.end();
+  }
+});
+
+async function fixture(
+  run: (f: {
+    db: ScopedDb;
+    org: string;
+    owner: string;
+    branch: string;
+    api: (
+      userId: string,
+      role?: 'ADMIN' | 'EMPLOYEE',
+      licensed?: boolean
+    ) => ReturnType<typeof router.createCaller>;
+  }) => Promise<void>
+) {
+  const org = `pv_security_${randomUUID().replaceAll('-', '')}`;
+  const owner = `${org}_owner`;
+  const branch = `${org}_branch`;
+  try {
+    await withTenantDb(
+      org,
+      async (db) => {
+        await db.organization.create({
+          data: {
+            id: org,
+            slug: org,
+            legalName: org,
+            displayName: org,
+            vertical: 'PHARMACY',
+            status: 'ACTIVE',
+          },
+        });
+        await seedDepartments(db, [org], ['LEADERSHIP']);
+        await db.user.create({
+          data: {
+            id: owner,
+            name: 'Owner',
+            email: `${owner}@example.test`,
+            role: 'ADMIN',
+            department: 'LEADERSHIP',
+            title: 'Owner',
+          },
+        });
+        await db.pharmacyBranch.create({
+          data: {
+            id: branch,
+            code: 'MAIN',
+            name: 'Main',
+            addressLine: 'Test',
+            city: 'Lahore',
+            provinceCode: 'PB',
+          },
+        });
+        const profile = await db.restaurantStaffProfile.create({
+          data: { userId: owner, displayName: 'Owner' },
+        });
+        await db.restaurantOperatorCredential.create({
+          data: { staffProfileId: profile.id, type: 'PIN', credentialHash: pinHash },
+        });
+        await db.$queryRaw`SELECT set_config('app.current_branch_id', ${branch}, true)`;
+        if (testRole) await db.$executeRawUnsafe(`SET LOCAL ROLE "${testRole}"`);
+        const [runtime] = await db.$queryRaw<
+          Array<{ rolsuper: boolean; rolbypassrls: boolean }>
+        >`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user`;
+        expect(runtime).toEqual({ rolsuper: false, rolbypassrls: false });
+        const api = (userId: string, role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN', licensed = true) =>
+          router.createCaller({
+            db,
+            entitlements: {
+              organizationId: org,
+              enabledModules: licensed ? ['pharmacy-reports'] : [],
+              modules: [],
+              limits: {},
+              activeSeats: 1,
+              seatLimit: 10,
+            },
+            session: {
+              expires: 'later',
+              user: { id: userId, role, status: 'ACTIVE', organizationId: org },
+            },
+            organization: { id: org, vertical: 'PHARMACY' },
+            support: null,
+            requestMeta: { ip: null, userAgent: null },
+            audit: { detail: {} },
+          } as unknown as TRPCContext);
+        await run({ db, org, owner, branch, api });
+        throw rollback;
+      },
+      { timeout: 60_000, skipDrain: true }
+    );
+  } catch (error) {
+    if (error !== rollback) throw error;
+  }
+}
+
+async function reviewable(db: ScopedDb, branchId: string, creator: string) {
+  return db.pharmacyPharmacovigilanceReport.create({
+    data: {
+      branchId,
+      createdByUserId: creator,
+      kind: 'ADVERSE_DRUG_REACTION',
+      occurredAt: new Date(),
+      assertedDescription: 'Human asserted report',
+      state: 'UNDER_REVIEW',
+    },
+  });
+}
+
+suite('PV security persistence and compatibility', () => {
+  it('auto-assigns admin owners on branch creation and late promotion, without assigning ordinary staff', async () => {
+    await fixture(async ({ db, org, owner, branch }) => {
+      expect(
+        await db.pharmacyBranchAssignment.findMany({ where: { userId: owner, active: true } })
+      ).toEqual([expect.objectContaining({ organizationId: org, branchId: branch })]);
+      const user = await db.user.create({
+        data: {
+          name: 'Staff',
+          email: `${org}@example.test`,
+          department: 'LEADERSHIP',
+          title: 'Staff',
+        },
+      });
+      expect(await db.pharmacyBranchAssignment.count({ where: { userId: user.id } })).toBe(0);
+      await db.user.update({ where: { id: user.id }, data: { role: 'ADMIN' } });
+      expect(
+        await db.pharmacyBranchAssignment.count({
+          where: { userId: user.id, branchId: branch, active: true },
+        })
+      ).toBe(1);
+      const next = await db.pharmacyBranch.create({
+        data: {
+          code: 'NEXT',
+          name: 'Next',
+          addressLine: 'Test',
+          city: 'Lahore',
+          provinceCode: 'PB',
+        },
+      });
+      expect(
+        await db.pharmacyBranchAssignment.count({ where: { branchId: next.id, active: true } })
+      ).toBe(2);
+      expect(
+        await db.pharmacyBranchAssignment.count({ where: { organizationId: { not: org } } })
+      ).toBe(0);
+    });
+  });
+
+  it('requires PIN for solo readiness and commits a matching audit without changing external submission state', async () => {
+    await fixture(async ({ db, owner, branch, api }) => {
+      const report = await reviewable(db, branch, owner);
+      const input = { id: report.id, branchId: branch, state: 'READY' as const };
+      await expect(api(owner).transitionPharmacovigilanceReport(input)).resolves.toHaveProperty(
+        'blocked'
+      );
+      expect(
+        (await db.pharmacyPharmacovigilanceReport.findUniqueOrThrow({ where: { id: report.id } }))
+          .state
+      ).toBe('UNDER_REVIEW');
+      await api(owner).transitionPharmacovigilanceReport({ ...input, pin: '1234' });
+      expect(
+        await db.pharmacyPharmacovigilanceReport.findUniqueOrThrow({ where: { id: report.id } })
+      ).toMatchObject({
+        state: 'READY',
+        externalSubmissionState: 'NOT_SUBMITTED',
+        reviewedByUserId: owner,
+      });
+      const audit = await db.auditLog.findFirstOrThrow({
+        where: { action: 'pv_solo_owner_approval', targetId: report.id },
+      });
+      expect(audit).toMatchObject({
+        actorId: owner,
+        input: '[skipped]',
+        metadata: {
+          policy: 'PV:SOLO_OWNER_PIN',
+          branchId: branch,
+          reauthenticatedAt: expect.any(String),
+        },
+      });
+      expect(JSON.stringify(audit)).not.toContain('1234');
+    });
+  });
+
+  it('persists five failed PIN attempts as a lockout and rejects the correct PIN while locked', async () => {
+    await fixture(async ({ db, owner, branch, api }) => {
+      const report = await reviewable(db, branch, owner);
+      const input = { id: report.id, branchId: branch, state: 'READY' as const, pin: '0000' };
+      for (let attempt = 0; attempt < 5; attempt++)
+        await expect(api(owner).transitionPharmacovigilanceReport(input)).resolves.toHaveProperty(
+          'blocked'
+        );
+      expect(await db.restaurantOperatorCredential.findFirstOrThrow()).toMatchObject({
+        failedAttempts: 0,
+        lockedUntil: expect.any(Date),
+      });
+      await expect(
+        api(owner).transitionPharmacovigilanceReport({ ...input, pin: '1234' })
+      ).resolves.toHaveProperty('blocked');
+      expect(
+        (await db.pharmacyPharmacovigilanceReport.findUniqueOrThrow({ where: { id: report.id } }))
+          .state
+      ).toBe('UNDER_REVIEW');
+      expect(await db.auditLog.count({ where: { action: 'pv_solo_owner_approval' } })).toBe(0);
+    });
+  });
+
+  it('blocks staffed owner self approval but allows an assigned safety reviewer without reports capability', async () => {
+    await fixture(async ({ db, owner, branch, api }) => {
+      const role = await db.organizationRole.create({
+        data: {
+          key: 'safety',
+          name: 'Safety',
+          permissions: { create: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }] },
+        },
+      });
+      const reviewer = await db.user.create({
+        data: {
+          name: 'Reviewer',
+          email: `${owner}_review@example.test`,
+          department: 'LEADERSHIP',
+          title: 'Reviewer',
+          organizationRoleId: role.id,
+        },
+      });
+      await db.pharmacyBranchAssignment.create({ data: { branchId: branch, userId: reviewer.id } });
+      const report = await reviewable(db, branch, owner);
+      const input = { id: report.id, branchId: branch, state: 'READY' as const };
+      await expect(
+        api(owner).transitionPharmacovigilanceReport({ ...input, pin: '1234' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await api(reviewer.id, 'EMPLOYEE').transitionPharmacovigilanceReport(input);
+      expect(
+        (await db.pharmacyPharmacovigilanceReport.findUniqueOrThrow({ where: { id: report.id } }))
+          .reviewedByUserId
+      ).toBe(reviewer.id);
+      const sibling = await db.pharmacyBranch.create({
+        data: {
+          code: 'SIBLING',
+          name: 'Sibling',
+          addressLine: 'Test',
+          city: 'Lahore',
+          provinceCode: 'PB',
+        },
+      });
+      const dates = { from: new Date('2020-01-01'), to: new Date('2099-01-01') };
+      await expect(
+        api(reviewer.id, 'EMPLOYEE').exportPharmacovigilanceDrap({ branchId: sibling.id, ...dates })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        api(owner, 'ADMIN', false).exportPharmacovigilanceDrap({ branchId: branch, ...dates })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(
+        (await api(owner).exportPharmacovigilanceDrap({ branchId: branch, ...dates })).reports
+      ).toHaveLength(1);
+    });
+  });
+});

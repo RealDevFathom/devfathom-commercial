@@ -11,6 +11,14 @@ import {
   validatePharmacyReplenishmentReportInput,
 } from '@/lib/pharmacy/replenishment-report';
 
+import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
+import {
+  clearLockout,
+  isLockedOut,
+  registerFailedAttempt,
+  verifyOperatorCredential,
+} from '@/lib/restaurant/operator-credentials';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { hasModule } from '@/lib/entitlements';
 import { can, subjectFromSession } from '@/lib/abac';
 import {
@@ -42,6 +50,7 @@ import {
 import { capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
+const safety = capabilityProcedure('pharmacy:safety');
 const widget = z
   .object({
     key: z.enum(PHARMACY_WIDGET_KEYS),
@@ -94,7 +103,12 @@ const transitions: Record<z.infer<typeof pvState>, readonly z.infer<typeof pvSta
 };
 
 async function requirePvBranch(ctx: TRPCContext, branchId: string) {
+  if (!hasModule(ctx.entitlements, 'pharmacy-reports'))
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy reports are not licensed.' });
   const organizationId = ctx.entitlements.organizationId;
+  const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, ctx.session!.user.id);
+  if (!assigned.includes(branchId))
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your pharmacy scope.' });
   const branch = await ctx.db.pharmacyBranch.findFirst({
     where: { id: branchId, organizationId, active: true },
   });
@@ -176,7 +190,7 @@ export const pharmacyReportsRouter = router({
       }
       return readPharmacyMarketingReport(ctx.db, ctx.entitlements.organizationId, scoped);
     }),
-  createPharmacovigilanceReport: reports
+  createPharmacovigilanceReport: safety
     .input(
       z
         .object({
@@ -222,27 +236,122 @@ export const pharmacyReportsRouter = router({
         data: { ...input, organizationId, createdByUserId: ctx.session.user.id },
       });
     }),
-  transitionPharmacovigilanceReport: reports
+  transitionPharmacovigilanceReport: safety
     .input(
-      z.object({ id: z.string().min(1), branchId: z.string().min(1), state: pvState }).strict()
+      z
+        .object({
+          id: z.string().min(1),
+          branchId: z.string().min(1),
+          state: pvState,
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
+        })
+        .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'pv_transition', skipInput: true };
       const organizationId = await requirePvBranch(ctx, input.branchId);
-      const report = await ctx.db.pharmacyPharmacovigilanceReport.findFirst({
-        where: { id: input.id, branchId: input.branchId, organizationId },
-      });
-      if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
-      if (!transitions[report.state].includes(input.state))
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Invalid report lifecycle transition.',
+      const actorId = ctx.session.user.id;
+      return ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        // Serialize readiness decisions and use the same organization lock as seat creation.
+        await db.$queryRaw`SELECT id FROM organizations WHERE id=${organizationId} FOR UPDATE`;
+        await db.$queryRaw`SELECT id FROM pharmacy_pharmacovigilance_reports WHERE id=${input.id} AND "organizationId"=${organizationId} AND "branchId"=${input.branchId} FOR UPDATE`;
+        const report = await db.pharmacyPharmacovigilanceReport.findFirst({
+          where: { id: input.id, branchId: input.branchId, organizationId },
         });
-      return ctx.db.pharmacyPharmacovigilanceReport.update({
-        where: { id: report.id },
-        data: { state: input.state, reviewedByUserId: ctx.session.user.id },
+        if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
+        if (!transitions[report.state].includes(input.state))
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Invalid report lifecycle transition.',
+          });
+        if (input.state === 'READY' && report.createdByUserId === actorId) {
+          // Solo is a tenant staffing fact, never inferred from approver availability.
+          const actor = await db.user.findFirst({
+            where: { id: actorId, organizationId, status: 'ACTIVE' },
+            select: { role: true, organizationRole: { select: { key: true } } },
+          });
+          const otherStaff = await db.user.count({
+            where: { organizationId, id: { not: actorId }, status: { in: ['ACTIVE', 'ON_LEAVE'] } },
+          });
+          if (
+            !actor ||
+            (actor.role !== 'ADMIN' &&
+              !['owner', 'owner-operator'].includes(actor.organizationRole?.key ?? '')) ||
+            otherStaff !== 0
+          )
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'A second approver must review this report.',
+            });
+          ctx.audit.detail.metadata = {
+            policy: 'PV:SOLO_OWNER_PIN',
+            reportId: report.id,
+            actorId,
+            reauthenticated: false,
+          };
+          if (!input.pin) return { blocked: 'Owner PIN reauthentication is required.' };
+          await db.$queryRaw`SELECT c.id FROM restaurant_operator_credentials c JOIN restaurant_staff_profiles s ON s.id=c."staffProfileId" AND s."organizationId"=c."organizationId" WHERE c."organizationId"=${organizationId} AND s."userId"=${actorId} AND c.type='PIN' AND c."revokedAt" IS NULL AND c."deviceId" IS NULL FOR UPDATE OF c`;
+          const credential = await db.restaurantOperatorCredential.findFirst({
+            where: {
+              organizationId,
+              type: 'PIN',
+              revokedAt: null,
+              deviceId: null,
+              staffProfile: { organizationId, userId: actorId, status: 'ACTIVE' },
+            },
+          });
+          const now = new Date();
+          if (!credential || isLockedOut(credential, now))
+            return { blocked: 'Owner PIN reauthentication is required.' };
+          if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
+            await db.restaurantOperatorCredential.update({
+              where: { id: credential.id },
+              data: registerFailedAttempt(credential, now),
+            });
+            // Return rather than throw: the request transaction must commit lockout strikes.
+            return { blocked: 'Owner PIN reauthentication is required.' };
+          }
+          await db.restaurantOperatorCredential.update({
+            where: { id: credential.id },
+            data: clearLockout(),
+          });
+          ctx.audit.detail.metadata = {
+            ...ctx.audit.detail.metadata,
+            reauthenticated: true,
+            reauthenticatedAt: now.toISOString(),
+          };
+          // A solo approval must fail closed if its durable evidence cannot be written.
+          await db.auditLog.create({
+            data: {
+              organizationId,
+              actorId,
+              actorType: 'USER',
+              source: 'TRPC',
+              category: 'PHARMACY_SAFETY',
+              operation: 'UPDATE',
+              action: 'pv_solo_owner_approval',
+              targetType: 'PharmacyPharmacovigilanceReport',
+              targetId: report.id,
+              input: '[skipped]',
+              metadata: {
+                policy: 'PV:SOLO_OWNER_PIN',
+                branchId: input.branchId,
+                reauthenticatedAt: now.toISOString(),
+              },
+            },
+          });
+        }
+        return db.pharmacyPharmacovigilanceReport.update({
+          where: { id: report.id },
+          data: { state: input.state, reviewedByUserId: actorId },
+        });
       });
     }),
-  recordPharmacovigilanceSubmission: reports
+  recordPharmacovigilanceSubmission: safety
     .input(
       z
         .object({
@@ -284,7 +393,7 @@ export const pharmacyReportsRouter = router({
         },
       });
     }),
-  exportPharmacovigilanceDrap: reports
+  exportPharmacovigilanceDrap: safety
     .input(
       z
         .object({ branchId: z.string().min(1), from: z.date(), to: z.date() })
