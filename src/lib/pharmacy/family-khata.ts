@@ -15,12 +15,32 @@ export class FamilyKhataError extends Error {
       | 'INVALID_AMOUNT'
       | 'PAYMENT_EXCEEDS_BALANCE'
       | 'OWNER_ACTION_REQUIRED'
+      | 'OVERRIDE_REASON_REQUIRED'
       | 'CREDIT_LIMIT_EXCEEDED'
       | 'ACCOUNT_NOT_FOUND'
   ) {
     super(reason);
   }
 }
+
+/**
+ * #313: why the signed-in approver may raise a family limit for an over-limit charge.
+ * `pharmacy:manage` is the persisted Owner (`pharmacy:*`) or Manager role grant;
+ * `tenant-admin` is the tenant ADMIN through `admin:access`.
+ */
+export type KhataApproverBasis = 'pharmacy:manage' | 'tenant-admin';
+
+/** The over-limit charge a limit decision approves, as written to the append-only audit. */
+export type KhataOverLimitApproval = {
+  saleId: string;
+  reason: string;
+  approverBasis: KhataApproverBasis | null;
+  chargeAmountMinor: number;
+  balanceBeforeMinor: number;
+  previousLimitMinor: number;
+  approvedLimitMinor: number;
+  amountOverLimitMinor: number;
+};
 
 export type KhataHistoryEntry = {
   kind: 'CHARGE' | 'PAYMENT' | 'DISHONOURED_CHEQUE';
@@ -223,6 +243,8 @@ export async function applyKhataLimitDecision(
     ownerAuthorizedByUserId?: string;
     ownerReauthenticatedAt?: Date;
     overrideLimitMinor?: number;
+    /** #313: set when the decision approves one charge past the limit; needs a reason. */
+    overLimitCharge?: KhataOverLimitApproval;
   }
 ) {
   const authorizedAt = new Date();
@@ -236,6 +258,12 @@ export async function applyKhataLimitDecision(
     authorizedAt.getTime() - reauthenticatedAt > 5 * 60_000
   )
     throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+  const overLimitCharge = input.overLimitCharge && {
+    ...input.overLimitCharge,
+    reason: input.overLimitCharge.reason.trim(),
+  };
+  if (overLimitCharge && !overLimitCharge.reason)
+    throw new FamilyKhataError('OVERRIDE_REASON_REQUIRED');
   const appliedLimitMinor = input.overrideLimitMinor ?? input.suggestion.suggestedLimitMinor;
   if (!Number.isSafeInteger(appliedLimitMinor) || appliedLimitMinor < 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
@@ -266,6 +294,7 @@ export async function applyKhataLimitDecision(
         ownerAuthorizedByUserId: input.ownerAuthorizedByUserId,
         ownerReauthenticatedAt: input.ownerReauthenticatedAt!.toISOString(),
         ownerAuthorizedAt: authorizedAt.toISOString(),
+        ...(overLimitCharge ? { overLimitCharge } : {}),
       },
       ownerActorId: scope.actorId,
     },
@@ -350,12 +379,22 @@ export async function readSaleKhataStatement(
   };
 }
 
-/** Caller holds the sale lock; family lock serializes competing counters. */
+/**
+ * Caller holds the sale lock; family lock serializes competing counters. Past the limit,
+ * the signed-in approver (an Owner, Manager or tenant ADMIN, decided by the caller from
+ * server evidence) raises the limit for this charge, with a reason, in the same transaction.
+ */
 export async function authorizeKhataCharge(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: { saleId: string; familyAccountId: string; amountMinor: number; ownerOverride?: boolean },
-  owner: { authorized: boolean; passwordAuthenticatedAt?: number }
+  input: {
+    saleId: string;
+    familyAccountId: string;
+    amountMinor: number;
+    ownerOverride?: boolean;
+    overrideReason?: string;
+  },
+  owner: { authorized: boolean; passwordAuthenticatedAt?: number; basis?: KhataApproverBasis }
 ) {
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
@@ -372,10 +411,21 @@ export async function authorizeKhataCharge(
     projected > 2147483647
   )
     throw new FamilyKhataError('INVALID_AMOUNT');
+  let overLimitApproval: (KhataOverLimitApproval & { decisionId: string }) | undefined;
   if (projected > account.creditLimitMinor) {
     if (!input.ownerOverride) throw new FamilyKhataError('CREDIT_LIMIT_EXCEEDED');
     const now = new Date();
-    await applyKhataLimitDecision(db, scope, {
+    const overLimitCharge: KhataOverLimitApproval = {
+      saleId: input.saleId,
+      reason: input.overrideReason ?? '',
+      approverBasis: owner.basis ?? null,
+      chargeAmountMinor: input.amountMinor,
+      balanceBeforeMinor: account.balanceMinor,
+      previousLimitMinor: account.creditLimitMinor,
+      approvedLimitMinor: projected,
+      amountOverLimitMinor: projected - account.creditLimitMinor,
+    };
+    const { decision } = await applyKhataLimitDecision(db, scope, {
       familyAccountId: account.id,
       suggestion: calculateKhataHealthSuggestion(
         await db.pharmacyKhataEvent.findMany({
@@ -396,7 +446,13 @@ export async function authorizeKhataCharge(
           ? undefined
           : new Date(owner.passwordAuthenticatedAt),
       overrideLimitMinor: projected,
+      overLimitCharge,
     });
+    overLimitApproval = {
+      ...overLimitCharge,
+      reason: overLimitCharge.reason.trim(),
+      decisionId: decision.id,
+    };
   }
-  return account;
+  return { ...account, overLimitApproval };
 }

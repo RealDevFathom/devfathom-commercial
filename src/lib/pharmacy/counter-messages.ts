@@ -69,6 +69,12 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   MOCK_PROVIDER_IN_RELEASE:
     'Card payments are not configured on this deployment. Take another tender.',
   REOPEN_REASON_REQUIRED: 'Reopening a closed drawer needs a recorded reason.',
+  // Family Khata over-limit approval (#313).
+  CREDIT_LIMIT_EXCEEDED:
+    'This charge is over the family credit limit. An owner or manager must approve it with a reason.',
+  OWNER_ACTION_REQUIRED:
+    'Only an owner, manager or administrator can approve a charge over the credit limit, after re-entering their password.',
+  OVERRIDE_REASON_REQUIRED: 'Enter a reason before approving a charge over the credit limit.',
 };
 
 /**

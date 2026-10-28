@@ -1,0 +1,78 @@
+name: Pharmacy application tests
+
+on:
+  pull_request:
+    branches: ['improve/**']
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pharmacy-tests-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pharmacy-tests:
+    if: contains(fromJSON('[644,646,647]'), github.event.pull_request.number)
+    name: Pharmacy application / DB
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # Disposable service; no credentials or real tenant data are used.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['127.0.0.1:55432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      CI: 'true'
+      NODE_ENV: test
+      TZ: UTC
+      NEXT_TELEMETRY_DISABLED: '1'
+      PHARMACY_PR_TARGET: ${{ github.event.pull_request.number }}
+      DATABASE_URL: postgresql://pharmacy_runtime@127.0.0.1:55432/pharmacy_pr_test
+      TEST_DATABASE_URL: postgresql://pharmacy_runtime@127.0.0.1:55432/pharmacy_pr_test
+      WHA1198_TEST_RUNTIME_DATABASE_URL: postgresql://pharmacy_runtime@127.0.0.1:55432/pharmacy_pr_test
+      PHARMACY_TEST_OWNER_DATABASE_URL: postgresql://pharmacy_owner@127.0.0.1:55432/pharmacy_pr_test
+      MIGRATION_DATABASE_URL: postgresql://pharmacy_owner@127.0.0.1:55432/pharmacy_pr_test
+      EXTENSION_ADMIN_DATABASE_URL: postgresql://postgres@127.0.0.1:55432/pharmacy_pr_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Test this immutable PR head, not a moving branch or synthetic merge.
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.10.0'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - name: Install locked dependencies without lifecycle scripts
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Create isolated roles and database
+        run: node scripts/ci/pharmacy-pr-tests.mjs bootstrap
+      - name: Prepare extensions on the disposable cluster
+        run: bun prisma/prepare-extensions.ts
+      - name: Apply all official migrations
+        run: bunx --no-install prisma migrate deploy
+      - name: Generate the official Prisma client
+        run: bunx --no-install prisma generate
+      - name: Grant restricted runtime access
+        run: node scripts/ci/pharmacy-pr-tests.mjs grants
+      - name: Execute relevant application, DB and UI suites (no skipped tests)
+        run: node scripts/ci/pharmacy-pr-tests.mjs test
+      - name: Upload exact-head test receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pharmacy-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: test-results/pharmacy-pr/
+          if-no-files-found: warn
+          retention-days: 7

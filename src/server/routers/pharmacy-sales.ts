@@ -14,7 +14,6 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
-import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
   appendControlledSaleEntries,
   earlierRegisterEntry,
@@ -40,6 +39,7 @@ import {
   FamilyKhataError,
   readSaleKhataAccounts,
   readSaleKhataStatement,
+  type KhataApproverBasis,
 } from '@/lib/pharmacy/family-khata';
 
 import {
@@ -131,6 +131,8 @@ const tenderInput = z
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
+    // #313: why the approver lets this Khata charge pass the family credit limit.
+    overrideReason: z.string().trim().min(1).max(500).optional(),
   })
   .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
@@ -157,19 +159,77 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   return { organizationId, branchId: branch, actorId };
 }
 
-async function khataScope(ctx: TRPCContext, branch: string) {
+/**
+ * #313: non-ADMIN Owners and Managers approve with pharmacy:manage. ADMIN keeps
+ * main's dispense + admin:access approval contract, not an alternate admission
+ * path into Khata. An exact manage DENY with dispense ALLOW is not a new bypass;
+ * a dispense or pharmacy:* DENY still blocks ADMIN at khataScope and here.
+ */
+async function khataLimitApproverBasis(ctx: TRPCContext): Promise<KhataApproverBasis | null> {
+  const user = ctx.session!.user;
+  const subject = subjectFromSession(user);
+  const options = { db: ctx.db, source: 'TRPC' as const };
+  if (user.role !== 'ADMIN')
+    return (await can(subject, 'pharmacy:manage', undefined, options)) ? 'pharmacy:manage' : null;
+  if (
+    !(await can(subject, 'pharmacy:dispense', undefined, options)) ||
+    !(await can(subject, 'admin:access', undefined, options))
+  )
+    return null;
+  const member = await ctx.db.user.findUnique({
+    where: { id: user.id },
+    select: { status: true, organizationId: true },
+  });
+  if (!member || member.status !== 'ACTIVE' || member.organizationId !== user.organizationId)
+    return null;
+  return 'tenant-admin';
+}
+
+/**
+ * Khata account reads and tenders also admit non-ADMIN pharmacy:manage approvers.
+ * Every non-ADMIN actor needs an active same-tenant assignment, even when they
+ * also hold an exact dispense grant. ADMIN still needs dispense;
+ * admin:access alone is never Khata admission.
+ */
+async function khataScope(ctx: TRPCContext, branch: string, options: { approver?: boolean } = {}) {
   const scope = await scopeFor(ctx, branch);
   if (
     ctx.organization?.vertical !== 'PHARMACY' ||
     ctx.organization.id !== scope.organizationId ||
     ctx.session!.user.organizationId !== scope.organizationId ||
-    !hasModule(ctx.entitlements, 'pharmacy-counter') ||
-    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
-      db: ctx.db,
-      source: 'TRPC',
-    }))
+    !hasModule(ctx.entitlements, 'pharmacy-counter')
   )
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
+  const mayDispense = await can(
+    subjectFromSession(ctx.session!.user),
+    'pharmacy:dispense',
+    undefined,
+    {
+      db: ctx.db,
+      source: 'TRPC',
+    }
+  );
+  const approverBasis =
+    options.approver === true && ctx.session!.user.role !== 'ADMIN'
+      ? await khataLimitApproverBasis(ctx)
+      : null;
+  if (!mayDispense && approverBasis === null)
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
+  // Saad's 2026-10-24 decision: all non-ADMIN Khata access is assigned-branch only.
+  // Do not let a second grant or a wildcard turn manage into every-branch access.
+  if (ctx.session!.user.role !== 'ADMIN') {
+    const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: branch,
+        userId: ctx.session!.user.id,
+        active: true,
+      },
+      select: { branchId: true },
+    });
+    if (!assignment)
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
   const available = await ctx.db.pharmacyBranch.findFirst({
     where: { organizationId: scope.organizationId, id: branch, active: true },
     select: { id: true },
@@ -515,7 +575,7 @@ export const pharmacySalesRouter = router({
   khataAccounts: protectedProcedure
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await khataScope(ctx, input.branchId);
+      const scope = await khataScope(ctx, input.branchId, { approver: true });
       return ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
         await bindKhataBranch(db, scope);
@@ -528,7 +588,7 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
-        const scope = await khataScope(ctx, input.branchId);
+        const scope = await khataScope(ctx, input.branchId, { approver: true });
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           await bindKhataBranch(db, scope);
@@ -749,15 +809,19 @@ export const pharmacySalesRouter = router({
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
     const scope =
-      input.type === 'KHATA' || input.familyAccountId
-        ? await khataScope(ctx, input.branchId)
+      input.type === 'KHATA' || input.type === 'CREDIT' || input.familyAccountId
+        ? await khataScope(ctx, input.branchId, { approver: true })
         : await scopeFor(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
   }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
     try {
       if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
-        if (input.familyAccountId !== undefined || input.ownerOverride !== undefined)
+        if (
+          input.familyAccountId !== undefined ||
+          input.ownerOverride !== undefined ||
+          input.overrideReason !== undefined
+        )
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message: 'Khata fields require Khata tender.',
@@ -767,30 +831,29 @@ export const pharmacySalesRouter = router({
           applyPharmacyTender(txDb(tx), scope, ledgerTender(input))
         );
       }
-      const scope = await khataScope(ctx, input.branchId);
+      const scope = await khataScope(ctx, input.branchId, { approver: true });
       if (!input.familyAccountId) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
       const normalized = ledgerTender(input);
-      const ownerAuthorized =
-        input.ownerOverride === true &&
-        ctx.session!.user.role === 'ADMIN' &&
-        (await can(subjectFromSession(ctx.session!.user), 'admin:access', undefined, {
-          db: ctx.db,
-          source: 'TRPC',
-        }));
-      return await ctx.db.$transaction(async (tx) => {
+      // The approver is the signed-in actor: an Owner, Manager or tenant ADMIN whose
+      // session re-entered its password within five minutes (checked by the domain).
+      const approverBasis =
+        input.ownerOverride === true ? await khataLimitApproverBasis(ctx) : null;
+      const { result, overLimitApproval } = await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
         await bindKhataBranch(db, scope);
         await db.$queryRaw(
           Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
         );
         const prior = await readPharmacyTenderOutcome(db, scope, normalized);
-        if (prior.status === 'ACCEPTED') return { ...prior.result, replayed: true };
+        if (prior.status === 'ACCEPTED')
+          return { result: { ...prior.result, replayed: true }, overLimitApproval: undefined };
         const account = await authorizeKhataCharge(
           db,
           scope,
           { ...input, familyAccountId: input.familyAccountId! },
           {
-            authorized: ownerAuthorized,
+            authorized: approverBasis !== null,
+            basis: approverBasis ?? undefined,
             passwordAuthenticatedAt: ctx.session!.user.passwordAuthenticatedAt,
           }
         );
@@ -811,8 +874,24 @@ export const pharmacySalesRouter = router({
             note: `Tender ${result.tenderId}`,
           },
         });
-        return result;
+        return { result, overLimitApproval: account.overLimitApproval };
       });
+      // The append-only limit decision written above is the durable record; the request
+      // audit row names the committed approval too: actor, reason and amounts.
+      if (overLimitApproval)
+        annotateAudit(ctx, {
+          category: 'PHARMACY',
+          action: 'khata_credit_limit_override',
+          targetType: 'PharmacyFamilyAccount',
+          targetId: input.familyAccountId,
+          description: 'Approved a Khata charge past the family credit limit.',
+          metadata: {
+            branchId: scope.branchId,
+            approverId: scope.actorId,
+            ...overLimitApproval,
+          },
+        });
+      return result;
     } catch (error) {
       fail(error);
     }
