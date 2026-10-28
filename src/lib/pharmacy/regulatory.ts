@@ -51,6 +51,18 @@ function stringValues(value: unknown): readonly string[] {
   return Array.isArray(values) && values.every((item) => typeof item === 'string') ? values : [];
 }
 
+/** Exclusive instant after the licence expiry date in Pakistan Standard Time. */
+export function pharmacyLicenceExpiryBoundary(expiryDate: Date): Date {
+  return new Date(
+    Date.UTC(
+      expiryDate.getUTCFullYear(),
+      expiryDate.getUTCMonth(),
+      expiryDate.getUTCDate() + 1,
+      -5
+    )
+  );
+}
+
 /**
  * PLAT-02 fail-closed primitive. Every denial is typed and audited before it is
  * thrown; callers cannot downgrade it to a warning by inspecting a boolean.
@@ -78,7 +90,7 @@ export function assertBranchMayOperate(
     !branch.licenceCategory.trim() ||
     !stringValues(branch.ruleSet.licenceCategories).includes(branch.licenceCategory) ||
     at < branch.licenceValidFrom ||
-    at >= branch.licenceValidTo
+    at >= pharmacyLicenceExpiryBoundary(branch.licenceValidTo)
   ) {
     deny('LICENCE_INVALID');
   }

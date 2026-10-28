@@ -57,10 +57,30 @@ describe('assertBranchMayOperate', () => {
     expect(state.auditDenied).not.toHaveBeenCalled();
   });
 
-  it('fails closed and audits an expired licence', () => {
+  it('keeps a licence valid through 23:59:59 Asia/Karachi on its expiry date', () => {
     const state = validState();
-    state.licenceValidTo = at;
-    expectDenied(state, 'LICENCE_INVALID');
+    state.licenceValidTo = new Date('2026-09-02T00:00:00.000Z');
+
+    expect(() =>
+      assertBranchMayOperate(state, {
+        name: 'COMPLETE_SALE',
+        at: new Date('2026-09-02T18:59:59.999Z'),
+        requiresQualifiedPerson: false,
+      })
+    ).not.toThrow();
+  });
+
+  it('fails closed at midnight Asia/Karachi after the expiry date', () => {
+    const state = validState();
+    state.licenceValidTo = new Date('2026-09-02T00:00:00.000Z');
+    expect(() =>
+      assertBranchMayOperate(state, {
+        name: 'COMPLETE_SALE',
+        at: new Date('2026-09-02T19:00:00.000Z'),
+        requiresQualifiedPerson: false,
+      })
+    ).toThrowError(new BranchOperationDeniedError('LICENCE_INVALID'));
+    expect(state.auditDenied).toHaveBeenCalledOnce();
   });
 
   it('fails closed and audits missing qualified-person coverage', () => {

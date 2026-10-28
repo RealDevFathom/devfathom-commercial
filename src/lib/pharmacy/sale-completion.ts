@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { LedgerScope } from './stock-ledger';
 import { postSaleLineEntry } from './finance-postings';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
+import { assertStoredBranchMayOperate } from './regulatory';
 
 export const completionSaleInclude = {
   lines: {
@@ -26,6 +27,16 @@ export async function completePaidPharmacySale(
   /** F2: a leased offline receipt number the caller already consumed in this transaction. */
   leasedReceiptNumber: number | null = null
 ) {
+  // The licence must still be valid when money is taken, rather than merely when
+  // the cart was opened. Use the same instant for the regulatory decision and
+  // the immutable completion evidence.
+  const issuedAt = new Date();
+  await assertStoredBranchMayOperate(db, scope.organizationId, scope.branchId, {
+    name: 'COMPLETE_SALE',
+    at: issuedAt,
+    requiresQualifiedPerson: false,
+  });
+
   let receiptNumber = leasedReceiptNumber;
   if (receiptNumber === null) {
     // Reserved (leased) numbers never return to this online sequence.
@@ -37,7 +48,6 @@ export async function completePaidPharmacySale(
       RETURNING "nextNumber" - 1 AS receipt_number`);
     receiptNumber = rows[0]!.receipt_number;
   }
-  const issuedAt = new Date();
   await db.pharmacySale.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: sale.id } },
     data: {
