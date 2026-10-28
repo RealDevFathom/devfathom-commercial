@@ -775,6 +775,19 @@ function SopBoardView(props: SopBoardViewProps) {
                           occurrenceId={selected.id}
                         />
                         <StaffSelect label="Verifier" staff={staff} />
+                        <label className="text-sm text-text-body sm:col-span-2">
+                          Verification PIN (required for your own work)
+                          <Input
+                            className="mt-1 min-h-11"
+                            type="password"
+                            name="approvalPin"
+                            inputMode="numeric"
+                            pattern="[0-9]{4,8}"
+                            minLength={4}
+                            maxLength={8}
+                            autoComplete="off"
+                          />
+                        </label>
                         <label className="text-sm text-text-body">
                           Verification reason
                           <Input
@@ -1075,6 +1088,7 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
           await caller.verify({
             occurrenceId,
             actorStaffProfileId,
+            approvalPin: optionalField(form, 'approvalPin'),
             reason: optionalField(form, 'reason'),
           });
           success = 'SOP verified.';

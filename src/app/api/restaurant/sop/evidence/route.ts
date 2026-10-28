@@ -17,12 +17,7 @@ const EVIDENCE_TYPES = {
 } as const;
 
 type EvidenceCaptureStage =
-  | 'file_validation'
-  | 'context'
-  | 'authorization'
-  | 'storage'
-  | 'attach'
-  | 'cleanup';
+  'file_validation' | 'context' | 'authorization' | 'storage' | 'attach' | 'cleanup';
 
 function warnEvidenceCaptureFailure(stage: EvidenceCaptureStage, error: unknown) {
   try {

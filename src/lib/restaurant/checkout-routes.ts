@@ -230,7 +230,10 @@ export async function operatorHasCapability(
     select: {
       status: true,
       primaryBranchId: true,
-      jobRoles: { where: { branchId }, select: { branchId: true } },
+      jobRoles: {
+        where: { branchId },
+        select: { branchId: true, jobRole: { select: { key: true, active: true } } },
+      },
       directCapabilityGrants: { where: { branchId }, select: { branchId: true } },
       user: {
         select: {
@@ -280,6 +283,7 @@ export async function operatorHasCapability(
     overrides === true ||
     role === true ||
     isTenantAdministrator(user) ||
+    profile.jobRoles.some((row) => row.jobRole?.active && row.jobRole.key === 'owner') ||
     [...staff.effective].some((rule) => capabilityMatches(rule, capability, 'ALLOW'))
   );
 }

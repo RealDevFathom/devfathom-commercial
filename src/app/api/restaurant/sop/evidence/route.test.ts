@@ -384,3 +384,19 @@ it('rejects missing occurrences before actor resolution, uploads or evidence wri
   expect(mocks.putUpload).not.toHaveBeenCalled();
   expect(mocks.attachEvidence).not.toHaveBeenCalled();
 });
+
+it('uses the stored occurrence branch rather than the submitted form branch', async () => {
+  const findUnique = vi.fn().mockResolvedValue({ branchId: 'stored-branch' });
+  mocks.createTRPCContext.mockResolvedValue({
+    db: { restaurantSopOccurrence: { findUnique } },
+    organization: { id: 'org-1' },
+    session: { user: { id: 'user-1' } },
+  });
+  mocks.resolveRestaurantActor.mockRejectedValueOnce(new Error('Branch access denied'));
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  await POST(request({ uploaderStaffProfileId: 'spoofed-staff' }));
+  expect(mocks.resolveRestaurantActor).toHaveBeenCalledWith(expect.anything(), ['stored-branch']);
+  expect(mocks.putUpload).not.toHaveBeenCalled();
+  expect(mocks.attachEvidence).not.toHaveBeenCalled();
+  expect(warn).toHaveBeenCalled();
+});

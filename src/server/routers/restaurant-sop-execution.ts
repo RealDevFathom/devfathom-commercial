@@ -555,10 +555,12 @@ export const restaurantSopExecutionRouter = router({
           occurrenceId: OCCURRENCE_ID,
           actorStaffProfileId: OPTIONAL_ACTOR,
           reason: OPTIONAL_REASON,
+          approvalPin: z.string().min(1).max(128).optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
       assertSopDepth(ctx.entitlements, 'sop.verification');
       try {
         const result = await verifyOccurrence(ctx.db, {
@@ -611,6 +613,7 @@ export const restaurantSopExecutionRouter = router({
           occurrenceId: OCCURRENCE_ID,
           actorStaffProfileId: z.string().min(1),
           approvingStaffProfileId: z.string().trim().min(1),
+          approvalPin: z.string().min(1).max(128).optional(),
           approvingPin: z
             .string()
             .regex(/^\d{4,8}$/)

@@ -235,10 +235,13 @@ describe('waiver credential and solo-owner boundary', () => {
       branchId: 'branch_b',
       organizationId: 'org_1',
     });
-    db.restaurantStaffProfile = { ...model(), count: vi.fn().mockResolvedValue(1) };
+    db.restaurantStaffProfile = { ...model(), count: vi.fn().mockResolvedValue(0) };
     db.restaurantStaffProfile.findUnique.mockResolvedValue({
+      id: ACTOR_ID,
+      organizationId: 'org_1',
       status: 'ACTIVE',
-      user: { role: 'EMPLOYEE', organizationRole: { key: 'owner' } },
+      jobRoles: [],
+      user: { role: 'EMPLOYEE', status: 'ACTIVE', organizationRole: { key: 'owner' } },
     });
   });
   it('permits only the sole active owner after PIN verification and records both identities', async () => {
@@ -265,12 +268,14 @@ describe('waiver credential and solo-owner boundary', () => {
         metadata: expect.objectContaining({ coAuthorizationId: 'new_id' }),
       }),
     });
-    expect(db.restaurantStaffProfile.count).toHaveBeenCalledWith({ where: { status: 'ACTIVE' } });
+    expect(db.restaurantStaffProfile.count).toHaveBeenCalledWith({
+      where: { status: 'ACTIVE', id: { not: ACTOR_ID } },
+    });
     expect(db.restaurantCoAuthorization.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         actingStaffProfileId: ACTOR_ID,
         approvingStaffProfileId: ACTOR_ID,
-        reason: 'Emergency',
+        reason: '[SOLO_OWNER_PIN_REAUTH] Emergency',
         targetId: OCC_ID,
       }),
       select: { id: true },
@@ -282,7 +287,7 @@ describe('waiver credential and solo-owner boundary', () => {
     );
   });
   it('requires a second approver when another active staff member exists', async () => {
-    db.restaurantStaffProfile.count.mockResolvedValue(2);
+    db.restaurantStaffProfile.count.mockResolvedValue(1);
     await expect(waiveOccurrence(db as unknown as ScopedDb, input)).rejects.toMatchObject({
       reason: 'CO_AUTH_REQUIRED',
     });
@@ -291,7 +296,9 @@ describe('waiver credential and solo-owner boundary', () => {
   it('denies solo staff who are not owners', async () => {
     db.restaurantStaffProfile.findUnique.mockResolvedValue({
       status: 'ACTIVE',
-      user: { role: 'EMPLOYEE', organizationRole: { key: 'manager' } },
+      id: ACTOR_ID,
+      jobRoles: [],
+      user: { role: 'EMPLOYEE', status: 'ACTIVE', organizationRole: { key: 'manager' } },
     });
     await expect(waiveOccurrence(db as unknown as ScopedDb, input)).rejects.toMatchObject({
       reason: 'CO_AUTH_REQUIRED',
@@ -303,7 +310,8 @@ describe('waiver credential and solo-owner boundary', () => {
       reason: 'CO_AUTH_REQUIRED',
     });
     expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
-    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
   });
   it('rejects an approver ID alone', async () => {
     await expect(

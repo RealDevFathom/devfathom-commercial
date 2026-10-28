@@ -19,7 +19,7 @@ export async function resolveRestaurantActor(ctx: TRPCContext, branchIds: string
     select: {
       id: true,
       primaryBranchId: true,
-      jobRoles: { select: { branchId: true } },
+      jobRoles: { where: { jobRole: { active: true } }, select: { branchId: true } },
       directCapabilityGrants: { select: { branchId: true } },
     },
     orderBy: { id: 'asc' },

@@ -197,14 +197,22 @@ suite('SOP waiver credential durability through the real HTTP rollback boundary'
           assigneeStaffProfileId: id('owner'),
         },
       });
-      for (const [index, name] of ['occurrence', 'solo', 'multi', 'concurrent'].entries())
+      for (const [index, name] of [
+        'occurrence',
+        'solo',
+        'multi',
+        'concurrent',
+        'verify-lockout',
+        'verify-solo',
+        'verify-multi',
+      ].entries())
         await db.restaurantSopOccurrence.create({
           data: {
             id: id(name),
             branchId: id('target'),
             assignmentId: id('assignment'),
             templateVersionId: id('version'),
-            status: 'MISSED',
+            status: name.startsWith('verify-') ? 'SUBMITTED' : 'MISSED',
             businessDate: new Date('2026-10-01'),
             dueAt: new Date(Date.UTC(2026, 9, 1, index)),
             windowEndsAt: new Date('2026-10-02'),
@@ -310,6 +318,46 @@ suite('SOP waiver credential durability through the real HTTP rollback boundary'
     expect(JSON.stringify(audit)).not.toContain(PIN);
   });
 
+  it('persists bad-PIN lockouts for own-work verification and audits a valid solo verification', async () => {
+    await resetCredential();
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      await expect(
+        client().mutation('restaurantSopExecution.verify', {
+          occurrenceId: id('verify-lockout'),
+          approvalPin: '1111',
+          actorStaffProfileId: 'spoofed',
+        })
+      ).rejects.toMatchObject({ data: { code: 'FORBIDDEN' } });
+      await flushAudit();
+      expect((await credential()).failedAttempts).toBe(attempt === 5 ? 0 : attempt);
+      expect(
+        await tenantDb.restaurantSopVerification.count({
+          where: { occurrenceId: id('verify-lockout') },
+        })
+      ).toBe(0);
+    }
+    expect((await credential()).lockedUntil!.getTime()).toBeGreaterThan(Date.now());
+    await expect(
+      client().mutation('restaurantSopExecution.verify', {
+        occurrenceId: id('verify-lockout'),
+        approvalPin: PIN,
+      })
+    ).rejects.toMatchObject({ data: { code: 'FORBIDDEN' } });
+    await resetCredential();
+    await expect(
+      client().mutation('restaurantSopExecution.verify', {
+        occurrenceId: id('verify-solo'),
+        approvalPin: PIN,
+      })
+    ).resolves.toMatchObject({ action: 'VERIFY' });
+    await flushAudit();
+    const audit = await tenantDb.auditLog.findFirstOrThrow({
+      where: { action: 'sop.verify.soloOwnerApproval', targetId: id('verify-solo') },
+    });
+    expect(audit.actorStaffProfileId).toBe(id('owner'));
+    expect(JSON.stringify(audit)).not.toContain(PIN);
+  }, 60000);
+
   it('requires a second approver when any other active staff member exists', async () => {
     await tenantDb.restaurantStaffProfile.create({
       data: { id: id('second'), displayName: 'Second operator', primaryBranchId: id('primary') },
@@ -319,6 +367,17 @@ suite('SOP waiver credential durability through the real HTTP rollback boundary'
     ).rejects.toMatchObject({ data: { code: 'FORBIDDEN' } });
     await flushAudit();
     await noWaiverWrites(id('multi'));
+    await expect(
+      client().mutation('restaurantSopExecution.verify', {
+        occurrenceId: id('verify-multi'),
+        approvalPin: PIN,
+      })
+    ).rejects.toMatchObject({ data: { code: 'FORBIDDEN' } });
+    expect(
+      await tenantDb.restaurantSopVerification.count({
+        where: { occurrenceId: id('verify-multi') },
+      })
+    ).toBe(0);
   });
 
   it('accepts a PIN-only second approver whose job grants are at a different branch than their primary assignment', async () => {

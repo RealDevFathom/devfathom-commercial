@@ -401,7 +401,7 @@ describe('verify', () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({
       id: OCC_ID,
       branchId: 'branch_1',
-      assignedStaffProfileId: 'staff_actor',
+      assignedStaffProfileId: 'someone_else',
       status: 'SUBMITTED',
     });
     db.restaurantSopVerification.create.mockResolvedValue({ id: 'ver_1', createdAt: new Date() });
@@ -479,7 +479,6 @@ describe('SOP depth entitlement gating', () => {
     db.restaurantSopOccurrence.findUnique.mockResolvedValue({
       id: OCC_ID,
       branchId: 'branch_1',
-      assignedStaffProfileId: 'staff_actor',
       status: 'SUBMITTED',
       windowEndsAt: new Date(Date.now() + 3_600_000),
     });
@@ -797,4 +796,128 @@ it('attributes evidence and escalation acknowledgements to the session even with
       data: expect.objectContaining({ actorStaffProfileId: 'staff_actor' }),
     })
   );
+});
+
+describe('session-bound SOP attribution (PR 268)', () => {
+  beforeEach(() => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      branchId: 'branch_1',
+      status: 'SUBMITTED',
+      assignedStaffProfileId: 'staff_a',
+      claimedByStaffProfileId: null,
+      poolJobRoleId: null,
+      steps: [],
+      evidence: [],
+      windowEndsAt: new Date(Date.now() + 60_000),
+    });
+  });
+
+  it.each(['start', 'completeStep', 'submit'] as const)(
+    '%s cannot impersonate the assigned owner',
+    async (command) => {
+      db.restaurantStaffProfile.findMany.mockResolvedValue([
+        { id: 'attacker', primaryBranchId: 'branch_1' },
+      ]);
+      await expect(
+        caller()[command]({
+          occurrenceId: OCC_ID,
+          ...(command === 'completeStep' ? { templateStepId: 'step_1' } : {}),
+          actorStaffProfileId: 'staff_actor',
+        } as never)
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+      expect(db.restaurantSopOccurrenceStep.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['verify', 'reject'] as const)(
+    '%s records the session actor despite a spoofed actor input',
+    async (command) => {
+      db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+        id: OCC_ID,
+        branchId: 'branch_1',
+        status: 'SUBMITTED',
+        assignedStaffProfileId: 'someone_else',
+        steps: [],
+        evidence: [],
+      });
+      await caller()[command]({ occurrenceId: OCC_ID, actorStaffProfileId: 'spoofed' });
+      expect(db.restaurantSopVerification.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ actorStaffProfileId: 'staff_actor' }),
+        })
+      );
+    }
+  );
+
+  it('checks the stored occurrence branch before attaching evidence', async () => {
+    mocks.can.mockImplementation(async (...args) => args[1] === 'sop:complete');
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({ id: OCC_ID, branchId: 'unassigned' });
+    await expect(
+      caller().attachEvidence({
+        occurrenceId: OCC_ID,
+        contentHashHex: 'a'.repeat(64),
+        mimeType: 'image/jpeg',
+        sizeBytes: 10,
+        uploaderStaffProfileId: 'staff_a',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.restaurantSopEvidence.createMany).not.toHaveBeenCalled();
+  });
+
+  it('fails closed without a linked active staff actor', async () => {
+    db.restaurantStaffProfile.findMany.mockResolvedValue([]);
+    await expect(
+      caller().verify({ occurrenceId: OCC_ID, actorStaffProfileId: 'staff_actor' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.restaurantSopVerification.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('SOP waiver second-approver authentication', () => {
+  beforeEach(() => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      branchId: 'branch_1',
+      status: 'MISSED',
+    });
+  });
+  it("rejects an arbitrary second staff id without that person's PIN", async () => {
+    await expect(
+      caller().waive({
+        occurrenceId: OCC_ID,
+        actorStaffProfileId: 'spoofed',
+        approvingStaffProfileId: 'staff_b',
+        reason: 'Emergency',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+  });
+  it('rejects incorrect second-approver PINs', async () => {
+    mocks.authenticateOperator.mockResolvedValue({ ok: false, reason: 'INVALID' });
+    await expect(
+      caller().waive({
+        occurrenceId: OCC_ID,
+        actorStaffProfileId: 'spoofed',
+        approvingStaffProfileId: 'staff_b',
+        approvalPin: 'wrong',
+        reason: 'Emergency',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+  });
+  it('rejects a valid PIN without approval capability', async () => {
+    mocks.operatorHasCapability.mockResolvedValue(false);
+    await expect(
+      caller().waive({
+        occurrenceId: OCC_ID,
+        actorStaffProfileId: 'spoofed',
+        approvingStaffProfileId: 'staff_b',
+        approvalPin: '4821',
+        reason: 'Emergency',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+  });
 });

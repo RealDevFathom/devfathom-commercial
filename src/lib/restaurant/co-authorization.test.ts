@@ -93,20 +93,14 @@ describe('buildCoAuthorizationRecord', () => {
 
 it('does not extend the solo SOP waiver exception to terminal or sibling actions', () => {
   expect(() =>
-    buildCoAuthorizationRecord(
-      { ...terminalRequest, approvingStaffProfileId: 'staff_actor' },
-      { verifiedSoloOwner: true }
-    )
+    buildCoAuthorizationRecord({ ...terminalRequest, approvingStaffProfileId: 'staff_actor' })
   ).toThrow(CoAuthorizationError);
   expect(() =>
-    buildCoAuthorizationRecord(
-      {
-        ...terminalRequest,
-        approvingStaffProfileId: 'staff_actor',
-        capability: 'sop:verify',
-        targetType: 'RestaurantSopOccurrence',
-      },
-      { verifiedSoloOwner: true }
-    )
+    buildCoAuthorizationRecord({
+      ...terminalRequest,
+      approvingStaffProfileId: 'staff_actor',
+      capability: 'sop:verify',
+      targetType: 'RestaurantSopOccurrence',
+    })
   ).toThrow(CoAuthorizationError);
 });

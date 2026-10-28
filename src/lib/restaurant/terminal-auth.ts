@@ -1,3 +1,4 @@
+import { isTenantAdministrator } from '@/lib/abac/tenant-administrator';
 import 'server-only';
 
 import {
@@ -586,7 +587,21 @@ export async function authenticateOperator(
   const [profile, branch, credentials] = await Promise.all([
     db.restaurantStaffProfile.findUnique({
       where: { id: staffProfileId },
-      select: { id: true, primaryBranchId: true, status: true },
+      select: {
+        id: true,
+        primaryBranchId: true,
+        status: true,
+        jobRoles: { where: { jobRole: { active: true } }, select: { branchId: true } },
+        directCapabilityGrants: { select: { branchId: true } },
+        user: {
+          select: {
+            role: true,
+            status: true,
+            organizationRole: { select: { key: true } },
+            restaurantBranchAssignments: { select: { branchId: true } },
+          },
+        },
+      },
     }),
     // Completion wave: whether THIS branch requires a rostered shift. Read
     // alongside the profile so the enforced path costs no extra round trip, and
@@ -619,7 +634,12 @@ export async function authenticateOperator(
   if (
     !profile ||
     profile.status !== 'ACTIVE' ||
-    (branchId !== undefined && profile.primaryBranchId !== branchId) ||
+    (branchId !== undefined &&
+      profile.primaryBranchId !== branchId &&
+      !profile.jobRoles?.some((row) => row.branchId === branchId) &&
+      !profile.directCapabilityGrants?.some((row) => row.branchId === branchId) &&
+      !profile.user?.restaurantBranchAssignments?.some((row) => row.branchId === branchId) &&
+      !(profile.user?.status === 'ACTIVE' && isTenantAdministrator(profile.user))) ||
     !credential
   ) {
     // Fail closed, but still burn a compare so absence is timing-opaque.

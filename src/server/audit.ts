@@ -102,6 +102,8 @@ function isSensitiveKey(key: string): boolean {
   return (
     k === 'previousgrantid' ||
     k === 'approvingpin' ||
+    k === 'approvalpin' ||
+    k === 'pin' ||
     SENSITIVE_SUBSTRINGS.some((s) => k.includes(s))
   );
 }
@@ -406,10 +408,10 @@ export function recordAudit(row: AuditRowInput, db?: ScopedDb): void | Promise<v
         input: (row.input ?? undefined) as never,
         changes: (row.changes ?? undefined) as never,
         result: (row.result ?? undefined) as never,
-        metadata: ({
+        metadata: {
           ...((row.metadata && typeof row.metadata === 'object' ? row.metadata : {}) as object),
           ...(placeholder ? { placeholder: true } : {}),
-        }) as never,
+        } as never,
         ip: row.ip ?? null,
         userAgent: row.userAgent ?? null,
         httpMethod: row.httpMethod ?? null,

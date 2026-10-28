@@ -133,6 +133,7 @@ describe('waiver credential form', () => {
       })),
       getOccurrence: vi.fn(async () => occurrence),
       waive: vi.fn(async () => ({})),
+      verify: vi.fn(async () => ({})),
     };
     mocks.resolveTenantActor.mockResolvedValue(actor);
     mocks.createTRPCContext.mockResolvedValue(ctx);
@@ -167,6 +168,24 @@ describe('waiver credential form', () => {
       reason: 'Emergency',
     });
   });
+  it('forwards own-work verification PINs through the existing server action', async () => {
+    const { tree, caller } = await readyBoard();
+    const form = new FormData();
+    for (const [key, value] of Object.entries({
+      intent: 'verify',
+      occurrenceId: 'occ-1',
+      actorStaffProfileId: 'owner-1',
+      approvalPin: '4821',
+    }))
+      form.set(key, value);
+    await tree.props.action(form);
+    expect(caller.verify).toHaveBeenCalledWith({
+      occurrenceId: 'occ-1',
+      actorStaffProfileId: 'owner-1',
+      approvalPin: '4821',
+      reason: undefined,
+    });
+  });
   it('renders the existing Studio board states for visual QA', async () => {
     const { tree } = await readyBoard();
     if (process.env.SOP_QA_OUTPUT) {
@@ -176,6 +195,7 @@ describe('waiver credential form', () => {
       await mkdir(process.env.SOP_QA_OUTPUT, { recursive: true });
       const variants = {
         ready: tree.props,
+        review: { ...tree.props, selected: { ...tree.props.selected, status: 'SUBMITTED' } },
         disabled: { ...tree.props, action: undefined },
         empty: {
           ...tree.props,

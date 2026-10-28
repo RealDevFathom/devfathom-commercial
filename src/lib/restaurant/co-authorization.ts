@@ -1,4 +1,6 @@
 import 'server-only';
+import { isTenantAdministrator } from '@/lib/abac/tenant-administrator';
+import { authenticateApprovalPin } from './approval-auth';
 
 /**
  * M2-L1 / C6 & C7 — co-authorization record primitive.
@@ -13,10 +15,11 @@ import 'server-only';
  * untrusted).
  *
  * This primitive lives in L1 because both the L2 back-office and L3 terminal
- * paths must construct the identical, validated record. It performs no I/O: it
+ * paths must construct the identical, validated record. The ordinary builder
  * validates a request and returns the create-shaped data the caller persists
  * (organizationId and createdAt are supplied by the database — the RLS default
  * and the row default respectively — and must not be forged by the caller).
+ * The async solo-owner builder additionally checks live ownership, roster and PIN.
  */
 
 export type CoAuthorizationRequest = {
@@ -78,23 +81,12 @@ function optionalTrimmed(value: string | null | undefined): string | null {
 /**
  * Assert the co-authorization invariants (C6/C7). Throws `CoAuthorizationError`
  * on any violation. The load-bearing rule is that the approving manager cannot
- * be the acting operator, except the explicitly server-verified sole-owner SOP waiver.
+ * be the acting operator: a self-approval is not a co-authorization.
  */
-export function assertCoAuthorization(
-  request: CoAuthorizationRequest,
-  options?: { verifiedSoloOwner?: boolean }
-): void {
+function validateRequest(request: CoAuthorizationRequest, soloOwner = false): void {
   const acting = requireNonEmpty(request.actingStaffProfileId, 'acting staff profile');
   const approving = requireNonEmpty(request.approvingStaffProfileId, 'approving staff profile');
-  // The only exception is SOP waiver after the server has verified sole-owner
-  // status and PIN. Terminal and other co-authorization contracts stay distinct.
-  const soloSopWaiver =
-    options?.verifiedSoloOwner &&
-    request.capability === 'sop:verify' &&
-    request.targetType === 'RestaurantSopOccurrence' &&
-    !request.deviceId &&
-    !request.terminalSessionId;
-  if (acting === approving && !soloSopWaiver) {
+  if (acting === approving && !soloOwner) {
     throw new CoAuthorizationError(
       'A co-authorization requires a second identity: the approving manager must differ from the acting operator.'
     );
@@ -111,16 +103,21 @@ export function assertCoAuthorization(
   }
 }
 
+export function assertCoAuthorization(request: CoAuthorizationRequest): void {
+  validateRequest(request);
+}
+
 /**
  * Validate a request and return the create-shaped, normalised record. Trims all
  * strings and folds blank optionals to null so a caller cannot smuggle
  * whitespace-only evidence past the invariants.
  */
-export function buildCoAuthorizationRecord(
-  request: CoAuthorizationRequest,
-  options?: { verifiedSoloOwner?: boolean }
-): CoAuthorizationRecord {
-  assertCoAuthorization(request, options);
+export function buildCoAuthorizationRecord(request: CoAuthorizationRequest): CoAuthorizationRecord {
+  assertCoAuthorization(request);
+  return normalizedRecord(request);
+}
+
+function normalizedRecord(request: CoAuthorizationRequest): CoAuthorizationRecord {
   return {
     actingStaffProfileId: request.actingStaffProfileId.trim(),
     approvingStaffProfileId: request.approvingStaffProfileId.trim(),
@@ -131,4 +128,59 @@ export function buildCoAuthorizationRecord(
     deviceId: optionalTrimmed(request.deviceId),
     terminalSessionId: optionalTrimmed(request.terminalSessionId),
   };
+}
+
+/** Server-only exception: no client flag can replace the live owner/roster/PIN checks.
+ * Callers persist this evidence and their explicit audit with the action.
+ */
+export async function buildSoloOwnerCoAuthorization(
+  db: import('@/lib/tenancy/scoped-db').ScopedDb,
+  request: CoAuthorizationRequest,
+  branchId: string,
+  pin: string | undefined
+): Promise<CoAuthorizationRecord> {
+  validateRequest(request, true);
+  if (request.actingStaffProfileId.trim() !== request.approvingStaffProfileId.trim() || !pin) {
+    throw new CoAuthorizationError('Solo-owner approval requires PIN reauthentication.');
+  }
+  const profile = await db.restaurantStaffProfile.findUnique({
+    where: { id: request.actingStaffProfileId },
+    select: {
+      id: true,
+      organizationId: true,
+      status: true,
+      user: { select: { role: true, status: true, organizationRole: { select: { key: true } } } },
+      jobRoles: {
+        where: { branchId, jobRole: { key: 'owner', active: true } },
+        select: { id: true },
+      },
+    },
+  });
+  const tenantOwner = profile?.user?.status === 'ACTIVE' && isTenantAdministrator(profile.user);
+  if (profile?.status !== 'ACTIVE' || (!tenantOwner && !profile.jobRoles?.length)) {
+    throw new CoAuthorizationError('Only a solo tenant or branch owner may self-approve.');
+  }
+  // A sole active staff member is counted across the tenant, not just the
+  // primary branch: secondary assignments and global owners must not bypass it.
+  const colleagues = await db.restaurantStaffProfile.count({
+    where: { status: 'ACTIVE', id: { not: profile.id } },
+  });
+  if (colleagues !== 0) throw new CoAuthorizationError('A second staff approver is required.');
+  const { operatorHasCapability } = await import('./checkout-routes');
+  const now = new Date();
+  if (
+    !(await operatorHasCapability(db, profile.id, 'coauth:approve', now, branchId)) ||
+    !(await operatorHasCapability(db, profile.id, request.capability, now, branchId))
+  ) {
+    throw new CoAuthorizationError('Owner approval capability is denied for this branch.');
+  }
+  const auth = await authenticateApprovalPin(profile.organizationId, {
+    staffProfileId: profile.id,
+    deviceId: request.deviceId ?? undefined,
+    type: 'PIN',
+    secret: pin,
+    now: new Date(),
+  });
+  if (!auth.ok) throw new CoAuthorizationError('PIN reauthentication failed.');
+  return normalizedRecord({ ...request, reason: `[SOLO_OWNER_PIN_REAUTH] ${request.reason}` });
 }
