@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   userCreate: vi.fn(),
   userUpdate: vi.fn(),
   userCount: vi.fn(),
+  invitationUpdateMany: vi.fn(),
   queryRaw: vi.fn(),
   branchFindMany: vi.fn(),
   assignmentCreateMany: vi.fn(),
@@ -45,6 +46,7 @@ type MemberDb = {
     update: typeof mocks.userUpdate;
     count: typeof mocks.userCount;
   };
+  invitation: { updateMany: typeof mocks.invitationUpdateMany };
   organizationDepartment: { findFirst: typeof mocks.departmentFindFirst };
   organizationRole: { findFirst: typeof mocks.roleFindFirst };
   pharmacyBranch: { findMany: typeof mocks.branchFindMany };
@@ -60,6 +62,7 @@ const db: MemberDb = {
     update: mocks.userUpdate,
     count: mocks.userCount,
   },
+  invitation: { updateMany: mocks.invitationUpdateMany },
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
   organizationRole: { findFirst: mocks.roleFindFirst },
   pharmacyBranch: { findMany: mocks.branchFindMany },
@@ -223,14 +226,23 @@ describe('organization member creation', () => {
       email: 'ayesha@clifton.test',
       name: 'Ayesha Cashier',
     });
+    mocks.userUpdate.mockResolvedValue({ id: 'member_invited', email: 'invitee@example.test' });
+    mocks.invitationUpdateMany.mockResolvedValue({ count: 1 });
   });
 
-  it.each(['aaaaaaaaaaaa', 'AAAAAAAAAAAA', 'PasswordOnly'])('rejects weak staff passwords: %s', async (password) => {
-    await expect(caller().createMember({ ...input, password })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    await expect(caller().resetMemberPassword({ id: 'member', password })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(mocks.userCreate).not.toHaveBeenCalled();
-    expect(mocks.userFindFirst).not.toHaveBeenCalled();
-  });
+  it.each(['aaaaaaaaaaaa', 'AAAAAAAAAAAA', 'PasswordOnly'])(
+    'rejects weak staff passwords: %s',
+    async (password) => {
+      await expect(caller().createMember({ ...input, password })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      await expect(caller().resetMemberPassword({ id: 'member', password })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      expect(mocks.userCreate).not.toHaveBeenCalled();
+      expect(mocks.userFindFirst).not.toHaveBeenCalled();
+    }
+  );
 
   it('creates an ACTIVE member scoped to the caller tenant with a hashed password', async () => {
     await caller('org_a').createMember(input);
@@ -343,5 +355,32 @@ describe('organization member creation', () => {
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Choose an active pharmacy branch.' });
     expect(mocks.userCreate).not.toHaveBeenCalled();
     expect(mocks.assignmentCreateMany).not.toHaveBeenCalled();
+  });
+
+  it('invalidates a pending invitation when an invited member is deactivated', async () => {
+    mocks.userFindFirst.mockResolvedValue({
+      id: 'member_invited',
+      status: 'INVITED',
+      role: 'EMPLOYEE',
+      email: 'invitee@example.test',
+    });
+
+    await caller('org_a').updateMember({
+      id: 'member_invited',
+      role: 'EMPLOYEE',
+      status: 'INACTIVE',
+      organizationRoleId: null,
+      title: 'Engineer',
+      department: 'COUNTER',
+    });
+
+    expect(mocks.invitationUpdateMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_a', userId: 'member_invited', acceptedAt: null },
+      data: { expiresAt: expect.any(Date) },
+    });
+    expect(mocks.invitationUpdateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.userUpdate.mock.invocationCallOrder[0]!
+    );
+    expect(mocks.userCount).not.toHaveBeenCalled();
   });
 });

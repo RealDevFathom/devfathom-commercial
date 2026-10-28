@@ -539,6 +539,15 @@ export const organizationAdminRouter = router({
             });
           }
         }
+        // Withdrawing an invitation must invalidate its token in the same
+        // transaction as the status change. The acceptance path also checks the
+        // user's status, providing defense in depth for concurrent requests.
+        if (before.status === 'INVITED' && input.status !== 'INVITED') {
+          await tx.invitation.updateMany({
+            where: { organizationId: id, userId: before.id, acceptedAt: null },
+            data: { expiresAt: new Date() },
+          });
+        }
         return tx.user.update({
           where: { id: input.id },
           data: {
