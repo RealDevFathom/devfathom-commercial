@@ -6,7 +6,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { POS_MONTHLY_ORDERS_LIMIT, resolveEntitlementLimit } from '@/lib/entitlement-limits';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { evaluateOrderSettlement } from './bills';
+import { evaluateOrderSettlement, removeVoidedItemFromBills } from './bills';
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { buildCoAuthorizationRecord } from './co-authorization';
 import { postOrderRecipeConsumption } from './inventory';
@@ -1088,6 +1088,8 @@ export async function voidItem(db: ScopedDb, input: VoidItemInput): Promise<Item
 
     const item = findItem(order, input.itemId);
     assertItemTransition(item.status, 'VOIDED');
+
+    await removeVoidedItemFromBills(tx, order.id, item.id);
 
     const postPrep = isPostPrep(item.status);
     let voidCoAuthorizationId: string | null = null;

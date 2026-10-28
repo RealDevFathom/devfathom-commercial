@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { randomUUID } from 'node:crypto';
+import { TRPCError } from '@trpc/server';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -52,13 +53,9 @@ import { consumeReservations } from './promotion-caps';
  * compTotal − discountTotal + roundingAdjustment`. The reconciliation invariant the
  * settlement guard and the reconciliation battery both rely on is:
  *
- *   Σ non-void bills of (grandTotal + compTotal + discountTotal − exclusiveTax)
- *     ≡ derived order total.
- *
- * A comp or discount adds back its own amount. Inclusive tax is already inside the
- * merchandise price, so it stays in both sides. Exclusive tax is added on top only
- * when a tender freezes it and is not part of the pre-tax derived order total —
- * leaving it in the sum makes a fully tendered bill look like TOTAL_MISMATCH.
+ *   Σ non-void bill grand totals ≡ merchandise − comps − discounts + remaining
+ *   bill service + delivery + frozen exclusive tax, compared in integer cents.
+ * Inclusive tax is already inside merchandise and is never added a second time.
  *
  * Re-splitting is allowed only while ALL of the order's live bills are OPEN and
  * untendered; afterwards a re-cut is a void-and-recut — the old bills become VOID
@@ -841,6 +838,63 @@ async function liveBillIds(tx: ScopedDb, orderId: string, branchId: string): Pro
   return rows.map((r) => r.id);
 }
 
+/** Called inside the order mutation transaction, after the parent order lock.
+ * Preserve pinned service allocations on the remaining lines. Paid/fractional bills
+ * need the existing reversal/re-cut flow before an item can be voided. */
+export async function removeVoidedItemFromBills(tx: ScopedDb, orderId: string, itemId: string) {
+  await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE "orderId" = ${orderId} AND status <> 'VOID' ORDER BY id FOR UPDATE`;
+  const bills = await tx.restaurantBill.findMany({
+    where: { orderId, status: { not: 'VOID' } },
+    include: { lines: true, tenders: { select: { id: true }, take: 1 } },
+  });
+  for (const bill of bills) {
+    const line = bill.lines.find((line) => line.orderItemId === itemId);
+    if (!line && bill.splitKind !== 'FRACTIONAL') continue;
+    if (
+      bill.status !== 'OPEN' ||
+      bill.tenders.length ||
+      bill.splitKind === 'FRACTIONAL' ||
+      !bill.taxTotal.isZero()
+    ) {
+      throw new BillCommandError(
+        'Reverse payments and re-cut this bill before voiding an item.',
+        'BILL_NOT_OPEN'
+      );
+    }
+    if (!line) continue;
+    const grandTotal = bill.grandTotal.minus(line.lineTotal);
+    if (grandTotal.isNegative()) {
+      throw new BillCommandError(
+        'Reverse bill discounts before voiding this item.',
+        'COMP_EXCEEDS_BILL'
+      );
+    }
+    const serviceChargeTotal = bill.serviceChargeTotal.minus(line.serviceChargeAmount);
+    const serviceChargeBasis =
+      bill.serviceChargePolicyVersionId && line.compAmount.isZero()
+        ? bill.serviceChargeBasis.minus(line.lineSubtotal)
+        : bill.serviceChargeBasis;
+    await tx.restaurantBillLine.delete({ where: { id: line.id } });
+    await tx.restaurantBill.update({
+      where: { id: bill.id },
+      data: {
+        subtotal: bill.subtotal.minus(line.lineSubtotal),
+        compTotal: bill.compTotal.minus(line.compAmount),
+        serviceChargeTotal,
+        serviceChargeBasis,
+        grandTotal,
+        ...(serviceChargeBasis.isZero() && serviceChargeTotal.isZero()
+          ? {
+              serviceChargePolicyVersionId: null,
+              serviceChargeRate: null,
+              serviceChargeTaxTreatment: null,
+            }
+          : {}),
+      },
+    });
+  }
+}
+
 // ── compLine (comp at zero) ──────────────────────────────────────────────────
 
 export type CompLineInput = {
@@ -923,7 +977,16 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
     await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} AND "branchId" = ${input.branchId} FOR UPDATE`;
     const bill = await tx.restaurantBill.findFirst({
       where: { id: input.billId, branchId: input.branchId },
-      select: { id: true, status: true, compTotal: true, discountTotal: true, grandTotal: true },
+      select: {
+        id: true,
+        status: true,
+        compTotal: true,
+        discountTotal: true,
+        grandTotal: true,
+        serviceChargeTotal: true,
+        serviceChargeBasis: true,
+        serviceChargePolicyVersionId: true,
+      },
     });
     if (!bill) {
       throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
@@ -953,7 +1016,13 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
 
     const line = await tx.restaurantBillLine.findUnique({
       where: { id: input.billLineId },
-      select: { id: true, billId: true, lineSubtotal: true, compAmount: true },
+      select: {
+        id: true,
+        billId: true,
+        lineSubtotal: true,
+        compAmount: true,
+        serviceChargeAmount: true,
+      },
     });
     if (!line || line.billId !== bill.id) {
       throw new BillCommandError('The bill line does not belong to this bill.', 'LINE_NOT_FOUND');
@@ -963,7 +1032,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
     }
 
     // What the comp cannot absorb out of the bill's own balance (B3).
-    const shortfall = sub(line.lineSubtotal, bill.grandTotal);
+    const shortfall = sub(add(line.lineSubtotal, line.serviceChargeAmount), bill.grandTotal);
     let releasedDiscount = ZERO;
     if (compare(shortfall, ZERO) > 0 && compare(bill.discountTotal, ZERO) > 0) {
       const release = await releaseLoyaltyRedemption(tx, {
@@ -979,7 +1048,14 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       // it — so this call applies no further delta.
       releasedDiscount = release.replayed ? ZERO : release.value;
     }
-    const grandTotal = sub(add(bill.grandTotal, releasedDiscount), line.lineSubtotal);
+    const serviceChargeTotal = sub(bill.serviceChargeTotal, line.serviceChargeAmount);
+    const serviceChargeBasis = bill.serviceChargePolicyVersionId
+      ? sub(bill.serviceChargeBasis, line.lineSubtotal)
+      : ZERO;
+    const grandTotal = sub(
+      sub(add(bill.grandTotal, releasedDiscount), line.lineSubtotal),
+      line.serviceChargeAmount
+    );
     if (compare(grandTotal, ZERO) < 0) {
       // The bill carries a deduction this lane cannot release, so the comp would
       // leave a negative grand total. Refuse rather than record an untrue total.
@@ -992,7 +1068,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
     const coAuthorizationId = await persistCoAuth(tx, {
       actingStaffProfileId: input.actor.staffProfileId,
       approvingStaffProfileId: input.approvingStaffProfileId,
-      capability: 'orders:comp',
+      capability: 'orders:complimentary',
       reason,
       targetType: 'RestaurantBillLine',
       targetId: line.id,
@@ -1003,6 +1079,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       where: { id: line.id },
       data: {
         compAmount: line.lineSubtotal,
+        serviceChargeAmount: ZERO,
         lineTotal: ZERO,
         compReason: reason,
         compCoAuthorizationId: coAuthorizationId,
@@ -1011,6 +1088,15 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
     await tx.restaurantBill.update({
       where: { id: bill.id },
       data: {
+        serviceChargeTotal,
+        serviceChargeBasis,
+        ...(serviceChargeBasis.isZero() && serviceChargeTotal.isZero()
+          ? {
+              serviceChargePolicyVersionId: null,
+              serviceChargeRate: null,
+              serviceChargeTaxTreatment: null,
+            }
+          : {}),
         compTotal: add(bill.compTotal, line.lineSubtotal),
         discountTotal: sub(bill.discountTotal, releasedDiscount),
         grandTotal,
@@ -1019,6 +1105,30 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
 
     await recordMoneyIdempotentResult(tx, input.actor, encodeCompResult(line.id, releasedDiscount));
     return { billLineId: line.id, billId: bill.id, releasedDiscount, replayed: false };
+  }).catch((error: unknown) => {
+    const isCheckViolation = (value: unknown, seen = new Set<unknown>()): boolean => {
+      if (!value || typeof value !== 'object' || seen.has(value)) return false;
+      seen.add(value);
+      const record = value as Record<string, unknown>;
+      return (
+        record.code === '23514' ||
+        record.originalCode === '23514' ||
+        record.sqlState === '23514' ||
+        record.code === 'P2004' ||
+        [record.cause, record.originalError, ...Object.values(record)].some((child) =>
+          isCheckViolation(child, seen)
+        )
+      );
+    };
+    if (isCheckViolation(error)) {
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message:
+          'The comp could not be applied because the bill totals or service-charge evidence are inconsistent. Refresh the bill and try again.',
+        cause: error,
+      });
+    }
+    throw error;
   });
 }
 
@@ -1596,8 +1706,7 @@ export type OrderSettlement = {
   blocker: OrderSettlementBlocker | null;
   derivedOrderTotal: Prisma.Decimal;
   /**
-   * Σ over live bills of (grandTotal + compTotal + discountTotal − exclusiveTax).
-   * Exclusive tax is removed so this stays comparable to the pre-tax derived total.
+   * Sum of live bill grand totals, compared to the derived payable order total.
    */
   accountedTotal: Prisma.Decimal;
   bills: {
@@ -1625,10 +1734,9 @@ export type OrderSettlement = {
  *      line (FRACTIONAL bills own fractions, not items, so item coverage is proven
  *      by the money identity instead);
  *   3. every live bill is SETTLED (VOID bills are excluded);
- *   4. Σ (grandTotal + compTotal + discountTotal − exclusiveTax) over live bills ≡
- *      the derived order total by exact Decimal equality. Comps and discounts add
- *      back their amount. Exclusive tax is the portion a final tender adds on top
- *      of merchandise; inclusive tax is already inside the derived merchandise price.
+ *   4. Live bill grand totals equal merchandise less comps and discounts, plus
+ *      remaining allocated service, delivery, and frozen exclusive tax. All sums
+ *      and the comparison use integer cents; inclusive tax stays in merchandise.
  */
 
 type SettlementTaxEvidence = {
@@ -1644,7 +1752,7 @@ type SettlementTaxEvidence = {
  * the additive portion. Fractional bills persist no buckets, so a profile whose
  * rules are uniformly EXCLUSIVE contributes the snapshot tax total, and a
  * uniformly INCLUSIVE (or mixed, bucket-less) profile contributes nothing —
- * inclusive tax is already inside merchandise and must not be subtracted.
+ * inclusive tax is already inside merchandise and must not be added again.
  */
 export function exclusiveTaxOutsideOrderTotal(evidence: SettlementTaxEvidence): Prisma.Decimal {
   if (evidence.buckets.length > 0) {
@@ -1685,9 +1793,9 @@ function settlementSnapshotIsNewer(
 }
 
 /**
- * Exclusive tax to subtract per bill. A reversal row is not a freeze, and a
+ * Exclusive tax per bill. A reversal row is not a freeze, and a
  * snapshot that another row reverses is stale. A reversed freeze plus a later
- * re-freeze would otherwise subtract the same exclusive tax twice and fail the
+ * re-freeze would otherwise count the same exclusive tax twice and fail the
  * order identity. Only the latest snapshot that is still in force counts.
  */
 export function exclusiveTaxFromSettlementSnapshots(
@@ -1750,15 +1858,6 @@ export async function evaluateOrderSettlement(
 ): Promise<OrderSettlement> {
   const order = await loadBillOrder(tx, orderId);
   const items = nonVoidedItems(order);
-  const derivedOrderTotal = add(
-    add(
-      deriveOrderTotal(items),
-      order.serviceChargePolicyVersion
-        ? roundMoney(multiply(deriveOrderTotal(items), order.serviceChargePolicyVersion.rate))
-        : ZERO
-    ),
-    order.deliveryFulfillment?.deliveryFeeSnapshot ?? ZERO
-  );
 
   const allBills = await tx.restaurantBill.findMany({
     where: { orderId },
@@ -1769,6 +1868,7 @@ export async function evaluateOrderSettlement(
       splitKind: true,
       grandTotal: true,
       deliveryFeeTotal: true,
+      serviceChargeTotal: true,
       compTotal: true,
       discountTotal: true,
       taxTotal: true,
@@ -1782,14 +1882,23 @@ export async function evaluateOrderSettlement(
     tx,
     liveBills.map((bill) => bill.id)
   );
-  const accountedTotal = sum(
-    liveBills.map((bill) =>
-      sub(
-        add(add(bill.grandTotal, bill.compTotal), bill.discountTotal),
-        exclusiveTaxByBill.get(bill.id) ?? ZERO
-      )
-    )
-  );
+  // Compare payable amounts in integer minor units. Service is already allocated
+  // to bills at cut time and reduced by comps; recomputing it on original gross
+  // merchandise would restore service the guest no longer owes (and lose split cents).
+  const cents = (amount: Prisma.Decimal) => BigInt(exactCents(amount));
+  let expectedCents =
+    cents(deriveOrderTotal(items)) + cents(order.deliveryFulfillment?.deliveryFeeSnapshot ?? ZERO);
+  let accountedCents = BigInt(0);
+  for (const bill of liveBills) {
+    expectedCents +=
+      cents(bill.serviceChargeTotal) +
+      cents(exclusiveTaxByBill.get(bill.id) ?? ZERO) -
+      cents(bill.compTotal) -
+      cents(bill.discountTotal);
+    accountedCents += cents(bill.grandTotal);
+  }
+  const derivedOrderTotal = money(expectedCents.toString()).div(100);
+  const accountedTotal = money(accountedCents.toString()).div(100);
 
   const coveredItemIds = new Set<string>();
   for (const bill of liveBills) {
@@ -1821,7 +1930,7 @@ export async function evaluateOrderSettlement(
     blocker = 'ITEMS_UNBILLED';
   } else if (liveBills.some((b) => b.status !== 'SETTLED')) {
     blocker = 'BILLS_OPEN';
-  } else if (!equals(accountedTotal, derivedOrderTotal)) {
+  } else if (accountedCents !== expectedCents) {
     blocker = 'TOTAL_MISMATCH';
   }
 

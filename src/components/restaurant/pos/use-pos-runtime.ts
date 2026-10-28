@@ -13,6 +13,7 @@ import {
   useState,
 } from 'react';
 
+import type { CompPanel } from './comp-panel';
 import type { CheckoutPanel } from './checkout-panel';
 import {
   useTerminalSession,
@@ -829,6 +830,23 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         ),
       disabled: busy || !online,
     } satisfies ComponentProps<typeof DayClosePanel>,
+    compPanelProps: {
+      orderId: order?.id ?? null,
+      request: checkoutRequest,
+      actingOperatorId: runtime.operator?.staffProfileId ?? '',
+      operators: operators
+        .filter((operator) => operator.canApprove)
+        .map((operator) => ({
+          id: operator.staffProfileId,
+          displayName: operator.displayName,
+          role: operator.role,
+        })),
+      disabled: busy || !online,
+      onApplied: async () => {
+        if (order) await loadDetail(order.id, runtime, false);
+        await loadOpenOrders();
+      },
+    } satisfies ComponentProps<typeof CompPanel>,
     refundPanelProps: {
       request: checkoutRequest,
       actingOperatorId: runtime.operator?.staffProfileId ?? '',

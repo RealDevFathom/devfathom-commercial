@@ -19,6 +19,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
+  compLine,
   deriveOrderTotal,
   evaluateOrderSettlement,
   exclusiveTaxFromSettlementSnapshots,
@@ -32,6 +33,32 @@ import type { FinalizeBillSettlementInput } from './bills';
 // ── Pure fixtures ────────────────────────────────────────────────────────────
 
 const D = (v: string | number) => new Prisma.Decimal(v);
+
+describe('comp constraint errors', () => {
+  it('maps a wrapped PostgreSQL CHECK violation to a clear TRPCError', async () => {
+    const db = {
+      $transaction: async () => {
+        throw new Error('Prisma constraint failure', {
+          cause: { meta: { driverAdapterError: { cause: { originalCode: '23514' } } } },
+        });
+      },
+    } as unknown as ScopedDb;
+    await expect(
+      compLine(db, {
+        billId: 'bill',
+        branchId: 'branch',
+        billLineId: 'line',
+        reason: 'comp',
+        approvingStaffProfileId: 'manager',
+        actor: { staffProfileId: 'staff', deviceId: 'device', idempotencyKey: 'key' },
+      })
+    ).rejects.toMatchObject({
+      name: 'TRPCError',
+      code: 'CONFLICT',
+      message: expect.stringContaining('service-charge evidence'),
+    });
+  });
+});
 
 describe('tender tax allocation validation', () => {
   const merchandise = {
@@ -201,6 +228,106 @@ function settlementSnapshot(input: {
   };
 }
 
+describe('settlement payable totals (QA-272)', () => {
+  it.each([
+    {
+      label: 'partial comp removes its allocated service',
+      comp: '40',
+      service: '6',
+      tax: '0',
+      discount: '0',
+      grand: '66',
+    },
+    {
+      label: 'exclusive tax is added once',
+      comp: '0',
+      service: '10',
+      tax: '15',
+      discount: '0',
+      grand: '125',
+    },
+    {
+      label: 'comp and exclusive tax together',
+      comp: '40',
+      service: '6',
+      tax: '9',
+      discount: '0',
+      grand: '75',
+    },
+    { label: 'fully comped bill', comp: '100', service: '0', tax: '0', discount: '0', grand: '0' },
+    {
+      label: 'discount and inclusive tax',
+      comp: '0',
+      service: '10',
+      tax: '0',
+      discount: '5',
+      grand: '105',
+    },
+  ])('$label', async ({ comp, service, tax, discount, grand }) => {
+    const db = {
+      restaurantOrder: {
+        findFirst: async () => ({
+          id: 'order-1',
+          status: 'PAYMENT_PENDING',
+          serviceChargePolicyVersion: { id: 'policy', rate: D('0.10') },
+          deliveryFulfillment: null,
+          items: [
+            { id: 'item-1', status: 'SERVED', unitPrice: D('100'), quantity: 1, modifiers: [] },
+          ],
+        }),
+      },
+      restaurantBill: {
+        findMany: async () => [
+          {
+            id: 'bill-1',
+            status: 'SETTLED',
+            splitKind: 'NONE',
+            grandTotal: D(grand),
+            serviceChargeTotal: D(service),
+            deliveryFeeTotal: D('0'),
+            compTotal: D(comp),
+            discountTotal: D(discount),
+            taxTotal: D(tax === '0' ? '12' : tax),
+            receiptNumber: 1,
+            lines: [{ orderItemId: 'item-1' }],
+            tenders: [{ amount: D(grand) }],
+          },
+        ],
+      },
+      restaurantTaxTransactionSnapshot: {
+        findMany: async () => [
+          {
+            ...settlementSnapshot({
+              id: 'snapshot',
+              tax: tax === '0' ? '12' : tax,
+              settledAt: '2026-08-01T12:00:00.000Z',
+            }),
+            buckets: [
+              {
+                priceMode: tax === '0' ? 'INCLUSIVE' : 'EXCLUSIVE',
+                taxAmount: D(tax === '0' ? '12' : tax),
+              },
+            ],
+          },
+        ],
+      },
+    } as unknown as ScopedDb;
+    const result = await evaluateOrderSettlement(db, 'order-1');
+    expect(result.settled).toBe(true);
+    expect(result.blocker).toBeNull();
+    expect(result.derivedOrderTotal.toFixed(2)).toBe(D(grand).toFixed(2));
+    expect(result.accountedTotal.toFixed(2)).toBe(D(grand).toFixed(2));
+    // Still reject a genuine one-cent drift, rather than trusting the bill total.
+    const findBills = db.restaurantBill.findMany;
+    db.restaurantBill.findMany = (async () =>
+      (await findBills()).map((bill) => ({
+        ...bill,
+        grandTotal: bill.grandTotal.plus('0.01'),
+      }))) as typeof findBills;
+    expect((await evaluateOrderSettlement(db, 'order-1')).blocker).toBe('TOTAL_MISMATCH');
+  });
+});
+
 describe('exclusiveTaxFromSettlementSnapshots', () => {
   const reversedAndRefrozen = [
     settlementSnapshot({
@@ -258,6 +385,7 @@ describe('exclusiveTaxFromSettlementSnapshots', () => {
             status: 'SETTLED',
             splitKind: 'NONE',
             grandTotal: D('1115.50'),
+            serviceChargeTotal: D('0.00'),
             deliveryFeeTotal: D('0.00'),
             compTotal: D('0.00'),
             discountTotal: D('0.00'),
@@ -276,7 +404,7 @@ describe('exclusiveTaxFromSettlementSnapshots', () => {
     const settlement = await evaluateOrderSettlement(db, 'order-1');
     expect(settlement.settled).toBe(true);
     expect(settlement.blocker).toBeNull();
-    expect(settlement.accountedTotal.toString()).toBe('970');
+    expect(settlement.accountedTotal.toString()).toBe('1115.5');
     expect(settlement.accountedTotal.toString()).toBe(settlement.derivedOrderTotal.toString());
   });
 
@@ -878,6 +1006,80 @@ describeIfDatabase('bills command layer (real DB)', () => {
     expect(settlement.accountedTotal.toString()).toBe(settlement.derivedOrderTotal.toString());
     expect(settlement.unbilledItemIds).toEqual([]);
     expect(settlement.blocker).toBe('BILLS_OPEN'); // bills exist, not yet settled
+  });
+
+  it('comps the last policy service-bearing line with valid zero-service evidence (QA-271)', async () => {
+    const policy = await read((tx) =>
+      tx.restaurantServiceChargePolicyVersion.create({
+        data: {
+          branchId: ids.branch,
+          rate: D('0.10'),
+          effectiveFrom: new Date('2030-01-01T00:00:00.000Z'),
+          acknowledgedAt: AT,
+          acknowledgementRef: 'QA-271',
+          idempotencyKey: key(),
+          payloadHash: key(),
+        },
+      })
+    );
+    for (const count of [1, 2]) {
+      const { orderId, db } = await openWithItems(Array.from({ length: count }, () => ({})));
+      await read((tx) =>
+        tx.restaurantOrder.update({
+          where: { id: orderId },
+          data: { serviceChargePolicyVersionId: policy.id },
+        })
+      );
+      const { billIds } = await deps.bills.cutBills(db, {
+        orderId,
+        branchId: ids.branch,
+        split: { kind: 'NONE' },
+        actor: actor(),
+      });
+      const lines = await read((tx) =>
+        tx.restaurantBillLine.findMany({ where: { billId: billIds[0]! } })
+      );
+      for (const line of lines) {
+        await deps.bills.compLine(db, {
+          billId: billIds[0]!,
+          branchId: ids.branch,
+          billLineId: line.id,
+          reason: 'QA-271 comp',
+          approvingStaffProfileId: ids.manager,
+          actor: actor(),
+        });
+        const settlement = await read((tx) => deps.bills.evaluateOrderSettlement(tx, orderId));
+        expect(settlement.accountedTotal.toFixed(2)).toBe(settlement.derivedOrderTotal.toFixed(2));
+      }
+      const bill = await read((tx) =>
+        tx.restaurantBill.findUniqueOrThrow({
+          where: { id: billIds[0]! },
+          include: { lines: true },
+        })
+      );
+      expect(bill.grandTotal.toFixed(2)).toBe('0.00');
+      expect(bill.serviceChargeTotal.toFixed(2)).toBe('0.00');
+      expect(bill.serviceChargeBasis.toFixed(2)).toBe('0.00');
+      expect(bill.serviceChargePolicyVersionId).toBeNull();
+      expect(bill.serviceChargeRate).toBeNull();
+      expect(bill.serviceChargeTaxTreatment).toBeNull();
+      await read((tx) =>
+        deps.bills.settleBill(tx, {
+          billId: bill.id,
+          staffProfileId: ids.operator,
+          deviceId,
+          at: AT,
+        })
+      );
+      expect((await read((tx) => deps.bills.evaluateOrderSettlement(tx, orderId))).settled).toBe(
+        true
+      );
+      expect(
+        bill.lines.every(
+          (line) => line.serviceChargeAmount.isZero() && line.compAmount.equals(line.lineSubtotal)
+        )
+      ).toBe(true);
+    }
   });
 
   it('comps a line to zero: retains snapshot price, records reason + co-auth, updates totals', async () => {

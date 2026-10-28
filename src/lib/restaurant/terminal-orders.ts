@@ -532,6 +532,10 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
           items: { select: { orderItemId: true, quantity: true } },
         },
       },
+      bills: {
+        where: { status: { not: 'VOID' } },
+        select: { serviceChargeTotal: true },
+      },
       deliveryFulfillment: { select: { deliveryFeeSnapshot: true } },
     },
   });
@@ -604,7 +608,9 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     totals: {
       subtotal: money(deriveSubtotal(activeItems)),
       tax: quoted.tax,
-      serviceCharge: quoted.serviceCharge,
+      serviceCharge: order.bills?.length
+        ? Prisma.Decimal.sum(...order.bills.map((bill) => bill.serviceChargeTotal)).toFixed(2)
+        : quoted.serviceCharge,
       deliveryFee: money(order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)),
     },
   };

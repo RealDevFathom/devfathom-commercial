@@ -1,3 +1,4 @@
+import { TRPCError } from '@trpc/server';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import 'server-only';
 
@@ -204,7 +205,12 @@ export const dayCorrectBody = z
 /** The five money capabilities a terminal route may gate on, plus the approver's
  * `coauth:approve` — all pre-existing entries in `vertical-catalog.ts` (C11). */
 export type MoneyCapability =
-  'payments:collect' | 'payments:refund' | 'cash:open' | 'cash:adjust' | 'cash:close';
+  | 'orders:complimentary'
+  | 'payments:collect'
+  | 'payments:refund'
+  | 'cash:open'
+  | 'cash:adjust'
+  | 'cash:close';
 
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 
@@ -402,6 +408,7 @@ const json = (body: unknown, status: number): NextResponse => NextResponse.json(
  * generic 500.
  */
 export function moneyErrorResponse(err: unknown): NextResponse | null {
+  if (err instanceof TRPCError && err.code === 'CONFLICT') return json({ error: err.message }, 409);
   // Map only after the terminal transaction rolls back. Configuration errors
   // may contain internal profile/rule IDs, so return fixed operator guidance.
   if (err instanceof TaxProfileResolutionError) {

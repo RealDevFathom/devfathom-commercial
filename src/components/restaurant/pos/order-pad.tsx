@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, type ReactNode } from 'react';
 import { usePosRuntime, type PosNotice } from './use-pos-runtime';
+import { CompPanel } from './comp-panel';
 import { CheckoutPanel } from './checkout-panel';
 import { DrawerPanel } from './drawer-panel';
 import { DayClosePanel } from './day-close-panel';
@@ -165,6 +166,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
             <OperatorSwitch {...workspace.operatorSwitchProps} />
             <DrawerPanel {...workspace.drawerPanelProps} />
             <DayClosePanel {...workspace.dayClosePanelProps} />
+            <CompPanel key={pos.order?.id ?? 'no-order'} {...workspace.compPanelProps} />
             <RefundPanel {...workspace.refundPanelProps} />
             <Button
               type="button"
