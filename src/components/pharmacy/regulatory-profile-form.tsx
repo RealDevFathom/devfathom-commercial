@@ -313,7 +313,13 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
             {saved}
           </p>
         ) : null}
-        <form className="space-y-6" noValidate onSubmit={submit} ref={formRef}>
+        <form
+          className="space-y-6"
+          key={branchId}
+          noValidate
+          onSubmit={submit}
+          ref={formRef}
+        >
           <fieldset className="grid gap-4 sm:grid-cols-2">
             <legend className="mb-2 font-display text-base font-semibold text-text-strong">
               Jurisdiction and premises
