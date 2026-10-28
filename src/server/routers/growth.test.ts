@@ -27,8 +27,9 @@ let sequence = 0;
 function caller() {
   sequence += 1;
   const organizationId = `org_growth_ui_${sequence}`;
+  const countAudience = vi.fn(async () => 7);
   const api = growthRouter.createCaller({
-    db: {},
+    db: { growthWaCustomer: { count: countAudience } },
     entitlements: {
       organizationId,
       enabledModules: ['growth_ai'],
@@ -52,7 +53,7 @@ function caller() {
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as never);
-  return { api, organizationId };
+  return { api, organizationId, countAudience };
 }
 
 const proposal = {
@@ -128,7 +129,7 @@ describe('growth admin procedures', () => {
     });
     expect(created.status).toBe('proposed');
     expect(created.createdBy).toBe('user_owner');
-    expect(created.estimatedReach).toBe(0);
+    expect(created.estimatedReach).toBe(7);
     expect(created.segment).toEqual({ type: 'all' });
   });
 
@@ -257,4 +258,15 @@ describe('growth admin procedures', () => {
     mocks.can.mockResolvedValue(false);
     await expect(caller().api.campaigns.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
+});
+
+it('computes reach from this session tenant and refreshes it when editing', async () => {
+  const { api, organizationId, countAudience } = caller();
+  const created = await api.campaigns.create(proposal);
+  expect(created.estimatedReach).toBe(7);
+  expect(countAudience).toHaveBeenCalledWith({
+    where: { organizationId, whatsappOptIn: true, whatsappE164: { not: null } },
+  });
+  countAudience.mockResolvedValueOnce(3);
+  expect((await api.campaigns.update({ ...proposal, id: created.id })).estimatedReach).toBe(3);
 });

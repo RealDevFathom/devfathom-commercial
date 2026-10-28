@@ -15223,3 +15223,76 @@ model PharmacyPackPrice {
   @@index([organizationId, packLevelId, effectiveFrom])
   @@map("pharmacy_pack_prices")
 }
+
+/// WhatsApp channel for one organization. Tables are `growth_wa_*` so a later
+/// G1 growth schema can add its own settings and customer models without a clash.
+/// `organizationId` is on all four tables so tenant purge deletes them. The
+/// settings foreign key also cascades when the organization row itself is deleted.
+model GrowthWaSettings {
+  organizationId        String   @id
+  monthlyBudgetMinor    Int      @default(0)
+  autoApproveUnderMinor Int      @default(0)
+  quietHoursStart       Int      @default(21)
+  quietHoursEnd         Int      @default(9)
+  maxMsgsPerDay         Int      @default(200)
+  minSecondsBetweenMsgs Int      @default(4)
+  waInstanceName        String?
+  waApiUrl              String?
+  waApiKeyEnc           String?
+  waWebhookSecretHash   String?  @unique
+  waWebhookSecretEnc    String?
+  churnThreshold        Int      @default(60)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@map("growth_wa_settings")
+}
+
+model GrowthWaCustomer {
+  id               String    @id @default(cuid())
+  organizationId   String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  displayName      String?
+  whatsappE164     String?
+  whatsappOptIn    Boolean   @default(false)
+  whatsappOptInAt  DateTime?
+  whatsappOptOutAt DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([organizationId, whatsappE164])
+  @@index([organizationId])
+  @@map("growth_wa_customers")
+}
+
+model GrowthWaMessage {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId     String?
+  direction      String
+  waMessageId    String?
+  body           String
+  status         String
+  campaignId     String?
+  recipientId    String?
+  error          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, waMessageId])
+  @@index([organizationId, direction, status])
+  @@map("growth_wa_messages")
+}
+
+model GrowthWaTemplate {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  key            String
+  language       String
+  body           String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, key, language])
+  @@index([organizationId])
+  @@map("growth_wa_templates")
+}

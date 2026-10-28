@@ -1,3 +1,4 @@
+import { growthWhatsAppRouter } from './growth-whatsapp';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
@@ -17,10 +18,10 @@ import {
   type GrowthTemplate,
   type TemplateKey,
 } from '@/lib/growth/view';
-import { capabilityProcedure, router } from '@/server/trpc';
+import { capabilityProcedure, router, type TRPCContext } from '@/server/trpc';
 
 const growthProcedure = capabilityProcedure('growth.manage').use(async ({ ctx, next }) => {
-  const organizationId = ctx.organization?.id ?? ctx.session?.user?.organizationId;
+  const organizationId = ctx.session?.user?.organizationId;
   if (!organizationId || !(await isGrowthEnabled(organizationId))) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Growth AI is off for this shop.' });
   }
@@ -158,7 +159,7 @@ function organizationIdOf(ctx: {
   organization: { id: string } | null;
   session: { user?: { organizationId?: string | null } | null } | null;
 }): string {
-  const organizationId = ctx.organization?.id ?? ctx.session?.user?.organizationId;
+  const organizationId = ctx.session?.user?.organizationId;
   if (!organizationId) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
   return organizationId;
 }
@@ -315,6 +316,7 @@ function writeCampaign(
   store: GrowthFixture,
   input: z.infer<typeof campaignWrite>,
   userId: string,
+  estimatedReach: number,
   existing?: FixtureCampaign
 ): FixtureCampaign {
   assertDiscount(store, input);
@@ -334,7 +336,7 @@ function writeCampaign(
     budgetCapMinor: input.budgetCapMinor,
     spentMinor: 0,
     templateId: input.templateId,
-    estimatedReach: 0,
+    estimatedReach,
     createdBy: userId,
     approvedBy: null,
     approvedAt: null,
@@ -351,7 +353,7 @@ function writeCampaign(
       budgetCapMinor: input.budgetCapMinor,
       templateId: input.templateId,
       rationale: input.rationale,
-      estimatedReach: 0,
+      estimatedReach,
     });
   } else {
     store.campaigns.push(campaign);
@@ -360,7 +362,20 @@ function writeCampaign(
   return campaign;
 }
 
+async function estimatedAudience(ctx: TRPCContext) {
+  return ctx.db.growthWaCustomer.count({
+    where: {
+      organizationId: organizationIdOf(ctx),
+      whatsappOptIn: true,
+      whatsappE164: { not: null },
+    },
+  });
+}
+
 export const growthRouter = router({
+  customers: growthWhatsAppRouter.customers,
+  whatsapp: growthWhatsAppRouter.whatsapp,
+  channelTemplates: growthWhatsAppRouter.templates,
   connection: router({
     status: growthProcedure.query(({ ctx }): GrowthConnection =>
       connectionOf(growthStore(organizationIdOf(ctx)).settings)
@@ -392,17 +407,19 @@ export const growthRouter = router({
         preview: previewFor(campaign, template),
       };
     }),
-    create: growthProcedure.input(campaignWrite).mutation(({ ctx, input }) => {
+    create: growthProcedure.input(campaignWrite).mutation(async ({ ctx, input }) => {
       const store = growthStore(organizationIdOf(ctx));
-      return toCampaign(writeCampaign(store, input, userIdOf(ctx)));
+      return toCampaign(writeCampaign(store, input, userIdOf(ctx), await estimatedAudience(ctx)));
     }),
     update: growthProcedure
       .input(campaignWrite.extend({ id: z.string().min(1) }))
-      .mutation(({ ctx, input }) => {
+      .mutation(async ({ ctx, input }) => {
         const store = growthStore(organizationIdOf(ctx));
         const campaign = requireCampaign(store, input.id);
         if (campaign.status !== 'proposed') bad('Only a proposal can be edited.');
-        return toCampaign(writeCampaign(store, input, userIdOf(ctx), campaign));
+        return toCampaign(
+          writeCampaign(store, input, userIdOf(ctx), await estimatedAudience(ctx), campaign)
+        );
       }),
     approve: growthProcedure
       .input(z.object({ id: z.string().min(1) }))

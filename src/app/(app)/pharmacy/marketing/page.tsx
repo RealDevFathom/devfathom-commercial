@@ -9,6 +9,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { pharmacyMarketingRouter } from '@/server/routers/pharmacy-marketing';
 import { createTRPCContext } from '@/server/trpc';
 import { MarketingActionForm } from './action-form';
+import { WhatsAppWebhookSettings } from './whatsapp-webhook-settings';
 
 export const metadata = { title: 'Marketing · Pharmacy' };
 const control =
@@ -41,6 +42,14 @@ export default async function PharmacyMarketingPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const params = await searchParams;
+  let isAdmin = false;
+  try {
+    const ctx = await createTRPCContext();
+    isAdmin = ctx.session?.user.role === 'ADMIN';
+  } catch {
+    isAdmin = false;
+  }
+  const webhookSettings = isAdmin ? <WhatsAppWebhookSettings /> : null;
   const heading = (
     <PageHeader
       eyebrowMuted
@@ -63,6 +72,7 @@ export default async function PharmacyMarketingPage({
     return (
       <main className="min-w-0 space-y-6">
         {heading}
+        {webhookSettings}
         <SectionCard
           title={denied ? 'Marketing access required' : 'Marketing unavailable'}
           titleLevel={2}
@@ -86,6 +96,7 @@ export default async function PharmacyMarketingPage({
     return (
       <main className="min-w-0 space-y-6">
         {heading}
+        {webhookSettings}
         <SectionCard title="No active branches" titleLevel={2}>
           Activate a pharmacy branch before preparing campaigns.
         </SectionCard>
@@ -95,6 +106,7 @@ export default async function PharmacyMarketingPage({
   return (
     <main key={branchId} className="min-w-0 space-y-6">
       {heading}
+      {webhookSettings}
       <SectionCard title="Workspace" titleLevel={2}>
         <form action="/pharmacy/marketing" className="flex flex-wrap items-end gap-4">
           <label className="min-w-0 flex-1 text-sm">

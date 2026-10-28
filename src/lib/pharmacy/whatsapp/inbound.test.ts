@@ -236,6 +236,23 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     expect(provider.calls).toHaveLength(1);
   });
 
+  it.each(['yes', 'haan', 'ہاں', 'subscribe', 'شروع کریں', 'START offers', 'START.'])(
+    'does not re-subscribe an opted-out customer for %s', async (text) => {
+      knownCustomer(false);
+      await handleInboundWhatsAppMessage('org_a', provider, message(text));
+      expect(store.customers[0]).toMatchObject({ whatsappOptIn: false });
+      expect(provider.calls).toHaveLength(0);
+    }
+  );
+
+  it.each(['START', 'start ', 'شروع'])(
+    're-subscribes an opted-out customer for %s', async (text) => {
+      knownCustomer(false);
+      await handleInboundWhatsAppMessage('org_a', provider, message(text));
+      expect(store.customers[0]).toMatchObject({ whatsappOptIn: true });
+    }
+  );
+
   it('Urdu STOP and START toggle the flag', async () => {
     knownCustomer(null);
     await handleInboundWhatsAppMessage('org_a', provider, message('بند کریں'));

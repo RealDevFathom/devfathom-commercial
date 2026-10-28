@@ -1,0 +1,11 @@
+# WhatsApp marketing safety (PR #175)
+
+Task rules: `/workspace/wt/prompts/_rules.txt`. Implementation is confined to the current fix branch; session tenant derivation and existing FORCE RLS are unchanged.
+
+`src/lib/growth/prohibited-drugs.json` is the maintained safety dataset: DRAP-hosted Punjab Drug Sale Rules Schedule G and DRAP controlled-medicine provenance, plus explicitly supplemental Pakistani brands and Roman Urdu aliases requested in the review. Review it when DRAP publishes changes; it is not a complete dispensing authority. Tenant catalog brand, ingredient and alias checks remain mandatory and fail closed.
+
+Normalization uses NFKD, strips marks and tatweel, folds common Cyrillic/Greek confusables and Arabic keyboard letters, treats i/l/1/pipe as ambiguous, and accepts repeated letters and separators. Names of five or more normalized letters allow affixes. `Lyrical` is a narrow reviewed adjective exception for Lyrica; Kodeen remains conservatively blocked as a codeine alias. Insulin accessory noun phrases are permitted by the copy check; product category admission still requires FRONT_SHOP/DEVICE. Insulin alone remains blocked.
+
+General store callers can insert inbound messages only; outbound capability belongs to queue/consent. The source test scans all src, including bracket spellings and string concatenation. The campaign drain rechecks the claimed body against the current tenant catalog immediately before sending, and marks rejected or uncheckable campaign rows failed. Utility refill reminders retain their separate purpose.
+
+Before purge deletes tenant rows, it archives customer phone/consent timestamps and inbound proof in `growth_wa_consent_retention`, in the same transaction. An archive error aborts purge; retries are idempotent. The archive has no tenant foreign key and uses `tenantId` so generic organizationId deletion cannot erase evidence. FORCE RLS restricts tenant reads; platform administration can audit it. This evidence remains after tenant purge for suppression/consent disputes and must not be used to restart marketing. There is no automatic expiry in this change; deletion requires an explicit retention-policy decision. Apply the migration before deploying the purge worker.

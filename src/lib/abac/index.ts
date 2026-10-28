@@ -27,7 +27,7 @@ export type CanOptions = {
 
 function capabilityMatches(rule: string, action: string): boolean {
   if (rule === '*' || rule === action) return true;
-  if (!rule.endsWith(':*')) return false;
+  if (!rule.endsWith(':*') && !rule.endsWith('.*')) return false;
   return action.startsWith(rule.slice(0, -1));
 }
 

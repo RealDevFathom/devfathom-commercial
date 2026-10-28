@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const m = vi.hoisted(() => ({
   query: vi.fn(),
   execute: vi.fn(),
+  raw: vi.fn(),
   createMany: vi.fn(),
   updateMany: vi.fn(),
   update: vi.fn(),
@@ -27,6 +28,7 @@ import { processPlatformJobs } from './jobs';
 
 const db = {
   $queryRaw: m.query,
+  $executeRaw: m.raw,
   $executeRawUnsafe: m.execute,
   platformJob: {
     createMany: m.createMany,
@@ -78,6 +80,7 @@ beforeEach(() => {
   m.retention.mockResolvedValue({ purged: 1 });
   m.organization.mockResolvedValue({ status: 'PURGING', purgeScheduledAt: new Date('2026-10-01') });
   m.execute.mockResolvedValue(1);
+  m.raw.mockResolvedValue(1);
   m.deployment.mockResolvedValue({ count: 1 });
 });
 afterEach(() => vi.useRealTimers());
@@ -254,3 +257,54 @@ describe('composed platform worker boundaries', () => {
     }
   );
 });
+
+it('expires archived consent proof on worker passes without queued jobs', async () => {
+  await processPlatformJobs(1);
+  expect(m.raw.mock.calls[0][0].join('')).toContain('DELETE FROM growth_wa_consent_retention WHERE "expiresAt" <= now()');
+});
+
+it('archives consent proof without storing message text and aborts on archive failure', async () => {
+  queue(job('PURGE_DATA', { attempts: 3 }));
+  m.raw.mockImplementation(async (sql) => {
+    const text = sql.join('');
+    if (text.includes('INSERT INTO')) throw new Error('archive failed');
+    return 0;
+  });
+  await expect(processPlatformJobs(1)).resolves.toMatchObject({ failed: 1 });
+  expect(m.execute).not.toHaveBeenCalled();
+  expect(m.organizationUpdate).not.toHaveBeenCalled();
+});
+
+it.each(['STOP.', 'رک جاؤ', 'بند', 'band kar do', 'رُک جاؤ'])(
+  'archives normalized opt-out proof for %s', async (body) => {
+    queue(job('PURGE_DATA'));
+    const baseQuery = m.query.getMockImplementation()!;
+    m.query.mockImplementation(async (sql) => {
+      if (sql.text?.includes('AS phone')) return [{
+        id: 'in-1', waMessageId: 'wa-1', phone: '+923001234567', timestamp: now, body,
+      }];
+      return baseQuery(sql);
+    });
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1 });
+    const archive = m.raw.mock.calls.find((call) => call[0].join('').includes('VALUES ('));
+    expect(archive).toBeDefined();
+    expect(JSON.parse(archive![3])).toMatchObject({ keyword: 'STOP', timestamp: now.toISOString() });
+    const customerArchive = m.raw.mock.calls.find((call) => call[0].join('').includes("'customer'"));
+    expect(customerArchive![0].join('')).toContain("'optOutAt', \"whatsappOptOutAt\"");
+  }
+);
+
+it.each(['yes', 'haan', 'ہاں', "Yes, I'll pick it up tomorrow", 'haan kal', 'START offers'])(
+  'does not archive ordinary conversation as opt-in: %s', async (body) => {
+    queue(job('PURGE_DATA'));
+    const baseQuery = m.query.getMockImplementation()!;
+    m.query.mockImplementation(async (sql) => {
+      if (sql.text?.includes('AS phone')) return [{
+        id: 'in-1', waMessageId: 'wa-1', phone: '+923001234567', timestamp: now, body,
+      }];
+      return baseQuery(sql);
+    });
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1 });
+    expect(m.raw.mock.calls.some((call) => call[0].join('').includes('VALUES ('))).toBe(false);
+  }
+);

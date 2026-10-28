@@ -109,6 +109,16 @@ describe('opt-in pharmacy Owner / Operator access', () => {
 });
 
 describe('custom ABAC decisions', () => {
+  it('lets a dotted wildcard grant only dotted actions in that namespace', async () => {
+    const db = authorizationDb({
+      rolePermissions: [{ capability: 'pharmacy.*', effect: 'ALLOW' }],
+    });
+
+    await expect(can(employee, 'pharmacy.counter', undefined, { db })).resolves.toBe(true);
+    await expect(can(employee, 'pharmacy:orders', undefined, { db })).resolves.toBe(false);
+    await expect(can(employee, 'pos:operate', undefined, { db })).resolves.toBe(false);
+  });
+
   it('allows exact and namespace wildcard capabilities from a custom role', async () => {
     const db = authorizationDb({
       rolePermissions: [
@@ -180,9 +190,11 @@ describe('custom ABAC decisions', () => {
       'pharmacy:safety',
       'pharmacy:catalogue-review',
       'pharmacy:orders',
+      'pharmacy.counter',
+      'pos:operate',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(42);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(44);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toEqual([]);

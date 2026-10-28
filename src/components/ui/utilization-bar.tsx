@@ -22,21 +22,32 @@ function UtilizationBar({
   className,
   ...props
 }: UtilizationBarProps) {
+  const labelId = React.useId();
   const pct = Math.max(0, Math.min(100, value));
   const showHeader = label != null || !hidePercent;
   return (
     <div data-slot="utilization-bar" className={cn('space-y-1.5', className)} {...props}>
       {showHeader ? (
         <div className="flex items-center justify-between gap-2">
-          {label != null ? <span className="eyebrow">{label}</span> : <span />}
+          {label != null ? (
+            <span id={labelId} className="eyebrow">
+              {label}
+            </span>
+          ) : (
+            <span />
+          )}
           {!hidePercent ? (
-            <span className="font-mono text-xs tabular-nums text-text-body">{Math.round(pct)}%</span>
+            <span className="font-mono text-xs tabular-nums text-text-body">
+              {Math.round(pct)}%
+            </span>
           ) : null}
         </div>
       ) : null}
       <div
         className="h-1.5 w-full overflow-hidden rounded-full bg-surface-sunken"
         role="progressbar"
+        aria-labelledby={props['aria-labelledby'] ?? (label != null ? labelId : undefined)}
+        aria-label={props['aria-label'] ?? (label == null ? 'Utilization' : undefined)}
         aria-valuenow={Math.round(pct)}
         aria-valuemin={0}
         aria-valuemax={100}

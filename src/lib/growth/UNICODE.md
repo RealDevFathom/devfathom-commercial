@@ -1,0 +1,1 @@
+The complete Unicode UTS #39 confusables mapping (version 18.0.0) is vendored in unicode-confusables.ts from https://www.unicode.org/Public/security/latest/confusables.txt (retrieved 2026-10-21). Each source code point maps to its skeleton sequence. No runtime network requests. Unicode data license: https://www.unicode.org/license.txt .

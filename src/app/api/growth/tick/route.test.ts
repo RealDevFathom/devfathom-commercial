@@ -2,9 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import vercel from '../../../../../vercel.json';
 
-const mocks = vi.hoisted(() => ({ withPlatformDb: vi.fn(), isGrowthEnabled: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  withPlatformDb: vi.fn(),
+  isGrowthEnabled: vi.fn(),
+  drain: vi.fn(),
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: mocks.withPlatformDb }));
 vi.mock('@/lib/growth', () => ({ isGrowthEnabled: mocks.isGrowthEnabled }));
+vi.mock('@/lib/growth/whatsapp/queue', () => ({ drainOrganizationQueue: mocks.drain }));
 
 import { GET, POST } from './route';
 
@@ -22,6 +27,7 @@ describe.each([
     mocks.withPlatformDb.mockImplementation((run) => run({ organization: { findMany } }));
     findMany.mockResolvedValue([{ id: 'org_enabled' }, { id: 'org_disabled' }]);
     mocks.isGrowthEnabled.mockImplementation(async (id) => id === 'org_enabled');
+    mocks.drain.mockResolvedValue({ sent: 0, reason: 'no_settings' });
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -40,6 +46,7 @@ describe.each([
       expect(response.status).toBe(401);
       expect(mocks.withPlatformDb).not.toHaveBeenCalled();
       expect(mocks.isGrowthEnabled).not.toHaveBeenCalled();
+      expect(mocks.drain).not.toHaveBeenCalled();
       expect(console.info).not.toHaveBeenCalled();
     }
   );
@@ -55,6 +62,7 @@ describe.each([
     expect(response.status).toBe(401);
     expect(mocks.withPlatformDb).not.toHaveBeenCalled();
     expect(mocks.isGrowthEnabled).not.toHaveBeenCalled();
+    expect(mocks.drain).not.toHaveBeenCalled();
   });
 
   it('logs exactly once per enabled active organization', async () => {
@@ -74,6 +82,7 @@ describe.each([
     expect(console.info).toHaveBeenCalledExactlyOnceWith(
       '[growth] tick organizationId=org_enabled'
     );
+    expect(mocks.drain).toHaveBeenCalledExactlyOnceWith('org_enabled');
   });
 
   it('logs nothing when no organizations are enabled', async () => {
@@ -86,6 +95,7 @@ describe.each([
     );
     expect(response.status).toBe(200);
     expect(console.info).not.toHaveBeenCalled();
+    expect(mocks.drain).not.toHaveBeenCalled();
   });
 });
 

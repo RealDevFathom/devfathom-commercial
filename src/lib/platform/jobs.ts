@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { consentKeyword } from '@/lib/growth/consent';
+
 import { resolveTxt } from 'node:dns/promises';
 import { createHash } from 'node:crypto';
 import {
@@ -644,6 +646,41 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
   if (!organization.purgeScheduledAt || organization.purgeScheduledAt > new Date()) {
     throw new Error('The retention window has not elapsed.');
   }
+  // Archive consent proof in the same transaction before destructive work.
+  // A failed archive aborts the purge; idempotency supports worker retries.
+  await db.$executeRaw`
+    INSERT INTO growth_wa_consent_retention ("tenantId", "evidenceKind", "sourceId", evidence)
+    SELECT "organizationId", 'customer', id,
+      jsonb_build_object('phone', "whatsappE164", 'timestamp', "whatsappOptInAt",
+        'keyword', CASE WHEN "whatsappOptInAt" IS NOT NULL THEN 'opt-in' ELSE 'opt-out' END, 'id', id, 'optOutAt', "whatsappOptOutAt")
+    FROM growth_wa_customers WHERE "organizationId" = ${organizationId}
+      AND ("whatsappOptInAt" IS NOT NULL OR "whatsappOptOutAt" IS NOT NULL)
+    ON CONFLICT DO NOTHING
+  `;
+  const inboundProof = await db.$queryRaw<Array<{
+    id: string; waMessageId: string | null; phone: string | null;
+    timestamp: Date; body: string;
+  }>>(Prisma.sql`
+    SELECT m.id, m."waMessageId", c."whatsappE164" AS phone,
+      m."createdAt" AS timestamp, m.body
+    FROM growth_wa_messages m
+    LEFT JOIN growth_wa_customers c ON c.id = m."customerId"
+      AND c."organizationId" = m."organizationId"
+    WHERE m."organizationId" = ${organizationId} AND m.direction = 'in'
+  `);
+  for (const row of inboundProof) {
+    const keyword = consentKeyword(row.body);
+    if (!keyword) continue;
+    const evidence = JSON.stringify({
+      id: row.id, waMessageId: row.waMessageId, phone: row.phone,
+      timestamp: row.timestamp, keyword: keyword.toUpperCase(),
+    });
+    await db.$executeRaw`
+      INSERT INTO growth_wa_consent_retention ("tenantId", "evidenceKind", "sourceId", evidence)
+      VALUES (${organizationId}, 'inbound', ${row.id}, ${evidence}::jsonb)
+      ON CONFLICT DO NOTHING
+    `;
+  }
   const dependencies = await db.$queryRaw<TableDependency[]>(Prisma.sql`
     WITH tenant_tables AS (
       SELECT table_name
@@ -878,6 +915,10 @@ export type ProcessJobsResult = {
 
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
+  // Runs on every scheduled platform worker pass, even with no queued jobs.
+  await withPlatformDb((db) => db.$executeRaw`
+    DELETE FROM growth_wa_consent_retention WHERE "expiresAt" <= now()
+  `);
   await enqueueCameraEvidenceJobs(new Date());
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),

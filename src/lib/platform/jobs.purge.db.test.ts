@@ -151,6 +151,19 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
     await withPlatformDb(async (db) => {
       await seedTenant(db, PURGED_ORG, 'PURGING');
       await seedTenant(db, LIVE_ORG, 'ACTIVE');
+      await db.$executeRawUnsafe(
+        `INSERT INTO growth_wa_customers (id, "organizationId", "whatsappE164", "whatsappOptIn", "whatsappOptInAt", "whatsappOptOutAt", "updatedAt")
+         VALUES ($1, $2, '+923001234567', false, now() - interval '1 day', now(), now())`,
+        `${PURGED_ORG}_consent`,
+        PURGED_ORG
+      );
+      await db.$executeRawUnsafe(
+        `INSERT INTO growth_wa_messages (id, "organizationId", "customerId", direction, body, status, "updatedAt")
+         VALUES ($1, $2, $3, 'in', 'STOP', 'received', now())`,
+        `${PURGED_ORG}_stop`,
+        PURGED_ORG,
+        `${PURGED_ORG}_consent`
+      );
 
       // The mutually-referencing pair: a branch that names a default stock
       // location which in turn belongs to that branch.
@@ -224,6 +237,27 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       retried: 0,
       failed: 0,
     });
+
+    const evidence = await withPlatformDb((db) =>
+      db.$queryRawUnsafe<Array<{ evidenceKind: string; evidence: Record<string, unknown>; expiresAt: Date; retainedAt: Date }>>(
+        `SELECT "evidenceKind", evidence, "expiresAt", "retainedAt" FROM growth_wa_consent_retention WHERE "tenantId" = $1 ORDER BY "evidenceKind"`,
+        PURGED_ORG
+      )
+    );
+    expect(evidence.map((row) => row.evidenceKind)).toEqual(['customer', 'inbound']);
+    for (const row of evidence) {
+      expect(Object.keys(row.evidence).sort()).toEqual(
+        (row.evidenceKind === 'inbound' ? ['id', 'waMessageId', 'phone', 'timestamp', 'keyword'] : ['id', 'phone', 'timestamp', 'keyword', 'optOutAt']).sort()
+      );
+      expect(row.expiresAt.getTime() - row.retainedAt.getTime()).toBe(365 * 24 * 60 * 60 * 1000);
+    }
+    const isolated = await withTenantDb(LIVE_ORG, (db) =>
+      db.$queryRawUnsafe<unknown[]>(
+        `SELECT evidence FROM growth_wa_consent_retention WHERE "tenantId" = $1`,
+        PURGED_ORG
+      )
+    );
+    expect(isolated).toEqual([]);
 
     const [remaining] = await withPlatformDb((db) =>
       db.$queryRawUnsafe<Array<Record<string, bigint>>>(
