@@ -201,10 +201,10 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'khataAgingMinor',
     'Khata aging',
-    'Unknown: customer open-item and due-date aging are not available. Recorded account balances in Finance are not aging.',
-    null,
-    'not asserted',
-    null,
+    'Outstanding overdue Khata debits, including dishonoured cheques, less allocated collections as of the report end.',
+    'pharmacy_khata_events',
+    'selected branches at report end',
+    '/pharmacy/counter',
     'reports:financial',
   ],
   [
@@ -317,6 +317,19 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
         Prisma.sql`SELECT COUNT(*) FILTER (WHERE "status" IN ('QUEUED','SUBMITTING') AND "createdAt"<=CURRENT_TIMESTAMP-interval '15 minutes')::int AS aging, COUNT(*) FILTER (WHERE "status" IN ('REJECTED','DEAD'))::int AS rejected FROM "pharmacy_fiscal_documents" WHERE "branchId" IN (${branches})`
       ),
     ]);
+  const aging = await db.$queryRaw<Array<{ amount: bigint }>>(Prisma.sql`
+    SELECT COALESCE(SUM(GREATEST(0, e."amountMinor"::bigint - COALESCE(p.paid,0))),0)::bigint AS amount
+    FROM pharmacy_khata_events e
+    LEFT JOIN (
+      SELECT "organizationId", "branchId", "familyAccountId", "settlesChargeId", SUM("amountMinor") AS paid
+      FROM pharmacy_khata_events WHERE kind='PAYMENT' AND "occurredAt" < ${parsed.to}
+      GROUP BY "organizationId", "branchId", "familyAccountId", "settlesChargeId"
+    ) p ON p."organizationId"=e."organizationId" AND p."branchId"=e."branchId"
+      AND p."familyAccountId"=e."familyAccountId" AND p."settlesChargeId"=e.id
+    WHERE e."organizationId"=current_setting('app.current_organization_id',true)
+      AND e."branchId" IN (${branches}) AND e.kind IN ('CHARGE','DISHONOURED_CHEQUE')
+      AND e."occurredAt" < ${parsed.to} AND COALESCE(e."dueAt",e."occurredAt") < ${parsed.to}
+  `);
   const m = money[0] ?? {
     salesMinor: 0,
     marginMinor: null,
@@ -354,7 +367,7 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
       rejectedFiscalDocuments: fiscal[0]?.rejected ?? 0,
       accountsPayableMinor: null,
       accountsReceivableMinor: null,
-      khataAgingMinor: null,
+      khataAgingMinor: Number(aging[0]?.amount ?? 0),
       deviceFiscalOfflineExceptions: null,
     },
   };

@@ -10,6 +10,7 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
+  annotateAudit: vi.fn(),
 }));
 vi.mock('@/lib/abac', () => ({
   can: vi.fn(async () => true),
@@ -23,10 +24,12 @@ vi.mock('@/lib/pharmacy/settlement', async (original) => ({
 }));
 import {
   applyPharmacyTender,
+  foldExpectedCash,
   readPharmacyTenderOutcome,
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
 import { can } from '@/lib/abac';
+import { annotateAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 const app = router({ pharmacySales: pharmacySalesRouter });
@@ -50,9 +53,18 @@ function fixture() {
         where.id.in.map((id) => ({ id }))
       ),
     },
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'assignment-a' }),
+    },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue({ type: 'CREDIT' }) },
     pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
     pharmacyFamilyAccount: {
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'family-a',
+        displayName: 'Family',
+        creditLimitMinor: 100,
+        active: true,
+      }),
       findMany: vi.fn().mockResolvedValue([
         {
           id: 'family-a',
@@ -69,6 +81,16 @@ function fixture() {
       findMany: vi.fn().mockResolvedValue([]),
       create: vi.fn().mockResolvedValue({}),
     },
+    pharmacyDrawerSession: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'drawer-a' }),
+    },
+    pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
+    financeJournalEntry: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({ id: 'journal-a' }),
+      findFirstOrThrow: vi.fn().mockResolvedValue({ id: 'journal-a', lines: [] }),
+    },
+    financeJournalLine: { create: vi.fn().mockResolvedValue({}) },
     pharmacyKhataLimitDecision: { create: vi.fn().mockResolvedValue({}) },
   };
   db.$transaction.mockImplementation(async (callback) => callback(db));
@@ -111,6 +133,247 @@ beforeEach(() => {
   });
 });
 describe('Khata router trust and recovery boundary', () => {
+  it('adds a cash Khata collection to the actor drawer without trusting a client device', async () => {
+    const f = fixture();
+    f.db.pharmacyKhataEvent.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { id: 'charge-a', kind: 'CHARGE', amountMinor: 250, occurredAt: new Date() },
+    ] as never);
+    f.db.pharmacyKhataEvent.create.mockResolvedValue({ id: 'payment-a', amountMinor: 250 } as never);
+
+    await f.caller().settleFamilyKhata({
+      branchId: 'branch-a',
+      familyAccountId: 'family-a',
+      amountMinor: 250,
+      paymentMethod: 'CASH',
+      idempotencyKey: 'collection-a',
+    });
+
+    expect(f.db.pharmacyDrawerSession.findFirst).toHaveBeenCalledWith({
+      where: expect.objectContaining({ openedByActorId: 'owner-a', status: 'OPEN' }),
+      select: { id: true },
+    });
+    expect(f.db.pharmacyDrawerMovement.create).toHaveBeenCalledWith({ data: {
+      organizationId: 'org-a',
+      drawerSessionId: 'drawer-a',
+      kind: 'CASH_SALE',
+      amountMinor: 250,
+      reason: 'Khata cash collection',
+      actorId: 'owner-a',
+    } });
+    expect(f.db.financeJournalLine.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ accountCode: 'CASH', side: 'DEBIT', amountMinor: 250 }),
+    });
+    expect(foldExpectedCash([
+      { kind: 'OPENING_FLOAT', amountMinor: 1_000 },
+      { kind: 'CASH_SALE', amountMinor: 250 },
+    ])).toBe(1_250);
+  });
+
+  it.each(['CARD', 'BANK_TRANSFER', 'WALLET'] as const)('posts a %s Khata collection to bank and not the cash drawer', async (paymentMethod) => {
+    const f = fixture();
+    f.db.pharmacyKhataEvent.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { id: 'charge-a', kind: 'CHARGE', amountMinor: 250, occurredAt: new Date() },
+    ] as never);
+    f.db.pharmacyKhataEvent.create.mockResolvedValue({ id: 'payment-a', amountMinor: 250 } as never);
+
+    await f.caller().settleFamilyKhata({
+      branchId: 'branch-a',
+      familyAccountId: 'family-a',
+      amountMinor: 250,
+      paymentMethod,
+      idempotencyKey: `collection-${paymentMethod.toLowerCase()}-a`,
+    });
+
+    expect(f.db.pharmacyDrawerSession.findFirst).not.toHaveBeenCalled();
+    expect(f.db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+    expect(f.db.financeJournalLine.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ accountCode: 'BANK', side: 'DEBIT', amountMinor: 250 }),
+    });
+  });
+
+  it.each([1, 99, 100])(
+    'allows a cashier with only pharmacy:counter to charge %i minor units within the limit',
+    async (amountMinor) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      vi.mocked(can).mockImplementation(async (_subject, action) => action === 'pharmacy:counter');
+
+      await expect(f.caller().tender({ ...input, amountMinor })).resolves.toMatchObject({
+        tenderId: 'tender-a',
+      });
+
+      expect(can).toHaveBeenCalledWith(
+        f.user,
+        'pharmacy:counter',
+        undefined,
+        expect.objectContaining({ db: f.db, source: 'TRPC' })
+      );
+      expect(can).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'pharmacy:dispense',
+        expect.anything(),
+        expect.anything()
+      );
+      expect(applyPharmacyTender).toHaveBeenCalledTimes(1);
+      expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['ADMIN', 'EMPLOYEE'])(
+    'audits a reason and real history for owner/manager %s',
+    async (role) => {
+      const f = fixture();
+      f.user.role = role;
+      vi.mocked(can).mockImplementation(
+        async (_s, action) => action === 'pharmacy:counter' || action === 'pharmacy:manage'
+      );
+      const charge = {
+        id: 'history-charge',
+        kind: 'CHARGE',
+        amountMinor: 50,
+        occurredAt: new Date(Date.now() - 20 * 86400000),
+        dueAt: new Date(Date.now() - 10 * 86400000),
+      };
+      f.db.pharmacyKhataEvent.findMany.mockResolvedValue([charge] as never);
+      await f.caller().tender({
+        ...input,
+        amountMinor: 101,
+        ownerOverride: true,
+        overrideReason: '  Emergency approved  ',
+      });
+      expect(f.db.pharmacyKhataEvent.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            organizationId: 'org-a',
+            branchId: 'branch-a',
+            familyAccountId: 'family-a',
+            occurredAt: { gte: expect.any(Date), lte: expect.any(Date) },
+          }),
+        })
+      );
+      const decision = f.db.pharmacyKhataLimitDecision.create.mock.calls[0]![0].data;
+      expect(decision).toMatchObject({
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        kind: 'OVERRIDDEN',
+        ownerActorId: 'owner-a',
+        score: 88,
+        reasons: {
+          reasons: expect.arrayContaining([
+            '1 charge(s) in the stated window',
+            '1 overdue unsettled charge(s)',
+            'Charge amount: 101 minor units',
+            'Credit limit before override: 100 minor units',
+            'Override reason: Emergency approved',
+          ]),
+        },
+      });
+      expect(decision.windowEnd.getTime() - decision.windowStart.getTime()).toBe(180 * 86400000);
+      expect(applyPharmacyTender).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('allows a manager override with a reason and audits actor, customer and excess amount', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    vi.mocked(can).mockImplementation(
+      async (_subject, action) => action === 'pharmacy:counter' || action === 'pharmacy:manage'
+    );
+
+    await expect(
+      f.caller().tender({
+        ...input,
+        amountMinor: 125,
+        ownerOverride: true,
+        overrideReason: '  Manager approved essential medicine  ',
+      })
+    ).resolves.toMatchObject({ tenderId: 'tender-a' });
+
+    expect(annotateAudit).toHaveBeenCalledWith(
+      f.context,
+      expect.objectContaining({
+        action: 'khata_credit_limit_override',
+        targetType: 'PharmacyCustomer',
+        targetId: 'customer-a',
+        metadata: expect.objectContaining({
+          actorId: 'owner-a',
+          customerId: 'customer-a',
+          familyAccountId: 'family-a',
+          amountOverLimitMinor: 25,
+          reason: 'Manager approved essential medicine',
+        }),
+      })
+    );
+    expect(applyPharmacyTender).toHaveBeenCalledTimes(1);
+    expect(f.db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a manager override at a branch they are not assigned to', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null as never);
+    vi.mocked(can).mockImplementation(
+      async (_subject, action) => action === 'pharmacy:counter' || action === 'pharmacy:manage'
+    );
+
+    await expect(
+      f.caller().tender({
+        ...input,
+        amountMinor: 125,
+        ownerOverride: true,
+        overrideReason: 'Requested from another branch',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('refuses a manager override when its reason is blank', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    vi.mocked(can).mockImplementation(
+      async (_subject, action) => action === 'pharmacy:counter' || action === 'pharmacy:manage'
+    );
+
+    await expect(
+      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: '   ' })
+    ).rejects.toBeDefined();
+    expect(annotateAudit).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('keeps a cashier capped at the Khata credit limit even with a reason', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    vi.mocked(can).mockImplementation(async (_subject, action) => action === 'pharmacy:counter');
+
+    await expect(
+      f.caller().tender({
+        ...input,
+        amountMinor: 101,
+        ownerOverride: true,
+        overrideReason: 'Cashier cannot authorize this',
+      })
+    ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    expect(annotateAudit).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it.each(['ADMIN', 'EMPLOYEE'])('requires a reason for owner/manager %s', async (role) => {
+    for (const overrideReason of [undefined, '', '   ']) {
+      const f = fixture();
+      f.user.role = role;
+      await expect(
+        f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason })
+      ).rejects.toBeDefined();
+      expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+      expect(f.db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+    }
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
   it('uses server tenant, CREDIT settlement and an atomic member charge', async () => {
     const f = fixture();
     await f.caller().tender(input);
@@ -132,7 +395,12 @@ describe('Khata router trust and recovery boundary', () => {
   });
   it('hands only the fresh server-session claim to the audited owner gate', async () => {
     const f = fixture();
-    await f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true });
+    await f.caller().tender({
+      ...input,
+      amountMinor: 101,
+      ownerOverride: true,
+      overrideReason: 'Trusted customer emergency',
+    });
     expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         reasons: expect.objectContaining({
@@ -156,12 +424,23 @@ describe('Khata router trust and recovery boundary', () => {
     const f = fixture();
     f.user.passwordAuthenticatedAt -= 301000;
     await expect(
-      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
+      f.caller().tender({
+        ...input,
+        amountMinor: 101,
+        ownerOverride: true,
+        overrideReason: 'Trusted customer emergency',
+      })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
     f.user.passwordAuthenticatedAt = Date.now();
     f.user.role = 'EMPLOYEE';
+    vi.mocked(can).mockImplementation(async (_s, action) => action !== 'pharmacy:manage');
     await expect(
-      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
+      f.caller().tender({
+        ...input,
+        amountMinor: 101,
+        ownerOverride: true,
+        overrideReason: 'Trusted customer emergency',
+      })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
@@ -174,7 +453,11 @@ describe('Khata router trust and recovery boundary', () => {
       replayUnsafe: true,
       result,
     });
-    expect(await f.caller().tender({ ...input, ownerOverride: true })).toEqual({
+    expect(
+      await f
+        .caller()
+        .tender({ ...input, ownerOverride: true, overrideReason: 'Trusted customer emergency' })
+    ).toEqual({
       ...result,
       replayed: true,
     });

@@ -173,6 +173,7 @@ export async function processDueWhatsAppKhataReminders(
           patientId: true,
           active: true,
           whatsappOptIn: true,
+          preferredLanguage: true,
           patient: { select: { phone: true } },
         },
       });
@@ -217,7 +218,7 @@ export async function processDueWhatsAppKhataReminders(
         templateName: config.templates.khataReminder,
         dueDate: plan.dueDate,
       });
-      return { customerId: customer.id, patientId: customer.patientId, to, logId };
+      return { customerId: customer.id, patientId: customer.patientId, to, logId, language: customer.preferredLanguage === 'ur' ? 'ur' : 'en' };
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
@@ -245,6 +246,7 @@ export async function processDueWhatsAppKhataReminders(
         provider.sendTemplate({
           to: recipient.to,
           template: 'khataReminder',
+          language: recipient.language,
           // Utility parameters only: who owes, and how much is outstanding.
           parameters: [sanitizeReminderDisplayName(account.displayName), formatMinor(balanceMinor)],
         })
@@ -297,8 +299,8 @@ export async function readDueKhataAccounts(
            acct."displayName", acct."payerCustomerId",
            SUM(CASE WHEN ev."kind" = 'PAYMENT' THEN -ev."amountMinor"::bigint
                     ELSE ev."amountMinor"::bigint END)::bigint AS "balanceMinor",
-           MIN(ev."dueAt") FILTER (
-             WHERE ev."kind" = 'CHARGE' AND ev."dueAt" <= ${now}
+           MIN(COALESCE(ev."dueAt", ev."occurredAt")) FILTER (
+             WHERE ev."kind" IN ('CHARGE', 'DISHONOURED_CHEQUE') AND COALESCE(ev."dueAt", ev."occurredAt") <= ${now}
                AND ev."amountMinor" > COALESCE(payments.paid, 0)
            ) AS "oldestOverdueAt"
     FROM "pharmacy_family_accounts" acct
@@ -314,8 +316,8 @@ export async function readDueKhataAccounts(
     GROUP BY acct."id", acct."organizationId", acct."branchId", acct."displayName", acct."payerCustomerId"
     HAVING SUM(CASE WHEN ev."kind" = 'PAYMENT' THEN -ev."amountMinor"::bigint
                     ELSE ev."amountMinor"::bigint END) >= ${floor}
-       AND MIN(ev."dueAt") FILTER (
-         WHERE ev."kind" = 'CHARGE' AND ev."dueAt" <= ${now}
+       AND MIN(COALESCE(ev."dueAt", ev."occurredAt")) FILTER (
+         WHERE ev."kind" IN ('CHARGE', 'DISHONOURED_CHEQUE') AND COALESCE(ev."dueAt", ev."occurredAt") <= ${now}
            AND ev."amountMinor" > COALESCE(payments.paid, 0)
        ) IS NOT NULL
     ORDER BY "oldestOverdueAt", acct."id"

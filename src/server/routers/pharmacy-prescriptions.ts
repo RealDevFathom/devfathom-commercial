@@ -451,7 +451,7 @@ export const pharmacyPrescriptionsRouter = router({
   // ── POS-09: the prescription panel beside the cart ────────────────────────
 
   /** Patients a counter can attach without navigating away from the bill. */
-  counterPatients: protectedProcedure
+  counterPatients: capabilityProcedure('pharmacy:counter')
     .input(z.object({ query: z.string().trim().min(2).max(120) }).strict())
     .query(async ({ ctx, input }) => {
       try {

@@ -1,0 +1,2 @@
+ALTER TYPE "FinanceSourceKind" ADD VALUE IF NOT EXISTS 'PHARMACY_KHATA_EVENT';
+ALTER TABLE pharmacy_customers ADD COLUMN "preferredLanguage" TEXT NOT NULL DEFAULT 'en';

@@ -28,6 +28,8 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import {
+  dishonourKhataPayment,
+  settleFamilyKhata,
   authorizeKhataCharge,
   FamilyKhataError,
   readSaleKhataAccounts,
@@ -116,6 +118,7 @@ const tenderInput = z
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
+    overrideReason: z.string().trim().min(3).max(500).optional(),
   })
   .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
@@ -144,12 +147,15 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 
 async function khataScope(ctx: TRPCContext, branch: string) {
   const scope = await scopeFor(ctx, branch);
+  // Khata is a counter tender, not a clinical dispensing decision. Cashiers may
+  // charge within the account limit; pharmacy:manage is checked separately only
+  // when an over-limit override is requested.
   if (
     ctx.organization?.vertical !== 'PHARMACY' ||
     ctx.organization.id !== scope.organizationId ||
     ctx.session!.user.organizationId !== scope.organizationId ||
     !hasModule(ctx.entitlements, 'pharmacy-counter') ||
-    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:counter', undefined, {
       db: ctx.db,
       source: 'TRPC',
     }))
@@ -565,6 +571,78 @@ export const pharmacySalesRouter = router({
         failDayClose(error);
       }
     }),
+  dishonourKhataPayment: protectedProcedure.input(z.object({
+    branchId, paymentId: z.string().min(1), reason: z.string().trim().min(3).max(500),
+  }).strict()).mutation(async ({ ctx, input }) => {
+    const scope = await khataScope(ctx, input.branchId);
+    if (!await can(subjectFromSession(ctx.session!.user), 'pharmacy:manage', undefined, { db: ctx.db }))
+      throw new TRPCError({ code: 'FORBIDDEN' });
+    return ctx.db.$transaction(async tx => {
+      const db = txDb(tx);
+      await bindKhataBranch(db, scope);
+      return dishonourKhataPayment(db, scope, { ...input, occurredAt: new Date() });
+    });
+  }),
+  settleFamilyKhata: protectedProcedure.input(z.object({
+    branchId, familyAccountId: z.string().min(1), amountMinor: z.number().int().positive().max(2147483647),
+    paymentMethod: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET']),
+    idempotencyKey: z.string().trim().min(1).max(128),
+  }).strict()).mutation(async ({ ctx, input }) => {
+    const scope = await khataScope(ctx, input.branchId);
+    return ctx.db.$transaction(async (tx) => {
+      const db = txDb(tx);
+      await bindKhataBranch(db, scope);
+      await db.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${scope.organizationId}), hashtext(${input.idempotencyKey}))`);
+      await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
+      const account = await db.pharmacyFamilyAccount.findFirst({ where: {
+        id: input.familyAccountId, organizationId: scope.organizationId, branchId: scope.branchId, active: true,
+      }});
+      if (!account) throw new TRPCError({ code: 'NOT_FOUND' });
+      const key = `collection:${scope.branchId}:${input.idempotencyKey}`;
+      const prior = await db.pharmacyKhataEvent.findMany({ where: {
+        organizationId: scope.organizationId, branchId: scope.branchId, note: key,
+      }});
+      if (prior.length) {
+        if (prior.some(p => p.familyAccountId !== input.familyAccountId) || prior.reduce((n,p) => n+p.amountMinor,0) !== input.amountMinor)
+          throw new TRPCError({ code: 'CONFLICT' });
+        return { paidMinor: input.amountMinor, replayed: true };
+      }
+      let drawerSessionId: string | undefined;
+      if (input.paymentMethod === 'CASH') {
+        await db.$queryRaw(Prisma.sql`
+          SELECT id FROM pharmacy_drawer_sessions
+          WHERE "organizationId"=${scope.organizationId}
+            AND "branchId"=${scope.branchId}
+            AND "openedByActorId"=${scope.actorId}
+            AND status='OPEN'
+          FOR UPDATE`);
+        const drawer = await db.pharmacyDrawerSession.findFirst({ where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          openedByActorId: scope.actorId,
+          status: 'OPEN',
+        }, select: { id: true } });
+        if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+        drawerSessionId = drawer.id;
+      }
+      const result = await settleFamilyKhata(db, scope, {
+        familyAccountId: input.familyAccountId,
+        amountMinor: input.amountMinor,
+        occurredAt: new Date(),
+        paymentMethod: input.paymentMethod,
+        collectionKey: key,
+      });
+      if (drawerSessionId) await db.pharmacyDrawerMovement.create({ data: {
+        organizationId: scope.organizationId,
+        drawerSessionId,
+        kind: 'CASH_SALE',
+        amountMinor: input.amountMinor,
+        reason: 'Khata cash collection',
+        actorId: scope.actorId,
+      } });
+      return result;
+    });
+  }),
   customerSnapshot: protectedProcedure
     .input(
       z
@@ -753,11 +831,27 @@ export const pharmacySalesRouter = router({
       const normalized = ledgerTender(input);
       const ownerAuthorized =
         input.ownerOverride === true &&
-        ctx.session!.user.role === 'ADMIN' &&
-        (await can(subjectFromSession(ctx.session!.user), 'admin:access', undefined, {
+        (await can(subjectFromSession(ctx.session!.user), 'pharmacy:manage', undefined, {
           db: ctx.db,
           source: 'TRPC',
         }));
+      if (ownerAuthorized) {
+        const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            userId: scope.actorId,
+            active: true,
+            branch: { organizationId: scope.organizationId, active: true },
+          },
+          select: { id: true },
+        });
+        if (!assignment)
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Managers may only override Khata limits at an assigned branch.',
+          });
+      }
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
         await bindKhataBranch(db, scope);
@@ -775,6 +869,32 @@ export const pharmacySalesRouter = router({
             passwordAuthenticatedAt: ctx.session!.user.passwordAuthenticatedAt,
           }
         );
+        if (account.override) {
+          const sale = await db.pharmacySale.findFirst({
+            where: {
+              id: input.saleId,
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+            },
+            select: { customerId: true },
+          });
+          if (!sale?.customerId) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+          annotateAudit(ctx, {
+            category: 'PHARMACY_FINANCE',
+            action: 'khata_credit_limit_override',
+            targetType: 'PharmacyCustomer',
+            targetId: sale.customerId,
+            description: 'Manager approved a Khata sale above the customer credit limit.',
+            metadata: {
+              actorId: scope.actorId,
+              customerId: sale.customerId,
+              familyAccountId: input.familyAccountId,
+              amountOverLimitMinor: account.override.amountOverLimitMinor,
+              creditLimitMinor: account.override.creditLimitMinor,
+              reason: account.override.reason,
+            },
+          });
+        }
         const result = await applyPharmacyTender(db, scope, normalized);
         if (!('tenderId' in result) || typeof result.tenderId !== 'string')
           throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });

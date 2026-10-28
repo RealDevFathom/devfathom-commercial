@@ -122,6 +122,68 @@ beforeAll(async () => {
   foreign = await fixture(orgB, 'Foreign');
 });
 suite('family Khata restricted PostgreSQL', () => {
+  it('collects, clears AR, reopens a dishonoured payment and settles it again', async () => {
+    const f = await fixture(orgA, 'Collections', new Date('2026-01-01T00:00:00Z'));
+    await inScope(f, async db => {
+      const result = await khata.settleFamilyKhata(db, f, { ...f, amountMinor: 600, occurredAt: new Date('2026-10-20T10:00:00Z'), paymentMethod: 'CASH' });
+      expect(result.remainingBalanceMinor).toBe(0);
+      const lines = await db.financeJournalLine.findMany({where:{organizationId:orgA, branchId:f.branchId}});
+      expect(lines.filter(l => l.accountCode==='ACCOUNTS_RECEIVABLE').reduce((n,l)=> n+(l.side==='CREDIT'?l.amountMinor:-l.amountMinor),0)).toBe(600);
+      expect(lines.filter(l => l.accountCode==='CASH').reduce((n,l)=> n+l.amountMinor,0)).toBe(600);
+      const event = await khata.dishonourKhataPayment(db, f, {paymentId:result.allocations[0]!.id, reason:'Cheque returned', occurredAt:new Date('2026-10-20T11:00:00Z')});
+      await khata.dishonourKhataPayment(db, f, {paymentId:result.allocations[0]!.id, reason:'Cheque returned', occurredAt:new Date('2026-10-20T11:00:00Z')});
+      expect(await khata.readKhataBalance(db,f,f.familyAccountId)).toBe(50);
+      const {readDueKhataAccounts} = await import('./whatsapp/khata-reminders');
+      const due = await readDueKhataAccounts(db,orgA,new Date('2026-10-21T12:00:00Z'),100,1);
+      expect(due.find(a => a.familyAccountId===f.familyAccountId)?.oldestOverdueAt.toISOString()).toBe('2026-10-20T11:00:00.000Z');
+      const paid = await khata.settleFamilyKhata(db,f,{...f,amountMinor:50,occurredAt:new Date('2026-10-21T12:00:00Z'),paymentMethod:'CASH'});
+      expect(paid.allocations[0]!.settlesChargeId).toBe(event.id);
+      expect(await khata.readKhataBalance(db,f,f.familyAccountId)).toBe(0);
+      expect(await db.pharmacyKhataEvent.count({where:{id:event.id}})).toBe(1);
+    });
+  });
+  it('snapshot uses the family limit and all collections beyond the ten-sale preview', async () => {
+    const f = await fixture(orgA,'Snapshot');
+    await inScope(f,async db => {
+      const sale = await db.pharmacySale.findFirstOrThrow({where:{id:f.saleId}});
+      await db.pharmacyCustomer.update({where:{id:sale.customerId!}, data:{creditLimitMinor:9999}});
+      await khata.settleFamilyKhata(db,f,{...f,amountMinor:250,occurredAt:new Date(),paymentMethod:'CASH'});
+      const {readCustomerSnapshot} = await import('./customer-loyalty');
+      const snapshot = await readCustomerSnapshot(db,f,sale.customerId!);
+      expect(snapshot.creditBalanceMinor).toBe(350);
+      expect(snapshot.customer.creditLimitMinor).toBe(1000);
+      expect(snapshot.availableCreditMinor).toBe(650);
+    });
+  });
+  it('requires authorization and a reason for exceeding the family limit', async () => {
+    const f = await fixture(orgA,'Override');
+    await expect(inScope(f, db => khata.authorizeKhataCharge(db,f,{...f,amountMinor:401},{authorized:false}))).rejects.toMatchObject({reason:'CREDIT_LIMIT_EXCEEDED'});
+    await expect(inScope(f, db => khata.authorizeKhataCharge(db,f,{...f,amountMinor:401,ownerOverride:true},{authorized:true,passwordAuthenticatedAt:Date.now()}))).rejects.toMatchObject({reason:'OWNER_ACTION_REQUIRED'});
+    await inScope(f,async db => {
+      await khata.authorizeKhataCharge(db,f,{...f,amountMinor:401,ownerOverride:true,overrideReason:'Manager verified emergency'}, {authorized:true,passwordAuthenticatedAt:Date.now()});
+      const decision=await db.pharmacyKhataLimitDecision.findFirstOrThrow({where:{familyAccountId:f.familyAccountId}});
+      expect(JSON.stringify(decision.reasons)).toContain('Manager verified emergency');
+      expect(decision.appliedLimitMinor).toBe(1001);
+      expect((await db.pharmacyFamilyAccount.findFirstOrThrow({where:{id:f.familyAccountId}})).creditLimitMinor).toBe(1000);
+      const originalSale = await db.pharmacySale.findFirstOrThrow({ where: { id: f.saleId } });
+      const nextSale = await db.pharmacySale.create({
+        data: {
+          organizationId: f.organizationId,
+          branchId: f.branchId,
+          customerId: originalSale.customerId,
+          createdByUserId: f.actorId,
+        },
+      });
+      await expect(
+        khata.authorizeKhataCharge(
+          db,
+          f,
+          { ...f, saleId: nextSale.id, amountMinor: 401 },
+          { authorized: false }
+        )
+      ).rejects.toMatchObject({ reason: 'CREDIT_LIMIT_EXCEEDED' });
+    });
+  });
   it('runs under LOGIN NOSUPERUSER NOBYPASSRLS', async () => {
     const roles = await inScope(a, (db) =>
       db.$queryRawUnsafe<Array<{ rolsuper: boolean; rolbypassrls: boolean; rolcanlogin: boolean }>>(
@@ -159,7 +221,7 @@ suite('family Khata restricted PostgreSQL', () => {
         khata.authorizeKhataCharge(
           db,
           a,
-          { ...a, amountMinor: 401, ownerOverride: true },
+          { ...a, amountMinor: 401, ownerOverride: true, overrideReason: 'Trusted customer emergency' },
           { authorized: true, passwordAuthenticatedAt: Date.now() - 301000 }
         )
       )
@@ -201,7 +263,7 @@ suite('family Khata restricted PostgreSQL', () => {
       khata.authorizeKhataCharge(
         db,
         a,
-        { ...a, amountMinor: 200, ownerOverride: true },
+        { ...a, amountMinor: 200, ownerOverride: true, overrideReason: 'Trusted customer emergency' },
         { authorized: true, passwordAuthenticatedAt: Date.now() }
       )
     );

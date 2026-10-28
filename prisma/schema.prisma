@@ -1105,6 +1105,7 @@ model PharmacySale {
   refunds                   PharmacyRefund[]
   customer                  PharmacyCustomer?            @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
   loyaltyEntries            PharmacyLoyaltyPointsEntry[]
+  khataLimitDecisions       PharmacyKhataLimitDecision[]
   customerOrder             PharmacyCustomerOrder?
   visibilityAnchor          PharmacyBranch               @relation("PharmacySaleVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_sales_visibility_fkey")
 
@@ -1117,6 +1118,7 @@ model PharmacySale {
 /// CRM-L01 retail identity. Clinical identity remains in PharmacyPatient and is
 /// joined only server-side after a current LOYALTY consent check.
 model PharmacyCustomer {
+  preferredLanguage String @default("en")
   whatsappMessages PharmacyMessageLog[]
   id               String               @id @default(cuid())
   organizationId   String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -1227,6 +1229,7 @@ model PharmacyKhataLimitDecision {
   organizationId      String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId            String
   familyAccountId     String
+  saleId              String?
   kind                PharmacyKhataLimitDecisionKind
   score               Int
   method              String
@@ -1239,8 +1242,10 @@ model PharmacyKhataLimitDecision {
   createdAt           DateTime                       @default(now())
 
   familyAccount PharmacyFamilyAccount @relation(fields: [organizationId, branchId, familyAccountId], references: [organizationId, branchId, id], onDelete: Restrict)
+  sale          PharmacySale?          @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
 
   @@unique([organizationId, branchId, id])
+  @@unique([organizationId, branchId, saleId])
   @@index([organizationId, branchId, familyAccountId, createdAt])
   @@map("pharmacy_khata_limit_decisions")
 }
@@ -2373,6 +2378,7 @@ enum FinanceAccountCode {
 /// FIN-01 traceability: the operational table an entry accounts for. `sourceId`
 /// is a row id in that table.
 enum FinanceSourceKind {
+  PHARMACY_KHATA_EVENT
   PHARMACY_GOODS_RECEIPT
   PHARMACY_SALE_LINE
   PHARMACY_SALE_RETURN_LINE

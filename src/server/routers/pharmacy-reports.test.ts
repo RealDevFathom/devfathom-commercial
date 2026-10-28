@@ -17,6 +17,15 @@ const mocks = vi.hoisted(() => ({
   creditsRead: vi.fn(),
   refresh: vi.fn(),
   createDraft: vi.fn(),
+  queryRaw: vi.fn().mockResolvedValue([]),
+  count: vi.fn().mockResolvedValue(0),
+  commandCentreRead: vi.fn(),
+  recordTrpcAudit: vi.fn(),
+}));
+
+vi.mock('@/lib/pharmacy/reports', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/pharmacy/reports')>('@/lib/pharmacy/reports')),
+  readPharmacyOwnerCommandCentre: mocks.commandCentreRead,
 }));
 
 vi.mock('@/lib/pharmacy/stock-signals-operations', () => ({
@@ -60,8 +69,8 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
-  isAuditExcludedPath: vi.fn(() => true),
-  recordTrpcAudit: vi.fn(),
+  isAuditExcludedPath: vi.fn(() => false),
+  recordTrpcAudit: mocks.recordTrpcAudit,
 }));
 
 import { hasModule } from '@/lib/entitlements';
@@ -78,6 +87,11 @@ function caller(role = 'ADMIN') {
         update: mocks.reportUpdate,
       },
       pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
+      pharmacyRecallNotice: { count: mocks.count },
+      pharmacySupplierClaim: { count: mocks.count },
+      pharmacyReceivingException: { count: mocks.count },
+      branchRegulatoryProfile: { count: mocks.count },
+      $queryRaw: mocks.queryRaw,
     },
     entitlements: {
       organizationId: 'org_1',
@@ -270,6 +284,62 @@ describe('pharmacy owner digest capability boundary', () => {
   });
 });
 
+describe('owner command centre security boundary', () => {
+  const input = { from: '2026-09-01', to: '2026-09-10' };
+
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.commandCentreRead.mockResolvedValue({
+      metrics: {
+        salesMinor: 100,
+        marginMinor: 20,
+        cashMinor: 80,
+        cashVarianceMinor: 1,
+        refundsMinor: 2,
+        accountsPayableMinor: 3,
+        accountsReceivableMinor: 4,
+        khataAgingMinor: 5,
+      },
+    });
+  });
+
+  it('audits an owner financial read', async () => {
+    mocks.can.mockResolvedValue(true);
+
+    const result = await caller().commandCentre(input);
+
+    expect(result.permissions.financial).toBe(true);
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: 'commandCentre',
+        type: 'query',
+        outcome: 'SUCCESS',
+      })
+    );
+  });
+
+  it('does not let the admin shortcut bypass reports:financial', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'admin:access');
+
+    const result = await caller().commandCentre(input);
+
+    expect(result.permissions.financial).toBe(false);
+    expect(result.metrics).toEqual(
+      expect.objectContaining({
+        salesMinor: null,
+        marginMinor: null,
+        cashMinor: null,
+        cashVarianceMinor: null,
+        refundsMinor: null,
+        accountsPayableMinor: null,
+        accountsReceivableMinor: null,
+        khataAgingMinor: null,
+      })
+    );
+  });
+});
+
 describe('RX-08 pharmacovigilance state boundaries', () => {
   it('completing internal review does not mark the report externally submitted', async () => {
     mocks.reportFindFirst.mockResolvedValue({ id: 'pv_1', state: 'UNDER_REVIEW' });
@@ -395,5 +465,55 @@ describe('repeat purchasing authorization', () => {
       caller().repeatPurchasing({ ...input, supplierId: 'supplier' } as typeof input)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.repeatRead).not.toHaveBeenCalled();
+  });
+});
+
+describe('owner command centre overdue Khata + access (#247)', () => {
+  const input = { from: '2026-09-01', to: '2026-09-30' };
+  beforeEach(() => {
+    mocks.can.mockReset();
+    mocks.commandCentreRead.mockReset();
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    // The report helper returns money in the same minor units used by
+    // pharmacy_khata_events.amountMinor; Rs 42.00 is therefore 4,200 here.
+    mocks.commandCentreRead.mockResolvedValue({
+      metrics: { khataAgingMinor: 4200 },
+    });
+  });
+
+  // The command-centre gate calls `can` in order: admin:access (ADMIN role only),
+  // then reports:operational, then reports:financial.
+  it('admits a pharmacy owner via reports:operational and exposes overdue Khata', async () => {
+    // Pharmacy owner is an ADMIN without platform admin:access but holds reports:*.
+    mocks.can
+      .mockResolvedValueOnce(false) // admin:access
+      .mockResolvedValueOnce(true) // reports:operational
+      .mockResolvedValueOnce(true); // reports:financial
+    const result = await caller().commandCentre(input);
+    expect(result.permissions).toEqual({ operational: true, financial: true });
+    expect(result.metrics.khataAgingMinor).toBe(4200);
+    expect(mocks.commandCentreRead).toHaveBeenCalledWith(expect.anything(), {
+      ...input,
+      branchIds: ['branch_1'],
+    });
+  });
+
+  it('masks Khata aging when financial permission is absent', async () => {
+    mocks.can
+      .mockResolvedValueOnce(false) // admin:access
+      .mockResolvedValueOnce(true) // reports:operational
+      .mockResolvedValueOnce(false); // reports:financial
+    const result = await caller().commandCentre(input);
+    expect(result.permissions.financial).toBe(false);
+    expect(result.metrics.khataAgingMinor).toBeNull();
+  });
+
+  it('forbids a caller without operational or admin access', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().commandCentre(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.commandCentreRead).not.toHaveBeenCalled();
   });
 });

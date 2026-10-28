@@ -39,7 +39,7 @@ import {
   acknowledgePackAuthenticationFlag,
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
-import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { auditedProtectedProcedure, protectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
 const widget = z
@@ -428,7 +428,11 @@ export const pharmacyReportsRouter = router({
       }
       return readRepeatPurchasing(ctx.db, ctx.entitlements.organizationId, scoped);
     }),
-  commandCentre: reports.input(filters).query(async ({ ctx, input }) => {
+  commandCentre: auditedProtectedProcedure.input(filters).query(async ({ ctx, input }) => {
+    const subject = subjectFromSession(ctx.session!.user);
+    const owner = ctx.session!.user.role === 'ADMIN' && await can(subject, 'admin:access', undefined, { db: ctx.db });
+    if (!owner && !await can(subject, 'reports:operational', undefined, { db: ctx.db }))
+      throw new TRPCError({ code: 'FORBIDDEN' });
     const available = await scope(ctx);
     const branchIds = input.branchId
       ? [input.branchId]

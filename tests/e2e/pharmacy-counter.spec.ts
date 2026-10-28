@@ -203,6 +203,20 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(receipt).toContainText('2028-06-30');
   await expect(receipt).toContainText(PHARMACY_E2E_EXPECTED.otcTwoStripTotal);
 
+  // #252: the settled receipt remains readable and keyboard scrollable on a phone.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const receiptCard = page.getByRole('region', { name: 'Sale receipt', exact: true });
+  await receiptCard.focus();
+  await expect(receiptCard).toBeFocused();
+  expect(await receiptCard.evaluate((node) => node.clientHeight)).toBeGreaterThanOrEqual(190);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const receiptA11y = await new AxeBuilder({ page })
+    .include('[aria-label="Sale receipt"]')
+    .withRules(['scrollable-region-focusable'])
+    .analyze();
+  expect(receiptA11y.violations).toEqual([]);
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   // POS-08: Urdu renders the same bill with Urdu field names, right-to-left.
   const localeSelect = page.getByLabel('Language');
   await localeSelect.focus();

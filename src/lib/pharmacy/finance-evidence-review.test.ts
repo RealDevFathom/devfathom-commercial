@@ -204,11 +204,10 @@ describe('metric contract (reports.ts PHARMACY_METRIC_CONTRACT)', () => {
     expect(byKey.refundsMinor?.source).toBe('pharmacy_refunds');
   });
 
-  it('marks exactly four metrics as having no source', () => {
+  it('marks exactly three metrics as having no source', () => {
     expect(PHARMACY_METRIC_CONTRACT.filter((m) => m.source === null).map((m) => m.key)).toEqual([
       'accountsPayableMinor',
       'accountsReceivableMinor',
-      'khataAgingMinor',
       'deviceFiscalOfflineExceptions',
     ]);
   });
@@ -290,7 +289,7 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
       rejectedFiscalDocuments: 2,
       accountsPayableMinor: null,
       accountsReceivableMinor: null,
-      khataAgingMinor: null,
+      khataAgingMinor: 0,
       deviceFiscalOfflineExceptions: null,
     });
   });
@@ -309,10 +308,10 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     expect(where.effectiveFrom.lte.toISOString()).toBe('2026-03-10T12:00:00.000Z');
   });
 
-  it('issues five raw reads; sales use businessDate while margin uses UTC occurredAt in the same statement', async () => {
+  it('issues six raw reads; sales use businessDate while margin uses UTC occurredAt in the same statement', async () => {
     const { db, calls } = makeDb(populated, populatedCounts);
     await readPharmacyOwnerCommandCentre(db, filters);
-    expect(calls).toHaveLength(5);
+    expect(calls).toHaveLength(6);
     const money = calls[0];
     expect(money?.sql).toContain('s."businessDate">=');
     expect(money?.sql).toContain('entry."occurredAt" >=');
@@ -323,6 +322,8 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     // Expiry and fiscal aging use the database clock, not the JS clock used for freshness.
     expect(calls[2]?.sql).toContain('CURRENT_TIMESTAMP');
     expect(calls[4]?.sql).toContain('CURRENT_TIMESTAMP');
+    const khataAging = calls[5];
+    expect(khataAging?.sql).toContain('FROM pharmacy_khata_events e');
   });
 
   it('salesMinor is gross of returns: no return-line or refund term in the sales expression', async () => {

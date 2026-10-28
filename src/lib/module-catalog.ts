@@ -270,6 +270,7 @@ export function moduleForProcedure(path: string): string | null {
   // Inviting workspace users is baseline administration in every vertical.
   if (path === 'team.inviteMember') return 'admin';
   if (ACCOUNT_PROCEDURES.has(path)) return null;
+  if (path === 'pharmacyPrescriptions.counterPatients') return 'pharmacy-counter';
   if (
     /^pharmacyFinance\.(perpetualValuation|grossMargin|leakageReport|marginComparison|financialStatements)$/.test(
       path

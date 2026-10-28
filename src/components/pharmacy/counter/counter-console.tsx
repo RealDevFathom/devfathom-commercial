@@ -1,5 +1,6 @@
 'use client';
 
+import { KhataCollectionForm } from './khata-collection-form';
 import { browserUuid } from '@/lib/browser-uuid';
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -1118,6 +1119,7 @@ function ScopedPharmacyCounterConsole({
         cashReceivedMinor?: number;
         familyAccountId?: string;
         ownerOverride?: boolean;
+        overrideReason?: string;
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
@@ -1162,7 +1164,11 @@ function ScopedPharmacyCounterConsole({
             ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
             : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
           ...(input.familyAccountId
-            ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride }
+            ? {
+                familyAccountId: input.familyAccountId,
+                ownerOverride: input.ownerOverride,
+                overrideReason: input.overrideReason,
+              }
             : {}),
         };
         const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
@@ -2021,7 +2027,7 @@ function ScopedPharmacyCounterConsole({
           </SectionCard>
         </div>
 
-        <div className="flex min-h-0 flex-col gap-2 overflow-hidden md:col-start-2 md:row-span-2">
+        <div className="flex min-h-0 flex-col gap-2 overflow-y-auto md:col-start-2 md:row-span-2">
           <SectionCard
             compact
             className="min-h-0 flex-1 overflow-y-auto"
@@ -2136,7 +2142,10 @@ function ScopedPharmacyCounterConsole({
 
           <SectionCard
             compact
-            className="min-h-0 max-h-24 shrink overflow-y-auto"
+            className="min-h-48 max-h-[60vh] shrink-0 overflow-y-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            tabIndex={0}
+            role="region"
+            aria-label="Sale receipt"
             eyebrow="POS-08"
             title="Receipt"
           >
@@ -2211,6 +2220,18 @@ function ScopedPharmacyCounterConsole({
                     Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
                   </p>
                 </div>
+                <KhataCollectionForm
+                  accounts={customerQuery.data.khataAccounts ?? []}
+                  disabled={busy}
+                  onCollect={async (input) => {
+                    await utils.client.pharmacySales.settleFamilyKhata.mutate({
+                      branchId,
+                      paymentMethod: 'CASH',
+                      ...input,
+                    });
+                    await customerQuery.refetch();
+                  }}
+                />
                 <div className="flex gap-2">
                   <Label htmlFor="counter-redeem-points" className="sr-only">
                     Points to redeem
