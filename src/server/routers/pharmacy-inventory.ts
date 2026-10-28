@@ -1183,7 +1183,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  acknowledgeRecall: protectedProcedure
+  acknowledgeRecall: regulatory
     .input(z.object({ branchId, recallNoticeId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -1197,7 +1197,7 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  closeRecall: protectedProcedure
+  closeRecall: regulatory
     .input(z.object({ recallNoticeId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
