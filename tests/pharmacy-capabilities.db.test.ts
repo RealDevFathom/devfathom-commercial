@@ -149,7 +149,11 @@ const legacy: Record<string, string[]> = {
       );
       // Owner's redundant explicit order grant remains harmless and is not removed.
       const expected = [
-        ...template.capabilities,
+        // This test executes the historical canonicalization migration. Owner
+        // elevation is separately covered by pharmacy-owner-authorization.db.test.ts.
+        ...(template.key === 'owner'
+          ? ['pharmacy:*', 'reports:operational', 'reports:financial']
+          : template.capabilities),
         ...(template.key === 'owner' ? ['pharmacy:orders'] : []),
       ].sort();
       expect(rows.rows.map((r) => r.capability)).toEqual(expected);

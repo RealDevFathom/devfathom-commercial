@@ -58,12 +58,16 @@ export function receiveInput(data: FormData) {
   const reason = text(data, 'varianceReason');
   const witnessId = text(data, 'witnessId');
   const evidenceRef = text(data, 'evidenceRef');
+  const pin = text(data, 'pin');
   return {
     branchId: text(data, 'branchId'),
     transferId,
     lines,
     // Partial evidence is no evidence: the router refuses a shortfall without all three.
-    variance: reason && witnessId && evidenceRef ? { reason, witnessId, evidenceRef } : undefined,
+    variance:
+      reason && witnessId && evidenceRef
+        ? { reason, witnessId, evidenceRef, ...(pin ? { pin } : {}) }
+        : undefined,
     idempotencyKeyPrefix: `ui-receive-close:${transferId}`,
   };
 }

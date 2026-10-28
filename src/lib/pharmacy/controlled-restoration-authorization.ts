@@ -1,3 +1,4 @@
+import { authorizeSoloOwnerApproval } from './solo-owner-approval';
 import { randomUUID } from 'node:crypto';
 import { can } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -54,11 +55,23 @@ export async function authorizeControlledRestoration(
     !witness ||
     witness.organizationId !== scope.organizationId ||
     witness.status !== 'ACTIVE' ||
-    witness.id === scope.actorId ||
     isLockedOut(credential, now) ||
     !(await can(witness, 'pharmacy:dispense', undefined, { db, now }))
   ) {
     throw new ControlledRestorationDenied();
+  }
+  if (witness.id === scope.actorId) {
+    if (
+      !(await authorizeSoloOwnerApproval(db, {
+        ...scope,
+        targetId: scope.branchId,
+        capability: 'pharmacy:dispense',
+        pin: input.pin,
+        staffProfileId: input.staffProfileId,
+      }))
+    )
+      throw new ControlledRestorationDenied();
+    return { witnessedByUserId: witness.id, signatureRef: `pin:${credential.id}:${randomUUID()}` };
   }
   if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
     await db.restaurantOperatorCredential.update({

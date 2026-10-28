@@ -762,13 +762,14 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
+    // Exact clinical grants remain mandatory; wildcard semantics and DENY are unchanged.
+    capabilities: ['*', 'pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review'],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN
     // for business/cashier guards that require literal ADMIN; EMPLOYEE plus this
     // template is not equivalent. Provisioning does not assign it to existing owners.
-    // These grants neither verify clinical qualifications nor permit self-review/signing.
+    // Clinical self-review separately requires solo ownership, PIN reauthentication and audit.
     key: 'owner-operator',
     name: 'Owner / Operator',
     isSystem: true,

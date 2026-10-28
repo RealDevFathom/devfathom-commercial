@@ -52,6 +52,7 @@ function contextStub(enabledModules = ['pharmacy-procurement']) {
     organization: actor.organization,
     entitlements: { organizationId: 'org-1', enabledModules },
     db: {
+      $queryRaw: vi.fn().mockResolvedValue([{ allowed: false }]),
       user: {
         findUnique: vi.fn().mockResolvedValue({
           organizationRole: {
@@ -615,6 +616,47 @@ describe('segregation of duties (PUR-02)', () => {
 
     expect(screen.getByText(/You raised this order, so you cannot approve it/)).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  });
+  it('offers a PIN field and approval controls for an authoritative solo owner', async () => {
+    const ctx = contextStub();
+    ctx.db.$queryRaw.mockResolvedValue([{ allowed: true }]);
+    mocks.createTRPCContext.mockResolvedValue(ctx);
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        purchaseOrders: vi.fn().mockResolvedValue([
+          {
+            id: 'po-1',
+            reference: 'PO-1',
+            status: 'SUBMITTED',
+            supplier: { id: 'sup-ok', name: 'Karachi Distributors' },
+            branch: null,
+            branchId: null,
+            supplierId: 'sup-ok',
+            requisition: null,
+            lines: [],
+            approvals: [],
+            goodsReceipts: [],
+            // The signed-in user in this suite.
+            createdByUserId: 'user-1',
+          },
+        ]),
+        landedCost: vi.fn().mockResolvedValue({
+          payableMinor: 0,
+          landedCostMinor: 0,
+          taxMinor: 0,
+          chargesMinor: 0,
+          canonicalUnits: 0,
+          netCostMinor: 0,
+          lines: [],
+        }),
+      })
+    );
+
+    render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
+
+    expect(screen.getByLabelText('Owner PIN').getAttribute('type')).toBe('password');
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDefined();
+    expect(screen.queryByText(/You raised this order, so you cannot approve it/)).toBeNull();
   });
 });
 

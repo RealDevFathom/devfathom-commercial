@@ -18,11 +18,13 @@ export function TransferReceiveForm({
   transfer,
   branchId,
   witnesses,
+  soloOwner = false,
   action,
 }: {
   transfer: TransferBoardRow;
   branchId: string;
   witnesses: ReadonlyArray<Witness>;
+  soloOwner?: boolean;
   action: TransferStepAction;
 }) {
   const reference = transferReference(transfer.id);
@@ -55,6 +57,18 @@ export function TransferReceiveForm({
           </span>
         </label>
       ))}
+      {soloOwner ? (
+        <label className="text-sm">
+          Owner PIN
+          <Input
+            name="pin"
+            type="password"
+            inputMode="numeric"
+            autoComplete="off"
+            className="mt-1"
+          />
+        </label>
+      ) : null}
       <fieldset className="grid gap-3 rounded-[var(--radius-sm)] bg-surface-sunken p-3 md:col-span-3 md:grid-cols-3">
         <legend className="px-1 text-xs text-text-muted">
           Shortfall evidence — required only when a line arrived short

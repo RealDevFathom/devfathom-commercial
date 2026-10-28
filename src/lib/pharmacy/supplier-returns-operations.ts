@@ -1,3 +1,4 @@
+import { authorizeSoloOwnerApproval } from './solo-owner-approval';
 /**
  * PH-PUR / PUR-06 — purchase returns and expiry claims against the append-only
  * ledger, with debit notes, supplier credit and settlement allocation.
@@ -410,7 +411,13 @@ export async function recordSupplierCredit(
 export async function allocateSupplierCredit(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { supplierCreditId: string; debitNoteId: string; amountMinor: number; at: Date }
+  input: {
+    supplierCreditId: string;
+    debitNoteId: string;
+    amountMinor: number;
+    at: Date;
+    pin?: string;
+  }
 ) {
   const [credit, note] = await Promise.all([
     db.pharmacySupplierCredit.findFirst({
@@ -430,7 +437,18 @@ export async function allocateSupplierCredit(
     throw new PharmacySupplierReturnError('CROSS_TENANT_REFERENCE');
   }
   if (note.status === 'CANCELLED') throw new PharmacySupplierReturnError('INVALID_TRANSITION');
-  if (note.purchaseReturn.submittedByUserId) {
+  if (
+    note.purchaseReturn.submittedByUserId &&
+    !(
+      note.purchaseReturn.submittedByUserId === scope.actorId &&
+      (await authorizeSoloOwnerApproval(db, {
+        ...scope,
+        targetId: note.id,
+        capability: 'pharmacy:procurement',
+        pin: input.pin,
+      }))
+    )
+  ) {
     assertSettlementSegregation({
       submittedByUserId: note.purchaseReturn.submittedByUserId,
       allocatedByUserId: scope.actorId,

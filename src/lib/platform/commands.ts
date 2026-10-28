@@ -918,7 +918,12 @@ async function bootstrapOrganization(
       description: 'Full organization administration',
       isSystem: true,
       permissions: {
-        create: (demo ? RESTAURANT_CAPABILITIES : ['*']).map((capability) => ({
+        create: (demo
+          ? RESTAURANT_CAPABILITIES
+          : input.vertical === 'PHARMACY'
+            ? ['*', 'pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review']
+            : ['*']
+        ).map((capability) => ({
           organizationId: organization.id,
           capability,
           effect: 'ALLOW' as const,

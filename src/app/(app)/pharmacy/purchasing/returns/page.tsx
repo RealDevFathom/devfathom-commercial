@@ -329,6 +329,7 @@ export default async function PharmacyReturnsPage({
         supplierCreditId: field(form, 'supplierCreditId'),
         debitNoteId: field(form, 'debitNoteId'),
         amountMinor: moneyFieldMinor(form, 'amountMinor', 'Amount'),
+        pin: optionalField(form, 'pin'),
       });
       revalidatePath(ROUTE);
       next = destination(
@@ -670,6 +671,15 @@ export default async function PharmacyReturnsPage({
                             notice={notice}
                             required
                           />
+                          <TextField
+                            label="Owner PIN (solo self-approval)"
+                            name="pin"
+                            notice={notice}
+                            type="password"
+                            inputMode="numeric"
+                            autoComplete="off"
+                            hint="Only needed when a solo owner submitted this return."
+                          />
                           <SubmitButton variant="secondary">Allocate</SubmitButton>
                         </PurchasingActionForm>
                       ) : null}
@@ -855,6 +865,15 @@ function ReturnDetail({
                       name="amountMinor"
                       notice={notice}
                       required
+                    />
+                    <TextField
+                      label="Owner PIN (solo self-approval)"
+                      name="pin"
+                      notice={notice}
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      hint="Only needed when a solo owner submitted this return."
                     />
                     <SubmitButton variant="secondary">Allocate</SubmitButton>
                   </PurchasingActionForm>

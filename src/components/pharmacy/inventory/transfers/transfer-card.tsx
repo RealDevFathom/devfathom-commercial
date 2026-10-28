@@ -1,3 +1,4 @@
+import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { StatusPill } from '@/components/ui/status-pill';
 import {
@@ -30,12 +31,14 @@ export function TransferCard({
   transfer,
   branchId,
   currentUserId,
+  soloOwner = false,
   witnesses,
   action,
 }: {
   transfer: TransferBoardRow;
   branchId: string;
   currentUserId: string;
+  soloOwner?: boolean;
   witnesses: ReadonlyArray<Witness>;
   action: TransferStepAction;
 }) {
@@ -125,7 +128,7 @@ export function TransferCard({
           <PackingSlipPrintButton slip={packingSlipFor(transfer)} />
         ) : null}
         {outbound && transfer.status === 'ALLOCATED' ? (
-          ownAllocation ? (
+          ownAllocation && !soloOwner ? (
             <p className="text-xs text-text-muted">
               Waiting for a colleague to approve — you allocated this transfer.
             </p>
@@ -134,6 +137,18 @@ export function TransferCard({
               <input name="action" type="hidden" value="approve" />
               <input name="branchId" type="hidden" value={branchId} />
               <input name="transferId" type="hidden" value={transfer.id} />
+              {ownAllocation && soloOwner ? (
+                <label className="text-sm">
+                  Owner PIN
+                  <Input
+                    name="pin"
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    required
+                  />
+                </label>
+              ) : null}
               <Button size="sm" type="submit">
                 Approve {reference}
               </Button>
@@ -159,6 +174,7 @@ export function TransferCard({
 
       {!outbound && RECEIVABLE_STATUSES.has(transfer.status) ? (
         <TransferReceiveForm
+          soloOwner={soloOwner}
           action={action}
           branchId={branchId}
           transfer={transfer}

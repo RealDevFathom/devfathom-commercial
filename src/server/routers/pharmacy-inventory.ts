@@ -1,3 +1,4 @@
+import { authorizeSoloOwnerApproval } from '@/lib/pharmacy/solo-owner-approval';
 /**
  * PH-INV / INV-01..04 — the minimal procedures behind the `pharmacy-inventory`
  * entitlement (module-catalog).
@@ -72,6 +73,7 @@ import {
   auditedProtectedProcedure,
   capabilityProcedure,
   protectedProcedure,
+  publicProcedure,
   router,
 } from '../trpc';
 import { assertInOrganization } from '../org-refs';
@@ -83,6 +85,12 @@ const regulatory = capabilityProcedure('pharmacy:safety');
 // Storage zones and their cold-chain readings belong to whoever runs the stock
 // (the Inventory role, or `pharmacy:*`). Checked through `can()` before any read.
 const inventoryControl = capabilityProcedure('pharmacy:inventory');
+const pinInventoryControl = publicProcedure
+  .use(({ ctx, next }) => {
+    ctx.audit.detail.skipInput = true;
+    return next();
+  })
+  .concat(inventoryControl);
 const drapNotice = z.discriminatedUnion('kind', [
   z
     .object({
@@ -411,7 +419,7 @@ async function transferBoard(db: ScopedDb, scope: LedgerScope) {
 type VarianceReceiptInput = {
   transferId: string;
   lines: ReadonlyArray<{ lineId: string; receivedUnits: number }>;
-  variance?: { reason: string; witnessId: string; evidenceRef: string };
+  variance?: { reason: string; witnessId: string; evidenceRef: string; pin?: string };
   idempotencyKeyPrefix: string;
 };
 
@@ -503,7 +511,16 @@ async function receiveTransferWithVariance(
   const short = plan.some((step) => step.varianceUnits > 0);
   if (short) {
     const evidence = input.variance;
-    if (!evidence || evidence.witnessId === scope.actorId)
+    if (
+      !evidence ||
+      (evidence.witnessId === scope.actorId &&
+        !(await authorizeSoloOwnerApproval(db, {
+          ...scope,
+          targetId: scope.branchId,
+          capability: 'pharmacy:inventory',
+          pin: evidence.pin,
+        })))
+    )
       throw new PharmacyInventoryError('COAUTH_REQUIRED');
     const witness = await db.user.findFirst({
       where: { id: evidence.witnessId, organizationId: scope.organizationId, status: 'ACTIVE' },
@@ -993,11 +1010,15 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  approveCount: inventoryControl
+  approveCount: pinInventoryControl
     .input(
       z
         .object({
           branchId,
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
           countId: z.string().min(1),
           idempotencyKeyPrefix: z.string().trim().min(1).max(160),
         })
@@ -1010,7 +1031,8 @@ export const pharmacyInventoryRouter = router({
             txDb(tx),
             await scopeFor(ctx, input.branchId),
             input.countId,
-            input.idempotencyKeyPrefix
+            input.idempotencyKeyPrefix,
+            input.pin
           )
         );
       } catch (error) {
@@ -1018,11 +1040,15 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  writeOff: inventoryControl
+  writeOff: pinInventoryControl
     .input(
       z
         .object({
           branchId,
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
           inventoryLotId: z.string().min(1),
           stockLocationId: z.string().min(1),
           units: z.number().int().positive(),
@@ -1096,11 +1122,29 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
-  approveTransfer: inventoryControl
-    .input(z.object({ branchId, transferId: z.string().min(1) }).strict())
+  approveTransfer: pinInventoryControl
+    .input(
+      z
+        .object({
+          branchId,
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
+          transferId: z.string().min(1),
+        })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await approveTransfer(ctx.db, await scopeFor(ctx, input.branchId), input.transferId);
+        return await ctx.db.$transaction(async (tx) =>
+          approveTransfer(
+            txDb(tx),
+            await scopeFor(ctx, input.branchId),
+            input.transferId,
+            input.pin
+          )
+        );
       } catch (error) {
         domainError(error);
       }
@@ -1958,7 +2002,7 @@ export const pharmacyInventoryRouter = router({
     .query(async ({ ctx, input }) => transferBoard(ctx.db, await scopeFor(ctx, input.branchId))),
 
   /** WHA-1603 INV-07: close a transfer, posting any shortfall as a custody write-off. */
-  receiveTransferWithVariance: inventoryControl
+  receiveTransferWithVariance: pinInventoryControl
     .input(
       z
         .object({
@@ -1979,6 +2023,10 @@ export const pharmacyInventoryRouter = router({
             .object({
               reason: z.string().trim().min(1).max(500),
               witnessId: z.string().trim().min(1).max(200),
+              pin: z
+                .string()
+                .regex(/^\d{4,8}$/)
+                .optional(),
               evidenceRef: z.string().trim().min(1).max(200),
             })
             .strict()

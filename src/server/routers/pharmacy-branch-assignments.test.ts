@@ -159,6 +159,19 @@ describe('pharmacy branch assignments', () => {
     });
   });
 
+  it('keeps automatic owner branch assignments active', async () => {
+    const f = fixture();
+    f.db.user.findFirst.mockResolvedValueOnce({
+      id: 'cashier-1',
+      role: 'ADMIN',
+      organizationRole: null,
+    } as never);
+    await expect(f.caller.unassign({ assignmentId: 'pba-1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Owners are automatically assigned to every pharmacy branch.',
+    });
+    expect(f.db.pharmacyBranchAssignment.update).not.toHaveBeenCalled();
+  });
   it('refuses another organization, a closed branch, and a member without a pharmacy role', async () => {
     const foreign = fixture();
     foreign.context.session.user.organizationId = 'org-b';

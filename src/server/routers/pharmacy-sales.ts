@@ -1,3 +1,4 @@
+import { authorizeSoloOwnerApproval } from '@/lib/pharmacy/solo-owner-approval';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
@@ -113,6 +114,7 @@ import {
   auditedProtectedProcedure,
   capabilityProcedure,
   protectedProcedure,
+  publicProcedure,
   router,
 } from '../trpc';
 import type { TRPCContext } from '../trpc';
@@ -148,6 +150,12 @@ const demandReason = z.enum([
   'SERVICE_FAILURE',
 ]);
 const txDb = (tx: unknown) => tx as ScopedDb;
+const pinProcedure = publicProcedure
+  .use(({ ctx, next }) => {
+    ctx.audit.detail.skipInput = true;
+    return next();
+  })
+  .concat(protectedProcedure);
 
 async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const organizationId = ctx.entitlements?.organizationId;
@@ -897,7 +905,7 @@ export const pharmacySalesRouter = router({
         createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
       )
     ),
-  addLine: protectedProcedure
+  addLine: pinProcedure
     .input(
       z
         .object({
@@ -1063,24 +1071,36 @@ export const pharmacySalesRouter = router({
             !pharmacist ||
             pharmacist.organizationId !== scope.organizationId ||
             pharmacist.status !== 'ACTIVE' ||
-            pharmacist.id === scope.actorId ||
             isLockedOut(credential, now)
           )
             return blocked;
           if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
-          if (
-            !(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))
-          ) {
+          if (pharmacist.id === scope.actorId) {
+            if (
+              !(await authorizeSoloOwnerApproval(db, {
+                ...scope,
+                targetId: scope.branchId,
+                capability: 'pharmacy:dispense',
+                pin: authorization.pin,
+                staffProfileId: authorization.staffProfileId,
+              }))
+            )
+              return blocked;
+          } else {
+            if (
+              !(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))
+            ) {
+              await db.restaurantOperatorCredential.update({
+                where: { id: credential.id },
+                data: registerFailedAttempt(credential, now),
+              });
+              return blocked;
+            }
             await db.restaurantOperatorCredential.update({
               where: { id: credential.id },
-              data: registerFailedAttempt(credential, now),
+              data: clearLockout(),
             });
-            return blocked;
           }
-          await db.restaurantOperatorCredential.update({
-            where: { id: credential.id },
-            data: clearLockout(),
-          });
           const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);
           if (authorization.refSerial && !refEntry) {
             return { blocked: 'That earlier register serial is not on this branch.' };
@@ -1284,7 +1304,7 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  transition: protectedProcedure
+  transition: pinProcedure
     .input(
       z
         .object({
@@ -1348,7 +1368,7 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  returnLine: protectedProcedure
+  returnLine: pinProcedure
     .input(
       z
         .object({

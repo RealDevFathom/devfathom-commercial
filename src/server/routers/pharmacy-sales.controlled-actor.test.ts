@@ -107,7 +107,7 @@ describe('pharmacySales.addLine controlled actor', () => {
 
   it('lets a pharmacist past the actor check', async () => {
     const { caller, credential } = callerFor([
-      { capability: 'pharmacy.dispense', effect: 'ALLOW' },
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
     ]);
     const { controlledAuthorization, ...plain } = line;
     void controlledAuthorization;

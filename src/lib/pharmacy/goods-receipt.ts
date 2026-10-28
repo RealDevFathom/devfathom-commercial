@@ -1,3 +1,4 @@
+import { authorizeSoloOwnerApproval } from './solo-owner-approval';
 /**
  * PH-PUR — PRD §6.3 PUR-02 (receiving), PUR-04 (three-way match exceptions and
  * reversal) and PUR-05 (direct purchase). The database half of receiving.
@@ -133,10 +134,19 @@ export async function verifyControlledPurchaseWitness(
     pharmacist.id === receipt.qualifiedPersonUserId &&
     pharmacist.organizationId === scope.organizationId &&
     pharmacist.status === 'ACTIVE' &&
-    pharmacist.id !== scope.actorId &&
     !isLockedOut(credential, now) &&
     (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
   if (!eligible || !credential || !pharmacist) return { blocked: WITNESS_BLOCKED };
+  if (pharmacist.id === scope.actorId) {
+    const allowed = await authorizeSoloOwnerApproval(db, {
+      ...scope,
+      targetId: scope.branchId,
+      capability: 'pharmacy:dispense',
+      pin: input.pin,
+      staffProfileId: input.staffProfileId,
+    });
+    return allowed ? { pharmacistId: pharmacist.id } : { blocked: WITNESS_BLOCKED };
+  }
   if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },

@@ -1,3 +1,4 @@
+import { isSoloPharmacyOwner } from '@/lib/pharmacy/solo-owner-approval';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
@@ -115,6 +116,7 @@ export default async function PharmacyTransfersPage({
     );
   }
 
+  const soloOwner = await isSoloPharmacyOwner(ctx.db, organizationId, currentUserId, branch.id);
   const caller = pharmacyInventoryRouter.createCaller(ctx);
   const [transfers, balances, destinationLocations, witnesses] = await Promise.all([
     caller.transferBoard({ branchId: branch.id }),
@@ -148,7 +150,11 @@ export default async function PharmacyTransfersPage({
       select: { id: true, name: true, branchId: true },
     }),
     ctx.db.user.findMany({
-      where: { organizationId, status: 'ACTIVE', id: { not: currentUserId } },
+      where: {
+        organizationId,
+        status: 'ACTIVE',
+        ...(soloOwner ? {} : { id: { not: currentUserId } }),
+      },
       orderBy: { name: 'asc' },
       select: { id: true, name: true, title: true },
     }),
@@ -180,7 +186,12 @@ export default async function PharmacyTransfersPage({
       const transferId = String(data.get('transferId') ?? '').trim();
       if (action === 'allocate')
         await actionCaller.allocateTransfer(allocateInput(data, ALLOCATE_ROWS));
-      else if (action === 'approve') await actionCaller.approveTransfer({ branchId, transferId });
+      else if (action === 'approve')
+        await actionCaller.approveTransfer({
+          branchId,
+          transferId,
+          pin: String(data.get('pin') ?? '').trim() || undefined,
+        });
       else if (action === 'dispatch')
         await actionCaller.dispatchTransfer({
           branchId,
@@ -283,6 +294,7 @@ export default async function PharmacyTransfersPage({
                 action={perform}
                 branchId={branch.id}
                 currentUserId={currentUserId}
+                soloOwner={soloOwner}
                 key={transfer.id}
                 transfer={transfer}
                 witnesses={witnesses}
@@ -302,6 +314,7 @@ export default async function PharmacyTransfersPage({
                 action={perform}
                 branchId={branch.id}
                 currentUserId={currentUserId}
+                soloOwner={soloOwner}
                 key={transfer.id}
                 transfer={transfer}
                 witnesses={witnesses}

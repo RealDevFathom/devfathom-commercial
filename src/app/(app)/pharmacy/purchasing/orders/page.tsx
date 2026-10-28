@@ -1,3 +1,4 @@
+import { isSoloPharmacyOwner } from '@/lib/pharmacy/solo-owner-approval';
 import type { Metadata } from 'next';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
@@ -118,6 +119,14 @@ export default async function PharmacyOrdersPage({
   // whichever record happens to be first.
   const requisition = requisitions.find((row) => row.id === requestedRequisition) ?? null;
   const order = orders.find((row) => row.id === requestedOrder) ?? null;
+  const soloOwner = order
+    ? await isSoloPharmacyOwner(
+        ctx.db,
+        ctx.entitlements.organizationId,
+        ctx.session.user.id,
+        order.branchId ?? undefined
+      )
+    : false;
 
   /**
    * PUR-02: the ranked, explained comparison for every line of the selected
@@ -391,11 +400,12 @@ export default async function PharmacyOrdersPage({
       let message: string;
       if (action === 'submit') {
         await outcome.write(actionCaller.submitPurchaseOrder)({ purchaseOrderId });
-        message = 'Order submitted for approval. Somebody else has to approve it.';
+        message = 'Order submitted for approval. A second approver or solo owner PIN is required.';
       } else if (action === 'approve' || action === 'reject') {
         await outcome.write(actionCaller.approvePurchaseOrder)({
           purchaseOrderId,
           decision: action === 'approve' ? 'APPROVED' : 'REJECTED',
+          pin: optionalField(form, 'pin'),
           reason: optionalField(form, 'reason'),
         });
         message =
@@ -609,6 +619,7 @@ export default async function PharmacyOrdersPage({
           {order ? (
             <OrderDetailPanel
               actorId={ctx.session.user.id}
+              soloOwner={soloOwner}
               landed={landed}
               notice={notice}
               onAdvance={advanceOrder}
@@ -1002,6 +1013,7 @@ function OrderDetailPanel({
   order,
   landed,
   actorId,
+  soloOwner,
   notice,
   onAdvance,
 }: {
@@ -1020,6 +1032,7 @@ function OrderDetailPanel({
     }[];
   } | null;
   actorId: string;
+  soloOwner: boolean;
   notice: Notice | null;
   onAdvance: (form: FormData) => Promise<string>;
 }) {
@@ -1143,7 +1156,7 @@ function OrderDetailPanel({
         ) : null}
 
         {order.status === 'SUBMITTED' ? (
-          selfApproval ? (
+          selfApproval && !soloOwner ? (
             <p className="text-sm text-text-muted">
               You raised this order, so you cannot approve it. That is the PUR-02 segregation of
               duties rule — ask a second person to decide.
@@ -1155,6 +1168,18 @@ function OrderDetailPanel({
               className="flex flex-wrap items-end gap-3"
             >
               <input name="purchaseOrderId" type="hidden" value={order.id} />
+              {selfApproval ? (
+                <TextField
+                  label="Owner PIN"
+                  name="pin"
+                  notice={notice}
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  required
+                  hint="Solo owner decisions require a fresh PIN and are audited."
+                />
+              ) : null}
               <TextField
                 className="min-w-56"
                 label="Decision note"

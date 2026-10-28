@@ -68,6 +68,7 @@ function makeContext() {
     organization: { id: 'org', isDemo: false },
     entitlements: {},
     db: {
+      $queryRaw: vi.fn().mockResolvedValue([{ allowed: false }]),
       pharmacyBranch: { findMany: vi.fn().mockResolvedValue([branch]) },
       pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([location]) },
       pharmacyInventoryLot: { findMany: lots },

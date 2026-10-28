@@ -342,11 +342,14 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
         api.lookupReceiptByNumber({ branchId: ids.branchB, receiptNumber: 7 })
       ).resolves.toEqual([expect.objectContaining({ id: ids.saleB })]);
     });
-    await withTenantDb(ids.orgA, (tx) =>
-      tx.pharmacyBranchAssignment.create({
+    // Owners are provisioned to every branch. Keep exercising the receipt
+    // admin fallback with a deliberately sparse legacy assignment set.
+    await withTenantDb(ids.orgA, async (tx) => {
+      await tx.pharmacyBranchAssignment.deleteMany({ where: { userId: ids.admin } });
+      await tx.pharmacyBranchAssignment.create({
         data: { userId: ids.admin, branchId: ids.branchA },
-      })
-    );
+      });
+    });
     await act(ids.orgA, { id: ids.admin, role: 'ADMIN', organizationId: ids.orgA }, async (api) => {
       await expect(
         api.lookupReceiptByNumber({ branchId: ids.branchB, receiptNumber: 7 })

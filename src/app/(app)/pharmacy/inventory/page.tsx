@@ -1,3 +1,4 @@
+import { isSoloPharmacyOwner } from '@/lib/pharmacy/solo-owner-approval';
 import { browserUuid } from '@/lib/browser-uuid';
 import type { Metadata } from 'next';
 import Link from 'next/link';
@@ -155,6 +156,12 @@ export default async function PharmacyInventoryPage({
     );
   }
 
+  const soloOwner = await isSoloPharmacyOwner(
+    ctx.db,
+    organizationId,
+    ctx.session.user.id,
+    branch.id
+  );
   const caller = pharmacyInventoryRouter.createCaller(ctx);
   const [
     organizationLocations,
@@ -211,7 +218,11 @@ export default async function PharmacyInventoryPage({
       },
     }),
     ctx.db.user.findMany({
-      where: { organizationId, status: 'ACTIVE', id: { not: ctx.session.user.id } },
+      where: {
+        organizationId,
+        status: 'ACTIVE',
+        ...(soloOwner ? {} : { id: { not: ctx.session.user.id } }),
+      },
       orderBy: { name: 'asc' },
       select: { id: true, name: true, title: true },
     }),
@@ -296,6 +307,7 @@ export default async function PharmacyInventoryPage({
         await actionCaller.approveCount({
           branchId,
           countId: field(data, 'countId'),
+          pin: field(data, 'pin') || undefined,
           idempotencyKeyPrefix: `ui-count:${field(data, 'countId')}`,
         });
       else if (action === 'write-off')
@@ -305,6 +317,7 @@ export default async function PharmacyInventoryPage({
           stockLocationId: field(data, 'position').split(':')[1]!,
           units: number(data, 'units'),
           witnessId: field(data, 'witnessId'),
+          pin: field(data, 'pin') || undefined,
           reason: field(data, 'reason'),
           evidenceRef: field(data, 'evidenceRef'),
           idempotencyKey: `ui-writeoff:${browserUuid()}`,
@@ -323,7 +336,11 @@ export default async function PharmacyInventoryPage({
           ],
         });
       else if (action === 'approve-transfer')
-        await actionCaller.approveTransfer({ branchId, transferId: field(data, 'transferId') });
+        await actionCaller.approveTransfer({
+          branchId,
+          transferId: field(data, 'transferId'),
+          pin: field(data, 'pin') || undefined,
+        });
       else if (action === 'dispatch-transfer')
         await actionCaller.dispatchTransfer({
           branchId,
@@ -743,6 +760,18 @@ export default async function PharmacyInventoryPage({
                     <input name="action" type="hidden" value="approve-count" />
                     <input name="branchId" type="hidden" value={branch.id} />
                     <input name="countId" type="hidden" value={count.id} />
+                    {soloOwner ? (
+                      <label className="text-sm">
+                        Owner PIN
+                        <Input
+                          name="pin"
+                          type="password"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          className="mt-1"
+                        />
+                      </label>
+                    ) : null}
                     <Submit>
                       {count.status === 'AWAITING_COAUTH'
                         ? 'Co-authorize variance'
@@ -789,6 +818,18 @@ export default async function PharmacyInventoryPage({
                 ))}
               </select>
             </label>
+            {soloOwner ? (
+              <label className="text-sm">
+                Owner PIN
+                <Input
+                  name="pin"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  className="mt-1"
+                />
+              </label>
+            ) : null}
             <label className="text-sm">
               Evidence reference
               <Input
@@ -808,7 +849,7 @@ export default async function PharmacyInventoryPage({
           </form>
         ) : (
           <Empty>
-            A write-off needs available stock and a different active organization member as witness.
+            A write-off needs available stock and a second witness, or a solo owner PIN.
           </Empty>
         )}
       </SectionCard>
@@ -882,6 +923,18 @@ export default async function PharmacyInventoryPage({
                     <input name="action" type="hidden" value="approve-transfer" />
                     <input name="branchId" type="hidden" value={branch.id} />
                     <input name="transferId" type="hidden" value={transfer.id} />
+                    {soloOwner ? (
+                      <label className="text-sm">
+                        Owner PIN
+                        <Input
+                          name="pin"
+                          type="password"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          className="mt-1"
+                        />
+                      </label>
+                    ) : null}
                     <Submit>Approve</Submit>
                   </form>
                 ) : null}

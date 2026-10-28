@@ -1,3 +1,4 @@
+import { authorizeSoloOwnerApproval } from '../solo-owner-approval';
 import 'server-only';
 
 /**
@@ -598,9 +599,22 @@ function abs(value: bigint): bigint {
  * or any exception is still open. Co-authored like INV-06's count approval: the
  * pharmacist who opened the session cannot also be the one who signs it off.
  */
-export async function signOffOpeningSession(db: ScopedDb, scope: LedgerScope, sessionId: string) {
+export async function signOffOpeningSession(
+  db: ScopedDb,
+  scope: LedgerScope,
+  sessionId: string,
+  pin?: string
+) {
   const session = await requireSession(db, scope, sessionId, ['POSTED']);
-  if (session.createdByActorId === scope.actorId) {
+  if (
+    session.createdByActorId === scope.actorId &&
+    !(await authorizeSoloOwnerApproval(db, {
+      ...scope,
+      targetId: session.id,
+      capability: 'pharmacy:inventory',
+      pin,
+    }))
+  ) {
     throw new PharmacyOpeningError('COAUTH_REQUIRED');
   }
 

@@ -66,17 +66,22 @@ const isoDay = (offsetDays = 0) =>
  * Saving never signs anything — pharmacist review still releases the line.
  */
 function CounterRxPhotoCapture({
+  branchId,
   patientId,
   patientName,
   disabled,
 }: {
+  branchId?: string;
   patientId: string;
   patientName: string;
   disabled: boolean;
 }) {
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
-  const workspace = trpc.pharmacyPrescriptions.workspace.useQuery(undefined, { enabled: open });
+  const workspace = trpc.pharmacyPrescriptions.workspace.useQuery(
+    branchId ? { branchId } : undefined,
+    { enabled: open }
+  );
   const uploadSource = trpc.pharmacyPrescriptions.uploadSource.useMutation();
   const extractSource = trpc.pharmacyPrescriptions.extractSource.useMutation();
   const capture = trpc.pharmacyPrescriptions.capture.useMutation();
@@ -198,7 +203,10 @@ function CounterRxPhotoCapture({
       inFlight.current = false;
     }
     await Promise.allSettled([
-      utils.pharmacyPrescriptions.counterPatientPanel.invalidate({ patientId }),
+      utils.pharmacyPrescriptions.counterPatientPanel.invalidate({
+        branchId: branchId ?? workspace.data?.selectedBranchId ?? '',
+        patientId,
+      }),
       utils.pharmacyPrescriptions.workspace.invalidate(),
     ]);
   }
@@ -490,6 +498,7 @@ function CounterRxPhotoCapture({
 }
 
 export type CounterRxPanelProps = {
+  branchId?: string;
   controlled?: {
     prescriptionLineId: string;
     staffProfileId: string;
@@ -550,6 +559,7 @@ export type CounterRxPanelProps = {
 export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
   function CounterRxPanel(
     {
+      branchId,
       controlled,
       alerts,
       patient,
@@ -856,6 +866,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                   Capture does not replace pharmacist review or dispensing consent.
                 </p>
                 <CounterRxPhotoCapture
+                  branchId={branchId}
                   key={patient.patientId}
                   patientId={patient.patientId}
                   patientName={patient.displayName}

@@ -1,3 +1,4 @@
+import { isSoloPharmacyOwner } from './solo-owner-approval';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
@@ -482,14 +483,16 @@ export async function assignedRegisterBranchIds(
 export async function listControlledPinWitnesses(
   db: ScopedDb,
   organizationId: string,
-  actorId: string
+  actorId: string,
+  branchId?: string
 ) {
+  const soloOwner = await isSoloPharmacyOwner(db, organizationId, actorId, branchId);
   const staff = await db.restaurantStaffProfile.findMany({
     where: {
       organizationId,
       user: { organizationId, status: 'ACTIVE' },
       status: 'ACTIVE',
-      userId: { not: actorId },
+      ...(soloOwner ? {} : { userId: { not: actorId } }),
       credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
     },
     include: {
