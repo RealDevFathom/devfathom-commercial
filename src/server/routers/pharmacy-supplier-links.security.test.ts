@@ -24,6 +24,10 @@ function fixture() {
   const db = {
     user: {
       findUnique: vi.fn().mockResolvedValue({
+        id: 'actor',
+        status: 'ACTIVE',
+        role: 'EMPLOYEE',
+        organizationId: 'org',
         organizationRole: {
           permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
         },

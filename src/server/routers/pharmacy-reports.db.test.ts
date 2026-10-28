@@ -32,7 +32,10 @@ const pin = '846291';
 const audit = { detail: {} };
 let transaction: ScopedDb;
 function withTenantDb<T>(organizationId: string, work: (tx: ScopedDb) => Promise<T>) {
-  return withOrganizationDefaults(transaction, organizationId, work);
+  return withOrganizationDefaults(transaction, organizationId, async (tx) => {
+    await tx.$queryRaw`SELECT set_config('app.current_branch_id', ${id('branch')}, true)`;
+    return work(tx);
+  });
 }
 function act<T>(
   person: string,
@@ -313,6 +316,7 @@ describe('pharmacovigilance PostgreSQL authorization and review', () => {
             )
           ).rejects.toThrow();
           await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT pv_failed_request');
+          await tx.$executeRawUnsafe('RELEASE SAVEPOINT pv_failed_request');
           await withTenantDb(org, async (tx) => {
             expect(
               (

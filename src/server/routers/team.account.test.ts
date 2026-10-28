@@ -141,7 +141,7 @@ describe('team.getById directory privacy', () => {
     phone: '+92 300 0000001',
   };
   const permissionLookup = expect.objectContaining({
-    where: { id: 'user_self' },
+    where: { id: 'user_self', organizationId: 'org_1' },
     select: expect.objectContaining({ permissionOverrides: expect.anything() }),
   });
 
@@ -302,7 +302,7 @@ describe('team.getAll and team:view', () => {
       self,
     ]);
     expect(mocks.permissions).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'user_self' } })
+      expect.objectContaining({ where: { id: 'user_self', organizationId: 'org_1' } })
     );
     expect(mocks.findMany).toHaveBeenCalledWith(
       expect.not.objectContaining({ where: expect.anything() })

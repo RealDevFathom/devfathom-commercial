@@ -31,6 +31,21 @@ beforeEach(() => {
   mocks.context.mockResolvedValue({
     session: { user: { id: 'user' } },
     entitlements: { organizationId: 'org' },
+    db: {
+      user: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({
+            status: 'ACTIVE',
+            role: 'EMPLOYEE',
+            organizationId: 'org',
+            permissionOverrides: [],
+            organizationRole: {
+              permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+            },
+          }),
+      },
+    },
   });
   mocks.module.mockReturnValue(true);
   mocks.caller.mockReturnValue(reads);

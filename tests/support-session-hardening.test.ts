@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
     findMany: vi.fn(),
   },
   platformAuditLog: { create: vi.fn() },
-  platformUser: { findMany: vi.fn() },
+  platformUser: { findMany: vi.fn(), findUnique: vi.fn() },
   notification: { createMany: vi.fn() },
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
@@ -59,6 +59,7 @@ const session = () => ({
 
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.platformUser.findUnique.mockResolvedValue({ active: true });
   mocks.organization.findUnique.mockResolvedValue({
     id: 'org_one',
     slug: 'one',

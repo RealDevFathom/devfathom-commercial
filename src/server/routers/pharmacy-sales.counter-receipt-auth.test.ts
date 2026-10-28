@@ -521,7 +521,7 @@ describe('counter receipt authorization', () => {
     expect(f.db.$transaction).not.toHaveBeenCalled();
   });
 
-  it('keeps Khata tender off the branch-assignment guard', async () => {
+  it('denies Khata tender for an unassigned nonowner', async () => {
     const f = fixture(dispense);
     f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
     await expect(
@@ -535,8 +535,9 @@ describe('counter receipt authorization', () => {
         familyAccountId: 'family-1',
         idempotencyKey: 'khata-1',
       })
-    ).rejects.toThrow('khata-reached');
-    expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 
@@ -627,8 +628,8 @@ describe('counter receipt authorization', () => {
     expect(paused.db.pharmacySale.findMany).not.toHaveBeenCalled();
   });
 
-  it('lets a session admin of this organization read without an assignment and records why', async () => {
-    const f = fixture(dispense, 'ADMIN');
+  it('lets a system owner of this organization read without an assignment and records why', async () => {
+    const f = fixture(dispense, 'ADMIN', [], 'owner');
     await expect(
       f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
     ).resolves.toMatchObject({
@@ -652,8 +653,8 @@ describe('counter receipt authorization', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
-  it('lets a session admin read a branch they are not assigned to even when another branch is', async () => {
-    const admin = fixture(dispense, 'ADMIN');
+  it('lets a system owner read a branch they are not assigned to even when another branch is', async () => {
+    const admin = fixture(dispense, 'ADMIN', [], 'owner');
     assign(admin, ['branch-b']);
     await expect(
       admin.caller().counterReceiptPrintJob({
@@ -679,7 +680,7 @@ describe('counter receipt authorization', () => {
       showChannel: true,
     };
     vi.mocked(savePharmacyReceiptFormat).mockResolvedValue({ layout, revision: 1 });
-    const admin = fixture(dispense, 'ADMIN');
+    const admin = fixture(dispense, 'ADMIN', [], 'owner');
     await expect(
       admin.caller().counterSaveReceiptFormat({ branchId: 'branch-a', revision: 0, layout })
     ).resolves.toMatchObject({ revision: 1 });

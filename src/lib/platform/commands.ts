@@ -1085,6 +1085,14 @@ async function bootstrapOrganization(
         },
       });
       if (input.vertical === 'HOSPITALITY') hospitalityRoleIds.set(template.key, role.id);
+      // Pharmacy branch authority and clinical grants require the persisted
+      // system owner identity, including for the named bootstrap administrator.
+      if (input.vertical === 'PHARMACY' && template.key === 'owner') {
+        await db.user.update({
+          where: { id: admin.id },
+          data: { organizationRoleId: role.id },
+        });
+      }
     }
   }
   // The named administrator gets one explicit assignment to this new property.

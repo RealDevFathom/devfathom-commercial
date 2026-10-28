@@ -276,11 +276,12 @@ export const pharmacyReportsRouter = router({
         // A report author cannot complete their own review in a staffed pharmacy.
         // The sole active owner may do so only after fresh PIN verification.
         if (input.state === 'READY' && report.createdByUserId === ctx.session.user.id) {
+          await db.$queryRaw`SELECT pharmacy_lock_solo_roster(${organizationId})::text`;
           const blocked = {
             blocked: 'A second approver is required, or the sole active owner must reauthenticate.',
           };
           const auth = input.ownerAuthorization;
-          if (!auth || !(await isPvOwner(ctx.db, ctx.session.user.id, organizationId)))
+          if (!auth || !(await isPvOwner(db as typeof ctx.db, ctx.session.user.id, organizationId)))
             return blocked;
           const now = new Date();
           const scope = { organizationId, actorId: ctx.session.user.id, branchId: report.branchId };

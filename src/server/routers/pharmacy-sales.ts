@@ -165,7 +165,7 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 }
 
 async function khataScope(ctx: TRPCContext, branch: string) {
-  const scope = await tenantBranchScope(ctx, branch);
+  const scope = await scopeFor(ctx, branch);
   if (
     ctx.organization?.vertical !== 'PHARMACY' ||
     ctx.organization.id !== scope.organizationId ||
@@ -340,14 +340,14 @@ function counterCapabilityDecision(
 /**
  * Dispense, receipt, or counter capability, then an active pharmacy branch
  * assignment in the session organization. Restaurant staff profiles are not
- * consulted. An empty assignment denies a non-admin. A session `ADMIN` of this
+ * consulted. An empty assignment denies a nonowner. A live system owner of this
  * organization may use every active branch, including when they also have an
  * explicit assignment elsewhere. That exception is recorded on the audit.
  */
 /** A branch outside the session organization is a scope denial, not a bad request. */
 async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   try {
-    return await tenantBranchScope(ctx, branch);
+    return await scopeFor(ctx, branch);
   } catch (error) {
     if (error instanceof TRPCError && error.code === 'BAD_REQUEST') {
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
@@ -361,7 +361,17 @@ async function requireCounterReceiptAccess(
   branch: string,
   requireCanonicalCounter = false
 ): Promise<LedgerScope> {
-  const scope = await branchScopeOrForbidden(ctx, branch);
+  const organizationId = ctx.entitlements?.organizationId;
+  const actorId = ctx.session?.user.id;
+  if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  let scope: LedgerScope;
+  try {
+    scope = await tenantBranchScope(ctx, branch);
+  } catch (error) {
+    if (error instanceof TRPCError && error.code === 'BAD_REQUEST')
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    throw error;
+  }
   const user = ctx.session!.user;
   if (!user.organizationId || user.organizationId !== scope.organizationId) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
@@ -408,8 +418,7 @@ async function requireCounterReceiptAccess(
   // Combine user overrides and role rules into ONE family decision so any
   // explicit DENY (user or role, on any alias) beats any ALLOW.
   const owner =
-    member.status === 'ACTIVE' &&
-    (member.role === 'ADMIN' || (await isPharmacyOwner(ctx.db, scope.organizationId, user.id)));
+    member.status === 'ACTIVE' && (await isPharmacyOwner(ctx.db, scope.organizationId, user.id));
   const decision = counterCapabilityDecision([...overrides, ...roleRules]);
   const liveSubject = { ...member, id: user.id };
   const capable =
@@ -425,6 +434,7 @@ async function requireCounterReceiptAccess(
     });
   }
 
+  await branchScopeOrForbidden(ctx, branch);
   const available = await ctx.db.pharmacyBranch.findFirst({
     where: { id: branch, organizationId: scope.organizationId, active: true },
     select: { id: true },
@@ -768,7 +778,7 @@ export const pharmacySalesRouter = router({
     const scope =
       input.type === 'KHATA' || input.familyAccountId
         ? await khataScope(ctx, input.branchId)
-        : await tenantBranchScope(ctx, input.branchId);
+        : await scopeFor(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
   }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {

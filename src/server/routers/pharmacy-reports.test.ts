@@ -85,7 +85,7 @@ import { pharmacyReportsRouter } from './pharmacy-reports';
 function caller(role = 'ADMIN') {
   return pharmacyReportsRouter.createCaller({
     db: {
-      $transaction: async (fn: (db: unknown) => unknown) => fn(dbForApproval()),
+      $transaction: async (fn: (db: unknown) => unknown) => fn(dbForApproval(role)),
       user: {
         findUnique: vi.fn().mockResolvedValue({
           organizationId: 'org_1',
@@ -125,8 +125,23 @@ function caller(role = 'ADMIN') {
   } as unknown as TRPCContext);
 }
 
-function dbForApproval() {
+function dbForApproval(role = 'ADMIN') {
   return {
+    user: {
+      findUnique: vi
+        .fn()
+        .mockResolvedValue({
+          organizationId: 'org_1',
+          role,
+          status: 'ACTIVE',
+          organization: { vertical: 'PHARMACY' },
+          organizationRole: {
+            organizationId: 'org_1',
+            key: role === 'ADMIN' ? 'owner' : 'cashier',
+            isSystem: true,
+          },
+        }),
+    },
     $queryRaw: vi.fn(async (sql: TemplateStringsArray) =>
       sql.join('').includes('restaurant_staff_profiles')
         ? await mocks.staff()

@@ -64,47 +64,94 @@ afterAll(async () => {
   }
 });
 
-async function fixture(kind: 'ADMIN' | 'owner' = 'ADMIN') {
-  const org = `h1_${randomUUID().replaceAll('-', '')}`;
+async function fixture(kind: 'ADMIN' | 'owner' | 'provisioned' = 'ADMIN') {
+  let org = `h1_${randomUUID().replaceAll('-', '')}`;
   orgs.push(org);
-  await owner.query(
-    `INSERT INTO organizations (id,slug,"legalName","displayName",status,vertical,"updatedAt") VALUES ($1,$1,'H1 regression','H1 regression','ACTIVE','PHARMACY',now())`,
-    [org]
-  );
+  if (kind === 'provisioned') {
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    const { executePlatformCommand } = await import('@/lib/platform/commands');
+    const packageRecord = await withPlatformDb((db) =>
+      db.platformPackage.create({
+        data: { key: org, name: 'Regression pharmacy', vertical: 'PHARMACY', defaultSeats: 10 },
+      })
+    );
+    const result = await executePlatformCommand(
+      {
+        id: 'integration-platform',
+        sessionId: 'integration-session',
+        name: 'Regression operator',
+        email: 'operator@example.invalid',
+        role: 'SUPER_ADMIN',
+        mfaEnabled: true,
+        expiresAt: new Date(Date.now() + 3600_000),
+      },
+      'organization.create',
+      {
+        vertical: 'PHARMACY',
+        slug: org.replaceAll('_', '-'),
+        legalName: org,
+        displayName: org,
+        packageId: packageRecord.id,
+        primaryContactName: 'Owner',
+        primaryContactEmail: `${org}@example.invalid`,
+        adminName: 'Bootstrap owner',
+        adminEmail: `${org}@example.invalid`,
+        adminPassword: 'Disposable-owner-password-683!',
+        firstBranchName: 'Main',
+        firstBranchAddress: 'Test road',
+        firstBranchCity: 'Lahore',
+        firstBranchProvinceCode: 'PK-PB',
+      },
+      new Request('http://platform.localhost/api/platform')
+    );
+    org = (result as { id: string }).id;
+  } else
+    await owner.query(
+      `INSERT INTO organizations (id,slug,"legalName","displayName",status,vertical,"updatedAt") VALUES ($1,$1,'H1 regression','H1 regression','ACTIVE','PHARMACY',now())`,
+      [org]
+    );
   return withTenantDb(
     org,
     async (db) => {
-      await db.organizationDepartment.create({
-        data: { organizationId: org, key: 'PHARMACY', name: 'PHARMACY' },
-      });
-      const role = await db.organizationRole.create({
-        data: {
-          organizationId: org,
-          key: 'owner',
-          isSystem: true,
-          name: kind,
-        },
-      });
-      for (const capability of [
-        'pharmacy:dispense',
-        'pharmacy:safety',
-        'pharmacy:catalogue-review',
-      ])
-        await db.organizationRolePermission.create({
-          data: { organizationId: org, organizationRoleId: role.id, capability, effect: 'ALLOW' },
+      if (kind !== 'provisioned')
+        await db.organizationDepartment.create({
+          data: { organizationId: org, key: 'PHARMACY', name: 'PHARMACY' },
         });
-      const user = await db.user.create({
-        data: {
-          organizationId: org,
-          organizationRoleId: role.id,
-          name: 'Solo proprietor',
-          email: `${org}@example.invalid`,
-          department: 'PHARMACY',
-          title: 'Owner',
-          role: kind === 'ADMIN' ? 'ADMIN' : 'EMPLOYEE',
-          status: 'ACTIVE',
-        },
-      });
+      const role =
+        kind === 'provisioned'
+          ? await db.organizationRole.findFirstOrThrow({ where: { key: 'owner' } })
+          : await db.organizationRole.create({
+              data: {
+                organizationId: org,
+                key: 'owner',
+                isSystem: true,
+                name: kind,
+              },
+            });
+      if (kind !== 'provisioned')
+        for (const capability of [
+          'pharmacy:dispense',
+          'pharmacy:safety',
+          'pharmacy:catalogue-review',
+        ])
+          await db.organizationRolePermission.create({
+            data: { organizationId: org, organizationRoleId: role.id, capability, effect: 'ALLOW' },
+          });
+      const user =
+        kind === 'provisioned'
+          ? await db.user.findFirstOrThrow({ where: { role: 'ADMIN' } })
+          : await db.user.create({
+              data: {
+                organizationId: org,
+                organizationRoleId: role.id,
+                name: 'Solo proprietor',
+                email: `${org}@example.invalid`,
+                department: 'PHARMACY',
+                title: 'Owner',
+                role: kind === 'ADMIN' ? 'ADMIN' : 'EMPLOYEE',
+                status: 'ACTIVE',
+              },
+            });
       const profile = await db.restaurantStaffProfile.create({
         data: { organizationId: org, userId: user.id, displayName: 'Owner' },
       });
@@ -116,16 +163,19 @@ async function fixture(kind: 'ADMIN' | 'owner' = 'ADMIN') {
           credentialHash: await hash(pin, 4),
         },
       });
-      const branch = await db.pharmacyBranch.create({
-        data: {
-          organizationId: org,
-          code: 'MAIN',
-          name: 'Main',
-          addressLine: 'Test',
-          city: 'Test',
-          provinceCode: 'PB',
-        },
-      });
+      const branch =
+        kind === 'provisioned'
+          ? await db.pharmacyBranch.findFirstOrThrow({ where: { code: 'MAIN' } })
+          : await db.pharmacyBranch.create({
+              data: {
+                organizationId: org,
+                code: 'MAIN',
+                name: 'Main',
+                addressLine: 'Test',
+                city: 'Test',
+                provinceCode: 'PB',
+              },
+            });
       const other = await db.pharmacyBranch.create({
         data: {
           organizationId: org,
@@ -356,8 +406,8 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
     }
   );
 
-  it('approves its own purchase through the actual router with an atomic PIN audit', async () => {
-    const f = await fixture();
+  it('approves a real provisioned bootstrap owner purchase through the router with an atomic PIN audit', async () => {
+    const f = await fixture('provisioned');
     const po = await order(f);
     await withTenantDb(
       f.org,
@@ -892,8 +942,8 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
   });
 });
 
-it('records a solo owner-PIN controlled prescription sale with matching register and audit references', async () => {
-  const f = await fixture('owner');
+it('runs catalogue, dispensing, PV and a controlled prescription sale as the real provisioned sole owner', async () => {
+  const f = await fixture('provisioned');
   const receipt = await withTenantDb(
     f.org,
     (db) => caller(db, f).createGoodsReceipt(receiptInput(f)),
@@ -948,9 +998,18 @@ it('records a solo owner-PIN controlled prescription sale with matching register
         },
         include: { lines: true },
       });
-      const api = pharmacySalesRouter.createCaller({
+      const context = {
         db,
-        entitlements: { organizationId: f.org, enabledModules: ['pharmacy-counter'], modules: [] },
+        entitlements: {
+          organizationId: f.org,
+          enabledModules: [
+            'pharmacy-counter',
+            'pharmacy-core',
+            'pharmacy-dispensing',
+            'pharmacy-reports',
+          ],
+          modules: [],
+        },
         session: {
           expires: 'later',
           user: { id: f.user, organizationId: f.org, role: 'EMPLOYEE', status: 'ACTIVE' },
@@ -959,7 +1018,41 @@ it('records a solo owner-PIN controlled prescription sale with matching register
         support: null,
         requestMeta: { ip: null, userAgent: null },
         audit: { detail: {}, db },
-      } as never);
+      } as never;
+      const api = pharmacySalesRouter.createCaller(context);
+      const { pharmacyMedicineRouter } = await import('@/server/routers/pharmacy-medicine');
+      const { pharmacyDispensingRouter } = await import('@/server/routers/pharmacy-dispensing');
+      const { pharmacyReportsRouter } = await import('@/server/routers/pharmacy-reports');
+      const catalogue = await pharmacyMedicineRouter.createCaller(context).createMedicine({
+        productName: 'Provisioned catalogue write',
+        productFamily: 'PHARMACEUTICAL',
+      });
+      expect(catalogue).toHaveProperty('id');
+      expect(await pharmacyDispensingRouter.createCaller(context).reviewQueue()).toMatchObject({
+        currentUserId: f.user,
+        items: [],
+      });
+      await db.$queryRaw`SELECT set_config('app.current_branch_id', ${f.branch}, true)`;
+      const pv = pharmacyReportsRouter.createCaller(context);
+      const report = await pv.createPharmacovigilanceReport({
+        branchId: f.branch,
+        kind: 'MEDICATION_ERROR',
+        occurredAt: new Date(),
+        assertedDescription: 'Human asserted regression evidence',
+      });
+      await pv.transitionPharmacovigilanceReport({
+        id: report.id,
+        branchId: f.branch,
+        state: 'UNDER_REVIEW',
+      });
+      expect(
+        await pv.transitionPharmacovigilanceReport({
+          id: report.id,
+          branchId: f.branch,
+          state: 'READY',
+          ownerAuthorization: { staffProfileId: f.profile, pin },
+        })
+      ).toMatchObject({ state: 'READY', reviewedByUserId: f.user });
       const sale = await api.create({ branchId: f.branch });
       const input = {
         branchId: f.branch,
@@ -1087,7 +1180,10 @@ async function tenantConnection(f: Fixture, isolation = 'READ COMMITTED') {
   await client.connect();
   await client.query(`BEGIN ISOLATION LEVEL ${isolation}`);
   await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
-  await client.query(`SELECT set_config('app.current_organization_id', $1, true)`, [f.org]);
+  await client.query(
+    `SELECT set_config('app.current_organization_id', $1, true), set_config('app.current_branch_id', $2, true)`,
+    [f.org, f.branch]
+  );
   await client.query(`SET LOCAL statement_timeout = '5s'`);
   return client;
 }
@@ -1111,12 +1207,24 @@ async function waitUntilBlocked(client: Client) {
 }
 // Install transaction-bound evidence directly to isolate the SQL guard. The
 // router tests above independently exercise actual PIN reauthentication.
-async function sqlAudit(client: Client, f: Fixture, target: string) {
+async function sqlAudit(
+  client: Client,
+  f: Fixture,
+  target: string,
+  type = 'PharmacyPurchaseOrder'
+) {
   const id = randomUUID();
   await client.query(
     `INSERT INTO audit_logs (id,"organizationId","actorId",source,category,action,"targetType","targetId",metadata)
-     VALUES ($1,$2,$3,'TRPC','PHARMACY','PHARMACY:SOLO_OWNER_PIN','PharmacyPurchaseOrder',$4,$5::jsonb)`,
-    [id, f.org, f.user, target, JSON.stringify({ branchId: f.branch, reauthentication: 'PIN' })]
+     VALUES ($1,$2,$3,'TRPC','PHARMACY','PHARMACY:SOLO_OWNER_PIN',$6,$4,$5::jsonb)`,
+    [
+      id,
+      f.org,
+      f.user,
+      target,
+      JSON.stringify({ branchId: f.branch, reauthentication: 'PIN' }),
+      type,
+    ]
   );
   await client.query(`SELECT set_config('app.pharmacy_solo_audit_id',$1,true)`, [id]);
 }
@@ -1671,4 +1779,92 @@ it('signs off opening stock only with authorized solo PIN proof and retains mult
     },
     { skipDrain: true }
   );
+});
+
+it('PV READY database guard rechecks a concurrent staff activation and holds the roster through commit', async () => {
+  const f = await fixture();
+  const { report, staff } = await withTenantDb(
+    f.org,
+    async (db) => {
+      await db.$queryRaw`SELECT set_config('app.current_branch_id', ${f.branch}, true)`;
+      return {
+        report: await db.pharmacyPharmacovigilanceReport.create({
+          data: {
+            branchId: f.branch,
+            kind: 'MEDICATION_ERROR',
+            state: 'UNDER_REVIEW',
+            occurredAt: new Date(),
+            assertedDescription: 'Concurrent PV regression',
+            createdByUserId: f.user,
+          },
+        }),
+        staff: await db.user.create({
+          data: {
+            name: 'Joining colleague',
+            email: `${randomUUID()}@example.invalid`,
+            department: 'PHARMACY',
+            title: 'Staff',
+            status: 'INACTIVE',
+          },
+        }),
+      };
+    },
+    { skipDrain: true }
+  );
+  const approve = (c: Client) =>
+    c.query(
+      `UPDATE pharmacy_pharmacovigilance_reports SET state='READY',"reviewedByUserId"=$1 WHERE id=$2`,
+      [f.user, report.id]
+    );
+  const roster = await tenantConnection(f);
+  const approval = await tenantConnection(f);
+  try {
+    await expect(approve(approval)).rejects.toMatchObject({ code: '23514' });
+    await approval.query('ROLLBACK');
+    await approval.query('BEGIN');
+    await approval.query(`SET LOCAL ROLE "${runtimeRole}"`);
+    await approval.query(
+      `SELECT set_config('app.current_organization_id',$1,true), set_config('app.current_branch_id',$2,true)`,
+      [f.org, f.branch]
+    );
+    await sqlAudit(approval, f, report.id, 'PharmacyPharmacovigilanceReport');
+    expect(
+      (
+        await approval.query('SELECT pharmacy_solo_owner_eligible($1,$2,$3) AS allowed', [
+          f.org,
+          f.branch,
+          f.user,
+        ])
+      ).rows[0].allowed
+    ).toBe(true);
+    await roster.query(`UPDATE users SET status='ACTIVE' WHERE id=$1`, [staff.id]);
+    const pending = approve(approval).catch((e: unknown) => e);
+    await waitUntilBlocked(approval);
+    await roster.query('COMMIT');
+    expect(await pending).toMatchObject({
+      code: '23514',
+      message: 'PV self review requires solo owner PIN audit',
+    });
+  } finally {
+    await closeConnections(roster, approval);
+  }
+  await withTenantDb(
+    f.org,
+    (db) => db.user.update({ where: { id: staff.id }, data: { status: 'INACTIVE' } }),
+    { skipDrain: true }
+  );
+  const a = await tenantConnection(f);
+  const b = await tenantConnection(f);
+  try {
+    await a.query('SELECT pharmacy_lock_solo_roster($1)', [f.org]);
+    await sqlAudit(a, f, report.id, 'PharmacyPharmacovigilanceReport');
+    await approve(a);
+    const joining = b.query(`UPDATE users SET status='ACTIVE' WHERE id=$1`, [staff.id]);
+    await waitUntilBlocked(b);
+    await a.query('COMMIT');
+    await joining;
+    await b.query('COMMIT');
+  } finally {
+    await closeConnections(a, b);
+  }
 });

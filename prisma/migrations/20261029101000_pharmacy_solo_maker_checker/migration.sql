@@ -5,7 +5,7 @@ RETURNS boolean LANGUAGE plpgsql VOLATILE AS $$
 BEGIN
  -- Prevent an activation, assignment, or new staff row racing the singleton
  -- decision. This is taken only for self-approval, never normal receipts.
- PERFORM id FROM organizations WHERE id=NEW."organizationId" FOR NO KEY UPDATE;
+ PERFORM id FROM organizations WHERE id=org FOR NO KEY UPDATE;
  RETURN pharmacy_solo_owner_eligible(org, branch, actor) AND EXISTS (
    SELECT 1 FROM audit_logs a WHERE a.id = current_setting('app.pharmacy_solo_audit_id', true)
    AND a."organizationId" = org AND a."actorId" = actor AND a.action = 'PHARMACY:SOLO_OWNER_PIN'

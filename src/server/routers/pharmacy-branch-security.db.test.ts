@@ -592,7 +592,7 @@ describe.sequential('shared pharmacy branch and owner security (forced RLS)', ()
       code: 'FORBIDDEN',
     });
   });
-  it('marks inherited assignments on promotion/reactivation and only revokes ownerManaged rows on demotion', async () => {
+  it('preserves manual assignments across owner promotion, reactivation and demotion', async () => {
     await inOrg(async (db) => {
       const role = await db.organizationRole.findFirstOrThrow({
         where: { key: 'owner', isSystem: true },
@@ -617,19 +617,29 @@ describe.sequential('shared pharmacy branch and owner security (forced RLS)', ()
       await db.user.update({ where: { id: promoted }, data: { organizationRoleId: role.id } });
       expect(
         await db.pharmacyBranchAssignment.findUniqueOrThrow({ where: { id: `pba_${promoted}` } })
-      ).toMatchObject({ active: true, ownerManaged: true });
+      ).toMatchObject({ active: true, ownerManaged: false });
       await db.user.update({ where: { id: promoted }, data: { status: 'INACTIVE' } });
       expect(
         await db.pharmacyBranchAssignment.findUniqueOrThrow({ where: { id: `pba_${promoted}` } })
-      ).toMatchObject({ active: false, ownerManaged: true });
+      ).toMatchObject({ active: true, ownerManaged: false });
       await db.user.update({ where: { id: promoted }, data: { status: 'ACTIVE' } });
       expect(
         await db.pharmacyBranchAssignment.findUniqueOrThrow({ where: { id: `pba_${promoted}` } })
+      ).toMatchObject({ active: true, ownerManaged: false });
+      expect(
+        await db.pharmacyBranchAssignment.findFirst({
+          where: { userId: promoted, branchId: branchB },
+        })
       ).toMatchObject({ active: true, ownerManaged: true });
       await db.user.update({ where: { id: promoted }, data: { organizationRoleId: null } });
       expect(
-        await db.pharmacyBranchAssignment.findUniqueOrThrow({ where: { id: `pba_${promoted}` } })
+        await db.pharmacyBranchAssignment.findFirst({
+          where: { userId: promoted, branchId: branchB },
+        })
       ).toMatchObject({ active: false, ownerManaged: true });
+      expect(
+        await db.pharmacyBranchAssignment.findUniqueOrThrow({ where: { id: `pba_${promoted}` } })
+      ).toMatchObject({ active: true, ownerManaged: false });
       expect(
         await db.pharmacyBranchAssignment.findUniqueOrThrow({ where: { id: `pba_${ordinary}` } })
       ).toMatchObject({ active: true, ownerManaged: false });

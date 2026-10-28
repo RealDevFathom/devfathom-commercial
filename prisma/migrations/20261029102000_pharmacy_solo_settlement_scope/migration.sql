@@ -20,7 +20,7 @@ BEGIN
  IF TG_OP <> 'DELETE' THEN new_org := NEW."organizationId"; END IF;
  -- Stable ordering also covers privileged cross-organization moves.
  FOR org IN SELECT DISTINCT value FROM unnest(ARRAY[old_org, new_org]) AS t(value)
-            WHERE value IS NOT NULL ORDER BY value
+            WHERE value IS NOT NULL AND EXISTS (SELECT 1 FROM organizations o WHERE o.id=value AND o.vertical='PHARMACY') ORDER BY value
  LOOP
    PERFORM pharmacy_lock_solo_roster(org);
  END LOOP;

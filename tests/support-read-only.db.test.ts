@@ -100,6 +100,16 @@ describe.skipIf(!url)('support read-only authority on actual restricted PostgreS
       await db.$queryRaw`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`
     ).toEqual([{ rolsuper: false, rolbypassrls: false }]);
     await scoped.withPlatformDb(async (tx) => {
+      await tx.platformUser.create({
+        data: {
+          id: `operator_${slug}`,
+          name: 'Support',
+          email: `${slug}@example.test`,
+          passwordHash: 'unused',
+          role: 'SUPPORT',
+          active: true,
+        },
+      });
       const org = await tx.organization.create({
         data: {
           slug,
@@ -148,7 +158,7 @@ describe.skipIf(!url)('support read-only authority on actual restricted PostgreS
     } as Session;
     const created = await support.createSupportSession({
       actor: {
-        id: 'support_security_operator',
+        id: `operator_${slug}`,
         sessionId: 'platform_test',
         name: 'Support',
         email: 'support@example.test',

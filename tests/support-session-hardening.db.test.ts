@@ -33,6 +33,18 @@ describe.skipIf(!url)('support hardening on restricted PostgreSQL', () => {
     >`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`;
     expect(role).toEqual([{ rolsuper: false, rolbypassrls: false }]);
     await scoped.withPlatformDb(async (tx) => {
+      await tx.platformUser.upsert({
+        where: { id: actor.id },
+        create: {
+          id: actor.id,
+          name: actor.name,
+          email: actor.email,
+          passwordHash: 'unused-test-password',
+          role: 'SUPPORT',
+          active: true,
+        },
+        update: { active: true },
+      });
       const org = await tx.organization.create({
         data: {
           slug: `wha1598-${Date.now()}`,

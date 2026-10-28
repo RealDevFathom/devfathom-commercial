@@ -986,20 +986,29 @@ function ScopedPharmacyCounterConsole({
     const token = barcodeAdd.current;
     if (!token || token !== trimmedQuery || !searchCurrent) return;
     if (searchQuery.isFetching || searchQuery.isPlaceholderData || searchQuery.isError) return;
-    const found = searchQuery.data?.rows ?? [];
-    if (found.length !== 1) {
+    // Deliver the asynchronous search result as a cancellable scan callback.
+    // A new scan, changed preview or unmount invalidates this delivery.
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled || barcodeAdd.current !== token) return;
+      const found = searchQuery.data?.rows ?? [];
+      if (found.length !== 1) {
+        barcodeAdd.current = null;
+        return;
+      }
+      const row = found[0]!;
+      const nextUnit = row.saleUnits[0]?.kind ?? null;
+      if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
+        stageRow(row);
+        return;
+      }
       barcodeAdd.current = null;
-      return;
-    }
-    const row = found[0]!;
-    const nextUnit = row.saleUnits[0]?.kind ?? null;
-    if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
-      stageRow(row);
-      return;
-    }
-    barcodeAdd.current = null;
-    if (!preview?.sufficient || busy) return;
-    void addToCart();
+      if (!preview?.sufficient || busy) return;
+      void addToCart();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [
     activeRow,
     addToCart,
