@@ -14,7 +14,7 @@ export const intendedPharmacyGrants = {
     'pharmacy:safety',
   ],
   pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
-  manager: ['pharmacy:manage', 'pharmacy:orders'],
+  manager: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
   cashier: ['pharmacy:counter', 'pharmacy:orders'],
   procurement: ['pharmacy:procurement'],
   inventory: ['pharmacy:inventory'],
@@ -41,7 +41,6 @@ describe('canonical capability contract (#130)', () => {
 
   it.each([
     'pharmacy.*',
-    'pharmacy.dispense',
     'pharmacy:*:*',
     'pharmacy:dis*',
     'pharmacy:',
@@ -52,6 +51,15 @@ describe('canonical capability contract (#130)', () => {
   ])('ignores malformed grant %j', (grant) => {
     for (const action of [...ALL_ACTIONS, grant])
       expect(capabilityMatches(grant, action)).toBe(false);
+  });
+  it('maps only the exact legacy dotted aliases to their canonical action', () => {
+    // The canonical-pharmacy migration renames stored grants; these two aliases are
+    // also honored at authorization time for any not-yet-migrated grant. The mapping
+    // is exact — a dotted alias never behaves like a namespace wildcard.
+    expect(capabilityMatches('pharmacy.procurement', 'pharmacy:procurement')).toBe(true);
+    expect(capabilityMatches('pharmacy.dispense', 'pharmacy:dispense')).toBe(true);
+    expect(capabilityMatches('pharmacy.dispense', 'pharmacy:safety')).toBe(false);
+    expect(capabilityMatches('pharmacy.procurement', 'pharmacy:orders')).toBe(false);
   });
   it('matches only exact actions, * and namespace:*', () => {
     expect(capabilityMatches('*', 'pharmacy:dispense')).toBe(true);

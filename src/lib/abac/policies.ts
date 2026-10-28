@@ -71,7 +71,7 @@ export const ALL_ACTIONS = [
   'menu:import', // R-lane WHA-194: OCR menu import — upload, review queue, confirmed catalog import
   'pharmacy:counter',
   'pharmacy:manage',
-  'pharmacy:procurement',
+  'pharmacy:procurement', // Purchasing and medicine creation require an explicit organization grant.
   'pharmacy:inventory',
   'pharmacy:dispense', // RX-03/04: pharmacist decisions and substitution evidence
   'pharmacy:safety', // RX-05: controlled register and incident approval

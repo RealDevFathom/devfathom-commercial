@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
+  purchasingWorkspace,
   listPurchaseReturns,
   listSupplierCredits,
   type PurchasingReadBounds,
@@ -141,4 +142,74 @@ it('retains the legacy at clock for window preparation without claiming historic
   const page = await listPurchaseReturns(db, scope, { at: from, page: {} });
   expect(page.snapshot).toBe('live');
   expect(page.observedAt.getTime()).toBeGreaterThan(to.getTime());
+});
+
+it('labels goods-in packs using each child multiplier, excluding the parent multiplier', async () => {
+  const empty = { findMany: vi.fn().mockResolvedValue([]) };
+  const db = {
+    pharmacyBranch: empty,
+    pharmacyStockLocation: empty,
+    pharmacySupplier: empty,
+    user: empty,
+    medicine: {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: 'm1',
+          productName: 'Test',
+          brandName: null,
+          coldChain: false,
+          controlled: false,
+          presentations: [
+            {
+              presentation: 'TABLET',
+              packLevels: [
+                {
+                  id: 'box',
+                  level: 'BOX',
+                  unitsPerParent: 1,
+                  parentPackLevelId: null,
+                  effectiveFrom: from,
+                  effectiveTo: null,
+                },
+                {
+                  id: 'strip',
+                  level: 'STRIP',
+                  unitsPerParent: 5,
+                  parentPackLevelId: 'box',
+                  effectiveFrom: from,
+                  effectiveTo: null,
+                },
+                {
+                  id: 'unit',
+                  level: 'UNIT',
+                  unitsPerParent: 12,
+                  parentPackLevelId: 'strip',
+                  effectiveFrom: from,
+                  effectiveTo: null,
+                },
+              ],
+            },
+          ],
+        },
+      ]),
+    },
+  } as unknown as ScopedDb;
+  const workspace = await purchasingWorkspace(db, scope, { at: to });
+  expect(workspace.medicines[0]!.packs).toEqual([
+    expect.objectContaining({
+      level: 'BOX',
+      canonicalUnitsPerPack: 60,
+      conversionLabel: '1 BOX = 5 STRIPs = 60 UNITs = 60 units',
+    }),
+    expect.objectContaining({
+      level: 'STRIP',
+      canonicalUnitsPerPack: 12,
+      conversionLabel: '1 STRIP = 12 UNITs = 12 units',
+    }),
+    expect.objectContaining({
+      level: 'UNIT',
+      canonicalUnitsPerPack: 1,
+      conversionLabel: '1 UNIT = 1 units',
+    }),
+  ]);
 });

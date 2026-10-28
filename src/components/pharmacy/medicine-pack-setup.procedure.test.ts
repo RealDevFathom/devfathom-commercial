@@ -19,6 +19,15 @@ import { router, type TRPCContext } from '@/server/trpc';
 import { purchasingWorkspace } from '@/lib/pharmacy/purchasing-console';
 
 function caller(db: object) {
+  // The pack procedures require pharmacy:procurement (real ABAC); grant it to this actor.
+  const withGrant = db as { user?: object };
+  withGrant.user = {
+    ...(withGrant.user ?? {}),
+    findUnique: vi.fn(async () => ({
+      organizationRole: { permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    })),
+  };
   return router({ pharmacyMedicine: pharmacyMedicineRouter }).createCaller({
     db,
     entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-core'], modules: [] },
@@ -40,7 +49,16 @@ beforeEach(() => {
 
 describe('existing pack procedure to receiving options (in-memory delegates, no DB)', () => {
   it('makes the created effective pack selectable with the derived unit count', async () => {
-    const packs: Array<object> = [];
+    const packs: Array<object> = [
+      {
+        id: 'unit-leaf',
+        level: 'UNIT',
+        unitsPerParent: 10,
+        parentPackLevelId: 'new-pack',
+        effectiveFrom: input.effectiveFrom,
+        effectiveTo: null,
+      },
+    ];
     const db = {
       presentation: { findFirst: vi.fn(async () => ({ id: input.presentationId })) },
       packLevel: {
@@ -75,20 +93,26 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
       { organizationId: 'org-a', actorId: 'admin-a' },
       { at: new Date('2026-09-06') }
     );
-    expect(workspace.medicines[0].packs).toEqual([
-      expect.objectContaining({
-        packLevelId: 'new-pack',
-        canonicalUnitsPerPack: 10,
-        presentation: '10 tablets',
-        level: 'STRIP',
-      }),
-    ]);
+    // The UNIT leaf is itself a (1-unit) purchasable level; the created STRIP must be
+    // selectable with its derived unit count.
+    expect(workspace.medicines[0].packs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          packLevelId: 'new-pack',
+          canonicalUnitsPerPack: 10,
+          presentation: '10 tablets',
+          level: 'STRIP',
+        }),
+      ])
+    );
     const earlier = await purchasingWorkspace(
       db as unknown as Parameters<typeof purchasingWorkspace>[0],
       { organizationId: 'org-a' },
       { at: new Date('2026-08-01') }
     );
-    expect(earlier.medicines[0].packs).toEqual([]);
+    expect(
+      earlier.medicines[0].packs.map((p: { packLevelId: string }) => p.packLevelId)
+    ).not.toContain('new-pack');
   });
 
   it.each([0, -1, 1.5])('rejects invalid units %s before persistence', async (unitsPerParent) => {

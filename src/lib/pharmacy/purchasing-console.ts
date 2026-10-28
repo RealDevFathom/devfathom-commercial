@@ -252,7 +252,7 @@ function conversionLabel(
   const steps: string[] = [];
   let running = 1;
   for (const step of chain.slice(1)) {
-    running *= chain[steps.length]!.unitsPerParent;
+    running *= step.unitsPerParent;
     steps.push(`${running} ${step.level}${running === 1 ? '' : 's'}`);
   }
   return `1 ${level} = ${steps.join(' = ')} = ${units} units`;

@@ -26,7 +26,6 @@ import {
   adminProcedure,
   auditedProtectedProcedure,
   capabilityProcedure,
-  protectedProcedure,
   router,
 } from '../trpc';
 
@@ -482,6 +481,7 @@ export const pharmacyMedicineRouter = router({
         saleable: false,
         provenance: {
           some: {
+            supersededBy: { none: {} },
             OR: [
               { status: 'UNREVIEWED' },
               {
@@ -493,7 +493,7 @@ export const pharmacyMedicineRouter = router({
         },
       },
       include: {
-        provenance: { orderBy: { createdAt: 'asc' } },
+        provenance: { where: { supersededBy: { none: {} } }, orderBy: { createdAt: 'asc' } },
         presentations: true,
         aliases: true,
         strengths: { include: { ingredient: true } },
@@ -503,11 +503,11 @@ export const pharmacyMedicineRouter = router({
     })
   ),
 
-  createIngredient: protectedProcedure
+  createIngredient: capabilityProcedure('pharmacy:procurement')
     .input(z.object({ name: z.string().trim().min(1).max(200) }).strict())
     .mutation(({ ctx, input }) => ctx.db.ingredient.create({ data: input })),
 
-  createMedicine: protectedProcedure
+  createMedicine: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -603,7 +603,7 @@ export const pharmacyMedicineRouter = router({
       return medicine;
     }),
 
-  createPackLevel: protectedProcedure
+  createPackLevel: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -617,7 +617,12 @@ export const pharmacyMedicineRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      if (!(await ctx.db.presentation.findFirst({ where: { id: input.presentationId } })))
+      const organizationId = ctx.entitlements.organizationId;
+      if (
+        !(await ctx.db.presentation.findFirst({
+          where: { id: input.presentationId, organizationId },
+        }))
+      )
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'Presentation is outside this workspace.',
@@ -625,7 +630,12 @@ export const pharmacyMedicineRouter = router({
       if (
         input.parentPackLevelId &&
         !(await ctx.db.packLevel.findFirst({
-          where: { id: input.parentPackLevelId, presentationId: input.presentationId },
+          where: {
+            id: input.parentPackLevelId,
+            organizationId,
+            presentationId: input.presentationId,
+            effectiveTo: null,
+          },
         }))
       )
         throw new TRPCError({
@@ -635,7 +645,7 @@ export const pharmacyMedicineRouter = router({
       return ctx.db.packLevel.create({ data: { ...input, version: 1 } });
     }),
 
-  revisePackLevel: protectedProcedure
+  revisePackLevel: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -645,30 +655,70 @@ export const pharmacyMedicineRouter = router({
         })
         .strict()
     )
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) => {
-        const current = await tx.packLevel.findFirst({ where: { id: input.id } });
-        if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack level not found.' });
-        await tx.packLevel.update({
-          where: { id: current.id },
-          data: { effectiveTo: input.effectiveFrom },
-        });
-        return tx.packLevel.create({
-          data: {
-            presentationId: current.presentationId,
-            parentPackLevelId: current.parentPackLevelId,
-            versionGroupId: current.versionGroupId,
-            version: current.version + 1,
-            level: current.level,
-            unitsPerParent: input.unitsPerParent,
-            effectiveFrom: input.effectiveFrom,
-            supersedesPackLevelId: current.id,
-          },
-        });
-      })
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      return ctx.db.$transaction(async (tx) => {
+        /**
+         * Supersede one level under a row lock: close effectiveTo only if it is
+         * still open, then write the next version pointing at `parentId`.
+         */
+        const supersede = async (
+          id: string,
+          parentId: string | null,
+          unitsPerParent: number | null
+        ) => {
+          await tx.$queryRaw`SELECT id FROM pharmacy_pack_levels WHERE id=${id} AND "organizationId"=${organizationId} FOR UPDATE`;
+          const current = await tx.packLevel.findFirst({ where: { id, organizationId } });
+          if (!current)
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack level not found.' });
+          if (current.effectiveTo !== null || current.effectiveFrom >= input.effectiveFrom)
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'This pack level was already revised. Reload and try again.',
+            });
+          const closed = await tx.packLevel.updateMany({
+            where: { id: current.id, organizationId, effectiveTo: null },
+            data: { effectiveTo: input.effectiveFrom },
+          });
+          if (closed.count !== 1)
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'This pack level was already revised. Reload and try again.',
+            });
+          const next = await tx.packLevel.create({
+            data: {
+              presentationId: current.presentationId,
+              parentPackLevelId: parentId,
+              versionGroupId: current.versionGroupId,
+              version: current.version + 1,
+              level: current.level,
+              unitsPerParent: unitsPerParent ?? current.unitsPerParent,
+              effectiveFrom: input.effectiveFrom,
+              supersedesPackLevelId: current.id,
+            },
+          });
+          return { current, next };
+        };
+        /** Carry every open child forward onto the new parent version, recursively. */
+        const carryChildren = async (oldParentId: string, newParentId: string) => {
+          const children = await tx.packLevel.findMany({
+            where: { organizationId, parentPackLevelId: oldParentId, effectiveTo: null },
+            orderBy: { id: 'asc' },
+          });
+          for (const child of children) {
+            const { next } = await supersede(child.id, newParentId, null);
+            await carryChildren(child.id, next.id);
+          }
+        };
+        const head = await tx.packLevel.findFirst({ where: { id: input.id, organizationId } });
+        if (!head) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack level not found.' });
+        const { next } = await supersede(head.id, head.parentPackLevelId, input.unitsPerParent);
+        await carryChildren(head.id, next.id);
+        return next;
+      });
+    }),
 
-  recordPrintedMrp: protectedProcedure
+  recordPrintedMrp: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -680,7 +730,11 @@ export const pharmacyMedicineRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      if (!(await ctx.db.packLevel.findFirst({ where: { id: input.packLevelId } })))
+      if (
+        !(await ctx.db.packLevel.findFirst({
+          where: { id: input.packLevelId, organizationId: ctx.entitlements.organizationId },
+        }))
+      )
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'Pack level is outside this workspace.',
@@ -704,7 +758,7 @@ export const pharmacyMedicineRouter = router({
       });
     }),
 
-  addBarcode: protectedProcedure
+  addBarcode: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -721,7 +775,7 @@ export const pharmacyMedicineRouter = router({
       })
     ),
 
-  addAlias: protectedProcedure
+  addAlias: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -853,7 +907,11 @@ export const pharmacyMedicineRouter = router({
       }
       const [medicineCount, assertions] = await Promise.all([
         tx.medicine.count({ where: { id: { in: medicineIds } } }),
-        tx.medicineProvenance.findMany({ where: { id: { in: assertionIds } } }),
+        tx.medicineProvenance.findMany({
+          // Provenance is append-only (DB trigger): a reviewed assertion is superseded by
+          // a new row, never updated. Only the current head of each chain is reviewable.
+          where: { id: { in: assertionIds }, supersededBy: { none: {} } },
+        }),
       ]);
       if (medicineCount !== medicineIds.length || assertions.length !== assertionIds.length) {
         throw new TRPCError({
@@ -873,18 +931,46 @@ export const pharmacyMedicineRouter = router({
         });
       }
 
-      let reviewedAssertionIds = assertionIds;
-      if (input.action === 'ACCEPT' || input.action === 'REJECT') {
-        const transitioned = await tx.medicineProvenance.updateMany({
-          where: { id: { in: assertionIds }, status: 'UNREVIEWED' },
+      // Serialize concurrent decisions on the same assertions without UPDATE (a row lock
+      // does not fire the append-only trigger), then re-check nothing superseded them.
+      await tx.$queryRaw`SELECT id FROM "pharmacy_medicine_provenance" WHERE id = ANY(${assertionIds}) FOR UPDATE`;
+      const raced = await tx.medicineProvenance.count({
+        where: { supersedesId: { in: assertionIds } },
+      });
+      if (raced > 0) {
+        throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
+      }
+
+      const appendReviewed = (
+        assertion: (typeof assertions)[number],
+        status: 'ACCEPTED' | 'REJECTED' | 'CORRECTED',
+        assertedValue: Prisma.InputJsonValue | undefined
+      ) =>
+        tx.medicineProvenance.create({
           data: {
-            status: input.action === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED',
+            medicineId: assertion.medicineId,
+            field: assertion.field,
+            source: assertion.source,
+            sourceType: assertion.sourceType,
+            retrievedAt: status === 'CORRECTED' ? new Date() : assertion.retrievedAt,
+            confidence: assertion.confidence,
             reviewer: ctx.session.user.id,
+            status,
+            supersedesId: assertion.id,
+            assertedValue,
           },
         });
-        if (transitioned.count !== assertionIds.length) {
-          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
+      const jsonValue = (value: unknown) =>
+        value === null || value === undefined ? undefined : (value as Prisma.InputJsonValue);
+
+      let reviewedAssertionIds = assertionIds;
+      if (input.action === 'ACCEPT' || input.action === 'REJECT') {
+        const status = input.action === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED';
+        const created = [];
+        for (const assertion of assertions) {
+          created.push(await appendReviewed(assertion, status, jsonValue(assertion.assertedValue)));
         }
+        reviewedAssertionIds = created.map((assertion) => assertion.id);
       } else if (input.action === 'CORRECT') {
         const corrections = new Map(
           input.payload.corrections.map((item) => [item.assertionId, item.value])
@@ -901,46 +987,16 @@ export const pharmacyMedicineRouter = router({
         const created = [];
         for (const assertion of assertions) {
           const value = corrections.get(assertion.id);
-          if (!value) continue;
-          const envelope = assertedEnvelope.parse(assertion.assertedValue);
-          created.push(
-            await tx.medicineProvenance.create({
-              data: {
-                medicineId: assertion.medicineId,
-                field: assertion.field,
-                source: assertion.source,
-                sourceType: assertion.sourceType,
-                retrievedAt: new Date(),
-                confidence: assertion.confidence,
-                reviewer: ctx.session.user.id,
-                status: 'CORRECTED',
-                supersedesId: assertion.id,
-                assertedValue: { ...envelope, value },
-              },
-            })
-          );
+          if (value) {
+            const envelope = assertedEnvelope.parse(assertion.assertedValue);
+            created.push(await appendReviewed(assertion, 'CORRECTED', { ...envelope, value }));
+          } else {
+            created.push(
+              await appendReviewed(assertion, 'ACCEPTED', jsonValue(assertion.assertedValue))
+            );
+          }
         }
-        const corrected = await tx.medicineProvenance.updateMany({
-          where: { id: { in: [...corrections.keys()] }, status: 'UNREVIEWED' },
-          data: { status: 'SUPERSEDED', reviewer: ctx.session.user.id },
-        });
-        if (corrected.count !== corrections.size) {
-          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
-        }
-        reviewedAssertionIds = [
-          ...assertionIds.filter((id) => !corrections.has(id)),
-          ...created.map((assertion) => assertion.id),
-        ];
-        const accepted = await tx.medicineProvenance.updateMany({
-          where: {
-            id: { in: assertionIds.filter((id) => !corrections.has(id)) },
-            status: 'UNREVIEWED',
-          },
-          data: { status: 'ACCEPTED', reviewer: ctx.session.user.id },
-        });
-        if (accepted.count !== assertionIds.length - corrections.size) {
-          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
-        }
+        reviewedAssertionIds = created.map((assertion) => assertion.id);
       }
 
       return tx.medicineReviewDecision.create({

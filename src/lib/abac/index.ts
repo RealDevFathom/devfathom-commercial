@@ -35,6 +35,7 @@ async function customDecision(
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
+      role: true,
       organizationRole: {
         select: { permissions: { select: { capability: true, effect: true } } },
       },
@@ -46,15 +47,23 @@ async function customDecision(
   });
   if (!user) return false;
   const overrides = user.permissionOverrides.filter((rule) =>
-    capabilityMatches(rule.capability, action)
+    capabilityMatches(rule.capability, action, rule.effect)
   );
   if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
-    capabilityMatches(rule.capability, action)
+    capabilityMatches(rule.capability, action, rule.effect)
   );
+  // Pharmacy privileges can represent regulated duties, so a role-level DENY is
+  // an upper bound that a per-user grant cannot bypass. Other verticals retain
+  // the established user-override precedence.
+  if (action.startsWith('pharmacy:') && roleRules.some((rule) => rule.effect === 'DENY'))
+    return false;
+  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
   if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
+  // Legacy tenant administrators without a custom role retain purchasing only.
+  if (!user.organizationRole && user.role === 'ADMIN' && action === 'pharmacy:procurement')
+    return true;
   return null;
 }
 

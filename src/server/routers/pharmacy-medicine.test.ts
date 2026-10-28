@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
-  return { hasModule };
+  return { hasModule, can: vi.fn().mockResolvedValue(true) };
 });
+vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -66,6 +67,7 @@ function caller(enabledModules = ['pharmacy-core']) {
 }
 
 beforeEach(() => {
+  mocks.can.mockResolvedValue(true);
   db = makeDb();
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
@@ -98,4 +100,12 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
   it('maps the public router prefix to the pharmacy-core entitlement', () => {
     expect(moduleForProcedure('pharmacyMedicine.createIngredient')).toBe('pharmacy-core');
   });
+});
+
+it('refuses medicine creation without procurement permission', async () => {
+  mocks.can.mockResolvedValue(false);
+  await expect(
+    caller().createMedicine({ productName: 'Test', productFamily: 'FRONT_SHOP' })
+  ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(db.medicine.create).not.toHaveBeenCalled();
 });

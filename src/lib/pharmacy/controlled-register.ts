@@ -1,6 +1,7 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
+import { isControlledPurchaseWitnessEligible } from './controlled-purchase-witness';
 
 /** Running balance after applying a signed delta. Null when the result is not a safe non-negative integer. */
 export function registerBalanceAfter(previous: number, delta: number): number | null {
@@ -482,17 +483,39 @@ export async function assignedRegisterBranchIds(
 export async function listControlledPinWitnesses(
   db: ScopedDb,
   organizationId: string,
-  actorId: string
+  actorId: string,
+  branchId?: string,
+  qualifiedPersonUserId?: string
 ) {
   const staff = await db.restaurantStaffProfile.findMany({
     where: {
       organizationId,
-      user: { organizationId, status: 'ACTIVE' },
+      user: {
+        organizationId,
+        status: 'ACTIVE',
+        ...(branchId
+          ? { pharmacyBranchAssignments: { some: { organizationId, branchId, active: true } } }
+          : {}),
+      },
       status: 'ACTIVE',
-      userId: { not: actorId },
-      credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
+      userId: qualifiedPersonUserId
+        ? { equals: qualifiedPersonUserId, not: actorId }
+        : { not: actorId },
+      credentials: {
+        some: {
+          type: 'PIN',
+          revokedAt: null,
+          deviceId: null,
+          ...(qualifiedPersonUserId
+            ? { OR: [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }] }
+            : {}),
+        },
+      },
     },
     include: {
+      credentials: {
+        where: { type: 'PIN', revokedAt: null, deviceId: null },
+      },
       user: {
         include: {
           organizationRole: { include: { permissions: true } },
@@ -504,6 +527,21 @@ export async function listControlledPinWitnesses(
   const eligible: Array<{ id: string; name: string }> = [];
   for (const profile of staff) {
     if (
+      qualifiedPersonUserId &&
+      (await isControlledPurchaseWitnessEligible(
+        db,
+        {
+          status: profile.status,
+          user: profile.user,
+          credential: profile.credentials[0] ?? null,
+        },
+        { organizationId, actorId },
+        qualifiedPersonUserId
+      ))
+    ) {
+      eligible.push({ id: profile.id, name: profile.displayName });
+    } else if (
+      !qualifiedPersonUserId &&
       profile.user?.organizationId === organizationId &&
       profile.user.status === 'ACTIVE' &&
       (await can(profile.user, 'pharmacy:dispense', undefined, { db }))

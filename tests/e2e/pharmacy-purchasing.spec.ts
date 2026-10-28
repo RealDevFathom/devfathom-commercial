@@ -120,6 +120,10 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
   await capture.getByLabel('Packs received').fill(String(FIXTURE.delivery.receivedPacks));
   await capture.getByLabel('Invoiced price / pack (PKR)').fill('250.00');
   await capture.getByLabel('Receive into').selectOption({ label: `${FIXTURE.shelf.name} (STORE)` });
+  await page
+    .getByLabel('Qualified person', { exact: true })
+    .first()
+    .selectOption({ label: new RegExp(FIXTURE.approver.email) });
 
   await page.getByRole('button', { name: 'File receipt (draft)' }).first().click();
 
@@ -132,6 +136,11 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
   // ── 4. the draft is selected and posts into the ledger ──────────────────
   const receiptPanel = page.getByRole('heading', { level: 2, name: receiptReference }).first();
   await expect(receiptPanel).toBeVisible();
+  const postForm = receiptPanel.locator('xpath=ancestor::section').first();
+  await postForm
+    .getByLabel('Qualified person PIN')
+    .selectOption({ label: FIXTURE.approver.name });
+  await postForm.getByLabel('PIN', { exact: true }).fill(FIXTURE.witnessPin);
   await page.getByRole('button', { name: 'Post into stock' }).first().click();
 
   const posted = page.getByRole('status').filter({ hasText: 'Receipt posted' }).first();

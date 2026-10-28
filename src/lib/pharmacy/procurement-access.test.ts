@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { procurementCapabilityGranted } from './procurement-access';
+import { actorCanProcure, procurementCapabilityGranted } from './procurement-access';
 
 describe('procurementCapabilityGranted', () => {
   it('allows the procurement capability and refuses a cashier', () => {
@@ -21,18 +21,52 @@ describe('procurementCapabilityGranted', () => {
     ).toBe(false);
   });
 
-  it('lets a pharmacy wildcard through and lets DENY win', () => {
+  it('lets a canonical pharmacy wildcard through and lets DENY win', () => {
     expect(
       procurementCapabilityGranted({
         overrides: [],
-        role: [{ capability: 'pharmacy.*', effect: 'ALLOW' }],
+        role: [{ capability: 'pharmacy:*', effect: 'ALLOW' }],
       })
     ).toBe(true);
     expect(
       procurementCapabilityGranted({
         overrides: [{ capability: 'pharmacy.procurement', effect: 'DENY' }],
-        role: [{ capability: 'pharmacy.*', effect: 'ALLOW' }],
+        role: [{ capability: 'pharmacy:*', effect: 'ALLOW' }],
+      })
+    ).toBe(false);
+  });
+
+  it('keeps a role DENY above a user ALLOW for procurement', () => {
+    expect(
+      procurementCapabilityGranted({
+        overrides: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
+        role: [{ capability: 'pharmacy:procurement', effect: 'DENY' }],
       })
     ).toBe(false);
   });
 });
+
+it('grants Goods-in to role-less ADMIN but respects an explicit denial', () => {
+  expect(procurementCapabilityGranted({ overrides: [], role: [], rolelessAdmin: true })).toBe(true);
+  expect(
+    procurementCapabilityGranted({
+      overrides: [{ capability: '*', effect: 'DENY' }],
+      role: [],
+      rolelessAdmin: true,
+    })
+  ).toBe(false);
+});
+
+it.each(['ADMIN', 'EMPLOYEE'])(
+  'derives role-less Goods-in access from the persisted %s role',
+  async (role) => {
+    const db = {
+      user: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ role, organizationRole: null, permissionOverrides: [] }),
+      },
+    };
+    await expect(actorCanProcure(db as never, 'actor')).resolves.toBe(role === 'ADMIN');
+  }
+);

@@ -465,6 +465,14 @@ describe('M4-L1 capability reconciliation (additive-only)', () => {
 });
 
 describe('optional pharmacy Owner / Operator', () => {
+  it('publishes each canonical pharmacy capability once', () => {
+    expect(new Set(PHARMACY_CAPABILITIES).size).toBe(PHARMACY_CAPABILITIES.length);
+    expect(
+      PHARMACY_CAPABILITIES.filter((capability) => capability === 'pharmacy:procurement')
+    ).toEqual(['pharmacy:procurement']);
+    expect(PHARMACY_CAPABILITIES).not.toContain('pharmacy.procurement');
+  });
+
   it('offers exactly six explicit grants accepted by the pharmacy capability catalog', () => {
     const templates = roleTemplatesForVertical('PHARMACY').filter(
       (role) => role.key === 'owner-operator'
@@ -507,7 +515,10 @@ describe('optional pharmacy Owner / Operator', () => {
         key: 'pharmacist',
         capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
       },
-      { key: 'manager', capabilities: ['pharmacy:manage', 'pharmacy:orders'] },
+      {
+        key: 'manager',
+        capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+      },
       { key: 'cashier', capabilities: ['pharmacy:counter', 'pharmacy:orders'] },
       { key: 'procurement', capabilities: ['pharmacy:procurement'] },
       { key: 'inventory', capabilities: ['pharmacy:inventory'] },

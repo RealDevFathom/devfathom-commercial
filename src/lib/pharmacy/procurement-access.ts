@@ -1,16 +1,12 @@
+import { capabilityMatches } from '@/lib/abac/capabilities';
+
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 
-const PROCUREMENT_ACTIONS = ['pharmacy.procurement', 'pharmacy:procurement'] as const;
-
-function covers(rule: string, action: string): boolean {
-  if (rule === '*' || rule === action) return true;
-  if (rule.endsWith('.*') || rule.endsWith(':*')) return action.startsWith(rule.slice(0, -1));
-  return false;
-}
+const PROCUREMENT_ACTION = 'pharmacy:procurement';
 
 function matching(rules: readonly CapabilityRule[]) {
   return rules.filter((rule) =>
-    PROCUREMENT_ACTIONS.some((action) => covers(rule.capability, action))
+    capabilityMatches(rule.capability, PROCUREMENT_ACTION, rule.effect)
   );
 }
 
@@ -21,13 +17,14 @@ function matching(rules: readonly CapabilityRule[]) {
 export function procurementCapabilityGranted(input: {
   overrides: readonly CapabilityRule[];
   role: readonly CapabilityRule[];
+  rolelessAdmin?: boolean;
 }): boolean {
   const overrides = matching(input.overrides);
   if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   const role = matching(input.role);
   if (role.some((rule) => rule.effect === 'DENY')) return false;
-  return role.some((rule) => rule.effect === 'ALLOW');
+  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
+  return role.some((rule) => rule.effect === 'ALLOW') || input.rolelessAdmin === true;
 }
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -36,6 +33,7 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
+      role: true,
       organizationRole: {
         select: { permissions: { select: { capability: true, effect: true } } },
       },
@@ -47,6 +45,7 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
   });
   if (!user) return false;
   return procurementCapabilityGranted({
+    rolelessAdmin: !user.organizationRole && user.role === 'ADMIN',
     overrides: user.permissionOverrides,
     role: user.organizationRole?.permissions ?? [],
   });

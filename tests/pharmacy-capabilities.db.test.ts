@@ -72,6 +72,12 @@ const legacy: Record<string, string[]> = {
         );
       }
     }
+    // Keep a manager without overrides so the authorization assertion below
+    // exercises the role grant migrated from pharmacy.manage end to end.
+    await client.query(
+      `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,"updatedAt") VALUES ($1,$2,$3,$1,$1,'Pharmacy','Manager',now())`,
+      [id('user_manager_access'), org, id('manager')]
+    );
     // Collision: an existing canonical DENY must survive a legacy ALLOW.
     await client.query(
       `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:counter','DENY')`,
@@ -274,6 +280,7 @@ const legacy: Record<string, string[]> = {
     expect(await can(subject('pharmacist'), 'pharmacy:dispense', undefined, { db })).toBe(true);
     expect(await can(subject('pharmacist'), 'pharmacy:safety', undefined, { db })).toBe(false);
     expect(await can(subject('owner'), 'reports:financial', undefined, { db })).toBe(true);
+    expect(await can(subject('manager_access'), 'pharmacy:manage', undefined, { db })).toBe(true);
     expect(await can(subject('cashier'), 'pharmacy:orders', undefined, { db })).toBe(true);
     expect(await can(subject('cashier'), 'pharmacy:procurement', undefined, { db })).toBe(false);
     expect(await can(subject('auditor'), 'pharmacy:dispense', undefined, { db })).toBe(false);

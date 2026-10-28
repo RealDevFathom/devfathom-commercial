@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { CreateMedicine } from '@/components/pharmacy/create-medicine';
 import { StagedMedicineCatalogue } from '@/components/pharmacy/staged-medicine-catalogue';
 
 import { MedicineReferenceWorkbench } from '@/components/pharmacy/medicine-reference-workbench';
@@ -34,12 +35,18 @@ export default async function MedicineReferencePage({
   }
   return (
     <main className="min-w-0 space-y-6">
-      {await StagedMedicineCatalogue({ searchParams })}
+      <PageHeader
+        eyebrow="Pharmacy / medicines"
+        heading="Medicine catalogue"
+        description="Create a medicine, review and publish its facts, then define its pack for receiving."
+      />
+      <CreateMedicine />
+      <MedicineReferenceWorkbench health={medicineConnectorHealth()} />
       <details className="rounded-md border border-border bg-surface-card p-6">
         <summary className="min-h-11 cursor-pointer font-semibold focus-visible:outline-2 focus-visible:outline-ring">
-          Medicine reference connectors
+          Preserved import source review
         </summary>
-        <MedicineReferenceWorkbench health={medicineConnectorHealth()} />
+        {await StagedMedicineCatalogue({ searchParams, showHeader: false })}
       </details>
     </main>
   );

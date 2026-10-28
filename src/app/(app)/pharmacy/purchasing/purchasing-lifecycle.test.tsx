@@ -766,3 +766,67 @@ it.each(['pending', 'uncertain'] as const)(
       });
   }
 );
+
+it.each([
+  [false, false],
+  [true, false],
+  [false, true],
+])(
+  'opens controlled drafts safely when witness lookup fails=%s, PIN rejected=%s',
+  async (fails, blocked) => {
+    const receipt = {
+      id: 'gr-controlled',
+      reference: 'GR-C',
+      status: 'DRAFT',
+      supplier: licensedSupplier,
+      supplierInvoiceRef: 'INV-C',
+      supplierInvoiceDate: new Date('2026-09-01T00:00:00Z'),
+      receivedAt: new Date('2026-09-01T00:00:00Z'),
+      qualifiedPersonUserId: 'qualified-user',
+      lines: [],
+      exceptions: [],
+    };
+    const rejection =
+      'Incorrect witness PIN. Ask the receipt’s designated qualified person to try again.';
+    const post = vi.fn().mockResolvedValue(blocked ? { blocked: rejection } : {});
+    const witnesses = fails
+      ? vi.fn().mockRejectedValue(new Error('FORBIDDEN'))
+      : vi.fn().mockResolvedValue([{ id: 'staff-witness', name: 'Qualified witness' }]);
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        goodsReceipts: vi.fn().mockResolvedValue([receipt]),
+        controlledWitnesses: witnesses,
+        postGoodsReceipt: post,
+      })
+    );
+    render(await ReceivingPage({ searchParams: params({ receipt: receipt.id }) }));
+    expect(witnesses).toHaveBeenCalledExactlyOnceWith({ goodsReceiptId: receipt.id });
+    const button = screen.getByRole('button', { name: 'Post into stock' });
+    if (fails) {
+      expect(button).toBeDisabled();
+      expect(screen.getByText(/Qualified witnesses could not be loaded/)).toBeVisible();
+      expect(post).not.toHaveBeenCalled();
+    } else {
+      expect(button).toBeEnabled();
+      fireEvent.change(screen.getByLabelText('Qualified person PIN'), {
+        target: { value: 'staff-witness' },
+      });
+      fireEvent.change(screen.getByLabelText('PIN'), { target: { value: '1234' } });
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      expect(post).toHaveBeenCalledExactlyOnceWith({
+        branchId: 'branch-1',
+        goodsReceiptId: receipt.id,
+        staffProfileId: 'staff-witness',
+        pin: '1234',
+      });
+      if (blocked) {
+        expect(screen.getByRole('alert')).toHaveTextContent(rejection);
+        expect(revalidatePath).not.toHaveBeenCalled();
+      } else {
+        expect(screen.getByRole('status')).toHaveTextContent('posted');
+      }
+    }
+  }
+);

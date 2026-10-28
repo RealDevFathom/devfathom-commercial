@@ -783,7 +783,9 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'manager',
     name: 'Manager',
     isSystem: true,
-    capabilities: ['pharmacy:manage', 'pharmacy:orders'],
+    // #284: the Manager template keeps procurement authority alongside store
+    // management, under the canonical colon capability names.
+    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
   },
   {
     key: 'cashier',

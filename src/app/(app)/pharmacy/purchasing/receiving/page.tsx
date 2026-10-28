@@ -197,7 +197,15 @@ export default async function PharmacyReceivingPage({
     (selectedReceipt.qualifiedPersonUserId ||
       selectedReceipt.lines.some((line) => line.medicine.controlled))
   );
-  const witnesses = needsWitness ? await caller.controlledWitnesses() : [];
+  let witnesses: Array<{ id: string; name: string }> = [];
+  let witnessLoadFailed = false;
+  if (needsWitness) {
+    try {
+      witnesses = await caller.controlledWitnesses({ goodsReceiptId: selectedReceipt!.id });
+    } catch {
+      witnessLoadFailed = true;
+    }
+  }
 
   // ── actions ───────────────────────────────────────────────────────────────
 
@@ -900,6 +908,12 @@ export default async function PharmacyReceivingPage({
           )}
         </SectionCard>
 
+        {witnessLoadFailed ? (
+          <LoadFailure
+            detail="Qualified witnesses could not be loaded. Reload before posting this controlled receipt."
+            retryHref={`${ROUTE}?branch=${encodeURIComponent(branchId)}&receipt=${encodeURIComponent(selectedReceipt!.id)}`}
+          />
+        ) : null}
         {selectedReceipt ? (
           <ReceiptDetail
             branchId={branchId}
@@ -909,6 +923,7 @@ export default async function PharmacyReceivingPage({
             onReverse={reverseReceipt}
             receipt={selectedReceipt}
             witnesses={witnesses}
+            witnessLoadFailed={witnessLoadFailed}
           />
         ) : (
           <SectionCard title="No receipt selected" titleLevel={2}>
@@ -1170,6 +1185,7 @@ function ReceiptDetail({
   onPost,
   onReverse,
   witnesses,
+  witnessLoadFailed,
 }: {
   receipt: GoodsReceiptDetail;
   lots: {
@@ -1183,6 +1199,7 @@ function ReceiptDetail({
   onPost: (form: FormData) => Promise<string>;
   onReverse: (form: FormData) => Promise<string>;
   witnesses: ReadonlyArray<{ id: string; name: string }>;
+  witnessLoadFailed: boolean;
 }) {
   return (
     <SectionCard
@@ -1309,7 +1326,7 @@ function ReceiptDetail({
                 />
               </div>
             ) : null}
-            <SubmitButton>Post into stock</SubmitButton>
+            <SubmitButton disabled={witnessLoadFailed}>Post into stock</SubmitButton>
             <p className="mt-2 text-sm text-text-muted">
               Posting creates the batch lot, both dispositions and any match exception in one
               transaction: all of it commits, or none of it does.

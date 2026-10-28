@@ -24,11 +24,9 @@
  * in its place.
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { can } from '@/lib/abac';
 import { appendControlledPurchaseEntries } from './controlled-register';
 import {
   clearLockout,
-  isLockedOut,
   registerFailedAttempt,
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
@@ -45,6 +43,7 @@ import {
 import { nearExpiryWarning, packIsExpired } from './gs1-datamatrix';
 import { expiryInstant, receiveLot, reverseMovements } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
+import { isControlledPurchaseWitnessEligible } from './controlled-purchase-witness';
 
 export type ReceivingScope = LedgerScope;
 
@@ -75,7 +74,8 @@ export type PostGoodsReceiptResult = {
  *
  * Must run inside the caller's transaction.
  */
-const WITNESS_BLOCKED = 'A different qualified person must enter their PIN.';
+const WITNESS_BLOCKED =
+  'The receipt’s designated qualified person must be a different active pharmacist with an unlocked PIN. Ask them to enter their PIN.';
 
 /**
  * PIN witness for a controlled purchase. A receipt with no controlled line
@@ -126,23 +126,28 @@ export async function verifyControlledPurchaseWitness(
   });
   const pharmacist = credential?.staffProfile.user;
   const now = new Date();
-  const eligible =
-    credential &&
-    credential.staffProfile.status === 'ACTIVE' &&
-    pharmacist &&
-    pharmacist.id === receipt.qualifiedPersonUserId &&
-    pharmacist.organizationId === scope.organizationId &&
-    pharmacist.status === 'ACTIVE' &&
-    pharmacist.id !== scope.actorId &&
-    !isLockedOut(credential, now) &&
-    (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
+  const eligible = receipt.qualifiedPersonUserId
+    ? await isControlledPurchaseWitnessEligible(
+        db,
+        {
+          status: credential?.staffProfile.status ?? 'INACTIVE',
+          user: pharmacist ?? null,
+          credential: credential ?? null,
+        },
+        scope,
+        receipt.qualifiedPersonUserId,
+        now
+      )
+    : false;
   if (!eligible || !credential || !pharmacist) return { blocked: WITNESS_BLOCKED };
   if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),
     });
-    return { blocked: WITNESS_BLOCKED };
+    return {
+      blocked: 'Incorrect witness PIN. Ask the receipt’s designated qualified person to try again.',
+    };
   }
   await db.restaurantOperatorCredential.update({
     where: { id: credential.id },
@@ -154,8 +159,30 @@ export async function verifyControlledPurchaseWitness(
 export async function postGoodsReceipt(
   db: ScopedDb,
   scope: ReceivingScope,
+  input: {
+    goodsReceiptId: string;
+    at: Date;
+    staffProfileId?: string;
+    pin?: string;
+    returnBlocked: true;
+  }
+): Promise<PostGoodsReceiptResult | { blocked: string }>;
+export async function postGoodsReceipt(
+  db: ScopedDb,
+  scope: ReceivingScope,
   input: { goodsReceiptId: string; at: Date; staffProfileId?: string; pin?: string }
-): Promise<PostGoodsReceiptResult> {
+): Promise<PostGoodsReceiptResult>;
+export async function postGoodsReceipt(
+  db: ScopedDb,
+  scope: ReceivingScope,
+  input: {
+    goodsReceiptId: string;
+    at: Date;
+    staffProfileId?: string;
+    pin?: string;
+    returnBlocked?: true;
+  }
+): Promise<PostGoodsReceiptResult | { blocked: string }> {
   const receipt = await db.pharmacyGoodsReceipt.findFirst({
     where: { id: input.goodsReceiptId, organizationId: scope.organizationId },
     include: {
@@ -183,7 +210,10 @@ export async function postGoodsReceipt(
     (line) => controlledIds.has(line.medicineId) && line.acceptedCanonicalUnits > 0
   );
   const witness = await verifyControlledPurchaseWitness(db, scope, input);
-  if ('blocked' in witness) throw new PharmacyReceivingError('CONTROLLED_WITNESS_REQUIRED');
+  if ('blocked' in witness) {
+    if ('returnBlocked' in input && input.returnBlocked) return witness;
+    throw new PharmacyReceivingError('CONTROLLED_WITNESS_REQUIRED');
+  }
   if (needsRegister && !witness.pharmacistId) {
     throw new PharmacyReceivingError('CONTROLLED_WITNESS_REQUIRED');
   }

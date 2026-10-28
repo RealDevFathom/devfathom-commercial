@@ -147,11 +147,43 @@ async function main() {
       });
 
       const passwordHash = await bcrypt.hash(FIXTURE.receiver.password, 10);
+      const roles = await Promise.all(
+        [
+          { key: 'procurement', name: 'Procurement', capability: 'pharmacy:procurement' },
+          { key: 'pharmacist', name: 'Pharmacist', capability: 'pharmacy:dispense' },
+        ].map(async (role) => {
+          const saved = await tx.organizationRole.upsert({
+            where: { organizationId_key: { organizationId, key: role.key } },
+            update: { name: role.name, isSystem: true },
+            create: { organizationId, key: role.key, name: role.name, isSystem: true },
+          });
+          await tx.organizationRolePermission.upsert({
+            where: {
+              organizationRoleId_capability: {
+                organizationRoleId: saved.id,
+                capability: role.capability,
+              },
+            },
+            update: { effect: 'ALLOW' },
+            create: {
+              organizationId,
+              organizationRoleId: saved.id,
+              capability: role.capability,
+              effect: 'ALLOW',
+            },
+          });
+          return saved;
+        })
+      );
       const [receiver, approver] = await Promise.all(
         [FIXTURE.receiver, FIXTURE.approver].map((person, index) =>
           tx.user.upsert({
             where: { organizationId_email: { organizationId, email: person.email } },
-            update: { status: 'ACTIVE', password: passwordHash },
+            update: {
+              status: 'ACTIVE',
+              password: passwordHash,
+              organizationRoleId: roles[index]!.id,
+            },
             create: {
               organizationId,
               email: person.email,
@@ -159,9 +191,8 @@ async function main() {
               password: passwordHash,
               department: 'pharmacy',
               title: index === 0 ? 'Receiving pharmacist' : 'Branch manager',
-              // The receiver is an ADMIN so the whole console is reachable; the
-              // approver only has to be somebody else for PUR-02 to be satisfied.
-              role: index === 0 ? 'ADMIN' : 'EMPLOYEE',
+              organizationRoleId: roles[index]!.id,
+              role: 'EMPLOYEE',
               status: 'ACTIVE',
             },
             select: { id: true },
@@ -215,9 +246,62 @@ async function main() {
         data: { defaultStockLocationId: shelf!.id },
       });
 
+      await tx.pharmacyBranchAssignment.upsert({
+        where: {
+          organizationId_branchId_userId: {
+            organizationId,
+            branchId: branch.id,
+            userId: approver!.id,
+          },
+        },
+        update: { active: true },
+        create: { organizationId, branchId: branch.id, userId: approver!.id, active: true },
+      });
+      let witnessProfile = await tx.restaurantStaffProfile.findFirst({
+        where: { organizationId, userId: approver!.id },
+      });
+      witnessProfile = witnessProfile
+        ? await tx.restaurantStaffProfile.update({
+            where: { id: witnessProfile.id },
+            data: { displayName: FIXTURE.approver.name, status: 'ACTIVE' },
+          })
+        : await tx.restaurantStaffProfile.create({
+            data: {
+              organizationId,
+              userId: approver!.id,
+              displayName: FIXTURE.approver.name,
+              status: 'ACTIVE',
+            },
+          });
+      const pinHash = await bcrypt.hash(FIXTURE.witnessPin, 10);
+      const credential = await tx.restaurantOperatorCredential.findFirst({
+        where: {
+          organizationId,
+          staffProfileId: witnessProfile.id,
+          type: 'PIN',
+          deviceId: null,
+          revokedAt: null,
+        },
+      });
+      if (credential) {
+        await tx.restaurantOperatorCredential.update({
+          where: { id: credential.id },
+          data: { credentialHash: pinHash, failedAttempts: 0, lockedUntil: null },
+        });
+      } else {
+        await tx.restaurantOperatorCredential.create({
+          data: {
+            organizationId,
+            staffProfileId: witnessProfile.id,
+            type: 'PIN',
+            credentialHash: pinHash,
+          },
+        });
+      }
+
       let medicine = await tx.medicine.findFirst({
         where: { organizationId, productName: FIXTURE.medicine.productName },
-        select: { id: true, presentations: { select: { id: true } } },
+        select: { id: true, controlled: true, presentations: { select: { id: true } } },
       });
       if (!medicine) {
         medicine = await tx.medicine.create({
@@ -226,12 +310,16 @@ async function main() {
             productName: FIXTURE.medicine.productName,
             productFamily: 'PHARMACEUTICAL',
             saleable: true,
+            controlled: true,
             presentations: {
               create: { organizationId, presentation: 'Capsule, 10 per strip' },
             },
           },
-          select: { id: true, presentations: { select: { id: true } } },
+          select: { id: true, controlled: true, presentations: { select: { id: true } } },
         });
+      }
+      if (!medicine.controlled) {
+        await tx.medicine.update({ where: { id: medicine.id }, data: { controlled: true } });
       }
       const presentationId = medicine.presentations[0]!.id;
 

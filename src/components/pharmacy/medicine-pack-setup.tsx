@@ -21,6 +21,7 @@ export function MedicinePackSetup() {
   const [presentationId, setPresentationId] = useState('');
   const [level, setLevel] = useState<(typeof packTypes)[number] | ''>('');
   const [units, setUnits] = useState('');
+  const [parentId, setParentId] = useState('');
   const [effectiveDate, setEffectiveDate] = useState('');
   const [message, setMessage] = useState('');
   const [validation, setValidation] = useState('');
@@ -39,6 +40,7 @@ export function MedicinePackSetup() {
       setMessage('Pack created. Return to Pharmacy setup to continue with opening stock.');
       setLevel('');
       setUnits('');
+      setParentId('');
       await utils.pharmacyMedicine.get.invalidate({ id: medicineId });
     },
   });
@@ -50,9 +52,10 @@ export function MedicinePackSetup() {
   return (
     <SectionCard title="Packs for receiving" titleLevel={2}>
       <p className="mb-4 text-sm text-text-muted">
-        After publishing a medicine, define a pack and the number of individual units it contains.
-        Use the quantity printed on the pack; each pack here is counted directly in individual
-        units.
+        After publishing a medicine, build its packaging from the outside in: first the outer pack
+        (for example a box), then what sits inside it (a strip, with how many strips per box), and
+        finally the individual unit (a tablet, with how many tablets per strip). Every pack chain
+        must end in a single unit before it can be received or sold.
       </p>
       <form
         className="flex flex-wrap items-end gap-3"
@@ -120,14 +123,9 @@ export function MedicinePackSetup() {
             event.preventDefault();
             const quantity = Number(units);
             const effectiveFrom = new Date(`${effectiveDate}T00:00:00Z`);
-            if (
-              !Number.isSafeInteger(quantity) ||
-              quantity <= 0 ||
-              (level === 'UNIT' && quantity !== 1)
-            ) {
-              setValidation(
-                'Enter a positive whole number of individual units. A single unit must contain exactly 1.'
-              );
+            const nested = Boolean(parentId);
+            if (nested && (!Number.isSafeInteger(quantity) || quantity <= 0)) {
+              setValidation('Enter how many fit inside one of the outer pack, as a whole number.');
               return;
             }
             if (!presentation || !level || !Number.isFinite(effectiveFrom.getTime())) return;
@@ -136,7 +134,9 @@ export function MedicinePackSetup() {
             create.mutate({
               presentationId: presentation.id,
               level,
-              unitsPerParent: quantity,
+              ...(nested ? { parentPackLevelId: parentId } : {}),
+              // The outermost pack's own count is not used; nested levels count per parent.
+              unitsPerParent: nested ? quantity : 1,
               effectiveFrom,
               versionGroupId: browserUuid(),
             });
@@ -211,14 +211,36 @@ export function MedicinePackSetup() {
               </select>
             </label>
             <label className="space-y-2 text-sm text-text-body">
-              <span>Individual units per pack</span>
+              <span>Inside</span>
+              <select
+                className={control}
+                value={parentId}
+                disabled={!presentation}
+                onChange={(event) => {
+                  setParentId(event.target.value);
+                  setValidation('');
+                }}
+              >
+                <option value="">Nothing — this is the outer pack</option>
+                {(presentation?.packLevels ?? [])
+                  .filter((item) => item.level !== 'UNIT')
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.level[0] + item.level.slice(1).toLowerCase()}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label className="space-y-2 text-sm text-text-body">
+              <span>How many fit inside one outer pack</span>
               <input
                 className={control}
                 type="number"
-                required
+                required={Boolean(parentId)}
+                disabled={!parentId}
                 min={1}
                 step={1}
-                value={units}
+                value={parentId ? units : ''}
                 aria-invalid={Boolean(validation)}
                 aria-describedby="pack-units-help"
                 onChange={(event) => {
@@ -227,7 +249,8 @@ export function MedicinePackSetup() {
                 }}
               />
               <span id="pack-units-help" className="block text-sm text-text-muted">
-                For example, a strip of 10 tablets contains 10 individual units.
+                For example, a box holding 3 strips: choose Strip inside Box and enter 3. A strip of
+                10 tablets: choose Unit inside Strip and enter 10. Not needed for the outer pack.
               </span>
             </label>
             <label className="space-y-2 text-sm text-text-body">
@@ -262,7 +285,7 @@ export function MedicinePackSetup() {
               busy ||
               !presentation ||
               !level ||
-              !units ||
+              (Boolean(parentId) && !units) ||
               !effectiveDate ||
               medicine.isFetching ||
               Boolean(medicine.error) ||

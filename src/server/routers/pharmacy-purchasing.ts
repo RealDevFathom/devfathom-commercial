@@ -1,3 +1,4 @@
+import { packConversions } from '@/lib/pharmacy/pack-conversion';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -7,9 +8,11 @@ import {
   postGoodsReceipt,
   resolveReceivingException,
   reverseGoodsReceipt,
-  verifyControlledPurchaseWitness,
 } from '@/lib/pharmacy/goods-receipt';
-import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
+import {
+  assignedRegisterBranchIds,
+  listControlledPinWitnesses,
+} from '@/lib/pharmacy/controlled-register';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   allocateCentralReceipt,
@@ -76,7 +79,12 @@ import {
 import type { ReceivingScope } from '@/lib/pharmacy/goods-receipt';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import {
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  protectedProcedure,
+  router,
+} from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 /**
@@ -313,6 +321,30 @@ function tenantScope(ctx: TRPCContext): { organizationId: string } {
   return { organizationId };
 }
 
+/** Resolve conversions only from the tenant's configured medicine pack hierarchy. */
+async function resolvePurchasingLine<T extends { medicineId: string; packLevelId: string }>(
+  ctx: TRPCContext,
+  line: T,
+  /** The instant the conversion must be effective at (the receipt date when receiving). */
+  at: Date = new Date()
+): Promise<T & { canonicalUnitsPerPack: number }> {
+  const { organizationId } = tenantScope(ctx);
+  const pack = await ctx.db.packLevel.findFirst({
+    where: {
+      id: line.packLevelId,
+      organizationId,
+      presentation: { organizationId, medicineId: line.medicineId },
+    },
+  });
+  if (!pack) throw new TRPCError({ code: 'BAD_REQUEST', message: 'MISSING_PACK_CONVERSION' });
+  const levels = await ctx.db.packLevel.findMany({
+    where: { organizationId, presentationId: pack.presentationId },
+  });
+  const conversion = packConversions(levels, at).find((row) => row.packLevelId === pack.id);
+  if (!conversion) throw new TRPCError({ code: 'BAD_REQUEST', message: 'MISSING_PACK_CONVERSION' });
+  return { ...line, canonicalUnitsPerPack: conversion.canonicalUnitsPerPack };
+}
+
 /**
  * PUR-01: refuse a supplier that may not be ordered from right now. `supplier`
  * is whatever the tenant-scoped client returned, so a row belonging to another
@@ -431,7 +463,7 @@ const purchasingRouter = router({
 
   // ----- PUR-02 requisition -----
 
-  createRequisition: protectedProcedure
+  createRequisition: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -459,13 +491,18 @@ const purchasingRouter = router({
       try {
         for (const line of input.lines) {
           if (
-            !(await ctx.db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
+            !(await ctx.db.medicine.findFirst({
+              where: {
+                id: line.medicineId,
+                organizationId: tenantScope(ctx).organizationId,
+                saleable: true,
+              },
+            }))
           )
             throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
-          if (!(await ctx.db.packLevel.findFirst({ where: { id: line.packLevelId } })))
-            throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
         }
-        const { lines, ...requisition } = input;
+        const { lines: inputLines, ...requisition } = input;
+        const lines = await Promise.all(inputLines.map((line) => resolvePurchasingLine(ctx, line)));
         return await ctx.db.pharmacyRequisition.create({
           data: {
             ...requisition,
@@ -485,7 +522,7 @@ const purchasingRouter = router({
       }
     }),
 
-  submitRequisition: protectedProcedure
+  submitRequisition: capabilityProcedure('pharmacy:procurement')
     .input(z.object({ requisitionId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -505,7 +542,7 @@ const purchasingRouter = router({
 
   // ----- PUR-02 quotes and comparison -----
 
-  recordQuote: protectedProcedure
+  recordQuote: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -557,7 +594,16 @@ const purchasingRouter = router({
           if (!ownLines.has(line.requisitionLineId))
             throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
         }
-        const { lines, ...quote } = input;
+        const { lines: inputLines, ...quote } = input;
+        const lines = await Promise.all(
+          inputLines.map(async (line) => {
+            const requisitionLine = requisition.lines.find(
+              (row) => row.id === line.requisitionLineId
+            )!;
+            const resolved = await resolvePurchasingLine(ctx, requisitionLine);
+            return { ...line, canonicalUnitsPerPack: resolved.canonicalUnitsPerPack };
+          })
+        );
         return await ctx.db.pharmacyQuote.create({
           data: { ...quote, lines: { create: lines } },
           include: { lines: true },
@@ -623,7 +669,7 @@ const purchasingRouter = router({
 
   // ----- PUR-02 purchase order and approval -----
 
-  createPurchaseOrder: protectedProcedure
+  createPurchaseOrder: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -681,20 +727,25 @@ const purchasingRouter = router({
           throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
         for (const line of input.lines) {
           if (
-            !(await ctx.db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
+            !(await ctx.db.medicine.findFirst({
+              where: {
+                id: line.medicineId,
+                organizationId: tenantScope(ctx).organizationId,
+                saleable: true,
+              },
+            }))
           )
             throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
-          if (!(await ctx.db.packLevel.findFirst({ where: { id: line.packLevelId } })))
-            throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
         }
+        const { lines: inputLines, ...purchaseOrder } = input;
+        const lines = await Promise.all(inputLines.map((line) => resolvePurchasingLine(ctx, line)));
         // Reject impossible money or quantity terms before they reach the table.
         landedCost({
-          lines: input.lines,
+          lines,
           freightMinor: input.freightMinor,
           otherChargesMinor: input.otherChargesMinor,
         });
 
-        const { lines, ...purchaseOrder } = input;
         return await ctx.db.pharmacyPurchaseOrder.create({
           data: {
             ...purchaseOrder,
@@ -715,7 +766,7 @@ const purchasingRouter = router({
       }
     }),
 
-  submitPurchaseOrder: protectedProcedure
+  submitPurchaseOrder: capabilityProcedure('pharmacy:procurement')
     .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -738,7 +789,7 @@ const purchasingRouter = router({
    * it is refused for whoever raised the order or the underlying requisition.
    * A rejection is recorded too, and returns the order to DRAFT.
    */
-  approvePurchaseOrder: protectedProcedure
+  approvePurchaseOrder: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -803,7 +854,7 @@ const purchasingRouter = router({
       }
     }),
 
-  sendPurchaseOrder: protectedProcedure
+  sendPurchaseOrder: capabilityProcedure('pharmacy:procurement')
     .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -878,7 +929,7 @@ const purchasingRouter = router({
    * and approver in its place. Everything else about the two paths is identical
    * by construction, because they are the same procedure.
    */
-  createGoodsReceipt: protectedProcedure
+  createGoodsReceipt: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -1003,13 +1054,18 @@ const purchasingRouter = router({
 
         const lines = [];
         const seenSerials = new Set<string>();
-        for (const [index, line] of input.lines.entries()) {
+        for (const [index, inputLine] of input.lines.entries()) {
           if (
-            !(await ctx.db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
+            !(await ctx.db.medicine.findFirst({
+              where: {
+                id: inputLine.medicineId,
+                organizationId: scope.organizationId,
+                saleable: true,
+              },
+            }))
           )
             throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-          if (!(await ctx.db.packLevel.findFirst({ where: { id: line.packLevelId } })))
-            throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
+          const line = await resolvePurchasingLine(ctx, inputLine, input.receivedAt);
           // An ordered line borrowed from another order — or from another
           // tenant — would make the three-way match compare the goods against
           // something they were never ordered on.
@@ -1127,7 +1183,7 @@ const purchasingRouter = router({
    * One transaction: the lot, both dispositions, every exception, the receipt
    * status and the order's move to RECEIVING commit together or not at all.
    */
-  postGoodsReceipt: protectedProcedure
+  postGoodsReceipt: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -1144,16 +1200,9 @@ const purchasingRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
-      // Lockout counters commit even when the PIN is refused. Stock posting is
-      // a second transaction, so a refused PIN never leaves a half-posted receipt.
-      const attempt = await ctx.db.$transaction((tx) =>
-        verifyControlledPurchaseWitness(txDb(tx), scope, {
-          goodsReceiptId: input.goodsReceiptId,
-          staffProfileId: input.staffProfileId,
-          pin: input.pin,
-        })
-      );
-      if ('blocked' in attempt) return attempt;
+      // Verification and posting share one transaction. A rejected PIN returns
+      // normally so its lockout counter commits; an accepted PIN is verified
+      // exactly once before any stock is written.
       try {
         return await ctx.db.$transaction((tx) =>
           postGoodsReceipt(txDb(tx), scope, {
@@ -1161,6 +1210,7 @@ const purchasingRouter = router({
             at: new Date(),
             staffProfileId: input.staffProfileId,
             pin: input.pin,
+            returnBlocked: true,
           })
         );
       } catch (error) {
@@ -1169,20 +1219,41 @@ const purchasingRouter = router({
     }),
 
   /** Qualified people who can enter a PIN when a controlled receipt is posted. */
-  controlledWitnesses: protectedProcedure.query(async ({ ctx }) => {
-    const actorId = ctx.session?.user?.id;
-    if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    const actor = subjectFromSession(ctx.session!.user);
-    if (
-      !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
-      !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
-    ) {
-      throw new TRPCError({ code: 'FORBIDDEN' });
-    }
-    const organizationId = ctx.entitlements?.organizationId;
-    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    return listControlledPinWitnesses(ctx.db, organizationId, actorId);
-  }),
+  controlledWitnesses: protectedProcedure
+    .input(z.object({ goodsReceiptId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      const actorId = ctx.session?.user?.id;
+      if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const actor = subjectFromSession(ctx.session!.user);
+      if (
+        !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
+        !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db })) &&
+        !(await can(actor, 'pharmacy:procurement', undefined, { db: ctx.db }))
+      ) {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      const organizationId = ctx.session?.user?.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const receipt = await ctx.db.pharmacyGoodsReceipt.findFirst({
+        where: { id: input.goodsReceiptId, organizationId },
+        select: { branchId: true, qualifiedPersonUserId: true },
+      });
+      if (!receipt) throw new TRPCError({ code: 'NOT_FOUND' });
+      // The picker only lists witnesses from the receipt's branch, but nothing had
+      // confirmed the actor themselves may open that branch. Enforce it so a user
+      // assigned elsewhere cannot enumerate another branch's PIN holders.
+      const actorBranchIds = await assignedRegisterBranchIds(ctx.db, organizationId, actorId);
+      if (!actorBranchIds.includes(receipt.branchId))
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+      if (!receipt.qualifiedPersonUserId || receipt.qualifiedPersonUserId === actorId) return [];
+      return listControlledPinWitnesses(
+        ctx.db,
+        organizationId,
+        actorId,
+        receipt.branchId,
+        receipt.qualifiedPersonUserId
+      );
+    }),
 
   /**
    * PUR-04: undo a posting with linked compensating movements. Nothing that was
@@ -1576,7 +1647,7 @@ const purchasingRouter = router({
     }),
 
   /** INV-10 — one human-created central draft PO; never auto-orders. */
-  createCentralPurchaseOrder: auditedProtectedProcedure
+  createCentralPurchaseOrder: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -1607,7 +1678,10 @@ const purchasingRouter = router({
             organizationId: tenantScope(ctx).organizationId,
             actorId: ctx.session.user.id,
           },
-          input
+          {
+            ...input,
+            lines: await Promise.all(input.lines.map((line) => resolvePurchasingLine(ctx, line))),
+          }
         );
       } catch (error) {
         domainError(error);

@@ -54,7 +54,16 @@ beforeEach(() => {
         id: 'presentation-secret',
         dosageForm: 'Tablet',
         presentation: '10 tablets',
-        packLevels: [],
+        packLevels: [
+          {
+            id: 'box-1',
+            level: 'BOX',
+            unitsPerParent: 1,
+            parentPackLevelId: null,
+            effectiveFrom: new Date('2026-01-01'),
+            effectiveTo: null,
+          },
+        ],
       },
     ],
   };
@@ -69,7 +78,8 @@ function fill() {
     target: { value: 'presentation-secret' },
   });
   fireEvent.change(screen.getByLabelText('Pack type'), { target: { value: 'STRIP' } });
-  fireEvent.change(screen.getByLabelText(/Individual units per pack/), { target: { value: '10' } });
+  fireEvent.change(screen.getByLabelText('Inside'), { target: { value: 'box-1' } });
+  fireEvent.change(screen.getByLabelText(/How many fit inside/), { target: { value: '10' } });
   fireEvent.change(screen.getByLabelText(/Effective from/), { target: { value: '2026-09-06' } });
 }
 
@@ -94,6 +104,7 @@ describe('medicine pack setup', () => {
     expect(mocks.mutation.mutate).toHaveBeenCalledExactlyOnceWith({
       presentationId: 'presentation-secret',
       level: 'STRIP',
+      parentPackLevelId: 'box-1',
       unitsPerParent: 10,
       effectiveFrom: new Date('2026-09-06T00:00:00Z'),
       versionGroupId: expect.any(String),
@@ -108,14 +119,29 @@ describe('medicine pack setup', () => {
   it('keeps values and describes validation errors without submitting an invalid unit conversion', () => {
     render(<MedicinePackSetup />);
     fill();
-    fireEvent.change(screen.getByLabelText('Pack type'), { target: { value: 'UNIT' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create pack' }));
+    fireEvent.change(screen.getByLabelText(/How many fit inside/), { target: { value: '2.5' } });
+    // Submit directly so the component validation runs even if native validation is bypassed.
+    fireEvent.submit(screen.getByRole('button', { name: 'Create pack' }).closest('form')!);
     expect(mocks.mutation.mutate).not.toHaveBeenCalled();
-    expect(screen.getByRole('alert')).toHaveTextContent('exactly 1');
-    expect(screen.getByLabelText(/Individual units per pack/)).toHaveValue(10);
-    expect(screen.getByLabelText(/Individual units per pack/)).toHaveAttribute(
+    expect(screen.getByRole('alert')).toHaveTextContent('whole number');
+    expect(screen.getByLabelText(/How many fit inside/)).toHaveValue(2.5);
+    expect(screen.getByLabelText(/How many fit inside/)).toHaveAttribute(
       'aria-invalid',
       'true'
+    );
+  });
+
+  it('creates the outer pack without a parent or count, then nests a unit inside it', () => {
+    render(<MedicinePackSetup />);
+    fill();
+    fireEvent.change(screen.getByLabelText('Inside'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Pack type'), { target: { value: 'BOX' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create pack' }));
+    expect(mocks.mutation.mutate).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ parentPackLevelId: expect.anything() })
+    );
+    expect(mocks.mutation.mutate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ level: 'BOX', unitsPerParent: 1 })
     );
   });
 
@@ -127,7 +153,7 @@ describe('medicine pack setup', () => {
       mocks.mutation.error = { message: 'Pack was not created.', data: { code } };
       view.rerender(<MedicinePackSetup />);
       expect(screen.getByRole('alert')).toHaveTextContent(/entries are preserved/);
-      expect(screen.getByLabelText(/Individual units per pack/)).toHaveValue(10);
+      expect(screen.getByLabelText(/How many fit inside/)).toHaveValue(10);
       expect(screen.getByLabelText('Presentation')).toHaveValue('presentation-secret');
       expect(screen.getByLabelText(/Effective from/)).toHaveValue('2026-09-06');
       if (code !== 'BAD_REQUEST')
@@ -176,6 +202,14 @@ describe('medicine pack setup', () => {
               level: 'STRIP',
               unitsPerParent: 10,
               parentPackLevelId: null,
+              effectiveFrom: new Date('2020-01-01'),
+              effectiveTo: null,
+            },
+            {
+              id: 'unit',
+              level: 'UNIT',
+              unitsPerParent: 10,
+              parentPackLevelId: 'now',
               effectiveFrom: new Date('2020-01-01'),
               effectiveTo: null,
             },

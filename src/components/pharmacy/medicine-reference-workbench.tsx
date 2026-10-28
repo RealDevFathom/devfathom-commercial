@@ -231,169 +231,170 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
 
   return (
     <div className="space-y-6">
-      <section aria-label="Connector health" className="grid gap-3 md:grid-cols-3">
-        {health.map((connector) => (
-          <SectionCard key={connector.id} title={connector.label} titleLevel={2}>
-            <StatusPill
-              status={connector.status}
-              tone={connector.enabled ? 'success' : 'neutral'}
-            />
-            <p className="mt-3 text-sm leading-6 text-text-muted">{connector.detail}</p>
-          </SectionCard>
-        ))}
-      </section>
-
-      <SectionCard
-        eyebrow="MED-06 / controlled intake"
-        title="Upload reference rows"
-        titleLevel={2}
-      >
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
-          <label className="block text-sm font-medium text-text-body">
-            CSV or Excel workbook
-            <span className="mt-1 flex min-h-11 items-center gap-3 rounded-sm border border-border-default bg-surface-raised px-3 focus-within:ring-2 focus-within:ring-ring">
-              <FileSpreadsheet className="size-4 text-text-muted" aria-hidden="true" />
-              <input
-                className="min-w-0 flex-1 text-sm file:mr-3 file:border-0 file:bg-transparent file:font-semibold"
-                type="file"
-                accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                onChange={(event) => void chooseFile(event.target.files?.[0])}
+      <details className="rounded-md border border-border-default bg-surface-card p-5">
+        <summary className="min-h-11 cursor-pointer font-semibold focus-visible:outline-2 focus-visible:outline-ring">
+          Import reference files and connector health
+        </summary>
+        <section aria-label="Connector health" className="grid gap-3 md:grid-cols-3">
+          {health.map((connector) => (
+            <SectionCard key={connector.id} title={connector.label} titleLevel={2}>
+              <StatusPill
+                status={connector.status}
+                tone={connector.enabled ? 'success' : 'neutral'}
               />
-            </span>
-          </label>
-          <Button
-            className="min-h-11 self-end"
-            type="button"
-            variant="outline"
-            onClick={downloadTemplate}
-          >
-            <Download data-icon="inline-start" /> Mapping template
-          </Button>
-        </div>
+              <p className="mt-3 text-sm leading-6 text-text-muted">{connector.detail}</p>
+            </SectionCard>
+          ))}
+        </section>
 
-        {parsed ? (
-          <div className="mt-5 space-y-5 border-t border-border-subtle pt-5">
-            <label className="block max-w-xl text-sm font-medium text-text-body">
-              Batch ID
-              <input
-                className="mt-1 min-h-11 w-full rounded-sm border border-border-default bg-surface-raised px-3 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                value={batchId}
-                onChange={(event) => setBatchId(event.target.value)}
-                required
-              />
+        <SectionCard
+          eyebrow="MED-06 / controlled intake"
+          title="Upload reference rows"
+          titleLevel={2}
+        >
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
+            <label className="block text-sm font-medium text-text-body">
+              CSV or Excel workbook
+              <span className="mt-1 flex min-h-11 items-center gap-3 rounded-sm border border-border-default bg-surface-raised px-3 focus-within:ring-2 focus-within:ring-ring">
+                <FileSpreadsheet className="size-4 text-text-muted" aria-hidden="true" />
+                <input
+                  className="min-w-0 flex-1 text-sm file:mr-3 file:border-0 file:bg-transparent file:font-semibold"
+                  type="file"
+                  accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  onChange={(event) => void chooseFile(event.target.files?.[0])}
+                />
+              </span>
             </label>
-            <div>
-              <h3 className="text-sm font-semibold text-text-strong">Column mapping</h3>
-              <p className="mt-1 text-xs text-text-muted">
-                Strength, dosage form, and pack have no defaults. Missing values stay blocked in
-                review.
-              </p>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                {[
-                  ...MEDICINE_REFERENCE_FIELDS,
-                  'rowSourceKey' as const,
-                  'targetMedicineId' as const,
-                ].map((field) => (
-                  <label key={field} className="text-xs font-medium text-text-body">
-                    {field}
-                    <select
-                      className="mt-1 min-h-11 w-full rounded-sm border border-border-default bg-surface-raised px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      value={mapping[field] ?? ''}
-                      onChange={(event) =>
-                        setMapping((current) => ({
-                          ...current,
-                          [field]: event.target.value || undefined,
-                        }))
-                      }
-                    >
-                      <option value="">Not supplied</option>
-                      {parsed.headers.map((header) => (
-                        <option key={header} value={header}>
-                          {header}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ))}
+            <Button
+              className="min-h-11 self-end"
+              type="button"
+              variant="outline"
+              onClick={downloadTemplate}
+            >
+              <Download data-icon="inline-start" /> Mapping template
+            </Button>
+          </div>
+
+          {parsed ? (
+            <div className="mt-5 space-y-5 border-t border-border-subtle pt-5">
+              <label className="block max-w-xl text-sm font-medium text-text-body">
+                Batch ID
+                <input
+                  className="mt-1 min-h-11 w-full rounded-sm border border-border-default bg-surface-raised px-3 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  value={batchId}
+                  onChange={(event) => setBatchId(event.target.value)}
+                  required
+                />
+              </label>
+              <div>
+                <h3 className="text-sm font-semibold text-text-strong">Column mapping</h3>
+                <p className="mt-1 text-xs text-text-muted">
+                  Strength, dosage form, and pack have no defaults. Missing values stay blocked in
+                  review.
+                </p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                  {[
+                    ...MEDICINE_REFERENCE_FIELDS,
+                    'rowSourceKey' as const,
+                    'targetMedicineId' as const,
+                  ].map((field) => (
+                    <label key={field} className="text-xs font-medium text-text-body">
+                      {field}
+                      <select
+                        className="mt-1 min-h-11 w-full rounded-sm border border-border-default bg-surface-raised px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        value={mapping[field] ?? ''}
+                        onChange={(event) =>
+                          setMapping((current) => ({
+                            ...current,
+                            [field]: event.target.value || undefined,
+                          }))
+                        }
+                      >
+                        <option value="">Not supplied</option>
+                        {parsed.headers.map((header) => (
+                          <option key={header} value={header}>
+                            {header}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  className="min-h-11"
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void normalizePreview()}
+                >
+                  Preview normalized rows
+                </Button>
+                <Button
+                  className="min-h-11"
+                  type="button"
+                  disabled={!preview.length || !batchId.trim() || importBatch.isPending}
+                  onClick={() =>
+                    importBatch.mutate({
+                      connectorId: 'manual-file',
+                      batchId,
+                      fileName: parsed.name,
+                      rows: preview,
+                    })
+                  }
+                >
+                  {importBatch.isPending ? (
+                    <Loader2 className="animate-spin" data-icon="inline-start" />
+                  ) : (
+                    <Upload data-icon="inline-start" />
+                  )}
+                  Run {preview.length || ''} rows now
+                </Button>
               </div>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                className="min-h-11"
-                type="button"
-                variant="secondary"
-                onClick={() => void normalizePreview()}
-              >
-                Preview normalized rows
-              </Button>
-              <Button
-                className="min-h-11"
-                type="button"
-                disabled={!preview.length || !batchId.trim() || importBatch.isPending}
-                onClick={() =>
-                  importBatch.mutate({
-                    connectorId: 'manual-file',
-                    batchId,
-                    fileName: parsed.name,
-                    rows: preview,
-                  })
-                }
-              >
-                {importBatch.isPending ? (
-                  <Loader2 className="animate-spin" data-icon="inline-start" />
-                ) : (
-                  <Upload data-icon="inline-start" />
-                )}
-                Run {preview.length || ''} rows now
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <p className="mt-5 rounded-md bg-surface-sunken px-4 py-5 text-sm text-text-muted">
-            Choose a file to map its columns. Nothing is imported until you preview and confirm.
-          </p>
-        )}
+          ) : (
+            <p className="mt-5 rounded-md bg-surface-sunken px-4 py-5 text-sm text-text-muted">
+              Choose a file to map its columns. Nothing is imported until you preview and confirm.
+            </p>
+          )}
 
-        {preview.length ? (
-          <div className="mt-5 overflow-x-auto rounded-md border border-border-subtle">
-            <table className="w-full min-w-[780px] text-left text-sm">
-              <thead className="bg-surface-sunken font-mono text-[10px] uppercase tracking-wide text-text-muted">
-                <tr>
-                  <th className="px-3 py-3">Source row</th>
-                  <th className="px-3 py-3">Product</th>
-                  <th className="px-3 py-3">Strength</th>
-                  <th className="px-3 py-3">Form</th>
-                  <th className="px-3 py-3">Pack</th>
-                  <th className="px-3 py-3">State</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border-subtle">
-                {preview.map((row) => (
-                  <tr key={row.rowSourceKey} className="hover:bg-surface-sunken/60">
-                    <td className="px-3 py-3 font-mono text-xs">{row.rowSourceKey}</td>
-                    <td className="px-3 py-3">{row.values.productName ?? 'Missing'}</td>
-                    <td className="px-3 py-3">{row.values.strength ?? 'Missing'}</td>
-                    <td className="px-3 py-3">{row.values.dosageForm ?? 'Missing'}</td>
-                    <td className="px-3 py-3">{row.values.pack ?? 'Missing'}</td>
-                    <td className="px-3 py-3">
-                      <StatusPill
-                        status={row.blockingIssues.length ? 'Blocked' : 'Ready'}
-                        tone={row.blockingIssues.length ? 'danger' : 'success'}
-                      />
-                    </td>
+          {preview.length ? (
+            <div className="mt-5 overflow-x-auto rounded-md border border-border-subtle">
+              <table className="w-full min-w-[780px] text-left text-sm">
+                <thead className="bg-surface-sunken font-mono text-[10px] uppercase tracking-wide text-text-muted">
+                  <tr>
+                    <th className="px-3 py-3">Source row</th>
+                    <th className="px-3 py-3">Product</th>
+                    <th className="px-3 py-3">Strength</th>
+                    <th className="px-3 py-3">Form</th>
+                    <th className="px-3 py-3">Pack</th>
+                    <th className="px-3 py-3">State</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
-      </SectionCard>
+                </thead>
+                <tbody className="divide-y divide-border-subtle">
+                  {preview.map((row) => (
+                    <tr key={row.rowSourceKey} className="hover:bg-surface-sunken/60">
+                      <td className="px-3 py-3 font-mono text-xs">{row.rowSourceKey}</td>
+                      <td className="px-3 py-3">{row.values.productName ?? 'Missing'}</td>
+                      <td className="px-3 py-3">{row.values.strength ?? 'Missing'}</td>
+                      <td className="px-3 py-3">{row.values.dosageForm ?? 'Missing'}</td>
+                      <td className="px-3 py-3">{row.values.pack ?? 'Missing'}</td>
+                      <td className="px-3 py-3">
+                        <StatusPill
+                          status={row.blockingIssues.length ? 'Blocked' : 'Ready'}
+                          tone={row.blockingIssues.length ? 'danger' : 'success'}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </SectionCard>
+      </details>
 
-      <SectionCard
-        eyebrow="MED-03 / MED-04 / MED-05"
-        title="Reference review workbench"
-        titleLevel={2}
-      >
+      <SectionCard eyebrow="MED-03 / MED-04 / MED-05" title="Review and publication" titleLevel={2}>
         {candidates.isPending ? (
           <p className="flex items-center gap-2 text-sm text-text-muted">
             <Loader2 className="size-4 animate-spin" /> Loading review candidates…
@@ -407,8 +408,8 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
         ) : null}
         {candidates.data?.length === 0 ? (
           <p className="rounded-md bg-surface-sunken p-5 text-sm text-text-muted">
-            No confirmed reference rows await publication. Upload a manual batch above; regulated
-            changes remain proposals until a pharmacist confirms them.
+            No medicines await publication. Create a medicine above or upload reference rows. Review
+            and accept the facts before publishing.
           </p>
         ) : null}
         <div className="space-y-4">
