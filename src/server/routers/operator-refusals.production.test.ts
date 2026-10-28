@@ -37,15 +37,19 @@ const app = router({
 const GENERIC = 'Something went wrong on our side. Please try again.';
 
 const db = {
-  // The capability check: this member holds `pharmacy:safety`.
+  // The actor can inspect safety evidence and receive purchases.
   user: {
     findUnique: vi.fn(async () => ({
       organizationRole: null,
-      permissionOverrides: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
+      permissionOverrides: [
+        { capability: 'pharmacy:safety', effect: 'ALLOW' },
+        { capability: 'pharmacy:procurement', effect: 'ALLOW' },
+      ],
     })),
   },
   // The scanned branch is not an active branch of the organization: neither the
   // counter's `scopeFor` lookup nor the pack library's own finds it.
+  pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-retired' }]) },
   pharmacyBranch: { findFirst: vi.fn(async () => null), findMany: vi.fn(async () => []) },
 };
 

@@ -32,7 +32,11 @@ function fixture(capability: string) {
     requestMeta: { ip: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
-  return { db, caller: app.createCaller(ctx) };
+  return {
+    db,
+    caller: app.createCaller(ctx),
+    purchasing: pharmacyPurchasingRouter.createCaller(ctx),
+  };
 }
 describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surface) => {
   function query(f: ReturnType<typeof fixture>) {
@@ -60,4 +64,17 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
       })
     );
   });
+});
+
+it('allows a procurement receiver to select a controlled purchase witness', async () => {
+  const f = fixture('pharmacy:procurement');
+  await expect(f.purchasing.controlledWitnesses()).resolves.toEqual([]);
+});
+it('rejects an inactive database actor before witness enumeration', async () => {
+  const f = fixture('pharmacy:safety');
+  f.db.user.findUnique.mockResolvedValue(null);
+  await expect(f.purchasing.controlledWitnesses()).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+  });
+  expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
 });

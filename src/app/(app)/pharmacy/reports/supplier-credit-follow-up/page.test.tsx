@@ -416,6 +416,9 @@ describe('supplier-credit Reports preparation', () => {
       ...context(),
       db: {
         pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ id: scope.branchId }) },
+        pharmacyBranchAssignment: {
+          findMany: vi.fn().mockResolvedValue([{ branchId: scope.branchId }]),
+        },
         pharmacyPurchaseReturn: { findMany: returnsRead },
         pharmacySupplierCredit: { findMany: creditsRead },
       },

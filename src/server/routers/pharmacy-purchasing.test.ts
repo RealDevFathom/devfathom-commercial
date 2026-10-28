@@ -61,6 +61,7 @@ function makeDb() {
     pharmacyDebitNote: model(),
     pharmacySupplierCredit: model(),
     pharmacyBranch: model(),
+    pharmacyBranchAssignment: model(),
     user: model(),
     medicineBarcode: model(),
   };
@@ -130,6 +131,7 @@ beforeEach(() => {
     },
     permissionOverrides: [],
   });
+  db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
   db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
@@ -427,9 +429,7 @@ describe('procurement write authorization', () => {
   });
 
   it('fails closed before a database lookup when the session actor id is missing', async () => {
-    await expect(
-      caller('').createSupplier({ name: 'Unapproved supplier' })
-    ).rejects.toMatchObject({
+    await expect(caller('').createSupplier({ name: 'Unapproved supplier' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
     });
@@ -985,6 +985,12 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     permissionOverrides: [],
   };
 
+  it('refuses to draft a receipt at an unassigned branch', async () => {
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'other_branch' }]);
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
   it('derives canonical units and the landed unit cost instead of trusting the payload', async () => {
     await caller().createGoodsReceipt(RECEIPT);
     const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
@@ -1432,5 +1438,230 @@ describe('PUR-06 — the returns and settlement transport', () => {
         where: expect.objectContaining({ organizationId: 'org_a', branchId: 'branch_a' }),
       })
     );
+  });
+});
+
+const sensitiveReads = {
+  compareQuotes: () => caller().compareQuotes({ requisitionLineId: 'line' }),
+  landedCost: () => caller().landedCost({ purchaseOrderId: 'order' }),
+  workspace: () => caller().workspace(),
+  suppliers: () => caller().suppliers(),
+  requisitions: () => caller().requisitions(),
+  purchaseOrders: () => caller().purchaseOrders(),
+  receivedAgainstOrder: () => caller().receivedAgainstOrder({ purchaseOrderId: 'order' }),
+  goodsReceipts: () => caller().goodsReceipts({ branchId: 'branch_a' }),
+  receivingExceptions: () => caller().receivingExceptions({ branchId: 'branch_a' }),
+  receivingExceptionQueue: () => caller().receivingExceptionQueue({ branchId: 'branch_a' }),
+  lotsFromReceipt: () =>
+    caller().lotsFromReceipt({ branchId: 'branch_a', goodsReceiptId: 'receipt' }),
+  returnableLots: () => caller().returnableLots({ branchId: 'branch_a' }),
+  debitNotePositions: () => caller().debitNotePositions({ branchId: 'branch_a' }),
+  resolveScan: () => caller().resolveScan({ term: 'medicine' }),
+  centralDemand: () => caller().centralDemand({}),
+};
+describe.each(Object.keys(sensitiveReads) as (keyof typeof sensitiveReads)[])(
+  '%s sensitive read security',
+  (name) => {
+    it.each(['cashier', 'deny', 'inactive'] as const)(
+      'rejects %s before reading procurement data',
+      async (mode) => {
+        db.user.findUnique.mockResolvedValue(
+          mode === 'inactive'
+            ? null
+            : {
+                organizationRole: {
+                  permissions: [
+                    {
+                      capability: mode === 'cashier' ? 'pharmacy.counter' : 'pharmacy:*',
+                      effect: 'ALLOW',
+                    },
+                  ],
+                },
+                permissionOverrides:
+                  mode === 'deny' ? [{ capability: 'pharmacy:procurement', effect: 'DENY' }] : [],
+              }
+        );
+        await expect(sensitiveReads[name]()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        for (const [key, delegate] of Object.entries(db)) {
+          if (key === 'user' || typeof delegate === 'function') continue;
+          expect(delegate.findFirst).not.toHaveBeenCalled();
+          expect(delegate.findMany).not.toHaveBeenCalled();
+        }
+        expect(db.user.findUnique).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: 'user_a', status: 'ACTIVE' } })
+        );
+      }
+    );
+  }
+);
+
+const branchActions = {
+  postGoodsReceipt: () =>
+    caller().postGoodsReceipt({ branchId: 'branch_a', goodsReceiptId: 'receipt' }),
+  reverseGoodsReceipt: () =>
+    caller().reverseGoodsReceipt({
+      branchId: 'branch_a',
+      goodsReceiptId: 'receipt',
+      reason: 'Incorrect invoice',
+    }),
+  resolveReceivingException: () =>
+    caller().resolveReceivingException({
+      branchId: 'branch_a',
+      receivingExceptionId: 'exception',
+      resolutionNote: 'Invoice checked',
+    }),
+  createPurchaseReturn: () =>
+    caller().createPurchaseReturn({
+      branchId: 'branch_a',
+      supplierId: 'supplier',
+      kind: 'EXPIRY_CLAIM',
+      reference: 'RET',
+      lines: [RETURN_LINE],
+    }),
+  submitPurchaseReturn: () =>
+    caller().submitPurchaseReturn({ branchId: 'branch_a', purchaseReturnId: 'return' }),
+  dispatchPurchaseReturn: () =>
+    caller().dispatchPurchaseReturn({
+      branchId: 'branch_a',
+      purchaseReturnId: 'return',
+      idempotencyKey: 'dispatch',
+    }),
+  issueDebitNote: () =>
+    caller().issueDebitNote({
+      branchId: 'branch_a',
+      purchaseReturnId: 'return',
+      reference: 'DEBIT',
+    }),
+  recordSupplierCredit: () =>
+    caller().recordSupplierCredit({
+      branchId: 'branch_a',
+      supplierId: 'supplier',
+      reference: 'CREDIT',
+      amountMinor: 100,
+      receivedAt: PAST,
+    }),
+  allocateSupplierCredit: () =>
+    caller().allocateSupplierCredit({
+      branchId: 'branch_a',
+      supplierCreditId: 'credit',
+      debitNoteId: 'debit',
+      amountMinor: 100,
+    }),
+  authenticatePack: () => caller().authenticatePack({ branchId: 'branch_a', payload: 'scan' }),
+  goodsReceipts: sensitiveReads.goodsReceipts,
+  receivingExceptions: sensitiveReads.receivingExceptions,
+  receivingExceptionQueue: sensitiveReads.receivingExceptionQueue,
+  lotsFromReceipt: sensitiveReads.lotsFromReceipt,
+  returnableLots: sensitiveReads.returnableLots,
+  debitNotePositions: sensitiveReads.debitNotePositions,
+  purchaseReturns: () => caller().purchaseReturns({ branchId: 'branch_a' }),
+  supplierCredits: () => caller().supplierCredits({ branchId: 'branch_a' }),
+};
+describe.each(Object.keys(branchActions) as (keyof typeof branchActions)[])(
+  '%s branch security',
+  (name) => {
+    it.each(['unassigned', 'inactive-or-foreign'] as const)(
+      'rejects %s branch before side effects',
+      async (mode) => {
+        if (mode === 'unassigned')
+          db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'other_branch' }]);
+        else db.pharmacyBranch.findFirst.mockResolvedValue(null);
+        await expect(branchActions[name]()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(db.$transaction).not.toHaveBeenCalled();
+        for (const delegate of Object.values(db)) {
+          if (typeof delegate !== 'function') {
+            expect(delegate.create).not.toHaveBeenCalled();
+            expect(delegate.update).not.toHaveBeenCalled();
+          }
+        }
+        expect(db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
+          where: { organizationId: 'org_a', userId: 'user_a', active: true },
+          select: { branchId: true },
+        });
+        if (mode !== 'unassigned')
+          expect(db.pharmacyBranch.findFirst).toHaveBeenCalledWith({
+            where: { id: 'branch_a', organizationId: 'org_a', active: true },
+            select: { id: true },
+          });
+      }
+    );
+  }
+);
+
+describe('stored procurement branch boundaries', () => {
+  beforeEach(() => {
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
+    db.pharmacyRequisition.findFirst.mockResolvedValue({
+      id: 'req',
+      branchId: 'branch_b',
+      status: 'DRAFT',
+      lines: [],
+    });
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po',
+      branchId: 'branch_b',
+      status: 'SUBMITTED',
+      lines: [],
+    });
+  });
+  it.each(['submitPurchaseOrder', 'sendPurchaseOrder', 'landedCost'] as const)(
+    'refuses %s on another branch order',
+    async (name) => {
+      await expect(caller()[name]({ purchaseOrderId: 'po' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
+    }
+  );
+  it('refuses approval before recording an approval event', async () => {
+    await expect(
+      caller().approvePurchaseOrder({ purchaseOrderId: 'po', decision: 'APPROVED' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyPurchaseOrderApproval.create).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
+  });
+  it('refuses submission of another branch requisition', async () => {
+    await expect(caller().submitRequisition({ requisitionId: 'req' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyRequisition.update).not.toHaveBeenCalled();
+  });
+  it('refuses quote comparison on another branch requisition', async () => {
+    db.pharmacyRequisitionLine.findFirst.mockResolvedValue({
+      id: 'line',
+      requisition: { branchId: 'branch_b' },
+    });
+    await expect(caller().compareQuotes({ requisitionLineId: 'line' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyQuoteLine.findMany).not.toHaveBeenCalled();
+  });
+  it('refuses a new order naming another branch', async () => {
+    await expect(
+      caller().createPurchaseOrder({
+        branchId: 'branch_b',
+        supplierId: 'supplier',
+        reference: 'PO',
+        lines: [ORDER_LINE],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+  });
+  it('refuses a new requisition naming another branch', async () => {
+    await expect(
+      caller().createRequisition({
+        branchId: 'branch_b',
+        reference: 'REQ',
+        lines: [
+          {
+            medicineId: 'medicine',
+            packLevelId: 'pack',
+            quantityPacks: 1,
+            canonicalUnitsPerPack: 10,
+          },
+        ],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
   });
 });
