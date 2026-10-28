@@ -8,6 +8,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
 import { buildCoAuthorizationRecord } from './co-authorization';
+import { assertMoneyDayOpen } from './money-day';
 import { add, isNegative, money, sub, ZERO } from './money';
 
 /**
@@ -65,7 +66,13 @@ export class DrawerSessionError extends Error {
 }
 
 export type DrawerMovementKind =
-  'OPENING_FLOAT' | 'CASH_SALE' | 'CASH_REFUND' | 'PAID_IN' | 'PAID_OUT' | 'DROP' | 'CLOSING_COUNT';
+  | 'OPENING_FLOAT'
+  | 'CASH_SALE'
+  | 'CASH_REFUND'
+  | 'PAID_IN'
+  | 'PAID_OUT'
+  | 'DROP'
+  | 'CLOSING_COUNT';
 
 /** The manual adjustment kinds a `cash:adjust` command may post (C8). Opening
  * float, sales, refunds and the closing count are written by their own commands /
@@ -443,6 +450,15 @@ export async function openDrawerSession(
       );
     }
 
+    const businessDate = businessDateToUtcDate(
+      resolveBusinessDate(at, branch.timezone, branch.businessDayCutoff)
+    );
+    // Serialize against cut/correct close before checking or creating drawer state.
+    // Whichever transaction takes the branch-day lock first wins: a completed
+    // close blocks this open, while a completed open makes the close fail its
+    // OPEN-drawer readiness check.
+    await assertMoneyDayOpen(tx, branch.id, businessDate);
+
     await enforceConcurrentRegisterLimit(tx, input);
 
     const existingOpen = await tx.restaurantDrawerSession.findFirst({
@@ -457,10 +473,6 @@ export async function openDrawerSession(
     }
 
     const openingFloat = requireNonNegative(money(input.openingFloat), 'The opening float');
-    const businessDate = businessDateToUtcDate(
-      resolveBusinessDate(at, branch.timezone, branch.businessDayCutoff)
-    );
-
     let sessionId: string;
     try {
       const session = await tx.restaurantDrawerSession.create({
