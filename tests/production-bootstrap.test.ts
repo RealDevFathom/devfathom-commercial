@@ -11,6 +11,7 @@ import { MODULE_CATALOG } from '../src/lib/module-catalog';
 import {
   AGENCY_DEPARTMENTS,
   HOSPITALITY_PACKAGES,
+  packageDefaultSeats,
   PHARMACY_PACKAGES,
   RESTAURANT_MODULES,
   RESTAURANT_DEPARTMENTS,
@@ -84,6 +85,7 @@ function fakeTransaction() {
     }),
   };
   const platformPackage = {
+    updateMany: vi.fn(async () => ({ count: 0 })),
     findMany: findManyByKey(packageKeys),
     upsert: vi.fn(async (args: { where: { key: string } }) => {
       packageKeys.add(args.where.key);
@@ -283,6 +285,7 @@ describe('production bootstrap', () => {
           key: restaurantPackage.key,
           name: restaurantPackage.name,
           vertical: 'RESTAURANT',
+          defaultSeats: packageDefaultSeats(restaurantPackage),
         },
       });
       for (const moduleKey of restaurantPackage.moduleKeys) {
@@ -529,6 +532,20 @@ function restaurantTransaction() {
     },
     platformPackage: {
       findMany: vi.fn(async () => [...packages.values()]),
+      updateMany: vi.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { key: string; defaultSeats: number };
+          data: { defaultSeats: number };
+        }) => {
+          const row = packages.get(where.key);
+          if (!row || row.defaultSeats !== where.defaultSeats) return { count: 0 };
+          Object.assign(row, data);
+          return { count: 1 };
+        }
+      ),
       findUnique: findPackage,
       findUniqueOrThrow: vi.fn(async (args: { where: { key: string } }) => {
         const row = await findPackage(args);
@@ -613,7 +630,7 @@ describe('explicit Restaurant fresh bootstrap', () => {
         status: 'ONBOARDING',
         isDemo: false,
         packageId: 'package_restaurant-essentials',
-        seatLimit: 1,
+        seatLimit: 10,
       }),
     ]);
     expect([...fake.packages.keys()]).toEqual(['restaurant-essentials']);

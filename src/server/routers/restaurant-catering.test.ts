@@ -66,6 +66,9 @@ function makeDb(status = 'DRAFT') {
   const db = {
     user: {
       findUnique: vi.fn().mockResolvedValue({
+        status: 'ACTIVE',
+        organizationId: 'org_1',
+        role: 'EMPLOYEE',
         organizationRole: {
           permissions: [
             { capability: 'catering:read', effect: 'ALLOW' },

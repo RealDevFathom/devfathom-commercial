@@ -7,7 +7,8 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 // This suite deliberately fails if DATABASE_URL is absent: it must execute in
 // the authorized CLI run, never turn a missing database into a skipped pass.
-const configuredUrl = process.env.DATABASE_URL;
+const originalUrl = process.env.DATABASE_URL;
+const configuredUrl = process.env.M8_TEST_OWNER_DATABASE_URL ?? originalUrl;
 const suffix = randomUUID().replaceAll('-', '');
 const runtimeRole = `h1_runtime_${suffix}`;
 let owner: Client;
@@ -50,7 +51,8 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
-  if (configuredUrl) process.env.DATABASE_URL = configuredUrl;
+  if (originalUrl) process.env.DATABASE_URL = originalUrl;
+  else delete process.env.DATABASE_URL;
   if (owner) {
     const { db } = await import('@/lib/db');
     await db.$disconnect();

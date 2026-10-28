@@ -21,7 +21,9 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+// The worker drains the global queue; isolate it from other suites' jobs.
+const TEST_DATABASE_URL =
+  process.env.PHARMACY_COUNTER_EVIDENCE_TEST_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 // Resolved when the camera runtime module is evaluated, in the dynamic imports.
 process.env.CAMERA_GATEWAY_MODE = 'simulated';

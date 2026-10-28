@@ -178,6 +178,9 @@ describeIfDatabase('RX-01/RX-02 PostgreSQL RLS and cumulative fills', () => {
       [id('fill_second'), lineA, id('dispenser'), id('fill_key_second')]
     );
 
+    // Attach the rejection assertion before releasing the lock so a fast
+    // PostgreSQL refusal cannot become an unhandled rejection.
+    const refusedFill = expectPgCode('23514', () => competingFill);
     let observedLockWait = false;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const activity = await owner!.query<{ blocked: boolean }>(
@@ -193,7 +196,7 @@ describeIfDatabase('RX-01/RX-02 PostgreSQL RLS and cumulative fills', () => {
     expect(observedLockWait).toBe(true);
 
     await firstFill!.query('COMMIT');
-    await expectPgCode('23514', () => competingFill);
+    await refusedFill;
     await secondFill!.query('ROLLBACK');
 
     const cumulative = await runtime!.query<{ fills: number; units: number }>(

@@ -34,13 +34,20 @@ const testRouter = router({
   restaurantReports: restaurantReportsRouter,
 });
 const states = new Map<string, boolean>();
+const members = new Map<string, { organizationId: string; role: string; status: string }>();
 const db = {
   organization: { findUnique: mocks.findUnique, update: mocks.update },
-  user: { findUnique: mocks.user },
+  user: {
+    findUnique: async (args: { where: { id: string } }) => ({
+      ...members.get(args.where.id),
+      ...(await mocks.user(args)),
+    }),
+  },
   restaurantBranch: { findMany: vi.fn(async () => [{ id: 'branch_a', name: 'Main' }]) },
 };
 
 function context(organizationId = 'org_a', role = 'ADMIN'): TRPCContext {
+  members.set(`user_${organizationId}`, { organizationId, role, status: 'ACTIVE' });
   return {
     db,
     session: {
@@ -62,6 +69,7 @@ function context(organizationId = 'org_a', role = 'ADMIN'): TRPCContext {
 beforeEach(() => {
   vi.resetAllMocks();
   states.clear();
+  members.clear();
   states.set('org_a', true);
   states.set('org_b', false);
   mocks.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>

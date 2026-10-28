@@ -70,6 +70,7 @@ const priorHrefs = [
   '/restaurant/orders',
   '/restaurant/catering',
   '/restaurant/money',
+  '/restaurant/menu-import',
   '/restaurant/inventory',
   '/restaurant/purchasing',
   '/restaurant/sop',
@@ -160,8 +161,8 @@ beforeEach(() => {
 afterEach(cleanup);
 describe('Hotel navigation composition', () => {
   it('retains every accepted link and adds exactly the six hospitality routes', () => {
-    expect(priorHrefs).toHaveLength(57);
-    expect(navigation).toHaveLength(63);
+    expect(priorHrefs).toHaveLength(58);
+    expect(navigation).toHaveLength(64);
     const hrefs = navigation.map((n) => n.href);
     expect(hrefs).toEqual(expect.arrayContaining(priorHrefs));
     expect(navigation.filter((n) => n.group === 'Hospitality').map((n) => n.href)).toEqual(

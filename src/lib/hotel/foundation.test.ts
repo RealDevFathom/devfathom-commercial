@@ -23,8 +23,8 @@ import {
 const priorCatalogDigests = {
   AGENCY: '54e0ca2cb112bd14c7bde79c1aba7ceeb7875fc51c5a0e5dd05c0db326440769',
   RESTAURANT: '94d6616c691e680b51b340e75547478e5fdd98e9aa208efc12ce64670dc950a7',
-  // QA-130: canonical capability names and explicit Owner report grants.
-  PHARMACY: '72ac46b3a8e9809a563bdb02d78774b4ba26260780dd1700992fd656ef092ff8',
+  // PR 683: explicit owner capabilities and package seat ceilings.
+  PHARMACY: 'c09c0610cbe61b6bf94b6f5341868fc1e2a3bbc67cc3f7445e3bbe808283ce8e',
 };
 
 const property = {
@@ -106,6 +106,7 @@ function catalogDb(existing: string[] = []) {
       upsert: vi.fn(async (arg: { create: { key: string } }) => ({ id: arg.create.key })),
     },
     platformPackage: {
+      updateMany: vi.fn(async () => ({ count: 0 })),
       findMany: vi.fn(async () => existing.map((key) => ({ key }))),
       findUnique: vi.fn(async () => null),
       upsert: vi.fn(async (arg: { create: { key: string } }) => ({ id: arg.create.key })),

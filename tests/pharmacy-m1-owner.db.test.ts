@@ -122,7 +122,11 @@ const url = process.env.DATABASE_URL;
 it('migrates real bootstrap admin identities, preserves DENYs and manual assignment provenance, and safely repeats the owner migration', async () => {
   expect(url).toBeTruthy();
   const { readFile } = await import('node:fs/promises');
-  const db = new pg.Client({ connectionString: url });
+  // Replacing migration functions requires their schema owner, while the
+  // runtime behavior above continues to execute under the restricted URL.
+  const migrationUrl = process.env.M8_TEST_OWNER_DATABASE_URL ?? url;
+  assertDisposableRlsDatabase(migrationUrl!);
+  const db = new pg.Client({ connectionString: migrationUrl });
   await db.connect();
   const org = `bootstrap_${randomUUID().replaceAll('-', '')}`;
   const adminRole = `${org}_admin`,
