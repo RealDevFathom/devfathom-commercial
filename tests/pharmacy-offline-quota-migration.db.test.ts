@@ -10,7 +10,7 @@ import { splitSqlStatements } from './split-sql-statements';
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeIfDatabase = databaseUrl ? describe : describe.skip;
 const sql = readFileSync(
-  'prisma/migrations/20261026120000_preserve_offline_stock_quotas/migration.sql',
+  'prisma/migrations/20261026120200_preserve_offline_stock_quotas/migration.sql',
   'utf8'
 );
 
