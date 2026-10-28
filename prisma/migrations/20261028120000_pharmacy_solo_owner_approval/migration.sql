@@ -42,6 +42,8 @@ BEGIN
    -- Re-check only when approval evidence changes, so historical approval
    -- remains valid when another staff member later joins.
    IF TG_OP = 'UPDATE' AND NEW."approvedByUserId" IS NOT DISTINCT FROM OLD."approvedByUserId"
+      AND (NEW."createdByUserId", NEW."requisitionId", NEW."branchId", NEW."organizationId", NEW.id)
+          IS NOT DISTINCT FROM (OLD."createdByUserId", OLD."requisitionId", OLD."branchId", OLD."organizationId", OLD.id)
       AND NEW."approvedAt" IS NOT DISTINCT FROM OLD."approvedAt" THEN RETURN NEW; END IF;
    SELECT "requestedByUserId" INTO maker FROM pharmacy_requisitions WHERE id = NEW."requisitionId" AND "organizationId" = NEW."organizationId";
    IF NEW."approvedByUserId" IS NOT NULL AND (NEW."approvedByUserId" = NEW."createdByUserId" OR NEW."approvedByUserId" = maker)
@@ -49,6 +51,8 @@ BEGIN
    THEN RAISE EXCEPTION 'purchase self approval requires solo owner PIN audit' USING ERRCODE = '23514'; END IF;
  ELSE
    IF TG_OP = 'UPDATE' AND NEW."bypassApprovedByUserId" IS NOT DISTINCT FROM OLD."bypassApprovedByUserId"
+      AND (NEW."receivedByUserId", NEW."branchId", NEW."organizationId", NEW.id)
+          IS NOT DISTINCT FROM (OLD."receivedByUserId", OLD."branchId", OLD."organizationId", OLD.id)
       AND NEW."bypassApprovedAt" IS NOT DISTINCT FROM OLD."bypassApprovedAt" THEN RETURN NEW; END IF;
    IF NEW."bypassApprovedByUserId" = NEW."receivedByUserId"
      AND NOT pharmacy_has_solo_audit(NEW."organizationId", NEW."branchId", NEW."receivedByUserId", 'PharmacyGoodsReceipt', NEW.id)

@@ -1121,6 +1121,188 @@ function sqlApprove(client: Client, f: Fixture, id: string) {
 }
 
 describe('solo approval database guard regressions', () => {
+  it.each(['purchase', 'count', 'transfer'] as const)(
+    'rechecks maker-only changes on approved %s rows and requires fresh transaction-bound PIN evidence',
+    async (kind) => {
+      const f = await fixture('owner');
+      const priorMaker = await withTenantDb(
+        f.org,
+        (db) =>
+          db.user.create({
+            data: {
+              name: 'Prior maker',
+              email: `${randomUUID()}@example.invalid`,
+              department: 'PHARMACY',
+              title: 'Staff',
+              status: 'INACTIVE',
+            },
+          }),
+        { skipDrain: true }
+      );
+      const target = await withTenantDb(
+        f.org,
+        async (db) => {
+          if (kind === 'purchase') {
+            const po = await db.pharmacyPurchaseOrder.create({
+              data: {
+                branchId: f.branch,
+                supplierId: f.supplier,
+                reference: randomUUID(),
+                createdByUserId: priorMaker.id,
+              },
+            });
+            await db.pharmacyPurchaseOrder.update({
+              where: { id: po.id },
+              data: { status: 'SUBMITTED' },
+            });
+            await db.pharmacyPurchaseOrder.update({
+              where: { id: po.id },
+              data: { status: 'APPROVED', approvedByUserId: f.user, approvedAt: new Date() },
+            });
+            return { id: po.id, type: 'PharmacyPurchaseOrder' };
+          }
+          if (kind === 'transfer') {
+            const transfer = await db.pharmacyInterbranchTransfer.create({
+              data: {
+                fromBranchId: f.branch,
+                toBranchId: f.other,
+                allocatedById: priorMaker.id,
+                approvedById: f.user,
+              },
+            });
+            return { id: transfer.id, type: 'PharmacyTransfer' };
+          }
+          const receipt = await caller(db, f).createGoodsReceipt(receiptInput(f));
+          const { postGoodsReceipt } = await import('./goods-receipt');
+          await postGoodsReceipt(db, scope(f), {
+            goodsReceiptId: receipt.id,
+            at: new Date(),
+            staffProfileId: f.profile,
+            pin,
+          });
+          const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+            where: { branchId: f.branch },
+          });
+          const count = await db.pharmacyInventoryCount.create({
+            data: { branchId: f.branch, varianceThreshold: 0, createdById: priorMaker.id },
+          });
+          await db.pharmacyInventoryCountLine.create({
+            data: {
+              countId: count.id,
+              branchId: f.branch,
+              inventoryLotId: lot.id,
+              stockLocationId: f.location,
+              expectedUnits: 0,
+              expectedSealedPacks: 0,
+              expectedLooseUnits: 0,
+              countedUnits: 1,
+              countedSealedPacks: 0,
+              countedLooseUnits: 1,
+              varianceUnits: 1,
+            },
+          });
+          await db.pharmacyInventoryCount.update({
+            where: { id: count.id },
+            data: { status: 'APPROVED', approvedById: f.user, approvedAt: new Date() },
+          });
+          return { id: count.id, type: 'PharmacyInventoryCount' };
+        },
+        { skipDrain: true, timeout: 60_000 }
+      );
+      const updateMaker = (db: ScopedDb, maker: string) => {
+        if (kind === 'purchase')
+          return db.pharmacyPurchaseOrder.update({
+            where: { id: target.id },
+            data: { createdByUserId: maker },
+          });
+        if (kind === 'count')
+          return db.pharmacyInventoryCount.update({
+            where: { id: target.id },
+            data: { createdById: maker },
+          });
+        return db.pharmacyInterbranchTransfer.update({
+          where: { id: target.id },
+          data: { allocatedById: maker },
+        });
+      };
+      // Changing only the checker to the existing maker must also revalidate.
+      await expect(
+        withTenantDb(
+          f.org,
+          async (db) => {
+            if (kind === 'purchase') {
+              await db.pharmacyPurchaseOrder.update({
+                where: { id: target.id },
+                data: { approvedByUserId: priorMaker.id },
+              });
+            } else if (kind === 'count') {
+              await db.pharmacyInventoryCount.update({
+                where: { id: target.id },
+                data: { approvedById: priorMaker.id },
+              });
+            } else {
+              await db.pharmacyInterbranchTransfer.update({
+                where: { id: target.id },
+                data: { approvedById: priorMaker.id },
+              });
+            }
+          },
+          { skipDrain: true }
+        )
+      ).rejects.toThrow(/self approval requires solo owner PIN audit/);
+      // Neither absent evidence nor evidence committed in a prior transaction suffices.
+      const attempt = () =>
+        withTenantDb(
+          f.org,
+          async (db) => {
+            await updateMaker(db, f.user);
+          },
+          { skipDrain: true }
+        );
+      await expect(attempt()).rejects.toThrow(/self approval requires solo owner PIN audit/);
+      await withTenantDb(
+        f.org,
+        async (db) => {
+          expect(await authorize(db, scope(f), target, pin)).toBe(true);
+        },
+        { skipDrain: true }
+      );
+      await expect(attempt()).rejects.toThrow(/self approval requires solo owner PIN audit/);
+      await withTenantDb(
+        f.org,
+        async (db) => {
+          expect(await authorize(db, scope(f), target, pin)).toBe(true);
+          await updateMaker(db, f.user);
+        },
+        { skipDrain: true }
+      );
+      // An unchanged approval remains editable after its audit transaction commits.
+      await withTenantDb(
+        f.org,
+        async (db) => {
+          await updateMaker(db, f.user);
+        },
+        { skipDrain: true }
+      );
+      if (kind !== 'transfer') {
+        await expect(
+          withTenantDb(
+            f.org,
+            async (db) => {
+              const data = { approvedAt: new Date('2030-01-01') };
+              if (kind === 'purchase') {
+                await db.pharmacyPurchaseOrder.update({ where: { id: target.id }, data });
+              } else {
+                await db.pharmacyInventoryCount.update({ where: { id: target.id }, data });
+              }
+            },
+            { skipDrain: true }
+          )
+        ).rejects.toThrow(/self approval requires solo owner PIN audit/);
+      }
+    }
+  );
+
   it('rechecks receiver-only changes but permits ordinary edits to historical receipts', async () => {
     const f = await fixture();
     const receipt = await withTenantDb(

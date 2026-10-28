@@ -1,4 +1,4 @@
--- Keep the first migration immutable. Extend its transaction-bound exception
+-- Extend the transaction-bound solo exception
 -- to the other maker/checker workflows without changing their ledger checks.
 CREATE OR REPLACE FUNCTION pharmacy_has_solo_audit(org text, branch text, actor text, kind text, target text)
 RETURNS boolean LANGUAGE plpgsql VOLATILE AS $$
@@ -17,8 +17,11 @@ END $$;
 CREATE OR REPLACE FUNCTION pharmacy_guard_purchase_self_approval() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE maker text;
 BEGIN
+ -- Skip historical edits only when every approval participant and audit binding is unchanged.
  IF TG_TABLE_NAME = 'pharmacy_purchase_orders' THEN
    IF TG_OP = 'UPDATE' AND NEW."approvedByUserId" IS NOT DISTINCT FROM OLD."approvedByUserId"
+      AND (NEW."createdByUserId", NEW."requisitionId", NEW."branchId", NEW."organizationId", NEW.id)
+          IS NOT DISTINCT FROM (OLD."createdByUserId", OLD."requisitionId", OLD."branchId", OLD."organizationId", OLD.id)
       AND NEW."approvedAt" IS NOT DISTINCT FROM OLD."approvedAt" THEN RETURN NEW; END IF;
    SELECT "requestedByUserId" INTO maker FROM pharmacy_requisitions WHERE id = NEW."requisitionId" AND "organizationId" = NEW."organizationId";
    IF NEW."approvedByUserId" IS NOT NULL AND (NEW."approvedByUserId" = NEW."createdByUserId" OR NEW."approvedByUserId" = maker)
@@ -26,8 +29,9 @@ BEGIN
    THEN RAISE EXCEPTION 'purchase self approval requires solo owner PIN audit' USING ERRCODE = '23514'; END IF;
  ELSE
    IF TG_OP = 'UPDATE' AND NEW."bypassApprovedByUserId" IS NOT DISTINCT FROM OLD."bypassApprovedByUserId"
-      AND NEW."bypassApprovedAt" IS NOT DISTINCT FROM OLD."bypassApprovedAt"
-      AND NEW."receivedByUserId" IS NOT DISTINCT FROM OLD."receivedByUserId" THEN RETURN NEW; END IF;
+      AND (NEW."receivedByUserId", NEW."branchId", NEW."organizationId", NEW.id)
+          IS NOT DISTINCT FROM (OLD."receivedByUserId", OLD."branchId", OLD."organizationId", OLD.id)
+      AND NEW."bypassApprovedAt" IS NOT DISTINCT FROM OLD."bypassApprovedAt" THEN RETURN NEW; END IF;
    IF NEW."bypassApprovedByUserId" = NEW."receivedByUserId"
      AND NOT pharmacy_has_solo_audit(NEW."organizationId", NEW."branchId", NEW."receivedByUserId", 'PharmacyGoodsReceipt', NEW.id)
    THEN RAISE EXCEPTION 'direct purchase self approval requires solo owner PIN audit' USING ERRCODE = '23514'; END IF;
@@ -63,13 +67,23 @@ CREATE FUNCTION pharmacy_guard_inventory_solo() RETURNS trigger LANGUAGE plpgsql
 DECLARE actor text; maker text; branch text; kind text; target text;
 BEGIN
  IF TG_TABLE_NAME = 'pharmacy_inventory_counts' THEN
-   IF NEW.status <> 'APPROVED' OR (TG_OP = 'UPDATE' AND OLD.status = 'APPROVED') THEN RETURN NEW; END IF;
+   IF NEW.status <> 'APPROVED' THEN RETURN NEW; END IF;
+   IF TG_OP = 'UPDATE' AND
+      (NEW.status, NEW."createdById", NEW."approvedById", NEW."approvedAt", NEW."branchId", NEW."organizationId", NEW.id, NEW."varianceThreshold")
+      IS NOT DISTINCT FROM
+      (OLD.status, OLD."createdById", OLD."approvedById", OLD."approvedAt", OLD."branchId", OLD."organizationId", OLD.id, OLD."varianceThreshold")
+   THEN RETURN NEW; END IF;
    -- Below-threshold counts never required a second person.
    IF NOT EXISTS (SELECT 1 FROM pharmacy_inventory_count_lines l WHERE l."organizationId"=NEW."organizationId" AND l."countId"=NEW.id AND abs(l."varianceUnits")>NEW."varianceThreshold") THEN RETURN NEW; END IF;
    actor := NEW."approvedById"; maker := NEW."createdById"; branch := NEW."branchId";
    kind := 'PharmacyInventoryCount'; target := NEW.id;
  ELSIF TG_TABLE_NAME = 'pharmacy_interbranch_transfers' THEN
-   IF NEW."approvedById" IS NULL OR (TG_OP = 'UPDATE' AND NEW."approvedById" IS NOT DISTINCT FROM OLD."approvedById") THEN RETURN NEW; END IF;
+   IF NEW."approvedById" IS NULL THEN RETURN NEW; END IF;
+   IF TG_OP = 'UPDATE' AND
+      (NEW."approvedById", NEW."allocatedById", NEW."fromBranchId", NEW."organizationId", NEW.id)
+      IS NOT DISTINCT FROM
+      (OLD."approvedById", OLD."allocatedById", OLD."fromBranchId", OLD."organizationId", OLD.id)
+   THEN RETURN NEW; END IF;
    actor := NEW."approvedById"; maker := NEW."allocatedById"; branch := NEW."fromBranchId";
    kind := 'PharmacyTransfer'; target := NEW.id;
  ELSE
