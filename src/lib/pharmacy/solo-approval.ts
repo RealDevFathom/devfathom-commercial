@@ -43,11 +43,10 @@ export async function soloOwnerEligible(
   return rows?.[0]?.allowed === true;
 }
 
-/** Runs in the same transaction as the document. Never persists the PIN. */
-export async function authorizeSoloApproval(
+/** Checks eligibility and PIN, persisting only credential lockout state. */
+export async function verifySoloOwnerPin(
   db: ScopedDb,
   scope: { organizationId: string; branchId: string | null; actorId: string },
-  target: { type: string; id: string },
   pin?: string
 ): Promise<boolean> {
   const { organizationId, branchId, actorId } = scope;
@@ -91,7 +90,18 @@ export async function authorizeSoloApproval(
     },
     { userId: actorId, skipDrain: true }
   );
-  if (!valid) return false;
+  return valid;
+}
+
+/** Approval evidence must commit or roll back with the document. Never persists the PIN. */
+export async function authorizeSoloApproval(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string | null; actorId: string },
+  target: { type: string; id: string },
+  pin?: string
+): Promise<boolean> {
+  if (!(await verifySoloOwnerPin(db, scope, pin))) return false;
+  const { organizationId, branchId, actorId } = scope;
   const audit = await db.auditLog.create({
     data: {
       organizationId,

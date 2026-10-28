@@ -416,6 +416,92 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
     );
   });
 
+  it.each([false, true])(
+    'router posting commits exactly one controlled approval or none on revoked supplier (revoked=%s)',
+    async (revoked) => {
+      const f = await fixture('owner');
+      const receipt = await withTenantDb(
+        f.org,
+        (db) => caller(db, f).createGoodsReceipt(receiptInput(f)),
+        { skipDrain: true }
+      );
+      if (revoked)
+        await withTenantDb(
+          f.org,
+          (db) =>
+            db.pharmacySupplier.update({
+              where: { id: f.supplier },
+              data: { authorized: false },
+            }),
+          { skipDrain: true }
+        );
+      // Exercise the actual router with independently committed precheck and posting
+      // transactions, so a request-wide rollback cannot hide a leaked success audit.
+      await withTenantDb(
+        f.org,
+        async (db) => {
+          const requestDb = new Proxy(db, {
+            get(target, key) {
+              if (key === '$transaction')
+                return (run: (tx: ScopedDb) => Promise<unknown>) =>
+                  withTenantDb(f.org, run, { skipDrain: true });
+              return Reflect.get(target, key);
+            },
+          });
+          const posting = caller(requestDb, f).postGoodsReceipt({
+            branchId: f.branch,
+            goodsReceiptId: receipt.id,
+            staffProfileId: f.profile,
+            pin,
+          });
+          if (revoked)
+            await expect(posting).rejects.toMatchObject({
+              code: 'FORBIDDEN',
+              message: 'SUPPLIER_NOT_AUTHORIZED',
+            });
+          else await expect(posting).resolves.toHaveProperty('goodsReceiptId', receipt.id);
+        },
+        { skipDrain: true }
+      );
+      await withTenantDb(
+        f.org,
+        async (db) => {
+          expect(
+            (
+              await db.pharmacyGoodsReceipt.findUniqueOrThrow({
+                where: { id: receipt.id },
+              })
+            ).status
+          ).toBe(revoked ? 'DRAFT' : 'POSTED');
+          expect(
+            await db.auditLog.count({
+              where: {
+                action: 'PHARMACY:SOLO_OWNER_PIN',
+                targetType: 'ControlledPurchase',
+                targetId: receipt.id,
+              },
+            })
+          ).toBe(revoked ? 0 : 1);
+          expect(
+            await db.pharmacyControlledRegisterEntry.count({
+              where: {
+                organizationId: f.org,
+              },
+            })
+          ).toBe(revoked ? 0 : 1);
+          expect(
+            await db.pharmacyInventoryLot.count({
+              where: {
+                organizationId: f.org,
+              },
+            })
+          ).toBe(revoked ? 0 : 1);
+        },
+        { skipDrain: true }
+      );
+    }
+  );
+
   it('rejects a controlled self-witness with dispense DENY even with the owner PIN', async () => {
     const f = await fixture();
     const receipt = await withTenantDb(

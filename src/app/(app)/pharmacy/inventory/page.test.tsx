@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -81,6 +81,7 @@ function makeContext() {
           .fn()
           .mockResolvedValue({ status: 'ACTIVE', role: 'EMPLOYEE', organizationId: 'org' }),
       },
+      $queryRaw: vi.fn().mockResolvedValue([{ allowed: true }]),
       pharmacyTemperatureLog: { findMany: vi.fn().mockResolvedValue([]) },
     },
   };
@@ -108,6 +109,45 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Inventory pack-action integration', () => {
+  it.each([
+    ['OPEN', 'user', true, false],
+    ['AWAITING_COAUTH', 'user', true, true],
+    ['AWAITING_COAUTH', 'other', true, false],
+    ['AWAITING_COAUTH', 'user', false, false],
+  ] as const)(
+    'requires a count PIN only for solo self coauthorization (%s, %s, solo=%s)',
+    async (status, createdById, solo, requiresPin) => {
+      ctx.db.user.findUnique.mockResolvedValue({
+        status: 'ACTIVE',
+        role: solo ? 'ADMIN' : 'EMPLOYEE',
+        organizationId: 'org',
+      });
+      ctx.db.pharmacyInventoryCount.findMany.mockResolvedValue([
+        {
+          id: 'count',
+          status,
+          createdById,
+          createdAt: new Date(),
+          lines: [{ varianceUnits: 0 }],
+        },
+      ] as never);
+      await show();
+      const button = screen.getByRole('button', {
+        name: status === 'AWAITING_COAUTH' ? 'Co-authorize variance' : 'Approve count',
+      });
+      const form = button.closest('form')!;
+      const pin = within(form).queryByLabelText('Owner PIN');
+      if (requiresPin) {
+        expect(pin).toBeRequired();
+        expect(pin).toHaveAttribute('type', 'password');
+        expect(form.checkValidity()).toBe(false);
+      } else {
+        expect(pin).not.toBeInTheDocument();
+        expect(form.checkValidity()).toBe(true);
+      }
+    }
+  );
+
   it('passes exact lot/location balances and preserves FEFO query and available totals', async () => {
     await show();
     expect(mocks.form.mock.calls[0][0]).toEqual({

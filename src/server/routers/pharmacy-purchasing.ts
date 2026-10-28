@@ -1229,11 +1229,16 @@ const purchasingRouter = router({
       if (receipt?.purchaseOrder?.branchId)
         await receivingScope(ctx, receipt.purchaseOrder.branchId);
       const attempt = await ctx.db.$transaction((tx) =>
-        verifyControlledPurchaseWitness(txDb(tx), scope, {
-          goodsReceiptId: input.goodsReceiptId,
-          staffProfileId: input.staffProfileId,
-          pin: input.pin,
-        })
+        verifyControlledPurchaseWitness(
+          txDb(tx),
+          scope,
+          {
+            goodsReceiptId: input.goodsReceiptId,
+            staffProfileId: input.staffProfileId,
+            pin: input.pin,
+          },
+          'precheck'
+        )
       );
       if ('blocked' in attempt) return attempt;
       try {
