@@ -34,7 +34,9 @@ function caller(granted = true) {
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
       callback(db)
     ),
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: BRANCH }]) },
     pharmacyBranch: {
+      findFirst: vi.fn(async () => ({ id: BRANCH })),
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
@@ -43,7 +45,7 @@ function caller(granted = true) {
       findUnique: vi.fn(async () => ({
         role: 'EMPLOYEE',
         status: 'ACTIVE',
-        organizationId: 'org_a',
+        organizationId: 'org-1',
         organizationRole: {
           permissions: granted ? [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }] : [],
         },

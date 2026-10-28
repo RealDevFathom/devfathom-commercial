@@ -489,13 +489,13 @@ function ScopedPharmacyCounterConsole({
   }, [evidenceAuthorized, utils]);
 
   const patientsQuery = trpc.pharmacyPrescriptions.counterPatients.useQuery(
-    { query: submittedPatientQuery },
-    { enabled: submittedPatientQuery.trim().length >= 2 && patientId === null }
+    { branchId, query: submittedPatientQuery },
+    { enabled: Boolean(branchId) && submittedPatientQuery.trim().length >= 2 && patientId === null }
   );
 
   const patientPanelQuery = trpc.pharmacyPrescriptions.counterPatientPanel.useQuery(
-    { patientId: patientId ?? '' },
-    { enabled: patientId !== null }
+    { branchId, patientId: patientId ?? '' },
+    { enabled: Boolean(branchId) && patientId !== null }
   );
   const lotOptionsQuery = trpc.pharmacySales.counterLotOptions.useQuery(
     { branchId, medicineId: activeRow?.medicineId ?? '' },
@@ -2323,6 +2323,7 @@ function ScopedPharmacyCounterConsole({
             }
           >
             <CounterRxPanel
+              branchId={branchId}
               ref={rxPanelRef}
               controlled={
                 // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A

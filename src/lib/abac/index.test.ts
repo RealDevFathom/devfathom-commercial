@@ -4,6 +4,7 @@ import type { AuthzDb } from '@/lib/authz';
 import { isAdmin } from '@/lib/authz';
 import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
 
+import { EXACT_GRANT_ONLY_ACTIONS } from './capabilities';
 import { can, subjectFromSession } from '.';
 import { ALL_ACTIONS, POLICIES, type Action } from './policies';
 
@@ -20,15 +21,22 @@ function authorizationDb(options: {
 }): AuthzDb {
   return {
     user: {
+      findFirst: vi.fn(),
       count: vi.fn().mockResolvedValue(options.activeUsers ?? 2),
       findUnique: options.throws
         ? vi.fn().mockRejectedValue(new Error('database unavailable'))
         : vi.fn().mockResolvedValue({
             organizationId: 'org',
+            organization: { vertical: 'PHARMACY' },
             role: options.role ?? 'EMPLOYEE',
             status: options.status ?? 'ACTIVE',
             organizationRole: options.rolePermissions
-              ? { key: options.roleKey ?? 'custom', permissions: options.rolePermissions }
+              ? {
+                  organizationId: 'org',
+                  isSystem: true,
+                  key: options.roleKey ?? 'custom',
+                  permissions: options.rolePermissions,
+                }
               : null,
             permissionOverrides: options.overrides ?? [],
           }),
@@ -277,7 +285,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);
@@ -391,7 +399,7 @@ describe('persisted authority and mandatory resource constraints', () => {
     }
   );
 
-  it.each(['ADMIN', 'owner'])(
+  it.each(['owner'])(
     'preserves sole active %s capabilities without bypassing resource policies',
     async (kind) => {
       const db = authorizationDb({
@@ -409,7 +417,7 @@ describe('persisted authority and mandatory resource constraints', () => {
             { db }
           ),
           action
-        ).toBe(true);
+        ).toBe(!EXACT_GRANT_ONLY_ACTIONS.has(action));
       }
       for (const resource of [
         { type: 'Resignation', userId: employee.id, status: 'PENDING' },

@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { hash, compare } from 'bcryptjs';
 
+vi.mock('@/lib/rate-limit', () => ({
+  rateLimit: vi.fn(async () => ({ ok: true })),
+  clearRateLimit: vi.fn(async () => {}),
+}));
 const mocks = vi.hoisted(() => ({ withTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.withTenantDb }));
 import { authorizeSoloApproval, SOLO_APPROVAL_POLICY } from './solo-approval';
@@ -59,7 +63,12 @@ describe('solo owner PIN reauthentication', () => {
         targetId: 'po',
         targetType: 'PharmacyPurchaseOrder',
         action: SOLO_APPROVAL_POLICY,
-        metadata: { branchId: 'branch', policy: SOLO_APPROVAL_POLICY, reauthentication: 'PIN' },
+        metadata: {
+          branchId: 'branch',
+          policy: SOLO_APPROVAL_POLICY,
+          reauthentication: 'PIN',
+          activeStaffCount: 1,
+        },
       }),
     });
     expect(JSON.stringify(vi.mocked(db.auditLog.create).mock.calls)).not.toContain('1234');

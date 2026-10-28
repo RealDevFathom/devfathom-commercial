@@ -4002,6 +4002,10 @@ async function runCommand(
           where: { platformUserId: saved.id, revokedAt: null },
           data: { revokedAt: new Date() },
         });
+        await db.platformSupportSession.updateMany({
+          where: { platformUserId: saved.id, status: 'ACTIVE' },
+          data: { status: 'REVOKED', endedAt: new Date() },
+        });
       }
       const safe = omit(saved, 'passwordHash', 'encryptedTotpSecret');
       return { targetType: 'PlatformUser', targetId: saved.id, data: safe, audit: safe };

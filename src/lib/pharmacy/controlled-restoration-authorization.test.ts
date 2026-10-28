@@ -3,6 +3,14 @@ import { authorizeControlledRestoration } from './controlled-restoration-authori
 import { changeSaleStatus, returnSaleLine } from './sales';
 import { can } from '@/lib/abac';
 import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
+let activeDb: unknown;
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  withTenantDb: vi.fn(async (_org, fn) => fn(activeDb)),
+}));
+vi.mock('@/lib/rate-limit', () => ({
+  rateLimit: vi.fn(async () => ({ ok: true })),
+  clearRateLimit: vi.fn(),
+}));
 vi.mock('@/lib/abac', () => ({ can: vi.fn() }));
 vi.mock('@/lib/restaurant/operator-credentials', () => ({
   verifyOperatorCredential: vi.fn(),
@@ -17,7 +25,11 @@ function fixture() {
   const witness = { id: 'new-witness', organizationId: 'org', status: 'ACTIVE', role: 'EMPLOYEE' };
   const db = {
     $queryRaw: vi.fn(),
-    user: { findFirst: vi.fn().mockResolvedValue({ id: 'actor', role: 'EMPLOYEE' }) },
+    user: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'actor', role: 'EMPLOYEE' }),
+      count: vi.fn().mockResolvedValue(2),
+    },
+    auditLog: { create: vi.fn(async () => ({ id: 'audit' })) },
     restaurantOperatorCredential: {
       findFirst: vi.fn().mockResolvedValue({
         id: 'cred',
@@ -39,6 +51,7 @@ function fixture() {
     },
     pharmacyStockMovement: { create: vi.fn() },
   };
+  activeDb = db;
   return { db, witness };
 }
 const pin = { staffProfileId: 'staff', pin: '1234' };
@@ -102,5 +115,56 @@ describe('fresh controlled restoration authorization', () => {
     expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
     const reads = db.restaurantOperatorCredential.findFirst.mock.invocationCallOrder;
     expect(db.$queryRaw.mock.invocationCallOrder[1]).toBeLessThan(reads[0]!);
+  });
+});
+
+describe('solo pharmacy owner restoration', () => {
+  it('requires a fresh valid PIN and audits owner self-approval', async () => {
+    const { db, witness } = fixture();
+    witness.id = 'actor';
+    db.user.count.mockResolvedValue(1);
+    db.$queryRaw.mockImplementation(async (sql) =>
+      String(sql).includes('restaurant_staff_profiles')
+        ? [{ userId: 'actor' }]
+        : [{ allowed: true }]
+    );
+    await expect(authorizeControlledRestoration(db as never, scope)).rejects.toThrow(
+      /fresh witness PIN/
+    );
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(false);
+    await expect(authorizeControlledRestoration(db as never, scope, pin)).rejects.toThrow();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+    vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
+    await expect(authorizeControlledRestoration(db as never, scope, pin)).resolves.toMatchObject({
+      witnessedByUserId: 'actor',
+    });
+    expect(db.$queryRaw).toHaveBeenCalled();
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorId: 'actor',
+        action: 'PHARMACY:SOLO_OWNER_PIN',
+        metadata: expect.objectContaining({ branchId: 'branch', reauthentication: 'PIN' }),
+      }),
+    });
+  });
+  it('still requires a second person with multiple active staff', async () => {
+    const { db, witness } = fixture();
+    witness.id = 'actor';
+    await expect(authorizeControlledRestoration(db as never, scope, pin)).rejects.toThrow();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+    witness.id = 'colleague';
+    await expect(authorizeControlledRestoration(db as never, scope, pin)).resolves.toMatchObject({
+      witnessedByUserId: 'colleague',
+    });
+  });
+  it('does not allow a solo non-owner to self-approve', async () => {
+    const { db, witness } = fixture();
+    witness.id = 'actor';
+    db.user.findFirst
+      .mockResolvedValueOnce({ id: 'actor', role: 'EMPLOYEE' })
+      .mockResolvedValueOnce(null as never);
+    db.user.count.mockResolvedValue(1);
+    await expect(authorizeControlledRestoration(db as never, scope, pin)).rejects.toThrow();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
   });
 });

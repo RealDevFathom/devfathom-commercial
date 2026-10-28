@@ -2,6 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+let activeDb: unknown;
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  withTenantDb: vi.fn(async (_org, fn) => fn(activeDb)),
+}));
+vi.mock('@/lib/rate-limit', () => ({
+  rateLimit: vi.fn(async () => ({ ok: true })),
+  clearRateLimit: vi.fn(),
+}));
 vi.mock('@/lib/abac', () => ({ can: vi.fn(async () => true) }));
 vi.mock('@/lib/restaurant/operator-credentials', () => ({
   verifyOperatorCredential: vi.fn(async () => false),
@@ -32,6 +40,11 @@ const credential = {
 function witnessDb() {
   const update = vi.fn();
   const db = {
+    user: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'pharmacist' }),
+      count: vi.fn().mockResolvedValue(1),
+    },
+    auditLog: { create: vi.fn(async () => ({ id: 'audit' })) },
     pharmacyGoodsReceipt: {
       findFirst: vi.fn(async () => ({
         branchId: 'branch',
@@ -48,6 +61,13 @@ function witnessDb() {
       update,
     },
   } as unknown as ScopedDb;
+  activeDb = db;
+  (db.$queryRaw as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+    async (sql: TemplateStringsArray) =>
+      String(sql).includes('restaurant_staff_profiles')
+        ? [{ userId: 'pharmacist' }]
+        : [{ allowed: (await db.user.count()) === 1 }]
+  );
   return { db, update };
 }
 
@@ -121,5 +141,38 @@ describe('verifyControlledPurchaseWitness', () => {
     expect(vi.mocked(db.$queryRaw).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(db.restaurantOperatorCredential.findFirst).mock.invocationCallOrder[0]!
     );
+  });
+});
+
+describe('solo controlled purchase witness', () => {
+  it('accepts the solo owner PIN and audits self-witnessing', async () => {
+    const { db } = witnessDb();
+    vi.mocked(verifyOperatorCredential).mockResolvedValueOnce(true);
+    await expect(
+      verifyControlledPurchaseWitness(
+        db,
+        { organizationId: 'org', branchId: 'branch', actorId: 'pharmacist' },
+        { goodsReceiptId: 'receipt', staffProfileId: 'staff', pin: '1234' }
+      )
+    ).resolves.toEqual({ pharmacistId: 'pharmacist', signatureRef: 'solo-purchase:receipt' });
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorId: 'pharmacist',
+        action: 'PHARMACY:SOLO_OWNER_PIN',
+        metadata: expect.objectContaining({ reauthentication: 'PIN', branchId: 'branch' }),
+      }),
+    });
+  });
+  it('refuses self-witnessing when a colleague is active', async () => {
+    const { db } = witnessDb();
+    vi.mocked(db.user.count).mockResolvedValueOnce(2);
+    await expect(
+      verifyControlledPurchaseWitness(
+        db,
+        { organizationId: 'org', branchId: 'branch', actorId: 'pharmacist' },
+        { goodsReceiptId: 'receipt', staffProfileId: 'staff', pin: '1234' }
+      )
+    ).resolves.toHaveProperty('blocked');
+    expect(db.auditLog.create).not.toHaveBeenCalled();
   });
 });

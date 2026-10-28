@@ -1,6 +1,17 @@
+BEGIN;
+-- Preserve full pharmacy operation for existing and newly provisioned proprietors.
+SELECT set_config('app.is_platform_admin', 'true', true);
+INSERT INTO organization_role_permissions (id, "organizationId", "organizationRoleId", capability, effect)
+SELECT 'm1_' || md5(r.id || ':' || c.capability), r."organizationId", r.id, c.capability, 'ALLOW'::"PermissionEffect"
+FROM organization_roles r
+JOIN organizations o ON o.id = r."organizationId"
+CROSS JOIN (VALUES ('pharmacy:dispense'), ('pharmacy:safety'), ('pharmacy:catalogue-review')) c(capability)
+WHERE o.vertical = 'PHARMACY' AND r.key = 'owner' AND r."isSystem" = true
+ON CONFLICT ("organizationRoleId", capability) DO NOTHING;
+
 -- A solo exception requires a current tenant owner, a fresh transaction-bound
 -- PIN audit, and exactly one active staff identity in the applicable scope.
-CREATE FUNCTION pharmacy_solo_owner_eligible(org text, branch text, actor text)
+CREATE OR REPLACE FUNCTION pharmacy_solo_owner_eligible(org text, branch text, actor text)
 RETURNS boolean LANGUAGE sql STABLE AS $$
  SELECT EXISTS (SELECT 1 FROM users u LEFT JOIN organization_roles r ON r.id = u."organizationRoleId"
    AND r."organizationId" = org
@@ -28,16 +39,16 @@ $$;
 DO $$ DECLARE c record; BEGIN
  FOR c IN SELECT conname FROM pg_constraint WHERE conrelid = 'pharmacy_purchase_orders'::regclass
    AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%"approvedByUserId" <> "createdByUserId"%'
- LOOP EXECUTE format('ALTER TABLE pharmacy_purchase_orders DROP CONSTRAINT %I', c.conname); END LOOP;
+ LOOP EXECUTE format('ALTER TABLE pharmacy_purchase_orders DROP CONSTRAINT IF EXISTS %I', c.conname); END LOOP;
 END $$;
-ALTER TABLE pharmacy_goods_receipts DROP CONSTRAINT pharmacy_goods_receipts_bypass_actor_check;
+ALTER TABLE pharmacy_goods_receipts DROP CONSTRAINT IF EXISTS pharmacy_goods_receipts_bypass_actor_check;
 
 CREATE FUNCTION pharmacy_guard_purchase_self_approval() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE maker text;
 BEGIN
  -- Staff roster writes cannot race the singleton decision. Locks last until
  -- the document and its audit commit together.
- LOCK TABLE users, pharmacy_branch_assignments, restaurant_staff_profiles IN SHARE MODE;
+ PERFORM id FROM organizations WHERE id=NEW."organizationId" FOR NO KEY UPDATE;
  IF TG_TABLE_NAME = 'pharmacy_purchase_orders' THEN
    -- Re-check only when approval evidence changes, so historical approval
    -- remains valid when another staff member later joins.
@@ -64,3 +75,5 @@ CREATE TRIGGER pharmacy_purchase_self_approval BEFORE INSERT OR UPDATE ON pharma
  FOR EACH ROW EXECUTE FUNCTION pharmacy_guard_purchase_self_approval();
 CREATE TRIGGER pharmacy_receipt_self_approval BEFORE INSERT OR UPDATE ON pharmacy_goods_receipts
  FOR EACH ROW EXECUTE FUNCTION pharmacy_guard_purchase_self_approval();
+
+COMMIT;

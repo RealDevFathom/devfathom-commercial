@@ -46,7 +46,17 @@ const input = {
 function fixture(returnedUnits: number, priorRefunds: number[] = []) {
   let payloadHash = '';
   const db = {
+    user: {
+      findUnique: vi.fn(async () => ({
+        id: 'actor-1',
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+      })),
+    },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
     pharmacyBranch: {
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),

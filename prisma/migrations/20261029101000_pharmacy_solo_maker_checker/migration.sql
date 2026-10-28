@@ -5,7 +5,7 @@ RETURNS boolean LANGUAGE plpgsql VOLATILE AS $$
 BEGIN
  -- Prevent an activation, assignment, or new staff row racing the singleton
  -- decision. This is taken only for self-approval, never normal receipts.
- LOCK TABLE users, pharmacy_branch_assignments, restaurant_staff_profiles IN SHARE MODE;
+ PERFORM id FROM organizations WHERE id=NEW."organizationId" FOR NO KEY UPDATE;
  RETURN pharmacy_solo_owner_eligible(org, branch, actor) AND EXISTS (
    SELECT 1 FROM audit_logs a WHERE a.id = current_setting('app.pharmacy_solo_audit_id', true)
    AND a."organizationId" = org AND a."actorId" = actor AND a.action = 'PHARMACY:SOLO_OWNER_PIN'
@@ -39,8 +39,8 @@ BEGIN
  RETURN NEW;
 END $$;
 
-ALTER TABLE pharmacy_controlled_register_entries DROP CONSTRAINT pharmacy_controlled_register_entries_check;
-ALTER TABLE pharmacy_custody_records DROP CONSTRAINT pharmacy_custody_records_check;
+ALTER TABLE pharmacy_controlled_register_entries DROP CONSTRAINT IF EXISTS pharmacy_controlled_register_entries_check;
+ALTER TABLE pharmacy_custody_records DROP CONSTRAINT IF EXISTS pharmacy_custody_records_check;
 ALTER TABLE pharmacy_custody_records ADD CONSTRAINT pharmacy_custody_evidence_check
  CHECK (length(btrim(reason)) > 0 AND length(btrim("evidenceRef")) > 0);
 

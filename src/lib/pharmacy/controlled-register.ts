@@ -1,3 +1,4 @@
+import { isPharmacyOwner } from './owner';
 import { soloOwnerEligible } from './solo-approval';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -485,7 +486,7 @@ export async function assignedRegisterBranchIds(
   if (
     admin?.status === 'ACTIVE' &&
     admin.organizationId === organizationId &&
-    (admin.role === 'ADMIN' || admin.organizationRole?.key === 'owner')
+    (admin.role === 'ADMIN' || (await isPharmacyOwner(db, organizationId, userId)))
   ) {
     return (
       await db.pharmacyBranch.findMany({

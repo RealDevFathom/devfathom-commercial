@@ -37,8 +37,10 @@ function contextStub(enabledModules = ['pharmacy-procurement']) {
     organization: actor.organization,
     entitlements: { organizationId: 'org-1', enabledModules },
     db: {
+      $queryRaw: vi.fn().mockResolvedValue([{ allowed: false }]),
       user: {
         findUnique: vi.fn().mockResolvedValue({
+          status: 'ACTIVE',
           organizationRole: {
             permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
           },
@@ -216,11 +218,19 @@ it('review: submitted order success remains visible after refreshed status remov
     fireEvent.click(screen.getByRole('button', { name: 'Submit for approval' }));
   });
   expect(write).toHaveBeenCalledTimes(1);
-  expect(screen.getByText(/Order submitted for approval. Somebody else/)).toBeVisible();
+  expect(
+    screen.getByText(
+      /Order submitted for approval. A second approver or solo owner PIN is required./
+    )
+  ).toBeVisible();
   list.mockResolvedValue([{ ...order, status: 'SUBMITTED' }]);
   view.rerender(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
   expect(screen.getByRole('button', { name: 'Approve' })).toBeVisible();
-  expect(screen.queryByText(/Order submitted for approval. Somebody else/)).toBeInTheDocument();
+  expect(
+    screen.queryByText(
+      /Order submitted for approval. A second approver or solo owner PIN is required./
+    )
+  ).toBeInTheDocument();
 });
 it('review: refreshed authorization offers the distinct withdrawal action', async () => {
   const list = vi.fn().mockResolvedValue([{ ...licensedSupplier, authorized: false }]);
@@ -396,7 +406,11 @@ it('delivers the order outcome even when revalidation removes its form before th
   await act(async () => {
     complete({});
   });
-  expect(screen.getByText(/Order submitted for approval. Somebody else/)).toBeVisible();
+  expect(
+    screen.getByText(
+      /Order submitted for approval. A second approver or solo owner PIN is required./
+    )
+  ).toBeVisible();
   expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled();
   expect(write).toHaveBeenCalledOnce();
 });

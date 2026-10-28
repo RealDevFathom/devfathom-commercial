@@ -68,6 +68,7 @@ function makeContext() {
     organization: { id: 'org', isDemo: false },
     entitlements: {},
     db: {
+      $queryRaw: vi.fn().mockResolvedValue([{ allowed: false }]),
       pharmacyBranch: { findMany: vi.fn().mockResolvedValue([branch]) },
       pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([location]) },
       pharmacyInventoryLot: { findMany: lots },
@@ -81,7 +82,6 @@ function makeContext() {
           .fn()
           .mockResolvedValue({ status: 'ACTIVE', role: 'EMPLOYEE', organizationId: 'org' }),
       },
-      $queryRaw: vi.fn().mockResolvedValue([{ allowed: true }]),
       pharmacyTemperatureLog: { findMany: vi.fn().mockResolvedValue([]) },
     },
   };
@@ -117,6 +117,7 @@ describe('Inventory pack-action integration', () => {
   ] as const)(
     'requires a count PIN only for solo self coauthorization (%s, %s, solo=%s)',
     async (status, createdById, solo, requiresPin) => {
+      ctx.db.$queryRaw.mockResolvedValue([{ allowed: solo }]);
       ctx.db.user.findUnique.mockResolvedValue({
         status: 'ACTIVE',
         role: solo ? 'ADMIN' : 'EMPLOYEE',

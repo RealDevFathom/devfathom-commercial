@@ -198,6 +198,17 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
 
   it('opens a drawer on an active branch of the organization, scoped to that branch', async () => {
     db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+    Object.assign(db.pharmacyBranch, { findFirst: vi.fn(async () => ({ id: BRANCH })) });
+    Object.assign(db, {
+      user: {
+        findUnique: vi.fn(async () => ({
+          id: 'actor-1',
+          status: 'ACTIVE',
+          organizationId: 'org-1',
+        })),
+      },
+      pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: BRANCH }]) },
+    });
     await expect(
       caller('EMPLOYEE').openDrawer({
         branchId: BRANCH,

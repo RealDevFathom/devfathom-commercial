@@ -399,7 +399,7 @@ export default async function PharmacyOrdersPage({
       let message: string;
       if (action === 'submit') {
         await outcome.write(actionCaller.submitPurchaseOrder)({ purchaseOrderId });
-        message = 'Order submitted for approval. Somebody else has to approve it.';
+        message = 'Order submitted for approval. A second approver or solo owner PIN is required.';
       } else if (action === 'approve' || action === 'reject') {
         await outcome.write(actionCaller.approvePurchaseOrder)({
           purchaseOrderId,

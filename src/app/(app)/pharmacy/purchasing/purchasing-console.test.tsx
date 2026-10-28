@@ -54,8 +54,10 @@ function contextStub(enabledModules = ['pharmacy-procurement']) {
     organization: actor.organization,
     entitlements: { organizationId: 'org-1', enabledModules },
     db: {
+      $queryRaw: vi.fn().mockResolvedValue([{ allowed: false }]),
       user: {
         findUnique: vi.fn().mockResolvedValue({
+          status: 'ACTIVE',
           organizationRole: {
             permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
           },
@@ -228,6 +230,7 @@ describe('tenancy and licensing (UX rule 7)', () => {
       db: {
         user: {
           findUnique: vi.fn().mockResolvedValue({
+            status: 'ACTIVE',
             organizationRole: {
               permissions: [
                 { capability: 'pharmacy.counter', effect: 'ALLOW' },
@@ -659,6 +662,50 @@ describe('segregation of duties (PUR-02)', () => {
     expect(screen.getByText(/You raised this order, so you cannot approve it/)).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
   });
+  it('offers a PIN field and approval controls for an authoritative solo owner', async () => {
+    mocks.soloEligible.mockResolvedValue(true);
+    const ctx = contextStub();
+    ctx.db.$queryRaw.mockResolvedValue([{ allowed: true }]);
+    mocks.createTRPCContext.mockResolvedValue(ctx);
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        purchaseOrders: vi.fn().mockResolvedValue([
+          {
+            id: 'po-1',
+            reference: 'PO-1',
+            status: 'SUBMITTED',
+            supplier: { id: 'sup-ok', name: 'Karachi Distributors' },
+            branch: null,
+            branchId: null,
+            supplierId: 'sup-ok',
+            requisition: null,
+            lines: [],
+            approvals: [],
+            goodsReceipts: [],
+            // The signed-in user in this suite.
+            createdByUserId: 'user-1',
+          },
+        ]),
+        landedCost: vi.fn().mockResolvedValue({
+          payableMinor: 0,
+          landedCostMinor: 0,
+          taxMinor: 0,
+          chargesMinor: 0,
+          canonicalUnits: 0,
+          netCostMinor: 0,
+          lines: [],
+        }),
+      })
+    );
+
+    render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
+
+    expect(screen.getAllByLabelText(/Owner PIN/)).toHaveLength(1);
+    for (const pin of screen.getAllByLabelText(/Owner PIN/))
+      expect(pin).toHaveAttribute('type', 'password');
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDefined();
+    expect(screen.queryByText(/You raised this order, so you cannot approve it/)).toBeNull();
+  });
 });
 
 function findAction(node: ReactNode, name: string): (form: FormData) => Promise<string> {
@@ -953,7 +1000,7 @@ describe('solo owner PIN forms', () => {
       })
     );
     render(await OrdersPage({ searchParams: params({ po: 'po-solo' }) }));
-    const pin = screen.getByLabelText('Owner PIN');
+    const pin = screen.getByLabelText(/Owner PIN/);
     expect(pin).toHaveAttribute('type', 'password');
     expect(pin).toHaveAttribute('pattern', '[0-9]{4,8}');
     const approve = screen.getByRole('button', { name: 'Approve' });
@@ -974,7 +1021,7 @@ describe('solo owner PIN forms', () => {
       })
     );
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
-    const pin = screen.getByLabelText('Owner PIN');
+    const pin = screen.getByLabelText(/Owner PIN/);
     expect(pin).toHaveAttribute('type', 'password');
     expect(pin).toHaveAttribute('pattern', '[0-9]{4,8}');
     const approver = screen.getByLabelText('Approved by');

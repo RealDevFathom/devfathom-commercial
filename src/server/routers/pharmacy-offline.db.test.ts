@@ -214,6 +214,23 @@ beforeAll(async () => {
       [ORG_A]
     )
   );
+  await scopedDb.withTenantDb(ORG_A, async (db) => {
+    await db.organizationDepartment.create({ data: { key: 'PHARMACY', name: 'PHARMACY' } });
+    const role = await db.organizationRole.create({
+      data: { key: 'owner', name: 'Owner', isSystem: true },
+    });
+    await db.user.create({
+      data: {
+        id: ACTOR,
+        email: `${ACTOR}@example.invalid`,
+        name: 'Offline actor',
+        department: 'PHARMACY',
+        title: 'Owner',
+        role: 'ADMIN',
+        organizationRoleId: role.id,
+      },
+    });
+  });
 }, 180_000);
 
 // Mock only the web identity/entitlement boundary; transactions, signatures,

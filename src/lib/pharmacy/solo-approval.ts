@@ -1,3 +1,4 @@
+import { rateLimit, clearRateLimit } from '@/lib/rate-limit';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   verifyOperatorCredential,
@@ -23,21 +24,6 @@ export async function soloOwnerEligible(
   db: ScopedDb,
   scope: { organizationId: string; branchId?: string | null; actorId: string }
 ) {
-  const actor = await db.user.findUnique({
-    where: { id: scope.actorId, organizationId: scope.organizationId },
-    select: {
-      status: true,
-      role: true,
-      organizationId: true,
-      organizationRole: { select: { key: true } },
-    },
-  });
-  if (
-    actor?.status !== 'ACTIVE' ||
-    actor.organizationId !== scope.organizationId ||
-    (actor.role !== 'ADMIN' && actor.organizationRole?.key !== 'owner')
-  )
-    return false;
   const rows = await db.$queryRaw<Array<{ allowed: boolean }>>`
     SELECT pharmacy_solo_owner_eligible(${scope.organizationId}, ${scope.branchId ?? null}, ${scope.actorId}) AS allowed`;
   return rows?.[0]?.allowed === true;
@@ -51,6 +37,8 @@ export async function verifySoloOwnerPin(
 ): Promise<boolean> {
   const { organizationId, branchId, actorId } = scope;
   if (!pin || !/^\d{4,8}$/.test(pin)) return false;
+  if (!(await rateLimit(`pharmacy:solo-owner-pin:${organizationId}:${actorId}`, 5, 15 * 60_000)).ok)
+    return false;
   // The database guard repeats eligibility when the document changes.
   const eligible = await db.$queryRaw<Array<{ allowed: boolean }>>`
     SELECT pharmacy_solo_owner_eligible(${organizationId}, ${branchId}, ${actorId}) AS allowed`;
@@ -90,6 +78,7 @@ export async function verifySoloOwnerPin(
     },
     { userId: actorId, skipDrain: true }
   );
+  if (valid) await clearRateLimit(`pharmacy:solo-owner-pin:${organizationId}:${actorId}`);
   return valid;
 }
 
@@ -111,7 +100,12 @@ export async function authorizeSoloApproval(
       action: SOLO_APPROVAL_POLICY,
       targetType: target.type,
       targetId: target.id,
-      metadata: { branchId, policy: SOLO_APPROVAL_POLICY, reauthentication: 'PIN' },
+      metadata: {
+        branchId,
+        policy: SOLO_APPROVAL_POLICY,
+        reauthentication: 'PIN',
+        activeStaffCount: 1,
+      },
     },
   });
   await db.$queryRaw`SELECT set_config('app.pharmacy_solo_audit_id', ${audit.id}, true)`;

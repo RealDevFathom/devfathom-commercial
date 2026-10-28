@@ -1,9 +1,25 @@
+import { requirePharmacyReadBranch } from '../pharmacy-branch-access';
 import { authorizeSoloApproval, soloOwnerEligible } from '@/lib/pharmacy/solo-approval';
 import { z } from 'zod';
-import { capabilityProcedure, router } from '../trpc';
+import { capabilityProcedure, router, type TRPCContext } from '../trpc';
 import { TRPCError } from '@trpc/server';
 
 const dispense = capabilityProcedure('pharmacy:dispense');
+
+async function reviewScope(ctx: TRPCContext) {
+  const { branches } = await requirePharmacyReadBranch(ctx);
+  const lines = await ctx.db.pharmacySaleLine.findMany({
+    where: {
+      organizationId: ctx.entitlements!.organizationId,
+      branchId: { in: branches.map((branch) => branch.id) },
+    },
+    select: { id: true },
+  });
+  return {
+    organizationId: ctx.entitlements!.organizationId,
+    saleLineId: { in: lines.map((line) => line.id) },
+  };
+}
 
 export const pharmacyDispensingRouter = router({
   // Separate, repeatable OTC-capable work queue. These holdings remain quarantined;
@@ -31,7 +47,9 @@ export const pharmacyDispensingRouter = router({
       });
     }),
   reviewQueue: dispense.query(async ({ ctx }) => {
+    const where = await reviewScope(ctx);
     const items = await ctx.db.pharmacyPharmacistReviewItem.findMany({
+      where,
       orderBy: { requestedAt: 'asc' },
       include: {
         line: {
@@ -64,6 +82,7 @@ export const pharmacyDispensingRouter = router({
   }),
   substitutionWorkspace: dispense.query(async ({ ctx }) => ({
     lines: await ctx.db.pharmacyPharmacistReviewItem.findMany({
+      where: await reviewScope(ctx),
       orderBy: { requestedAt: 'desc' },
       include: {
         line: {

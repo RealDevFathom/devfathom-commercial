@@ -1,3 +1,4 @@
+import { authorizeSoloApproval, pinProfileBelongsToActor } from '@/lib/pharmacy/solo-approval';
 import { readRepeatPurchasing, validateRepeatFilters } from '@/lib/pharmacy/repeat-purchasing';
 import {
   readPharmacyMarketingReport,
@@ -12,7 +13,7 @@ import {
 } from '@/lib/pharmacy/replenishment-report';
 
 import { hasModule } from '@/lib/entitlements';
-import { can, subjectFromSession } from '@/lib/abac';
+import { can, isPvOwner, subjectFromSession } from '@/lib/abac';
 import {
   readPharmacyDailyWorkPack,
   validateDailyWorkPackInput,
@@ -39,7 +40,11 @@ import {
   acknowledgePackAuthenticationFlag,
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
-import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
+import { annotateAudit } from '@/server/audit';
+
+const safety = capabilityProcedure('pharmacy:safety');
 
 const reports = capabilityProcedure('reports:operational');
 const widget = z
@@ -95,10 +100,18 @@ const transitions: Record<z.infer<typeof pvState>, readonly z.infer<typeof pvSta
 
 async function requirePvBranch(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements.organizationId;
+  const user = ctx.session!.user;
+  const owner = await isPvOwner(ctx.db, user.id, organizationId);
+  if (!owner) {
+    const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, user.id);
+    if (!assigned.includes(branchId))
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
   const branch = await ctx.db.pharmacyBranch.findFirst({
     where: { id: branchId, organizationId, active: true },
   });
   if (!branch) throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  if (owner) annotateAudit(ctx, { metadata: { branchId, ownerBranchAccess: true } });
   return organizationId;
 }
 const anomalyDecision = z
@@ -176,7 +189,7 @@ export const pharmacyReportsRouter = router({
       }
       return readPharmacyMarketingReport(ctx.db, ctx.entitlements.organizationId, scoped);
     }),
-  createPharmacovigilanceReport: auditedProtectedProcedure
+  createPharmacovigilanceReport: safety
     .input(
       z
         .object({
@@ -213,18 +226,35 @@ export const pharmacyReportsRouter = router({
             message: 'Inventory lot does not match this branch and medicine.',
           });
       }
-      ctx.audit.detail = {
+      annotateAudit(ctx, {
         category: 'PHARMACY_SAFETY',
         action: 'human_asserted_report_capture',
         skipInput: true,
-      };
+      });
       return ctx.db.pharmacyPharmacovigilanceReport.create({
         data: { ...input, organizationId, createdByUserId: ctx.session.user.id },
       });
     }),
-  transitionPharmacovigilanceReport: auditedProtectedProcedure
+  transitionPharmacovigilanceReport: safety
+    .use(({ ctx, next }) => {
+      annotateAudit(ctx, { category: 'PHARMACY_SAFETY', skipInput: true });
+      return next();
+    })
     .input(
-      z.object({ id: z.string().min(1), branchId: z.string().min(1), state: pvState }).strict()
+      z
+        .object({
+          id: z.string().min(1),
+          branchId: z.string().min(1),
+          state: pvState,
+          ownerAuthorization: z
+            .object({
+              staffProfileId: z.string().min(1),
+              pin: z.string().regex(/^\d{4,8}$/),
+            })
+            .strict()
+            .optional(),
+        })
+        .strict()
     )
     .mutation(async ({ ctx, input }) => {
       const organizationId = await requirePvBranch(ctx, input.branchId);
@@ -237,12 +267,78 @@ export const pharmacyReportsRouter = router({
           code: 'BAD_REQUEST',
           message: 'Invalid report lifecycle transition.',
         });
-      return ctx.db.pharmacyPharmacovigilanceReport.update({
-        where: { id: report.id },
-        data: { state: input.state, reviewedByUserId: ctx.session.user.id },
+      annotateAudit(ctx, {
+        targetType: 'PharmacyPharmacovigilanceReport',
+        targetId: report.id,
+        metadata: { reportState: input.state },
+      });
+      return ctx.db.$transaction(async (db) => {
+        // A report author cannot complete their own review in a staffed pharmacy.
+        // The sole active owner may do so only after fresh PIN verification.
+        if (input.state === 'READY' && report.createdByUserId === ctx.session.user.id) {
+          const blocked = {
+            blocked: 'A second approver is required, or the sole active owner must reauthenticate.',
+          };
+          const auth = input.ownerAuthorization;
+          if (!auth || !(await isPvOwner(ctx.db, ctx.session.user.id, organizationId)))
+            return blocked;
+          const now = new Date();
+          const scope = { organizationId, actorId: ctx.session.user.id, branchId: report.branchId };
+          if (
+            !(await pinProfileBelongsToActor(db as typeof ctx.db, scope, auth.staffProfileId)) ||
+            !(await authorizeSoloApproval(
+              db as typeof ctx.db,
+              scope,
+              { type: 'PharmacyPharmacovigilanceReport', id: report.id },
+              auth.pin
+            ))
+          )
+            return blocked;
+          await db.auditLog.create({
+            data: {
+              organizationId,
+              actorType: 'USER',
+              actorId: ctx.session.user.id,
+              actorRole: ctx.session.user.role,
+              source: 'TRPC',
+              category: 'PHARMACY_SAFETY',
+              operation: 'UPDATE',
+              action: 'pharmacyReports.soloOwnerSelfApproval',
+              targetType: 'PharmacyPharmacovigilanceReport',
+              targetId: report.id,
+              metadata: {
+                branchId: input.branchId,
+                reportId: report.id,
+                staffProfileId: auth.staffProfileId,
+                soloOwnerSelfApproval: true,
+                reauthenticationMethod: 'PIN',
+                reauthenticatedAt: now.toISOString(),
+              },
+            },
+          });
+          annotateAudit(ctx, {
+            metadata: {
+              soloOwnerSelfApproval: true,
+              reportId: report.id,
+              staffProfileId: auth.staffProfileId,
+              reauthenticatedAt: now.toISOString(),
+            },
+          });
+        }
+        return db.pharmacyPharmacovigilanceReport.update({
+          where: { id: report.id, organizationId, branchId: input.branchId, state: report.state },
+          data: {
+            state: input.state,
+            ...(input.state === 'READY'
+              ? { reviewedByUserId: ctx.session.user.id }
+              : ['DRAFT', 'UNDER_REVIEW'].includes(input.state)
+                ? { reviewedByUserId: null }
+                : {}),
+          },
+        });
       });
     }),
-  recordPharmacovigilanceSubmission: auditedProtectedProcedure
+  recordPharmacovigilanceSubmission: safety
     .input(
       z
         .object({
@@ -272,11 +368,25 @@ export const pharmacyReportsRouter = router({
       const organizationId = await requirePvBranch(ctx, input.branchId);
       const report = await ctx.db.pharmacyPharmacovigilanceReport.findFirst({
         where: { id: input.id, branchId: input.branchId, organizationId },
-        select: { id: true },
+        select: { id: true, state: true, reviewedByUserId: true },
       });
       if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
+      if (
+        input.state === 'SUBMITTED' &&
+        (!['READY', 'SUBMITTED', 'CLOSED'].includes(report.state) || !report.reviewedByUserId)
+      )
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Internal approval is required before submission.',
+        });
       return ctx.db.pharmacyPharmacovigilanceReport.update({
-        where: { id: report.id },
+        where: {
+          id: report.id,
+          organizationId,
+          branchId: input.branchId,
+          state: report.state,
+          reviewedByUserId: report.reviewedByUserId,
+        },
         data: {
           externalSubmissionState: input.state,
           externalReference: input.state === 'SUBMITTED' ? input.externalReference : null,
@@ -284,7 +394,7 @@ export const pharmacyReportsRouter = router({
         },
       });
     }),
-  exportPharmacovigilanceDrap: auditedProtectedProcedure
+  exportPharmacovigilanceDrap: safety
     .input(
       z
         .object({ branchId: z.string().min(1), from: z.date(), to: z.date() })
@@ -293,7 +403,7 @@ export const pharmacyReportsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const organizationId = await requirePvBranch(ctx, input.branchId);
-      ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'drap_export', skipInput: true };
+      annotateAudit(ctx, { category: 'PHARMACY_SAFETY', action: 'drap_export', skipInput: true });
       const reports = await ctx.db.pharmacyPharmacovigilanceReport.findMany({
         where: {
           organizationId,

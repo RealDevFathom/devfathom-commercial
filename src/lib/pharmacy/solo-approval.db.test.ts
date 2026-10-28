@@ -80,10 +80,19 @@ async function fixture(kind: 'ADMIN' | 'owner' = 'ADMIN') {
       const role = await db.organizationRole.create({
         data: {
           organizationId: org,
-          key: kind === 'owner' ? 'owner' : 'ordinary',
+          key: 'owner',
+          isSystem: true,
           name: kind,
         },
       });
+      for (const capability of [
+        'pharmacy:dispense',
+        'pharmacy:safety',
+        'pharmacy:catalogue-review',
+      ])
+        await db.organizationRolePermission.create({
+          data: { organizationId: org, organizationRoleId: role.id, capability, effect: 'ALLOW' },
+        });
       const user = await db.user.create({
         data: {
           organizationId: org,
@@ -661,7 +670,7 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
-  it('counts every active owner across branches while allowing an ordinary sibling-branch staff member', async () => {
+  it('counts active pharmacy membership tenant-wide including sibling-branch staff', async () => {
     const f = await fixture('owner');
     // Once staffed, sensitive work requires an exact grant in addition to PIN.
     await withTenantDb(
@@ -702,11 +711,9 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
     await withTenantDb(
       f.org,
       async (db) => {
-        expect(await soloOwnerEligible(db, scope(f))).toBe(true);
+        expect(await soloOwnerEligible(db, scope(f))).toBe(false);
         expect(await soloOwnerEligible(db, { ...scope(f), branchId: null })).toBe(false);
-        expect(await listControlledPinWitnesses(db, f.org, f.user, f.branch)).toEqual([
-          { id: f.profile, name: 'Owner' },
-        ]);
+        expect(await listControlledPinWitnesses(db, f.org, f.user, f.branch)).toEqual([]);
         expect(await listControlledPinWitnesses(db, f.org, f.user)).toEqual([]);
         const ownerRole = await db.organizationRole.findFirstOrThrow({ where: { key: 'owner' } });
         await db.user.update({
@@ -1487,7 +1494,7 @@ describe('solo approval database guard regressions', () => {
               email: `${randomUUID()}@example.invalid`,
               department: 'PHARMACY',
               title: 'Staff',
-              status: change === 'activation' ? 'INACTIVE' : 'ACTIVE',
+              status: 'INACTIVE',
               organizationRoleId: role.id,
             },
           });
@@ -1508,6 +1515,8 @@ describe('solo approval database guard regressions', () => {
           [f.org, f.branch, f.user]
         );
         expect(before.rows[0].eligible).toBe(true);
+        if (change !== 'activation')
+          await roster.query(`UPDATE users SET status='ACTIVE' WHERE id=$1`, [staff.user.id]);
         if (change === 'activation')
           await roster.query(`UPDATE users SET status='ACTIVE' WHERE id=$1`, [staff.user.id]);
         if (change === 'assignment')
@@ -1521,7 +1530,7 @@ describe('solo approval database guard regressions', () => {
             [randomUUID(), f.org]
           );
         if (change === 'owner role')
-          await roster.query(`UPDATE organization_roles SET key='owner' WHERE id=$1`, [
+          await roster.query(`UPDATE organization_roles SET key='owner-renamed' WHERE id=$1`, [
             staff.role.id,
           ]);
         const pending = sqlApprove(approval, f, po.id).catch((error: unknown) => error);

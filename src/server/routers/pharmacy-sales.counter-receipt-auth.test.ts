@@ -93,7 +93,13 @@ function fixture(
         status: 'ACTIVE',
         role,
         organizationId: 'org-a',
-        organizationRole: { permissions, ...(roleKey ? { key: roleKey } : {}) },
+        organization: { vertical: 'PHARMACY' },
+        organizationRole: {
+          organizationId: 'org-a',
+          isSystem: true,
+          permissions,
+          ...(roleKey ? { key: roleKey } : {}),
+        },
         permissionOverrides: overrides,
       })),
     },
@@ -274,16 +280,18 @@ describe('counter receipt authorization', () => {
       }
     });
 
-    it('retains solo access without grants or branch assignments', async () => {
+    it('requires a system owner identity for solo access without grants', async () => {
       const f = fixture([], role, [], key);
       f.user.role = 'EMPLOYEE';
       f.db.user.count.mockResolvedValue(1);
       for (const path of protectedPaths()) {
-        await expect(path.run(f.caller()), path.name).resolves.toMatchObject(path.allowed);
+        if (key === 'owner')
+          await expect(path.run(f.caller()), path.name).resolves.toMatchObject(path.allowed);
+        else
+          await expect(path.run(f.caller()), path.name).rejects.toMatchObject({
+            code: 'FORBIDDEN',
+          });
       }
-      expect(f.db.user.count).toHaveBeenCalledWith({
-        where: { organizationId: 'org-a', status: 'ACTIVE' },
-      });
     });
 
     it('requires a grant when another ACTIVE user exists', async () => {
@@ -545,7 +553,7 @@ describe('counter receipt authorization', () => {
     expect(readCounterCart).not.toHaveBeenCalled();
   });
 
-  it('allows pharmacy.dispense and pharmacy:receipt when the branch is assigned', async () => {
+  it('requires canonical dispense grants while retaining receipt aliases on assigned branches', async () => {
     for (const capability of [
       'pharmacy.dispense',
       'pharmacy:receipt',
@@ -553,9 +561,10 @@ describe('counter receipt authorization', () => {
     ] as const) {
       const f = fixture([{ capability, effect: 'ALLOW' }]);
       assign(f, ['branch-a']);
-      await expect(
-        f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
-      ).resolves.toMatchObject({ receiptNumber: 7 });
+      const result = f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' });
+      if (capability === 'pharmacy.dispense')
+        await expect(result).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      else await expect(result).resolves.toMatchObject({ receiptNumber: 7 });
     }
   });
 
@@ -602,7 +611,7 @@ describe('counter receipt authorization', () => {
       status: 'INACTIVE',
       role: 'EMPLOYEE',
       organizationId: 'org-a',
-      organizationRole: { permissions: dispense },
+      organizationRole: { organizationId: 'org-a', isSystem: false, permissions: dispense },
       permissionOverrides: [],
     });
     await expect(

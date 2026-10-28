@@ -17,6 +17,7 @@ import { router, type TRPCContext } from '../trpc';
 const app = router({ safety: pharmacySafetyRouter, purchasing: pharmacyPurchasingRouter });
 function fixture(capability: string) {
   const db = {
+    $queryRaw: vi.fn().mockResolvedValue([{ allowed: false }]),
     user: {
       findUnique: vi.fn().mockResolvedValue({
         role: 'EMPLOYEE',

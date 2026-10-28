@@ -8,7 +8,8 @@ CREATE FUNCTION pharmacy_lock_solo_roster(org text) RETURNS void
 LANGUAGE plpgsql VOLATILE AS $$
 BEGIN
  -- Touch a non-key column so ordinary FK KEY SHARE locks stay compatible.
- UPDATE organizations SET "updatedAt" = "updatedAt" WHERE id = org;
+ PERFORM id FROM organizations WHERE id = org FOR NO KEY UPDATE;
+ UPDATE organizations SET "updatedAt"="updatedAt" WHERE id=org;
 END $$;
 
 CREATE FUNCTION pharmacy_serialize_solo_roster() RETURNS trigger

@@ -257,6 +257,13 @@ export async function getSupportSession(request?: Request): Promise<SupportIdent
   ) {
     return null;
   }
+  const operator = await withPlatformDb((db) =>
+    db.platformUser.findUnique({
+      where: { id: session.platformUserId },
+      select: { active: true },
+    })
+  );
+  if (!operator?.active) return null;
   const tenantUser = await withTenantDb(session.organizationId, (tenantDb) =>
     tenantDb.user.findUnique({
       where: { id: session.tenantUserId! },
