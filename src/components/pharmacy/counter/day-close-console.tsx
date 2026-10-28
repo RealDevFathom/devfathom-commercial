@@ -103,6 +103,7 @@ function DayCloseBranches() {
             <Input
               className="min-h-11"
               type="date"
+              max={today}
               value={date}
               onChange={(e) => setPicked(e.target.value)}
             />

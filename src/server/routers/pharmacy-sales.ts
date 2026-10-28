@@ -30,7 +30,7 @@ import {
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
-import { workspaceTimezone } from '@/lib/timezone';
+import { workspaceTimezone, workspaceToday } from '@/lib/timezone';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -457,6 +457,22 @@ const closeDate = z
       date.getUTCMilliseconds() === 0,
     'Choose a date without a time.'
   );
+async function requireCurrentOrPastCloseDate(
+  db: ScopedDb,
+  organizationId: string,
+  businessDate: Date
+) {
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { timezone: true },
+  });
+  if (businessDate.toISOString().slice(0, 10) > workspaceToday(organization?.timezone)) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Choose a business date that is not in the future.',
+    });
+  }
+}
 function requireCloseAccess(ctx: TRPCContext) {
   if (ctx.session?.user.role !== 'ADMIN')
     throw new TRPCError({
@@ -546,9 +562,12 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => {
       requireCloseAccess(ctx);
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          readPharmacyClose(txDb(tx), await scopeFor(ctx, input.branchId), input.businessDate)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = await scopeFor(ctx, input.branchId);
+          await requireCurrentOrPastCloseDate(db, scope.organizationId, input.businessDate);
+          return readPharmacyClose(db, scope, input.businessDate);
+        });
       } catch (error) {
         fail(error);
       }
@@ -577,9 +596,12 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       requireCloseAccess(ctx);
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = await scopeFor(ctx, input.branchId);
+          await requireCurrentOrPastCloseDate(db, scope.organizationId, input.businessDate);
+          return closePharmacyDay(db, scope, input);
+        });
       } catch (error) {
         fail(error);
       }
@@ -740,9 +762,12 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       requireCloseAccess(ctx);
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = await scopeFor(ctx, input.branchId);
+          await requireCurrentOrPastCloseDate(db, scope.organizationId, input.businessDate);
+          return cutPharmacyDailyClose(db, scope, input);
+        });
       } catch (error) {
         fail(error);
       }

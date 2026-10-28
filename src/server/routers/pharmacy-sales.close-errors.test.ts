@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The close family (`dailyClose`, `closePreview`, `closeDay`) calls the same
 // settlement library as the drawer family, which raises typed
@@ -93,8 +93,30 @@ let f: ReturnType<typeof fixture>;
 beforeEach(() => {
   f = fixture();
 });
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('pharmacy close family refusals', () => {
+  it('refuses to close a future business date in the organization timezone', async () => {
+    vi.useFakeTimers({ now: new Date('2026-10-22T12:00:00.000Z') });
+    f.db.organization.findUnique.mockResolvedValue({ timezone: 'Asia/Karachi' });
+
+    await expect(
+      f.caller.closeDay({
+        branchId: BRANCH,
+        businessDate: new Date('2026-10-23T00:00:00.000Z'),
+        sourceHash: 'a'.repeat(64),
+        counts: [],
+        varianceNote: '',
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Choose a business date that is not in the future.',
+    });
+    expect(f.db.pharmacyDailyClose.create).not.toHaveBeenCalled();
+  });
+
   it('answers a daily close with a drawer still open as a CONFLICT, writing no close', async () => {
     f.db.pharmacyDrawerSession.count.mockResolvedValue(1);
     await expect(f.caller.dailyClose({ branchId: BRANCH, businessDate })).rejects.toMatchObject({
