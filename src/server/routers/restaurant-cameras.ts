@@ -18,8 +18,11 @@ import { sealCameraCredential } from '@/lib/restaurant/camera-credentials';
 import {
   CoAuthorizationError,
   buildCoAuthorizationRecord,
+  buildAuthenticatedCoAuthorizationRecord,
+  authenticateCoAuthorizationOperator,
+  isSoloBranchOwner,
 } from '@/lib/restaurant/co-authorization';
-import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import { resolveRestaurantActor } from '@/server/restaurant-actor';
 import { assertInOrganization } from '../org-refs';
 import { annotateAudit } from '../audit';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
@@ -144,22 +147,39 @@ export const restaurantCamerasRouter = router({
         where: { id: input.gatewayId },
       });
       if (!gateway) throw new TRPCError({ code: 'NOT_FOUND', message: 'Gateway not found.' });
+      const actor = await resolveRestaurantActor(ctx, [gateway.branchId]);
+      if (input.actingStaffProfileId !== actor.staffProfileId) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Acting staff must match the authenticated user.',
+        });
+      }
       let record;
       try {
-        record = buildCoAuthorizationRecord({
+        const requestData = {
           actingStaffProfileId: input.actingStaffProfileId,
           approvingStaffProfileId: input.approvingStaffProfileId,
           capability: 'cameras:gateway:revoke',
           reason: input.reason,
           targetType: 'RestaurantCameraGateway',
           targetId: gateway.id,
-        });
+        };
+        if (
+          actor.staffProfileId === input.approvingStaffProfileId &&
+          input.approvingType === 'PIN' &&
+          (await isSoloBranchOwner(ctx.db, actor.staffProfileId, gateway.branchId))
+        ) {
+          record = requestData;
+        } else {
+          record = buildCoAuthorizationRecord(requestData);
+        }
       } catch (error) {
         if (error instanceof CoAuthorizationError)
           throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
         throw error;
       }
-      const auth = await authenticateOperator(ctx.db, {
+      const auth = await authenticateCoAuthorizationOperator(ctx.db, {
+        branchId: gateway.branchId,
         staffProfileId: input.approvingStaffProfileId,
         type: input.approvingType,
         secret: input.approvingSecret,
@@ -173,6 +193,7 @@ export const restaurantCamerasRouter = router({
               ? 'Approving manager credential is temporarily locked.'
               : 'Invalid approving credential.',
         });
+      record = await buildAuthenticatedCoAuthorizationRecord(ctx.db, record);
       const coAuthorization = await ctx.db.restaurantCoAuthorization.create({ data: record });
       const revoked = await revokeCameraGateway(ctx.db, gateway.id, new Date());
       return {

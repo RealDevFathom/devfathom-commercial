@@ -55,7 +55,8 @@ function makeDb() {
   const db = {
     restaurantBranch: delegate,
     restaurantRegisteredDevice: { count: dependencies.devices },
-    restaurantStaffProfile: { count: dependencies.staff },
+    restaurantStaffProfile: { count: dependencies.staff, findMany: vi.fn().mockResolvedValue([]) },
+    restaurantJobRole: { findFirst: vi.fn().mockResolvedValue(null) },
     restaurantOrder: { count: dependencies.orders },
     restaurantDrawerSession: { count: dependencies.drawers },
     restaurantShift: { count: dependencies.shifts },

@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { hasStaffBranchAccess } from './branch-access';
+
 import {
   demoSeatFromOrganizationId,
   isCanonicalDemoOrganization,
@@ -574,7 +576,7 @@ export async function authenticateOperator(
      * where only an organization-wide credential is accepted. */
     deviceId?: string;
     /** Trusted branch derived from the authenticated terminal device. When set,
-     * only an operator whose primary branch matches may authenticate. */
+     * requires active branch membership (including organization-wide owners/admins). */
     branchId?: string;
     type: OperatorCredentialType;
     secret: string;
@@ -619,7 +621,9 @@ export async function authenticateOperator(
   if (
     !profile ||
     profile.status !== 'ACTIVE' ||
-    (branchId !== undefined && profile.primaryBranchId !== branchId) ||
+    (branchId !== undefined &&
+      profile.primaryBranchId !== branchId &&
+      !(await hasStaffBranchAccess(db, staffProfileId, branchId))) ||
     !credential
   ) {
     // Fail closed, but still burn a compare so absence is timing-opaque.

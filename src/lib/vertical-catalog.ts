@@ -1301,17 +1301,7 @@ export const RESTAURANT_JOB_ROLE_TEMPLATES: readonly JobRoleTemplate[] = [
     key: 'owner',
     name: 'Owner',
     description: 'Owns the business: configuration, money, devices and pay rates.',
-    capabilities: [
-      ...FLOOR_BASELINE,
-      ...MANAGES_A_BRANCH,
-      'restaurant:configure',
-      'branches:manage',
-      'devices:revoke',
-      'menu:write',
-      'menu:import',
-      'reports:financial',
-      'workforce:rates',
-    ],
+    capabilities: [...RESTAURANT_CAPABILITIES],
   },
   {
     key: 'accountant',

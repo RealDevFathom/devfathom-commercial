@@ -7,6 +7,9 @@ import { z } from 'zod';
 import {
   CoAuthorizationError,
   buildCoAuthorizationRecord,
+  buildAuthenticatedCoAuthorizationRecord,
+  authenticateCoAuthorizationOperator,
+  isSoloBranchOwner,
 } from '@/lib/restaurant/co-authorization';
 import {
   DeviceLifecycleError,
@@ -27,7 +30,6 @@ import {
   renamePrinterInventory,
   retirePrinterInventory,
 } from '@/lib/restaurant/printer-inventory';
-import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
 import {
   CommercialLimitError,
   enrollDeviceWithinCommercialLimits,
@@ -461,14 +463,23 @@ export const restaurantDevicesRouter = router({
       // Validate the two-identity invariants BEFORE spending a bcrypt compare.
       let record;
       try {
-        record = buildCoAuthorizationRecord({
+        const requestData = {
           actingStaffProfileId,
           approvingStaffProfileId: input.approvingStaffProfileId,
           capability: 'devices:revoke',
           reason: input.reason,
           targetType: 'RestaurantRegisteredDevice',
           targetId: device.id,
-        });
+        };
+        if (
+          actingStaffProfileId === input.approvingStaffProfileId &&
+          input.approvingType === 'PIN' &&
+          (await isSoloBranchOwner(ctx.db, actingStaffProfileId, device.branchId))
+        ) {
+          record = requestData;
+        } else {
+          record = buildCoAuthorizationRecord(requestData);
+        }
       } catch (err) {
         if (err instanceof CoAuthorizationError) {
           throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
@@ -477,7 +488,8 @@ export const restaurantDevicesRouter = router({
       }
 
       const now = new Date();
-      const auth = await authenticateOperator(ctx.db, {
+      const auth = await authenticateCoAuthorizationOperator(ctx.db, {
+        branchId: device.branchId,
         staffProfileId: input.approvingStaffProfileId,
         type: input.approvingType,
         secret: input.approvingSecret,
@@ -492,6 +504,7 @@ export const restaurantDevicesRouter = router({
         }
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Invalid approving credential.' });
       }
+      record = await buildAuthenticatedCoAuthorizationRecord(ctx.db, record);
       if (
         !(await staffHasCapability(
           ctx.db,
@@ -579,14 +592,23 @@ export const restaurantDevicesRouter = router({
       }
       let record;
       try {
-        record = buildCoAuthorizationRecord({
+        const requestData = {
           actingStaffProfileId,
           approvingStaffProfileId: input.approvingStaffProfileId,
           capability: 'devices:manage',
           reason: input.reason,
           targetType: 'RestaurantRegisteredDevice',
           targetId: device.id,
-        });
+        };
+        if (
+          actingStaffProfileId === input.approvingStaffProfileId &&
+          input.approvingType === 'PIN' &&
+          (await isSoloBranchOwner(ctx.db, actingStaffProfileId, device.branchId))
+        ) {
+          record = requestData;
+        } else {
+          record = buildCoAuthorizationRecord(requestData);
+        }
       } catch (err) {
         if (err instanceof CoAuthorizationError) {
           throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
@@ -594,7 +616,8 @@ export const restaurantDevicesRouter = router({
         throw err;
       }
 
-      const auth = await authenticateOperator(ctx.db, {
+      const auth = await authenticateCoAuthorizationOperator(ctx.db, {
+        branchId: device.branchId,
         staffProfileId: input.approvingStaffProfileId,
         type: input.approvingType,
         secret: input.approvingSecret,
@@ -609,6 +632,7 @@ export const restaurantDevicesRouter = router({
         }
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Invalid approving credential.' });
       }
+      record = await buildAuthenticatedCoAuthorizationRecord(ctx.db, record);
       if (
         !(await staffHasCapability(
           ctx.db,

@@ -708,8 +708,16 @@ export async function resolveStaffCapabilityDecision(
 ): Promise<StaffCapabilityResolution> {
   const [holdings, overrides] = await Promise.all([
     db.restaurantStaffJobRole.findMany({
-      where: { staffProfileId, branchId, jobRole: { active: true } },
-      select: { jobRole: { select: { capabilities: { select: { capability: true } } } } },
+      where: {
+        staffProfileId,
+        jobRole: { active: true },
+        OR: [{ branchId }, { jobRole: { key: 'owner' } }],
+      },
+      select: {
+        branchId: true,
+        organizationId: true,
+        jobRole: { select: { key: true, capabilities: { select: { capability: true } } } },
+      },
     }),
     db.restaurantStaffCapabilityGrant.findMany({
       where: { staffProfileId, branchId },
@@ -717,8 +725,23 @@ export async function resolveStaffCapabilityDecision(
     }),
   ]);
 
+  const globalOwner = holdings.some(
+    (holding) => holding.jobRole.key === 'owner' && holding.branchId !== branchId
+  );
+  const targetBranch = globalOwner
+    ? await db.restaurantBranch.findUnique({
+        where: { id: branchId },
+        select: { organizationId: true, active: true },
+      })
+    : null;
   const inherited = new Set<string>();
   for (const holding of holdings) {
+    if (
+      holding.jobRole.key === 'owner' &&
+      holding.branchId !== branchId &&
+      (!targetBranch?.active || targetBranch.organizationId !== holding.organizationId)
+    )
+      continue;
     for (const row of holding.jobRole.capabilities) inherited.add(row.capability);
   }
 

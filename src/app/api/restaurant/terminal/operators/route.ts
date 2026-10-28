@@ -1,3 +1,4 @@
+import { staffBranchMembership } from '@/lib/restaurant/branch-access';
 import { NextResponse } from 'next/server';
 
 import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
@@ -7,7 +8,7 @@ import { withTerminalAuth } from '@/lib/restaurant/terminal-auth';
 export const GET = withTerminalAuth(async (ctx) => {
   const operators = await ctx.db.restaurantStaffProfile.findMany({
     where: {
-      primaryBranchId: ctx.device.branchId,
+      OR: staffBranchMembership(ctx.device.branchId),
       status: 'ACTIVE',
       credentials: {
         some: {

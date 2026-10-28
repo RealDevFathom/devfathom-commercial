@@ -125,7 +125,7 @@ const platformDb = {
     findUnique: mocks.branchFindUnique,
     count: mocks.branchCount,
   },
-  restaurantBranchAssignment: { create: mocks.assignmentCreate },
+  restaurantBranchAssignment: { create: mocks.assignmentCreate, upsert: record() },
   restaurantStaffProfile: {
     findFirst: mocks.staffFindFirst,
     create: mocks.staffCreate,
@@ -214,6 +214,7 @@ describe('§9 contract item 2 — RESTAURANT organization.create: branch + assig
     mocks.assignmentCreate.mockResolvedValue({ id: 'assign_1' });
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
+      defaultSeats: 100,
       active: true,
       vertical: 'RESTAURANT',
       moduleLinks: [{ moduleId: 'restaurant-core' }],
@@ -300,6 +301,7 @@ describe('§2.3 contract item 3 — mismatched package rejected', () => {
   it('rejects AGENCY create with a RESTAURANT package', async () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
+      defaultSeats: 100,
       active: true,
       vertical: 'RESTAURANT',
       moduleLinks: [],

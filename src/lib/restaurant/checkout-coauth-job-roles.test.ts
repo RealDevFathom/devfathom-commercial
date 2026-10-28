@@ -51,6 +51,7 @@ function fakeDb(options: {
   const { user = null, jobRoleCapabilities = [], overrides = [], hidden = false } = options;
   return {
     restaurantStaffProfile: {
+      findFirst: vi.fn().mockResolvedValue(null),
       findUnique: vi.fn(async () =>
         hidden
           ? null

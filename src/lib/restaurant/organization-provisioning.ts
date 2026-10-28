@@ -149,19 +149,26 @@ export async function provisionRestaurantOrganization(
         displayName: administrator.name,
         email: administrator.email,
       });
-      // Job-role holdings are per branch, and the administrator's is the branch
-      // their profile points at. A branch-less organization gets the profile and
-      // no holding — there is no branch to hold a role at.
-      const roleProfileGranted =
-        ownerRole?.active && profile.primaryBranchId
-          ? (
-              await grantJobRole(tx, {
-                staffProfileId: profile.staffProfileId,
-                jobRoleId: ownerRole.id,
-                branchId: profile.primaryBranchId,
-              })
-            ).changed
-          : false;
+      let roleProfileGranted = false;
+      for (const branch of branches) {
+        await tx.restaurantBranchAssignment.upsert({
+          where: { branchId_userId: { branchId: branch.id, userId: administrator.id } },
+          create: {
+            organizationId: input.organizationId,
+            branchId: branch.id,
+            userId: administrator.id,
+          },
+          update: {},
+        });
+        if (ownerRole?.active) {
+          const grant = await grantJobRole(tx, {
+            staffProfileId: profile.staffProfileId,
+            jobRoleId: ownerRole.id,
+            branchId: branch.id,
+          });
+          roleProfileGranted ||= grant.changed;
+        }
+      }
       administrators.push({ ...profile, userId: administrator.id, roleProfileGranted });
     }
 

@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { buildCoAuthorizationRecord } from './co-authorization';
+import { buildAuthenticatedCoAuthorizationRecord } from './co-authorization';
 import { accrueLoyaltyForSettledBill, releaseLoyaltyRedemption } from './loyalty';
 import {
   add,
@@ -161,9 +161,9 @@ function requireReason(reason: string | null | undefined): string {
 
 async function persistCoAuth(
   tx: ScopedDb,
-  request: Parameters<typeof buildCoAuthorizationRecord>[0]
+  request: Parameters<typeof buildAuthenticatedCoAuthorizationRecord>[1]
 ): Promise<string> {
-  const record = buildCoAuthorizationRecord(request);
+  const record = await buildAuthenticatedCoAuthorizationRecord(tx, request);
   const row = await tx.restaurantCoAuthorization.create({ data: record, select: { id: true } });
   return row.id;
 }
@@ -933,6 +933,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         grandTotal: true,
         serviceChargeTotal: true,
         serviceChargeBasis: true,
+        serviceChargePolicyVersionId: true,
       },
     });
     if (!bill) {
@@ -1028,7 +1029,10 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       },
     });
     const serviceChargeTotal = sub(bill.serviceChargeTotal, line.serviceChargeAmount);
-    const serviceChargeBasis = sub(bill.serviceChargeBasis, line.lineSubtotal);
+    // Bills without a policy have no service-charge basis to reduce.
+    const serviceChargeBasis = bill.serviceChargePolicyVersionId
+      ? sub(bill.serviceChargeBasis, line.lineSubtotal)
+      : ZERO;
     const clearedServiceCharge = serviceChargeBasis.isZero();
     await tx.restaurantBill.update({
       where: { id: bill.id },
