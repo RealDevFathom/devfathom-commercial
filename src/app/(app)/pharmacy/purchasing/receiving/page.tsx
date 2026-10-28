@@ -833,20 +833,19 @@ export default async function PharmacyReceivingPage({
                 }))}
                 required
               />
-              {workspace.soloApprovalAllowed ? (
-                <TextField
-                  name="bypassPin"
-                  label="Owner PIN"
-                  type="password"
-                  minLength={4}
-                  maxLength={8}
-                  pattern="[0-9]{4,8}"
-                  inputMode="numeric"
-                  autoComplete="current-password"
-                  notice={notice}
-                  hint="Enter your PIN when approving your own direct purchase."
-                />
-              ) : null}
+              <TextField
+                name="bypassPin"
+                label="Approver PIN"
+                type="password"
+                minLength={4}
+                maxLength={8}
+                pattern="[0-9]{4,8}"
+                inputMode="numeric"
+                autoComplete="current-password"
+                notice={notice}
+                hint="The selected approver must enter their PIN. A sole active owner may approve with their own PIN."
+                required
+              />
             </div>
             <div className="space-y-3">
               {DIRECT_SLOTS.map((slot) => (

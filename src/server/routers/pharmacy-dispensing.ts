@@ -128,6 +128,8 @@ export const pharmacyDispensingRouter = router({
           where: { id: item.saleLineId },
           select: { branchId: true },
         });
+        if (!line) throw new TRPCError({ code: 'NOT_FOUND' });
+        await requirePharmacyReadBranch({ ...ctx, db: db as typeof ctx.db }, line.branchId);
         if (
           item.requestedByUserId === ctx.session!.user.id &&
           !(await authorizeSoloApproval(

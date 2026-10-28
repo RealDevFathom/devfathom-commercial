@@ -388,6 +388,10 @@ describe('pickers (UX rules 1, 12, 16)', () => {
       })
     );
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+    const pin = screen.getByLabelText('Approver PIN');
+    expect(pin).toHaveAttribute('type', 'password');
+    expect(pin).toHaveAttribute('required');
+    expect(pin).toHaveAttribute('pattern', '[0-9]{4,8}');
     const picker = screen.getByLabelText('Approved by');
     expect(picker).toHaveTextContent('Buyer (buyer@example.test)');
     expect(picker).not.toHaveTextContent('Other branch buyer');
@@ -1021,7 +1025,7 @@ describe('solo owner PIN forms', () => {
       })
     );
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
-    const pin = screen.getByLabelText(/Owner PIN/);
+    const pin = screen.getByLabelText(/Approver PIN/);
     expect(pin).toHaveAttribute('type', 'password');
     expect(pin).toHaveAttribute('pattern', '[0-9]{4,8}');
     const approver = screen.getByLabelText('Approved by');

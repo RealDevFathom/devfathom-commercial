@@ -159,17 +159,6 @@ export const pharmacySafetyRouter = router({
             { organizationId, actorId },
             input.staffProfileId
           );
-          if (
-            solo &&
-            !(await authorizeSoloApproval(
-              db,
-              { organizationId, branchId: input.branchId, actorId },
-              { type: 'ControlledCorrection', id: input.correctsEntryId },
-              input.pin
-            ))
-          ) {
-            return { blocked: 'A different qualified person must enter their PIN.' };
-          }
           if (!solo) {
             await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
           }
@@ -194,6 +183,17 @@ export const pharmacySafetyRouter = router({
             !isLockedOut(credential, now) &&
             (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
           if (!eligible || !credential || !pharmacist) {
+            return { blocked: 'A different qualified person must enter their PIN.' };
+          }
+          if (
+            solo &&
+            !(await authorizeSoloApproval(
+              db,
+              { organizationId, branchId: input.branchId, actorId },
+              { type: 'ControlledCorrection', id: input.correctsEntryId },
+              input.pin
+            ))
+          ) {
             return { blocked: 'A different qualified person must enter their PIN.' };
           }
           if (

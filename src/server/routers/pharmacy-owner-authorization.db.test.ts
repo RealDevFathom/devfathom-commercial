@@ -217,6 +217,27 @@ suite('owner provisioning, branch access and PIN maker/checker in Postgres', () 
       ).resolves.toMatchObject({ selectedBranchId: branch.id });
     });
   });
+  it('repairs existing inactive manual owner conflicts idempotently', async () => {
+    await tenant(org, async (db) => {
+      const assignment = await db.pharmacyBranchAssignment.findFirstOrThrow({
+        where: { userId: owner, branchId },
+      });
+      await db.pharmacyBranchAssignment.update({
+        where: { id: assignment.id },
+        data: { active: false, ownerManaged: false },
+      });
+      const correction = readFileSync(
+        'prisma/migrations/20261029107000_pharmacy_owner_assignment_conflicts/migration.sql',
+        'utf8'
+      ).replace(/^BEGIN;|COMMIT;/gm, '');
+      await runMigrationSql(db, correction.slice(correction.indexOf('DO $$ DECLARE')));
+      await runMigrationSql(db, correction.slice(correction.indexOf('DO $$ DECLARE')));
+      expect(
+        await db.pharmacyBranchAssignment.findUnique({ where: { id: assignment.id } })
+      ).toMatchObject({ active: true, ownerManaged: true });
+    });
+  });
+
   it('keeps exact and wildcard DENYs stronger than owner grants', async () => {
     await tenant(org, async (db) => {
       const deny = await db.userPermissionOverride.create({
@@ -390,6 +411,43 @@ suite('owner provisioning, branch access and PIN maker/checker in Postgres', () 
       expect(proof.allowed).toBe(false);
     });
   });
+  it('does not commit successful solo PIN evidence when correction eligibility is denied', async () => {
+    const safety = (await import('./pharmacy-safety')).pharmacySafetyRouter;
+    await tenant(org, async (db) => {
+      const profile = await db.restaurantStaffProfile.findFirstOrThrow({
+        where: { userId: owner },
+      });
+      const deny = await db.userPermissionOverride.create({
+        data: {
+          userId: owner,
+          capability: 'pharmacy:dispense',
+          effect: 'DENY',
+          reason: 'Clinical access revoked',
+        },
+      });
+      const ctx = context(db);
+      ctx.entitlements.enabledModules.push('pharmacy-safety');
+      const target = `denied-correction-${suffix}`;
+      await expect(
+        safety.createCaller(ctx).recordCorrection({
+          branchId,
+          correctsEntryId: target,
+          correctionReason: 'Correct quantity',
+          quantityCanonicalUnits: 1,
+          staffProfileId: profile.id,
+          pin,
+        })
+      ).resolves.toEqual({ blocked: 'A different qualified person must enter their PIN.' });
+      expect(
+        await db.auditLog.count({ where: { action: 'PHARMACY:SOLO_OWNER_PIN', targetId: target } })
+      ).toBe(0);
+      expect(
+        await db.pharmacyControlledRegisterEntry.count({ where: { correctsEntryId: target } })
+      ).toBe(0);
+      await db.userPermissionOverride.delete({ where: { id: deny.id } });
+    });
+  });
+
   it('requires another approver when a second active staff member exists', async () => {
     await tenant(org, async (db) => {
       const pharmacist = await db.organizationRole.create({
@@ -454,6 +512,25 @@ suite('owner provisioning, branch access and PIN maker/checker in Postgres', () 
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       const queue = await dispensing.createCaller(context(db)).reviewQueue();
       expect(queue.soloReviewItemIds).not.toContain(reviewId);
+      const before = await db.pharmacyPharmacistReviewDecision.count({
+        where: { reviewItemId: reviewId },
+      });
+      await expect(
+        dispensing.createCaller(context(db, second, 'EMPLOYEE')).decideReview({
+          reviewItemId: reviewId,
+          kind: 'VERIFY',
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(
+        await db.pharmacyPharmacistReviewDecision.count({ where: { reviewItemId: reviewId } })
+      ).toBe(before);
+      expect(
+        await db.auditLog.count({ where: { actorId: second, action: 'PHARMACY:SOLO_OWNER_PIN' } })
+      ).toBe(0);
+      // An inactive manually assigned branch must not block promotion to owner.
+      await db.pharmacyBranchAssignment.create({
+        data: { userId: second, branchId, active: false, ownerManaged: false },
+      });
       const ownerRole = await db.organizationRole.findFirstOrThrow({
         where: { key: 'owner', isSystem: true },
       });
@@ -468,6 +545,25 @@ suite('owner provisioning, branch access and PIN maker/checker in Postgres', () 
           where: { userId: second, branchId, active: true },
         })
       ).toBe(1);
+      expect(
+        await db.pharmacyBranchAssignment.findFirst({ where: { userId: second, branchId } })
+      ).toMatchObject({ active: true, ownerManaged: true });
+      const pharmacistRole = await db.organizationRole.findFirstOrThrow({
+        where: { key: 'pharmacist' },
+      });
+      await db.user.update({
+        where: { id: second },
+        data: { role: 'EMPLOYEE', organizationRoleId: pharmacistRole.id },
+      });
+      expect(
+        await db.pharmacyBranchAssignment.findFirst({ where: { userId: second, branchId } })
+      ).toMatchObject({ active: false, ownerManaged: true });
+      // Pre-existing active manual access remains after demotion.
+      expect(
+        await db.pharmacyBranchAssignment.findFirst({
+          where: { userId: second, branchId: branchB.id },
+        })
+      ).toMatchObject({ active: true, ownerManaged: false });
     });
   });
 });

@@ -4,8 +4,12 @@ import superjson from 'superjson';
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
-  return { hasModule, can: vi.fn() };
+  return { hasModule, can: vi.fn(), verifyPharmacyUserPin: vi.fn() };
 });
+vi.mock('@/lib/pharmacy/solo-approval', async () => ({
+  ...(await vi.importActual('@/lib/pharmacy/solo-approval')),
+  verifyPharmacyUserPin: mocks.verifyPharmacyUserPin,
+}));
 vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -1108,9 +1112,14 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   });
 
   it('records a direct purchase with its bypass reason and approver (PUR-05)', async () => {
+    mocks.verifyPharmacyUserPin.mockResolvedValueOnce(true);
     await caller('user_counter').createGoodsReceipt({
       ...withoutOrder(),
-      directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_manager' },
+      directPurchase: {
+        reason: 'Emergency insulin.',
+        approvedByUserId: 'user_manager',
+        pin: '5832',
+      },
     });
     expect(db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data).toMatchObject({
       purchaseOrderId: null,
@@ -1119,6 +1128,20 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       bypassApprovedByUserId: 'user_manager',
     });
   });
+
+  it.each([undefined, '9999'])(
+    'rejects approver impersonation without a valid PIN (%s)',
+    async (pin) => {
+      mocks.verifyPharmacyUserPin.mockResolvedValueOnce(false);
+      await expect(
+        caller('user_counter').createGoodsReceipt({
+          ...withoutOrder(),
+          directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_manager', pin },
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    }
+  );
 
   it('refuses a bypass the receiver approved for themselves', async () => {
     await expect(
