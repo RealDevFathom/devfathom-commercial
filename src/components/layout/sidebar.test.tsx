@@ -225,6 +225,16 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     return onNavigate;
   }
 
+  if (surface === 'mobile') {
+    it('anchors the drawer and its divider to the inline start edge', () => {
+      renderNavigation();
+
+      const drawer = screen.getByRole('navigation', { name: 'Main navigation' });
+      expect(drawer).toHaveClass('start-0', 'border-e');
+      expect(drawer).not.toHaveClass('left-0', 'border-r');
+    });
+  }
+
   it('renders named, focusable destinations with Chat disabled', () => {
     const onNavigate = renderNavigation();
     for (const [label, href] of destinations) {

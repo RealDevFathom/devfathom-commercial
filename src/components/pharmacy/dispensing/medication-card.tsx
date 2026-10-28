@@ -113,24 +113,24 @@ export function MedicationCard({ card }: { card: MedicationCardData }) {
             <CardField label="Refill date" value={englishDate.format(card.reminderAt)} />
           </dl>
         </section>
-        <section
-          lang="ur"
-          dir="rtl"
-          aria-labelledby={`card-ur-${card.id}`}
-          className="border-t border-border-subtle pt-5 text-right md:border-t-0 md:border-l md:pt-0 md:pl-6"
-        >
-          <h4 id={`card-ur-${card.id}`} className="font-display font-semibold text-text-strong">
-            اردو
-          </h4>
-          <dl className="mt-3 grid gap-3">
-            <CardField label="دوا" value={card.medicineName} />
-            <CardField label="طاقت" value={card.strength} />
-            <CardField label="شکل" value={card.dosageForm} />
-            <CardField label="ہدایات" value={card.directionsUrdu} />
-            <CardField label="فراہم کردہ مقدار" value={card.quantityDispensed} />
-            <CardField label="دوبارہ حاصل کرنے کی تاریخ" value={urduDate.format(card.reminderAt)} />
-          </dl>
-        </section>
+        <div className="border-t border-border-subtle pt-5 md:border-t-0 md:border-s md:pt-0 md:ps-6">
+          <section lang="ur" dir="rtl" aria-labelledby={`card-ur-${card.id}`}>
+            <h4 id={`card-ur-${card.id}`} className="font-display font-semibold text-text-strong">
+              اردو
+            </h4>
+            <dl className="mt-3 grid gap-3">
+              <CardField label="دوا" value={card.medicineName} />
+              <CardField label="طاقت" value={card.strength} />
+              <CardField label="شکل" value={card.dosageForm} />
+              <CardField label="ہدایات" value={card.directionsUrdu} />
+              <CardField label="فراہم کردہ مقدار" value={card.quantityDispensed} />
+              <CardField
+                label="دوبارہ حاصل کرنے کی تاریخ"
+                value={urduDate.format(card.reminderAt)}
+              />
+            </dl>
+          </section>
+        </div>
       </div>
 
       <div className="medication-card-actions flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle pt-4">
