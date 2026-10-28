@@ -444,9 +444,9 @@ describe('financial statements (financial-statements.ts financialStatements)', (
         netMinor: '300',
       },
     ]);
-    expect(result.accounts.reduce((sum, account) => sum + BigInt(account.debitMinor), 0n)).toBe(
-      result.accounts.reduce((sum, account) => sum + BigInt(account.creditMinor), 0n)
-    );
+    expect(
+      result.accounts.reduce((sum, account) => sum + BigInt(account.debitMinor), BigInt(0))
+    ).toBe(result.accounts.reduce((sum, account) => sum + BigInt(account.creditMinor), BigInt(0)));
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 25, skip: 25 }));
   });
 });

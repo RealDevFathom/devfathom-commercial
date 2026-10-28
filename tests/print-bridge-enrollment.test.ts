@@ -18,7 +18,12 @@ import {
   persistPrintBridgeToken,
   resolvePrintBridgeToken,
 } from '../scripts/print-bridge';
-const faults = vi.hoisted(() => ({ destination: '', write: false, sync: false }));
+const faults = vi.hoisted(() => ({
+  destination: '',
+  write: false,
+  sync: false,
+  ownerUnreadable: false,
+}));
 vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
   return {
@@ -26,6 +31,7 @@ vi.mock('node:fs/promises', async () => {
     open: async (...args: Parameters<typeof actual.open>) => {
       const handle = await actual.open(...args);
       if (String(args[0]) === faults.destination) {
+        if (faults.ownerUnreadable) await handle.chmod(0o200);
         const write = handle.writeFile.bind(handle);
         const sync = handle.sync.bind(handle);
         let syncCalls = 0;
@@ -56,6 +62,7 @@ beforeEach(async () => {
   faults.destination = '';
   faults.write = false;
   faults.sync = false;
+  faults.ownerUnreadable = false;
   request.mockReset().mockResolvedValue(response());
   vi.stubGlobal('fetch', request);
 });
@@ -200,12 +207,11 @@ describe.skipIf(process.platform === 'win32')('offline bridge enrollment (mock H
   });
 
   it('rejects an owner-unreadable reservation before consuming the code', async () => {
-    const previous = process.umask(0o400);
-    try {
-      await expect(enrollPrintBridge(input())).rejects.toThrow('could not be confirmed');
-    } finally {
-      process.umask(previous);
-    }
+    // A parent default ACL can override umask. Establish the actual mode on the
+    // newly opened reservation so this safety check also runs on ACL-backed filesystems.
+    faults.destination = input().tokenFile;
+    faults.ownerUnreadable = true;
+    await expect(enrollPrintBridge(input())).rejects.toThrow('could not be confirmed');
     expect(request).not.toHaveBeenCalled();
     expect((await stat(input().tokenFile)).mode & 0o777).toBe(0o200);
   });

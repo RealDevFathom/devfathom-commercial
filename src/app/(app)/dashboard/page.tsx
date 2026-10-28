@@ -17,17 +17,19 @@ export const metadata: Metadata = {
   title: 'Dashboard',
 };
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: { searchParams?: Promise<{ landing?: string | string[] }> } = {}) {
+  const signInLanding = (await searchParams)?.landing === '1';
   const ssr = await createSSRHelpers();
   const helpers = ssr?.helpers;
   const restaurant = ssr?.entitlements.vertical === 'RESTAURANT';
   const pharmacy = ssr?.entitlements.vertical === 'PHARMACY';
   const hospitality = ssr?.entitlements.vertical === 'HOSPITALITY';
 
-  // `/dashboard` is the safe, role-agnostic login callback. Once the tenant is
-  // known, send restaurant administrators to the management console and floor
-  // staff to the order pad instead of rendering a dashboard neither role uses.
-  if (restaurant && ssr?.session?.user) {
+  // Apply role-based routing only to a fresh sign-in. Explicit dashboard visits
+  // must retain the management overview, saved preferences and first-run checklist.
+  if (signInLanding && restaurant && ssr?.session?.user) {
     redirect(ssr.session.user.role === 'ADMIN' ? '/restaurant' : '/pos');
   }
 

@@ -1,11 +1,13 @@
 import { expect, type APIRequestContext, type Page } from '@playwright/test';
 import { hash } from 'bcryptjs';
+import { createCipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 import pg from 'pg';
 
 const runtimeUrl = process.env.DATABASE_URL;
 const adminUrl = process.env.PLAYWRIGHT_DATABASE_ADMIN_URL;
-const platformOrigin = new URL(process.env.PLAYWRIGHT_BASE_URL ?? 'http://admin.localhost:4319')
-  .origin;
+const platformOrigin = new URL(
+  process.env.PLAYWRIGHT_BASE_URL ?? `http://admin.localhost:${process.env.PLAYWRIGHT_PORT ?? 4319}`
+).origin;
 
 export const platformFixture = {
   admin: {
@@ -129,10 +131,43 @@ export async function prepareControlPlaneFixture() {
   }
 }
 
+// Disposable fixture authenticator: exercise MFA rather than disabling enforcement.
+async function platformAuthentication(identity: { email: string; password: string }) {
+  if (!runtimeUrl || !adminUrl || !/(?:test|e2e)/i.test(databaseName(runtimeUrl)))
+    throw new Error('MFA fixture requires the disposable control-plane database.');
+  const rawKey = process.env.PLATFORM_ENCRYPTION_KEY?.trim();
+  if (!rawKey) throw new Error('MFA fixture requires the platform encryption key.');
+  const decoded = Buffer.from(rawKey, 'base64');
+  const key = /^[a-f0-9]{64}$/i.test(rawKey)
+    ? Buffer.from(rawKey, 'hex')
+    : decoded.length === 32
+      ? decoded
+      : createHash('sha256').update(rawKey).digest();
+  const secret = 'JBSWY3DPEHPK3PXP';
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const ciphertext = Buffer.concat([cipher.update(secret, 'utf8'), cipher.final()]);
+  const encrypted = `v1.${iv.toString('base64url')}.${cipher.getAuthTag().toString('base64url')}.${ciphertext.toString('base64url')}`;
+  await withAdminDatabase(async (db) => {
+    await db.query(
+      `UPDATE platform_users SET "encryptedTotpSecret"=$1, "mfaEnabledAt"=now() WHERE email=$2`,
+      [encrypted, identity.email]
+    );
+  });
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30_000)));
+  const digest = createHmac('sha1', Buffer.from('48656c6c6f21deadbeef', 'hex'))
+    .update(counter)
+    .digest();
+  const offset = digest[digest.length - 1]! & 15;
+  const code = (digest.readUInt32BE(offset) & 0x7fffffff) % 1_000_000;
+  return { ...identity, authenticationCode: String(code).padStart(6, '0') };
+}
+
 export async function loginPlatform(page: Page, identity = platformFixture.admin) {
   const response = await page.request.post('/api/platform/session', {
     headers: { origin: platformOrigin },
-    data: identity,
+    data: await platformAuthentication(identity),
   });
   expect(response.status()).toBe(200);
   const cookie = response.headers()['set-cookie']?.match(/df_platform_session=([^;]+)/)?.[1];
@@ -155,7 +190,7 @@ export async function loginPlatformRequest(
 ) {
   const response = await request.post('/api/platform/session', {
     headers: { origin: platformOrigin },
-    data: identity,
+    data: await platformAuthentication(identity),
   });
   expect(response.status()).toBe(200);
 }
@@ -173,4 +208,31 @@ export async function withAdminDatabase<T>(run: (client: pg.Client) => Promise<T
   } finally {
     await client.end();
   }
+}
+
+/** A provisioned administrator must rotate the temporary credential before entering the workspace. */
+export async function signInProvisionedTenant(
+  page: Page,
+  origin: string,
+  identity: { email: string; password: string },
+  destination = /\/dashboard(?:\?|$)/
+) {
+  const login = new URL('/login', origin).href;
+  await page.goto(login);
+  await page.getByLabel('Email').fill(identity.email);
+  await page.locator('input[name="password"]').fill(identity.password);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.waitForURL(/\/change-password(?:\?|$)/);
+  await page.getByLabel('Current password', { exact: true }).fill(identity.password);
+  const password = `Rotated1!${randomBytes(16).toString('hex')}`;
+  await page.getByLabel('New password', { exact: true }).fill(password);
+  await page.getByLabel('Confirm new password', { exact: true }).fill(password);
+  await page.getByRole('button', { name: 'Change password', exact: true }).click();
+  await page.waitForURL(login);
+  await page.getByLabel('Email').fill(identity.email);
+  await page.locator('input[name="password"]').fill(password);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await page.waitForURL(destination);
+  expect(new URL(page.url()).origin).toBe(new URL(origin).origin);
+  return password;
 }

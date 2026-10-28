@@ -30,6 +30,7 @@ import {
   controlPlaneEnvironmentAvailable,
   ensureControlPlaneCatalog,
   loginPlatformRequest,
+  signInProvisionedTenant,
   platformMutationHeaders,
   resetOrganization,
   withAdminDatabase,
@@ -227,6 +228,7 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
       'inventory',
       'manager',
       'owner',
+      'owner-operator',
       'pharmacist',
       'procurement',
     ]);
@@ -315,11 +317,7 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
   });
 
   // ── The administrator signs in and reads the checklist ─────────────────────
-  await page.goto(`${sharedBaseUrl}/login`);
-  await page.getByLabel('Email').fill(tenant.email);
-  await page.locator('input[name="password"]').fill(tenant.password);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/dashboard(?:\?|$)/, { timeout: 60_000 });
+  await signInProvisionedTenant(page, sharedBaseUrl!, tenant);
 
   // Reached by clicking, not by typing a URL: the nav must actually offer it.
   await page.getByRole('link', { name: 'Onboarding' }).click();
