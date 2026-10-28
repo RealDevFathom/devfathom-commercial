@@ -275,6 +275,7 @@ type MoneyCounts = {
 export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: PharmacyReportFilters) {
   const parsed = validatePharmacyReportFilters(filters);
   const branches = Prisma.join(filters.branchIds);
+  const asOf = new Date();
   // Same signed journal query as Finance: no rounded sale-unit cost arithmetic.
   const marginQuery = grossMarginQuery(
     {
@@ -306,8 +307,10 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
       db.branchRegulatoryProfile.count({
         where: {
           branchId: { in: filters.branchIds },
-          effectiveFrom: { lte: new Date() },
-          OR: [{ effectiveTo: null }, { effectiveTo: { gt: new Date() } }],
+          effectiveFrom: { lte: asOf },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: asOf } }],
+          qualifiedPersonValidFrom: { lte: asOf },
+          qualifiedPersonValidTo: { gt: asOf },
         },
       }),
       db.$queryRaw<Array<{ value: number }>>(
