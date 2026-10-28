@@ -19,7 +19,9 @@ export const metadata: Metadata = {
 
 export default async function DashboardPage({
   searchParams,
-}: { searchParams?: Promise<{ landing?: string | string[] }> } = {}) {
+}: {
+  searchParams?: Promise<{ landing?: string | string[] }>;
+}) {
   const signInLanding = (await searchParams)?.landing === '1';
   const ssr = await createSSRHelpers();
   const helpers = ssr?.helpers;

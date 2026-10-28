@@ -94,7 +94,7 @@ describe('DashboardPage vertical dispatch', () => {
         session: { user: { id: 'restaurant-user', role, status: 'ACTIVE' } },
         entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
       });
-      const page = await DashboardPage();
+      const page = await DashboardPage({});
       expect(mocks.redirect).not.toHaveBeenCalled();
       expect(page.props.children.type).toBe(RestaurantDashboardContent);
       expect(page.props.children.props.enabledModules).toEqual(['restaurant-core']);
@@ -117,7 +117,7 @@ describe('DashboardPage vertical dispatch', () => {
       entitlements: { vertical: 'HOSPITALITY', enabledModules: ['hotel-core'] },
     });
 
-    const page = await DashboardPage();
+    const page = await DashboardPage({});
 
     expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
     expect(agencyHelpers.team.getAll.prefetch).not.toHaveBeenCalled();
@@ -139,7 +139,7 @@ describe('DashboardPage vertical dispatch', () => {
       entitlements: { vertical: 'AGENCY', enabledModules: ['dashboard'] },
     });
 
-    await DashboardPage();
+    await DashboardPage({});
 
     expect(agencyHelpers.dashboard.getStats.prefetch).toHaveBeenCalledOnce();
     expect(agencyHelpers.meetings.getUpcoming.prefetch).toHaveBeenCalledOnce();
@@ -163,7 +163,7 @@ describe('PHARMACY first-run capability gate', () => {
     });
     mocks.can.mockResolvedValue(allowed);
     mocks.loadSetupChecklist.mockResolvedValue({ complete: false, items: [] });
-    const page = await DashboardPage();
+    const page = await DashboardPage({});
     expect(mocks.withTenantDb).toHaveBeenCalledWith('tenant', expect.any(Function));
     expect(mocks.can).toHaveBeenCalledWith(user, 'admin:access', undefined, { db: mocks.db });
     expect(mocks.loadSetupChecklist).toHaveBeenCalledTimes(loads ? 1 : 0);
@@ -178,7 +178,7 @@ describe('PHARMACY first-run capability gate', () => {
       organization: { id: 'tenant' },
       entitlements: { vertical, enabledModules: [] },
     });
-    await DashboardPage();
+    await DashboardPage({});
     expect(mocks.withTenantDb).not.toHaveBeenCalled();
   });
 });

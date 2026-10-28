@@ -298,6 +298,12 @@ function ScopedPharmacyCounterConsole({
   const [submittedSearch, setSubmittedSearch] = useState({ text: '', query: '', branchId: '' });
   const submittedQuery = submittedSearch.query;
   const scannerRevision = useRef(0);
+  useEffect(
+    () => () => {
+      scannerRevision.current += 1;
+    },
+    []
+  );
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantity, setQuantity] = useState(1);
@@ -856,7 +862,10 @@ function ScopedPharmacyCounterConsole({
   }, [branchId, createSale, saleId, setActiveSale]);
 
   const addToCart = useCallback(
-    async (scannedRow?: CounterSearchRow) => {
+    async (scannedRow?: CounterSearchRow, scanRevision?: number) => {
+      const scanIsCurrent = () =>
+        scanRevision === undefined || scanRevision === scannerRevision.current;
+      if (!scanIsCurrent()) return;
       const row = scannedRow ?? activeRow;
       const option = scannedRow ? (scannedRow.saleUnits[0] ?? null) : selectedOption;
       const units = scannedRow ? 1 : quantity;
@@ -879,6 +888,8 @@ function ScopedPharmacyCounterConsole({
       setNotice(null);
       try {
         const activeSaleId = await ensureSale();
+        // Creating a bill can outlive this scan or the mounted counter.
+        if (!scanIsCurrent()) return;
         const controlled = row.restriction.controlled;
         const addressOk = patientAddress.trim().length >= 3;
         const prescriptionOk =
@@ -1013,7 +1024,7 @@ function ScopedPharmacyCounterConsole({
         ? counterSelectionPreview(row, row.saleUnits[0] ?? null, 1)
         : preview;
       if (scanPreview?.sufficient && !barcodeBusy.current) {
-        await addToCart(restage ? row : undefined);
+        await addToCart(restage ? row : undefined, search.revision);
       }
     } catch {
       // The search query renders its own error; a failed scan never adds a line.
