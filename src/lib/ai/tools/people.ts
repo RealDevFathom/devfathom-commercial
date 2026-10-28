@@ -858,7 +858,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           role: titleCase(finalRole),
           department: titleCase(department),
           emailed,
-          inviteUrl,
+          // Bearer credentials stay in the out-of-band invitation email.
         };
       },
     });

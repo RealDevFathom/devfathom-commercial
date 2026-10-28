@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   invitationUpsert: vi.fn(),
   departmentFindFirst: vi.fn(),
+  audit: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -23,6 +24,8 @@ vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 
 import { buildPeopleTools } from './people';
+import { sendEmail, templates } from '@/lib/email';
+import { hashInviteToken } from '@/lib/invite-token';
 import type { AssistantHelpers } from '@/lib/ai/context';
 
 const db = {
@@ -46,7 +49,7 @@ function inviteTool() {
     isAdminOrHr: true,
     ctx: { userId: 'user_admin', name: 'Admin' },
     can: vi.fn(async () => true),
-    audit: vi.fn(),
+    audit: mocks.audit,
   } as unknown as AssistantHelpers;
   const tools = buildPeopleTools(helpers);
   return tools.inviteMember as unknown as {
@@ -63,7 +66,9 @@ const base = {
 
 describe('assistant inviteMember duplicate guard', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    vi.mocked(templates.inviteMember).mockReturnValue({ subject: 's', html: 'h', text: 't' });
+    mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
     mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
     mocks.invitationUpsert.mockResolvedValue({});
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_1' });
@@ -126,7 +131,7 @@ describe('assistant inviteMember duplicate guard', () => {
       isAdminOrHr: true,
       ctx: { userId: 'user_admin', name: 'Admin' },
       can: vi.fn(async () => true),
-      audit: vi.fn(),
+      audit: mocks.audit,
     } as unknown as AssistantHelpers;
     const tools = buildPeopleTools(helpers);
     helpers.isAdmin = false;
@@ -159,4 +164,61 @@ describe('assistant inviteMember duplicate guard', () => {
       expect.objectContaining({ data: expect.objectContaining({ department: 'KITCHEN' }) })
     );
   });
+});
+
+describe('assistant invitation credential boundary', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_1' });
+    vi.mocked(templates.inviteMember).mockReturnValue({ subject: 's', html: 'h', text: 't' });
+  });
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])(
+    'reinvite=%s emailFailure=%s keeps credentials out of model and audit',
+    async (reInvite, emailFailure) => {
+      mocks.findFirst.mockResolvedValue(reInvite ? { id: 'user_2', status: 'INVITED' } : null);
+      if (emailFailure)
+        vi.mocked(sendEmail).mockRejectedValueOnce(new Error('delivery unavailable'));
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const result = await inviteTool().execute({ ...base, email: ' Alex@Company.COM ' });
+        expect(result).toStrictEqual({
+          name: 'Alex Carter',
+          email: 'alex@company.com',
+          role: 'Employee',
+          department: 'Engineering',
+          emailed: !emailFailure,
+        });
+        const mailInput = vi.mocked(templates.inviteMember).mock.calls[0][0];
+        const token = new URL(mailInput.acceptUrl).pathname.split('/').at(-1)!;
+        expect(/^[A-Za-z0-9_-]{43}$/.test(token)).toBe(true);
+        const tokenHash = hashInviteToken(token);
+        const write = mocks.invitationUpsert.mock.calls[0][0];
+        expect(write.create.tokenHash === tokenHash).toBe(true);
+        expect(write.update.tokenHash === tokenHash).toBe(true);
+        expect(write.update.acceptedAt).toBeNull();
+        expect(reInvite ? mocks.update : mocks.create).toHaveBeenCalledOnce();
+        expect(sendEmail).toHaveBeenCalledExactlyOnceWith({
+          to: { email: 'alex@company.com', name: 'Alex Carter' },
+          subject: 's',
+          html: 'h',
+          text: 't',
+        });
+        expect(mocks.audit).toHaveBeenCalledOnce();
+        expect(mocks.audit.mock.calls[0][0].metadata.reInvite).toBe(reInvite);
+        const serialized = JSON.stringify({ result, audit: mocks.audit.mock.calls });
+        for (const secret of [token, tokenHash, mailInput.acceptUrl])
+          expect(serialized.includes(secret)).toBe(false);
+        expect(/inviteUrl|tokenHash|acceptUrl/.test(serialized)).toBe(false);
+      } finally {
+        log.mockRestore();
+      }
+    }
+  );
 });
