@@ -121,6 +121,12 @@ describe('strict input schemas (C7)', () => {
     expect(bad.success).toBe(false);
   });
 
+  it('rejects a client-supplied total on the add-item body', () => {
+    expect(addItemBody.safeParse({ orderId: 'o1', menuItemId: 'm1', total: '0.01' }).success).toBe(
+      false
+    );
+  });
+
   it('requires a positive quantity on add-item when supplied', () => {
     expect(addItemBody.safeParse({ orderId: 'o1', menuItemId: 'm1' }).success).toBe(true);
     expect(addItemBody.safeParse({ orderId: 'o1', menuItemId: 'm1', quantity: 0 }).success).toBe(

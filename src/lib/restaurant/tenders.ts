@@ -20,12 +20,9 @@ import {
   add,
   compare,
   equals,
-  formatMoney,
   isNegative,
   isZero,
   money,
-  multiply,
-  roundMoney,
   sub,
   sum,
   ZERO,
@@ -695,21 +692,6 @@ async function loadSettlementContext(
       line.unitPrice.plus(line.modifierTotal).minus(line.comp).minus(line.beforeTaxDiscount)
     )
   );
-  const order = await tx.restaurantOrder.findFirst({
-    where: { id: bill.orderId },
-    select: { channel: true },
-  });
-  const servicePolicy =
-    order?.channel === 'DINE_IN'
-      ? await tx.restaurantServiceChargePolicyVersion.findFirst({
-          where: { branchId: bill.branchId, ...effectiveWindow },
-          orderBy: [{ effectiveFrom: 'desc' }, { id: 'asc' }],
-          select: { rate: true },
-        })
-      : null;
-  const serviceAmount = servicePolicy
-    ? formatMoney(roundMoney(multiply(merchandiseBasis, servicePolicy.rate.toString())))
-    : '0.00';
   const taxablePriorTenders = allocateTaxableTenderPrincipals(priorTenders, merchandiseBasis);
   const taxableQuote = quoteTaxSettlement({
     lines: quoteLines,
@@ -729,7 +711,10 @@ async function loadSettlementContext(
     priorTenderWeights: taxablePriorTenders,
     acceptedPrincipal: sum(priorTenders.map((tender) => tender.amount)),
     afterTaxDiscount,
-    serviceCharge: { amount: serviceAmount, taxable: false },
+    // The bill cut pins and allocates the order's acknowledged service policy.
+    // Re-reading the branch policy here would reprice an already presented bill
+    // when a newer policy takes effect between bill cut and tender.
+    serviceCharge: { amount: bill.serviceChargeTotal, taxable: false },
     roundingAdjustment: bill.roundingAdjustment,
   });
   const acceptedPrincipal = taxableQuote.acceptedPrincipal;

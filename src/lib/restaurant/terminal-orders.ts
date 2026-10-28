@@ -490,6 +490,7 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
       openedAt: true,
       closedAt: true,
       cancelledAt: true,
+      serviceChargePolicyVersion: { select: { rate: true } },
       items: {
         orderBy: [{ course: 'asc' }, { createdAt: 'asc' }],
         select: {
@@ -548,11 +549,17 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
       quantity: item.quantity,
       modifierDeltas: item.modifiers.map((modifier) => modifier.priceDelta.toString()),
     })),
-    serviceChargeRate: order.channel === 'DINE_IN' ? (terms.serviceChargeRate ?? '0') : '0',
+    // An open order pins the acknowledged policy that was effective when it was
+    // opened. Do not reprice it merely because the branch publishes a new rate.
+    serviceChargeRate:
+      order.channel === 'DINE_IN'
+        ? (order.serviceChargePolicyVersion?.rate.toString() ?? '0')
+        : '0',
     deliveryFee: (
       order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)
     ).toString(),
-    ...(terms.profiles.length > 0 ? { profiles: terms.profiles, rules: terms.rules } : {}),
+    profiles: terms.profiles,
+    rules: terms.rules,
   });
   return {
     id: order.id,
