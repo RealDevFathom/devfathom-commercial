@@ -1,3 +1,4 @@
+import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 /**
  * PUR-07 — the database half of the stock action centre: reading exact ledger
@@ -680,7 +681,14 @@ async function authorizeDraftIntent(
     select: {
       status: true,
       organization: { select: { status: true, vertical: true } },
-      organizationRole: { select: { permissions: { select: { capability: true, effect: true } } } },
+      role: true,
+      organizationRole: {
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
+      },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: at } }] },
         select: { capability: true, effect: true },
@@ -696,7 +704,7 @@ async function authorizeDraftIntent(
     throw new PharmacyDraftIntentError('FORBIDDEN', 'Draft actor is not authorized.');
 
   // These are the native PHARMACY_ROLE_TEMPLATES grants, not Restaurant actions.
-  // Preserve the established override-before-role, deny-before-allow precedence.
+  // Preserve ordinary grant precedence; live owner/admin authority covers all capabilities.
   const capability =
     input.kind === 'DRAFT_TRANSFER' ? 'pharmacy:inventory' : 'pharmacy:procurement';
   const matches = (rule: { capability: string; effect: string }) =>
@@ -706,8 +714,8 @@ async function authorizeDraftIntent(
     ? overrides
     : (user.organizationRole?.permissions ?? []).filter(matches);
   if (
-    rules.some((rule) => rule.effect === 'DENY') ||
-    !rules.some((rule) => rule.effect === 'ALLOW')
+    !hasAllCapabilityAccess(user) &&
+    (rules.some((rule) => rule.effect === 'DENY') || !rules.some((rule) => rule.effect === 'ALLOW'))
   ) {
     throw new PharmacyDraftIntentError('FORBIDDEN', 'Draft capability is not authorized.');
   }

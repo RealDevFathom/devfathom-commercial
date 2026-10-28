@@ -356,11 +356,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('does not let a user ALLOW override a role DENY when tendering', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:counter', effect: 'DENY' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'DENY' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
     assign(f, ['branch-a']);
 
     await expect(
@@ -378,11 +376,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('lets a role DENY on pharmacy:receipt beat a user ALLOW on pharmacy:counter for reads and tender', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:receipt', effect: 'DENY' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'DENY' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
     assign(f, ['branch-a']);
     await expect(
       f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
@@ -403,11 +399,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('lets a user DENY on pharmacy:counter beat a role ALLOW on pharmacy:receipt', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:receipt', effect: 'ALLOW' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'DENY' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'ALLOW' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'DENY' },
+    ]);
     assign(f, ['branch-a']);
     await expect(
       f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
@@ -634,3 +628,38 @@ describe('counter receipt authorization', () => {
     );
   });
 });
+
+it.each(paths)(
+  'allows a live all-capability owner without branch assignments for $name',
+  async ({ name, run, allowed }) => {
+    const f = fixture([{ capability: '*', effect: 'ALLOW' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:*', effect: 'DENY' },
+    ]);
+    f.db.user.findUnique.mockResolvedValue(
+      Object.assign(
+        {
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' as const }] },
+          permissionOverrides: [{ capability: 'pharmacy:*', effect: 'DENY' as const }],
+        },
+        { role: 'ADMIN' }
+      )
+    );
+    const expected =
+      name === 'counterReceipt'
+        ? { ...allowed, completedAt: '2026-10-01T00:00:00.000Z' }
+        : name.startsWith('counterReceiptPrintJob')
+          ? {
+              ...allowed,
+              document: { kind: 'RECEIPT' },
+              escPos: { encoding: 'base64', data: 'YQ==', byteCount: 1 },
+              paperWidth: 32,
+            }
+          : name === 'counterReceiptFormat'
+            ? { ...allowed, layout: { paperWidth: 32 } }
+            : allowed;
+    await expect(run(f.caller(), 'branch-b')).resolves.toEqual(expected);
+    expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+  }
+);

@@ -9,6 +9,7 @@ import {
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
+import { actorCanSelectPurchaseWitness } from '@/lib/pharmacy/procurement-access';
 import { hasModule } from '@/lib/entitlements';
 import {
   listReceivingExceptions,
@@ -845,6 +846,26 @@ const purchasingRouter = router({
               reason: input.reason,
             },
           });
+          if (selfApproval) {
+            await tx.auditLog.create({
+              data: {
+                organizationId: tenantScope(ctx).organizationId,
+                actorId: ctx.session.user.id,
+                actorType: 'USER',
+                source: 'TRPC',
+                category: 'PHARMACY_PURCHASING',
+                operation: 'OTHER',
+                action: 'pharmacy.purchaseOrderApproval',
+                targetType: 'PharmacyPurchaseOrder',
+                targetId: order.id,
+                metadata: {
+                  policy: SOLO_OWNER_POLICY,
+                  pinVerified: true,
+                  decision: input.decision,
+                },
+              },
+            });
+          }
           return tx.pharmacyPurchaseOrder.update({
             where: { id: order.id },
             data:
@@ -1326,7 +1347,7 @@ const purchasingRouter = router({
     }),
 
   /** Qualified people who can enter a PIN when a controlled receipt is posted. */
-  controlledWitnesses: purchasingRead.query(async ({ ctx }) => {
+  controlledWitnesses: protectedProcedure.query(async ({ ctx }) => {
     const actorId = ctx.session?.user?.id;
     if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
     const active = await ctx.db.user.findUnique({
@@ -1334,6 +1355,9 @@ const purchasingRouter = router({
       select: { id: true },
     });
     if (!active) throw new TRPCError({ code: 'FORBIDDEN' });
+    if (!(await actorCanSelectPurchaseWitness(ctx.db, actorId))) {
+      throw new TRPCError({ code: 'FORBIDDEN' });
+    }
     const organizationId = ctx.entitlements?.organizationId;
     if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
     return listControlledPinWitnesses(ctx.db, organizationId, actorId);

@@ -345,3 +345,50 @@ describe('hospitality capability namespace', () => {
     }
   });
 });
+
+describe('live all-capability tenant authority', () => {
+  it.each(ALL_ACTIONS)(
+    'allows owner/admin capability %s despite narrower denies',
+    async (action) => {
+      for (const identity of [
+        { role: 'EMPLOYEE', key: 'owner', isSystem: true },
+        { role: 'ADMIN', key: 'custom-admin', isSystem: false },
+      ]) {
+        const db = {
+          user: {
+            findUnique: vi.fn().mockResolvedValue({
+              status: 'ACTIVE',
+              role: identity.role,
+              organizationRole: {
+                ...identity,
+                permissions: [{ capability: '*', effect: 'ALLOW' }],
+              },
+              permissionOverrides: [{ capability: action, effect: 'DENY' }],
+            }),
+          },
+        } as unknown as AuthzDb;
+        await expect(can(employee, action, undefined, { db })).resolves.toBe(true);
+      }
+    }
+  );
+
+  it('does not trust a stale ADMIN session or elevate a non-admin wildcard grant', async () => {
+    const db = {
+      user: {
+        findUnique: vi.fn().mockResolvedValue({
+          status: 'ACTIVE',
+          role: 'EMPLOYEE',
+          organizationRole: {
+            key: 'custom',
+            isSystem: false,
+            permissions: [{ capability: '*', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        }),
+      },
+    } as unknown as AuthzDb;
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:safety', undefined, { db })
+    ).resolves.toBe(false);
+  });
+});

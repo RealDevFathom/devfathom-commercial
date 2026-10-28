@@ -11,6 +11,7 @@
  *     throw new TRPCError({ code: 'FORBIDDEN' });
  */
 import { capabilityMatches } from './capabilities';
+import { hasAllCapabilityAccess } from './owner-access';
 import type { AuthzDb } from '@/lib/authz';
 import { POLICIES, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
@@ -35,8 +36,14 @@ async function customDecision(
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
+      status: true,
+      role: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -45,6 +52,7 @@ async function customDecision(
     },
   });
   if (!user) return false;
+  if (hasAllCapabilityAccess(user)) return true;
   const matchingRules = [
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),

@@ -255,6 +255,75 @@ async function newLink() {
       });
     }, 60000);
 
+    it('gives the live owner every capability and every active tenant branch without assignments', async () => {
+      const { can } = await import('@/lib/abac');
+      const { ALL_ACTIONS } = await import('@/lib/abac/policies');
+      const { assignedRegisterBranchIds } = await import('./controlled-register');
+      const { actorCanProcure, actorCanReadPurchasing } = await import('./procurement-access');
+      const { assertProcurementBranch } = await import('@/server/pharmacy-procurement-access');
+      await inOrg(async (db) => {
+        // No explicit assignment is needed, including branches created after the owner.
+        await db.pharmacyBranchAssignment.deleteMany({ where: { userId: id('owner') } });
+        await db.userPermissionOverride.create({
+          data: {
+            organizationId: org,
+            userId: id('owner'),
+            capability: '*',
+            effect: 'DENY',
+            reason: 'Owner authority regression fixture',
+          },
+        });
+        try {
+          for (const action of ALL_ACTIONS) {
+            expect(
+              await can(
+                { id: id('owner'), role: 'ADMIN', status: 'ACTIVE', department: 'Pharmacy' },
+                action,
+                undefined,
+                { db }
+              )
+            ).toBe(true);
+          }
+          await db.pharmacyBranch.create({
+            data: {
+              id: id('newBranch'),
+              organizationId: org,
+              code: 'newBranch',
+              name: 'New branch',
+              addressLine: '1 Test Road',
+              city: 'Lahore',
+              provinceCode: 'PB',
+            },
+          });
+          await expect(
+            assertProcurementBranch(context(db), id('newBranch'))
+          ).resolves.toMatchObject({ branchId: id('newBranch') });
+          await db.pharmacyBranch.update({
+            where: { id: id('newBranch') },
+            data: { active: false },
+          });
+          await expect(assertProcurementBranch(context(db), id('newBranch'))).rejects.toMatchObject(
+            { code: 'FORBIDDEN' }
+          );
+          expect(await actorCanProcure(db, id('owner'))).toBe(true);
+          expect(await actorCanReadPurchasing(db, id('owner'))).toBe(true);
+          expect(await assignedRegisterBranchIds(db, org, id('owner'))).toEqual(
+            expect.arrayContaining([id('branch'), id('other')])
+          );
+          await expect(assertProcurementBranch(context(db), id('branch'))).resolves.toMatchObject({
+            branchId: id('branch'),
+          });
+          await expect(
+            assertProcurementBranch(context(db), 'outside-tenant')
+          ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        } finally {
+          await db.userPermissionOverride.deleteMany({
+            where: { userId: id('owner'), reason: 'Owner authority regression fixture' },
+          });
+        }
+      });
+    });
+
     it('PIN reauthenticates a solo owner for both PO and direct receipt with durable audit evidence', async () => {
       await inOrg(async (db) => {
         const ctx = context(db);
@@ -280,6 +349,20 @@ async function newLink() {
         expect(
           await caller.approvePurchaseOrder({ purchaseOrderId: po.id, decision: 'APPROVED', pin })
         ).toMatchObject({ status: 'APPROVED', approvedByUserId: id('owner') });
+        const approvalAudit = await db.auditLog.findFirst({
+          where: { organizationId: org, action: 'pharmacy.purchaseOrderApproval', targetId: po.id },
+        });
+        expect(approvalAudit).toMatchObject({
+          actorId: id('owner'),
+          metadata: {
+            policy: 'PHARMACY_SOLO_OWNER_PIN',
+            pinVerified: true,
+            decision: 'APPROVED',
+          },
+        });
+        expect(
+          await db.pharmacyPurchaseOrderApproval.findMany({ where: { purchaseOrderId: po.id } })
+        ).toHaveLength(1);
         const result = await caller.createGoodsReceipt(receiptInput());
         expect(result).toMatchObject({
           directPurchase: true,
@@ -404,6 +487,34 @@ async function newLink() {
       await expect(
         inOrg((db) => purchasing.createCaller(context(db)).createGoodsReceipt(receiptInput()))
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await inOrg(async (db) => {
+        const order = await db.pharmacyPurchaseOrder.create({
+          data: {
+            organizationId: org,
+            reference: unique('MULTI'),
+            branchId: id('branch'),
+            supplierId: id('supplier'),
+            createdByUserId: id('owner'),
+            status: 'SUBMITTED',
+          },
+        });
+        await expect(
+          purchasing.createCaller(context(db)).approvePurchaseOrder({
+            purchaseOrderId: order.id,
+            decision: 'APPROVED',
+            pin,
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(
+          await db.pharmacyPurchaseOrderApproval.count({ where: { purchaseOrderId: order.id } })
+        ).toBe(0);
+        expect(
+          await purchasing.createCaller(context(db, id('second'))).approvePurchaseOrder({
+            purchaseOrderId: order.id,
+            decision: 'APPROVED',
+          })
+        ).toMatchObject({ approvedByUserId: id('second'), status: 'APPROVED' });
+      });
       await inOrg(async (db) => {
         expect(
           await purchasing.createCaller(context(db)).createGoodsReceipt(receiptInput(id('second')))

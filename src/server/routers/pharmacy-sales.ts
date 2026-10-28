@@ -1,3 +1,4 @@
+import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
@@ -374,9 +375,14 @@ async function requireCounterReceiptAccess(
     where: { id: user.id },
     select: {
       status: true,
+      role: true,
       organizationId: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
@@ -398,8 +404,10 @@ async function requireCounterReceiptAccess(
   // Treat the names as one capability family. Otherwise an ALLOW on one alias
   // can accidentally outrun an explicit DENY on another alias.
   // Combine user overrides and role rules into ONE family decision so any
-  // explicit DENY (user or role, on any alias) beats any ALLOW.
-  const capable = counterCapabilityDecision([...overrides, ...roleRules]) === 'ALLOW';
+  // explicit DENY (user or role, on any alias) beats ordinary grants. Live
+  // all-capability owner/admin authority is resolved separately.
+  const owner = hasAllCapabilityAccess(member);
+  const capable = owner || counterCapabilityDecision([...overrides, ...roleRules]) === 'ALLOW';
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -414,6 +422,8 @@ async function requireCounterReceiptAccess(
   if (!available) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
+
+  if (owner) return scope;
 
   const rows = await ctx.db.pharmacyBranchAssignment.findMany({
     where: {

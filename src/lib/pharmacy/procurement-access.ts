@@ -1,3 +1,5 @@
+import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
+import { capabilityMatches } from '@/lib/abac/capabilities';
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 
 const PROCUREMENT_ACTIONS = ['pharmacy.procurement', 'pharmacy:procurement'] as const;
@@ -16,7 +18,8 @@ function matching(rules: readonly CapabilityRule[]) {
 
 /**
  * Goods-in is the procurement capability. A cashier grant such as
- * `pharmacy.counter` or `pharmacy:orders` does not cover it. DENY wins.
+ * `pharmacy.counter` or `pharmacy:orders` does not cover it. DENY wins for
+ * ordinary grants; callers resolve live owner/admin authority separately.
  */
 export function procurementCapabilityGranted(input: {
   overrides: readonly CapabilityRule[];
@@ -33,8 +36,14 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
   const user = await db.user.findUnique({
     where: { id: userId, status: 'ACTIVE' },
     select: {
+      role: true,
+      status: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -43,6 +52,7 @@ export async function actorCanProcure(db: ScopedDb, userId: string, now = new Da
     },
   });
   if (!user) return false;
+  if (hasAllCapabilityAccess(user)) return true;
   return procurementCapabilityGranted({
     overrides: user.permissionOverrides,
     role: user.organizationRole?.permissions ?? [],
@@ -55,6 +65,7 @@ export async function actorIsPharmacyOwner(db: ScopedDb, organizationId: string,
     where: { id: userId, organizationId, status: 'ACTIVE' },
     select: {
       role: true,
+      status: true,
       organizationRole: { select: { key: true, isSystem: true, permissions: true } },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
@@ -63,6 +74,7 @@ export async function actorIsPharmacyOwner(db: ScopedDb, organizationId: string,
     },
   });
   if (!user) return false;
+  if (hasAllCapabilityAccess(user)) return true;
   const role = user.organizationRole;
   return Boolean(
     (role?.isSystem && ['owner', 'owner-operator'].includes(role.key)) ||
@@ -78,7 +90,15 @@ export async function actorCanReadPurchasing(db: ScopedDb, userId: string, now =
   const user = await db.user.findUnique({
     where: { id: userId, status: 'ACTIVE' },
     select: {
-      organizationRole: { select: { permissions: { select: { capability: true, effect: true } } } },
+      role: true,
+      status: true,
+      organizationRole: {
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
+      },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
         select: { capability: true, effect: true },
@@ -86,6 +106,7 @@ export async function actorCanReadPurchasing(db: ScopedDb, userId: string, now =
     },
   });
   if (!user) return false;
+  if (hasAllCapabilityAccess(user)) return true;
   if (
     procurementCapabilityGranted({
       overrides: user.permissionOverrides,
@@ -101,4 +122,30 @@ export async function actorCanReadPurchasing(db: ScopedDb, userId: string, now =
   return (
     !rules.some((rule) => rule.effect === 'DENY') && rules.some((rule) => rule.effect === 'ALLOW')
   );
+}
+
+/** Clinical staff retain witness selection without receiving access to purchasing data. */
+export async function actorCanSelectPurchaseWitness(db: ScopedDb, userId: string) {
+  if (await actorCanReadPurchasing(db, userId)) return true;
+  const user = await db.user.findUnique({
+    where: { id: userId, status: 'ACTIVE' },
+    select: {
+      organizationRole: { select: { permissions: { select: { capability: true, effect: true } } } },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        select: { capability: true, effect: true },
+      },
+    },
+  });
+  if (!user) return false;
+  const rules = [...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])];
+  return ['pharmacy:safety', 'pharmacy:dispense'].some((action) => {
+    const matching = rules.filter((rule) =>
+      capabilityMatches(rule.capability, action, rule.effect)
+    );
+    return (
+      !matching.some((rule) => rule.effect === 'DENY') &&
+      matching.some((rule) => rule.effect === 'ALLOW')
+    );
+  });
 }
