@@ -24,6 +24,13 @@ import {
 import { needsPrescription, PharmacySafetyBlockError } from '@/lib/pharmacy/rx-gate';
 import { assertStoredBranchMayOperate, BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
 import {
+  PharmacyRxOverrideCapError,
+  RX_SELF_OVERRIDE_WINDOW_MS,
+  rxSelfOverrideDecision,
+  rxSelfOverrideLimits,
+  saleLineNetMinor,
+} from '@/lib/pharmacy/rx-override';
+import {
   isLockedOut,
   registerFailedAttempt,
   clearLockout,
@@ -1074,6 +1081,9 @@ export const pharmacySalesRouter = router({
             let pharmacistUserId = scope.actorId;
             let prescriptionFill:
               { prescriptionLineId: string; fillSequence: number; units: number } | undefined;
+            // A pharmacist waving a regulated line through on their own capability
+            // (no independent co-signer PIN). These self-overrides are capped below.
+            let selfOverride = false;
             if (rxAuth.prescriptionLineId) {
               await db.$queryRaw`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${rxAuth.prescriptionLineId} FOR UPDATE`;
               const rx = await db.prescriptionLine.findFirst({
@@ -1139,7 +1149,12 @@ export const pharmacySalesRouter = router({
                 undefined,
                 { db, now }
               );
-              if (!actorIsPharmacist) {
+              // An independent pharmacist PIN, when supplied, is a second actor:
+              // verifyPharmacistPin rejects the acting user's own credential, so a
+              // co-signer is always a distinct active pharmacist. It is required
+              // for a cashier, and lifts the self-override cap for a pharmacist.
+              let coSignerId: string | undefined;
+              if (override.staffProfileId || override.pin) {
                 if (!override.staffProfileId || !override.pin) return rxBlocked;
                 const pharmacist = await verifyPharmacistPin(
                   db,
@@ -1148,8 +1163,13 @@ export const pharmacySalesRouter = router({
                   override.pin
                 );
                 if (!pharmacist) return rxBlocked;
-                pharmacistUserId = pharmacist.id;
+                coSignerId = pharmacist.id;
               }
+              if (coSignerId) pharmacistUserId = coSignerId;
+              else if (!actorIsPharmacist) return rxBlocked;
+              // A pharmacist authorizing alone is a self-override; the cap below
+              // enforced after the line is priced applies only to these.
+              selfOverride = actorIsPharmacist && !coSignerId;
               annotateAudit(ctx, {
                 category: 'PHARMACY_SAFETY',
                 action: 'rx_override',
@@ -1160,6 +1180,9 @@ export const pharmacySalesRouter = router({
                   branchId: input.branchId,
                   medicineId: input.medicineId,
                   pharmacistUserId,
+                  recordedByUserId: scope.actorId,
+                  coSigned: Boolean(coSignerId),
+                  selfOverride,
                   reason: override.reason,
                 },
               });
@@ -1170,6 +1193,44 @@ export const pharmacySalesRouter = router({
               select: { id: true },
             });
             if (!existing) {
+              // SEC (PR #195): a pharmacist self-authorizing alone is capped per
+              // rolling window (count AND dispensed value). The line is already
+              // priced and inserted above, so a breach throws to roll the whole
+              // transaction back; the outer catch turns it into a soft refusal.
+              // Only this pharmacist's own prior self-overrides count — co-signed
+              // overrides (pharmacistUserId !== recordedByUserId) are the escape
+              // hatch and are excluded. The current line's authorization has not
+              // been written yet, so it is never counted against itself.
+              if (selfOverride) {
+                await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.actorId},0))`;
+                const windowStart = new Date(now.getTime() - RX_SELF_OVERRIDE_WINDOW_MS);
+                const priorAuths = await db.pharmacyRxLineAuthorization.findMany({
+                  where: {
+                    organizationId: scope.organizationId,
+                    kind: 'OVERRIDE',
+                    pharmacistUserId: scope.actorId,
+                    recordedByUserId: scope.actorId,
+                    createdAt: { gte: windowStart },
+                  },
+                  select: { saleLineId: true },
+                });
+                const priorLines = priorAuths.length
+                  ? await db.pharmacySaleLine.findMany({
+                      where: {
+                        organizationId: scope.organizationId,
+                        id: { in: priorAuths.map((a) => a.saleLineId) },
+                      },
+                      select: { quantity: true, unitPriceMinor: true, discountMinor: true },
+                    })
+                  : [];
+                const refusal = rxSelfOverrideDecision({
+                  priorCount: priorAuths.length,
+                  priorValueMinor: priorLines.reduce((sum, l) => sum + saleLineNetMinor(l), 0),
+                  thisValueMinor: saleLineNetMinor(result.line),
+                  limits: await rxSelfOverrideLimits(db, scope, now),
+                });
+                if (refusal) throw new PharmacyRxOverrideCapError(refusal);
+              }
               if (prescriptionFill)
                 await db.prescriptionFill.create({
                   data: {
@@ -1438,6 +1499,9 @@ export const pharmacySalesRouter = router({
         }
         return outcome;
       } catch (error) {
+        // A self-override cap breach rolled the line back on purpose; surface it
+        // as the same inline refusal the other Rx branches return, not a 500.
+        if (error instanceof PharmacyRxOverrideCapError) return { blocked: error.message };
         fail(error);
       }
     }),

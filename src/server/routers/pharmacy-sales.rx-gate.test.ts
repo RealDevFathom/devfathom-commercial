@@ -27,12 +27,26 @@ vi.mock('@/lib/pharmacy/stock-ledger', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/stock-ledger')>()),
   onHand: vi.fn(),
 }));
+// The self-override cap's co-signer escape hatch runs verifyPharmacistPin, which
+// hashes and locks a real credential row. Stub the credential primitives so a
+// co-signed override can be exercised without a seeded PIN.
+vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/restaurant/operator-credentials')>()),
+  verifyOperatorCredential: vi.fn(async () => true),
+  isLockedOut: vi.fn(() => false),
+  registerFailedAttempt: vi.fn(() => ({})),
+  clearLockout: vi.fn(() => ({})),
+}));
 vi.mock('@/lib/pharmacy/regulatory', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/regulatory')>()),
   assertStoredBranchMayOperate: vi.fn(async () => undefined),
 }));
 
 import { can } from '@/lib/abac';
+import {
+  RX_SELF_OVERRIDE_MAX_COUNT_KEY,
+  RX_SELF_OVERRIDE_MAX_VALUE_MINOR_KEY,
+} from '@/lib/pharmacy/rx-override';
 import { addSaleLine } from '@/lib/pharmacy/sales';
 import { recordTrpcAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
@@ -88,12 +102,20 @@ function fixture(flags: { rx?: boolean; restricted?: boolean } = { rx: true }) {
           }
       ),
     },
-    pharmacySaleLine: { findFirst: vi.fn(async () => null as unknown) },
+    pharmacySaleLine: {
+      findFirst: vi.fn(async () => null as unknown),
+      // Prior self-override sale lines read for the rolling value cap.
+      findMany: vi.fn(async () => [] as unknown[]),
+    },
     prescriptionFill: { create: vi.fn(async ({ data }: { data: unknown }) => data) },
     prescriptionLine: { findFirst: vi.fn(async () => null as unknown) },
     restaurantOperatorCredential: { findFirst: vi.fn(async () => null), update: vi.fn() },
+    // Server-side self-override cap: configured limits (empty → defaults) and the
+    // pharmacist's prior self-overrides in the rolling window (none by default).
+    organizationLimit: { findMany: vi.fn(async () => [] as unknown[]) },
     pharmacyRxLineAuthorization: {
       findFirst: vi.fn(async () => null as unknown),
+      findMany: vi.fn(async () => [] as unknown[]),
       create: authorizationCreate,
     },
     pharmacyPharmacistReviewItem: {
@@ -121,7 +143,10 @@ function fixture(flags: { rx?: boolean; restricted?: boolean } = { rx: true }) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(can).mockResolvedValue(false);
-  vi.mocked(addSaleLine).mockResolvedValue({ line: { id: 'line-1' }, allocation: {} } as never);
+  vi.mocked(addSaleLine).mockResolvedValue({
+    line: { id: 'line-1', quantity: 1, unitPriceMinor: 0, discountMinor: 0 },
+    allocation: {},
+  } as never);
 });
 
 describe('pharmacySales.addLine prescription gate (SEC)', () => {
@@ -396,6 +421,112 @@ describe('pharmacySales.addLine prescription gate (SEC)', () => {
         rxAuthorization: { prescriptionLineId: 'rx-line-1', override: { reason: 'both' } },
       })
     ).rejects.toThrow();
+  });
+});
+
+describe('pharmacySales.addLine self-override cap (SEC PR #195)', () => {
+  const selfOverride = {
+    ...line,
+    rxAuthorization: { override: { reason: 'Known chronic patient, script at home' } },
+  };
+
+  it('records a self-override and queries only this pharmacist own prior ones', async () => {
+    vi.mocked(can).mockResolvedValue(true);
+    const f = fixture();
+    await expect(f.caller.addLine(selfOverride)).resolves.not.toHaveProperty('blocked');
+    // The rolling-window query is scoped to the acting pharmacist's self-overrides:
+    // a co-signed row (pharmacistUserId !== recordedByUserId) is excluded by it.
+    expect(f.db.$queryRaw).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.stringContaining('pg_advisory_xact_lock(hashtextextended('),
+      ]),
+      'org-1:cashier-1'
+    );
+    expect(f.db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      f.db.pharmacyRxLineAuthorization.findMany.mock.invocationCallOrder[0]
+    );
+    expect(f.db.pharmacyRxLineAuthorization.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org-1',
+          kind: 'OVERRIDE',
+          pharmacistUserId: 'cashier-1',
+          recordedByUserId: 'cashier-1',
+          createdAt: { gte: expect.any(Date) },
+        }),
+      })
+    );
+    expect(f.authorizationCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ kind: 'OVERRIDE', pharmacistUserId: 'cashier-1' }),
+    });
+  });
+
+  it('blocks and writes nothing once the count cap is reached, demanding a co-signer', async () => {
+    vi.mocked(can).mockResolvedValue(true);
+    const f = fixture();
+    f.db.organizationLimit.findMany.mockResolvedValue([
+      { key: RX_SELF_OVERRIDE_MAX_COUNT_KEY, value: 1 },
+    ]);
+    f.db.pharmacyRxLineAuthorization.findMany.mockResolvedValue([{ saleLineId: 'prior-1' }]);
+    f.db.pharmacySaleLine.findMany.mockResolvedValue([
+      { quantity: 1, unitPriceMinor: 1_000, discountMinor: 0 },
+    ]);
+    await expect(f.caller.addLine(selfOverride)).resolves.toMatchObject({
+      blocked: expect.stringContaining('co-sign'),
+    });
+    expect(f.authorizationCreate).not.toHaveBeenCalled();
+    expect(f.db.prescriptionFill.create).not.toHaveBeenCalled();
+  });
+
+  it('blocks when this override tips the rolling value past the cap', async () => {
+    vi.mocked(can).mockResolvedValue(true);
+    const f = fixture();
+    f.db.organizationLimit.findMany.mockResolvedValue([
+      { key: RX_SELF_OVERRIDE_MAX_VALUE_MINOR_KEY, value: 100 },
+    ]);
+    vi.mocked(addSaleLine).mockResolvedValue({
+      line: { id: 'line-1', quantity: 10, unitPriceMinor: 50, discountMinor: 0 },
+      allocation: {},
+    } as never);
+    await expect(f.caller.addLine(selfOverride)).resolves.toMatchObject({
+      blocked: expect.stringContaining('value limit'),
+    });
+    expect(f.authorizationCreate).not.toHaveBeenCalled();
+  });
+
+  it('lets an independent pharmacist PIN co-sign past an exhausted cap, bypassing it', async () => {
+    vi.mocked(can).mockResolvedValue(true);
+    const f = fixture();
+    // Self-overrides fully disabled for the acting pharmacist...
+    f.db.organizationLimit.findMany.mockResolvedValue([
+      { key: RX_SELF_OVERRIDE_MAX_COUNT_KEY, value: 0 },
+    ]);
+    // ...but a second, distinct active pharmacist presents a valid PIN.
+    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue({
+      id: 'cred-2',
+      credentialHash: 'hash',
+      staffProfile: {
+        status: 'ACTIVE',
+        user: { id: 'pharmacist-2', status: 'ACTIVE', organizationId: 'org-1' },
+      },
+    });
+    await expect(
+      f.caller.addLine({
+        ...line,
+        rxAuthorization: {
+          override: { reason: 'Second pharmacist co-signed', staffProfileId: 'sp-2', pin: '4321' },
+        },
+      })
+    ).resolves.not.toHaveProperty('blocked');
+    // A co-signed override is the escape hatch: the self-override cap is never consulted.
+    expect(f.db.pharmacyRxLineAuthorization.findMany).not.toHaveBeenCalled();
+    expect(f.authorizationCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        kind: 'OVERRIDE',
+        pharmacistUserId: 'pharmacist-2',
+        recordedByUserId: 'cashier-1',
+      }),
+    });
   });
 });
 
