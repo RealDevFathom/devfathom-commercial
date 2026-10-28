@@ -94,7 +94,13 @@ async function main() {
   mkdirSync(resolve(receipt, '..'), { recursive: true });
   writeFileSync(resolve(runtimeRoot, 'source-manifest.json'), manifest);
   const server = spawn(process.execPath, ['scripts/start-standalone.mjs'], {
-    env: { ...env, HOSTNAME: '127.0.0.1', PORT: '4483' },
+    env: {
+      ...env,
+      HOSTNAME: '127.0.0.1',
+      PORT: '4483',
+      // This CI server accepts traffic only on loopback; keep production IP validation enabled.
+      TRUSTED_PROXY_CIDRS: '127.0.0.1/32,::1/128',
+    },
     stdio: [
       'ignore',
       openSync(resolve(evidence, 'app.stdout.log'), 'w'),

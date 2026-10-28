@@ -511,7 +511,8 @@ test('shared-host login succeeds and forged tenant selection is generic', async 
   const tenantPassword = await signInProvisionedTenant(
     page,
     sharedBaseUrl!,
-    platformFixture.tenant
+    platformFixture.tenant,
+    /\/restaurant\/orders(?:\?|$)/
   );
   expect(page.url()).not.toMatch(/organizationId|workspace|org_/);
 

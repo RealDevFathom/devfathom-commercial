@@ -80,7 +80,6 @@ function SearchableSelectField({
             disabled={field.disabled}
             data-field-name={field.name}
             data-invalid={fieldError ? '' : undefined}
-            aria-invalid={Boolean(fieldError)}
             aria-label={field.label}
             aria-describedby={fieldError ? errorId : undefined}
             className="flex h-11 w-full items-center justify-between gap-2 rounded-lg border border-border-default bg-card px-3 text-left text-sm outline-none transition hover:bg-surface-sunken focus-visible:border-accent-brand focus-visible:ring-2 focus-visible:ring-accent-brand/15 disabled:cursor-not-allowed disabled:opacity-50"
@@ -94,7 +93,12 @@ function SearchableSelectField({
       />
       <PopoverContent align="start" className="w-(--anchor-width) min-w-72 p-0">
         <Command value={value}>
-          <CommandInput placeholder="Search city or IANA timezone…" autoFocus />
+          <CommandInput
+            placeholder="Search city or IANA timezone…"
+            aria-invalid={Boolean(fieldError)}
+            aria-describedby={fieldError ? errorId : undefined}
+            autoFocus
+          />
           <CommandList>
             <CommandEmpty>No matching timezone.</CommandEmpty>
             {[...groups.entries()].map(([region, regionOptions]) => (
