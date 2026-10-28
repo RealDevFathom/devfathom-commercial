@@ -195,4 +195,31 @@ describeIfDatabase('staff branch authorization (real PostgreSQL)', () => {
     });
     expect(holdings).toEqual([{ branchId: ids.branchA }, { branchId: ids.branchB }]);
   });
+  it('resolves session actors against real tenant branch bindings and rejects foreign scope', async () => {
+    const { resolveRestaurantActor } = await import('@/server/restaurant-actor');
+    const context = (id: string) =>
+      ({
+        db: deps.createTenantDb(ids.orgA),
+        session: { user: sessionUser(id) },
+        entitlements: { organizationId: ids.orgA },
+        requestMeta: { ip: null },
+      }) as unknown as import('@/server/trpc').TRPCContext;
+    await expect(resolveRestaurantActor(context(ids.manager), [ids.branchA])).resolves.toEqual({
+      staffProfileId: ids.managerProfile,
+    });
+    await expect(resolveRestaurantActor(context(ids.manager), [ids.branchB])).rejects.toMatchObject(
+      { code: 'FORBIDDEN' }
+    );
+    await expect(
+      resolveRestaurantActor(context(ids.manager), [ids.foreignBranch])
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    // A role holding can bind a branch other than the primary branch.
+    await client.query(
+      `INSERT INTO restaurant_staff_job_roles (id,"organizationId","staffProfileId","jobRoleId","branchId") VALUES ($1,$2,$3,$4,$5)`,
+      [`extra_${suffix}`, ids.orgA, ids.managerProfile, ids.role, ids.branchB]
+    );
+    await expect(resolveRestaurantActor(context(ids.manager), [ids.branchB])).resolves.toEqual({
+      staffProfileId: ids.managerProfile,
+    });
+  });
 });

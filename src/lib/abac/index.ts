@@ -10,6 +10,7 @@
  *   if (!(await can(subject, 'resignation:review', { type: 'Resignation', ... })))
  *     throw new TRPCError({ code: 'FORBIDDEN' });
  */
+import { isTenantAdministrator } from './tenant-administrator';
 import { capabilityMatches } from './capabilities';
 import type { AuthzDb } from '@/lib/authz';
 import { POLICIES, type Action } from './policies';
@@ -35,8 +36,9 @@ async function customDecision(
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
+      role: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: { key: true, permissions: { select: { capability: true, effect: true } } },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -52,6 +54,9 @@ async function customDecision(
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
   if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
+  // Owners/admins hold every capability, including regulated actions. Explicit
+  // DENY still wins; exact-grant pharmacy rules remain unchanged for other roles.
+  if (isTenantAdministrator(user)) return true;
   if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
   return null;
 }

@@ -16,7 +16,12 @@ export async function resolveRestaurantActor(ctx: TRPCContext, branchIds: string
 
   const actors = await ctx.db.restaurantStaffProfile.findMany({
     where: { userId: user.id, status: 'ACTIVE' },
-    select: { id: true, primaryBranchId: true },
+    select: {
+      id: true,
+      primaryBranchId: true,
+      jobRoles: { select: { branchId: true } },
+      directCapabilityGrants: { select: { branchId: true } },
+    },
     orderBy: { id: 'asc' },
     take: 2,
   });
@@ -30,6 +35,8 @@ export async function resolveRestaurantActor(ctx: TRPCContext, branchIds: string
   });
   const authorizedBranchIds = new Set(assigned.map(({ branchId }) => branchId));
   if (actor.primaryBranchId) authorizedBranchIds.add(actor.primaryBranchId);
+  for (const binding of [...(actor.jobRoles ?? []), ...(actor.directCapabilityGrants ?? [])])
+    authorizedBranchIds.add(binding.branchId);
 
   const assignedToEveryBranch = requiredBranchIds.every((branchId) =>
     authorizedBranchIds.has(branchId)

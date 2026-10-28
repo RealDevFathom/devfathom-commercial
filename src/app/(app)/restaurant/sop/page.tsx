@@ -828,8 +828,23 @@ function SopBoardView(props: SopBoardViewProps) {
                           staff={staff}
                         />
                         <p className="text-xs text-text-muted sm:col-span-2">
-                          Co-authorization requires two different active staff profiles.
+                          A second approver is required unless you are the only active staff member
+                          and an owner or administrator.
                         </p>
+                        <label className="text-sm text-text-body sm:col-span-2">
+                          Approver PIN
+                          <Input
+                            className="mt-1 min-h-11"
+                            name="approvingPin"
+                            type="password"
+                            inputMode="numeric"
+                            pattern="[0-9]{4,8}"
+                            minLength={4}
+                            maxLength={8}
+                            autoComplete="off"
+                            required
+                          />
+                        </label>
                         <label className="text-sm text-text-body sm:col-span-2">
                           Waiver reason
                           <Textarea
@@ -1082,20 +1097,17 @@ export default async function SopPage({ searchParams }: { searchParams: SearchPa
         }
         case 'waive': {
           const approvingStaffProfileId = field(form, 'approvingStaffProfileId');
-          if (
-            !actorStaffProfileId ||
-            !approvingStaffProfileId ||
-            actorStaffProfileId === approvingStaffProfileId
-          ) {
+          if (!actorStaffProfileId || !approvingStaffProfileId) {
             throw new TRPCError({
               code: 'BAD_REQUEST',
-              message: 'Select two different active staff profiles for co-authorization.',
+              message: 'Select an active approving staff profile for co-authorization.',
             });
           }
           await caller.waive({
             occurrenceId,
             actorStaffProfileId,
             approvingStaffProfileId,
+            approvingPin: field(form, 'approvingPin'),
             reason: field(form, 'reason'),
           });
           success = 'SOP waived with co-authorization.';

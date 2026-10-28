@@ -78,12 +78,23 @@ function optionalTrimmed(value: string | null | undefined): string | null {
 /**
  * Assert the co-authorization invariants (C6/C7). Throws `CoAuthorizationError`
  * on any violation. The load-bearing rule is that the approving manager cannot
- * be the acting operator: a self-approval is not a co-authorization.
+ * be the acting operator, except the explicitly server-verified sole-owner SOP waiver.
  */
-export function assertCoAuthorization(request: CoAuthorizationRequest): void {
+export function assertCoAuthorization(
+  request: CoAuthorizationRequest,
+  options?: { verifiedSoloOwner?: boolean }
+): void {
   const acting = requireNonEmpty(request.actingStaffProfileId, 'acting staff profile');
   const approving = requireNonEmpty(request.approvingStaffProfileId, 'approving staff profile');
-  if (acting === approving) {
+  // The only exception is SOP waiver after the server has verified sole-owner
+  // status and PIN. Terminal and other co-authorization contracts stay distinct.
+  const soloSopWaiver =
+    options?.verifiedSoloOwner &&
+    request.capability === 'sop:verify' &&
+    request.targetType === 'RestaurantSopOccurrence' &&
+    !request.deviceId &&
+    !request.terminalSessionId;
+  if (acting === approving && !soloSopWaiver) {
     throw new CoAuthorizationError(
       'A co-authorization requires a second identity: the approving manager must differ from the acting operator.'
     );
@@ -105,8 +116,11 @@ export function assertCoAuthorization(request: CoAuthorizationRequest): void {
  * strings and folds blank optionals to null so a caller cannot smuggle
  * whitespace-only evidence past the invariants.
  */
-export function buildCoAuthorizationRecord(request: CoAuthorizationRequest): CoAuthorizationRecord {
-  assertCoAuthorization(request);
+export function buildCoAuthorizationRecord(
+  request: CoAuthorizationRequest,
+  options?: { verifiedSoloOwner?: boolean }
+): CoAuthorizationRecord {
+  assertCoAuthorization(request, options);
   return {
     actingStaffProfileId: request.actingStaffProfileId.trim(),
     approvingStaffProfileId: request.approvingStaffProfileId.trim(),

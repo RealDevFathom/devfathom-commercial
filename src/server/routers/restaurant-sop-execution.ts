@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
+import { resolveRestaurantActor } from '../restaurant-actor';
 import { assertInOrganization } from '../org-refs';
 import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
@@ -145,6 +146,16 @@ async function requireReportBranch(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements.organizationId ?? user.organizationId;
   if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.restaurantBranch, organizationId, [branchId], { active: true });
+}
+
+/** Resolve scope from the stored occurrence, never from caller attribution. */
+async function occurrenceActor(ctx: TRPCContext, occurrenceId: string) {
+  const occurrence = await ctx.db.restaurantSopOccurrence.findUnique({
+    where: { id: occurrenceId },
+    select: { branchId: true },
+  });
+  if (!occurrence) throw new TRPCError({ code: 'NOT_FOUND', message: 'Occurrence not found.' });
+  return resolveRestaurantActor(ctx, [occurrence.branchId]);
 }
 
 // ── Read: branch board ────────────────────────────────────────────────────────
@@ -432,7 +443,10 @@ export const restaurantSopExecutionRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.execution');
       try {
-        const result = await startOccurrence(ctx.db, input);
+        const result = await startOccurrence(ctx.db, {
+          ...input,
+          actorStaffProfileId: (await occurrenceActor(ctx, input.occurrenceId)).staffProfileId,
+        });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
           targetId: result.occurrenceId,
@@ -458,7 +472,10 @@ export const restaurantSopExecutionRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.execution');
       try {
-        return await completeStep(ctx.db, input);
+        return await completeStep(ctx.db, {
+          ...input,
+          actorStaffProfileId: (await occurrenceActor(ctx, input.occurrenceId)).staffProfileId,
+        });
       } catch (err) {
         mapExecutionError(err);
       }
@@ -489,7 +506,7 @@ export const restaurantSopExecutionRouter = router({
           mimeType: input.mimeType,
           sizeBytes: input.sizeBytes,
           storageRef: input.storageRef,
-          uploaderStaffProfileId: input.uploaderStaffProfileId,
+          uploaderStaffProfileId: (await occurrenceActor(ctx, input.occurrenceId)).staffProfileId,
         });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopEvidence',
@@ -514,7 +531,10 @@ export const restaurantSopExecutionRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.execution');
       try {
-        const result = await submitOccurrence(ctx.db, input);
+        const result = await submitOccurrence(ctx.db, {
+          ...input,
+          actorStaffProfileId: (await occurrenceActor(ctx, input.occurrenceId)).staffProfileId,
+        });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
           targetId: result.occurrenceId,
@@ -541,7 +561,10 @@ export const restaurantSopExecutionRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.verification');
       try {
-        const result = await verifyOccurrence(ctx.db, input);
+        const result = await verifyOccurrence(ctx.db, {
+          ...input,
+          actorStaffProfileId: (await occurrenceActor(ctx, input.occurrenceId)).staffProfileId,
+        });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
           targetId: input.occurrenceId,
@@ -566,7 +589,10 @@ export const restaurantSopExecutionRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.verification');
       try {
-        const result = await rejectOccurrence(ctx.db, input);
+        const result = await rejectOccurrence(ctx.db, {
+          ...input,
+          actorStaffProfileId: (await occurrenceActor(ctx, input.occurrenceId)).staffProfileId,
+        });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
           targetId: input.occurrenceId,
@@ -584,15 +610,23 @@ export const restaurantSopExecutionRouter = router({
         .object({
           occurrenceId: OCCURRENCE_ID,
           actorStaffProfileId: z.string().min(1),
-          approvingStaffProfileId: z.string().min(1),
+          approvingStaffProfileId: z.string().trim().min(1),
+          approvingPin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
           reason: z.string().min(1).max(2_000),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
       assertSopDepth(ctx.entitlements, 'sop.waiver');
       try {
-        const result = await waiveOccurrence(ctx.db, input);
+        const result = await waiveOccurrence(ctx.db, {
+          ...input,
+          actorStaffProfileId: (await occurrenceActor(ctx, input.occurrenceId)).staffProfileId,
+        });
         annotateAudit(ctx, {
           targetType: 'RestaurantSopOccurrence',
           targetId: input.occurrenceId,
@@ -618,7 +652,10 @@ export const restaurantSopExecutionRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertSopDepth(ctx.entitlements, 'sop.escalation');
       try {
-        return await acknowledgeEscalation(ctx.db, input);
+        return await acknowledgeEscalation(ctx.db, {
+          ...input,
+          actorStaffProfileId: (await occurrenceActor(ctx, input.occurrenceId)).staffProfileId,
+        });
       } catch (err) {
         if (err instanceof TRPCError) throw err;
         throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to acknowledge.' });

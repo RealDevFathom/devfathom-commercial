@@ -4,6 +4,7 @@ import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 
 const mocks = vi.hoisted(() => ({
   attachEvidence: vi.fn(),
+  occurrence: vi.fn(),
   can: vi.fn(),
   createTRPCContext: vi.fn(),
   deleteUpload: vi.fn(),
@@ -72,8 +73,9 @@ function request(overrides?: {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
+  mocks.occurrence.mockResolvedValue({ branchId: 'stored-branch' });
   mocks.createTRPCContext.mockResolvedValue({
-    db: {},
+    db: { restaurantSopOccurrence: { findUnique: mocks.occurrence } },
     organization: { id: 'org-1' },
     session: { user: { id: 'user-1' } },
   });
@@ -128,7 +130,7 @@ describe('POST SOP evidence', () => {
       'image/jpeg'
     );
     expect(mocks.attachEvidence).toHaveBeenCalledWith(
-      {},
+      expect.objectContaining({ restaurantSopOccurrence: { findUnique: mocks.occurrence } }),
       expect.objectContaining({
         occurrenceId: 'occurrence-1',
         occurrenceStepId: 'step-1',
@@ -142,7 +144,7 @@ describe('POST SOP evidence', () => {
     );
     expect(mocks.resolveRestaurantActor).toHaveBeenCalledWith(
       expect.objectContaining({ session: { user: { id: 'user-1' } } }),
-      []
+      ['stored-branch']
     );
     expect(warn).not.toHaveBeenCalled();
   });
@@ -372,4 +374,13 @@ it('failed cleanup after attach failure is visible and sanitized', async () => {
   expect(response.headers.get('location')).toContain('cleanup+is+incomplete');
   expect(JSON.stringify(warn.mock.calls)).not.toContain('private');
   expect(mocks.deleteUpload).toHaveBeenCalledOnce();
+});
+
+it('rejects missing occurrences before actor resolution, uploads or evidence writes', async () => {
+  mocks.occurrence.mockResolvedValueOnce(null);
+  const response = await POST(request());
+  expect(response.headers.get('location')).toContain('kind=error');
+  expect(mocks.resolveRestaurantActor).not.toHaveBeenCalled();
+  expect(mocks.putUpload).not.toHaveBeenCalled();
+  expect(mocks.attachEvidence).not.toHaveBeenCalled();
 });

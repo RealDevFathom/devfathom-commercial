@@ -1,6 +1,9 @@
 import 'server-only';
 
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { isTenantAdministrator } from '@/lib/abac/tenant-administrator';
+import { authenticateOperator } from './terminal-auth';
+import { operatorHasCapability } from './checkout-routes';
+import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   buildCoAuthorizationRecord,
   CoAuthorizationError,
@@ -21,7 +24,7 @@ import {
  *   - verify and reject: require the `sop:verify` capability (enforced at the
  *     router layer — this module receives a pre-verified actor id).
  *   - waive: additionally requires a manager co-authorization (M2 pattern,
- *     distinct approver).
+ *     PIN-verified approver; only a sole active owner may self-approve).
  *
  * After REJECT the occurrence status returns to a state where `startOccurrence`
  * (REJECTED → IN_PROGRESS) can be called again for the rework.
@@ -165,8 +168,9 @@ export type WaiveOccurrenceInput = {
   occurrenceId: string;
   /** The manager performing the waiver. */
   actorStaffProfileId: string;
-  /** A distinct approving manager is REQUIRED for a waiver (M2 co-authorization). */
+  /** Requires a verified approver; only the sole active owner may approve themselves. */
   approvingStaffProfileId: string;
+  approvingPin?: string;
   reason: string;
   now?: Date;
 };
@@ -176,10 +180,52 @@ export async function waiveOccurrence(
   input: WaiveOccurrenceInput
 ): Promise<VerificationResult> {
   const now = input.now ?? new Date();
+  // Credential attempts must commit independently of the outer HTTP transaction.
+  const current = await db.restaurantSopOccurrence.findUnique({
+    where: { id: input.occurrenceId },
+    select: { status: true, branchId: true, organizationId: true },
+  });
+  if (!current) throw new SopVerificationError('Occurrence not found.', 'NOT_FOUND');
+  if (!(WAIVABLE_STATUSES as readonly string[]).includes(current.status))
+    throw new SopVerificationError('Occurrence is not waivable.', 'INVALID_STATE');
+  const approverId = input.approvingStaffProfileId.trim();
+  if (
+    !input.approvingPin ||
+    !(await operatorHasCapability(db, approverId, 'sop:verify', now, current.branchId)) ||
+    !(await operatorHasCapability(db, approverId, 'coauth:approve', now, current.branchId))
+  )
+    throw new SopVerificationError(
+      'A capable approver and verified PIN are required.',
+      'CO_AUTH_REQUIRED'
+    );
+  // withTenantDb opens a NEW global-client transaction (unlike db.$transaction,
+  // which reuses the HTTP transaction). skipDrain avoids inheriting its outbox scope.
+  // Return authentication failures normally so the lockout update commits.
+  const auth = await withTenantDb(
+    current.organizationId,
+    async (credentialDb) => {
+      // Serialize attempts against the same credential so concurrent bad PINs cannot
+      // overwrite each other's failedAttempts with the same stale count.
+      await credentialDb.$queryRawUnsafe(
+        `SELECT id FROM restaurant_operator_credentials WHERE "staffProfileId" = $1
+       AND type = 'PIN' AND "deviceId" IS NULL AND "revokedAt" IS NULL FOR UPDATE`,
+        approverId
+      );
+      return authenticateOperator(credentialDb, {
+        staffProfileId: approverId,
+        type: 'PIN',
+        secret: input.approvingPin!,
+        now,
+      });
+    },
+    { skipDrain: true }
+  );
+  if (!auth.ok)
+    throw new SopVerificationError('Invalid or locked approving credential.', 'CO_AUTH_REQUIRED');
   return runSopTx(db, async (tx) => {
     const occ = await tx.restaurantSopOccurrence.findUnique({
       where: { id: input.occurrenceId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, branchId: true },
     });
     if (!occ) throw new SopVerificationError('Occurrence not found.', 'NOT_FOUND');
     if (!(WAIVABLE_STATUSES as readonly string[]).includes(occ.status)) {
@@ -189,17 +235,41 @@ export async function waiveOccurrence(
       );
     }
 
-    // Build the co-authorization record (validates distinct actors, reason required)
+    if (occ.branchId !== current.branchId)
+      throw new SopVerificationError(
+        'Occurrence scope changed. Retry approval.',
+        'CO_AUTH_REQUIRED'
+      );
+    let verifiedSoloOwner = false;
+    if (input.actorStaffProfileId.trim() === approverId) {
+      const profile = await tx.restaurantStaffProfile.findUnique({
+        where: { id: approverId },
+        select: {
+          status: true,
+          user: { select: { role: true, organizationRole: { select: { key: true } } } },
+        },
+      });
+      const owner = isTenantAdministrator(profile?.user);
+      verifiedSoloOwner =
+        profile?.status === 'ACTIVE' &&
+        owner &&
+        (await tx.restaurantStaffProfile.count({ where: { status: 'ACTIVE' } })) === 1;
+    }
+    // The exception is derived here from tenant state and a verified credential, never input.
+
     let coAuthData: ReturnType<typeof buildCoAuthorizationRecord>;
     try {
-      coAuthData = buildCoAuthorizationRecord({
-        actingStaffProfileId: input.actorStaffProfileId,
-        approvingStaffProfileId: input.approvingStaffProfileId,
-        capability: 'sop:verify',
-        reason: input.reason,
-        targetType: 'RestaurantSopOccurrence',
-        targetId: input.occurrenceId,
-      });
+      coAuthData = buildCoAuthorizationRecord(
+        {
+          actingStaffProfileId: input.actorStaffProfileId,
+          approvingStaffProfileId: approverId,
+          capability: 'sop:verify',
+          reason: input.reason,
+          targetType: 'RestaurantSopOccurrence',
+          targetId: input.occurrenceId,
+        },
+        { verifiedSoloOwner }
+      );
     } catch (err) {
       const msg = err instanceof CoAuthorizationError ? err.message : 'Co-authorization failed.';
       throw new SopVerificationError(msg, 'CO_AUTH_REQUIRED');
@@ -209,6 +279,24 @@ export async function waiveOccurrence(
       data: coAuthData,
       select: { id: true },
     });
+
+    if (verifiedSoloOwner) {
+      await tx.auditLog.create({
+        data: {
+          organizationId: current.organizationId,
+          actorType: 'RESTAURANT_OPERATOR',
+          actorStaffProfileId: input.actorStaffProfileId,
+          source: 'SYSTEM',
+          category: 'RESTAURANT',
+          operation: 'EXECUTE',
+          action: 'sop.waive.soloOwnerApproval',
+          description: 'Sole active owner approved an SOP waiver with a verified PIN.',
+          targetType: 'RestaurantSopOccurrence',
+          targetId: input.occurrenceId,
+          metadata: { coAuthorizationId: coAuth.id, branchId: occ.branchId, reason: input.reason },
+        },
+      });
+    }
 
     const [, verification] = await Promise.all([
       tx.restaurantSopOccurrence.update({

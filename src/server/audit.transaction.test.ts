@@ -18,7 +18,7 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 
 import { bindSideEffects } from '@/lib/side-effects/scope';
-import { flushAuditWritesForTest, recordTrpcAudit } from './audit';
+import { flushAuditWritesForTest, recordTrpcAudit, toAuditJson } from './audit';
 import { createTRPCContext, protectedProcedure, router, type TRPCContext } from './trpc';
 
 const organizationId = 'org_demo_restaurant_seat_1';
@@ -139,5 +139,19 @@ describe('transaction-bound seed audits', () => {
         session: ctx.session,
       })
     ).rejects.toThrow('Audit transaction must match');
+  });
+});
+
+it('redacts SOP approver PINs even before resolver authorization or validation', () => {
+  expect(
+    toAuditJson({
+      approvingPin: '4821',
+      nested: { approvingPin: 'bad-format' },
+      approvingStaffProfileId: 'staff_1',
+    })
+  ).toEqual({
+    approvingPin: '[REDACTED]',
+    nested: { approvingPin: '[REDACTED]' },
+    approvingStaffProfileId: 'staff_1',
   });
 });

@@ -6,6 +6,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
+const approval = vi.hoisted(() => ({
+  authenticate: vi.fn(),
+  capable: vi.fn(),
+  independent: vi.fn(),
+}));
+vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: approval.independent }));
+vi.mock('./terminal-auth', () => ({ authenticateOperator: approval.authenticate }));
+vi.mock('./checkout-routes', () => ({ operatorHasCapability: approval.capable }));
 
 import { verifyOccurrence, rejectOccurrence, waiveOccurrence } from './sop-verification';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -37,6 +45,8 @@ function makeDb() {
     restaurantSopOccurrence: model(),
     restaurantSopVerification: model(),
     restaurantCoAuthorization: model(),
+    restaurantStaffProfile: model(),
+    auditLog: model(),
   };
   db.$transaction = vi.fn(async (fn: (tx: unknown) => unknown) => fn(db));
   return db as Record<string, Delegate> & { $transaction: ReturnType<typeof vi.fn> };
@@ -50,6 +60,12 @@ const APPROVER_ID = 'staff_approver';
 
 beforeEach(() => {
   db = makeDb();
+  vi.clearAllMocks();
+  approval.independent.mockImplementation(async (_org, run) =>
+    run({ ...db, $queryRawUnsafe: vi.fn() })
+  );
+  approval.authenticate.mockResolvedValue({ ok: true, staffProfileId: APPROVER_ID });
+  approval.capable.mockResolvedValue(true);
 });
 
 // ── verifyOccurrence ───────────────────────────────────────────────────────────
@@ -144,6 +160,7 @@ describe('waiveOccurrence', () => {
       occurrenceId: OCC_ID,
       actorStaffProfileId: ACTOR_ID,
       approvingStaffProfileId: APPROVER_ID,
+      approvingPin: '1234',
       reason: 'Emergency exemption',
     });
 
@@ -167,6 +184,7 @@ describe('waiveOccurrence', () => {
         occurrenceId: OCC_ID,
         actorStaffProfileId: ACTOR_ID,
         approvingStaffProfileId: ACTOR_ID, // same → self-approval rejected
+        approvingPin: '1234',
         reason: 'Test',
       })
     ).rejects.toMatchObject({ reason: 'CO_AUTH_REQUIRED' });
@@ -180,6 +198,7 @@ describe('waiveOccurrence', () => {
         occurrenceId: OCC_ID,
         actorStaffProfileId: ACTOR_ID,
         approvingStaffProfileId: APPROVER_ID,
+        approvingPin: '1234',
         reason: 'Test',
       })
     ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
@@ -193,9 +212,110 @@ describe('waiveOccurrence', () => {
       occurrenceId: OCC_ID,
       actorStaffProfileId: ACTOR_ID,
       approvingStaffProfileId: APPROVER_ID,
+      approvingPin: '1234',
       reason: 'Manager approved',
     });
 
     expect(result.action).toBe('WAIVE');
+  });
+});
+
+describe('waiver credential and solo-owner boundary', () => {
+  const input = {
+    occurrenceId: OCC_ID,
+    actorStaffProfileId: ACTOR_ID,
+    approvingStaffProfileId: ACTOR_ID,
+    approvingPin: '4821',
+    reason: 'Emergency',
+  };
+  beforeEach(() => {
+    db.restaurantSopOccurrence.findUnique.mockResolvedValue({
+      id: OCC_ID,
+      status: 'MISSED',
+      branchId: 'branch_b',
+      organizationId: 'org_1',
+    });
+    db.restaurantStaffProfile = { ...model(), count: vi.fn().mockResolvedValue(1) };
+    db.restaurantStaffProfile.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      user: { role: 'EMPLOYEE', organizationRole: { key: 'owner' } },
+    });
+  });
+  it('permits only the sole active owner after PIN verification and records both identities', async () => {
+    await waiveOccurrence(db as unknown as ScopedDb, input);
+    expect(approval.authenticate).toHaveBeenCalledWith(
+      expect.objectContaining(db),
+      expect.objectContaining({ staffProfileId: ACTOR_ID, type: 'PIN', secret: '4821' })
+    );
+    expect(approval.capable).toHaveBeenCalledWith(
+      db,
+      ACTOR_ID,
+      'coauth:approve',
+      expect.any(Date),
+      'branch_b'
+    );
+    expect(approval.independent).toHaveBeenCalledWith('org_1', expect.any(Function), {
+      skipDrain: true,
+    });
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'sop.waive.soloOwnerApproval',
+        actorStaffProfileId: ACTOR_ID,
+        targetId: OCC_ID,
+        metadata: expect.objectContaining({ coAuthorizationId: 'new_id' }),
+      }),
+    });
+    expect(db.restaurantStaffProfile.count).toHaveBeenCalledWith({ where: { status: 'ACTIVE' } });
+    expect(db.restaurantCoAuthorization.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actingStaffProfileId: ACTOR_ID,
+        approvingStaffProfileId: ACTOR_ID,
+        reason: 'Emergency',
+        targetId: OCC_ID,
+      }),
+      select: { id: true },
+    });
+    expect(db.restaurantSopVerification.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: 'WAIVE', coAuthorizationId: 'new_id' }),
+      })
+    );
+  });
+  it('requires a second approver when another active staff member exists', async () => {
+    db.restaurantStaffProfile.count.mockResolvedValue(2);
+    await expect(waiveOccurrence(db as unknown as ScopedDb, input)).rejects.toMatchObject({
+      reason: 'CO_AUTH_REQUIRED',
+    });
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+  });
+  it('denies solo staff who are not owners', async () => {
+    db.restaurantStaffProfile.findUnique.mockResolvedValue({
+      status: 'ACTIVE',
+      user: { role: 'EMPLOYEE', organizationRole: { key: 'manager' } },
+    });
+    await expect(waiveOccurrence(db as unknown as ScopedDb, input)).rejects.toMatchObject({
+      reason: 'CO_AUTH_REQUIRED',
+    });
+  });
+  it.each(['INVALID', 'LOCKED'])('denies a %s PIN without writing a waiver', async (reason) => {
+    approval.authenticate.mockResolvedValueOnce({ ok: false, reason });
+    await expect(waiveOccurrence(db as unknown as ScopedDb, input)).rejects.toMatchObject({
+      reason: 'CO_AUTH_REQUIRED',
+    });
+    expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+  it('rejects an approver ID alone', async () => {
+    await expect(
+      waiveOccurrence(db as unknown as ScopedDb, { ...input, approvingPin: undefined })
+    ).rejects.toMatchObject({ reason: 'CO_AUTH_REQUIRED' });
+    expect(db.restaurantCoAuthorization.create).not.toHaveBeenCalled();
+  });
+  it('denies an approver lacking capability in the occurrence branch', async () => {
+    approval.capable.mockResolvedValueOnce(false);
+    await expect(waiveOccurrence(db as unknown as ScopedDb, input)).rejects.toMatchObject({
+      reason: 'CO_AUTH_REQUIRED',
+    });
+    expect(db.restaurantSopOccurrence.update).not.toHaveBeenCalled();
   });
 });

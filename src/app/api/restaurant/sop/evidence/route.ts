@@ -130,7 +130,14 @@ export async function POST(request: Request) {
       source: 'TRPC',
     });
     if (!allowed) throw new Error('You do not have permission to capture SOP proof.');
-    const { staffProfileId: uploaderStaffProfileId } = await resolveRestaurantActor(ctx, []);
+    const occurrence = await ctx.db.restaurantSopOccurrence.findUnique({
+      where: { id: occurrenceId },
+      select: { branchId: true },
+    });
+    if (!occurrence) throw new Error('Occurrence not found.');
+    const { staffProfileId: uploaderStaffProfileId } = await resolveRestaurantActor(ctx, [
+      occurrence.branchId,
+    ]);
 
     const hash = crypto.createHash('sha256').update(bytes).digest('hex');
     storedFilename = `sop-${crypto.randomUUID()}.${extension}`;

@@ -104,3 +104,103 @@ describe('SopPage load failure', () => {
     expect(screen.queryByText(/private\.internal/)).not.toBeInTheDocument();
   });
 });
+
+describe('waiver credential form', () => {
+  async function readyBoard() {
+    const ctx = contextStub();
+    ctx.db.restaurantBranch.findMany.mockResolvedValue([
+      { id: 'branch-1', name: 'Main', timezone: 'UTC', businessDayCutoff: '00:00' },
+    ] as never);
+    ctx.db.restaurantStaffProfile.findMany.mockResolvedValue([
+      { id: 'owner-1', displayName: 'Owner' },
+    ] as never);
+    const occurrence = {
+      id: 'occ-1',
+      status: 'MISSED',
+      businessDate: new Date('2026-10-28'),
+      dueAt: new Date('2026-10-28T10:00:00Z'),
+      windowEndsAt: new Date('2026-10-28T11:00:00Z'),
+      steps: [],
+      evidence: [],
+      verifications: [],
+      escalationEvents: [],
+      assignment: { template: { name: 'Closing checklist', category: 'Safety' } },
+      templateVersion: { versionNumber: 1, steps: [] },
+    };
+    const caller = {
+      listOccurrences: vi.fn(async ({ status }) => ({
+        items: status === 'MISSED' ? [occurrence] : [],
+      })),
+      getOccurrence: vi.fn(async () => occurrence),
+      waive: vi.fn(async () => ({})),
+    };
+    mocks.resolveTenantActor.mockResolvedValue(actor);
+    mocks.createTRPCContext.mockResolvedValue(ctx);
+    mocks.createCaller.mockReturnValue(caller);
+    return {
+      tree: await SopPage({ searchParams: Promise.resolve({ date: '2026-10-28' }) }),
+      caller,
+    };
+  }
+  it('uses a labelled, masked numeric PIN input and forwards it for sole-owner approval', async () => {
+    const { tree, caller } = await readyBoard();
+    render(tree);
+    expect(screen.getByLabelText('Approver PIN')).toHaveAttribute('type', 'password');
+    expect(screen.getByLabelText('Approver PIN')).toHaveAttribute('inputmode', 'numeric');
+    expect(screen.getByLabelText('Approver PIN')).toBeRequired();
+    const form = new FormData();
+    for (const [key, value] of Object.entries({
+      intent: 'waive',
+      occurrenceId: 'occ-1',
+      actorStaffProfileId: 'owner-1',
+      approvingStaffProfileId: 'owner-1',
+      approvingPin: '4821',
+      reason: 'Emergency',
+    }))
+      form.set(key, value);
+    await tree.props.action(form);
+    expect(caller.waive).toHaveBeenCalledWith({
+      occurrenceId: 'occ-1',
+      actorStaffProfileId: 'owner-1',
+      approvingStaffProfileId: 'owner-1',
+      approvingPin: '4821',
+      reason: 'Emergency',
+    });
+  });
+  it('renders the existing Studio board states for visual QA', async () => {
+    const { tree } = await readyBoard();
+    if (process.env.SOP_QA_OUTPUT) {
+      const { mkdir, writeFile } = await import('node:fs/promises');
+      const { renderToStaticMarkup } = await import('react-dom/server');
+      const { createElement } = await import('react');
+      await mkdir(process.env.SOP_QA_OUTPUT, { recursive: true });
+      const variants = {
+        ready: tree.props,
+        disabled: { ...tree.props, action: undefined },
+        empty: {
+          ...tree.props,
+          state: 'empty',
+          selected: null,
+          groups: tree.props.groups.map((group: object) => ({ ...group, items: [] })),
+        },
+        error: { state: 'error' },
+        permission: { state: 'permission' },
+        success: {
+          ...tree.props,
+          notice: { kind: 'success', text: 'SOP waived with co-authorization.' },
+        },
+        failure: {
+          ...tree.props,
+          notice: { kind: 'error', text: 'Invalid or locked approving credential.' },
+        },
+      };
+      for (const [name, props] of Object.entries(variants))
+        await writeFile(
+          `${process.env.SOP_QA_OUTPUT}/${name}.html`,
+          renderToStaticMarkup(createElement(tree.type, props))
+        );
+    }
+    render(tree);
+    expect(screen.getByRole('button', { name: 'Waive occurrence' })).toBeEnabled();
+  });
+});

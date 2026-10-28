@@ -345,3 +345,49 @@ describe('hospitality capability namespace', () => {
     }
   });
 });
+
+describe('server-loaded tenant owners and administrators', () => {
+  it.each(['owner', 'admin', 'owner-operator', 'ADMIN'])(
+    'grants %s every capability while preserving explicit denies',
+    async (key) => {
+      const db = {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({
+            role: key === 'ADMIN' ? 'ADMIN' : 'EMPLOYEE',
+            organizationRole: { key, permissions: [] },
+            permissionOverrides: [],
+          }),
+        },
+      } as unknown as AuthzDb;
+      for (const action of ALL_ACTIONS) {
+        await expect(can(employee, action, undefined, { db })).resolves.toBe(true);
+      }
+      const denied = {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({
+            role: key === 'ADMIN' ? 'ADMIN' : 'EMPLOYEE',
+            organizationRole: { key, permissions: [] },
+            permissionOverrides: [{ capability: '*', effect: 'DENY' }],
+          }),
+        },
+      } as unknown as AuthzDb;
+      for (const action of ALL_ACTIONS)
+        await expect(can(employee, action, undefined, { db: denied })).resolves.toBe(false);
+    }
+  );
+  it.each(['pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review'] as const)(
+    'keeps %s exact-grant-only for nonowners',
+    async (action) => {
+      await expect(
+        can(employee, action, undefined, {
+          db: authorizationDb({ rolePermissions: [{ capability: '*', effect: 'ALLOW' }] }),
+        })
+      ).resolves.toBe(false);
+      await expect(
+        can(employee, action, undefined, {
+          db: authorizationDb({ rolePermissions: [{ capability: action, effect: 'ALLOW' }] }),
+        })
+      ).resolves.toBe(true);
+    }
+  );
+});
