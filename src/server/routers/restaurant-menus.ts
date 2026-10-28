@@ -675,7 +675,7 @@ export const restaurantMenusRouter = router({
         menuItemId: z.string().nullable().optional(),
         label: z.string().max(120).nullable().optional(),
         daysOfWeek: z.array(DAY_OF_WEEK).max(7),
-        startMinutes: MINUTE_OF_DAY,
+        startMinutes: MINUTE_OF_DAY.max(1439),
         endMinutes: MINUTE_OF_DAY,
       })
     )

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { provisionInvitedFloorStaff } from '@/lib/restaurant/invited-staff';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { hash } from 'bcryptjs';
 import { TRPCError } from '@trpc/server';
 import type { PrismaClient } from '@/generated/prisma/client';
@@ -33,12 +35,14 @@ async function loadPendingInvitation(db: PrismaClient, token: string) {
       user: {
         select: {
           id: true,
+          organizationId: true,
+          organizationRole: { select: { key: true } },
           name: true,
           email: true,
           title: true,
           department: true,
           role: true,
-          organization: { select: { isDemo: true } },
+          organization: { select: { isDemo: true, vertical: true } },
         },
       },
     },
@@ -123,6 +127,7 @@ export const invitationsRouter = router({
           },
         });
 
+        await provisionInvitedFloorStaff(tx as ScopedDb, invitation.user);
         return { email: invitation.user.email };
       });
     }),

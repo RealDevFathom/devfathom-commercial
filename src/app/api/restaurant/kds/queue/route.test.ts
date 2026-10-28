@@ -22,8 +22,8 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock('@/lib/restaurant/terminal-auth', () => ({
-  withDeviceAuth:
+vi.mock('@/lib/restaurant/kds-auth', () => ({
+  withKdsAuth:
     (handler: (ctx: typeof mocks.context, request: Request) => Promise<Response> | Response) =>
     (request: Request) =>
       handler(mocks.context, request),

@@ -6,7 +6,7 @@ import {
   requireKdsStation,
   resolveStationBusinessDate,
 } from '@/lib/restaurant/kds';
-import { withDeviceAuth } from '@/lib/restaurant/terminal-auth';
+import { withKdsAuth } from '@/lib/restaurant/kds-auth';
 
 const query = z.object({
   businessDate: z
@@ -26,7 +26,7 @@ const query = z.object({
  * on every call; `requireKdsStation` enforces `kind = KDS` + a station binding (C8).
  * The business date defaults to the branch's current one (server-time, DST-safe, C5).
  */
-export const GET = withDeviceAuth(async (ctx, request) => {
+export const GET = withKdsAuth(async (ctx, request) => {
   const station = requireKdsStation(ctx.device);
   if (!station.ok) return station.response;
 

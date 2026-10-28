@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { pendingOwnPinProfile } from '@/lib/restaurant/invited-staff';
 import { redirect } from 'next/navigation';
 import { signInRedirectPath, workspaceRedirectForPasswordChange } from '@/lib/auth/session-state';
 import { AppShell } from '@/components/layout/app-shell';
@@ -42,6 +43,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   }
   const passwordChange = workspaceRedirectForPasswordChange(actor.session.user.mustChangePassword);
   if (passwordChange) redirect(passwordChange);
+  if (actor.organization.vertical === 'RESTAURANT') {
+    const pendingPin = await withTenantDb(actor.session.user.organizationId, (db) =>
+      pendingOwnPinProfile(db, actor.session.user.id)
+    );
+    if (pendingPin) redirect('/set-pin');
+  }
   const { entitlements, brand } = await withTenantDb(actor.organization.id, async (db) => {
     const [entitlementSnapshot, organization] = await Promise.all([
       resolveOrganizationEntitlements(actor.organization.id, db),

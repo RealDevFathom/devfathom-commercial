@@ -16,15 +16,15 @@ vi.mock('./bills', async (importOriginal) => ({
   evaluateOrderSettlement: vi.fn(),
 }));
 
+vi.mock('./tenders', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./tenders')>()),
+  quoteOpenBillSettlement: vi.fn(),
+}));
 import {
   TaxConfigurationError,
   TaxProfileResolutionError,
   resolveTaxProfile,
 } from './tax-calculator';
-vi.mock('./tenders', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./tenders')>()),
-  quoteOpenBillSettlement: vi.fn(),
-}));
 
 const decimal = (value: string) => new Prisma.Decimal(value);
 

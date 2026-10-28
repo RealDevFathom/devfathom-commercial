@@ -26,6 +26,7 @@ import { buildPeopleTools } from './people';
 import type { AssistantHelpers } from '@/lib/ai/context';
 
 const db = {
+  organization: { findUnique: vi.fn(async () => ({ slug: 'bistro', domains: [] })) },
   user: { findFirst: mocks.findFirst, create: mocks.create, update: mocks.update },
   // WHA-278: the invite path validates the department against the tenant's own
   // configured catalog before writing.

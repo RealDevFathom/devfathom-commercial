@@ -1,5 +1,6 @@
 'use client';
 
+import { enumLabel } from '@/lib/enum-label';
 import { useState } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
@@ -12,7 +13,7 @@ const inputClass =
   'flex h-11 w-full rounded-lg border border-input bg-background px-4 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-brass focus:outline-none focus:ring-2 focus:ring-brass/30';
 
 function titleCase(value: string): string {
-  return value.charAt(0) + value.slice(1).toLowerCase();
+  return enumLabel(value);
 }
 
 export function AcceptInviteForm({ token }: { token: string }) {

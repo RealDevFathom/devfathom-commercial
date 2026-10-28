@@ -10,7 +10,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { DeliveryError, transitionDeliveryFulfillment } from './delivery';
 import { requireKdsStation } from './kds';
 import { lockRestaurantOrder } from './orders';
-import { withTerminalAuth } from './terminal-auth';
+import { withKdsAuth } from './kds-auth';
 import {
   idempotencyKeyFromRequest,
   invalidBody,
@@ -229,7 +229,7 @@ export function transitionDeliveryFromKds(
   });
 }
 
-export const deliveryQueueRoute = withTerminalAuth(async (ctx) => {
+export const deliveryQueueRoute = withKdsAuth(async (ctx) => {
   const station = requireKdsStation(ctx.device);
   if (!station.ok) return station.response;
   const operator = requireActingOperator(ctx);
@@ -239,7 +239,7 @@ export const deliveryQueueRoute = withTerminalAuth(async (ctx) => {
   return NextResponse.json({ serverTime: new Date().toISOString(), deliveries });
 });
 
-export const deliveryTransitionRoute = withTerminalAuth(
+export const deliveryTransitionRoute = withKdsAuth(
   async (ctx, request) => {
     const station = requireKdsStation(ctx.device);
     if (!station.ok) return station.response;

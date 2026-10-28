@@ -17,6 +17,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { matchScore, type AssistantHelpers, type ToolSet } from '@/lib/ai/context';
 import { appUrl, templates, sendEmail } from '@/lib/email';
 import { normalizeEmail } from '@/lib/email-address';
+import { tenantInviteUrl } from '@/lib/tenancy/invite-url';
 import { generateInviteToken } from '@/lib/invite-token';
 import { passwordMeetsPolicy } from '@/lib/password-policy';
 
@@ -796,6 +797,8 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           skills: skills ?? [],
         };
 
+        const inviteUrl = await tenantInviteUrl(h.db, ctx.organizationId, token);
+
         const user = await h.db.$transaction(async (tx) => {
           const u = existing
             ? await tx.user.update({
@@ -819,7 +822,6 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           return u;
         });
 
-        const inviteUrl = `${appUrl()}/invite/${token}`;
         let emailed = true;
         const mail = templates.inviteMember({
           name: user.name,

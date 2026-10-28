@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
+  vertical: 'AGENCY',
   role: 'ADMIN',
   modules: ['admin'] as string[],
   directory: vi.fn(() => ({ data: [], isLoading: false })),
@@ -17,7 +18,7 @@ vi.mock('next-auth/react', () => ({
   useSession: () => ({ data: { user: { role: state.role } } }),
 }));
 vi.mock('@/components/entitlements-provider', () => ({
-  useEntitlements: () => ({ enabledModules: state.modules }),
+  useEntitlements: () => ({ enabledModules: state.modules, vertical: state.vertical }),
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -33,6 +34,7 @@ import { AddMemberModal, TeamContent } from './team-content';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  state.vertical = 'AGENCY';
   state.departments.data = [
     { key: 'COUNTER', name: 'Counter', active: true },
     { key: 'OLD', name: 'Old department', active: false },
@@ -106,6 +108,20 @@ describe('tenant department invitation', () => {
     expect(screen.getByLabelText('Department')).toHaveValue('COUNTER');
     expect(screen.getByPlaceholderText('John Doe')).toHaveValue('Second operator');
   });
+});
+
+it.each(['Cashier', 'Kitchen', 'Server'])('offers and submits the restaurant %s role', (label) => {
+  state.vertical = 'RESTAURANT';
+  state.departments.data = [{ key: 'FRONT_OF_HOUSE', name: 'Front of house', active: true }];
+  render(<AddMemberModal onClose={vi.fn()} />);
+  fill();
+  fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'FRONT_OF_HOUSE' } });
+  fireEvent.click(screen.getByRole('button', { name: label }));
+  fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+  expect(state.invite.mutate).toHaveBeenCalledWith(
+    expect.objectContaining({ role: label.toLowerCase() }),
+    expect.any(Object)
+  );
 });
 
 describe('baseline workspace invitations', () => {

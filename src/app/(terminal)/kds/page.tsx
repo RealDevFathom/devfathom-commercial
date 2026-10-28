@@ -1,3 +1,6 @@
+import { redirect } from 'next/navigation';
+import { can, subjectFromSession } from '@/lib/abac';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import type { Metadata } from 'next';
 import { SessionProvider } from 'next-auth/react';
 
@@ -13,6 +16,16 @@ export const metadata: Metadata = {
 
 export default async function KdsPage() {
   const actor = await resolveTenantActor();
+  if (
+    actor &&
+    !(await withTenantDb(actor.session.user.organizationId, (db) =>
+      can(subjectFromSession(actor.session.user), 'kitchen:operate', undefined, {
+        db,
+        source: 'TRPC',
+      })
+    ))
+  )
+    redirect('/dashboard');
   const demo = actor?.organization.isDemo === true;
   return (
     <>

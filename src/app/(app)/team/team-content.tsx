@@ -24,6 +24,7 @@ import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
 import { trpc } from '@/lib/trpc';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
+import { enumLabel } from '@/lib/enum-label';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
 
@@ -128,7 +129,7 @@ export function TeamContent() {
                   : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
               )}
             >
-              {d.charAt(0) + d.slice(1).toLowerCase()}
+              {enumLabel(d)}
             </button>
           ))}
         </div>
@@ -213,7 +214,7 @@ const TeamMemberCard = memo(function TeamMemberCard({ member }: { member: TeamMe
                     departmentColors[member.department]
                   )}
                 >
-                  {member.department.charAt(0) + member.department.slice(1).toLowerCase()}
+                  {enumLabel(member.department)}
                 </span>
                 {member.role === 'ADMIN' && (
                   <span className="rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
@@ -251,6 +252,7 @@ const TeamMemberCard = memo(function TeamMemberCard({ member }: { member: TeamMe
 });
 
 export function AddMemberModal({ onClose }: { onClose: () => void }) {
+  const { vertical } = useEntitlements();
   const utils = trpc.useUtils();
   const inviteMember = trpc.team.inviteMember.useMutation();
   const departmentQuery = trpc.organizationAdmin.departments.useQuery(undefined, { retry: false });
@@ -258,7 +260,9 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [role, setRole] = useState<'ADMIN' | 'HR' | 'EMPLOYEE'>('EMPLOYEE');
+  const [role, setRole] = useState<'ADMIN' | 'HR' | 'EMPLOYEE' | 'cashier' | 'kitchen' | 'server'>(
+    'EMPLOYEE'
+  );
   const [department, setDepartment] = useState('');
   const [title, setTitle] = useState('');
   const [phone, setPhone] = useState('');
@@ -483,8 +487,17 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-foreground mb-1.5">Role</label>
-                    <div className="flex rounded-xl border border-border overflow-hidden">
-                      {(['EMPLOYEE', 'HR', 'ADMIN'] as const).map((r) => (
+                    <div className="flex flex-wrap rounded-xl border border-border overflow-hidden">
+                      {(
+                        [
+                          'EMPLOYEE',
+                          'HR',
+                          'ADMIN',
+                          ...(vertical === 'RESTAURANT'
+                            ? (['cashier', 'kitchen', 'server'] as const)
+                            : []),
+                        ] as const
+                      ).map((r) => (
                         <button
                           key={r}
                           onClick={() => setRole(r)}
@@ -495,7 +508,7 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                               : 'bg-card text-muted-foreground hover:text-foreground'
                           )}
                         >
-                          {r === 'EMPLOYEE' ? 'Employee' : r === 'HR' ? 'HR' : 'Admin'}
+                          {enumLabel(r)}
                         </button>
                       ))}
                     </div>

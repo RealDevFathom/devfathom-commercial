@@ -1,3 +1,4 @@
+import { staffHasCapability } from '@/lib/restaurant/job-roles';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -51,6 +52,20 @@ export const POST = withTerminalAuth(async (ctx, request) => {
   }
 
   const now = new Date();
+  if (
+    ctx.device.kind === 'KDS' &&
+    !(await staffHasCapability(
+      ctx.db,
+      parsed.data.staffProfileId,
+      ctx.device.branchId,
+      'kitchen:operate'
+    ))
+  ) {
+    return NextResponse.json(
+      { error: 'Kitchen operation permission is required.' },
+      { status: 403 }
+    );
+  }
   const auth = await authenticateOperator(ctx.db, {
     staffProfileId,
     deviceId: ctx.device.id,
