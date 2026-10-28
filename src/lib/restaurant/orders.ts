@@ -23,6 +23,7 @@ import {
   type OrderChannel,
 } from './order-channels';
 import { allocateOrderNumber } from './order-numbers';
+import { isValidOrderItemQuantity, MAX_ORDER_ITEM_QUANTITY } from './order-quantity';
 import {
   resolveItemSnapshot,
   resolveModifierSnapshots,
@@ -559,7 +560,17 @@ export type AddItemInput = {
 
 export type ItemResult = { itemId: string; replayed: boolean };
 
+function assertOrderItemQuantity(quantity: number | undefined): void {
+  if (quantity !== undefined && !isValidOrderItemQuantity(quantity)) {
+    throw new OrderCommandError(
+      `Item quantity must be a safe integer between 1 and ${MAX_ORDER_ITEM_QUANTITY}.`,
+      'INVALID'
+    );
+  }
+}
+
 export async function addItem(db: ScopedDb, input: AddItemInput): Promise<ItemResult> {
+  assertOrderItemQuantity(input.quantity);
   const at = input.now ?? new Date();
   return runInTransaction(db, async (tx) => {
     const idem = await beginIdempotent(tx, input.actor, 'item.add');
@@ -651,6 +662,7 @@ export type AdjustItemInput = {
 };
 
 export async function adjustItem(db: ScopedDb, input: AdjustItemInput): Promise<ItemResult> {
+  assertOrderItemQuantity(input.quantity);
   return runInTransaction(db, async (tx) => {
     const idem = await beginIdempotent(tx, input.actor, 'item.adjust');
     if (idem.replay) return { itemId: idem.resultRef ?? input.itemId, replayed: true };

@@ -14,7 +14,7 @@ vi.mock('server-only', () => ({}));
 
 import { CoAuthorizationError } from './co-authorization';
 import { KitchenTicketError } from './kitchen-tickets';
-import { OrderCommandError } from './orders';
+import { addItem, adjustItem, OrderCommandError } from './orders';
 import { OrderPricingError } from './order-pricing';
 import { OrderInvariantError, OrderTransitionError } from './order-state-machine';
 import {
@@ -37,6 +37,7 @@ import {
   type TerminalEffectiveMenu,
 } from './terminal-orders';
 import type { TerminalContext } from './terminal-auth';
+import { MAX_ORDER_ITEM_QUANTITY } from './order-quantity';
 
 function req(headers: Record<string, string> = {}): Request {
   return new Request('https://tenant.test/api/restaurant/orders/open', { method: 'POST', headers });
@@ -126,6 +127,44 @@ describe('strict input schemas (C7)', () => {
     expect(addItemBody.safeParse({ orderId: 'o1', menuItemId: 'm1', quantity: 0 }).success).toBe(
       false
     );
+    expect(
+      addItemBody.safeParse({
+        orderId: 'o1',
+        menuItemId: 'm1',
+        quantity: MAX_ORDER_ITEM_QUANTITY,
+      }).success
+    ).toBe(true);
+    expect(
+      addItemBody.safeParse({
+        orderId: 'o1',
+        menuItemId: 'm1',
+        quantity: MAX_ORDER_ITEM_QUANTITY + 1,
+      }).success
+    ).toBe(false);
+  });
+});
+
+describe('order item quantity command invariant', () => {
+  const actor = { staffProfileId: 'staff_1', deviceId: 'device_1', idempotencyKey: 'key_1' };
+
+  it('rejects excessive quantities before accessing the database', async () => {
+    const db = {} as ScopedDb;
+    await expect(
+      addItem(db, {
+        orderId: 'o1',
+        menuItemId: 'm1',
+        quantity: MAX_ORDER_ITEM_QUANTITY + 1,
+        actor,
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+    await expect(
+      adjustItem(db, {
+        orderId: 'o1',
+        itemId: 'i1',
+        quantity: Number.MAX_SAFE_INTEGER + 1,
+        actor,
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID' });
   });
 });
 

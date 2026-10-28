@@ -11,6 +11,7 @@ import { CoAuthorizationError } from '@/lib/restaurant/co-authorization';
 import { KitchenTicketError } from '@/lib/restaurant/kitchen-tickets';
 import { OrderPricingError } from '@/lib/restaurant/order-pricing';
 import { operationalOrderChannelSchema, orderChannelSchema } from '@/lib/restaurant/order-channels';
+import { MAX_ORDER_ITEM_QUANTITY } from '@/lib/restaurant/order-quantity';
 import { OrderInvariantError, OrderTransitionError } from '@/lib/restaurant/order-state-machine';
 import {
   OrderCommandError,
@@ -236,7 +237,7 @@ export const restaurantOrdersRouter = router({
         .object({
           orderId: ID,
           menuItemId: ID,
-          quantity: z.number().int().min(1).optional(),
+          quantity: z.number().int().min(1).max(MAX_ORDER_ITEM_QUANTITY).optional(),
           course: z.number().int().min(1).optional(),
           seatNumber: z.number().int().min(1).nullish(),
           modifierOptionIds: z.array(ID).optional(),
@@ -271,7 +272,7 @@ export const restaurantOrdersRouter = router({
         .object({
           orderId: ID,
           itemId: ID,
-          quantity: z.number().int().min(1).optional(),
+          quantity: z.number().int().min(1).max(MAX_ORDER_ITEM_QUANTITY).optional(),
           course: z.number().int().min(1).optional(),
           seatNumber: z.number().int().min(1).nullish(),
           modifierOptionIds: z.array(ID).optional(),

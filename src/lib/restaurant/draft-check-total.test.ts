@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { quoteDraftCheckTotal } from './draft-check-total';
-import type { TaxProfile, TaxRule } from './tax-calculator';
+import {
+  MAX_DRAFT_CHECK_UNITS,
+  quoteDraftCheckBreakdown,
+  quoteDraftCheckTotal,
+} from './draft-check-total';
+import { MAX_ORDER_ITEM_QUANTITY } from './order-quantity';
+import { quoteTaxSettlement, type TaxProfile, type TaxRule } from './tax-calculator';
 
 const at = new Date('2030-06-01T00:00:00Z');
 
@@ -81,5 +86,102 @@ describe('quoteDraftCheckTotal', () => {
         lines: [{ id: 'coffee', unitPrice: '4.00', quantity: 1, modifierDeltas: ['0.50'] }],
       })
     ).toBe('4.50');
+  });
+
+  it('rounds tax per unit to match settlement for multi-quantity lines', () => {
+    const rules = [rule('CASH', '0.10'), rule('CARD', '0.10'), rule('OTHER', '0.10')];
+    const preview = quoteDraftCheckBreakdown({
+      at,
+      profiles: [profile],
+      rules,
+      lines: [{ id: 'small-item', unitPrice: '0.05', quantity: 3 }],
+    });
+    const settlement = quoteTaxSettlement({
+      at,
+      profiles: [profile],
+      rules,
+      proposedTenderType: 'CASH',
+      acceptedPrincipal: '0.18',
+      lines: Array.from({ length: 3 }, (_, unitOrdinal) => ({
+        id: `small-item:${unitOrdinal}`,
+        unitPrice: '0.05',
+        quantity: 1,
+      })),
+    });
+
+    expect(preview).toEqual({ tax: '0.03', serviceCharge: '0.00', total: '0.18' });
+    expect(settlement.tax.toFixed(2)).toBe(preview.tax);
+    expect(settlement.grandTotal.toFixed(2)).toBe(preview.total);
+    expect(settlement.roundingAdjustment.toFixed(2)).toBe('0.00');
+    expect(settlement.remainingDue.toFixed(2)).toBe('0.00');
+  });
+
+  it('applies modifiers to every expanded unit', () => {
+    expect(
+      quoteDraftCheckBreakdown({
+        at,
+        profiles: [profile],
+        rules: [rule('CASH', '0.10'), rule('CARD', '0.10'), rule('OTHER', '0.10')],
+        lines: [
+          { id: 'small-item', unitPrice: '0.04', quantity: 2, modifierDeltas: ['0.01'] },
+        ],
+      })
+    ).toEqual({ tax: '0.02', serviceCharge: '0.00', total: '0.12' });
+  });
+
+  it.each([
+    0,
+    -1,
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    MAX_ORDER_ITEM_QUANTITY + 1,
+    Number.MAX_SAFE_INTEGER + 1,
+  ])(
+    'rejects invalid quantity %s before expanding units',
+    (quantity) => {
+      expect(() =>
+        quoteDraftCheckBreakdown({
+          at,
+          lines: [{ id: 'invalid', unitPrice: '1.00', quantity }],
+        })
+      ).toThrow(RangeError);
+    }
+  );
+
+  it('accepts a quantity within the order-line limit', () => {
+    expect(
+      quoteDraftCheckTotal({
+        at,
+        lines: [{ id: 'valid', unitPrice: '0.01', quantity: MAX_ORDER_ITEM_QUANTITY }],
+      })
+    ).toBe('1.00');
+  });
+
+  it('accepts an aggregate quantity at the draft-check limit', () => {
+    const lines = Array.from(
+      { length: MAX_DRAFT_CHECK_UNITS / MAX_ORDER_ITEM_QUANTITY },
+      (_, index) => ({
+        id: `item-${index}`,
+        unitPrice: '0.01',
+        quantity: MAX_ORDER_ITEM_QUANTITY,
+      })
+    );
+
+    expect(quoteDraftCheckTotal({ at, lines })).toBe('100.00');
+  });
+
+  it('rejects an excessive aggregate quantity before allocating units', () => {
+    const fullLines = MAX_DRAFT_CHECK_UNITS / MAX_ORDER_ITEM_QUANTITY;
+    const lines = Array.from({ length: fullLines + 1 }, (_, index) => ({
+      id: `item-${index}`,
+      unitPrice: '0.01',
+      quantity: MAX_ORDER_ITEM_QUANTITY,
+    }));
+
+    expect(() => quoteDraftCheckBreakdown({ at, lines })).toThrow(
+      `Draft check cannot exceed ${MAX_DRAFT_CHECK_UNITS} physical units.`
+    );
   });
 });

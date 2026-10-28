@@ -1,5 +1,12 @@
 import { add, formatMoney, multiply, roundMoney, sum } from '@/lib/restaurant/money-arithmetic';
+import {
+  isValidOrderItemQuantity,
+  MAX_ORDER_ITEM_QUANTITY,
+} from '@/lib/restaurant/order-quantity';
 import { quoteTaxSettlement, type TaxProfile, type TaxRule } from '@/lib/restaurant/tax-calculator';
+
+/** Upper bound for the eager per-unit representation used by draft tax quotes. */
+export const MAX_DRAFT_CHECK_UNITS = 10_000;
 
 export type DraftCheckLine = {
   id: string;
@@ -39,12 +46,30 @@ export type DraftCheckBreakdown = {
 export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftCheckBreakdown {
   const at = input.at ?? new Date();
   const fallback = input.profiles ? null : zeroTax(at);
-  const lines = input.lines.map((line) => ({
-    id: line.id,
-    unitPrice: line.unitPrice,
-    quantity: line.quantity,
-    modifierTotal: formatMoney(sum(line.modifierDeltas ?? [])),
-  }));
+  let unitCount = 0;
+  for (const line of input.lines) {
+    if (!isValidOrderItemQuantity(line.quantity)) {
+      throw new RangeError(
+        `Draft check line quantity must be an integer between 1 and ${MAX_ORDER_ITEM_QUANTITY}.`
+      );
+    }
+    unitCount += line.quantity;
+    if (unitCount > MAX_DRAFT_CHECK_UNITS) {
+      throw new RangeError(`Draft check cannot exceed ${MAX_DRAFT_CHECK_UNITS} physical units.`);
+    }
+  }
+  // Settlement taxes each physical unit independently. Expand draft lines the
+  // same way so per-line tax rounding cannot make a preview disagree with the
+  // amount required at tender time.
+  const lines = input.lines.flatMap((line) => {
+    const modifierTotal = formatMoney(sum(line.modifierDeltas ?? []));
+    return Array.from({ length: line.quantity }, (_, unitOrdinal) => ({
+      id: `${line.id}:${unitOrdinal}`,
+      unitPrice: line.unitPrice,
+      quantity: 1,
+      modifierTotal,
+    }));
+  });
   const basis = sum(
     lines.map((line) => multiply(add(line.unitPrice, line.modifierTotal), line.quantity))
   );

@@ -25,6 +25,7 @@ import {
   type OrderChannel,
 } from './menu-availability';
 import { OrderCommandError, type CommandActor } from './orders';
+import { MAX_ORDER_ITEM_QUANTITY } from './order-quantity';
 import { OrderPricingError } from './order-pricing';
 import { OrderInvariantError, OrderTransitionError } from './order-state-machine';
 import { pickEntry, resolveEffectiveEntries, type ResolvedPriceList } from './price-lists';
@@ -104,7 +105,7 @@ export const addItemBody = z
   .object({
     orderId: ID,
     menuItemId: ID,
-    quantity: z.number().int().min(1).optional(),
+    quantity: z.number().int().min(1).max(MAX_ORDER_ITEM_QUANTITY).optional(),
     course: z.number().int().min(1).optional(),
     seatNumber: z.number().int().min(1).nullish(),
     modifierOptionIds: z.array(ID).optional(),
