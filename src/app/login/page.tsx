@@ -80,65 +80,76 @@ export default async function LoginPage(props: LoginPageProps) {
     : { connections: [], enforced: false };
 
   return (
-    <div className="min-h-dvh bg-background text-foreground lg:grid lg:grid-cols-[minmax(0,1.08fr)_minmax(26rem,0.92fr)]">
-      {/* Blueprint field panel — desktop only */}
-      <LoginHero />
+    <>
+      <a
+        href="#main-content"
+        className="sr-only fixed top-3 left-3 z-50 rounded-[3px] bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground focus:not-sr-only"
+      >
+        Skip to content
+      </a>
+      <main
+        id="main-content"
+        className="min-h-dvh bg-background text-foreground lg:grid lg:grid-cols-[minmax(0,1.08fr)_minmax(26rem,0.92fr)]"
+      >
+        {/* Blueprint field panel — desktop only */}
+        <LoginHero />
 
-      {/* Sign-in sheet */}
-      <div className="relative flex min-h-dvh items-center justify-center px-5 py-10 sm:px-10">
-        <div className="w-full max-w-[25rem] animate-slide-up">
-          <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <Logo variant="auto" size="md" textClassName="text-foreground" />
-            <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
-              Fieldbook / access
-            </span>
-          </div>
+        {/* Sign-in sheet */}
+        <div className="relative flex min-h-dvh items-center justify-center px-5 py-10 sm:px-10">
+          <div className="w-full max-w-[25rem] animate-slide-up">
+            <div className="mb-8 flex items-center gap-3 lg:hidden">
+              <Logo variant="auto" size="md" textClassName="text-foreground" />
+              <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
+                Fieldbook / access
+              </span>
+            </div>
 
-          <div className="border-l-2 border-primary pl-5 sm:pl-6">
-            {/* Mobile logo */}
-            {/* The shared form owns its heading because the heading changes with
-                the step — "Welcome back" would be wrong on the selection screen.
-                Either way the page renders exactly one <h1>. */}
-            {shared ? null : (
-              <div className="mb-8">
-                <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-brand">
-                  Secure workspace access
+            <div className="border-l-2 border-primary pl-5 sm:pl-6">
+              {/* Mobile logo */}
+              {/* The shared form owns its heading because the heading changes with
+                  the step — "Welcome back" would be wrong on the selection screen.
+                  Either way the page renders exactly one <h1>. */}
+              {shared ? null : (
+                <div className="mb-8">
+                  <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-brand">
+                    Secure workspace access
+                  </p>
+                  <h1 className="mt-3 font-display text-[clamp(2rem,4vw,2.7rem)] font-semibold tracking-[-0.05em] text-foreground">
+                    Welcome back
+                  </h1>
+                  <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
+                    Sign in to pick up the work your team is moving forward.
+                  </p>
+                </div>
+              )}
+
+              {notice ? (
+                <p
+                  role="status"
+                  className="mb-5 border-l-2 border-accent-brand bg-muted px-4 py-3 text-sm leading-5 text-text-muted"
+                >
+                  {notice}
                 </p>
-                <h1 className="mt-3 font-display text-[clamp(2rem,4vw,2.7rem)] font-semibold tracking-[-0.05em] text-foreground">
-                  Welcome back
-                </h1>
-                <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
-                  Sign in to pick up the work your team is moving forward.
-                </p>
-              </div>
-            )}
+              ) : null}
 
-            {notice ? (
-              <p
-                role="status"
-                className="mb-5 border-l-2 border-accent-brand bg-muted px-4 py-3 text-sm leading-5 text-text-muted"
-              >
-                {notice}
-              </p>
-            ) : null}
+              {shared ? (
+                <SharedLoginForm callbackUrl={callbackUrl} initialError={initialError} />
+              ) : (
+                <LoginForm
+                  connections={identity.connections}
+                  ssoEnforced={identity.enforced}
+                  callbackUrl={callbackUrl}
+                  initialError={initialError}
+                />
+              )}
+            </div>
 
-            {shared ? (
-              <SharedLoginForm callbackUrl={callbackUrl} initialError={initialError} />
-            ) : (
-              <LoginForm
-                connections={identity.connections}
-                ssoEnforced={identity.enforced}
-                callbackUrl={callbackUrl}
-                initialError={initialError}
-              />
-            )}
+            <p className="mt-8 text-xs text-muted-foreground">
+              Need access? Contact your workspace admin.
+            </p>
           </div>
-
-          <p className="mt-8 text-xs text-muted-foreground">
-            Need access? Contact your workspace admin.
-          </p>
         </div>
-      </div>
-    </div>
+      </main>
+    </>
   );
 }

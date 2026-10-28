@@ -209,6 +209,13 @@ export function AppShell({
 
   return (
     <div className="studio-viewport h-dvh overflow-hidden" style={brandStyle}>
+      <a
+        href="#main-content"
+        className="sr-only fixed top-3 left-3 z-50 rounded-[3px] bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground focus:not-sr-only"
+      >
+        Skip to content
+      </a>
+
       {/* Mobile overlay */}
       {mobileMenuOpen && (
         <>
@@ -255,6 +262,7 @@ export function AppShell({
         <AdministratorStaffProfileCallout />
         <TopNavigation />
         <main
+          id="main-content"
           data-slot="app-canvas"
           className={cn(
             'studio-canvas relative min-h-0 flex-1 scroll-pt-24',

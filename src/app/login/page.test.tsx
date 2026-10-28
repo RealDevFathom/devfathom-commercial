@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
 
 const mocks = vi.hoisted(() => ({ actor: vi.fn(), headers: vi.fn(), redirect: vi.fn() }));
 vi.mock('server-only', () => ({}));
@@ -36,4 +37,15 @@ it('renders sign-in when the workspace guard rejects the session', async () => {
   mocks.actor.mockResolvedValue(null);
   expect(await LoginPage({ searchParams: Promise.resolve({}) })).toBeTruthy();
   expect(mocks.redirect).not.toHaveBeenCalled();
+});
+
+it('starts with a skip link targeting the main sign-in landmark', async () => {
+  mocks.actor.mockResolvedValue(null);
+  render(await LoginPage({ searchParams: Promise.resolve({}) }));
+
+  const skipLink = screen.getByRole('link', { name: 'Skip to content' });
+  const main = screen.getByRole('main');
+  expect(document.querySelectorAll('a, button, input, select, textarea')[0]).toBe(skipLink);
+  expect(skipLink).toHaveAttribute('href', '#main-content');
+  expect(main).toHaveAttribute('id', 'main-content');
 });
