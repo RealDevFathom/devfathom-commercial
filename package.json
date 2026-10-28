@@ -90,7 +90,7 @@
     "livekit-client": "^2.22.1",
     "livekit-server-sdk": "^2.18.0",
     "lucide-react": "^1.8.0",
-    "motion": "^12.40.0",
+    "motion": "^13.4.4",
     "next": "16.4.2",
     "next-auth": "5.0.0-beta.32",
     "openid-client": "6.8.4",
