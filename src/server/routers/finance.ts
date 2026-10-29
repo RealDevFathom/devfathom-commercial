@@ -479,6 +479,50 @@ export const financeRouter = router({
         });
       }
 
+      // Marking an issued invoice paid must also settle its ledger balance. Keep
+      // the balancing payment and status compare-and-set in one transaction so
+      // readers can never observe PAID with an outstanding balance.
+      if (next === 'PAID') {
+        return ctx.db.$transaction(async (tx) => {
+          const invoice = await tx.invoice.findUnique({
+            where: { id: input.id },
+            select: { id: true, total: true, currency: true },
+          });
+          if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
+
+          const priorPayments = await tx.payment.aggregate({
+            where: { invoiceId: invoice.id },
+            _sum: { amount: true },
+          });
+          const balance = round2(Number(invoice.total) - Number(priorPayments._sum.amount ?? 0));
+          const changedAt = new Date();
+          const changed = await tx.invoice.updateMany({
+            where: { id: invoice.id, status: prior },
+            data: { ...invoiceStatusUpdate(prior, next, changedAt), paidAt: changedAt },
+          });
+          if (changed.count !== 1) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'Invoice status changed concurrently. Refresh and try again.',
+            });
+          }
+          if (balance > PAYMENT_EPSILON) {
+            await tx.payment.create({
+              data: {
+                invoiceId: invoice.id,
+                amount: balance,
+                currency: invoice.currency,
+                method: 'Manual status update',
+              },
+            });
+          }
+          return tx.invoice.findUniqueOrThrow({
+            where: { id: invoice.id },
+            include: { client: { select: { name: true } } },
+          });
+        });
+      }
+
       const changed = await ctx.db.invoice.updateMany({
         where: { id: input.id, status: prior },
         data: invoiceStatusUpdate(prior, next, new Date()),

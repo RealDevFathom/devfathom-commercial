@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
   findUniqueOrThrow: vi.fn(),
   updateMany: vi.fn(),
+  aggregate: vi.fn(),
+  createPayment: vi.fn(),
   logActivity: vi.fn(),
 }));
 
@@ -25,13 +27,18 @@ import type { TRPCContext } from '../trpc';
 import { financeRouter } from './finance';
 
 function caller() {
+  const tx = {
+    invoice: {
+      findUnique: mocks.findUnique,
+      findUniqueOrThrow: mocks.findUniqueOrThrow,
+      updateMany: mocks.updateMany,
+    },
+    payment: { aggregate: mocks.aggregate, create: mocks.createPayment },
+  };
   return financeRouter.createCaller({
     db: {
-      invoice: {
-        findUnique: mocks.findUnique,
-        findUniqueOrThrow: mocks.findUniqueOrThrow,
-        updateMany: mocks.updateMany,
-      },
+      ...tx,
+      $transaction: vi.fn(async (callback) => callback(tx)),
     },
     entitlements: { organizationId: 'org-1', enabledModules: [], modules: [] },
     session: {
@@ -50,6 +57,8 @@ describe('finance.updateInvoiceStatus', () => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
     mocks.updateMany.mockResolvedValue({ count: 1 });
+    mocks.aggregate.mockResolvedValue({ _sum: { amount: 25 } });
+    mocks.createPayment.mockResolvedValue({});
     mocks.findUniqueOrThrow.mockResolvedValue({
       id: 'invoice-1',
       invoiceNumber: 'INV-1',
@@ -59,15 +68,33 @@ describe('finance.updateInvoiceStatus', () => {
     });
   });
 
-  it.each(['SENT', 'OVERDUE', 'PAID'])('rejects direct PAID from %s', async (status) => {
-    mocks.findUnique.mockResolvedValue({ status });
+  it.each(['SENT', 'OVERDUE'])(
+    'records the outstanding balance when marking %s paid',
+    async (status) => {
+      mocks.findUnique
+        .mockResolvedValueOnce({ status })
+        .mockResolvedValueOnce({ id: 'invoice-1', total: 100, currency: 'USD' });
 
-    await expect(
-      caller().updateInvoiceStatus({ id: 'invoice-1', status: 'PAID' })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(mocks.updateMany).not.toHaveBeenCalled();
-    expect(mocks.logActivity).not.toHaveBeenCalled();
-  });
+      await caller().updateInvoiceStatus({ id: 'invoice-1', status: 'PAID' });
+
+      expect(mocks.createPayment).toHaveBeenCalledWith({
+        data: {
+          invoiceId: 'invoice-1',
+          amount: 75,
+          currency: 'USD',
+          method: 'Manual status update',
+        },
+      });
+      expect(mocks.updateMany).toHaveBeenCalledWith({
+        where: { id: 'invoice-1', status },
+        data: {
+          status: 'PAID',
+          paidAt: expect.any(Date),
+          ...(status === 'SENT' && { sentAt: null }),
+        },
+      });
+    }
+  );
 
   it('clears sentAt using a status compare-and-set', async () => {
     mocks.findUnique.mockResolvedValue({ status: 'SENT' });

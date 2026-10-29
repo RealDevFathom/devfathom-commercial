@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssistantHelpers } from '@/lib/ai/context';
-import { PAID_STATUS_ERROR } from '@/lib/finance/invoice-status';
 
 vi.mock('server-only', () => ({}));
 
@@ -18,7 +17,7 @@ const invoice = {
 };
 
 function setup(prior: string, changed = 1) {
-  const db = {
+  const tx = {
     invoice: {
       findMany: vi
         .fn()
@@ -27,8 +26,14 @@ function setup(prior: string, changed = 1) {
         ]),
       updateMany: vi.fn().mockResolvedValue({ count: changed }),
       findUniqueOrThrow: vi.fn().mockResolvedValue({ ...invoice, status: prior }),
+      findUnique: vi.fn().mockResolvedValue(invoice),
+    },
+    payment: {
+      aggregate: vi.fn().mockResolvedValue({ _sum: { amount: 40 } }),
+      create: vi.fn().mockResolvedValue({}),
     },
   };
+  const db = { ...tx, $transaction: vi.fn(async (callback) => callback(tx)) };
   const helpers = {
     db,
     isAdmin: true,
@@ -47,17 +52,32 @@ function setup(prior: string, changed = 1) {
 describe('assistant updateInvoiceStatus', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it.each(['SENT', 'OVERDUE', 'PAID'])(
-    'rejects direct PAID from %s without side effects',
+  it.each(['SENT', 'OVERDUE'])(
+    'records a balancing payment when marking %s paid',
     async (prior) => {
       const { db, helpers, tool } = setup(prior);
 
       const result = await tool.execute({ invoiceNumber: invoice.invoiceNumber, status: 'PAID' });
 
-      expect(result.error).toBe(PAID_STATUS_ERROR);
-      expect(db.invoice.updateMany).not.toHaveBeenCalled();
+      expect(result.error).toBeUndefined();
+      expect(db.payment.create).toHaveBeenCalledWith({
+        data: {
+          invoiceId: invoice.id,
+          amount: 60,
+          currency: 'USD',
+          method: 'Manual status update',
+        },
+      });
+      expect(db.invoice.updateMany).toHaveBeenCalledWith({
+        where: { id: invoice.id, status: prior },
+        data: {
+          status: 'PAID',
+          paidAt: new Date('2026-10-21T00:00:00Z'),
+          ...(prior === 'SENT' && { sentAt: null }),
+        },
+      });
       expect(helpers.activity).not.toHaveBeenCalled();
-      expect(helpers.audit).not.toHaveBeenCalled();
+      expect(helpers.audit).toHaveBeenCalledOnce();
       expect(helpers.notifyUsers).not.toHaveBeenCalled();
     }
   );
