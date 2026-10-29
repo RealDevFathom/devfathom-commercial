@@ -29,6 +29,9 @@ export type ReportScope = {
 type JournalReportScope = Omit<ReportScope, 'organizationId'> & {
   organizationId: string | Prisma.Sql;
   branchIds?: string[];
+  supplierId?: string;
+  ingredientId?: string;
+  batchId?: string;
 };
 
 function branchFilter(scope: JournalReportScope) {
@@ -36,6 +39,37 @@ function branchFilter(scope: JournalReportScope) {
   return scope.branchId
     ? Prisma.sql`AND line."branchId" = ${scope.branchId}`
     : Prisma.sql`AND TRUE`;
+}
+
+function marginDimensionFilter(scope: JournalReportScope) {
+  return Prisma.sql`
+    ${scope.batchId ? Prisma.sql`AND lot."manufacturingBatchId" = ${scope.batchId}` : Prisma.empty}
+    ${
+      scope.ingredientId
+        ? Prisma.sql`AND EXISTS (
+            SELECT 1 FROM "pharmacy_medicine_strength_components" component
+             WHERE component."organizationId" = line."organizationId"
+               AND component."medicineId" = line."productId"
+               AND component."ingredientId" = ${scope.ingredientId}
+          )`
+        : Prisma.empty
+    }
+    ${
+      scope.supplierId
+        ? Prisma.sql`AND EXISTS (
+            SELECT 1
+              FROM "pharmacy_goods_receipt_lines" receipt_line
+              JOIN "pharmacy_goods_receipts" receipt
+                ON receipt."organizationId" = receipt_line."organizationId"
+               AND receipt."branchId" = receipt_line."branchId"
+               AND receipt."id" = receipt_line."goodsReceiptId"
+             WHERE receipt_line."organizationId" = line."organizationId"
+               AND receipt_line."branchId" = line."branchId"
+               AND receipt_line."inventoryLotId" = line."lotId"
+               AND receipt."supplierId" = ${scope.supplierId}
+          )`
+        : Prisma.empty
+    }`;
 }
 
 export type ValuationRow = {
@@ -146,6 +180,7 @@ export function grossMarginQuery(
          AND entry."occurredAt" >= ${input.from}
          AND entry."occurredAt" < ${input.to}
          ${branchFilter(scope)}
+         ${marginDimensionFilter(scope)}
     )
     SELECT "key",
            -- Revenue is a credit account: a credit increases it, so its signed
