@@ -370,7 +370,12 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
         idempotencyKey: randomUUID(),
       })
     );
-    const receipt = await tenant((db) => counter.readCounterReceipt(db, scope, sale.id));
+    const receipt = await tenant((db) =>
+      counter.readCounterReceipt(db, scope, sale.id, {
+        name: 'SEC643 Pharmacy',
+        currency: 'PKR',
+      })
+    );
     expect(receipt.totals.netMinor).toBe(preview.grossMinor);
     expect(receipt.totals.tenderedMinor).toBe(preview.grossMinor);
   }, 30_000);
