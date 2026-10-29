@@ -12,6 +12,12 @@ import {
   type CounterReceiptLine,
 } from './counter-receipt';
 import { PrintDocumentSchema } from '@/lib/restaurant/printing/contract';
+import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
+import {
+  buildCounterReceiptPreview,
+  exactReceiptPriceBreakdown,
+} from './counter-receipt-presentation';
+import { buildPharmacyReceiptPrintDocument } from './receipt-print';
 
 function receiptLine(overrides: Partial<CounterReceiptLine> = {}): CounterReceiptLine {
   return {
@@ -63,6 +69,32 @@ describe('formatMinor', () => {
     // 1000 × 0.01 must be exactly 10.00, which is what a float would lose.
     const total = Array.from({ length: 1_000 }, () => 1).reduce((sum, value) => sum + value, 0);
     expect(formatMinor(total)).toBe('10.00');
+  });
+});
+
+describe('mixed-lot receipt arithmetic', () => {
+  const mixedLotLine = receiptLine({
+    quantity: 3,
+    unitPriceMinor: 100,
+    discountMinor: 0,
+    lineTotalMinor: 301,
+  });
+
+  it('presents an exact unit-price allocation in the browser receipt', () => {
+    expect(exactReceiptPriceBreakdown(3, 301)).toBe('2 × 1.00 + 1 × 1.01');
+    const preview = buildCounterReceiptPreview(receipt({ lines: [mixedLotLine] }), 'en', 80);
+    expect(preview).toContain('2 × 1.00 + 1 × 1.01');
+    expect(preview).not.toContain('3 STRIP × 1.00');
+  });
+
+  it('prints the same exact allocation on the ESC/POS receipt', () => {
+    const document = buildPharmacyReceiptPrintDocument(receipt({ lines: [mixedLotLine] }), 'en', {
+      layout: DEFAULT_RECEIPT_LAYOUT,
+      taxIdentity: { ntn: null, strn: null },
+      reprint: false,
+    });
+    expect(document.receiptSnapshot?.facts.lines[0]).toContain('2 x 1.00 + 1 x 1.01');
+    expect(document.receiptSnapshot?.facts.lines[0]).not.toContain('3 STRIP x 1.00');
   });
 });
 

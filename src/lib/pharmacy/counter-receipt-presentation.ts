@@ -28,6 +28,32 @@ const labels = {
   },
 } as const;
 
+/**
+ * Show integer-minor-unit arithmetic that exactly reconciles to the stored
+ * gross. Mixed lots can make gross / quantity non-integral, so displaying only
+ * the representative unit price would make the printed equation false.
+ */
+export function exactReceiptPriceBreakdown(
+  quantity: number,
+  grossMinor: number,
+  multiplicationSign = '×'
+): string {
+  if (!Number.isSafeInteger(quantity) || quantity <= 0 || !Number.isSafeInteger(grossMinor)) {
+    throw new Error('Receipt line pricing is invalid.');
+  }
+  const lowerPrice = Math.floor(grossMinor / quantity);
+  const higherPriceCount = grossMinor - lowerPrice * quantity;
+  const lowerPriceCount = quantity - higherPriceCount;
+  if (higherPriceCount === 0) {
+    return `${quantity} ${multiplicationSign} ${formatMinor(lowerPrice)}`;
+  }
+  const parts = [];
+  if (lowerPriceCount > 0)
+    parts.push(`${lowerPriceCount} ${multiplicationSign} ${formatMinor(lowerPrice)}`);
+  parts.push(`${higherPriceCount} ${multiplicationSign} ${formatMinor(lowerPrice + 1)}`);
+  return parts.join(' + ');
+}
+
 /** Missing status on legacy callers is not evidence of issued identity. */
 export function counterLinePresentation(line: CounterReceiptLine, locale: CounterReceiptLocale) {
   const strings = COUNTER_RECEIPT_STRINGS[locale];
@@ -69,7 +95,10 @@ export function buildCounterReceiptPreview(
         const presentation = counterLinePresentation(line, locale);
         return [
           presentation.identity,
-          `${line.quantity} ${strings.saleUnit[line.saleUnit]} × ${formatMinor(line.unitPriceMinor)}`,
+          `${strings.saleUnit[line.saleUnit]}: ${exactReceiptPriceBreakdown(
+            line.quantity,
+            line.lineTotalMinor + line.discountMinor
+          )}`,
           ...presentation.allocations,
           `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
         ].join('\n');
