@@ -35,6 +35,12 @@ vi.mock('@/components/restaurant/administrator-staff-profile-callout', () => ({
 
 import { AppShell, isPathModuleEnabled } from './app-shell';
 
+const TestAppShell = AppShell as ComponentType<{
+  brand: Parameters<typeof AppShell>[0]['brand'];
+  children?: React.ReactNode;
+  pharmacyPlaceholder?: boolean;
+}>;
+
 describe('AppShell module guard', () => {
   it('keeps the responsive dashboard brand link explicitly named', () => {
     const topbar = readFileSync(
@@ -59,10 +65,6 @@ describe('AppShell module guard', () => {
   });
 
   it('closes the mobile navigation dialog with Escape', () => {
-    const TestAppShell = AppShell as ComponentType<{
-      brand: Parameters<typeof AppShell>[0]['brand'];
-      children?: React.ReactNode;
-    }>;
     render(
       createElement(
         TestAppShell,
@@ -91,7 +93,7 @@ describe('AppShell module guard', () => {
   it('clearly warns when the pharmacy licence is a placeholder', () => {
     render(
       createElement(
-        AppShell,
+        TestAppShell,
         {
           brand: {
             organizationId: 'org_test',
@@ -103,7 +105,6 @@ describe('AppShell module guard', () => {
             accentColor: null,
           },
           pharmacyPlaceholder: true,
-          children: null,
         },
         createElement('p', null, 'Dashboard')
       )

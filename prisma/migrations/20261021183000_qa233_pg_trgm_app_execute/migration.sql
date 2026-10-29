@@ -20,6 +20,16 @@ DECLARE
     'public.strict_word_similarity_commutator_op(text,text)'::regprocedure
   ];
 BEGIN
+  -- The runtime role is provisioned outside Prisma in some deployments. A clean
+  -- database must still be able to apply the schema before that role exists;
+  -- prepare-extensions.sql grants these functions when the role is present.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'devfathom_app'
+  ) THEN
+    RAISE NOTICE 'devfathom_app does not exist; deferring pg_trgm EXECUTE grants';
+    RETURN;
+  END IF;
+
   FOREACH target IN ARRAY targets
   LOOP
     IF NOT pg_catalog.has_function_privilege('devfathom_app', target, 'EXECUTE') THEN
