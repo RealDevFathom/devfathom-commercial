@@ -271,6 +271,111 @@ suite('owner provisioning, branch access and PIN maker/checker in Postgres', () 
     );
   }, 120_000);
 
+  it('honors exact, wildcard and role DENYs for freshly reauthenticated PIN resets', async () => {
+    const { pharmacyPinRouter } = await import('./pharmacy-pin');
+    for (const capability of ['pharmacy:pin-reset', 'pharmacy:*', '*']) {
+      await tenant(org, async (db) => {
+        const ctx = context(db);
+        ctx.session!.user.passwordAuthenticatedAt = Date.now();
+        const before = await db.restaurantOperatorCredential.count();
+        const audits = await db.auditLog.count({ where: { action: 'PHARMACY:PIN_RESET' } });
+        const deny = await db.userPermissionOverride.create({
+          data: { userId: owner, capability, effect: 'DENY', reason: 'PIN reset denied' },
+        });
+        await expect(
+          pharmacyPinRouter.createCaller(ctx).reset({ branchId, userId: owner, pin })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(await db.restaurantOperatorCredential.count()).toBe(before);
+        expect(
+          await db.restaurantOperatorCredential.findUniqueOrThrow({ where: { id: credentialId } })
+        ).toMatchObject({ revokedAt: null });
+        expect(await db.auditLog.count({ where: { action: 'PHARMACY:PIN_RESET' } })).toBe(audits);
+        await db.userPermissionOverride.delete({ where: { id: deny.id } });
+      });
+    }
+    await tenant(org, async (db) => {
+      const member = await db.user.findUniqueOrThrow({ where: { id: owner } });
+      const deny = await db.organizationRolePermission.create({
+        data: {
+          organizationRoleId: member.organizationRoleId!,
+          capability: 'pharmacy:pin-reset',
+          effect: 'DENY',
+        },
+      });
+      const ctx = context(db);
+      ctx.session!.user.passwordAuthenticatedAt = Date.now();
+      await expect(
+        pharmacyPinRouter.createCaller(ctx).reset({ branchId, userId: owner, pin })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await db.organizationRolePermission.delete({ where: { id: deny.id } });
+    });
+  });
+
+  it('allows masked counter reads for an assigned cashier without clinical permission', async () => {
+    await tenant(org, async (db) => {
+      const cashier = `cashier-${suffix}`;
+      const role = await db.organizationRole.create({
+        data: {
+          key: 'cashier',
+          name: 'Cashier',
+          permissions: {
+            create: [
+              { capability: 'pharmacy:counter', effect: 'ALLOW' },
+              { capability: 'pharmacy:orders', effect: 'ALLOW' },
+              { capability: 'pharmacy:dispense', effect: 'DENY' },
+            ],
+          },
+        },
+      });
+      await db.user.create({
+        data: {
+          id: cashier,
+          name: 'Cashier',
+          email: `${cashier}@example.test`,
+          title: 'Cashier',
+          department: 'LEADERSHIP',
+          organizationRoleId: role.id,
+        },
+      });
+      await db.pharmacyBranchAssignment.create({ data: { userId: cashier, branchId } });
+      await db.pharmacyPatient.update({
+        where: { id: patientId },
+        data: { phone: '03001234567', cnic: '1234512345671' },
+      });
+      const caller = prescriptions.createCaller(context(db, cashier, 'EMPLOYEE'));
+      const search = () => caller.counterPatients({ branchId, query: 'Security' });
+      const panel = () => caller.counterPatientPanel({ branchId, patientId });
+      expect((await search()).patients).toEqual([
+        expect.objectContaining({ patientId, displayName: 'Security patient' }),
+      ]);
+      const result = await panel();
+      expect(result.phone).not.toBe('03001234567');
+      expect(result.cnic).not.toBe('1234512345671');
+      expect(result.patientId).toBe(patientId);
+      await expect(caller.readPatient({ branchId, patientId })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      await expect(
+        caller.counterPatientPanel({ branchId: 'outside-scope', patientId })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      for (const capability of ['pharmacy:counter', 'pharmacy:orders']) {
+        const deny = await db.userPermissionOverride.create({
+          data: { userId: cashier, capability, effect: 'DENY', reason: 'Counter access revoked' },
+        });
+        await expect(search()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(panel()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await db.userPermissionOverride.delete({ where: { id: deny.id } });
+      }
+      await db.pharmacyBranchAssignment.updateMany({
+        where: { userId: cashier },
+        data: { active: false },
+      });
+      await expect(search()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(panel()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await db.user.update({ where: { id: cashier }, data: { status: 'INACTIVE' } });
+    });
+  });
+
   it('backfills every capability and autoassigns existing and newly created branches', async () => {
     await tenant(org, async (db) => {
       const { ALL_ACTIONS } = await import('@/lib/abac/policies');

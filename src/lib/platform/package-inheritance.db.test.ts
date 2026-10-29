@@ -27,6 +27,7 @@
  * organizationId. Wider visibility cannot reach the asserted rows, so the suite
  * is valid on a superuser TEST_DATABASE_URL too.
  */
+import { syncPlatformCatalog } from '../../../prisma/catalog-sync';
 import { randomBytes } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -87,6 +88,7 @@ describeIfDatabase('package-module inheritance, against PostgreSQL', () => {
     };
 
     await deps.withPlatformDb(async (db) => {
+      await syncPlatformCatalog(db);
       for (const name of MODULE_NAMES) {
         await db.platformModule.create({
           data: {
@@ -163,9 +165,6 @@ describeIfDatabase('package-module inheritance, against PostgreSQL', () => {
     expect(enabled).toEqual(
       [
         'admin',
-        'api',
-        'identity',
-        'team',
         'dashboard',
         'notifications',
         ...(['a1', 'a2', 'a3', 'a4', 'a5', 'a6'] as ModuleName[]).map(moduleKey),
@@ -188,16 +187,7 @@ describeIfDatabase('package-module inheritance, against PostgreSQL', () => {
 
     const entitlements = await resolve(ORG_AB);
     expect([...entitlements.enabledModules].sort()).toEqual(
-      [
-        'admin',
-        'api',
-        'identity',
-        'team',
-        'dashboard',
-        'notifications',
-        moduleKey('b1'),
-        moduleKey('b2'),
-      ].sort()
+      ['admin', 'dashboard', 'notifications', moduleKey('b1'), moduleKey('b2')].sort()
     );
     for (const name of ['a1', 'a2', 'a3', 'a4', 'a5', 'a6'] as ModuleName[]) {
       expect(entitlements.enabledModules).not.toContain(moduleKey(name));

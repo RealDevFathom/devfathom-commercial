@@ -9,6 +9,8 @@
  * Adding a capability later = add an action + its policy here. Granting it to a
  * new role = widen the predicate. No call sites change.
  */
+import { isPharmacyOwner } from '@/lib/pharmacy/owner';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { Policy } from './types';
 
 // Statuses that count as an active member of the company (may use the app).
@@ -72,6 +74,7 @@ export const ALL_ACTIONS = [
   'pharmacy:counter',
   'pharmacy:receipt',
   'pharmacy:manage',
+  'pharmacy:pin-reset',
   'pharmacy:procurement',
   'pharmacy:inventory',
   'pharmacy:dispense', // RX-03/04: pharmacist decisions and substitution evidence
@@ -248,6 +251,14 @@ export const POLICIES: Record<Action, Policy[]> = {
   'pharmacy:counter': [],
   'pharmacy:receipt': [],
   'pharmacy:manage': [],
+  // Preserve administrator/owner recovery through the evaluator so matching
+  // DENYs are resolved before these legacy identity grants.
+  'pharmacy:pin-reset': [
+    isAdmin,
+    ({ subject, db }) =>
+      !!subject.organizationId &&
+      isPharmacyOwner(db as ScopedDb, subject.organizationId, subject.id),
+  ],
   // Tenant administrators retain the operational purchasing access they had
   // before pharmacy capabilities became explicit. A matching custom DENY is
   // still resolved first by `can()` and therefore takes precedence.

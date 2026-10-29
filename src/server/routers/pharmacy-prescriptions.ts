@@ -38,26 +38,41 @@ const channel = z.enum(['IN_PERSON', 'PHONE', 'SMS', 'WHATSAPP', 'EMAIL']);
 
 // Suppress sensitive payload auditing before authentication/input validation,
 // including denied uploads. Keep the existing audited guards and ABAC engine.
-const fileProcedure = publicProcedure
+const patientReadProcedure = publicProcedure
   .use(({ ctx, next }) => {
     ctx.audit.detail.skipInput = true;
     return next();
   })
-  .concat(auditedProtectedProcedure)
-  .use(async ({ ctx, next }) => {
-    const subject = subjectFromSession(ctx.session.user);
-    const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
-    if (
-      !hasModule(ctx.entitlements, 'pharmacy-dispensing') ||
-      !(await can(subject, 'pharmacy:dispense', undefined, options))
-    ) {
-      throw new TRPCError({
-        code: 'FORBIDDEN',
-        message: 'Prescription file access is not permitted.',
-      });
-    }
-    return next();
-  });
+  .concat(auditedProtectedProcedure);
+
+const fileProcedure = patientReadProcedure.use(async ({ ctx, next }) => {
+  const subject = subjectFromSession(ctx.session.user);
+  const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+  if (
+    !hasModule(ctx.entitlements, 'pharmacy-dispensing') ||
+    !(await can(subject, 'pharmacy:dispense', undefined, options))
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Prescription file access is not permitted.',
+    });
+  }
+  return next();
+});
+
+// Masked counter reads use the cashier permissions, not clinical file access.
+const counterPatientProcedure = patientReadProcedure.use(async ({ ctx, next }) => {
+  const subject = subjectFromSession(ctx.session.user);
+  const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+  if (
+    !hasModule(ctx.entitlements, 'pharmacy-core') ||
+    !(await can(subject, 'pharmacy:counter', undefined, options)) ||
+    !(await can(subject, 'pharmacy:orders', undefined, options))
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Counter patient access is not permitted.' });
+  }
+  return next();
+});
 
 /**
  * Load a stored Rx image the caller may see. Before capture only the uploader
@@ -450,7 +465,7 @@ export const pharmacyPrescriptionsRouter = router({
   // ── POS-09: the prescription panel beside the cart ────────────────────────
 
   /** Patients a counter can attach without navigating away from the bill. */
-  counterPatients: fileProcedure
+  counterPatients: counterPatientProcedure
     .input(
       z
         .object({ query: z.string().trim().min(2).max(120), branchId: z.string().trim().min(1) })
@@ -481,7 +496,7 @@ export const pharmacyPrescriptionsRouter = router({
    * this on the same audited path as `readPatient` — a counter-side read of a
    * patient is still a protected read (RX-01), not an exemption.
    */
-  counterPatientPanel: fileProcedure
+  counterPatientPanel: counterPatientProcedure
     .input(z.object({ patientId: z.string().min(1), branchId: z.string().trim().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       await requirePharmacyReadBranch(ctx, input.branchId);

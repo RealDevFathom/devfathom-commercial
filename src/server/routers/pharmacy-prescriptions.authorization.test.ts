@@ -86,7 +86,7 @@ beforeEach(() => {
   mocks.can.mockResolvedValue(true);
 });
 describe('prescription read boundary', () => {
-  it.each(paths)('%s denies missing dispense before patient or branch queries', async (path) => {
+  it.each(paths)('%s denies missing capability before patient or branch queries', async (path) => {
     mocks.can.mockResolvedValue(false);
     const f = fixture();
     await expect(read(f.api, path)).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -94,7 +94,7 @@ describe('prescription read boundary', () => {
     for (const query of Object.values(f.reads)) expect(query).not.toHaveBeenCalled();
     expect(mocks.can).toHaveBeenCalledWith(
       expect.anything(),
-      'pharmacy:dispense',
+      path.startsWith('counter') ? 'pharmacy:counter' : 'pharmacy:dispense',
       undefined,
       expect.anything()
     );

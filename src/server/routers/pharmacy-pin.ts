@@ -2,7 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { ensurePharmacyStaffProfile } from '@/lib/pharmacy/pin-enrollment';
-import { isPharmacyOwner } from '@/lib/pharmacy/owner';
+import { can, subjectFromSession } from '@/lib/abac';
 import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
 import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { issueOperatorCredential } from '@/lib/restaurant/credential-lifecycle';
@@ -49,11 +49,15 @@ export const pharmacyPinRouter = router({
         const db = tx as unknown as ScopedDb;
         const actor = await db.user.findUnique({
           where: { id: actorId, organizationId, status: 'ACTIVE' },
-          select: { role: true },
+          select: { id: true },
         });
         if (
           !actor ||
-          (actor.role !== 'ADMIN' && !(await isPharmacyOwner(db, organizationId, actorId)))
+          !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:pin-reset', undefined, {
+            db,
+            source: 'TRPC',
+            ip: ctx.requestMeta.ip,
+          }))
         )
           throw new TRPCError({ code: 'FORBIDDEN' });
         const actorBranches = await assignedRegisterBranchIds(db, organizationId, actorId);

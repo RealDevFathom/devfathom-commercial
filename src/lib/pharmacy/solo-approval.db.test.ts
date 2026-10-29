@@ -2233,6 +2233,22 @@ it.each(['owner', 'ADMIN'] as const)(
           session: { user: { ...context.session.user, id: employee.id, role: 'EMPLOYEE' } },
         } as never);
         await expect(employeeApi.reset(request)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        // A fresh password and ADMIN/owner identity cannot outrun ABAC DENY.
+        for (const capability of ['pharmacy:pin-reset', 'pharmacy:*', '*']) {
+          const deny = await db.userPermissionOverride.create({
+            data: { userId: f.user, capability, effect: 'DENY', reason: 'Reset regression' },
+          });
+          const before = await db.restaurantOperatorCredential.count();
+          await expect(api.reset({ ...request, userId: employee.id })).rejects.toMatchObject({
+            code: 'FORBIDDEN',
+          });
+          await expect(api.reset(request)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+          expect(await db.restaurantOperatorCredential.count()).toBe(before);
+          expect(
+            await db.auditLog.count({ where: { actorId: f.user, action: 'PHARMACY:PIN_RESET' } })
+          ).toBe(0);
+          await db.userPermissionOverride.delete({ where: { id: deny.id } });
+        }
         expect(await api.reset({ ...request, userId: employee.id })).toEqual({ enrolled: true });
         await db.user.update({ where: { id: employee.id }, data: { status: 'INACTIVE' } });
         await expect(api.reset({ ...request, userId: employee.id })).rejects.toMatchObject({

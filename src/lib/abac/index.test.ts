@@ -285,7 +285,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(47);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);
@@ -474,4 +474,32 @@ describe('persisted authority and mandatory resource constraints', () => {
         })
       ).toBe(false);
   });
+});
+
+describe('pharmacy PIN reset policy', () => {
+  const subject = { ...employee, organizationId: 'org' };
+  it('retains staffed owner and legacy administrator reset authority', async () => {
+    for (const db of [
+      authorizationDb({ role: 'ADMIN' }),
+      authorizationDb({ roleKey: 'owner', rolePermissions: [] }),
+    ])
+      expect(await can(subject, 'pharmacy:pin-reset', undefined, { db })).toBe(true);
+    expect(await can(subject, 'pharmacy:pin-reset', undefined, { db: authorizationDb({}) })).toBe(
+      false
+    );
+  });
+  it.each(['pharmacy:pin-reset', 'pharmacy:*', '*'])(
+    'honors %s DENY before legacy authority',
+    async (capability) => {
+      for (const role of ['ADMIN', 'EMPLOYEE']) {
+        const db = authorizationDb({
+          role,
+          roleKey: 'owner',
+          rolePermissions: [],
+          overrides: [{ capability, effect: 'DENY' }],
+        });
+        expect(await can(subject, 'pharmacy:pin-reset', undefined, { db })).toBe(false);
+      }
+    }
+  );
 });
