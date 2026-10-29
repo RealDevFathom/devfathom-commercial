@@ -107,7 +107,15 @@ export const invitationsRouter = router({
         // Between the two statements the invitation can lapse, and expiry that is
         // only enforced on the read is enforced nowhere that the write can see.
         const claimed = await tx.invitation.updateMany({
-          where: { id: invitation.id, acceptedAt: null, expiresAt: { gt: now } },
+          // A resend updates this same row in place with a new token. Include
+          // the hash observed before bcrypt so an acceptance that started with
+          // the superseded token cannot consume the replacement invitation.
+          where: {
+            id: invitation.id,
+            tokenHash: invitation.tokenHash,
+            acceptedAt: null,
+            expiresAt: { gt: now },
+          },
           data: { acceptedAt: now },
         });
         if (claimed.count !== 1) throw invalidInvitation();

@@ -24,6 +24,33 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+const inviteHashGate = vi.hoisted(() => {
+  let started!: () => void;
+  let release!: () => void;
+  return {
+    started: new Promise<void>((resolve) => (started = resolve)),
+    release: new Promise<void>((resolve) => (release = resolve)),
+    signalStarted: () => started(),
+    signalRelease: () => release(),
+  };
+});
+
+// Hold one acceptance precisely inside the password hash so the resend race is
+// deterministic rather than dependent on bcrypt duration or scheduler timing.
+vi.mock('bcryptjs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('bcryptjs')>();
+  return {
+    ...actual,
+    hash: async (...args: Parameters<typeof actual.hash>) => {
+      if (args[0] === 'Rac3!Passw0rd') {
+        inviteHashGate.signalStarted();
+        await inviteHashGate.release;
+      }
+      return actual.hash(...args);
+    },
+  };
+});
+
 // The routers reach `@/server/trpc`, which reaches Auth.js, which cannot load
 // outside a Next server runtime. Nothing under test uses it: these procedures
 // are public, and the context here is built by hand. The database, the routers
@@ -131,6 +158,18 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
       });
       await db.user.create({
         data: {
+          id: id('user_resend'),
+          organizationId,
+          email: `resend.${suffix}@example.test`,
+          name: 'Resent Invitee',
+          title: 'Engineer',
+          department: department.key,
+          role: 'EMPLOYEE',
+          status: 'INVITED',
+        },
+      });
+      await db.user.create({
+        data: {
           id: id('user_resetter'),
           organizationId,
           email: `resetter.${suffix}@example.test`,
@@ -152,6 +191,16 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
           expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
         },
       });
+      await db.invitation.create({
+        data: {
+          id: id('inv_resend'),
+          organizationId,
+          userId: id('user_resend'),
+          email: `resend.${suffix}@example.test`,
+          tokenHash: hashToken(`${inviteToken}-old`),
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        },
+      });
       await db.passwordResetToken.create({
         data: {
           id: id('prt'),
@@ -167,10 +216,12 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
   afterAll(async () => {
     if (!organizationId) return;
     await deps.withTenantDb(organizationId, async (db) => {
-      await db.invitation.deleteMany({ where: { id: id('inv') } });
+      await db.invitation.deleteMany({ where: { id: { in: [id('inv'), id('inv_resend')] } } });
       await db.passwordResetToken.deleteMany({ where: { id: id('prt') } });
       await db.user.deleteMany({
-        where: { id: { in: [id('user_invitee'), id('user_resetter')] } },
+        where: {
+          id: { in: [id('user_invitee'), id('user_resetter'), id('user_resend')] },
+        },
       });
     });
   }, 60_000);
@@ -243,6 +294,39 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
     expect(invitation?.acceptedAt).toBeInstanceOf(Date);
     expect(user?.status).toBe('ACTIVE');
     expect(user?.password).toBeTruthy();
+  }, 120_000);
+
+  it('does not let an old-token acceptance consume an invitation resent during hashing', async () => {
+    const oldToken = `${inviteToken}-old`;
+    const newToken = `${inviteToken}-new`;
+    const acceptance = deps.withTenantDb(organizationId, (db) =>
+      caller(deps.invitationsRouter, db).accept({
+        token: oldToken,
+        password: 'Rac3!Passw0rd',
+        phone: '+15550888',
+      })
+    );
+
+    await inviteHashGate.started;
+    await deps.withTenantDb(organizationId, (db) =>
+      db.invitation.update({
+        where: { id: id('inv_resend') },
+        data: { tokenHash: hashToken(newToken), acceptedAt: null },
+      })
+    );
+    inviteHashGate.signalRelease();
+
+    await expect(acceptance).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: deps.INVITATION_GENERIC_MESSAGE,
+    });
+
+    const [invitation, user] = await deps.withTenantDb(organizationId, async (db) => [
+      await db.invitation.findUnique({ where: { id: id('inv_resend') } }),
+      await db.user.findUnique({ where: { id: id('user_resend') } }),
+    ]);
+    expect(invitation).toMatchObject({ tokenHash: hashToken(newToken), acceptedAt: null });
+    expect(user).toMatchObject({ status: 'INVITED', password: null });
   }, 120_000);
 
   it('refuses to replay a consumed invitation', async () => {
