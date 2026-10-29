@@ -4,6 +4,14 @@
 ALTER TABLE "pharmacy_registered_devices"
   ADD COLUMN "nextOfflineCommandSequence" INTEGER NOT NULL DEFAULT 1;
 
+-- Both source tables already FORCE RLS, including for their NOBYPASSRLS
+-- owner. Migrations run as that owner, so temporarily stop forcing the owner
+-- through tenant policies while the cross-tenant backfill runs. RLS remains
+-- enabled for every other role, and Prisma applies this migration in one
+-- transaction: FORCE is restored before any of these changes can commit.
+ALTER TABLE "pharmacy_registered_devices" NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE "pharmacy_offline_commands" NO FORCE ROW LEVEL SECURITY;
+
 UPDATE "pharmacy_registered_devices" AS device
 SET "nextOfflineCommandSequence" = COALESCE((
   SELECT MAX(command."sequence") + 1
@@ -11,6 +19,9 @@ SET "nextOfflineCommandSequence" = COALESCE((
   WHERE command."organizationId" = device."organizationId"
     AND command."deviceId" = device."id"
 ), 1);
+
+ALTER TABLE "pharmacy_offline_commands" FORCE ROW LEVEL SECURITY;
+ALTER TABLE "pharmacy_registered_devices" FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE "pharmacy_registered_devices"
   ADD CONSTRAINT "pharmacy_registered_devices_offline_sequence_check"
