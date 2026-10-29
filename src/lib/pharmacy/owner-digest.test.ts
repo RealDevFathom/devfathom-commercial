@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   refreshPharmacyAnomalySignals: vi.fn(),
   can: vi.fn(),
   resolveOrganizationEntitlements: vi.fn(),
+  sendAndLog: vi.fn(),
   platformDb: { pharmacyOwnerDigestSetting: { findMany: vi.fn() } },
   tenantDb: {
     $queryRaw: vi.fn(),
@@ -50,12 +51,14 @@ vi.mock('./anomaly-signals-operations', () => ({
     ...signals.map((signal) => `- ${signal.explanation}`),
   ],
 }));
+vi.mock('./whatsapp/message-log', () => ({ sendAndLog: mocks.sendAndLog }));
 
 import {
   CaptureChannel,
   composeOwnerDigest,
   nextDigestDueAt,
   processDueOwnerDigests,
+  readOwnerBriefingFigures,
   renderOwnerBriefing,
   WhatsAppChannel,
 } from './owner-digest';
@@ -72,6 +75,7 @@ describe('RPT-03 owner digest', () => {
     mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValue([]);
     mocks.readPharmacyAnomalySignals.mockResolvedValue([]);
     mocks.refreshPharmacyAnomalySignals.mockResolvedValue({ evaluated: 0, signals: [] });
+    mocks.sendAndLog.mockResolvedValue('SENT');
     mocks.tenantDb.$queryRaw.mockResolvedValue([]);
     mocks.readPharmacyOwnerCommandCentre.mockResolvedValue({
       freshness: { status: 'CURRENT', asOf: '2026-09-04T08:00:00.000Z', source: 'ledgers' },
@@ -196,8 +200,97 @@ describe('RPT-03 owner digest', () => {
     expect(nextDigestDueAt(now, 'PKT', 480)).toEqual(new Date('2026-09-04T08:00:00.000Z'));
   });
 
-  it('never reports a WhatsApp send from the stub', async () => {
-    await expect(new WhatsAppChannel().deliver()).resolves.toEqual({ delivered: false });
+  it('queries organization-local day boundaries and excludes recovered events from open loss', async () => {
+    const query = vi.fn().mockResolvedValue([]);
+    await readOwnerBriefingFigures(
+      { $queryRaw: query } as never,
+      'branch_1',
+      '2026-09-04',
+      '2026-09-04',
+      'Asia/Karachi'
+    );
+    const statement = query.mock.calls[0][0];
+    expect(statement.values).toEqual(
+      expect.arrayContaining([
+        'branch_1',
+        new Date('2026-09-03T19:00:00.000Z'),
+        new Date('2026-09-04T19:00:00.000Z'),
+      ])
+    );
+    expect(statement.sql).toContain("SELECT * FROM all_period_demand WHERE status='OPEN'");
+    expect(statement.sql).toContain('FROM open_period_demand GROUP BY');
+    expect(statement.sql).toContain('SUM("estimatedValueMinor") FROM open_period_demand');
+  });
+
+  it('delivers the safe briefing through the configured owner template and audit log', async () => {
+    const provider = { sendTemplate: vi.fn() };
+    const config = {
+      provider: 'meta' as const,
+      accessToken: 'token',
+      phoneNumberId: 'sender',
+      organizationId: 'org_1',
+      appSecret: null,
+      verifyToken: null,
+      graphVersion: 'v21.0',
+      templateLanguage: 'en',
+      templates: { refillReminder: null, khataReminder: null, ownerDigest: 'owner_digest_v1' },
+      reminderLeadDays: 3,
+    };
+    const digest = await composeOwnerDigest({ $queryRaw: vi.fn().mockResolvedValue([]) } as never, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      ownerPhone: '0300 1234567',
+      businessDate: '2026-09-04',
+    });
+
+    await expect(
+      new WhatsAppChannel(config, provider as never).deliver({} as never, digest)
+    ).resolves.toEqual({ delivered: true, reference: 'SENT' });
+    expect(mocks.sendAndLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'OWNER_DIGEST',
+        dedupeKey: 'owner-digest:user_1:branch_1:2026-09-04',
+        phoneLast4: '4567',
+        templateName: 'owner_digest_v1',
+      }),
+      expect.any(Function)
+    );
+    const send = mocks.sendAndLog.mock.calls[0][1];
+    await send();
+    expect(provider.sendTemplate).toHaveBeenCalledWith({
+      to: '923001234567',
+      template: 'ownerDigest',
+      parameters: [expect.not.stringContaining('Main')],
+    });
+  });
+
+  it('fails closed when the sender is not explicitly bound to this organization', async () => {
+    const config = {
+      provider: 'meta' as const,
+      accessToken: 'token',
+      phoneNumberId: 'sender',
+      organizationId: 'another_org',
+      appSecret: null,
+      verifyToken: null,
+      graphVersion: 'v21.0',
+      templateLanguage: 'en',
+      templates: { refillReminder: null, khataReminder: null, ownerDigest: 'owner_digest_v1' },
+      reminderLeadDays: 3,
+    };
+    const digest = await composeOwnerDigest({ $queryRaw: vi.fn().mockResolvedValue([]) } as never, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      ownerPhone: '0300 1234567',
+      businessDate: '2026-09-04',
+    });
+    await expect(
+      new WhatsAppChannel(config, { sendTemplate: vi.fn() } as never).deliver({} as never, digest)
+    ).resolves.toEqual({ delivered: false });
+    expect(mocks.sendAndLog).not.toHaveBeenCalled();
   });
 
   it('keeps catalog, salt, category and even branch names out of WhatsApp copy', () => {

@@ -7,6 +7,7 @@ import { WhatsAppProviderError, type WhatsAppSendResult } from './provider';
 export type MessageLogKind =
   | 'REFILL_REMINDER'
   | 'KHATA_REMINDER'
+  | 'OWNER_DIGEST'
   | 'ORDER_REQUEST'
   | 'ORDER_CONFIRMATION'
   | 'ORDER_FALLBACK'

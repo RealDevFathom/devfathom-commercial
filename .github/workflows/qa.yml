@@ -329,7 +329,9 @@ jobs:
           const requiredZero = ['numFailedTests', 'numFailedTestSuites', 'numPendingTests', 'numPendingTestSuites', 'numTodoTests'];
           const requiredPositive = ['numTotalTests', 'numTotalTestSuites', 'numPassedTests', 'numPassedTestSuites'];
           const totals = Object.fromEntries([...requiredZero, ...requiredPositive].map((field) => [field, 0]));
-          for (const lane of ['vitest', 'vitest-cohort', 'vitest-receipt', 'vitest-catering', 'vitest-counter-evidence', 'vitest-growth', 'vitest-platform-concurrency', 'vitest-price-intelligence', 'vitest-returns', 'vitest-boundary-http', 'vitest-growth-ready', 'vitest-growth-sandbox', 'vitest-platform-login']) {
+          // Every listed lane is produced above. Reserved test orchestrators retain their
+          // own exit-code evidence rather than pretending to emit Vitest JSON here.
+          for (const lane of ['vitest', 'vitest-cohort', 'vitest-receipt', 'vitest-catering', 'vitest-platform-login']) {
             try {
               const report = JSON.parse(fs.readFileSync(`gate/${lane}.json`, 'utf8'));
               for (const field of [...requiredZero, ...requiredPositive]) {

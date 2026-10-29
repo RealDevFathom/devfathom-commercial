@@ -573,13 +573,14 @@ export const pharmacyReportsRouter = router({
         },
       }),
     ]);
+    const whatsapp = new WhatsAppChannel();
     return {
       branches: available.branches,
       settings,
       history,
       channels: {
         capture: { enabled: true },
-        whatsapp: { enabled: false, configured: new WhatsAppChannel().configured },
+        whatsapp: { enabled: whatsapp.configured, configured: whatsapp.configured },
       },
     };
   }),
