@@ -35,7 +35,16 @@ for (const theme of ['light', 'dark'] as const)
       const errors: string[] = [];
       page.on('pageerror', (e) => errors.push(e.message));
       page.on('console', (e) => {
-        if (e.type() === 'error') errors.push(e.text());
+        if (e.type() !== 'error') return;
+        // An unusable invitation deliberately answers NOT_FOUND. Assert that
+        // response below; only its exact browser resource message is expected.
+        if (
+          /\/api\/trpc\/invitations\.get(?:\?|$)/.test(e.location().url) &&
+          e.text() ===
+            'Failed to load resource: the server responded with a status of 404 (Not Found)'
+        )
+          return;
+        errors.push(e.text());
       });
       await page.setViewportSize({ width, height: 960 });
       await page.addInitScript((theme) => localStorage.setItem('theme', theme), theme);
@@ -43,7 +52,25 @@ for (const theme of ['light', 'dark'] as const)
         await page.emulateMedia({
           reducedMotion: width === 375 || width === 1024 ? 'reduce' : 'no-preference',
         });
-        await page.goto(route);
+        const unavailableInvitation =
+          name === 'invite-unavailable'
+            ? page.waitForResponse((r) => r.url().includes('/api/trpc/invitations.get'))
+            : null;
+        // Each unusable token is a distinct fixture: the real per-token flood
+        // limit must remain active across the eight matrix cases.
+        await page.goto(
+          name === 'invite-unavailable' ? `${route}-${theme}-${width}-${Date.now()}` : route
+        );
+        if (unavailableInvitation) {
+          expect((await unavailableInvitation).status()).toBe(404);
+          // React Query retries an unavailable invitation before exposing its error state.
+          await expect(page.getByRole('heading', { name: 'Invitation unavailable' })).toBeVisible({
+            timeout: 20000,
+          });
+        }
+        if (name === 'reset-unavailable') {
+          await expect(page.getByRole('heading', { name: 'Link unavailable' })).toBeVisible();
+        }
         await page.waitForFunction(() => {
           const main = document.querySelector('main');
           return main && Object.keys(main).some((key) => key.startsWith('__reactProps$'));
