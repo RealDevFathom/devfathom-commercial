@@ -72,6 +72,12 @@ async function seedOrganization(
         updatedAt: FIXED_AT,
       },
     });
+    // This owned fixture exercises package licensing. Remove a stale tenant
+    // override so a previous run cannot continue to mask the package's Notes
+    // grant (including an expired override, which is an explicit disable).
+    await tx.organizationModule.deleteMany({
+      where: { organizationId, module: { key: 'notes' } },
+    });
     await tx.organizationDepartment.upsert({
       where: { organizationId_key: { organizationId, key: 'LEADERSHIP' } },
       update: { name: 'Leadership', active: true, sortOrder: 0 },
