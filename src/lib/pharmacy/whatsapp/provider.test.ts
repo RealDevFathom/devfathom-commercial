@@ -64,6 +64,24 @@ describe('readWhatsAppConfig', () => {
       readWhatsAppConfig({ PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS: '-1' }).reminderLeadDays
     ).toBe(3);
   });
+
+  it('accepts only HTTPS Meta account-quality appeal URLs', () => {
+    expect(
+      readWhatsAppConfig({
+        PHARMACY_WHATSAPP_ACCOUNT_APPEAL_URL:
+          'https://business.facebook.com/accountquality/example',
+      }).accountAppealUrl
+    ).toBe('https://business.facebook.com/accountquality/example');
+    for (const value of [
+      'javascript:alert(1)',
+      'http://business.facebook.com/accountquality',
+      'https://example.com/phishing',
+    ]) {
+      expect(
+        readWhatsAppConfig({ PHARMACY_WHATSAPP_ACCOUNT_APPEAL_URL: value }).accountAppealUrl
+      ).toBe('https://business.facebook.com/accountquality');
+    }
+  });
 });
 
 describe('MockWhatsAppProvider', () => {

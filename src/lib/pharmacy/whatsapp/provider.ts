@@ -71,6 +71,19 @@ function envValue(env: Env, key: string): string | null {
   return value ? value : null;
 }
 
+const DEFAULT_ACCOUNT_APPEAL_URL = 'https://business.facebook.com/accountquality';
+
+function accountAppealUrl(value: string | null): string {
+  if (!value) return DEFAULT_ACCOUNT_APPEAL_URL;
+  try {
+    const url = new URL(value);
+    if (url.protocol === 'https:' && url.hostname === 'business.facebook.com') return url.href;
+  } catch {
+    // Invalid or untrusted configuration falls back to Meta's canonical account-quality page.
+  }
+  return DEFAULT_ACCOUNT_APPEAL_URL;
+}
+
 export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
   const leadDays = Number(envValue(env, 'PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS') ?? 3);
   return {
@@ -80,9 +93,7 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
     organizationId: envValue(env, 'PHARMACY_WHATSAPP_ORGANIZATION_ID'),
     appSecret: envValue(env, 'PHARMACY_WHATSAPP_APP_SECRET'),
     verifyToken: envValue(env, 'PHARMACY_WHATSAPP_VERIFY_TOKEN'),
-    accountAppealUrl:
-      envValue(env, 'PHARMACY_WHATSAPP_ACCOUNT_APPEAL_URL') ??
-      'https://business.facebook.com/accountquality',
+    accountAppealUrl: accountAppealUrl(envValue(env, 'PHARMACY_WHATSAPP_ACCOUNT_APPEAL_URL')),
     graphVersion: envValue(env, 'PHARMACY_WHATSAPP_GRAPH_VERSION') ?? 'v21.0',
     templateLanguage: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_LANGUAGE') ?? 'en',
     templates: {

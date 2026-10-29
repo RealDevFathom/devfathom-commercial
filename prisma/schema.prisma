@@ -4083,6 +4083,7 @@ model Notification {
   @@index([userId, isRead])
   @@index([createdAt])
   @@index([organizationId])
+  @@unique([organizationId, userId, type, entityId], map: "notifications_tenant_user_type_entity_key")
   @@map("notifications")
 }
 
@@ -13720,6 +13721,7 @@ enum PharmacyCampaignStatus {
   DRAFT
   APPROVED
   CAPTURED
+  ACCOUNT_QUALITY_HOLD
   REFUSED
 }
 
@@ -13770,6 +13772,7 @@ model PharmacyCampaign {
   ownerApprovedByUserId String?
   ownerApprovedAt       DateTime?
   refusalReason         String?
+  holdPreviousStatus    PharmacyCampaignStatus?
   createdAt             DateTime               @default(now())
 
   @@unique([organizationId, id])
