@@ -1,9 +1,11 @@
 import 'server-only';
 
+import { createHash, randomUUID } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { auditPatientRead } from './patient-prescriptions';
+import { PharmacySettlementError, recordPharmacyCashMovement } from './settlement';
 
 export type FamilyKhataScope = { organizationId: string; branchId: string; actorId: string };
 
@@ -152,13 +154,81 @@ export async function readFamilyMemberDispensing(
 export async function settleFamilyKhata(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: { familyAccountId: string; amountMinor: number; occurredAt: Date }
+  input: {
+    familyAccountId: string;
+    amountMinor: number;
+    occurredAt: Date;
+    drawerSessionId?: string;
+    deviceId?: string;
+    idempotencyKey?: string;
+  }
 ) {
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
-  await db.$queryRaw(
+  const accounts = await db.$queryRaw<{ id: string }[]>(
     Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
   );
+  if (!accounts.length) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
+
+  const cashCollection =
+    input.drawerSessionId !== undefined ||
+    input.deviceId !== undefined ||
+    input.idempotencyKey !== undefined;
+  if (
+    cashCollection &&
+    (!input.drawerSessionId || !input.deviceId || !input.idempotencyKey?.trim())
+  )
+    throw new FamilyKhataError('INVALID_AMOUNT');
+
+  let drawer: { id: string; deviceId: string } | null = null;
+  let prior: { payloadHash: string; commandType: string; resultPayload: unknown } | null = null;
+  if (cashCollection) {
+    // Resolve the tenant and branch resources before consulting replay state. This
+    // prevents a valid key from one branch revealing its result in another.
+    drawer = await db.pharmacyDrawerSession.findFirst({
+      where: {
+        id: input.drawerSessionId!,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        deviceId: input.deviceId!,
+        status: 'OPEN',
+      },
+      select: { id: true, deviceId: true },
+    });
+    if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+
+    const payloadHash = createHash('sha256')
+      .update(
+        JSON.stringify({
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          familyAccountId: input.familyAccountId,
+          amountMinor: input.amountMinor,
+          occurredAt: input.occurredAt,
+          drawerSessionId: input.drawerSessionId,
+          deviceId: input.deviceId,
+        })
+      )
+      .digest('hex');
+    await db.$executeRaw(Prisma.sql`
+      INSERT INTO pharmacy_money_idempotency_keys
+        (id, "organizationId", "deviceId", key, "commandType", "payloadHash", "createdAt")
+      VALUES (${randomUUID()}, ${scope.organizationId}, ${input.deviceId!}, ${input.idempotencyKey!.trim()}, 'khata_collection', ${payloadHash}, now())
+      ON CONFLICT ("organizationId", "deviceId", key) DO NOTHING`);
+    prior = await db.pharmacyMoneyIdempotencyKey.findUnique({
+      where: {
+        organizationId_deviceId_key: {
+          organizationId: scope.organizationId,
+          deviceId: input.deviceId!,
+          key: input.idempotencyKey!.trim(),
+        },
+      },
+      select: { payloadHash: true, commandType: true, resultPayload: true },
+    });
+    if (!prior || prior.commandType !== 'khata_collection' || prior.payloadHash !== payloadHash)
+      throw new PharmacySettlementError('IDEMPOTENCY_CONFLICT');
+    if (prior.resultPayload) return prior.resultPayload;
+  }
   const events = await db.pharmacyKhataEvent.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -205,11 +275,32 @@ export async function settleFamilyKhata(
     );
     remaining -= amountMinor;
   }
-  return {
+  if (drawer)
+    await recordPharmacyCashMovement(db, scope, {
+      drawerSessionId: drawer.id,
+      kind: 'PAID_IN',
+      amountMinor: input.amountMinor,
+      reason: `Khata collection: ${input.familyAccountId}`,
+    });
+  const result = {
     paidMinor: input.amountMinor,
     remainingBalanceMinor: balanceMinor - input.amountMinor,
     allocations,
   };
+  if (prior)
+    await db.pharmacyMoneyIdempotencyKey.update({
+      where: {
+        organizationId_deviceId_key: {
+          organizationId: scope.organizationId,
+          deviceId: input.deviceId!,
+          key: input.idempotencyKey!.trim(),
+        },
+      },
+      data: {
+        resultPayload: JSON.parse(JSON.stringify(result)) as Prisma.InputJsonValue,
+      },
+    });
+  return result;
 }
 
 export async function applyKhataLimitDecision(
