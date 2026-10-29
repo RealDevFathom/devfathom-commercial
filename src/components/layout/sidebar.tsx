@@ -629,12 +629,7 @@ function useVisibleNavigation() {
   const refetchPharmacyAccess = pharmacyAccess.refetch;
   useEffect(() => {
     if (pharmacyEnabled) void refetchPharmacyAccess();
-  }, [
-    pharmacyEnabled,
-    session?.user.id,
-    session?.user.organizationId,
-    refetchPharmacyAccess,
-  ]);
+  }, [pharmacyEnabled, session?.user.id, session?.user.organizationId, refetchPharmacyAccess]);
   // Never render capabilities cached for another member or tenant during a switch.
   const pharmacyCurrent = Boolean(
     pharmacyEnabled &&
@@ -644,9 +639,7 @@ function useVisibleNavigation() {
     pharmacyAccess.data?.organizationId === session?.user.organizationId
   );
   const pharmacyCapabilities: readonly Action[] =
-    pharmacyCurrent && pharmacyAccess.data
-      ? pharmacyAccess.data.capabilities
-      : [];
+    pharmacyCurrent && pharmacyAccess.data ? pharmacyAccess.data.capabilities : [];
   const filteredNav = visibleNavigation(
     entitlements,
     session?.user?.role,

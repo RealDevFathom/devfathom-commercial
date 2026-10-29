@@ -20,9 +20,7 @@ const railQuery = vi.hoisted(() => ({
       },
 }));
 const pharmacyRailQuery = vi.hoisted(() => ({
-  data: undefined as
-    | undefined
-    | { userId: string; organizationId: string; capabilities: string[] },
+  data: undefined as undefined | { userId: string; organizationId: string; capabilities: string[] },
   isError: false,
   isFetching: false,
 }));
