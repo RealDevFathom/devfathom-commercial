@@ -40,6 +40,10 @@ import {
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import {
+  PHARMACY_GROWTH_CATEGORIES,
+  readPharmacyCategoryGrowthReport,
+} from '@/lib/pharmacy/category-growth-report';
 
 const reports = capabilityProcedure('reports:operational');
 const widget = z
@@ -162,6 +166,37 @@ async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
 }
 
 export const pharmacyReportsRouter = router({
+  categoryGrowth: reports
+    .input(
+      filters
+        .pick({ branchId: true, from: true, to: true })
+        .extend({
+          configuration: z
+            .array(
+              z
+                .object({
+                  category: z.enum(PHARMACY_GROWTH_CATEGORIES),
+                  displaySpaceSquareMetres: z.number().positive().nullable(),
+                  targetSalesSharePercent: z.number().min(0).max(100).nullable(),
+                })
+                .strict()
+            )
+            .max(PHARMACY_GROWTH_CATEGORIES.length),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scoped = await ownerFilters(ctx, input);
+      return readPharmacyCategoryGrowthReport(ctx.db, ctx.entitlements.organizationId, {
+        branchIds: scoped.branchIds,
+        from: input.from,
+        // Public report filters are inclusive; the evidence reader uses an exclusive cutoff.
+        to: new Date(new Date(`${input.to}T00:00:00.000Z`).getTime() + 86_400_000)
+          .toISOString()
+          .slice(0, 10),
+        configuration: input.configuration,
+      });
+    }),
   marketing: reports
     .input(filters.pick({ branchId: true, from: true, to: true }))
     .query(async ({ ctx, input }) => {
