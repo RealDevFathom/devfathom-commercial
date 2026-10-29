@@ -1,4 +1,4 @@
-import type { ScopedDb } from '@/lib/db';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { readPharmacyOwnerCommandCentre } from '@/lib/pharmacy/reports';
 
 export type PharmacyBranchComparisonInput = {

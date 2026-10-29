@@ -216,6 +216,42 @@ beforeEach(() => {
 });
 
 describe('pharmacy owner digest capability boundary', () => {
+  it('allows an owner with reports:financial and passes only active tenant branches', async () => {
+    mocks.can.mockResolvedValue(true);
+    mocks.branchFindMany.mockResolvedValue([
+      { id: 'branch_2', name: 'Second' },
+      { id: 'branch_1', name: 'Main' },
+    ]);
+    mocks.comparisonRead.mockResolvedValue({ rows: [] });
+
+    await expect(
+      caller().branchComparison({ from: '2026-10-01', to: '2026-10-07' })
+    ).resolves.toEqual({ rows: [] });
+
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_admin' }),
+      'reports:financial',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+    expect(mocks.branchFindMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', active: true },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
+    });
+    expect(mocks.comparisonRead).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        branches: [
+          { id: 'branch_2', name: 'Second' },
+          { id: 'branch_1', name: 'Main' },
+        ],
+        from: '2026-10-01',
+        to: '2026-10-07',
+      })
+    );
+  });
+
   it('denies branch comparison to a non-owner even with financial capability', async () => {
     mocks.can.mockResolvedValue(true);
     mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);

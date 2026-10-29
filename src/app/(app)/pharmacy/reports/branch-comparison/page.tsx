@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { TRPCError } from '@trpc/server';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
@@ -18,10 +19,16 @@ export default async function BranchComparisonPage({
   const to = query.to ?? today;
   const caller = pharmacyReportsRouter.createCaller(await createTRPCContext());
   let comparison: Awaited<ReturnType<typeof caller.branchComparison>> | null = null;
+  let errorMessage: string | null = null;
   try {
     comparison = await caller.branchComparison({ from, to });
-  } catch {
-    // The same state intentionally covers non-owners without disclosing financial availability.
+  } catch (error) {
+    errorMessage =
+      error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code)
+        ? 'Owner access and financial-report permission are required.'
+        : error instanceof TRPCError && error.code === 'BAD_REQUEST'
+          ? 'Check that the report dates are valid, then try again.'
+          : 'The comparison could not be loaded. Try again or contact support if the problem continues.';
   }
   const money = (value: number | null) =>
     value == null ? '—' : formatMinor(value).replace(/\B(?=(\d{3})+\.)/g, ',');
@@ -36,7 +43,7 @@ export default async function BranchComparisonPage({
       {!comparison ? (
         <SectionCard title="Comparison unavailable">
           <p className="text-sm text-text-muted" role="alert">
-            Owner access and financial-report permission are required.
+            {errorMessage}
           </p>
         </SectionCard>
       ) : (
