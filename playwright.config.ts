@@ -10,7 +10,12 @@ export default defineConfig({
   // The pharmacy counter lane is the same shape — its own disposable database,
   // seed and serial worker — so it is excluded here and run by
   // `playwright.pharmacy-counter.config.ts` alone.
-  testIgnore: ['platform-control-plane*.spec.ts', 'pharmacy-counter.spec.ts'],
+  // Login redesign uses its dedicated local-Postgres config and full viewport matrix.
+  testIgnore: [
+    'platform-control-plane*.spec.ts',
+    'pharmacy-counter.spec.ts',
+    'login-redesign.spec.ts',
+  ],
   // `test-results/` holds committed visual-QA baselines, and Playwright wipes its
   // outputDir on every run — so run artifacts live outside any tracked path.
   outputDir: './playwright-artifacts/e2e',
