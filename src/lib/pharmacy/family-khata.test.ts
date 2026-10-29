@@ -235,6 +235,9 @@ describe('counter Khata ledger gate', () => {
   function fixture() {
     return {
       $queryRaw: vi.fn().mockResolvedValue([]),
+      financeJournalEntry: {
+        findFirstOrThrow: vi.fn().mockResolvedValue({ id: 'journal-entry-a' }),
+      },
       pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
       pharmacyFamilyAccount: {
         findMany: vi.fn().mockResolvedValue([
@@ -258,6 +261,12 @@ describe('counter Khata ledger gate', () => {
     };
   }
   const input = { saleId: 'sale-a', familyAccountId: 'family-a', amountMinor: 500 };
+  it('provides the finance journal lookup used by the Khata flow', async () => {
+    const db = fixture();
+    await expect(db.financeJournalEntry.findFirstOrThrow()).resolves.toEqual({
+      id: 'journal-entry-a',
+    });
+  });
   it('uses all ledger events and accepts the exact limit without owner authorization', async () => {
     const db = fixture();
     expect(await readKhataBalance(db as never, scope, 'family-a')).toBe(500);
