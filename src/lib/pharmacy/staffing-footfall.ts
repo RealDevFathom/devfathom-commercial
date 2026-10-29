@@ -1,6 +1,8 @@
 import 'server-only';
 
+import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceTimezone } from '@/lib/timezone';
 
 const DAY = 86_400_000;
 
@@ -16,7 +18,11 @@ export type StaffingFootfallInput = StaffingFootfallConfig & {
   to: string;
 };
 
+type HourCount = { hourLocal: number; receiptCount: number };
+
 export function validateStaffingFootfallInput(input: StaffingFootfallInput) {
+  // UTC is used only to validate/count calendar labels. Query bounds are resolved
+  // by PostgreSQL in the workspace's IANA timezone below.
   const from = new Date(`${input.from}T00:00:00.000Z`);
   const to = new Date(`${input.to}T00:00:00.000Z`);
   if (
@@ -28,25 +34,25 @@ export function validateStaffingFootfallInput(input: StaffingFootfallInput) {
     from > to ||
     to.getTime() - from.getTime() >= 90 * DAY
   )
-    throw new Error('Use valid UTC dates spanning at most 90 days for one authorized branch.');
+    throw new Error('Use valid local dates spanning at most 90 days for one authorized branch.');
   if (!Number.isInteger(input.receiptsPerStaffHour) || input.receiptsPerStaffHour < 1)
     throw new Error('Receipts per staff hour must be a positive whole number.');
   if (!Number.isInteger(input.minimumSuggestedStaff) || input.minimumSuggestedStaff < 0)
     throw new Error('Minimum suggested staff must be a non-negative whole number.');
-  return { from, toExclusive: new Date(to.getTime() + DAY) };
+  return { days: Math.round((to.getTime() - from.getTime()) / DAY) + 1 };
 }
 
 export function calculateStaffingFootfall(
-  completedAt: readonly Date[],
+  aggregate: readonly HourCount[],
   days: number,
   config: StaffingFootfallConfig
 ) {
-  const counts = Array.from({ length: 24 }, () => 0);
-  for (const timestamp of completedAt) counts[timestamp.getUTCHours()] += 1;
-  return counts.map((receiptCount, hourUtc) => {
+  const counts = new Map(aggregate.map((row) => [row.hourLocal, Number(row.receiptCount)]));
+  return Array.from({ length: 24 }, (_, hourLocal) => {
+    const receiptCount = counts.get(hourLocal) ?? 0;
     const averageReceipts = receiptCount / days;
     return {
-      hourUtc,
+      hourLocal,
       receiptCount,
       averageReceipts,
       suggestedStaff: Math.max(
@@ -63,27 +69,46 @@ export async function readStaffingFootfall(
   organizationId: string,
   input: StaffingFootfallInput
 ) {
-  const period = validateStaffingFootfallInput(input);
-  const sales = await db.pharmacySale.findMany({
-    where: {
-      organizationId,
-      branchId: input.branchId,
-      status: 'COMPLETED',
-      receiptNumber: { not: null },
-      completedAt: { gte: period.from, lt: period.toExclusive },
-    },
-    select: { completedAt: true },
+  const { days } = validateStaffingFootfallInput(input);
+  // Pharmacy branches inherit their organization's workspace timezone. Binding
+  // both tenant and active branch here keeps this helper safe outside the router.
+  const branch = await db.pharmacyBranch.findFirst({
+    where: { id: input.branchId, organizationId, active: true },
+    select: { id: true },
   });
-  const completedAt = sales.flatMap((sale) => (sale.completedAt ? [sale.completedAt] : []));
-  const days = Math.round((period.toExclusive.getTime() - period.from.getTime()) / DAY);
+  if (!branch) throw new Error('Branch is outside your report scope.');
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { timezone: true },
+  });
+  const timezone = workspaceTimezone(organization?.timezone);
+
+  // Aggregate in PostgreSQL so a 90-day report always returns at most 24 rows.
+  // `AT TIME ZONE` resolves each local-midnight boundary with the correct offset,
+  // including days on either side of daylight-saving changes.
+  const aggregate = await db.$queryRaw<HourCount[]>(Prisma.sql`
+    SELECT
+      EXTRACT(HOUR FROM ("completedAt" AT TIME ZONE 'UTC') AT TIME ZONE ${timezone})::integer AS "hourLocal",
+      COUNT(*)::integer AS "receiptCount"
+    FROM pharmacy_sales
+    WHERE "organizationId" = ${organizationId}
+      AND "branchId" = ${input.branchId}
+      AND status = 'COMPLETED'
+      AND "receiptNumber" IS NOT NULL
+      AND "completedAt" >= ((${input.from}::date AT TIME ZONE ${timezone}) AT TIME ZONE 'UTC')
+      AND "completedAt" < (((${input.to}::date + 1) AT TIME ZONE ${timezone}) AT TIME ZONE 'UTC')
+    GROUP BY 1
+    ORDER BY 1
+  `);
+
   return {
-    period: { from: input.from, to: input.to, timezone: 'UTC' as const, days },
-    method: 'COMPLETED_RECEIPTS_BY_UTC_HOUR' as const,
+    period: { from: input.from, to: input.to, timezone, days },
+    method: 'COMPLETED_RECEIPTS_BY_LOCAL_HOUR' as const,
     estimated: true as const,
     config: {
       receiptsPerStaffHour: input.receiptsPerStaffHour,
       minimumSuggestedStaff: input.minimumSuggestedStaff,
     },
-    hours: calculateStaffingFootfall(completedAt, days, input),
+    hours: calculateStaffingFootfall(aggregate, days, input),
   };
 }

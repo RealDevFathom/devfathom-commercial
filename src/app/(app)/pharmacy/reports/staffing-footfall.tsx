@@ -2,10 +2,10 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 
 type Report = {
-  period: { days: number };
+  period: { days: number; timezone: string };
   config: { receiptsPerStaffHour: number };
   hours: Array<{
-    hourUtc: number;
+    hourLocal: number;
     receiptCount: number;
     averageReceipts: number;
     suggestedStaff: number;
@@ -28,7 +28,7 @@ export function StaffingFootfall({ report, failed }: { report: Report | null; fa
         <>
           <p className="mb-4 text-sm text-text-muted">
             Suggestion only. Completed receipts are an estimated footfall proxy, not a door count or
-            staffing requirement. UTC hours and all selected calendar days are included. Adjust the
+            staffing requirement. Hours and calendar days use {report.period.timezone}. Adjust the
             planning assumptions in the report filters; no rota or staff record is changed.
           </p>
           <div className="mb-4 grid gap-4 sm:grid-cols-3">
@@ -46,7 +46,7 @@ export function StaffingFootfall({ report, failed }: { report: Report | null; fa
             <table className="w-full min-w-lg text-left text-sm">
               <thead className="bg-surface-sunken font-mono text-xs uppercase text-text-muted">
                 <tr>
-                  <th className="px-4 py-3">UTC hour</th>
+                  <th className="px-4 py-3">Local hour</th>
                   <th className="px-4 py-3 text-right">Receipts</th>
                   <th className="px-4 py-3 text-right">Daily average</th>
                   <th className="px-4 py-3 text-right">Suggested staff</th>
@@ -54,8 +54,8 @@ export function StaffingFootfall({ report, failed }: { report: Report | null; fa
               </thead>
               <tbody>
                 {report.hours.map((row) => (
-                  <tr className="border-t border-border-subtle" key={row.hourUtc}>
-                    <td className="px-4 py-3 tabular-nums">{hour(row.hourUtc)}</td>
+                  <tr className="border-t border-border-subtle" key={row.hourLocal}>
+                    <td className="px-4 py-3 tabular-nums">{hour(row.hourLocal)}</td>
                     <td className="px-4 py-3 text-right tabular-nums">{row.receiptCount}</td>
                     <td className="px-4 py-3 text-right tabular-nums">
                       {row.averageReceipts.toFixed(1)}

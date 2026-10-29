@@ -270,6 +270,42 @@ describe('pharmacy owner digest capability boundary', () => {
   });
 });
 
+describe('staffing footfall authorization boundary', () => {
+  const input = {
+    branchId: 'branch_1',
+    from: '2026-10-01',
+    to: '2026-10-02',
+    receiptsPerStaffHour: 4,
+    minimumSuggestedStaff: 1,
+  };
+
+  it('denies a caller without operational capability before branch access', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().staffingFootfall(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
+
+  it('denies a caller without financial capability before branch access', async () => {
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await expect(caller().staffingFootfall(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
+
+  it('denies a non-owner even with both capabilities', async () => {
+    mocks.can.mockResolvedValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    await expect(caller('EMPLOYEE').staffingFootfall(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+
+  it('denies an absent or other-tenant branch', async () => {
+    mocks.can.mockResolvedValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_2', name: 'Other' }]);
+    await expect(caller().staffingFootfall(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+});
+
 describe('RX-08 pharmacovigilance state boundaries', () => {
   it('completing internal review does not mark the report externally submitted', async () => {
     mocks.reportFindFirst.mockResolvedValue({ id: 'pv_1', state: 'UNDER_REVIEW' });
