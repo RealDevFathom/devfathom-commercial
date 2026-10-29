@@ -19,6 +19,7 @@
  */
 import { tool } from 'ai';
 import { z } from 'zod';
+import { completionTimestampForMove, isDoneColumn } from '@/lib/tasks/completion';
 import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { matchScore, norm } from '@/lib/ai/context';
@@ -515,6 +516,7 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
           priority: priority ?? 'MEDIUM',
           dueDate: dueAt,
           createdById: h.ctx.userId,
+          completedAt: isDoneColumn(column.name) ? h.now() : null,
           assignees: { create: merged.map((id) => ({ userId: id })) },
         },
         select: { id: true, title: true, priority: true, dueDate: true, description: true },
@@ -689,7 +691,11 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         });
         await tx.task.update({
           where: { id: task.id },
-          data: { columnId: target.id, order: newOrder },
+          data: {
+            columnId: target.id,
+            order: newOrder,
+            completedAt: completionTimestampForMove(task.column.name, target.name, h.now()),
+          },
         });
         // Auto-assign the target column's default assignees (additive).
         const defaults = await tx.columnDefaultAssignee.findMany({

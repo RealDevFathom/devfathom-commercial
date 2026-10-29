@@ -4,6 +4,7 @@ import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { canAccessProject, canManageProject, projectIdOfTask } from '@/lib/authz';
 import { logActivity } from '@/server/activity';
+import { completionTimestampForMove } from '@/lib/tasks/completion';
 
 export const GET = withApiAuth(
   'tasks:read',
@@ -172,6 +173,10 @@ export const PATCH = withApiAuth(
           ...data,
           ...(dueDate !== undefined && { dueDate: dueDate ? new Date(dueDate) : null }),
           ...(isColumnMove && columnId && { columnId, order: newOrder }),
+          ...(isColumnMove &&
+            targetColumn && {
+              completedAt: completionTimestampForMove(existing.column.name, targetColumn.name),
+            }),
         },
       });
 

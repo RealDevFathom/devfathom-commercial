@@ -104,26 +104,26 @@ export const teamStatsRouter = router({
         select: { id: true, assignees: { select: { userId: true } } },
       }),
 
-      // Completed this week = task in Done column, updated in last 7 days
+      // Completed this week = task whose immutable Done transition was in the last 7 days
       ctx.db.task.findMany({
         where: {
           column: { name: 'Done' },
-          updatedAt: { gte: weekAgo },
+          completedAt: { gte: weekAgo },
           assignees: { some: {} },
         },
         select: {
           id: true,
           createdAt: true,
-          updatedAt: true,
+          completedAt: true,
           assignees: { select: { userId: true } },
         },
       }),
 
-      // Completed last week = Done, updated 7–14 days ago (for week-over-week delta)
+      // Completed last week = Done transition 7–14 days ago (for week-over-week delta)
       ctx.db.task.findMany({
         where: {
           column: { name: 'Done' },
-          updatedAt: { gte: twoWeeksAgo, lt: weekAgo },
+          completedAt: { gte: twoWeeksAgo, lt: weekAgo },
           assignees: { some: {} },
         },
         select: { id: true, assignees: { select: { userId: true } } },
@@ -147,11 +147,11 @@ export const teamStatsRouter = router({
         },
         select: {
           createdAt: true,
-          updatedAt: true,
+          completedAt: true,
           assignees: { select: { userId: true } },
         },
         take: 500,
-        orderBy: { updatedAt: 'desc' },
+        orderBy: { completedAt: 'desc' },
       }),
 
       // Meetings invited — fetch the (meeting, attendee) pairs so we can count
@@ -195,9 +195,9 @@ export const teamStatsRouter = router({
       ctx.db.task.findMany({
         where: {
           column: { name: 'Done' },
-          updatedAt: { gte: thirtyDaysAgo },
+          completedAt: { gte: thirtyDaysAgo },
         },
-        select: { updatedAt: true },
+        select: { completedAt: true },
       }),
 
       // Sample of overdue tasks for the alerts section (titles for context)
@@ -260,7 +260,7 @@ export const teamStatsRouter = router({
         const s = byUser.get(a.userId);
         if (!s) continue;
         s.completedThisWeek++;
-        const daysAgo = diffDays(today, startOfDay(t.updatedAt));
+        const daysAgo = diffDays(today, startOfDay(t.completedAt!));
         if (daysAgo >= 0 && daysAgo < 7) {
           // index 0 = oldest (6 days ago), index 6 = today
           s.tasksDoneSparkline[6 - daysAgo]++;
@@ -284,10 +284,11 @@ export const teamStatsRouter = router({
       }
     }
 
-    // Cycle time (avg days from createdAt → updatedAt, for Done tasks)
+    // Cycle time (avg days from createdAt → Done transition)
     const cycleSumByUser = new Map<string, { sum: number; count: number }>();
     for (const t of cycleTimeRows) {
-      const days = (t.updatedAt.getTime() - t.createdAt.getTime()) / DAY_MS;
+      if (!t.completedAt) continue;
+      const days = (t.completedAt.getTime() - t.createdAt.getTime()) / DAY_MS;
       if (days < 0 || days > 365) continue; // sanity filter
       for (const a of t.assignees) {
         const bucket = cycleSumByUser.get(a.userId) ?? { sum: 0, count: 0 };
@@ -371,7 +372,7 @@ export const teamStatsRouter = router({
     }
     const velocityIndex = new Map(velocity.map((v, i) => [v.date, i]));
     for (const t of velocityByDayRows) {
-      const key = t.updatedAt.toISOString().slice(0, 10);
+      const key = t.completedAt!.toISOString().slice(0, 10);
       const i = velocityIndex.get(key);
       if (i !== undefined) velocity[i].count++;
     }
@@ -519,15 +520,15 @@ export const teamStatsRouter = router({
         ctx.db.task.findMany({
           where: {
             column: { name: 'Done' },
-            updatedAt: { gte: weekAgo },
+            completedAt: { gte: weekAgo },
             assignees: { some: { userId: input.userId } },
           },
-          select: { updatedAt: true },
+          select: { completedAt: true },
         }),
         ctx.db.task.count({
           where: {
             column: { name: 'Done' },
-            updatedAt: { gte: twoWeeksAgo, lt: weekAgo },
+            completedAt: { gte: twoWeeksAgo, lt: weekAgo },
             assignees: { some: { userId: input.userId } },
           },
         }),
@@ -543,8 +544,8 @@ export const teamStatsRouter = router({
             column: { name: 'Done' },
             assignees: { some: { userId: input.userId } },
           },
-          select: { createdAt: true, updatedAt: true },
-          orderBy: { updatedAt: 'desc' },
+          select: { createdAt: true, completedAt: true },
+          orderBy: { completedAt: 'desc' },
           take: 200,
         }),
         // All meetings this user is invited to — used to count past occurrences
@@ -579,7 +580,7 @@ export const teamStatsRouter = router({
       const today = startOfDay(now);
       const sparkline = [0, 0, 0, 0, 0, 0, 0];
       for (const t of completedThisWeek) {
-        const daysAgo = diffDays(today, startOfDay(t.updatedAt));
+        const daysAgo = diffDays(today, startOfDay(t.completedAt!));
         if (daysAgo >= 0 && daysAgo < 7) sparkline[6 - daysAgo]++;
       }
 
@@ -587,7 +588,7 @@ export const teamStatsRouter = router({
       let avgCycleTimeDays: number | null = null;
       if (cycleTasks.length > 0) {
         const total = cycleTasks.reduce(
-          (sum, t) => sum + (t.updatedAt.getTime() - t.createdAt.getTime()) / DAY_MS,
+          (sum, t) => sum + (t.completedAt!.getTime() - t.createdAt.getTime()) / DAY_MS,
           0
         );
         avgCycleTimeDays = Math.round((total / cycleTasks.length) * 10) / 10;

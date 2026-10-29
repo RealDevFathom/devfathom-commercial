@@ -45,7 +45,7 @@ const tx = {
   },
   $queryRaw: vi.fn(async () => []),
   column: {
-    findUnique: vi.fn(async () => ({ board: { projectId: 'destination-project' } })),
+    findUnique: vi.fn(async () => ({ name: 'Done', board: { projectId: 'destination-project' } })),
   },
   taskAssignee: { deleteMany: assigneeDeleteMany, createMany: vi.fn() },
   columnDefaultAssignee: { findMany: defaultAssigneeFindMany },
@@ -97,10 +97,20 @@ describe('projects.moveTask', () => {
       },
       select: { userId: true },
     });
+    expect(taskUpdate).toHaveBeenCalledWith({
+      where: { id: 'task-1' },
+      data: {
+        columnId: 'target-column',
+        completedAt: expect.any(Date),
+      },
+    });
   });
 
   it('does not change assignees when moving between boards in the same project', async () => {
-    tx.column.findUnique.mockResolvedValueOnce({ board: { projectId: 'source-project' } });
+    tx.column.findUnique.mockResolvedValueOnce({
+      name: 'In Progress',
+      board: { projectId: 'source-project' },
+    });
 
     await caller().moveTask({ taskId: 'task-1', targetColumnId: 'target-column', newOrder: 0 });
 
@@ -119,8 +129,8 @@ describe('projects.moveTask', () => {
         { id: 'task-2', columnId: 'other-column' },
       ])
       .mockResolvedValueOnce([
-        { id: 'task-1', column: { board: { projectId: 'source-project' } } },
-        { id: 'task-2', column: { board: { projectId: 'destination-project' } } },
+        { id: 'task-1', column: { name: 'To Do', board: { projectId: 'source-project' } } },
+        { id: 'task-2', column: { name: 'Done', board: { projectId: 'destination-project' } } },
       ])
       .mockResolvedValueOnce([]);
 
@@ -143,6 +153,10 @@ describe('projects.moveTask', () => {
         user: { projectMembers: { some: { projectId: 'destination-project' } } },
       },
       select: { userId: true },
+    });
+    expect(taskUpdate).toHaveBeenCalledWith({
+      where: { id: 'task-1' },
+      data: { columnId: 'target-column', completedAt: expect.any(Date) },
     });
   });
 });

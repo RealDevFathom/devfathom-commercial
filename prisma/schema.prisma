@@ -3222,6 +3222,7 @@ model Task {
   parentId       String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  completedAt    DateTime?
 
   // Relations
   column       Column              @relation(fields: [columnId], references: [id], onDelete: Cascade)
@@ -3242,6 +3243,7 @@ model Task {
   @@index([createdById])
   @@index([parentId])
   @@index([organizationId])
+  @@index([completedAt])
   @@map("tasks")
 }
 

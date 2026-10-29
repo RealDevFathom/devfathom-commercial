@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { isDoneColumn } from '@/lib/tasks/completion';
 import { router, protectedProcedure } from '../trpc';
 import { assertProjectAccess } from '../authz';
 import { TRPCError } from '@trpc/server';
@@ -339,6 +340,10 @@ export const trelloImportRouter = router({
             customFieldLines.length ? customFieldLines.join('\n') : null,
           ].filter((b): b is string => !!b);
           const description = descriptionBlocks.length ? descriptionBlocks.join('\n\n') : null;
+          const destinationName =
+            columnId === doneColumnId
+              ? 'Done'
+              : (lists.find((candidate) => listIdMap.get(candidate.id) === columnId)?.name ?? '');
 
           const task = await tx.task.create({
             data: {
@@ -349,6 +354,7 @@ export const trelloImportRouter = router({
               priority: 'MEDIUM',
               dueDate: safeDate(card.due),
               createdById: ctx.session.user.id,
+              completedAt: isDoneColumn(destinationName) ? new Date() : null,
             },
           });
 
