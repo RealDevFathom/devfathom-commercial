@@ -12,7 +12,7 @@
  */
 import { capabilityMatches } from './capabilities';
 import type { AuthzDb } from '@/lib/authz';
-import { POLICIES, type Action } from './policies';
+import { MANDATORY_CONSTRAINTS, POLICIES, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
 
 export type { Action } from './policies';
@@ -75,20 +75,37 @@ export async function can(
   }
   try {
     const decision = await customDecision(db, subject.id, action, env.now);
-    if (decision !== null) return decision;
+    if (decision === false) return false;
+
+    let eligible = decision === true;
+    if (!eligible) {
+      for (const policy of POLICIES[action] ?? []) {
+        try {
+          if (await policy({ subject, resource, env, db })) {
+            eligible = true;
+            break;
+          }
+        } catch (err) {
+          // A policy that throws denies (fail-closed) but never crashes the request.
+          console.error(`[abac] policy for "${action}" threw:`, err);
+        }
+      }
+    }
+    if (!eligible) return false;
+
+    for (const constraint of MANDATORY_CONSTRAINTS[action] ?? []) {
+      try {
+        if (!(await constraint({ subject, resource, env, db }))) return false;
+      } catch (err) {
+        console.error(`[abac] mandatory constraint for "${action}" threw:`, err);
+        return false;
+      }
+    }
+    return true;
   } catch (err) {
     console.error(`[abac] custom permission lookup for "${action}" threw:`, err);
     return false;
   }
-  for (const policy of POLICIES[action] ?? []) {
-    try {
-      if (await policy({ subject, resource, env, db })) return true;
-    } catch (err) {
-      // A policy that throws denies (fail-closed) but never crashes the request.
-      console.error(`[abac] policy for "${action}" threw:`, err);
-    }
-  }
-  return false;
 }
 
 /** Convenience: derive the ABAC Subject from a session user. */
