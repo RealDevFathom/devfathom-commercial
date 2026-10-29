@@ -1073,11 +1073,13 @@ export type VoidItemInput = {
   actor: CommandActor;
 };
 
-/** Void an item. A pre-preparation void (HELD/QUEUED) needs only a reason; a
- * post-preparation void (FIRING/PREPARED/SERVED/REMAKE_REQUESTED) additionally
- * requires a co-authorization and a recorded wastage disposition — the disposition
- * is recorded but no inventory mutation exists until the inventory milestone (C6 /
- * BUILD-ASSUMPTIONS). Item + event history is preserved. */
+/** Void an item. Once a non-void bill exists, the bill must be voided and recut
+ * before any of its order items can be voided, preserving the bill snapshot and
+ * its service-charge allocation. A pre-preparation void (HELD/QUEUED) needs only
+ * a reason; a post-preparation void (FIRING/PREPARED/SERVED/REMAKE_REQUESTED)
+ * additionally requires a co-authorization and a recorded wastage disposition —
+ * the disposition is recorded but no inventory mutation exists until the inventory
+ * milestone (C6 / BUILD-ASSUMPTIONS). Item + event history is preserved. */
 export async function voidItem(db: ScopedDb, input: VoidItemInput): Promise<ItemResult> {
   return runInTransaction(db, async (tx) => {
     const idem = await beginIdempotent(tx, input.actor, 'item.void');
