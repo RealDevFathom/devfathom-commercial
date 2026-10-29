@@ -52,7 +52,11 @@ export class MarketingWorkflowError extends Error {}
 const DAY = 86_400_000;
 
 export function validateMarketingBody(body: string) {
-  if (/prescription|condition|allerg|medicine|diagnos|patient|drug|\brx\b/i.test(body))
+  if (
+    /prescription|condition|allerg|medicine|diagnos|patient|drug|\brx\b|\bsalt\b|antibiotic|analgesic|painkiller|antacid|antihistamine|antiviral|antifungal|supplement/i.test(
+      body
+    )
+  )
     throw new MarketingWorkflowError(
       'Use generic retail copy without clinical or medicine content.'
     );
