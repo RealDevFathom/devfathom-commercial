@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   resolveOrganizationEntitlements: vi.fn(),
   platformDb: { pharmacyOwnerDigestSetting: { findMany: vi.fn() } },
   tenantDb: {
+    $queryRaw: vi.fn(),
     pharmacyOwnerDigestSetting: { findFirst: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   },
 }));
@@ -55,6 +56,7 @@ import {
   composeOwnerDigest,
   nextDigestDueAt,
   processDueOwnerDigests,
+  renderOwnerBriefing,
   WhatsAppChannel,
 } from './owner-digest';
 
@@ -70,6 +72,7 @@ describe('RPT-03 owner digest', () => {
     mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValue([]);
     mocks.readPharmacyAnomalySignals.mockResolvedValue([]);
     mocks.refreshPharmacyAnomalySignals.mockResolvedValue({ evaluated: 0, signals: [] });
+    mocks.tenantDb.$queryRaw.mockResolvedValue([]);
     mocks.readPharmacyOwnerCommandCentre.mockResolvedValue({
       freshness: { status: 'CURRENT', asOf: '2026-09-04T08:00:00.000Z', source: 'ledgers' },
       metrics: {
@@ -91,7 +94,8 @@ describe('RPT-03 owner digest', () => {
   });
 
   it('composes one branch-day by calling the RPT-01 reader and retaining its contracts', async () => {
-    const digest = await composeOwnerDigest({} as never, {
+    const db = { $queryRaw: vi.fn().mockResolvedValue([]) } as never;
+    const digest = await composeOwnerDigest(db, {
       organizationId: 'org_1',
       userId: 'user_1',
       branchId: 'branch_1',
@@ -99,7 +103,7 @@ describe('RPT-03 owner digest', () => {
       businessDate: '2026-09-04',
     });
 
-    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(expect.anything(), {
+    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(db, {
       branchIds: ['branch_1'],
       from: '2026-09-04',
       to: '2026-09-04',
@@ -123,6 +127,8 @@ describe('RPT-03 owner digest', () => {
     expect(digest.rendered).not.toContain('cashVarianceMinor');
     expect(digest.rendered).toContain('deviceFiscalOfflineExceptions: Not available');
     expect(digest.rendered).toContain('Anomaly review signals: 0');
+    expect(digest.briefings.weekly.from).toBe('2026-08-29');
+    expect(digest.briefings.weekly.to).toBe('2026-09-04');
   });
 
   it('includes explainable anomaly events in the existing owner digest', async () => {
@@ -134,7 +140,7 @@ describe('RPT-03 owner digest', () => {
         explanation: 'Counted PKR 1,000 below the expected cash; review the close evidence.',
       },
     ]);
-    const digest = await composeOwnerDigest({} as never, {
+    const digest = await composeOwnerDigest({ $queryRaw: vi.fn().mockResolvedValue([]) } as never, {
       organizationId: 'org_1',
       userId: 'user_1',
       branchId: 'branch_1',
@@ -148,7 +154,7 @@ describe('RPT-03 owner digest', () => {
   it('persists capture delivery with the daily idempotency key', async () => {
     const createMany = vi.fn().mockResolvedValue({ count: 1 });
     const findUniqueOrThrow = vi.fn().mockResolvedValue({ id: 'capture_1' });
-    const digest = await composeOwnerDigest({} as never, {
+    const digest = await composeOwnerDigest({ $queryRaw: vi.fn().mockResolvedValue([]) } as never, {
       organizationId: 'org_1',
       userId: 'user_1',
       branchId: 'branch_1',
@@ -192,6 +198,33 @@ describe('RPT-03 owner digest', () => {
 
   it('never reports a WhatsApp send from the stub', async () => {
     await expect(new WhatsAppChannel().deliver()).resolves.toEqual({ delivered: false });
+  });
+
+  it('keeps catalog, salt, category and even branch names out of WhatsApp copy', () => {
+    const briefing = renderOwnerBriefing({
+      variant: 'DAILY',
+      branchName: 'Amoxicillin Antibiotics',
+      from: '2026-09-04',
+      to: '2026-09-04',
+      figures: {
+        salesMinor: 125_000,
+        cashMinor: 80_000,
+        lostDemandEstimatedMinor: 32_500,
+        walkOuts: 7,
+        topGapName: 'Panadol Paracetamol Analgesic',
+        topGapEstimatedMinor: 12_000,
+        topGapDraftPo: true,
+        recoveredEstimatedMinor: 4_500,
+        expiryAtRiskMinor: 8_000,
+        khataDueMinor: 25_000,
+      },
+    });
+    expect(briefing.appBody).toContain('Panadol Paracetamol Analgesic');
+    expect(briefing.whatsappBody).not.toMatch(
+      /Panadol|Paracetamol|Analgesic|Amoxicillin|Antibiotics/i
+    );
+    expect(briefing.whatsappBody.split('\n')).toHaveLength(6);
+    expect(briefing.whatsappBody).toContain('Lost demand estimate PKR 325.00 · walk-outs 7');
   });
 
   async function expectDeniedDigestDisabled() {

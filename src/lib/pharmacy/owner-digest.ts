@@ -31,6 +31,30 @@ const DIGEST_METRIC_KEYS = [
 type MetricKey = (typeof DIGEST_METRIC_KEYS)[number];
 type CommandCentre = Awaited<ReturnType<typeof readPharmacyOwnerCommandCentre>>;
 
+export type OwnerBriefingFigures = {
+  salesMinor: number;
+  cashMinor: number;
+  lostDemandEstimatedMinor: number;
+  walkOuts: number;
+  topGapName: string | null;
+  topGapEstimatedMinor: number;
+  topGapDraftPo: boolean;
+  recoveredEstimatedMinor: number;
+  expiryAtRiskMinor: number;
+  khataDueMinor: number | null;
+};
+
+export type OwnerBriefing = {
+  variant: 'DAILY' | 'WEEKLY';
+  from: string;
+  to: string;
+  figures: OwnerBriefingFigures;
+  /** Full detail for the authenticated owner in the app. */
+  appBody: string;
+  /** Utility-safe copy: deliberately contains no catalog-derived text. */
+  whatsappBody: string;
+};
+
 export type OwnerDigest = {
   organizationId: string;
   userId: string;
@@ -46,6 +70,7 @@ export type OwnerDigest = {
     value: number | null;
   }>;
   anomalies: Awaited<ReturnType<typeof readPharmacyAnomalySignals>>;
+  briefings: { daily: OwnerBriefing; weekly: OwnerBriefing };
   rendered: string;
 };
 
@@ -70,6 +95,110 @@ function renderValue(key: MetricKey, value: number | null): string {
   return moneyKeys.has(key) ? `PKR ${(value / 100).toFixed(2)}` : String(value);
 }
 
+const money = (minor: number | null) =>
+  minor == null ? 'Not available' : `PKR ${(minor / 100).toFixed(2)}`;
+
+function dateDaysBefore(date: string, days: number) {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() - days);
+  return value.toISOString().slice(0, 10);
+}
+
+/**
+ * Reads only recorded ledgers/events. Values sourced from estimated demand are
+ * explicitly labelled as estimates in both delivery surfaces.
+ */
+export async function readOwnerBriefingFigures(
+  db: ScopedDb,
+  branchId: string,
+  from: string,
+  to: string
+): Promise<OwnerBriefingFigures> {
+  const report = await readPharmacyOwnerCommandCentre(db, { branchIds: [branchId], from, to });
+  const start = new Date(`${from}T00:00:00.000Z`);
+  const end = new Date(`${to}T00:00:00.000Z`);
+  end.setUTCDate(end.getUTCDate() + 1);
+  const [demand] = await db.$queryRaw<
+    Array<{
+      lost: number;
+      walkOuts: number;
+      recovered: number;
+      topGapName: string | null;
+      topGapValue: number;
+      topGapDraftPo: boolean;
+    }>
+  >(Prisma.sql`
+    WITH period_demand AS (
+      SELECT d.*, m."productName"
+      FROM "pharmacy_unfulfilled_demand_events" d
+      LEFT JOIN "pharmacy_medicines" m ON m."organizationId"=d."organizationId" AND m."id"=d."requestedMedicineId"
+      WHERE d."branchId"=${branchId} AND d."createdAt">=${start} AND d."createdAt"<${end}
+    ), gaps AS (
+      SELECT "requestedMedicineId", MAX("productName") AS name,
+        COALESCE(SUM("estimatedValueMinor"),0)::int AS value
+      FROM period_demand GROUP BY "requestedMedicineId"
+      ORDER BY value DESC, "requestedMedicineId" NULLS LAST LIMIT 1
+    )
+    SELECT
+      COALESCE((SELECT SUM("estimatedValueMinor") FROM period_demand),0)::int AS lost,
+      (SELECT COUNT(*) FROM period_demand)::int AS "walkOuts",
+      COALESCE((SELECT SUM("estimatedValueMinor") FROM period_demand WHERE status='RECOVERED' AND "recoveredAt">=${start} AND "recoveredAt"<${end}),0)::int AS recovered,
+      gaps.name AS "topGapName", COALESCE(gaps.value,0)::int AS "topGapValue",
+      COALESCE(EXISTS(SELECT 1 FROM "pharmacy_purchase_order_lines" pol JOIN "pharmacy_purchase_orders" po ON po."organizationId"=pol."organizationId" AND po.id=pol."purchaseOrderId" WHERE po."branchId"=${branchId} AND po.status='DRAFT' AND pol."medicineId"=gaps."requestedMedicineId"),false) AS "topGapDraftPo"
+    FROM gaps RIGHT JOIN (SELECT 1) singleton ON true
+  `);
+  return {
+    salesMinor: report.metrics.salesMinor,
+    cashMinor: report.metrics.cashMinor,
+    lostDemandEstimatedMinor: demand?.lost ?? 0,
+    walkOuts: demand?.walkOuts ?? 0,
+    topGapName: demand?.topGapName ?? null,
+    topGapEstimatedMinor: demand?.topGapValue ?? 0,
+    topGapDraftPo: demand?.topGapDraftPo ?? false,
+    recoveredEstimatedMinor: demand?.recovered ?? 0,
+    expiryAtRiskMinor: report.metrics.expiryValueMinor30,
+    khataDueMinor: report.metrics.khataAgingMinor,
+  };
+}
+
+export function renderOwnerBriefing(input: {
+  variant: 'DAILY' | 'WEEKLY';
+  branchName: string;
+  from: string;
+  to: string;
+  figures: OwnerBriefingFigures;
+}): OwnerBriefing {
+  const { figures: f } = input;
+  const label = input.variant === 'DAILY' ? input.to : `${input.from} to ${input.to}`;
+  const heading = `${input.variant === 'DAILY' ? 'Daily' : 'Weekly'} owner briefing · ${input.branchName} · ${label}`;
+  const common = [
+    `1. Sales ${money(f.salesMinor)} · cash ${money(f.cashMinor)}`,
+    `2. Lost demand estimate ${money(f.lostDemandEstimatedMinor)} · walk-outs ${f.walkOuts}`,
+  ];
+  const po = f.topGapDraftPo ? 'draft PO ready' : 'no draft PO';
+  return {
+    variant: input.variant,
+    from: input.from,
+    to: input.to,
+    figures: f,
+    appBody: [
+      heading,
+      ...common,
+      `3. Top gap ${f.topGapName ?? 'Not available'} · estimated ${money(f.topGapEstimatedMinor)} · ${po}`,
+      `4. Recovered demand estimate ${money(f.recoveredEstimatedMinor)} · expiry at risk (30 days) ${money(f.expiryAtRiskMinor)}`,
+      `5. Khata due ${money(f.khataDueMinor)}`,
+    ].join('\n'),
+    // Never interpolate branch or catalog fields here. Even a branch may be named after a drug.
+    whatsappBody: [
+      `${input.variant === 'DAILY' ? 'Daily' : 'Weekly'} owner business briefing · ${label}`,
+      ...common,
+      `3. Top stock gap · estimated ${money(f.topGapEstimatedMinor)} · ${po}`,
+      `4. Recovered demand estimate ${money(f.recoveredEstimatedMinor)} · expiry at risk (30 days) ${money(f.expiryAtRiskMinor)}`,
+      `5. Khata due ${money(f.khataDueMinor)}`,
+    ].join('\n'),
+  };
+}
+
 export async function composeOwnerDigest(
   db: ScopedDb,
   input: {
@@ -85,9 +214,12 @@ export async function composeOwnerDigest(
     from: input.businessDate,
     to: input.businessDate,
   };
-  const [report, anomalies] = await Promise.all([
+  const weeklyFrom = dateDaysBefore(input.businessDate, 6);
+  const [report, anomalies, dailyFigures, weeklyFigures] = await Promise.all([
     readPharmacyOwnerCommandCentre(db, filters),
     readPharmacyAnomalySignals(db, filters),
+    readOwnerBriefingFigures(db, input.branchId, input.businessDate, input.businessDate),
+    readOwnerBriefingFigures(db, input.branchId, weeklyFrom, input.businessDate),
   ]);
   const contracts = new Map(PHARMACY_METRIC_CONTRACT.map((contract) => [contract.key, contract]));
   const metrics = DIGEST_METRIC_KEYS.map((key) => {
@@ -95,13 +227,34 @@ export async function composeOwnerDigest(
     if (!contract) throw new Error(`RPT-01 metric contract missing: ${key}.`);
     return { ...contract, key, value: report.metrics[key] };
   });
+  const briefings = {
+    daily: renderOwnerBriefing({
+      variant: 'DAILY',
+      branchName: input.branchName,
+      from: input.businessDate,
+      to: input.businessDate,
+      figures: dailyFigures,
+    }),
+    weekly: renderOwnerBriefing({
+      variant: 'WEEKLY',
+      branchName: input.branchName,
+      from: weeklyFrom,
+      to: input.businessDate,
+      figures: weeklyFigures,
+    }),
+  };
   return {
     ...input,
     freshness: report.freshness,
     metrics,
     anomalies,
+    briefings,
     rendered: [
-      `Daily owner digest · ${input.branchName} · ${input.businessDate}`,
+      briefings.daily.appBody,
+      '',
+      briefings.weekly.appBody,
+      '',
+      'Operational detail',
       ...metrics.map((metric) => `${metric.label}: ${renderValue(metric.key, metric.value)}`),
       ...renderAnomalyDigest(anomalies),
       `As of ${report.freshness.asOf}`,
