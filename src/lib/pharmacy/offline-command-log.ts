@@ -128,7 +128,9 @@ export async function recordOfflineCommand(
       existing.payloadHash !== payloadHash
     )
       throw new PharmacyOfflineCommandError('IDEMPOTENCY_CONFLICT');
-    return { command: existing, replayed: existing.attempts > 0 || existing.status !== 'PENDING' };
+    // Finding the key means this invocation did not create the command. That is
+    // a replay even when the first worker crashed before its initial attempt.
+    return { command: existing, replayed: true };
   }
 
   if (

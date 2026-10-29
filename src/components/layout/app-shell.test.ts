@@ -90,6 +90,9 @@ describe('AppShell module guard', () => {
 
   it('clearly warns when the pharmacy licence is a placeholder', () => {
     render(
+      // createElement's component type requires children in props even though
+      // the actual child is supplied as its third argument below.
+      // eslint-disable-next-line react/no-children-prop
       createElement(
         AppShell,
         {

@@ -718,6 +718,39 @@ describeIfDatabase('PH-OFF OFF-01 — the append-only command log', () => {
     expect(outcome.rows).toBe(1);
   });
 
+  it('reports a pre-existing unattempted pending command as a replay', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'log-pending-replay');
+    const outcome = await inOrg(ORG_A, async (db) => {
+      const first = await deps.log.recordOfflineCommand(db, scopeOf(fixture), command(fixture));
+      expect(first.command).toMatchObject({ status: 'PENDING', attempts: 0 });
+      return deps.log.recordOfflineCommand(db, scopeOf(fixture), command(fixture));
+    });
+    expect(outcome.replayed).toBe(true);
+    expect(outcome.command).toMatchObject({ status: 'PENDING', attempts: 0 });
+  });
+
+  it('backfills a gapped history to its first missing sequence', async () => {
+    const [backfill] = await inOrg(
+      ORG_A,
+      (db) => db.$queryRaw<Array<{ nextSequence: number }>>`
+        WITH ordered AS (
+          SELECT sequence,
+            LAG(sequence) OVER (ORDER BY sequence) AS previous,
+            MAX(sequence) OVER () AS maximum
+          FROM (VALUES (2::INTEGER), (3::INTEGER), (5::INTEGER)) AS historical(sequence)
+        )
+        SELECT LEAST(MIN(CASE
+          WHEN previous IS NULL AND sequence > 1 THEN 1::BIGINT
+          WHEN previous IS NOT NULL AND sequence::BIGINT > previous::BIGINT + 1
+            THEN previous::BIGINT + 1
+          WHEN sequence = maximum THEN sequence::BIGINT + 1
+        END), 2147483647)::INTEGER AS "nextSequence"
+        FROM ordered
+      `
+    );
+    expect(backfill?.nextSequence).toBe(1);
+  });
+
   it('refuses one key carrying two different payloads', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'log-conflict');
     await inOrg(ORG_A, (db) =>

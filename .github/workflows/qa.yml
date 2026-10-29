@@ -375,6 +375,8 @@ jobs:
       RESTAURANT_ACTOR_ADMIN_PASSWORD: gate-browser-seed-ci-only
       RESTAURANT_ACTOR_OPERATOR_EMAIL: operator@restaurant-e2e.test
       RESTAURANT_ACTOR_OPERATOR_PASSWORD: gate-restaurant-operator-ci-only
+      RESTAURANT_ACTOR_AGENCY_EMAIL: alex@company.com
+      RESTAURANT_ACTOR_AGENCY_PASSWORD: gate-browser-seed-ci-only
       AGENCY_E2E_ADMIN_EMAIL: agency-admin@agency-e2e.test
       AGENCY_E2E_ADMIN_PASSWORD: gate-agency-admin-ci-only
       PHARMACY_E2E_ADMIN_EMAIL: pharmacy-admin@pharmacy-e2e.test
@@ -493,7 +495,10 @@ jobs:
       - name: Record 05-run-agency
         if: always()
         run: printf '05-run-agency=%s\n' '${{ steps.agency.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
-      - name: Run pharmacy counter and time-to-first-sale
+      # The time-to-first-sale journey deliberately requires an operator-owned
+      # isolated-staging attestation and is run by its dedicated staging gate;
+      # this disposable localhost lane exercises the complete counter corpus.
+      - name: Run pharmacy counter
         id: pharmacy
         continue-on-error: true
         env:
@@ -506,10 +511,10 @@ jobs:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/pharmacy
         run: >-
           bunx tsx scripts/run-pharmacy-e2e.ts --workers=1 --reporter=html,json
-          tests/e2e/pharmacy-counter.spec.ts tests/e2e/time-to-first-sale.spec.ts
+          tests/e2e/pharmacy-counter.spec.ts
       - name: Record pharmacy lane
         if: always()
-        run: printf 'pharmacy-counter-time-to-first-sale=%s\n' '${{ steps.pharmacy.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
+        run: printf 'pharmacy-counter=%s\n' '${{ steps.pharmacy.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
       - name: 21-run-all-lanes summary
         if: always()
         shell: bash
@@ -523,7 +528,7 @@ jobs:
             '02-run-restaurant',
             '03-run-platform',
             '05-run-agency',
-            'pharmacy-counter-time-to-first-sale',
+            'pharmacy-counter',
           ];
           let aggregate = 0;
           let lines = [];
