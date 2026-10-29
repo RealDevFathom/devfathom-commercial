@@ -20,6 +20,7 @@ import {
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
 import { protectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { PHARMACY_CHECKED_CAPABILITIES } from '@/lib/vertical-catalog';
 
 async function organizationBranch(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements?.organizationId;
@@ -42,6 +43,28 @@ async function organizationBranch(ctx: TRPCContext, branchId: string) {
 const safety = capabilityProcedure('pharmacy:safety');
 
 export const pharmacySafetyRouter = router({
+  navigationAccess: protectedProcedure.query(async ({ ctx }) => {
+    const user = ctx.session?.user;
+    const organizationId = ctx.entitlements?.organizationId;
+    if (!user || !organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const subject = subjectFromSession(user);
+    const decisions = await Promise.all(
+      PHARMACY_CHECKED_CAPABILITIES.map(async (capability) => ({
+        capability,
+        allowed: await can(subject, capability, undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+        }),
+      }))
+    );
+    return {
+      userId: user.id,
+      organizationId,
+      capabilities: decisions
+        .filter((decision) => decision.allowed)
+        .map((decision) => decision.capability),
+    };
+  }),
   access: protectedProcedure.query(async ({ ctx }) => {
     const user = ctx.session?.user;
     if (!user) return { allowed: false };

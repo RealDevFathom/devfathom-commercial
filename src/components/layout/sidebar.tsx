@@ -88,7 +88,7 @@ interface NavItem {
    */
   hotelCapabilities?: readonly HotelCapability[];
   /** Shown only when the signed-in user holds one of these capabilities. */
-  pharmacyCapabilities?: readonly string[];
+  pharmacyCapabilities?: readonly Action[];
 }
 
 // Grouped to match the Studio WORKSPACE / RESTAURANT / FIRM rail. Order defines the
@@ -316,6 +316,7 @@ export const navigation: NavItem[] = [
     icon: Monitor,
     group: 'Pharmacy',
     module: 'pharmacy-counter',
+    adminOnly: true,
   },
   {
     label: 'Counter',
@@ -323,18 +324,21 @@ export const navigation: NavItem[] = [
     icon: Monitor,
     group: 'Pharmacy',
     module: 'pharmacy-counter',
+    pharmacyCapabilities: ['pharmacy:counter'],
   },
   {
     label: 'Inventory',
     href: '/pharmacy/inventory',
     icon: PackageSearch,
     group: 'Pharmacy',
+    pharmacyCapabilities: ['pharmacy:inventory'],
   },
   {
     label: 'Purchasing',
     href: '/pharmacy/purchasing',
     icon: ShoppingCart,
     group: 'Pharmacy',
+    pharmacyCapabilities: ['pharmacy:procurement'],
   },
   {
     label: 'Finance',
@@ -348,6 +352,7 @@ export const navigation: NavItem[] = [
     href: '/pharmacy/reports',
     icon: BarChart3,
     group: 'Pharmacy',
+    pharmacyCapabilities: ['reports:operational'],
   },
   {
     label: 'Cameras',
@@ -379,6 +384,7 @@ export const navigation: NavItem[] = [
     icon: FileText,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
+    pharmacyCapabilities: ['pharmacy:dispense'],
   },
   {
     label: 'Pharmacist queue',
@@ -386,6 +392,7 @@ export const navigation: NavItem[] = [
     icon: ClipboardCheck,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
+    pharmacyCapabilities: ['pharmacy:dispense'],
   },
   {
     label: 'Substitution',
@@ -393,6 +400,7 @@ export const navigation: NavItem[] = [
     icon: Replace,
     group: 'Pharmacy',
     module: 'pharmacy-dispensing',
+    pharmacyCapabilities: ['pharmacy:dispense'],
   },
   {
     label: 'Controlled register',
@@ -536,7 +544,7 @@ export function visibleNavigation(
   entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>,
   role?: string,
   hotelCapabilities: readonly HotelCapability[] = NO_HOTEL_CAPABILITIES,
-  pharmacyCapabilities: readonly string[] = []
+  pharmacyCapabilities: readonly Action[] = []
 ) {
   const isAdmin = role === 'ADMIN';
   const isHr = role === 'HR';
@@ -606,15 +614,39 @@ function useVisibleNavigation() {
     current && properties.data
       ? [...new Set(properties.data.properties.flatMap((property) => property.capabilities))]
       : NO_HOTEL_CAPABILITIES;
-  const safetyModule =
-    entitlements.vertical === 'PHARMACY' &&
-    isModuleGranted('pharmacy-safety', entitlements.enabledModules);
-  const safetyAccess = trpc.pharmacySafety.access.useQuery(undefined, {
-    enabled: safetyModule,
+  const pharmacyEnabled = Boolean(
+    session?.user.id &&
+    session.user.organizationId === entitlements.organizationId &&
+    evaluateSessionUser(session.user).ok &&
+    entitlements.vertical === 'PHARMACY'
+  );
+  const pharmacyAccess = trpc.pharmacySafety.navigationAccess.useQuery(undefined, {
+    enabled: pharmacyEnabled,
     retry: false,
-    staleTime: 30_000,
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
-  const pharmacyCapabilities = safetyAccess.data?.allowed ? ['pharmacy:safety'] : [];
+  const refetchPharmacyAccess = pharmacyAccess.refetch;
+  useEffect(() => {
+    if (pharmacyEnabled) void refetchPharmacyAccess();
+  }, [
+    pharmacyEnabled,
+    session?.user.id,
+    session?.user.organizationId,
+    refetchPharmacyAccess,
+  ]);
+  // Never render capabilities cached for another member or tenant during a switch.
+  const pharmacyCurrent = Boolean(
+    pharmacyEnabled &&
+    !pharmacyAccess.isError &&
+    !pharmacyAccess.isFetching &&
+    pharmacyAccess.data?.userId === session?.user.id &&
+    pharmacyAccess.data?.organizationId === session?.user.organizationId
+  );
+  const pharmacyCapabilities: readonly Action[] =
+    pharmacyCurrent && pharmacyAccess.data
+      ? pharmacyAccess.data.capabilities
+      : [];
   const filteredNav = visibleNavigation(
     entitlements,
     session?.user?.role,
