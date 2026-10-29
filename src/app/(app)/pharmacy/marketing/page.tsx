@@ -10,6 +10,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { pharmacyMarketingRouter } from '@/server/routers/pharmacy-marketing';
 import { createTRPCContext } from '@/server/trpc';
 import { MarketingActionForm } from './action-form';
+import { BusinessProfilePanel } from './business-profile-panel';
 
 export const metadata = { title: 'Marketing · Pharmacy' };
 const control =
@@ -150,6 +151,7 @@ export default async function PharmacyMarketingPage({
         unavailable={growthUnavailable}
         templates={history.templates}
       />
+      <BusinessProfilePanel branchId={branchId} />
       {review && (
         <SectionCard
           key={review.campaign.id}

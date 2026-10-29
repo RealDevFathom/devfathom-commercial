@@ -25,6 +25,23 @@ export async function marketingAction(
     let message: string;
     let savedCampaignId: string | undefined;
     switch (text('operation')) {
+      case 'review-reply': {
+        const tone = text('tone');
+        if (tone !== 'WARM' && tone !== 'FORMAL')
+          return { error: true, message: 'Choose an available tone.' };
+        const result = await caller.draftReviewReply({
+          branchId,
+          rating: Number(text('rating')),
+          review: text('review'),
+          tone,
+        });
+        return {
+          error: !result.available,
+          message: result.available
+            ? `Unapproved reply draft — copy, review, and post it manually if appropriate. Nothing was posted:\n\n${result.draft}`
+            : 'AI reply drafting is unavailable. Nothing was posted; write a reply manually.',
+        };
+      }
       case 'growth-generate': {
         const result = await caller.generateGrowth({
           branchId,
