@@ -65,9 +65,15 @@ type CandidateRow = {
  * expiry with one comparison and never sell into an expiry period.
  */
 export function expiryInstant(printed: Date, precision: 'DAY' | 'MONTH'): Date {
-  return precision === 'MONTH'
-    ? new Date(Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth() + 1, 1))
-    : new Date(Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth(), printed.getUTCDate() + 1));
+  // Printed dates are represented as UTC-midnight Dates at the API boundary,
+  // but they name calendar dates in Pakistan. Pakistan has remained UTC+05:00
+  // since 1970, so local midnight is 19:00Z on the preceding UTC date.
+  const karachiOffsetMs = 5 * 60 * 60 * 1_000;
+  const utcBoundary =
+    precision === 'MONTH'
+      ? Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth() + 1, 1)
+      : Date.UTC(printed.getUTCFullYear(), printed.getUTCMonth(), printed.getUTCDate() + 1);
+  return new Date(utcBoundary - karachiOffsetMs);
 }
 
 const CANDIDATE_COLUMNS = Prisma.sql`
