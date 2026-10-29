@@ -107,6 +107,28 @@ export const POST = withTerminalAuth(async (ctx, request) => {
     throw err;
   }
 
+<<<<<<< HEAD
+=======
+  const now = new Date();
+  const auth = await authenticateOperator(ctx.db, {
+    staffProfileId: approvingStaffProfileId,
+    deviceId: ctx.device.id,
+    branchId: ctx.device.branchId,
+    type,
+    secret,
+    now,
+  });
+  if (!auth.ok) {
+    if (auth.reason === 'LOCKED') {
+      return NextResponse.json(
+        { error: "Approving manager's credential is temporarily locked." },
+        { status: 423, headers: { 'Retry-After': String(Math.ceil(auth.retryAfterMs / 1000)) } }
+      );
+    }
+    return NextResponse.json({ error: 'Invalid approving credential.' }, { status: 401 });
+  }
+
+>>>>>>> origin/codex/demo-operating-mode
   const created = await ctx.db.restaurantCoAuthorization.create({ data: record });
   // C7 attribution: the actor stays the ACTING operator (approval never changes
   // who acts); the approving manager and the evidence are pinned in metadata.

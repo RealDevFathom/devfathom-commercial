@@ -1,3 +1,4 @@
+import { soloOwnerEligible } from '@/lib/pharmacy/solo-approval';
 import type { Metadata } from 'next';
 import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
@@ -144,6 +145,30 @@ export default async function PharmacyReceivingPage({
   }
 
   const branchId = scope.branch.id;
+  const solo = await soloOwnerEligible(ctx.db, {
+    organizationId: ctx.entitlements.organizationId,
+    branchId,
+    actorId: ctx.session.user.id,
+  });
+  workspace.soloApprovalAllowed = solo;
+  if (solo && !workspace.approvers.some((person) => person.id === ctx.session!.user.id)) {
+    workspace.approvers.push({
+      id: ctx.session.user.id,
+      name: ctx.session.user.name ?? 'Owner (you)',
+      email: ctx.session.user.email ?? '',
+    });
+  }
+  const directPurchaseApprovers = workspace.directPurchaseApprovers.filter((person) =>
+    person.branchIds.includes(branchId)
+  );
+  if (solo && !directPurchaseApprovers.some((person) => person.id === ctx.session!.user.id)) {
+    directPurchaseApprovers.push({
+      id: ctx.session.user.id,
+      name: ctx.session.user.name ?? 'Owner (you)',
+      email: ctx.session.user.email ?? '',
+      branchIds: [branchId],
+    });
+  }
   const exceptionStatus = param(query, 'exceptions') === 'resolved' ? 'RESOLVED' : 'OPEN';
 
   let receipts: GoodsReceiptDetail[];
@@ -197,7 +222,7 @@ export default async function PharmacyReceivingPage({
     (selectedReceipt.qualifiedPersonUserId ||
       selectedReceipt.lines.some((line) => line.medicine.controlled))
   );
-  const witnesses = needsWitness ? await caller.controlledWitnesses() : [];
+  const witnesses = needsWitness ? await caller.controlledWitnesses({ branchId }) : [];
 
   // ── actions ───────────────────────────────────────────────────────────────
 
@@ -307,6 +332,7 @@ export default async function PharmacyReceivingPage({
         directPurchase: {
           reason: field(form, 'bypassReason'),
           approvedByUserId: field(form, 'bypassApprovedByUserId'),
+          pin: optionalField(form, 'bypassPin'),
         },
         note: optionalField(form, 'directNote'),
         qualifiedPersonUserId: optionalField(form, 'directQualifiedPersonUserId'),
@@ -726,11 +752,11 @@ export default async function PharmacyReceivingPage({
           same as receiving against an order — the only difference is that a bypass reason and a
           named approver stand in place of the order.
         </p>
-        {workspace.approvers.length === 0 ? (
+        {directPurchaseApprovers.length === 0 ? (
           <div className="mt-4">
             <EmptyState
               title="No second person can approve a bypass"
-              detail="A direct purchase needs an approver who is not you, and this workspace has no other active user. Invite a colleague, or raise a purchase order instead."
+              detail="A direct purchase needs an active approver with procurement permission and access to this branch. Invite an eligible colleague, or raise a purchase order instead."
               steps={[
                 { label: 'Invite a colleague', href: '/team' },
                 { label: 'Raise a purchase order', href: `${PURCHASING_ROUTE}/orders` },
@@ -796,15 +822,28 @@ export default async function PharmacyReceivingPage({
                 hint="Recorded permanently with the receipt."
               />
               <SelectField
-                emptyHint="Nobody else is active in this workspace."
-                hint="You cannot approve your own bypass, so you are not on this list."
+                emptyHint="No eligible procurement approver has access to this branch."
+                hint="A second approver is required unless you are the sole active owner and enter your PIN."
                 label="Approved by"
                 name="bypassApprovedByUserId"
                 notice={notice}
-                options={workspace.approvers.map((approver) => ({
+                options={directPurchaseApprovers.map((approver) => ({
                   value: approver.id,
                   label: approver.name ? `${approver.name} (${approver.email})` : approver.email,
                 }))}
+                required
+              />
+              <TextField
+                name="bypassPin"
+                label="Approver PIN"
+                type="password"
+                minLength={4}
+                maxLength={8}
+                pattern="[0-9]{4,8}"
+                inputMode="numeric"
+                autoComplete="current-password"
+                notice={notice}
+                hint="The selected approver must enter their PIN. A sole active owner may approve with their own PIN."
                 required
               />
             </div>

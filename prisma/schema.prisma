@@ -246,14 +246,17 @@ model PharmacyBranch {
   @@map("pharmacy_branches")
 }
 
-/// Active assignment of a tenant user to one pharmacy branch. Receipt reads use
-/// this table, never restaurant staff profiles. An empty set is not a grant.
+/// Active assignment of a tenant user to one pharmacy branch. Branch-scoped pharmacy
+/// actions use this table, never restaurant staff profiles. Owner assignments are
+/// materialized by lifecycle triggers; an empty set grants nothing to other staff.
 model PharmacyBranchAssignment {
   id             String   @id @default(cuid())
   organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId       String
   userId         String
   active         Boolean  @default(true)
+  /// SQL lifecycle marker for assignments inherited from proprietor access.
+  ownerManaged   Boolean  @default(false)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -5070,6 +5073,11 @@ enum OrganizationVertical {
   HOSPITALITY
 }
 
+enum PharmacyOperatingMode {
+  SOLO
+  STAFFED
+}
+
 enum PlatformModuleBand {
   BASELINE
   PLATFORM
@@ -5101,6 +5109,7 @@ model Organization {
   seatLimit                Int                        @default(1)
   isDemo                   Boolean                    @default(false)
   askFathomEnabled         Boolean                    @default(true)
+  pharmacyOperatingMode    PharmacyOperatingMode      @default(STAFFED)
   lastDemoResetAt          DateTime?
   gracePeriodDays          Int                        @default(0)
   activatedAt              DateTime?

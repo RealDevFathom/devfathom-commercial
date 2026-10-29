@@ -114,6 +114,7 @@ describe('§9 contract item 1 — AGENCY organization.create: zero branch rows',
     mocks.orgCreate.mockResolvedValue({ id: 'org_a', slug: 'acme-agency' });
     mocks.roleCreate.mockResolvedValue({ id: 'role_admin' });
     mocks.pkgFindUnique.mockResolvedValue({
+      defaultSeats: 25,
       id: 'pkg_a',
       active: true,
       defaultSeats: 25,

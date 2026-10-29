@@ -38,7 +38,7 @@ const ORG_A = `org_wha1176_ret_a_${suffix}`;
 const ORG_B = `org_wha1176_ret_b_${suffix}`;
 const BRANCH_A = 'branch_a';
 const CLERK = 'user_store_clerk';
-const CONTROLLER = 'user_finance_controller';
+const CONTROLLER = `user_finance_controller_${suffix}`;
 
 /** Fixed instants, so no case depends on the wall clock. */
 const NOW = new Date('2026-09-02T09:00:00.000Z');
@@ -209,6 +209,37 @@ beforeAll(async () => {
   ]);
   deps = { withTenantDb: scopedDb.withTenantDb, ledger, returns };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  await scopedDb.withPlatformDb((db) =>
+    db.organization.createMany({
+      data: [ORG_A, ORG_B].map((id) => ({
+        id,
+        slug: id,
+        legalName: id,
+        displayName: id,
+        status: 'ACTIVE' as const,
+        vertical: 'PHARMACY' as const,
+      })),
+    })
+  );
+  await inOrg(ORG_A, async (db) => {
+    await db.organizationDepartment.create({ data: { key: 'pharmacy', name: 'Pharmacy' } });
+    const role = await db.organizationRole.create({
+      data: { key: 'manager', name: 'Procurement checker' },
+    });
+    await db.organizationRolePermission.create({
+      data: { organizationRoleId: role.id, capability: 'pharmacy:procurement' },
+    });
+    await db.user.create({
+      data: {
+        id: CONTROLLER,
+        name: 'Independent controller',
+        email: `${suffix}-controller@example.invalid`,
+        department: 'pharmacy',
+        title: 'Controller',
+        organizationRoleId: role.id,
+      },
+    });
+  });
 }, 120_000);
 
 // ── PUR-06 acceptance: a claimed quantity cannot be sold ────────────────────

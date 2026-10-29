@@ -23,9 +23,11 @@ const mocks = vi.hoisted(() => ({
   createTRPCContext: vi.fn(),
   hasModule: vi.fn(),
   createCaller: vi.fn(),
+  soloEligible: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/pharmacy/solo-approval', () => ({ soloOwnerEligible: mocks.soloEligible }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.hasModule }));
@@ -52,8 +54,10 @@ function contextStub(enabledModules = ['pharmacy-procurement']) {
     organization: actor.organization,
     entitlements: { organizationId: 'org-1', enabledModules },
     db: {
+      $queryRaw: vi.fn().mockResolvedValue([{ allowed: false }]),
       user: {
         findUnique: vi.fn().mockResolvedValue({
+          status: 'ACTIVE',
           organizationRole: {
             permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
           },
@@ -148,6 +152,14 @@ const workspace = {
     },
   ],
   suppliers: [licensedSupplier, lapsedSupplier],
+  directPurchaseApprovers: [
+    {
+      id: 'user-2',
+      name: 'Bilal',
+      email: 'bilal@example.test',
+      branchIds: ['branch-1', 'branch-a'],
+    },
+  ],
   approvers: [{ id: 'user-2', name: 'Bilal', email: 'bilal@example.test' }],
 };
 
@@ -172,6 +184,7 @@ function callerStub(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  mocks.soloEligible.mockResolvedValue(false);
   vi.clearAllMocks();
   vi.mocked(revalidatePath).mockReset();
   vi.unstubAllGlobals();
@@ -217,6 +230,7 @@ describe('tenancy and licensing (UX rule 7)', () => {
       db: {
         user: {
           findUnique: vi.fn().mockResolvedValue({
+            status: 'ACTIVE',
             organizationRole: {
               permissions: [
                 { capability: 'pharmacy.counter', effect: 'ALLOW' },
@@ -356,9 +370,44 @@ describe('pickers (UX rules 1, 12, 16)', () => {
     expect(option.value).toBe('med-1|pack-1|10');
   });
 
+  it('offers procurement approvers only for the selected branch while retaining dispensing signers', async () => {
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        workspace: vi.fn().mockResolvedValue({
+          ...workspace,
+          directPurchaseApprovers: [
+            { id: 'buyer', name: 'Buyer', email: 'buyer@example.test', branchIds: ['branch-1'] },
+            {
+              id: 'other-buyer',
+              name: 'Other branch buyer',
+              email: 'other@example.test',
+              branchIds: ['branch-2'],
+            },
+          ],
+        }),
+      })
+    );
+    render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+    const pin = screen.getByLabelText('Approver PIN');
+    expect(pin).toHaveAttribute('type', 'password');
+    expect(pin).toHaveAttribute('required');
+    expect(pin).toHaveAttribute('pattern', '[0-9]{4,8}');
+    const picker = screen.getByLabelText('Approved by');
+    expect(picker).toHaveTextContent('Buyer (buyer@example.test)');
+    expect(picker).not.toHaveTextContent('Other branch buyer');
+    expect(picker).not.toHaveTextContent('Bilal');
+    expect(
+      screen.getAllByRole('option', { name: 'Bilal (bilal@example.test)' }).length
+    ).toBeGreaterThan(0);
+  });
+
   it('replaces an empty required picker with what is missing and where to fix it', async () => {
     mocks.createCaller.mockReturnValue(
-      callerStub({ workspace: vi.fn().mockResolvedValue({ ...workspace, approvers: [] }) })
+      callerStub({
+        workspace: vi
+          .fn()
+          .mockResolvedValue({ ...workspace, directPurchaseApprovers: [], approvers: [] }),
+      })
     );
 
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
@@ -414,6 +463,7 @@ describe('preconditions (UX rule 13)', () => {
           stockLocations: [],
           medicines: [],
           suppliers: [],
+          directPurchaseApprovers: [],
           approvers: [],
         }),
       })
@@ -615,6 +665,50 @@ describe('segregation of duties (PUR-02)', () => {
 
     expect(screen.getByText(/You raised this order, so you cannot approve it/)).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  });
+  it('offers a PIN field and approval controls for an authoritative solo owner', async () => {
+    mocks.soloEligible.mockResolvedValue(true);
+    const ctx = contextStub();
+    ctx.db.$queryRaw.mockResolvedValue([{ allowed: true }]);
+    mocks.createTRPCContext.mockResolvedValue(ctx);
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        purchaseOrders: vi.fn().mockResolvedValue([
+          {
+            id: 'po-1',
+            reference: 'PO-1',
+            status: 'SUBMITTED',
+            supplier: { id: 'sup-ok', name: 'Karachi Distributors' },
+            branch: null,
+            branchId: null,
+            supplierId: 'sup-ok',
+            requisition: null,
+            lines: [],
+            approvals: [],
+            goodsReceipts: [],
+            // The signed-in user in this suite.
+            createdByUserId: 'user-1',
+          },
+        ]),
+        landedCost: vi.fn().mockResolvedValue({
+          payableMinor: 0,
+          landedCostMinor: 0,
+          taxMinor: 0,
+          chargesMinor: 0,
+          canonicalUnits: 0,
+          netCostMinor: 0,
+          lines: [],
+        }),
+      })
+    );
+
+    render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
+
+    expect(screen.getAllByLabelText(/Owner PIN/)).toHaveLength(1);
+    for (const pin of screen.getAllByLabelText(/Owner PIN/))
+      expect(pin).toHaveAttribute('type', 'password');
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDefined();
+    expect(screen.queryByText(/You raised this order, so you cannot approve it/)).toBeNull();
   });
 });
 
@@ -881,4 +975,83 @@ describe('goods-in scan and duplicate serial', () => {
     );
     expect(result.searchParams.get('field')).toBe('serialNumber');
   });
+});
+
+describe('solo owner PIN forms', () => {
+  it('offers a masked validated PIN on its own submitted order and passes it to approval', async () => {
+    mocks.soloEligible.mockResolvedValue(true);
+    const approvePurchaseOrder = vi.fn().mockResolvedValue({ status: 'APPROVED' });
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        approvePurchaseOrder,
+        purchaseOrders: vi.fn().mockResolvedValue([
+          {
+            id: 'po-solo',
+            reference: 'PO-SOLO',
+            status: 'SUBMITTED',
+            supplier: { id: 'sup-ok', name: 'Supplier' },
+            branch: null,
+            branchId: null,
+            supplierId: 'sup-ok',
+            requisition: null,
+            lines: [],
+            approvals: [],
+            goodsReceipts: [],
+            createdByUserId: 'user-1',
+          },
+        ]),
+        landedCost: vi.fn().mockResolvedValue(null),
+      })
+    );
+    render(await OrdersPage({ searchParams: params({ po: 'po-solo' }) }));
+    const pin = screen.getByLabelText(/Owner PIN/);
+    expect(pin).toHaveAttribute('type', 'password');
+    expect(pin).toHaveAttribute('pattern', '[0-9]{4,8}');
+    const approve = screen.getByRole('button', { name: 'Approve' });
+    fireEvent.change(pin, { target: { value: '4729' } });
+    await act(async () => fireEvent.click(approve));
+    expect(approvePurchaseOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ purchaseOrderId: 'po-solo', pin: '4729', decision: 'APPROVED' })
+    );
+  });
+
+  it('makes direct purchasing available to an eligible solo owner with a PIN input and self option', async () => {
+    mocks.soloEligible.mockResolvedValue(true);
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        workspace: vi
+          .fn()
+          .mockResolvedValue({ ...workspace, directPurchaseApprovers: [], approvers: [] }),
+      })
+    );
+    render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
+    const pin = screen.getByLabelText(/Approver PIN/);
+    expect(pin).toHaveAttribute('type', 'password');
+    expect(pin).toHaveAttribute('pattern', '[0-9]{4,8}');
+    const approver = screen.getByLabelText('Approved by');
+    expect(within(approver).getByRole('option', { name: /Owner/ })).toHaveValue('user-1');
+    fireEvent.change(approver, { target: { value: 'user-1' } });
+    expect(approver).toHaveValue('user-1');
+    expect(screen.queryByText('No second person can approve a bypass')).not.toBeInTheDocument();
+  });
+});
+
+it('renders the returns board read-only for a financial-only reader without requesting procurement lots', async () => {
+  const ctx = contextStub();
+  ctx.db.user.findUnique.mockResolvedValue({
+    status: 'ACTIVE',
+    organizationRole: { permissions: [{ capability: 'reports:financial', effect: 'ALLOW' }] },
+    permissionOverrides: [],
+  });
+  mocks.createTRPCContext.mockResolvedValue(ctx);
+  const api = callerStub();
+  mocks.createCaller.mockReturnValue(api);
+  render(await ReturnsPage({ searchParams: params({ branch: 'branch-1' }) }));
+  expect(screen.getByText(/Read-only financial access/)).toBeInTheDocument();
+  expect(api.purchaseReturns).toHaveBeenCalledWith({ branchId: 'branch-1' });
+  expect(api.supplierCredits).toHaveBeenCalledWith({ branchId: 'branch-1' });
+  expect(api.returnableLots).not.toHaveBeenCalled();
+  expect(screen.queryByRole('button', { name: 'Record credit' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Draft return' })).toBeNull();
+  expect(screen.queryByText('This surface could not load')).toBeNull();
 });

@@ -90,6 +90,9 @@ export function TextField(props: {
   placeholder?: string;
   required?: boolean;
   min?: number;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
   step?: string;
   inputMode?: 'numeric' | 'decimal' | 'text';
   autoComplete?: string;

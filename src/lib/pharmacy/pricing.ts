@@ -1,3 +1,4 @@
+import { enforceOperatingMode } from './operating-mode';
 import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -198,6 +199,8 @@ export async function setManualPackPrice(
     mrpMinor: number;
     sellingPriceMinor: number | null;
     effectiveFrom: Date;
+    pin?: string;
+    approvedByUserId?: string;
   }
 ) {
   return db.$transaction(async (tx) => {
@@ -220,9 +223,24 @@ export async function setManualPackPrice(
       where: { organizationId: scope.organizationId, packLevelId: pack.id, branchId: null },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
+    await enforceOperatingMode(
+      scoped,
+      { ...scope, branchId: input.branchId ?? null },
+      {
+        kind: 'OVERRIDE',
+        makerIds: [scope.actorId],
+        checkerId: input.approvedByUserId,
+        targetType: 'PharmacyPackPrice',
+        targetId: input.packLevelId,
+        pin: input.pin,
+      }
+    );
+    const { pin: _pin, approvedByUserId: _checker, ...priceInput } = input;
+    void _pin;
+    void _checker;
     const price = await scoped.pharmacyPackPrice.create({
       data: {
-        ...input,
+        ...priceInput,
         organizationId: scope.organizationId,
         presentationId: pack.presentationId,
         isOverride: !!input.branchId,

@@ -6,6 +6,7 @@
  * Real router, persisted roles, PostgreSQL as a NOSUPERUSER NOBYPASSRLS role.
  * Skipped unless TEST_DATABASE_URL is set.
  */
+import { seedRxChecker, RX_CHECKER_PIN } from '../../../tests/pharmacy-rx-checker-fixture';
 import { randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -22,6 +23,7 @@ vi.mock('@/server/audit', async () => {
 
 const suffix = randomBytes(6).toString('hex');
 const ids = {
+  checker: `checker_${suffix}`,
   org: `org_r518rx_${suffix}`,
   otherOrg: `org_r518rx_other_${suffix}`,
   branch: `br_r518rx_${suffix}`,
@@ -128,6 +130,7 @@ const line = (saleId: string, medicine: Medicine, extra: Record<string, unknown>
   quantity: 1,
   canonicalUnitsPerSaleUnit: 10,
   idempotencyKey: key(),
+  prescriptionApproval: { checkerId: ids.checker, pin: RX_CHECKER_PIN },
   ...extra,
 });
 const withReference = (prescriptionLineId: string, patientId = patients.ayesha) => ({
@@ -304,6 +307,7 @@ beforeAll(async () => {
         provinceCode: 'PB',
       },
     });
+    await seedRxChecker(tx, ids.branch, ids.checker);
     for (const [userId, capabilities] of [
       [ids.cashier, ['pharmacy:counter', 'pharmacy:orders']],
       [ids.pharmacist, ['pharmacy:dispense', 'pharmacy:counter']],
@@ -417,6 +421,53 @@ afterAll(async () => {
 });
 
 describeIfDatabase('prescription references on counter sale lines (#518)', () => {
+  it.each([undefined, '9999'])(
+    'refuses a STAFFED Rx checker without a valid PIN (%s)',
+    async (approvalPin) => {
+      const saleId = await newSale(ids.pharmacist);
+      await expect(
+        act(ids.pharmacist, (api) =>
+          api.addLine(
+            line(saleId, rx, {
+              ...withReference(lines.valid),
+              prescriptionApproval: { checkerId: ids.checker, pin: approvalPin },
+            })
+          )
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(
+        (await act(ids.pharmacist, (api) => api.counterCart({ branchId: ids.branch, saleId })))
+          .lines
+      ).toHaveLength(0);
+    }
+  );
+
+  it('refuses a pharmacist checker whose branch assignment was revoked', async () => {
+    const saleId = await newSale(ids.pharmacist);
+    await withTenantDb(ids.org, (db) =>
+      db.pharmacyBranchAssignment.updateMany({
+        where: { userId: ids.checker },
+        data: { active: false },
+      })
+    );
+    try {
+      await expect(
+        act(ids.pharmacist, (api) => api.addLine(line(saleId, rx, withReference(lines.valid))))
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(
+        (await act(ids.pharmacist, (api) => api.counterCart({ branchId: ids.branch, saleId })))
+          .lines
+      ).toHaveLength(0);
+    } finally {
+      await withTenantDb(ids.org, (db) =>
+        db.pharmacyBranchAssignment.updateMany({
+          where: { userId: ids.checker },
+          data: { active: true },
+        })
+      );
+    }
+  });
+
   it('refuses an unknown reference', async () => {
     await expectRefused(ids.pharmacist, rx, withReference(`rx-invented-${suffix}`), NOT_FOUND);
   });

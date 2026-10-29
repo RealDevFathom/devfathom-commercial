@@ -1085,6 +1085,14 @@ async function bootstrapOrganization(
         },
       });
       if (input.vertical === 'HOSPITALITY') hospitalityRoleIds.set(template.key, role.id);
+      // Pharmacy branch authority and clinical grants require the persisted
+      // system owner identity, including for the named bootstrap administrator.
+      if (input.vertical === 'PHARMACY' && template.key === 'owner') {
+        await db.user.update({
+          where: { id: admin.id },
+          data: { organizationRoleId: role.id },
+        });
+      }
     }
   }
   // The named administrator gets one explicit assignment to this new property.
@@ -4001,6 +4009,10 @@ async function runCommand(
         await db.platformSession.updateMany({
           where: { platformUserId: saved.id, revokedAt: null },
           data: { revokedAt: new Date() },
+        });
+        await db.platformSupportSession.updateMany({
+          where: { platformUserId: saved.id, status: 'ACTIVE' },
+          data: { status: 'REVOKED', endedAt: new Date() },
         });
       }
       const safe = omit(saved, 'passwordHash', 'encryptedTotpSecret');

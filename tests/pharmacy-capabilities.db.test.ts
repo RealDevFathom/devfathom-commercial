@@ -138,6 +138,11 @@ const legacy: Record<string, string[]> = {
     );
     await client.query(migration);
     await client.query(managerProcurementMigration);
+    await client.query(
+      readFileSync('prisma/migrations/20261029100000_pharmacy_owner_identity/migration.sql', 'utf8')
+        .split('-- A solo exception')[0]
+        .replace(/^BEGIN;$/m, '')
+    );
   }, 60_000);
   afterAll(async () => {
     await client.query('ROLLBACK');
@@ -152,7 +157,18 @@ const legacy: Record<string, string[]> = {
       );
       // Owner's redundant explicit order grant remains harmless and is not removed.
       const expected = [
-        ...template.capabilities,
+        // This test executes the historical canonicalization migration. Owner
+        // elevation is separately covered by pharmacy-owner-authorization.db.test.ts.
+        ...(template.key === 'owner'
+          ? [
+              'pharmacy:*',
+              'reports:operational',
+              'reports:financial',
+              'pharmacy:dispense',
+              'pharmacy:safety',
+              'pharmacy:catalogue-review',
+            ]
+          : template.capabilities),
         ...(template.key === 'owner' ? ['pharmacy:orders'] : []),
       ].sort();
       expect(rows.rows.map((r) => r.capability)).toEqual(expected);
@@ -192,6 +208,9 @@ const legacy: Record<string, string[]> = {
     );
     expect(ownerOther.rows).toEqual([
       { capability: 'pharmacy:*', effect: 'ALLOW' },
+      { capability: 'pharmacy:catalogue-review', effect: 'ALLOW' },
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+      { capability: 'pharmacy:safety', effect: 'ALLOW' },
       { capability: 'reports:financial', effect: 'DENY' },
       { capability: 'reports:operational', effect: 'ALLOW' },
     ]);
@@ -268,7 +287,10 @@ const legacy: Record<string, string[]> = {
             [where.id]
           );
           return {
-            organizationRole: { permissions: permissions.rows },
+            status: 'ACTIVE',
+            role: 'EMPLOYEE',
+            organizationId: org,
+            organizationRole: { organizationId: org, permissions: permissions.rows },
             permissionOverrides: overrides.rows,
           };
         },

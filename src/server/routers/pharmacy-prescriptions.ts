@@ -1,3 +1,4 @@
+import { requirePharmacyReadBranch } from '../pharmacy-branch-access';
 import { writePatientConsent } from '@/lib/pharmacy/consent-writer';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -96,16 +97,10 @@ export const pharmacyPrescriptionsRouter = router({
         .optional()
     )
     .query(async ({ ctx, input }) => {
-      const branches = await ctx.db.pharmacyBranch.findMany({
-        where: { active: true },
-        orderBy: { name: 'asc' },
-        select: { id: true, name: true },
-      });
-      const selectedBranch = input?.branchId
-        ? branches.find((branch) => branch.id === input.branchId)
-        : branches[0];
-      if (input?.branchId && !selectedBranch)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
+      const { branches, branch: selectedBranch } = await requirePharmacyReadBranch(
+        ctx,
+        input?.branchId
+      );
 
       const [patients, prescribers, medicines, prescriptions, reminderCaptures] = await Promise.all(
         [
@@ -126,7 +121,10 @@ export const pharmacyPrescriptionsRouter = router({
                 include: {
                   medicine: true,
                   presentation: true,
-                  fills: { include: { reminderCapture: true }, orderBy: { dispensedAt: 'desc' } },
+                  fills: {
+                    include: { reminderCapture: { where: { branchId: selectedBranch.id } } },
+                    orderBy: { dispensedAt: 'desc' },
+                  },
                 },
               },
             },
@@ -356,11 +354,12 @@ export const pharmacyPrescriptionsRouter = router({
       });
     }),
 
-  readPatient: auditedProtectedProcedure
-    .input(z.object({ patientId: z.string().min(1) }).strict())
+  readPatient: fileProcedure
+    .input(z.object({ patientId: z.string().min(1), branchId: z.string().trim().min(1) }).strict())
     .query(async ({ ctx, input }) => {
+      await requirePharmacyReadBranch(ctx, input.branchId);
       const patient = await ctx.db.pharmacyPatient.findFirstOrThrow({
-        where: { id: input.patientId },
+        where: { id: input.patientId, organizationId: ctx.entitlements.organizationId },
       });
       auditPatientRead({
         organizationId: ctx.entitlements.organizationId,
@@ -370,11 +369,12 @@ export const pharmacyPrescriptionsRouter = router({
       return maskedPatient(patient);
     }),
 
-  exportPatient: auditedProtectedProcedure
-    .input(z.object({ patientId: z.string().min(1) }).strict())
+  exportPatient: fileProcedure
+    .input(z.object({ patientId: z.string().min(1), branchId: z.string().trim().min(1) }).strict())
     .query(async ({ ctx, input }) => {
+      await requirePharmacyReadBranch(ctx, input.branchId);
       const patient = await ctx.db.pharmacyPatient.findFirstOrThrow({
-        where: { id: input.patientId },
+        where: { id: input.patientId, organizationId: ctx.entitlements.organizationId },
         include: {
           consents: true,
           prescriptions: { include: { lines: { include: { fills: true } } } },
@@ -450,9 +450,14 @@ export const pharmacyPrescriptionsRouter = router({
   // ── POS-09: the prescription panel beside the cart ────────────────────────
 
   /** Patients a counter can attach without navigating away from the bill. */
-  counterPatients: protectedProcedure
-    .input(z.object({ query: z.string().trim().min(2).max(120) }).strict())
+  counterPatients: fileProcedure
+    .input(
+      z
+        .object({ query: z.string().trim().min(2).max(120), branchId: z.string().trim().min(1) })
+        .strict()
+    )
     .query(async ({ ctx, input }) => {
+      await requirePharmacyReadBranch(ctx, input.branchId);
       try {
         return {
           patients: await searchCounterPatients(
@@ -476,9 +481,10 @@ export const pharmacyPrescriptionsRouter = router({
    * this on the same audited path as `readPatient` — a counter-side read of a
    * patient is still a protected read (RX-01), not an exemption.
    */
-  counterPatientPanel: auditedProtectedProcedure
-    .input(z.object({ patientId: z.string().min(1) }).strict())
+  counterPatientPanel: fileProcedure
+    .input(z.object({ patientId: z.string().min(1), branchId: z.string().trim().min(1) }).strict())
     .query(async ({ ctx, input }) => {
+      await requirePharmacyReadBranch(ctx, input.branchId);
       try {
         const panel = await readCounterPatientPanel(
           ctx.db,

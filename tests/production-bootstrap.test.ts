@@ -11,6 +11,7 @@ import { MODULE_CATALOG } from '../src/lib/module-catalog';
 import {
   AGENCY_DEPARTMENTS,
   HOSPITALITY_PACKAGES,
+  packageDefaultSeats,
   PHARMACY_PACKAGES,
   packageDefaultSeats,
   RESTAURANT_MODULES,
@@ -85,6 +86,7 @@ function fakeTransaction() {
     }),
   };
   const platformPackage = {
+<<<<<<< HEAD
     findMany: vi.fn(async (args: { where: { key: { in: string[] } } }) =>
       args.where.key.in.filter((key) => packages.has(key)).map((key) => ({ key }))
     ),
@@ -105,6 +107,12 @@ function fakeTransaction() {
           key: args.where.key,
           defaultSeats: args.create?.defaultSeats,
         });
+=======
+    updateMany: vi.fn(async () => ({ count: 0 })),
+    findMany: findManyByKey(packageKeys),
+    upsert: vi.fn(async (args: { where: { key: string } }) => {
+      packageKeys.add(args.where.key);
+>>>>>>> origin/codex/demo-operating-mode
       return { id: `package_${args.where.key}` };
     }),
   };
@@ -548,6 +556,20 @@ function restaurantTransaction() {
     },
     platformPackage: {
       findMany: vi.fn(async () => [...packages.values()]),
+      updateMany: vi.fn(
+        async ({
+          where,
+          data,
+        }: {
+          where: { key: string; defaultSeats: number };
+          data: { defaultSeats: number };
+        }) => {
+          const row = packages.get(where.key);
+          if (!row || row.defaultSeats !== where.defaultSeats) return { count: 0 };
+          Object.assign(row, data);
+          return { count: 1 };
+        }
+      ),
       findUnique: findPackage,
       findUniqueOrThrow: vi.fn(async (args: { where: { key: string } }) => {
         const row = await findPackage(args);
@@ -648,7 +670,11 @@ describe('explicit Restaurant fresh bootstrap', () => {
         status: 'ONBOARDING',
         isDemo: false,
         packageId: 'package_restaurant-essentials',
+<<<<<<< HEAD
         seatLimit: packageDefaultSeats(selected),
+=======
+        seatLimit: 10,
+>>>>>>> origin/codex/demo-operating-mode
       }),
     ]);
     expect([...fake.packages.keys()]).toEqual(['restaurant-essentials']);

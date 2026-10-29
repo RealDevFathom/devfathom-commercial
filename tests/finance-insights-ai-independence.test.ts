@@ -118,7 +118,11 @@ function fixture(
       ),
     },
     user: {
+      count: vi.fn(async () => 2),
       findUnique: vi.fn(async () => ({
+        organizationId,
+        role: 'ADMIN',
+        status: 'ACTIVE',
         organizationRole: {
           permissions: [
             { capability: 'reports:operational', effect: 'ALLOW' },

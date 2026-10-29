@@ -229,7 +229,7 @@ async function bindIdempotency(
 /** Shared transaction lock: closing cannot race a new tender or drawer write. */
 export async function lockPharmacyDay(db: ScopedDb, scope: LedgerScope, date: Date) {
   await db.$queryRaw(
-    Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${date.toISOString().slice(0, 10)}`}))`
+    Prisma.sql`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${date.toISOString().slice(0, 10)}`}))`
   );
 }
 
@@ -818,7 +818,7 @@ export async function cutPharmacyDailyClose(
   }
 ) {
   await db.$queryRaw(
-    Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${input.businessDate.toISOString().slice(0, 10)}`}))`
+    Prisma.sql`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${input.businessDate.toISOString().slice(0, 10)}`}))`
   );
   const openDrawers = await db.pharmacyDrawerSession.count({
     where: {

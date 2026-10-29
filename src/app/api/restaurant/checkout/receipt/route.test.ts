@@ -120,10 +120,16 @@ beforeEach(() => {
       $executeRawUnsafe: lock,
       restaurantBill: { findFirst: findBill, findFirstOrThrow: findBill },
       restaurantBranch: { findFirst: findLayout },
+      restaurantStaffJobRole: { findMany: async () => [] },
+      restaurantStaffCapabilityGrant: { findMany: async () => [] },
       restaurantStaffProfile: {
         findUnique: async () => ({
           status: 'ACTIVE',
+<<<<<<< HEAD
           primaryBranchId: 'branch-1',
+=======
+          primaryBranchId: mocks.ctx.device.branchId,
+>>>>>>> origin/codex/demo-operating-mode
           jobRoles: [],
           directCapabilityGrants: [],
           user: {

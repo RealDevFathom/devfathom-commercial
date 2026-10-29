@@ -70,6 +70,7 @@ const priorHrefs = [
   '/restaurant/orders',
   '/restaurant/catering',
   '/restaurant/money',
+  '/restaurant/menu-import',
   '/restaurant/inventory',
   '/restaurant/purchasing',
   '/restaurant/sop',

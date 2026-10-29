@@ -48,6 +48,9 @@ function makeDb() {
   const db = {
     user: {
       findUnique: vi.fn().mockResolvedValue({
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org_a',
         organizationRole: { permissions: [] },
         permissionOverrides: [],
       }),
@@ -128,6 +131,9 @@ const deny = (capability: string): Rule => ({ capability, effect: 'DENY' });
 /** What `can()` reads: the member's role rules and their own overrides. */
 function grant(role: Rule[], overrides: Rule[] = []) {
   db.user.findUnique.mockResolvedValue({
+    role: 'EMPLOYEE',
+    status: 'ACTIVE',
+    organizationId: 'org_a',
     organizationRole: { permissions: role },
     permissionOverrides: overrides,
   });
@@ -218,6 +224,9 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
 
   it('refuses to block a batch without a reason (INV-03 evidence)', async () => {
     db.user.findUnique.mockResolvedValue({
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      organizationId: 'org_a',
       organizationRole: {
         permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
       },
@@ -240,6 +249,9 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
 
   it('allows an exact pharmacy:safety grant to acknowledge a recall', async () => {
     db.user.findUnique.mockResolvedValue({
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      organizationId: 'org_a',
       organizationRole: {
         permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
       },

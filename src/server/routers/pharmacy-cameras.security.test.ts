@@ -107,7 +107,14 @@ let grants: Grant[];
 function makeDb() {
   return {
     user: {
-      findUnique: vi.fn(async () => ({ organizationRole: null, permissionOverrides: [] })),
+      count: vi.fn().mockResolvedValue(2),
+      findUnique: vi.fn(async () => ({
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationId: 'org_a',
+        organizationRole: null,
+        permissionOverrides: [],
+      })),
     },
     pharmacyBranch: {
       findFirst: vi.fn(async ({ where }: { where: Where }) => {
@@ -169,6 +176,13 @@ function makeDb() {
 
 let db = makeDb();
 function caller(over: { userId?: string; role?: string; organizationId?: string } = {}) {
+  db.user.findUnique.mockResolvedValue({
+    role: over.role ?? 'ADMIN',
+    status: 'ACTIVE',
+    organizationId: 'org_a',
+    organizationRole: null,
+    permissionOverrides: [],
+  });
   return pharmacyCamerasRouter.createCaller({
     db,
     entitlements: {

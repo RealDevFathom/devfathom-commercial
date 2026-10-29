@@ -10,9 +10,10 @@
  *   if (!(await can(subject, 'resignation:review', { type: 'Resignation', ... })))
  *     throw new TRPCError({ code: 'FORBIDDEN' });
  */
-import { capabilityMatches } from './capabilities';
+import { isPharmacyOwner } from '@/lib/pharmacy/owner';
+import { capabilityMatches, EXACT_GRANT_ONLY_ACTIONS } from './capabilities';
 import type { AuthzDb } from '@/lib/authz';
-import { POLICIES, type Action } from './policies';
+import { ACTIVE_STATUSES, POLICIES, RESOURCE_POLICIES, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
 
 export type { Action } from './policies';
@@ -30,13 +31,21 @@ async function customDecision(
   db: AuthzDb,
   userId: string,
   action: string,
-  now: Date
-): Promise<boolean | null> {
+  now: Date,
+  organizationId?: string
+): Promise<{ decision: boolean | null; subject: Subject }> {
   const user = await db.user.findUnique({
-    where: { id: userId },
+    where: { id: userId, ...(organizationId ? { organizationId } : {}) },
     select: {
+      organizationId: true,
+      role: true,
+      status: true,
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: {
+          key: true,
+          organizationId: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -44,16 +53,43 @@ async function customDecision(
       },
     },
   });
-  if (!user) return false;
+  const subject: Subject = { id: userId, role: user?.role ?? 'EMPLOYEE', status: user?.status };
+  if (
+    !user ||
+    (organizationId !== undefined && user.organizationId !== organizationId) ||
+    (user.organizationRole &&
+      user.organizationRole.organizationId !== undefined &&
+      user.organizationRole.organizationId !== user.organizationId) ||
+    !ACTIVE_STATUSES.has(user.status)
+  )
+    return { decision: false, subject };
   const matchingRules = [
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),
   ].filter((rule) =>
-    capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
+    capabilityMatches(
+      (action === 'pharmacy:receipt' || action === 'pharmacy:counter') &&
+        rule.capability === action.replace(':', '.')
+        ? action
+        : rule.capability,
+      action,
+      rule.effect === 'DENY' ? 'DENY' : 'ALLOW'
+    )
   );
-  if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
-  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
-  return null;
+  if (matchingRules.some((rule) => rule.effect === 'DENY')) return { decision: false, subject };
+  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return { decision: true, subject };
+  // Only a proven sole active proprietor inherits all capabilities. This is an
+  // entitlement, never an exemption from resource checks or PIN/audit approval.
+  if (
+    !EXACT_GRANT_ONLY_ACTIONS.has(action) &&
+    user.status === 'ACTIVE' &&
+    user.organizationRole?.key === 'owner' &&
+    (await db.user.count({ where: { organizationId: user.organizationId, status: 'ACTIVE' } })) ===
+      1 &&
+    (await isPharmacyOwner(db as never, user.organizationId, userId))
+  )
+    return { decision: true, subject };
+  return { decision: null, subject };
 }
 
 /** True iff some policy registered for `action` allows the subject + resource. */
@@ -73,11 +109,19 @@ export async function can(
     console.error(`[abac] no tenant-scoped database supplied for "${action}"`);
     return false;
   }
+  let decision: boolean | null;
   try {
-    const decision = await customDecision(db, subject.id, action, env.now);
-    if (decision !== null) return decision;
+    const current = await customDecision(db, subject.id, action, env.now, subject.organizationId);
+    decision = current.decision;
+    subject = { ...subject, ...current.subject };
+    if (decision === false) return false;
+    // Resource restrictions apply equally to explicit grants and solo owners.
+    for (const policy of RESOURCE_POLICIES[action] ?? []) {
+      if (!(await policy({ subject, resource, env, db }))) return false;
+    }
+    if (decision === true) return true;
   } catch (err) {
-    console.error(`[abac] custom permission lookup for "${action}" threw:`, err);
+    console.error(`[abac] permission evaluation for "${action}" threw:`, err);
     return false;
   }
   for (const policy of POLICIES[action] ?? []) {
@@ -97,11 +141,17 @@ export function subjectFromSession(user: {
   role?: string | null;
   department?: string | null;
   status?: string | null;
+  organizationId?: string;
 }): Subject {
   return {
     id: user.id,
+    organizationId: user.organizationId,
     role: user.role ?? 'EMPLOYEE',
     department: user.department ?? null,
     status: user.status ?? null,
   };
+}
+
+export async function isPvOwner(db: AuthzDb, userId: string, organizationId: string) {
+  return isPharmacyOwner(db as never, organizationId, userId);
 }

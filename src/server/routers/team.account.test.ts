@@ -51,8 +51,16 @@ function caller(enabledModules: string[], role = 'EMPLOYEE') {
       user: {
         // `can()` reads the viewer's custom permissions through the same delegate;
         // that lookup is answered separately from the member read.
-        findUnique: (args: { select?: { permissionOverrides?: unknown } }) =>
-          args.select?.permissionOverrides ? mocks.permissions(args) : mocks.findUnique(args),
+        findUnique: async (args: { select?: { permissionOverrides?: unknown } }) =>
+          args.select?.permissionOverrides
+            ? {
+                organizationId: 'org_1',
+                role,
+                status: 'ACTIVE',
+                ...(await mocks.permissions(args)),
+              }
+            : mocks.findUnique(args),
+        count: vi.fn().mockResolvedValue(2),
         findMany: mocks.findMany,
         update: mocks.update,
       },
@@ -133,7 +141,7 @@ describe('team.getById directory privacy', () => {
     phone: '+92 300 0000001',
   };
   const permissionLookup = expect.objectContaining({
-    where: { id: 'user_self' },
+    where: { id: 'user_self', organizationId: 'org_1' },
     select: expect.objectContaining({ permissionOverrides: expect.anything() }),
   });
 
@@ -294,7 +302,7 @@ describe('team.getAll and team:view', () => {
       self,
     ]);
     expect(mocks.permissions).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'user_self' } })
+      expect.objectContaining({ where: { id: 'user_self', organizationId: 'org_1' } })
     );
     expect(mocks.findMany).toHaveBeenCalledWith(
       expect.not.objectContaining({ where: expect.anything() })

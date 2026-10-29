@@ -5,6 +5,7 @@
  * Real router, persisted roles and overrides, PostgreSQL as a NOSUPERUSER NOBYPASSRLS role.
  * Skipped unless TEST_DATABASE_URL is set.
  */
+import { seedRxChecker, RX_CHECKER_PIN } from '../../../tests/pharmacy-rx-checker-fixture';
 import { randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -21,6 +22,7 @@ vi.mock('@/server/audit', async () => {
 
 const suffix = randomBytes(6).toString('hex');
 const ids = {
+  checker: `checker_${suffix}`,
   org: `org_r518_${suffix}`,
   branch: `br_r518_${suffix}`,
   cashier: `user_r518_cashier_${suffix}`,
@@ -105,6 +107,7 @@ const rxLine = (saleId: string, quantity = 1) => ({
   quantity,
   canonicalUnitsPerSaleUnit: 10,
   idempotencyKey: key(),
+  prescriptionApproval: { checkerId: ids.checker, pin: RX_CHECKER_PIN },
 });
 
 /** A sale holding one Rx line the pharmacist added, optionally linked to the loyalty customer. */
@@ -170,7 +173,11 @@ async function expectRefusedEverywhere(
   const tendered = await pharmacistSale();
   await expect(payInCash(userId, tendered)).rejects.toMatchObject(tenderRefusal);
   const redeemed = await pharmacistSale({ customer: true });
-  await expect(payInPoints(userId, redeemed)).rejects.toMatchObject(DENIED);
+  // Redemption has an exact dispense capability guard before the sale-level gate.
+  await expect(payInPoints(userId, redeemed)).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: 'You do not have permission for this action.',
+  });
   for (const sale of [tendered, redeemed])
     expect(await cart(sale.saleId)).toMatchObject({ status: 'OPEN', totals: { tenderedMinor: 0 } });
 }
@@ -211,6 +218,7 @@ beforeAll(async () => {
         provinceCode: 'PB',
       },
     });
+    await seedRxChecker(tx, ids.branch, ids.checker);
     // Persisted roles: the Cashier template's grants, a pharmacist with the exact grant, and the
     // two explicit-DENY combinations.
     const users: Array<{

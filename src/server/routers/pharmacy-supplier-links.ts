@@ -1,6 +1,9 @@
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { enforceOperatingMode } from '@/lib/pharmacy/operating-mode';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { assertInOrganization } from '../org-refs';
+import { assertProcurement, assertProcurementBranch } from '../pharmacy-procurement-access';
 import { publicProcedure, protectedProcedure, router, type TRPCContext } from '../trpc';
 import {
   SupplierLinkError,
@@ -25,9 +28,7 @@ const genericLinkError = () =>
     message: 'This supplier link is invalid, expired, or revoked.',
   });
 async function assertBranch(ctx: TRPCContext, branchId: string) {
-  const organizationId = ctx.entitlements.organizationId;
-  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-  await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branchId], { active: true });
+  await assertProcurementBranch(ctx, branchId);
 }
 
 function mapError(error: unknown): never {
@@ -38,6 +39,11 @@ function mapError(error: unknown): never {
     message: error.reason,
   });
 }
+
+const procurement = protectedProcedure.use(async ({ ctx, next }) => {
+  await assertProcurement(ctx);
+  return next({ ctx });
+});
 
 export const pharmacySupplierLinksRouter = router({
   get: publicProcedure.input(z.object({ token: id }).strict()).query(async ({ ctx, input }) => {
@@ -88,15 +94,18 @@ export const pharmacySupplierLinksRouter = router({
         mapError(error);
       }
     }),
-  createRelationship: protectedProcedure
+  createRelationship: procurement
     .input(z.object({ branchId: id, supplierId: id }).strict())
     .mutation(async ({ ctx, input }) => {
       await assertBranch(ctx, input.branchId);
+      await assertInOrganization(ctx.db.pharmacySupplier, ctx.entitlements.organizationId, [
+        input.supplierId,
+      ]);
       return ctx.db.pharmacySupplierRelationship.create({
         data: { ...input, organizationId: ctx.entitlements.organizationId },
       });
     }),
-  issue: protectedProcedure
+  issue: procurement
     .input(
       z
         .object({ branchId: id, relationshipId: id, purchaseOrderId: id, expiresAt: z.date() })
@@ -116,13 +125,23 @@ export const pharmacySupplierLinksRouter = router({
         mapError(error);
       }
     }),
-  revoke: protectedProcedure.input(z.object({ linkId: id }).strict()).mutation(({ ctx, input }) =>
-    ctx.db.pharmacySupplierActionLink.update({
-      where: { id: input.linkId },
+  revoke: procurement.input(z.object({ linkId: id }).strict()).mutation(async ({ ctx, input }) => {
+    const link = await ctx.db.pharmacySupplierActionLink.findFirst({
+      where: { id: input.linkId, organizationId: ctx.entitlements.organizationId },
+      select: { id: true, branchId: true },
+    });
+    if (!link) throw new TRPCError({ code: 'NOT_FOUND' });
+    await assertBranch(ctx, link.branchId);
+    return ctx.db.pharmacySupplierActionLink.update({
+      where: {
+        id: link.id,
+        organizationId: ctx.entitlements.organizationId,
+        branchId: link.branchId,
+      },
       data: { revokedAt: new Date() },
-    })
-  ),
-  recordManual: protectedProcedure
+    });
+  }),
+  recordManual: procurement
     .input(
       z
         .object({
@@ -144,32 +163,58 @@ export const pharmacySupplierLinksRouter = router({
         mapError(error);
       }
     }),
-  approveProposal: protectedProcedure
+  approveProposal: procurement
     .input(
       z
         .object({
           submissionId: id,
           branchId: id,
           approved: z.boolean(),
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
           reason: z.string().trim().max(1000).optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       await assertBranch(ctx, input.branchId);
-      const submission = await ctx.db.pharmacySupplierSubmission.findFirst({
-        where: { id: input.submissionId, branchId: input.branchId },
-      });
-      if (!submission) throw new TRPCError({ code: 'NOT_FOUND' });
-      return ctx.db.pharmacySupplierSubmissionApproval.create({
-        data: {
-          organizationId: ctx.entitlements.organizationId,
-          branchId: input.branchId,
-          submissionId: input.submissionId,
-          actorUserId: ctx.session.user.id,
-          approved: input.approved,
-          reason: input.reason,
-        },
+      return ctx.db.$transaction(async (transaction) => {
+        const db = transaction as ScopedDb;
+        const submission = await db.pharmacySupplierSubmission.findFirst({
+          where: {
+            id: input.submissionId,
+            branchId: input.branchId,
+            organizationId: ctx.entitlements.organizationId,
+          },
+        });
+        if (!submission) throw new TRPCError({ code: 'NOT_FOUND' });
+        await enforceOperatingMode(
+          db,
+          {
+            organizationId: ctx.entitlements.organizationId,
+            branchId: input.branchId,
+            actorId: ctx.session.user.id,
+          },
+          {
+            kind: 'PURCHASE',
+            makerIds: [],
+            targetType: 'PharmacySupplierSubmission',
+            targetId: submission.id,
+            pin: input.pin,
+          }
+        );
+        return db.pharmacySupplierSubmissionApproval.create({
+          data: {
+            organizationId: ctx.entitlements.organizationId,
+            branchId: input.branchId,
+            submissionId: input.submissionId,
+            actorUserId: ctx.session.user.id,
+            approved: input.approved,
+            reason: input.reason,
+          },
+        });
       });
     }),
 });

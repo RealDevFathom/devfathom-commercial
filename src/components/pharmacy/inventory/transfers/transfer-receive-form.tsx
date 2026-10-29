@@ -1,3 +1,4 @@
+import { SoloApprovalPin } from '@/components/pharmacy/solo-approval-pin';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
@@ -84,6 +85,7 @@ export function TransferReceiveForm({
             placeholder="Driver note, seal number or photo reference"
           />
         </label>
+        <SoloApprovalPin />
       </fieldset>
       <Button className="md:col-span-3" type="submit">
         Receive {reference}

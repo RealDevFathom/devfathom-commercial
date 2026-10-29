@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { enforceOperatingMode } from './operating-mode';
 /**
  * PH-PUR / PUR-06 — purchase returns and expiry claims against the append-only
  * ledger, with debit notes, supplier credit and settlement allocation.
@@ -29,7 +31,6 @@ import {
   assertClaimable,
   assertPurchaseReturnTransition,
   assertReturnWindowOpen,
-  assertSettlementSegregation,
   creditPosition,
   expectedCreditForLines,
   PharmacySupplierReturnError,
@@ -410,7 +411,13 @@ export async function recordSupplierCredit(
 export async function allocateSupplierCredit(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { supplierCreditId: string; debitNoteId: string; amountMinor: number; at: Date }
+  input: {
+    supplierCreditId: string;
+    debitNoteId: string;
+    amountMinor: number;
+    at: Date;
+    pin?: string;
+  }
 ) {
   const [credit, note] = await Promise.all([
     db.pharmacySupplierCredit.findFirst({
@@ -430,11 +437,17 @@ export async function allocateSupplierCredit(
     throw new PharmacySupplierReturnError('CROSS_TENANT_REFERENCE');
   }
   if (note.status === 'CANCELLED') throw new PharmacySupplierReturnError('INVALID_TRANSITION');
-  if (note.purchaseReturn.submittedByUserId) {
-    assertSettlementSegregation({
-      submittedByUserId: note.purchaseReturn.submittedByUserId,
-      allocatedByUserId: scope.actorId,
+  const allocationId = randomUUID();
+  try {
+    await enforceOperatingMode(db, scope, {
+      kind: 'PURCHASE',
+      makerIds: [note.purchaseReturn.submittedByUserId],
+      targetType: 'PharmacySupplierCreditAllocation',
+      targetId: allocationId,
+      pin: input.pin,
     });
+  } catch {
+    throw new PharmacySupplierReturnError('SELF_APPROVAL');
   }
 
   const creditAllocated = await db.pharmacySupplierCreditAllocation.aggregate({
@@ -455,6 +468,7 @@ export async function allocateSupplierCredit(
 
   const allocation = await db.pharmacySupplierCreditAllocation.create({
     data: {
+      id: allocationId,
       organizationId: scope.organizationId,
       supplierCreditId: credit.id,
       debitNoteId: note.id,

@@ -50,6 +50,7 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
   const register = vi.fn();
   const db = {
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
+<<<<<<< HEAD
     pharmacyBranch: { findMany: async () => [{ id: 'branch-1' }] },
     branchRegulatoryProfile: {
       findFirst: async () => ({
@@ -69,6 +70,12 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
           pharmacistCoverageRule: { provisional: false },
         },
       }),
+=======
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
+    pharmacyBranch: {
+      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
+      findMany: async () => [{ id: 'branch-1' }],
+>>>>>>> origin/codex/demo-operating-mode
     },
     medicine: {
       findFirst: async () => ({ id: 'medicine-1', controlled: true, manufacturer: 'Maker' }),
@@ -76,6 +83,7 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
     user: {
       findUnique: async () => ({
         status: 'ACTIVE',
+        organizationId: 'org-1',
         organizationRole: { permissions },
         permissionOverrides: [],
       }),
@@ -116,7 +124,7 @@ describe('pharmacySales.addLine controlled actor', () => {
 
   it('honors an explicit ABAC deny even when the role grants dispense', async () => {
     const { caller, credential, register } = callerFor([
-      { capability: 'pharmacy.dispense', effect: 'ALLOW' },
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
       { capability: 'pharmacy:dispense', effect: 'DENY' },
     ]);
     await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
