@@ -339,6 +339,7 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
           branchId: { in: filters.branchIds },
           effectiveFrom: { lte: at },
           OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+          qualifiedPersonValidFrom: { lte: at },
           qualifiedPersonValidTo: { gt: at },
         },
       }),

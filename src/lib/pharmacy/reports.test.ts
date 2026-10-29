@@ -45,7 +45,7 @@ describe('PH-RPT metric contract', () => {
     expect(sql).not.toContain('SUM(t."amountMinor" - COALESCE(t."changeGivenMinor",0))');
   });
 
-  it('excludes pharmacist coverage after the qualified person validity ends', async () => {
+  it('counts pharmacist coverage only during the qualified person validity window', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-29T12:00:00.000Z'));
     try {
@@ -71,6 +71,7 @@ describe('PH-RPT metric contract', () => {
             { effectiveTo: null },
             { effectiveTo: { gt: new Date('2026-10-29T12:00:00.000Z') } },
           ],
+          qualifiedPersonValidFrom: { lte: new Date('2026-10-29T12:00:00.000Z') },
           qualifiedPersonValidTo: { gt: new Date('2026-10-29T12:00:00.000Z') },
         },
       });
