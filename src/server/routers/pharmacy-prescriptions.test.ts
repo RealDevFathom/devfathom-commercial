@@ -184,6 +184,22 @@ describe('prescription capture and private delivery', () => {
     );
   });
 
+  it('accepts calendar-date carriers but rejects validity instants and reversed dates', async () => {
+    const receipt = await upload();
+    const input = captureInput(receipt.url);
+    await expect(
+      caller().capture({ ...input, validUntil: new Date('2026-10-01T12:00:00.000Z') })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().capture({
+        ...input,
+        validFrom: new Date('2026-10-02T00:00:00.000Z'),
+        validUntil: new Date('2026-10-01T00:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
   it('allows pharmacists with dispensing capability', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:dispense');
     await expect(upload()).resolves.toHaveProperty('url');

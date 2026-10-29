@@ -4,6 +4,10 @@ import { useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 
 import { CalendarClock, Plus, Upload } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import type { PrescriptionUpload } from '@/lib/pharmacy/prescription-files';
+import {
+  formatPrescriptionDate,
+  prescriptionCalendarDate,
+} from '@/lib/pharmacy/prescription-calendar';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -209,8 +213,8 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
         sourceKind: String(data.get('sourceKind')) as 'PAPER_IMAGE' | 'WHATSAPP_PHOTO',
         sourceFileRef: evidence.url,
         custodyState: String(data.get('custodyState')) as 'NOT_HELD' | 'HELD_AT_PHARMACY',
-        validFrom: new Date(String(data.get('validFrom'))),
-        validUntil: new Date(String(data.get('validUntil'))),
+        validFrom: prescriptionCalendarDate(String(data.get('validFrom'))),
+        validUntil: prescriptionCalendarDate(String(data.get('validUntil'))),
         authorizedRepeats: Number(data.get('authorizedRepeats')),
         lines: [
           {
@@ -530,8 +534,8 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                             </td>
                             <td className="py-4">{rx.prescriber.name}</td>
                             <td className="py-4 tabular-nums">
-                              {rx.validFrom.toLocaleDateString()}–
-                              {rx.validUntil.toLocaleDateString()}
+                              {formatPrescriptionDate(rx.validFrom)}–
+                              {formatPrescriptionDate(rx.validUntil)}
                             </td>
                             <td className="py-4">
                               {line.medicine.productName}
