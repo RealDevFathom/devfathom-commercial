@@ -134,6 +134,17 @@ describe('team.inviteMember duplicate guard', () => {
     );
   });
 
+  it('preserves the restaurant role when resending without reselecting it', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_2', status: 'INVITED' });
+    mocks.update.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+
+    await caller().inviteMember({ ...invite, email: 'manager@company.com' });
+
+    expect(mocks.update).toHaveBeenCalledOnce();
+    expect(mocks.update.mock.calls[0]?.[0].data).not.toHaveProperty('organizationRoleId');
+  });
+
   it('rejects a role template outside the tenant catalog', async () => {
     mocks.roleFindFirst.mockResolvedValue(null);
 

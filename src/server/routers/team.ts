@@ -137,7 +137,9 @@ export const teamRouter = router({
         // alex@company.com without the guard ever firing.
         email: emailSchema,
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).default('EMPLOYEE'),
-        organizationRoleId: z.string().trim().min(1).max(128).nullable().default(null),
+        // Omitted means "leave the role alone" when refreshing a pending
+        // invitation. `null` remains an explicit way for API callers to clear it.
+        organizationRoleId: z.string().trim().min(1).max(128).nullable().optional(),
         department: z
           .string()
           .trim()
@@ -186,7 +188,9 @@ export const teamRouter = router({
       const profile = {
         name: input.name,
         role: input.role,
-        organizationRoleId: organizationRole?.id ?? null,
+        ...(input.organizationRoleId !== undefined
+          ? { organizationRoleId: organizationRole?.id ?? null }
+          : {}),
         department: input.department,
         title: input.title,
         phone: input.phone ?? null,

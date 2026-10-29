@@ -292,7 +292,9 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
         name: name.trim(),
         email: submittedEmail,
         role,
-        organizationRoleId: organizationRoleId || null,
+        // When this email belongs to a pending invite, omitting an unselected
+        // template preserves its existing restaurant role on resend.
+        ...(organizationRoleId ? { organizationRoleId } : {}),
         department,
         title: title.trim(),
         phone: phone || undefined,

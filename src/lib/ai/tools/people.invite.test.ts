@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   invitationUpsert: vi.fn(),
   departmentFindFirst: vi.fn(),
+  roleFindFirst: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -30,6 +31,7 @@ const db = {
   // WHA-278: the invite path validates the department against the tenant's own
   // configured catalog before writing.
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
+  organizationRole: { findFirst: mocks.roleFindFirst },
   invitation: { upsert: mocks.invitationUpsert },
   $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
     run({
@@ -44,7 +46,7 @@ function inviteTool() {
     isAdmin: true,
     isHr: false,
     isAdminOrHr: true,
-    ctx: { userId: 'user_admin', name: 'Admin' },
+    ctx: { userId: 'user_admin', name: 'Admin', organizationId: 'org_test' },
     can: vi.fn(async () => true),
     audit: vi.fn(),
   } as unknown as AssistantHelpers;
@@ -124,7 +126,7 @@ describe('assistant inviteMember duplicate guard', () => {
       isAdmin: true,
       isHr: false,
       isAdminOrHr: true,
-      ctx: { userId: 'user_admin', name: 'Admin' },
+      ctx: { userId: 'user_admin', name: 'Admin', organizationId: 'org_test' },
       can: vi.fn(async () => true),
       audit: vi.fn(),
     } as unknown as AssistantHelpers;
@@ -158,5 +160,45 @@ describe('assistant inviteMember duplicate guard', () => {
     expect(mocks.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ department: 'KITCHEN' }) })
     );
+  });
+
+  it.each([
+    ['general-manager', 'General Manager'],
+    ['branch-manager', 'Branch Manager'],
+    ['bar-barista', 'Bar / Barista'],
+    ['accountant', 'Accountant'],
+  ])('assigns the %s restaurant role through an assistant invite', async (key, name) => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.roleFindFirst.mockResolvedValue({ id: `role_${key}`, key, name });
+
+    await inviteTool().execute({
+      ...base,
+      email: `${key}@company.com`,
+      restaurantRoleKey: key,
+    });
+
+    expect(mocks.roleFindFirst).toHaveBeenCalledWith({
+      where: { key, organizationId: 'org_test' },
+      select: { id: true, key: true, name: true },
+    });
+    expect(mocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ organizationRoleId: `role_${key}` }),
+      })
+    );
+  });
+
+  it('rejects an assistant role outside the workspace catalog', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.roleFindFirst.mockResolvedValue(null);
+
+    const result = await inviteTool().execute({
+      ...base,
+      email: 'manager@company.com',
+      restaurantRoleKey: 'general-manager',
+    });
+
+    expect(result.error).toBe('"general-manager" is not a role in this workspace.');
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 });
