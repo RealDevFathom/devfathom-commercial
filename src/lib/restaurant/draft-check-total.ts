@@ -39,12 +39,22 @@ export type DraftCheckBreakdown = {
 export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftCheckBreakdown {
   const at = input.at ?? new Date();
   const fallback = input.profiles ? null : zeroTax(at);
-  const lines = input.lines.map((line) => ({
-    id: line.id,
-    unitPrice: line.unitPrice,
-    quantity: line.quantity,
-    modifierTotal: formatMoney(sum(line.modifierDeltas ?? [])),
-  }));
+  // Settlement supplies one tax line per physical unit so that tax is rounded
+  // per unit. Expand previews the same way; otherwise an aggregated quantity
+  // can produce a different payable amount solely because it was quoted before
+  // the bill was materialized.
+  const lines = input.lines.flatMap((line) => {
+    if (!Number.isInteger(line.quantity) || line.quantity <= 0) {
+      throw new RangeError(`Invalid quantity for ${line.id}`);
+    }
+    const modifierTotal = formatMoney(sum(line.modifierDeltas ?? []));
+    return Array.from({ length: line.quantity }, (_, unitOrdinal) => ({
+      id: `${line.id}:${unitOrdinal}`,
+      unitPrice: line.unitPrice,
+      quantity: 1,
+      modifierTotal,
+    }));
+  });
   const basis = sum(
     lines.map((line) => multiply(add(line.unitPrice, line.modifierTotal), line.quantity))
   );
