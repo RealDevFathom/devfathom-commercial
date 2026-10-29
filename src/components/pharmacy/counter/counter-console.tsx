@@ -510,6 +510,9 @@ function ScopedPharmacyCounterConsole({
   const allocateBrowserPrint = trpc.pharmacySales.counterReceiptBrowserPrint.useMutation({
     retry: false,
   });
+  const recordBrowserPrint = trpc.pharmacySales.counterReceiptBrowserPrintDispatched.useMutation({
+    retry: false,
+  });
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
@@ -991,13 +994,18 @@ function ScopedPharmacyCounterConsole({
     }
     const row = found[0]!;
     const nextUnit = row.saleUnits[0]?.kind ?? null;
-    if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
-      stageRow(row);
-      return;
-    }
-    barcodeAdd.current = null;
-    if (!preview?.sufficient || busy) return;
-    void addToCart();
+    // Barcode search completion is an external async event. Handle its state
+    // transition in the timer callback so the effect remains synchronization-only.
+    const timer = window.setTimeout(() => {
+      if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
+        stageRow(row);
+        return;
+      }
+      barcodeAdd.current = null;
+      if (!preview?.sufficient || busy) return;
+      void addToCart();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [
     activeRow,
     addToCart,
@@ -1447,63 +1455,73 @@ function ScopedPharmacyCounterConsole({
     substitutesQuery.data,
   ]);
 
-  const printReceipt = useCallback(async (existingReservation?: CounterBrowserPrintReservation) => {
-    const reservation = existingReservation ?? reserveCounterBrowserPrint();
-    const receipt = receiptQuery.data;
-    if (
-      !receipt ||
-      receipt.saleId !== saleId ||
-      receipt.receiptNumber !== cart?.receiptNumber ||
-      billState !== 'settled' ||
-      receiptQuery.isFetching ||
-      receiptQuery.isError
-    ) {
-      setNotice({ tone: 'danger', message: 'Load the settled receipt before printing.' });
-      reservation.cancel();
-      return false;
-    }
-    if (!existingReservation) {
-      discardReceiptIntent();
-      setReceiptSettlement(null);
-    }
-    try {
-      const allocation = await allocateBrowserPrint.mutateAsync({
-        branchId,
-        saleId: receipt.saleId,
-        locale: receiptLocale,
-      });
-      printCounterBrowserReceipt(
-        receipt,
-        receiptLocale,
-        receiptFormat,
-        allocation.reprint,
-        reservation
-      );
-      setReceiptReprint(allocation.reprint);
-      setNotice({
-        tone: 'success',
-        message:
-          'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
-      });
-      return true;
-    } catch (error) {
-      reservation.cancel();
-      setNotice({ tone: 'danger', message: messageFrom(error) });
-      return false;
-    }
-  }, [
-    billState,
-    cart?.receiptNumber,
-    discardReceiptIntent,
-    receiptFormat,
-    receiptLocale,
-    receiptQuery.data,
-    receiptQuery.isError,
-    receiptQuery.isFetching,
-    allocateBrowserPrint,
-    branchId,
-    saleId,
-  ]);
+  const printReceipt = useCallback(
+    async (existingReservation?: CounterBrowserPrintReservation) => {
+      const reservation = existingReservation ?? reserveCounterBrowserPrint();
+      const receipt = receiptQuery.data;
+      if (
+        !receipt ||
+        receipt.saleId !== saleId ||
+        receipt.receiptNumber !== cart?.receiptNumber ||
+        billState !== 'settled' ||
+        receiptQuery.isFetching ||
+        receiptQuery.isError
+      ) {
+        setNotice({ tone: 'danger', message: 'Load the settled receipt before printing.' });
+        reservation.cancel();
+        return false;
+      }
+      if (!existingReservation) {
+        discardReceiptIntent();
+        setReceiptSettlement(null);
+      }
+      try {
+        const allocation = await allocateBrowserPrint.mutateAsync({
+          branchId,
+          saleId: receipt.saleId,
+          locale: receiptLocale,
+        });
+        printCounterBrowserReceipt(
+          receipt,
+          receiptLocale,
+          receiptFormat,
+          allocation.reprint,
+          reservation
+        );
+        await recordBrowserPrint.mutateAsync({
+          branchId,
+          saleId: receipt.saleId,
+          locale: receiptLocale,
+          copyNumber: allocation.copyNumber,
+        });
+        setReceiptReprint(allocation.reprint);
+        setNotice({
+          tone: 'success',
+          message:
+            'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
+        });
+        return true;
+      } catch (error) {
+        reservation.cancel();
+        setNotice({ tone: 'danger', message: messageFrom(error) });
+        return false;
+      }
+    },
+    [
+      billState,
+      cart?.receiptNumber,
+      discardReceiptIntent,
+      receiptFormat,
+      receiptLocale,
+      receiptQuery.data,
+      receiptQuery.isError,
+      receiptQuery.isFetching,
+      allocateBrowserPrint,
+      recordBrowserPrint,
+      branchId,
+      saleId,
+    ]
+  );
 
   // ── POS-01 keyboard map ───────────────────────────────────────────────────
 

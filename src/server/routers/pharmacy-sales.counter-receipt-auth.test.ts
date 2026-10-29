@@ -205,6 +205,17 @@ const paths: {
     allowed: { reprint: false, copyNumber: 1 },
   },
   {
+    name: 'counterReceiptBrowserPrintDispatched',
+    run: (caller, branchId = 'branch-a') =>
+      caller.counterReceiptBrowserPrintDispatched({
+        branchId,
+        saleId: 'sale-a',
+        locale: 'en',
+        copyNumber: 1,
+      }),
+    allowed: { recorded: true },
+  },
+  {
     name: 'lookupReceiptByNumber',
     run: (caller, branchId = 'branch-a') =>
       caller.lookupReceiptByNumber({ branchId, receiptNumber: 7 }),
@@ -359,11 +370,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('does not let a user ALLOW override a role DENY when tendering', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:counter', effect: 'DENY' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'DENY' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
     assign(f, ['branch-a']);
 
     await expect(
@@ -381,11 +390,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('lets a role DENY on pharmacy:receipt beat a user ALLOW on pharmacy:counter for reads and tender', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:receipt', effect: 'DENY' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'DENY' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
     assign(f, ['branch-a']);
     await expect(
       f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
@@ -406,11 +413,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('lets a user DENY on pharmacy:counter beat a role ALLOW on pharmacy:receipt', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:receipt', effect: 'ALLOW' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'DENY' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'ALLOW' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'DENY' },
+    ]);
     assign(f, ['branch-a']);
     await expect(
       f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
@@ -621,7 +626,7 @@ describe('counter receipt authorization', () => {
       reprint: true,
       copyNumber: 2,
     });
-    expect(f.db.$executeRaw).toHaveBeenCalledTimes(2);
+    expect(f.db.$executeRaw).toHaveBeenCalledTimes(1);
   });
 
   it('requires an active branch before an administrator saves the receipt format', async () => {

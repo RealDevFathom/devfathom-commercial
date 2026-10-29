@@ -50,6 +50,17 @@ type SalesCaller = {
     saleId: string;
     locale: 'en' | 'ur';
   }) => Promise<{ status: 'READY'; copyNumber: number; reprint: boolean }>;
+  counterReceiptBrowserPrint: (input: {
+    branchId: string;
+    saleId: string;
+    locale: 'en' | 'ur';
+  }) => Promise<{ copyNumber: number; reprint: boolean }>;
+  counterReceiptBrowserPrintDispatched: (input: {
+    branchId: string;
+    saleId: string;
+    locale: 'en' | 'ur';
+    copyNumber: number;
+  }) => Promise<{ recorded: true }>;
   lookupReceiptByNumber: (input: { branchId: string; receiptNumber: number }) => Promise<unknown>;
   counterReceiptFormat: (input: { branchId: string }) => Promise<unknown>;
   counterCart: (input: { branchId: string; saleId: string }) => Promise<unknown>;
@@ -352,7 +363,7 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     expect(persisted.dispatches).toHaveLength(results.length);
   });
 
-  it('marks a browser copy after a new request reload boundary', async () => {
+  it('records a browser dispatch only after explicit dialog handoff', async () => {
     const browserPrint = () =>
       act(ids.orgA, dispenser, (api) =>
         api.counterReceiptBrowserPrint({
@@ -367,6 +378,25 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     expect(first).toMatchObject({ copyNumber: 1, reprint: false });
     expect(afterReload).toMatchObject({ copyNumber: 2, reprint: true });
 
+    await expect(
+      withTenantDb(ids.orgA, (tx) =>
+        tx.pharmacyReceiptPrintDispatch.count({
+          where: { branchId: ids.branchA, saleId: ids.printableSale },
+        })
+      )
+    ).resolves.toBe(0);
+
+    for (const allocation of [first, afterReload]) {
+      await act(ids.orgA, dispenser, (api) =>
+        api.counterReceiptBrowserPrintDispatched({
+          branchId: ids.branchA,
+          saleId: ids.printableSale,
+          locale: 'en',
+          copyNumber: allocation.copyNumber,
+        })
+      );
+    }
+
     const dispatches = await withTenantDb(ids.orgA, (tx) =>
       tx.pharmacyReceiptPrintDispatch.findMany({
         where: { branchId: ids.branchA, saleId: ids.printableSale },
@@ -375,6 +405,29 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     );
     expect(dispatches).toHaveLength(2);
     expect(dispatches.map(({ copyNumber }) => copyNumber)).toEqual([1, 2]);
+  });
+
+  it('rejects update and delete of append-only dispatch audit rows', async () => {
+    await expect(
+      withTenantDb(ids.orgA, (tx) =>
+        tx.$executeRawUnsafe(
+          'UPDATE "pharmacy_receipt_print_dispatches" SET "locale" = \'ur\' WHERE "organizationId" = $1 AND "branchId" = $2 AND "saleId" = $3',
+          ids.orgA,
+          ids.branchA,
+          ids.printableSale
+        )
+      )
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      withTenantDb(ids.orgA, (tx) =>
+        tx.$executeRawUnsafe(
+          'DELETE FROM "pharmacy_receipt_print_dispatches" WHERE "organizationId" = $1 AND "branchId" = $2 AND "saleId" = $3',
+          ids.orgA,
+          ids.branchA,
+          ids.printableSale
+        )
+      )
+    ).rejects.toThrow(/append-only/);
   });
 
   it('allows the assigned branch and denies the sibling sale, an empty assignment, and another organization', async () => {

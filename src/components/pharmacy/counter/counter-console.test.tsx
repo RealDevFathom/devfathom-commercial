@@ -104,6 +104,7 @@ vi.mock('@/lib/trpc', () => {
         'transition',
         'tender',
         'counterReceiptBrowserPrint',
+        'counterReceiptBrowserPrintDispatched',
         'openDrawer',
         'captureDemand',
         'declineSubstitute',
@@ -255,6 +256,7 @@ beforeEach(() => {
     'transition',
     'tender',
     'counterReceiptBrowserPrint',
+    'counterReceiptBrowserPrintDispatched',
     'openDrawer',
     'captureDemand',
     'declineSubstitute',
@@ -265,6 +267,7 @@ beforeEach(() => {
     mocks.mutations[name] = vi.fn();
   mocks.mutations.tender!.mockResolvedValue(accepted());
   mocks.mutations.counterReceiptBrowserPrint!.mockResolvedValue({ copyNumber: 1, reprint: false });
+  mocks.mutations.counterReceiptBrowserPrintDispatched!.mockResolvedValue({ recorded: true });
   mocks.cancel.mockResolvedValue(undefined);
   mocks.receiptInvalidate.mockResolvedValue(undefined);
   mocks.refetch.mockImplementation(async () => {

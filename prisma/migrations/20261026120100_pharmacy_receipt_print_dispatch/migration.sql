@@ -31,6 +31,23 @@ CREATE TABLE "pharmacy_receipt_print_dispatches" (
 CREATE UNIQUE INDEX "pharmacy_receipt_print_dispatches_copy_key" ON "pharmacy_receipt_print_dispatches"("organizationId", "branchId", "saleId", "copyNumber");
 CREATE INDEX "pharmacy_receipt_print_dispatches_branch_created_idx" ON "pharmacy_receipt_print_dispatches"("organizationId", "branchId", "createdAt");
 
+-- Audit events are immutable even when the runtime role has broad table grants.
+-- A trigger is deliberate rather than relying on application convention or RLS:
+-- it also protects against future grants and privileged application code.
+CREATE FUNCTION reject_pharmacy_receipt_print_dispatch_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RAISE EXCEPTION 'pharmacy receipt print dispatches are append-only'
+    USING ERRCODE = '55000';
+END;
+$$;
+
+CREATE TRIGGER pharmacy_receipt_print_dispatches_append_only
+BEFORE UPDATE OR DELETE ON "pharmacy_receipt_print_dispatches"
+FOR EACH ROW EXECUTE FUNCTION reject_pharmacy_receipt_print_dispatch_mutation();
+
 DO $$ DECLARE table_name text; BEGIN
   FOREACH table_name IN ARRAY ARRAY['pharmacy_receipt_print_states', 'pharmacy_receipt_print_dispatches'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', table_name);
