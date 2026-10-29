@@ -495,7 +495,7 @@ export default async function PharmacyMarketingPage({
                   type="number"
                   min={0}
                   max={23}
-                  defaultValue={8}
+                  defaultValue={9}
                   required
                 />
               </label>
@@ -520,6 +520,18 @@ export default async function PharmacyMarketingPage({
                   min={1}
                   max={90}
                   defaultValue={7}
+                  required
+                />
+              </label>
+              <label className="block text-sm">
+                Maximum captures per customer (30 days)
+                <Input
+                  name="monthlyCap"
+                  className="mt-1 min-h-11"
+                  type="number"
+                  min={1}
+                  max={31}
+                  defaultValue={2}
                   required
                 />
               </label>

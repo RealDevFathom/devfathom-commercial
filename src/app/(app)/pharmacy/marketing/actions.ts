@@ -91,7 +91,11 @@ export async function marketingAction(
             all: [{ field, operator: 'gte', value: Number(text('threshold')) }],
           },
           quietHours: { startHour: Number(text('quietStart')), endHour: Number(text('quietEnd')) },
-          frequencyCap: { max: Number(text('cap')), windowDays: Number(text('window')) },
+          frequencyCap: {
+            max: Number(text('cap')),
+            windowDays: Number(text('window')),
+            monthlyMax: form.has('monthlyCap') ? Number(text('monthlyCap')) : 2,
+          },
           promotesRegulatedItem: false,
         });
         savedCampaignId = draft.id;

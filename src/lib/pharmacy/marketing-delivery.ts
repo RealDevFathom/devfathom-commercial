@@ -11,6 +11,7 @@ import {
   MarketingWorkflowError,
   type MarketingScope,
 } from './marketing-service';
+import { requireMarketingQuality } from './marketing-safety';
 import { z } from 'zod';
 
 export const sandboxDispatchInput = z
@@ -127,6 +128,7 @@ export async function reserveSandboxAttempt(
   input: z.infer<typeof sandboxDispatchInput>,
   now: Date
 ) {
+  await requireMarketingQuality(db, scope.organizationId);
   await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_campaign_captures
     WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
     AND id = ${captureId} FOR UPDATE`);
@@ -170,16 +172,28 @@ export async function reserveSandboxAttempt(
     reason = 'WINDOW_CLOSED';
   }
   // Current capture consumes one place; count other captures across campaigns/branches.
-  const others = await db.pharmacyCampaignCapture.count({
-    where: {
-      organizationId: scope.organizationId,
-      customerId: capture.customerId,
-      channel: 'WHATSAPP',
-      id: { not: capture.id },
-      capturedAt: { gte: new Date(now.getTime() - frequencyCap.windowDays * 86400000), lte: now },
-    },
-  });
-  if (others >= frequencyCap.max) reason = 'FREQUENCY_CAP';
+  const [others, monthlyOthers] = await Promise.all([
+    db.pharmacyCampaignCapture.count({
+      where: {
+        organizationId: scope.organizationId,
+        customerId: capture.customerId,
+        channel: 'WHATSAPP',
+        id: { not: capture.id },
+        capturedAt: { gte: new Date(now.getTime() - frequencyCap.windowDays * 86400000), lte: now },
+      },
+    }),
+    db.pharmacyCampaignCapture.count({
+      where: {
+        organizationId: scope.organizationId,
+        customerId: capture.customerId,
+        channel: 'WHATSAPP',
+        id: { not: capture.id },
+        capturedAt: { gte: new Date(now.getTime() - 30 * 86400000), lte: now },
+      },
+    }),
+  ]);
+  if (others >= frequencyCap.max || monthlyOthers >= frequencyCap.monthlyMax)
+    reason = 'FREQUENCY_CAP';
   const attempt = await db.pharmacyCampaignDispatchAttempt.create({
     data: {
       organizationId: scope.organizationId,

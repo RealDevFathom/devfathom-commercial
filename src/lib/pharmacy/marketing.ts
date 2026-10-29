@@ -13,7 +13,8 @@ export type SegmentDefinition = {
   all: Array<{ field: string; operator: 'eq' | 'gte' | 'lte'; value: boolean | number }>;
 };
 
-const forbiddenClinicalKey = /prescription|condition|allerg|medicine|diagnos|patient|drug|rx/i;
+const forbiddenClinicalKey =
+  /prescription|condition|allerg|medicine|diagnos|patient|drug|\brx\b|paracetamol|acetaminophen|ibuprofen|aspirin|antibiotic|analgesic|antihistamine|antacid|vitamin|supplement/i;
 
 export function validateSegmentDefinition(input: unknown): asserts input is SegmentDefinition {
   if (!input || typeof input !== 'object') throw new Error('A segment definition is required.');

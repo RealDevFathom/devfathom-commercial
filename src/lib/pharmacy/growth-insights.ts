@@ -277,8 +277,8 @@ export async function reviewGrowthInsight(
         ...input.edit,
         branchId: scope.branchId,
         definition: { version: 1, all: [{ field: 'receiptCount', operator: 'gte', value: 1 }] },
-        quietHours: { startHour: 22, endHour: 8 },
-        frequencyCap: { max: 1, windowDays: 7 },
+        quietHours: { startHour: 22, endHour: 9 },
+        frequencyCap: { max: 1, windowDays: 7, monthlyMax: 2 },
         promotesRegulatedItem: false,
       })
     );

@@ -13778,6 +13778,22 @@ model PharmacyCampaign {
 }
 
 /// Capture mode only: records intended delivery; no provider delivery state exists.
+/// Provider account quality gate for the tenant-owned WhatsApp sender.
+model PharmacyMarketingSafetyState {
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  senderId       String
+  quality        String
+  paused         Boolean
+  reason         String?
+  eventKey       String
+  occurredAt     DateTime
+  updatedAt      DateTime @updatedAt
+
+  @@id([organizationId, senderId])
+  @@unique([organizationId, eventKey])
+  @@map("pharmacy_marketing_safety_states")
+}
+
 model PharmacyCampaignCapture {
   dispatchAttempts PharmacyCampaignDispatchAttempt[]
   id               String                            @id @default(cuid())

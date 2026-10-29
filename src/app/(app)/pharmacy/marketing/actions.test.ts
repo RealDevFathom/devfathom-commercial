@@ -47,7 +47,7 @@ it('returns the saved manual draft for navigation with bounded retail settings',
       promotesRegulatedItem: false,
       definition: { version: 1, all: [{ field: 'receiptCount', operator: 'gte', value: 1 }] },
       quietHours: { startHour: 22, endHour: 8 },
-      frequencyCap: { max: 1, windowDays: 7 },
+      frequencyCap: { max: 1, windowDays: 7, monthlyMax: 2 },
     })
   );
   expect(mocks.approve).not.toHaveBeenCalled();
