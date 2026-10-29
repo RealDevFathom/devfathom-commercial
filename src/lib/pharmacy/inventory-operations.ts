@@ -296,6 +296,36 @@ export async function releaseQuarantinedPart(
     },
   });
   if (!lot) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  // Regulatory quarantine shares the balance projection with manual holds, but
+  // it may only be reversed by the safety-gated DRAP workflow. Reserve every
+  // unit represented by an unreversed recall action so this inventory-only
+  // operation can release manual excess without making recalled stock saleable.
+  const [quarantineBalance, recallReserve] = await Promise.all([
+    db.pharmacyStockBalance.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        inventoryLotId: input.inventoryLotId,
+        stockLocationId: input.stockLocationId,
+        disposition: 'QUARANTINE',
+      },
+      select: { onHandUnits: true },
+    }),
+    db.pharmacyRecallQuarantineAction.aggregate({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        inventoryLotId: input.inventoryLotId,
+        stockLocationId: input.stockLocationId,
+        reversedAt: null,
+      },
+      _sum: { quantityUnits: true },
+    }),
+  ]);
+  const regulatoryUnits = recallReserve._sum.quantityUnits ?? 0;
+  if (!quarantineBalance || quarantineBalance.onHandUnits - regulatoryUnits < input.units) {
+    throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+  }
   const a = await removalArrangement(
     db,
     scope,
