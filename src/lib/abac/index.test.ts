@@ -174,6 +174,22 @@ describe('custom ABAC decisions', () => {
     ).resolves.toBe(false);
   });
 
+  it('does not let tenant admin authority bypass an assigned Pharmacist role (#375)', async () => {
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: pharmacyPermissionsFor('pharmacist') }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('does not let tenant admin authority bypass an assigned custom role (#375)', async () => {
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({ rolePermissions: [] }),
+      })
+    ).resolves.toBe(false);
+  });
+
   it('lets an explicit deny revoke tenant admin procurement access', async () => {
     await expect(
       can({ ...employee, role: 'ADMIN' }, 'pharmacy:procurement', undefined, {

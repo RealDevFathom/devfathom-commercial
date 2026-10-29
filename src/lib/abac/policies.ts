@@ -234,8 +234,8 @@ export const POLICIES: Record<Action, Policy[]> = {
   'pharmacy:manage': [],
   // Tenant administrators without an assigned organization role retain the
   // purchasing and Goods-in access they had before pharmacy capabilities became
-  // explicit (#375). A matching custom DENY is still resolved first by `can()`
-  // and therefore takes precedence.
+  // explicit (#375). `can()` prevents an assigned role with no matching grant
+  // from falling through to this policy, and resolves a custom DENY first.
   'pharmacy:procurement': [isAdmin],
   'pharmacy:inventory': [],
   // Dispensing is an exact-grant-only action: tenant administration alone is
