@@ -70,6 +70,7 @@ export const ALL_ACTIONS = [
   'restaurant:configure', // restaurant M8: loyalty configuration and consolidated access — org-role driven
   'menu:import', // R-lane WHA-194: OCR menu import — upload, review queue, confirmed catalog import
   'pharmacy:counter',
+  'pharmacy:close',
   'pharmacy:manage',
   'pharmacy:procurement',
   'pharmacy:inventory',
@@ -231,6 +232,7 @@ export const POLICIES: Record<Action, Policy[]> = {
   // grants it explicitly (or holds `*`, e.g. the restaurant Owner template).
   'menu:import': [],
   'pharmacy:counter': [],
+  'pharmacy:close': [],
   'pharmacy:manage': [],
   // Tenant administrators retain the operational purchasing access they had
   // before pharmacy capabilities became explicit. A matching custom DENY is
