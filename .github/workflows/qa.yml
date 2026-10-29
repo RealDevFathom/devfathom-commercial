@@ -279,6 +279,19 @@ jobs:
           CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55678/postgres run vitest-boundary-setup bunx tsx scripts/ci-reserved-tests.ts
           run growth-acceptance-db-start docker run -d --name growth-acceptance-postgres --network host -e POSTGRES_PASSWORD=gate-reserved-ci-only postgres:16 -p 55683 -c listen_addresses=127.0.0.1
           CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55683/postgres run vitest-growth-setup bunx tsx scripts/ci-reserved-tests.ts
+          # ci-reserved-tests writes one Vitest JSON report per isolated lane.
+          # Assert that contract here, next to the producing commands, rather
+          # than discovering a missing report only in the final aggregate.
+          reserved_reports_ok=0
+          : > gate/reserved-reports.stderr.log
+          for lane in counter-evidence growth platform-concurrency price-intelligence returns boundary-http growth-ready growth-sandbox; do
+            if [ ! -s "gate/vitest-${lane}.json" ]; then
+              echo "Missing reserved-lane report: gate/vitest-${lane}.json" >>gate/reserved-reports.stderr.log
+              reserved_reports_ok=1
+            fi
+          done
+          : > gate/reserved-reports.stdout.log
+          record reserved-reports "$reserved_reports_ok"
           RESTAURANT_DEMO_RESET_DB=1 run vitest bunx vitest run --exclude=tests/platform-login-accessibility.browser.test.ts --exclude=src/lib/pharmacy/counter-evidence.db.test.ts --exclude=tests/restaurant-growth-ready.db.test.ts --exclude=tests/restaurant-growth-sandbox.db.test.ts --exclude=src/app/api/trpc/transaction-boundary.real-http.test.ts --exclude=src/lib/restaurant/growth-concurrency.db.test.ts --exclude=tests/platform-sensitive-concurrency.db.test.ts --exclude=tests/pharmacy-price-intelligence.integration.test.ts --exclude=src/lib/pharmacy/settlement.returns.db.test.ts --exclude=src/lib/pharmacy/repeat-purchasing.db.test.ts --exclude=src/lib/pharmacy/receipt-identity.db.test.ts --exclude=src/lib/restaurant/catering-money.db.test.ts --exclude=src/lib/restaurant/catering-runtime.db.test.ts --exclude=src/lib/restaurant/catering-endpoints.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
           # test:rls creates its own NOLOGIN role and does not start the app.
           DATABASE_URL="$SUPERUSER_URL" TEST_DATABASE_URL="$SUPERUSER_URL" run test-rls bun run test:rls

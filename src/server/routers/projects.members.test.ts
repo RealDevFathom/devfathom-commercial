@@ -13,6 +13,7 @@ import { projectsRouter } from './projects';
 type Member = { role: 'LEAD' | 'MEMBER' };
 type MemberWhere = { where: { projectId_userId: { userId: string } } };
 type MemberUpdate = MemberWhere & { data: Member };
+type MemberUpsert = MemberWhere & { create: Member; update: Member };
 
 function projectDb() {
   const members = new Map<string, Member>([
@@ -47,7 +48,15 @@ function projectDb() {
         member.role = data.role;
         return { userId: where.projectId_userId.userId, ...member };
       }),
+      upsert: vi.fn(async ({ where, create, update }: MemberUpsert) => {
+        calls.push('upsert');
+        const userId = where.projectId_userId.userId;
+        const member = members.get(userId);
+        members.set(userId, { role: member ? update.role : create.role });
+        return { userId, ...members.get(userId)! };
+      }),
     },
+    user: { findMany: vi.fn(async () => [{ id: 'lead-a' }, { id: 'lead-b' }]) },
   };
 
   const db = {
@@ -71,7 +80,9 @@ function projectDb() {
 function caller(db: ReturnType<typeof projectDb>['db'], userId: string) {
   return projectsRouter.createCaller({
     db,
-    session: { user: { id: userId, role: 'EMPLOYEE', status: 'ACTIVE' } },
+    session: {
+      user: { id: userId, organizationId: 'organization-1', role: 'EMPLOYEE', status: 'ACTIVE' },
+    },
     entitlements: { enabledModules: ['projects'] },
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
@@ -119,5 +130,22 @@ describe('project lead invariant', () => {
       reason: { code: 'BAD_REQUEST' },
     });
     expect(calls[0]).toBe('lock');
+  });
+
+  it('rejects demoting the last lead through the add-member upsert', async () => {
+    const { db, members, calls } = projectDb();
+    members.delete('lead-b');
+
+    await expect(
+      caller(db, 'lead-a').addMember({
+        projectId: 'project-1',
+        userId: 'lead-a',
+        role: 'MEMBER',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(members.get('lead-a')).toEqual({ role: 'LEAD' });
+    expect(calls[0]).toBe('lock');
+    expect(calls).not.toContain('upsert');
   });
 });
