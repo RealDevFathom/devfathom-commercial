@@ -2831,6 +2831,7 @@ model User {
   writtenNotes                PerformanceNote[]              @relation("NoteAuthor")
   activities                  Activity[]
   notifications               Notification[]
+  platformAuditLogs           PlatformAuditLog[]             @relation("TenantAuditActor")
   pharmacyOwnerDigestSettings PharmacyOwnerDigestSetting[]
   pharmacyOwnerDigestCaptures PharmacyOwnerDigestCapture[]
   uploadedFiles               ProjectFile[]
@@ -10667,6 +10668,7 @@ model PlatformUser {
   sessions                             PlatformSession[]
   recoveryCodes                        PlatformRecoveryCode[]
   restaurantActivationAcknowledgements RestaurantActivationAcknowledgement[]
+  auditLogs                            PlatformAuditLog[] @relation("PlatformAuditActor")
 
   @@index([role, active])
   @@map("platform_users")
@@ -11497,10 +11499,13 @@ model PlatformAuditLog {
   userAgent           String?
   createdAt           DateTime @default(now())
 
-  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  actorPlatformUser PlatformUser? @relation("PlatformAuditActor", fields: [actorPlatformUserId], references: [id], onDelete: SetNull)
+  actorTenantUser   User?         @relation("TenantAuditActor", fields: [actorTenantUserId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, createdAt])
   @@index([actorPlatformUserId, createdAt])
+  @@index([actorTenantUserId, createdAt])
   @@index([action, createdAt])
   @@index([requestId])
   @@map("platform_audit_logs")

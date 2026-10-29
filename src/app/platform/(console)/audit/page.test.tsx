@@ -26,6 +26,11 @@ describe('PlatformAuditPage', () => {
             organization: { displayName: 'DevFathom' },
             actorPlatformUserId: actorId,
             actorTenantUserId: null,
+            actorPlatformUser: {
+              name: 'Staging Administrator',
+              email: 'admin.staging@devfathom.com',
+            },
+            actorTenantUser: null,
             targetType: 'OrganizationModule',
             targetId: 'module-1',
             success: true,
@@ -34,16 +39,6 @@ describe('PlatformAuditPage', () => {
           },
         ]),
       },
-      platformUser: {
-        findMany: vi.fn().mockResolvedValue([
-          {
-            id: actorId,
-            name: 'Staging Administrator',
-            email: 'admin.staging@devfathom.com',
-          },
-        ]),
-      },
-      user: { findMany: vi.fn().mockResolvedValue([]) },
     };
     mocks.withPlatformDb.mockImplementation((run: (database: typeof db) => Promise<unknown>) =>
       run(db)
@@ -114,6 +109,33 @@ describe('PlatformAuditPage', () => {
         }),
       })
     );
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          actorPlatformUser: { select: { name: true, email: true } },
+          actorTenantUser: { select: { name: true, email: true } },
+        }),
+        where: expect.objectContaining({
+          OR: expect.arrayContaining([
+            {
+              actorPlatformUser: {
+                is: { name: { contains: 'update', mode: 'insensitive' } },
+              },
+            },
+            {
+              actorTenantUser: {
+                is: { email: { contains: 'update', mode: 'insensitive' } },
+              },
+            },
+          ]),
+        }),
+      })
+    );
+    expect(screen.getByLabelText('Search')).toHaveAttribute(
+      'placeholder',
+      'Search actor, action, target, or reason'
+    );
+    expect(screen.getByLabelText('Outcome')).toBeInTheDocument();
     expect(screen.getByText('100 records on this page. Dates use UTC.')).toBeInTheDocument();
     const older = new URL(
       screen.getByRole('link', { name: 'Older records' }).getAttribute('href')!,
