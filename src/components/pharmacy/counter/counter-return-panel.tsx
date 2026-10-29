@@ -156,8 +156,14 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const refund = trpc.pharmacySales.refundTender.useMutation();
   const data = history.data;
   const line = data?.lines.find((row) => row.id === lineId);
+  const recoveryLine =
+    attempt?.kind === 'return'
+      ? data?.lines.find((row) => row.id === attempt.input.saleLineId)
+      : undefined;
+  const recoveryReturnPending = attempt?.kind === 'return' && !recoveryLine;
+  const recoveryNeedsWitness = !!recoveryLine?.controlled;
   const witnesses = trpc.pharmacyPurchasing.controlledWitnesses.useQuery(undefined, {
-    enabled: ready && online && !!line?.controlled,
+    enabled: ready && online && (!!line?.controlled || recoveryNeedsWitness),
     retry: false,
   });
   const selectedLot = line?.lots.find((row) => row.lotId === lotId);
@@ -212,7 +218,10 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       );
     } catch (cause) {
       const code = (cause as { data?: { code?: string } })?.data?.code;
-      if (['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '')) {
+      if (
+        ['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '') &&
+        !(next.kind === 'return' && recoveryLine?.controlled)
+      ) {
         try {
           localStorage.removeItem(storageKey);
           setAttempt(null);
@@ -275,13 +284,72 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       )}
       {message && <p role="status">{message}</p>}
       {attempt && (
-        <Button
-          className="h-11"
-          disabled={busy || !online || !ready}
-          onClick={() => void execute(attempt)}
-        >
-          Retry saved {attempt.kind}
-        </Button>
+        <div className="space-y-3 rounded-lg border border-border-subtle p-4">
+          {attempt.kind === 'return' && recoveryNeedsWitness && (
+            <>
+              <p className="font-medium">Reauthorize controlled return recovery</p>
+              <p className="text-sm text-text-muted">
+                The saved operation contains no PIN. A different pharmacist must enter a fresh PIN
+                to reconcile the original reference.
+              </p>
+              <Label htmlFor="recovery-witness">Witness pharmacist</Label>
+              <select
+                id="recovery-witness"
+                className={selectClass}
+                value={witnessId}
+                onChange={(event) => {
+                  setWitnessId(event.target.value);
+                  setWitnessPin('');
+                }}
+              >
+                <option value="">Select pharmacist</option>
+                {witnesses.data?.map((staff) => (
+                  <option key={staff.id} value={staff.id}>
+                    {staff.name}
+                  </option>
+                ))}
+              </select>
+              <Label htmlFor="recovery-witness-pin">Witness PIN</Label>
+              <Input
+                id="recovery-witness-pin"
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                minLength={4}
+                maxLength={8}
+                className="h-11"
+                disabled={!witnessId}
+                value={witnessPin}
+                onChange={(event) => setWitnessPin(event.target.value)}
+              />
+            </>
+          )}
+          <Button
+            className="h-11"
+            disabled={
+              busy ||
+              !online ||
+              !ready ||
+              recoveryReturnPending ||
+              (recoveryNeedsWitness && (!witnessId || !/^\d{4,8}$/.test(witnessPin)))
+            }
+            onClick={() =>
+              void execute(
+                attempt.kind === 'return' && recoveryNeedsWitness
+                  ? {
+                      ...attempt,
+                      input: {
+                        ...attempt.input,
+                        controlledWitness: { staffProfileId: witnessId, pin: witnessPin },
+                      },
+                    }
+                  : attempt
+              )
+            }
+          >
+            Retry saved {attempt.kind}
+          </Button>
+        </div>
       )}
       <form
         className="flex flex-wrap items-end gap-2"
@@ -594,7 +662,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                     reason,
                     integrityDecision: integrity,
                     idempotencyKey: browserUuid(),
-                    controlledWitness: line.controlled
+                    controlledWitness: line?.controlled
                       ? { staffProfileId: witnessId, pin: witnessPin }
                       : undefined,
                   },
