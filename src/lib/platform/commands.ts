@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { ensurePharmacyStaffProfile } from '@/lib/pharmacy/pin-enrollment';
+
 import { hash } from 'bcryptjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
@@ -1039,6 +1041,9 @@ async function bootstrapOrganization(
   // gate working, and pre-seeding a profile here would be exactly the "seed data
   // fakes readiness" move PLAT-03 exists to refuse.
   if (input.vertical === 'PHARMACY') {
+    // Provision the identity link now; the owner chooses their own PIN through
+    // /pharmacy/settings/pin after signing in, without Restaurant Core.
+    await ensurePharmacyStaffProfile(db, organization.id, admin.id);
     await db.pharmacyBranch.create({
       data: {
         organizationId: organization.id,

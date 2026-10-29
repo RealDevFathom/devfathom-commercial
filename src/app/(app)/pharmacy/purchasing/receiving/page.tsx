@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { soloOwnerEligible } from '@/lib/pharmacy/solo-approval';
 import type { Metadata } from 'next';
 import type * as React from 'react';
@@ -833,6 +834,16 @@ export default async function PharmacyReceivingPage({
                 }))}
                 required
               />
+              <p className="text-sm text-text-muted sm:col-span-2">
+                Each approver enrolls their own PIN under{' '}
+                <Link
+                  href="/pharmacy/settings/pin"
+                  className="underline focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  Approval PIN
+                </Link>{' '}
+                before confirming a purchase.
+              </p>
               <TextField
                 name="bypassPin"
                 label="Approver PIN"

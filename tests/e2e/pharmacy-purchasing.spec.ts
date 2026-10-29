@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -66,6 +67,85 @@ function reference(prefix: string, testInfo: { workerIndex: number }): string {
 function shellText(page: Page, text: string | RegExp) {
   return page.getByText(text).first();
 }
+
+test('pharmacy PIN enrollment is discoverable, accessible and works without Restaurant Core', async ({
+  page,
+}, testInfo) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  await page.route('**/api/trpc/pharmacyPin.status*', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await route.continue();
+  });
+  await page.route('**/api/trpc/pharmacyPin.enroll*', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await route.continue();
+  });
+  await page.goto('/pharmacy/purchasing/receiving');
+  await page.getByRole('link', { name: 'Approval PIN', exact: true }).last().click();
+  await expect(page.getByRole('heading', { name: 'Approval PIN', exact: true })).toBeVisible();
+  await expect(page.getByText('Loading your PIN enrollment…', { exact: true })).toBeVisible();
+  const pin = page.getByLabel('New pharmacy PIN', { exact: true });
+  await expect(pin).toBeVisible();
+  await expect(pin).toHaveAttribute('type', 'password');
+  for (const width of [375, 768, 1024, 1440]) {
+    for (const theme of ['light', 'dark'] as const) {
+      for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.emulateMedia({ colorScheme: theme, reducedMotion });
+        await page.evaluate(
+          (value) => document.documentElement.setAttribute('data-theme', value),
+          theme
+        );
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
+        ).toBe(true);
+        await pin.focus();
+        await expect(pin).toBeFocused();
+        await page.keyboard.press('Tab');
+        await expect(page.getByLabel('Confirm pharmacy PIN', { exact: true })).toBeFocused();
+        await page.screenshot({
+          path: testInfo.outputPath(`pin-${width}-${theme}-${reducedMotion}.png`),
+          fullPage: true,
+        });
+        if (width === 375 && theme === 'light' && reducedMotion === 'no-preference') {
+          await page.getByRole('button', { name: 'Open menu' }).click();
+          await expect(page.getByRole('dialog', { name: 'Mobile navigation' })).toBeVisible();
+          await page.screenshot({
+            path: testInfo.outputPath('pin-mobile-navigation.png'),
+            fullPage: true,
+          });
+          await page.keyboard.press('Escape');
+          await expect(page.getByRole('dialog', { name: 'Mobile navigation' })).toHaveCount(0);
+        }
+      }
+    }
+  }
+  const accessibility = await new AxeBuilder({ page })
+    .include('[data-slot="section-card"]')
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  await pin.fill('482916');
+  await page.getByLabel('Confirm pharmacy PIN', { exact: true }).fill('482917');
+  await page.getByRole('button', { name: 'Enroll pharmacy PIN' }).click();
+  await expect(page.locator('#pin-error')).toHaveText('The PINs must match.');
+  await expect(pin).toHaveValue('482916');
+  await page.getByLabel('Confirm pharmacy PIN', { exact: true }).fill('482916');
+  await page.getByRole('button', { name: 'Enroll pharmacy PIN' }).click();
+  await expect(page.getByRole('button', { name: 'Enrolling…' })).toBeDisabled();
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Your pharmacy approval PIN is enrolled.' })
+  ).toBeVisible();
+  await expect(pin).toHaveCount(0);
+  await page.reload();
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Your pharmacy approval PIN is enrolled.' })
+  ).toBeVisible();
+  expect(errors).toEqual([]);
+});
 
 test('the overview reports a workspace that is ready to receive', async ({ page }) => {
   await page.goto(ROUTE);

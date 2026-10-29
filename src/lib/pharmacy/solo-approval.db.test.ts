@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
-import { hash } from 'bcryptjs';
+import { pharmacyPinRouter } from '@/server/routers/pharmacy-pin';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 // This suite deliberately fails if DATABASE_URL is absent: it must execute in
@@ -155,16 +155,28 @@ async function fixture(kind: 'ADMIN' | 'owner' | 'provisioned' = 'ADMIN') {
                 status: 'ACTIVE',
               },
             });
-      const profile = await db.restaurantStaffProfile.create({
-        data: { organizationId: org, userId: user.id, displayName: 'Owner' },
-      });
-      await db.restaurantOperatorCredential.create({
-        data: {
-          organizationId: org,
-          staffProfileId: profile.id,
-          type: 'PIN',
-          credentialHash: await hash(pin, 4),
+      if (kind === 'provisioned') {
+        expect(
+          await db.restaurantStaffProfile.count({ where: { userId: user.id, status: 'ACTIVE' } })
+        ).toBe(1);
+      }
+      const pinCaller = pharmacyPinRouter.createCaller({
+        db,
+        entitlements: { organizationId: org, enabledModules: ['pharmacy-core'], modules: [] },
+        session: {
+          expires: 'later',
+          user: { id: user.id, organizationId: org, role: user.role, status: 'ACTIVE' },
         },
+        organization: { id: org, vertical: 'PHARMACY' },
+        support: null,
+        requestMeta: { ip: null, userAgent: null },
+        audit: { detail: {}, db },
+      } as never);
+      expect(await pinCaller.status()).toEqual({ enrolled: false });
+      await pinCaller.enroll({ pin });
+      expect(await pinCaller.status()).toEqual({ enrolled: true });
+      const profile = await db.restaurantStaffProfile.findFirstOrThrow({
+        where: { userId: user.id },
       });
       const branch =
         kind === 'provisioned'
@@ -1955,4 +1967,168 @@ it('PV READY database guard rechecks a concurrent staff activation and holds the
   } finally {
     await closeConnections(a, b);
   }
+});
+
+it('enrolls only the session identity in a pharmacy without Restaurant Core and never overwrites a PIN', async () => {
+  const f = await fixture('provisioned');
+  await withTenantDb(
+    f.org,
+    async (db) => {
+      const context = {
+        db,
+        entitlements: { organizationId: f.org, enabledModules: ['pharmacy-core'], modules: [] },
+        session: {
+          expires: 'later',
+          user: { id: f.user, organizationId: f.org, role: 'ADMIN', status: 'ACTIVE' },
+        },
+        organization: { id: f.org, vertical: 'PHARMACY' },
+        support: null,
+        requestMeta: { ip: null, userAgent: null },
+        audit: { detail: {}, db },
+      };
+      const api = pharmacyPinRouter.createCaller(context as never);
+      await expect(api.enroll({ pin: '123456' })).rejects.toMatchObject({ code: 'CONFLICT' });
+      await expect(api.enroll({ pin, userId: 'somebody-else' } as never)).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      await expect(api.enroll({ pin: 'not-a-pin-983746' })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      await expect(
+        pharmacyPinRouter
+          .createCaller({
+            ...context,
+            organization: { id: f.org, vertical: 'AGENCY' },
+          } as never)
+          .status()
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        pharmacyPinRouter
+          .createCaller({
+            ...context,
+            entitlements: { ...context.entitlements, enabledModules: ['restaurant-core'] },
+          } as never)
+          .status()
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(await db.restaurantStaffProfile.count({ where: { userId: f.user } })).toBe(1);
+      expect(await api.status()).toEqual({ enrolled: true });
+      const auditRows = await db.auditLog.findMany({ where: { actorId: f.user } });
+      expect(JSON.stringify(auditRows)).not.toContain('123456');
+      expect(JSON.stringify(auditRows)).not.toContain('not-a-pin-983746');
+    },
+    { skipDrain: true }
+  );
+});
+
+it('requires the enrolled second approver PIN for staffed direct purchases and refuses impersonation', async () => {
+  const f = await fixture('owner');
+  const maker = await withTenantDb(
+    f.org,
+    async (db) => {
+      const user = await db.user.create({
+        data: {
+          organizationId: f.org,
+          name: 'Receiving operator',
+          email: `${f.org}-receiver@example.invalid`,
+          department: 'PHARMACY',
+          title: 'Receiver',
+          status: 'ACTIVE',
+        },
+      });
+      for (const userId of [f.user, user.id])
+        await db.userPermissionOverride.create({
+          data: {
+            organizationId: f.org,
+            userId,
+            capability: 'pharmacy.procurement',
+            effect: 'ALLOW',
+            reason: 'Authorized procurement operator',
+          },
+        });
+      await db.pharmacyBranchAssignment.create({
+        data: { organizationId: f.org, branchId: f.branch, userId: user.id },
+      });
+      return user.id;
+    },
+    { skipDrain: true }
+  );
+  const create = (input: ReturnType<typeof receiptInput>, userId = maker) =>
+    withTenantDb(f.org, (db) => caller(db, { ...f, user: userId }).createGoodsReceipt(input), {
+      skipDrain: true,
+    });
+  const missing = receiptInput(f);
+  delete (missing.directPurchase as { pin?: string }).pin;
+  await expect(create(missing)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  await expect(create(receiptInput(f, '9999'))).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  await expect(create(receiptInput(f), f.user)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  const impersonation = receiptInput(f);
+  impersonation.directPurchase.approvedByUserId = maker;
+  await expect(create(impersonation)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  const receipt = await create(receiptInput(f));
+  expect(receipt).toMatchObject({
+    receivedByUserId: maker,
+    bypassApprovedByUserId: f.user,
+    directPurchase: true,
+  });
+  await withTenantDb(
+    f.org,
+    async (db) => {
+      expect(await db.pharmacyGoodsReceipt.count()).toBe(1);
+      expect(await db.auditLog.count({ where: { action: 'PHARMACY:SOLO_OWNER_PIN' } })).toBe(0);
+    },
+    { skipDrain: true }
+  );
+});
+
+it('serializes concurrent enrollment through the request-scoped database facade', async () => {
+  const f = await fixture('owner');
+  const user = await withTenantDb(
+    f.org,
+    (db) =>
+      db.user.create({
+        data: {
+          organizationId: f.org,
+          name: 'New pharmacist',
+          email: `${f.org}-new@example.invalid`,
+          department: 'PHARMACY',
+          title: 'Pharmacist',
+          status: 'ACTIVE',
+        },
+      }),
+    { skipDrain: true }
+  );
+  const { createTenantDb } = await import('@/lib/tenancy/scoped-db');
+  const enroll = () =>
+    pharmacyPinRouter
+      .createCaller({
+        db: createTenantDb(f.org, user.id),
+        entitlements: { organizationId: f.org, enabledModules: ['pharmacy-core'], modules: [] },
+        session: {
+          expires: 'later',
+          user: { id: user.id, organizationId: f.org, role: 'EMPLOYEE', status: 'ACTIVE' },
+        },
+        organization: { id: f.org, vertical: 'PHARMACY' },
+        support: null,
+        requestMeta: { ip: null, userAgent: null },
+        audit: { detail: {} },
+      } as never)
+      .enroll({ pin });
+  const results = await Promise.allSettled([enroll(), enroll()]);
+  expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+  expect(results.find((result) => result.status === 'rejected')).toMatchObject({
+    reason: { code: 'CONFLICT' },
+  });
+  await withTenantDb(
+    f.org,
+    async (db) => {
+      const profiles = await db.restaurantStaffProfile.findMany({ where: { userId: user.id } });
+      expect(profiles).toHaveLength(1);
+      expect(
+        await db.restaurantOperatorCredential.count({
+          where: { staffProfileId: profiles[0].id, type: 'PIN', revokedAt: null },
+        })
+      ).toBe(1);
+    },
+    { skipDrain: true }
+  );
 });

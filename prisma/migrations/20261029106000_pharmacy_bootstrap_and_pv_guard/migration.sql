@@ -1,13 +1,21 @@
 BEGIN;
 SELECT set_config('app.is_platform_admin', 'true', true);
 -- Provisioning previously left the named administrator on the system admin role.
+-- Only a sole tenant user on the system admin role proves a bootstrap owner.
+-- A staffed tenant or an existing proprietor must never be promoted by inference.
+CREATE TEMP TABLE pharmacy_bootstrap_owners ON COMMIT DROP AS
+SELECT u.id FROM users u
+JOIN organizations o ON o.id=u."organizationId" AND o.vertical='PHARMACY'
+JOIN organization_roles r ON r.id=u."organizationRoleId" AND r."organizationId"=o.id
+WHERE u.role='ADMIN' AND r.key='admin' AND r."isSystem"
+AND NOT EXISTS (SELECT 1 FROM users other WHERE other."organizationId"=o.id AND other.id<>u.id);
 -- Preserve explicit DENYs when binding that bootstrap identity to the owner role.
 INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt")
 SELECT 'pbd_'||md5(u.id||p.capability),u."organizationId",u.id,p.capability,'DENY','Preserved bootstrap role denial',now()
 FROM users u JOIN organizations o ON o.id=u."organizationId" AND o.vertical='PHARMACY'
 JOIN organization_roles r ON r.id=u."organizationRoleId" AND r."organizationId"=o.id AND r.key='admin' AND r."isSystem"
 JOIN organization_role_permissions p ON p."organizationRoleId"=r.id AND p.effect='DENY'
-WHERE u.role='ADMIN'
+WHERE u.id IN (SELECT id FROM pharmacy_bootstrap_owners)
 ON CONFLICT ("userId",capability) DO UPDATE SET effect='DENY',"expiresAt"=NULL;
 INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt")
 SELECT 'pbo_'||md5(o.id),o.id,'owner','Owner',true,now() FROM organizations o WHERE o.vertical='PHARMACY'
@@ -70,7 +78,7 @@ CREATE TRIGGER pharmacy_role_branches AFTER UPDATE OF key, "isSystem" ON organiz
 
 UPDATE users u SET "organizationRoleId"=owner.id
 FROM organization_roles bootstrap, organization_roles owner, organizations o
-WHERE o.id=u."organizationId" AND o.vertical='PHARMACY' AND u.role='ADMIN'
+WHERE o.id=u."organizationId" AND o.vertical='PHARMACY' AND u.id IN (SELECT id FROM pharmacy_bootstrap_owners)
 AND bootstrap.id=u."organizationRoleId" AND bootstrap."organizationId"=o.id AND bootstrap.key='admin' AND bootstrap."isSystem"
 AND owner."organizationId"=o.id AND owner.key='owner' AND owner."isSystem";
 CREATE OR REPLACE FUNCTION pharmacy_guard_pv_self_review() RETURNS trigger LANGUAGE plpgsql AS $$

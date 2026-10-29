@@ -11,7 +11,7 @@ import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
 import { organizationAdminRouter } from '@/server/routers/organization-admin';
 import { ALL_ACTIONS } from '@/lib/abac/policies';
 import { requireProcurementBranch } from '@/lib/pharmacy/procurement-authorization';
-import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
+import { pharmacyPinRouter } from '@/server/routers/pharmacy-pin';
 import { pharmacyPurchasingRouter } from '@/server/routers/pharmacy-purchasing';
 import { pharmacySupplierLinksRouter } from '@/server/routers/pharmacy-supplier-links';
 import { toAuditJson } from '@/server/audit';
@@ -22,7 +22,6 @@ const url = process.env.DATABASE_URL;
 const ownerUrl = process.env.SECURITY_TEST_OWNER_DATABASE_URL;
 let org = `sec_h3_${randomUUID().replaceAll('-', '')}`;
 const rollback = new Error('rollback test fixtures');
-let pinHash: string;
 const pin = '482916';
 
 async function fixture(run: (tx: ScopedDb, ctx: TRPCContext) => Promise<void>) {
@@ -66,12 +65,20 @@ async function fixture(run: (tx: ScopedDb, ctx: TRPCContext) => Promise<void>) {
           organizationRoleId: role.id,
         },
       });
-      const profile = await tx.restaurantStaffProfile.create({
-        data: { userId: user.id, displayName: 'Owner' },
-      });
-      await tx.restaurantOperatorCredential.create({
-        data: { staffProfileId: profile.id, type: 'PIN', credentialHash: pinHash },
-      });
+      await pharmacyPinRouter
+        .createCaller({
+          db: tx,
+          entitlements: { organizationId: org, enabledModules: ['pharmacy-core'], modules: [] },
+          session: {
+            expires: '2099-01-01',
+            user: { id: user.id, organizationId: org, status: 'ACTIVE', role: 'EMPLOYEE' },
+          },
+          organization: { id: org, vertical: 'PHARMACY' },
+          support: null,
+          requestMeta: { ip: null, userAgent: null },
+          audit: { detail: {}, db: tx },
+        } as unknown as TRPCContext)
+        .enroll({ pin });
       const supplier = await tx.pharmacySupplier.create({
         data: { name: 'Supplier', authorized: true },
       });
@@ -135,7 +142,6 @@ describe.skipIf(!url || !ownerUrl)('procurement authorization with real PostgreS
     const owner = new Client({ connectionString: ownerUrl });
     await owner.connect();
     await owner.end();
-    pinHash = await hashOperatorCredential('PIN', pin);
     const [role] = await db.$queryRawUnsafe<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>(
       'SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user'
     );
