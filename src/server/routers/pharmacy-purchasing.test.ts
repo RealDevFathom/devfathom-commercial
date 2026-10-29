@@ -707,6 +707,21 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
+  it('refuses a receipt for a different branch than its purchase order', async () => {
+    db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_b' });
+    db.pharmacyPurchaseOrder.findFirst.mockImplementation(async ({ where }) =>
+      where.branchId === 'branch_a' ? { id: 'po_a', supplierId: 'supplier_a' } : null
+    );
+
+    await expect(
+      caller().createGoodsReceipt({ ...RECEIPT, branchId: 'branch_b' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyPurchaseOrder.findFirst).toHaveBeenCalledWith({
+      where: { id: 'po_a', supplierId: 'supplier_a', branchId: 'branch_b' },
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
   it('refuses a cross-tenant medicine on a receipt line', async () => {
     db.medicine.findFirst.mockResolvedValue(null);
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({

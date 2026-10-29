@@ -982,7 +982,11 @@ const purchasingRouter = router({
         if (
           input.purchaseOrderId &&
           !(await ctx.db.pharmacyPurchaseOrder.findFirst({
-            where: { id: input.purchaseOrderId, supplierId: input.supplierId },
+            where: {
+              id: input.purchaseOrderId,
+              supplierId: input.supplierId,
+              branchId: input.branchId,
+            },
           }))
         ) {
           throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
