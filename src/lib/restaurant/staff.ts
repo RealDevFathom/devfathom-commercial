@@ -24,7 +24,11 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  */
 
 export type StaffProfileErrorReason =
-  'INVALID' | 'EMAIL_TAKEN' | 'BRANCH_NOT_FOUND' | 'USER_NOT_FOUND' | 'NOT_FOUND';
+  | 'INVALID'
+  | 'EMAIL_TAKEN'
+  | 'BRANCH_NOT_FOUND'
+  | 'USER_NOT_FOUND'
+  | 'NOT_FOUND';
 
 export class StaffProfileError extends Error {
   constructor(
@@ -91,7 +95,7 @@ async function assertUserInScope(
   const user = await db.user.findFirst({
     where: {
       id: userId,
-      status: 'ACTIVE',
+      status: { in: ['ACTIVE', 'INVITED'] },
       restaurantStaffProfiles: currentProfileId
         ? { every: { id: currentProfileId } }
         : { none: {} },

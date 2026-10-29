@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => ({
   issueMutate: vi.fn(),
   issueReset: vi.fn(),
   noopMutate: vi.fn(),
+  inviteMutate: vi.fn(),
   noopReset: vi.fn(),
   invalidate: vi.fn(),
   roleSave: vi.fn(),
@@ -181,6 +182,27 @@ vi.mock('@/lib/trpc', () => ({
         }),
       },
     },
+    organizationAdmin: {
+      departments: {
+        useQuery: () => ({
+          data: [{ id: 'dept_ops', key: 'OPERATIONS', name: 'Operations', active: true }],
+          isFetching: false,
+          isError: false,
+        }),
+      },
+      roles: {
+        useQuery: () => ({
+          data: [{ id: 'role_manager', key: 'manager', name: 'Restaurant Manager' }],
+          isFetching: false,
+          isError: false,
+        }),
+      },
+    },
+    team: {
+      inviteMember: {
+        useMutation: () => ({ mutate: mocks.inviteMutate, isPending: false, error: null }),
+      },
+    },
     restaurantDevices: {
       list: {
         useQuery: () => ({
@@ -260,6 +282,53 @@ describe('Restaurant staff credential UI', () => {
       })
     ).toBeDisabled();
     expect(within(dialog).queryByText(/linked user id/i)).not.toBeInTheDocument();
+  });
+
+  it('invites a new employee with a restaurant role, then links their staff profile', () => {
+    mocks.inviteMutate.mockImplementationOnce((_input, options) =>
+      options.onSuccess({ id: 'user_invited', inviteUrl: 'https://example.test/invite/token' })
+    );
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
+    const dialog = screen.getByRole('dialog', { name: 'Add staff member' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Invite new user' }));
+    fireEvent.change(within(dialog).getByLabelText('Display name'), {
+      target: { value: 'Mina Manager' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Email'), {
+      target: { value: 'mina@example.com' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Job title'), {
+      target: { value: 'Manager' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Department'), {
+      target: { value: 'OPERATIONS' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Restaurant staff role'), {
+      target: { value: 'role_manager' },
+    });
+    fireEvent.submit(
+      within(dialog).getByRole('button', { name: 'Save staff member' }).closest('form')!
+    );
+
+    expect(mocks.inviteMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'Mina Manager',
+        email: 'mina@example.com',
+        role: 'EMPLOYEE',
+        department: 'OPERATIONS',
+        organizationRoleId: 'role_manager',
+      }),
+      expect.objectContaining({ onSuccess: expect.any(Function) })
+    );
+    expect(mocks.noopMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'user_invited', displayName: 'Mina Manager' })
+    );
   });
   beforeEach(() => {
     vi.clearAllMocks();
