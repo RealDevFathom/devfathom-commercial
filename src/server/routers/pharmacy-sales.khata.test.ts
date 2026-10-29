@@ -199,6 +199,30 @@ describe('Khata router trust and recovery boundary', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
+  it('gates Khata with counter or finance access, never clinical dispense access', async () => {
+    const f = fixture();
+    vi.mocked(can).mockImplementation(async (_subject, action) => action === 'reports:financial');
+
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toEqual([expect.objectContaining({ id: 'family-a' })]);
+    expect(can).toHaveBeenCalledWith(f.user, 'pharmacy:counter', undefined, {
+      db: f.db,
+      source: 'TRPC',
+    });
+    expect(can).toHaveBeenCalledWith(f.user, 'reports:financial', undefined, {
+      db: f.db,
+      source: 'TRPC',
+    });
+    expect(vi.mocked(can).mock.calls.map(([, action]) => action)).not.toContain(
+      'pharmacy:dispense'
+    );
+
+    vi.mocked(can).mockImplementation(async (_subject, action) => action === 'pharmacy:dispense');
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
   it('appends a refund payment once without editing the original charge', async () => {
     const f = fixture();
     const charge = { id: 'khata:tender-a', familyAccountId: 'family-a' };
