@@ -214,9 +214,18 @@ describe('pharmacy settlement invariants', () => {
     expect(first).toMatchObject({ tenderId: 'tender-1', receiptNumber: 41, replayed: false });
     expect(replay).toMatchObject({ tenderId: 'tender-1', receiptNumber: 41, replayed: true });
     expect(tenderCreate).toHaveBeenCalledTimes(1);
-    // An idempotent replay returns the recorded result, while the original payment must
-    // re-check the allocated batch after locking and loading the still-open sale.
-    expect(batchSafety.assert).toHaveBeenCalledExactlyOnceWith(
+    // An idempotent replay returns the recorded result without another safety check. The
+    // original payment checks once before tender side effects and again before issuing its
+    // receipt, so a batch that becomes unsellable between those boundaries fails closed.
+    expect(batchSafety.assert).toHaveBeenCalledTimes(2);
+    expect(batchSafety.assert).toHaveBeenNthCalledWith(
+      1,
+      db,
+      { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' },
+      'sale-1'
+    );
+    expect(batchSafety.assert).toHaveBeenNthCalledWith(
+      2,
       db,
       { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' },
       'sale-1'
