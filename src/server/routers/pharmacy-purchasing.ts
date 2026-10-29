@@ -884,6 +884,8 @@ const purchasingRouter = router({
           purchaseOrderId: z.string().min(1).optional(),
           supplierInvoiceRef: z.string().trim().min(1).max(200),
           supplierInvoiceDate: z.date(),
+          distributorNtn: z.string().trim().min(1).max(60).optional(),
+          distributorStrn: z.string().trim().min(1).max(60).optional(),
           warrantyEvidenceRef: z.string().trim().min(1).max(500),
           receivedAt: z.date(),
           directPurchase: z
@@ -1098,6 +1100,8 @@ const purchasingRouter = router({
             purchaseOrderId: input.purchaseOrderId ?? null,
             supplierInvoiceRef: input.supplierInvoiceRef,
             supplierInvoiceDate: input.supplierInvoiceDate,
+            distributorNtn: input.distributorNtn ?? null,
+            distributorStrn: input.distributorStrn ?? null,
             warrantyEvidenceRef: input.warrantyEvidenceRef,
             receivedByUserId: scope.actorId,
             receivedAt: input.receivedAt,
