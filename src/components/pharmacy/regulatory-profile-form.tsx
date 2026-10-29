@@ -89,18 +89,52 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const [saved, setSaved] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [evidenceRef, setEvidenceRef] = useState('');
+  const [evidenceRef, setEvidenceRef] = useState(
+    initial.versions.find((version) => version.effective)?.licenceEvidenceFileRef ?? ''
+  );
+  const [loadingBranch, setLoadingBranch] = useState(false);
   const [provinceCode, setProvinceCode] = useState<string>(
-    initial.jurisdictions[0]?.provinceCode ?? ''
+    initial.versions.find((version) => version.effective)?.provinceCode ??
+      initial.branches.find((branch) => branch.id === initial.selectedBranchId)?.provinceCode ??
+      initial.jurisdictions[0]?.provinceCode ??
+      ''
   );
   const formRef = useRef<HTMLFormElement>(null);
+  const branchRequest = useRef(0);
 
   const utils = trpc.useUtils();
-  const refresh = (nextBranchId = branchId) => {
+  const refresh = (nextBranchId = branchId, branchChange = false) => {
+    const request = ++branchRequest.current;
+    if (branchChange) setLoadingBranch(true);
     void utils.pharmacyOnboarding.regulatory
       .fetch({ branchId: nextBranchId || undefined })
-      .then(setData)
-      .catch(() => setErrors({ form: 'That branch could not be loaded. Try again.' }));
+      .then((nextData) => {
+        // A slower response for an earlier selection must never replace the
+        // profile belonging to the branch the operator is looking at now.
+        if (request !== branchRequest.current) return;
+        setData(nextData);
+        if (branchChange) {
+          const nextCurrent = nextData.versions.find((version) => version.effective);
+          const nextBranch = nextData.branches.find((branch) => branch.id === nextBranchId);
+          setProvinceCode(
+            nextCurrent?.provinceCode ??
+              nextBranch?.provinceCode ??
+              nextData.jurisdictions[0]?.provinceCode ??
+              ''
+          );
+          setEvidenceRef(nextCurrent?.licenceEvidenceFileRef ?? '');
+          setUploadError(null);
+        }
+      })
+      .catch(() => {
+        if (request === branchRequest.current) {
+          setErrors({ form: 'That branch could not be loaded. Try again.' });
+          if (branchChange) setBranchId(data.selectedBranchId ?? '');
+        }
+      })
+      .finally(() => {
+        if (request === branchRequest.current && branchChange) setLoadingBranch(false);
+      });
   };
 
   const save = trpc.pharmacyOnboarding.saveRegulatoryProfile.useMutation({
@@ -141,7 +175,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
     setBranchId(nextBranchId);
     setErrors({});
     setSaved(null);
-    refresh(nextBranchId);
+    refresh(nextBranchId, true);
   };
 
   const jurisdiction: Jurisdiction | undefined = data.jurisdictions.find(
@@ -151,6 +185,10 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const schedules = jurisdiction?.permittedSchedules ?? [];
   const current = data.versions.find((version) => version.effective);
   const inForce = data.versions.find((version) => version.inForce);
+  const currentPremises = current?.premises as { storageDescription?: string } | undefined;
+  const currentRetention = current?.retentionPolicy as
+    | { prescriptionsYears?: number; invoicesYears?: number; controlledRegisterYears?: number }
+    | undefined;
 
   async function uploadEvidence(file: File) {
     setUploadError(null);
@@ -314,8 +352,9 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
           </p>
         ) : null}
         <form
+          aria-busy={loadingBranch}
           className="space-y-6"
-          key={branchId}
+          key={`${branchId}:${loadingBranch ? 'loading' : 'loaded'}`}
           noValidate
           onSubmit={submit}
           ref={formRef}
@@ -416,6 +455,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                   }
                   aria-invalid={errors.premisesStorageDescription ? true : undefined}
                   className="mt-1"
+                  defaultValue={currentPremises?.storageDescription ?? ''}
                   id="premisesStorageDescription"
                   name="premisesStorageDescription"
                   required
@@ -445,6 +485,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 className={controlClass}
                 id="licenceCategory"
                 name="licenceCategory"
+                defaultValue={current?.licenceCategory}
               >
                 {categories.length === 0 ? (
                   <option value={PROVISIONAL_LICENCE_CATEGORY}>
@@ -464,6 +505,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 aria-describedby={errors.licenceNumber ? 'licenceNumber-error' : undefined}
                 aria-invalid={errors.licenceNumber ? true : undefined}
                 className="mt-1 min-h-11"
+                defaultValue={current?.licenceNumber ?? ''}
                 id="licenceNumber"
                 name="licenceNumber"
                 required
@@ -478,6 +520,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 aria-describedby={errors.licenceValidFrom ? 'licenceValidFrom-error' : undefined}
                 aria-invalid={errors.licenceValidFrom ? true : undefined}
                 className="mt-1 min-h-11"
+                defaultValue={current ? isoDay(current.licenceValidFrom) : ''}
                 id="licenceValidFrom"
                 name="licenceValidFrom"
                 required
@@ -489,6 +532,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 aria-describedby={errors.licenceValidTo ? 'licenceValidTo-error' : undefined}
                 aria-invalid={errors.licenceValidTo ? true : undefined}
                 className="mt-1 min-h-11"
+                defaultValue={current ? isoDay(current.licenceValidTo) : ''}
                 id="licenceValidTo"
                 name="licenceValidTo"
                 required
@@ -545,7 +589,12 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                         className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border-subtle px-3 text-sm"
                         key={schedule}
                       >
-                        <input name="permittedSchedules" type="checkbox" value={schedule} />
+                        <input
+                          defaultChecked={current?.permittedSchedules.includes(schedule)}
+                          name="permittedSchedules"
+                          type="checkbox"
+                          value={schedule}
+                        />
                         {schedule}
                       </label>
                     ))}
@@ -572,6 +621,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 }
                 aria-invalid={errors.qualifiedPersonRegistration ? true : undefined}
                 className="mt-1 min-h-11"
+                defaultValue={current?.qualifiedPersonRegistration ?? ''}
                 id="qualifiedPersonRegistration"
                 name="qualifiedPersonRegistration"
                 required
@@ -591,6 +641,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 }
                 aria-invalid={errors.qualifiedPersonCoverageRosterRef ? true : undefined}
                 className="mt-1 min-h-11"
+                defaultValue={current?.qualifiedPersonCoverageRosterRef ?? ''}
                 id="qualifiedPersonCoverageRosterRef"
                 name="qualifiedPersonCoverageRosterRef"
                 required
@@ -607,6 +658,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 }
                 aria-invalid={errors.qualifiedPersonValidFrom ? true : undefined}
                 className="mt-1 min-h-11"
+                defaultValue={current ? isoDay(current.qualifiedPersonValidFrom) : ''}
                 id="qualifiedPersonValidFrom"
                 name="qualifiedPersonValidFrom"
                 required
@@ -624,6 +676,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 }
                 aria-invalid={errors.qualifiedPersonValidTo ? true : undefined}
                 className="mt-1 min-h-11"
+                defaultValue={current ? isoDay(current.qualifiedPersonValidTo) : ''}
                 id="qualifiedPersonValidTo"
                 name="qualifiedPersonValidTo"
                 required
@@ -637,10 +690,20 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               Tax and retention
             </legend>
             <Field error={errors.ntn} htmlFor="ntn" hint="Optional." label="NTN">
-              <Input className="mt-1 min-h-11" id="ntn" name="ntn" />
+              <Input
+                className="mt-1 min-h-11"
+                defaultValue={current?.ntn ?? ''}
+                id="ntn"
+                name="ntn"
+              />
             </Field>
             <Field error={errors.strn} htmlFor="strn" hint="Optional." label="STRN">
-              <Input className="mt-1 min-h-11" id="strn" name="strn" />
+              <Input
+                className="mt-1 min-h-11"
+                defaultValue={current?.strn ?? ''}
+                id="strn"
+                name="strn"
+              />
             </Field>
             <Field error={errors.fiscalStatus} htmlFor="fiscalStatus" label="Fiscal status">
               <select
@@ -649,6 +712,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 className={controlClass}
                 id="fiscalStatus"
                 name="fiscalStatus"
+                defaultValue={current?.fiscalStatus}
               >
                 {FISCAL_STATUSES.map((status) => (
                   <option key={status.value} value={status.value}>
@@ -668,7 +732,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 }
                 aria-invalid={errors.retentionPrescriptionYears ? true : undefined}
                 className="mt-1 min-h-11"
-                defaultValue={5}
+                defaultValue={currentRetention?.prescriptionsYears ?? 5}
                 id="retentionPrescriptionYears"
                 max={30}
                 min={1}
@@ -688,7 +752,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 }
                 aria-invalid={errors.retentionInvoiceYears ? true : undefined}
                 className="mt-1 min-h-11"
-                defaultValue={6}
+                defaultValue={currentRetention?.invoicesYears ?? 6}
                 id="retentionInvoiceYears"
                 max={30}
                 min={1}
@@ -710,7 +774,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 }
                 aria-invalid={errors.retentionControlledRegisterYears ? true : undefined}
                 className="mt-1 min-h-11"
-                defaultValue={10}
+                defaultValue={currentRetention?.controlledRegisterYears ?? 10}
                 id="retentionControlledRegisterYears"
                 max={30}
                 min={1}
@@ -722,7 +786,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
           </fieldset>
 
           <div className="flex flex-wrap items-center gap-3">
-            <Button disabled={save.isPending || uploading} type="submit">
+            <Button disabled={save.isPending || uploading || loadingBranch} type="submit">
               {save.isPending ? 'Saving…' : 'Save this version'}
             </Button>
             <Link

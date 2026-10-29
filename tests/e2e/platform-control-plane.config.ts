@@ -68,6 +68,7 @@ export default defineConfig({
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,
         env: {
+          AUTH_SECRET: process.env.AUTH_SECRET ?? '',
           AUTH_TRUST_HOST: 'true',
           DATABASE_URL: process.env.DATABASE_URL ?? '',
           SHARED_APP_HOSTS: new URL(sharedBaseURL).hostname,

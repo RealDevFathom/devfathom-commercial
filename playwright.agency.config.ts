@@ -29,6 +29,7 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 120_000,
     env: {
+      AUTH_SECRET: process.env.AUTH_SECRET ?? '',
       DATABASE_URL: env.DATABASE_URL!,
       TEST_DATABASE_URL: env.TEST_DATABASE_URL!,
       AGENCY_E2E: '1',

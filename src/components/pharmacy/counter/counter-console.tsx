@@ -990,6 +990,9 @@ function ScopedPharmacyCounterConsole({
     const row = found[0]!;
     const nextUnit = row.saleUnits[0]?.kind ?? null;
     if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
+      // This effect completes an explicitly queued barcode scan; staging is the
+      // event's intended state transition rather than derived-state syncing.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       stageRow(row);
       return;
     }
