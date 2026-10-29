@@ -184,7 +184,7 @@ it('requires current review evidence even with persisted draft', async () => {
   expect(write).not.toHaveBeenCalled();
 });
 it.each([' stop ', 'STOP', '\nStOp\t', 'ＳＴＯＰ', ' بند '])(
-  'withdraws consent for %j and confirms in English and Urdu',
+  'withdraws consent for %j and confirms with exactly one English line',
   async (text) => {
     const result = await stopRestaurantGrowthSandbox(
       h,
@@ -202,10 +202,10 @@ it.each([' stop ', 'STOP', '\nStOp\t', 'ＳＴＯＰ', ' بند '])(
         idempotencyKey: 'restaurant-growth-stop:' + input.requestId,
       })
     );
-    expect(result.confirmation.split('\n')).toEqual([
-      'You will no longer receive WhatsApp growth messages. Reply START to opt back in.',
-      'آپ کو اب واٹس ایپ پر گروتھ پیغامات نہیں ملیں گے۔ دوبارہ شروع کرنے کے لیے START لکھیں۔',
-    ]);
+    expect(result.confirmation).toBe(
+      'You will no longer receive WhatsApp growth messages. Reply START to opt back in.'
+    );
+    expect(result.confirmation).not.toContain('\n');
   }
 );
 it.each(['subscribe', 'بند کریں', '', '   '])(

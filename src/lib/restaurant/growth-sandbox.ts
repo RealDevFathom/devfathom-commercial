@@ -41,8 +41,7 @@ const attemptSchema = z.object({
 });
 
 const GROWTH_OPT_OUT_CONFIRMATION =
-  'You will no longer receive WhatsApp growth messages. Reply START to opt back in.\n' +
-  'آپ کو اب واٹس ایپ پر گروتھ پیغامات نہیں ملیں گے۔ دوبارہ شروع کرنے کے لیے START لکھیں۔';
+  'You will no longer receive WhatsApp growth messages. Reply START to opt back in.';
 
 function isGrowthStop(text: string) {
   const normalized = text.normalize('NFKC').trim().toLowerCase();
