@@ -29,9 +29,9 @@ export function classifyCashEvidence(entry: CashFlowEvidence): {
       cashAccounts.has(line.accountCode)
         ? sum + (line.side === 'DEBIT' ? line.amountMinor : -line.amountMinor)
         : sum,
-    0n
+    BigInt(0)
   );
-  if (netMinor === 0n) {
+  if (netMinor === BigInt(0)) {
     return {
       classification: 'UNCLASSIFIED',
       netMinor,
@@ -83,13 +83,15 @@ export function classifyCashEvidence(entry: CashFlowEvidence): {
 }
 
 type RawRow = Omit<CashFlowEvidence, 'lines'> & { lines: unknown };
+type ClosingRow = { currency: string; closing: bigint };
 
 export async function loadCashFlowProjection(
   db: ScopedDb,
   scope: { organizationId: string; branchId: string },
   period: { from: Date; to: Date }
 ) {
-  const rows = await db.$queryRaw<RawRow[]>(Prisma.sql`
+  const [rows, closingRows] = await Promise.all([
+    db.$queryRaw<RawRow[]>(Prisma.sql`
     SELECT e.id, e."sourceKind"::text AS "sourceKind", e."sourceId", e.description,
       e.currency::text AS currency, e."occurredAt", e."reversesEntryId",
       bt.kind::text AS "sourceDetail",
@@ -102,7 +104,22 @@ export async function loadCashFlowProjection(
     WHERE e."organizationId"=${scope.organizationId} AND l."organizationId"=${scope.organizationId}
       AND l."branchId"=${scope.branchId} AND e."occurredAt"<${period.to}
     GROUP BY e.id,bt.kind
-    ORDER BY e."occurredAt",e.id`);
+    ORDER BY e."occurredAt",e.id`),
+    // Establish closing independently from classification so reconciliation can expose a
+    // classifier/query defect rather than asserting success by construction.
+    db.$queryRaw<ClosingRow[]>(Prisma.sql`
+      SELECT e.currency::text AS currency,
+        COALESCE(SUM(CASE WHEN l.side='DEBIT' THEN l."amountMinor" ELSE -l."amountMinor" END),0)::bigint AS closing
+      FROM finance_journal_entries e
+      JOIN finance_journal_lines l ON l."organizationId"=e."organizationId" AND l."entryId"=e.id
+      WHERE e."organizationId"=${scope.organizationId} AND l."organizationId"=${scope.organizationId}
+        AND l."branchId"=${scope.branchId} AND l."accountCode" IN ('CASH','BANK')
+        AND e."occurredAt"<${period.to}
+      GROUP BY e.currency`),
+  ]);
+  const independentlyEstablishedClosing = new Map(
+    closingRows.map((row) => [row.currency, BigInt(row.closing)])
+  );
   const evidence = rows.map((row) => ({
     ...row,
     lines: (
@@ -125,22 +142,22 @@ export async function loadCashFlowProjection(
   for (const entry of evidence) {
     const net = classifyCashEvidence(entry).netMinor;
     const totals = currencies.get(entry.currency) ?? {
-      opening: 0n,
-      operating: 0n,
-      investing: 0n,
-      financing: 0n,
-      unclassified: 0n,
+      opening: BigInt(0),
+      operating: BigInt(0),
+      investing: BigInt(0),
+      financing: BigInt(0),
+      unclassified: BigInt(0),
     };
     if (entry.occurredAt < period.from) totals.opening += net;
     currencies.set(entry.currency, totals);
   }
   for (const entry of details) {
     const totals = currencies.get(entry.currency) ?? {
-      opening: 0n,
-      operating: 0n,
-      investing: 0n,
-      financing: 0n,
-      unclassified: 0n,
+      opening: BigInt(0),
+      operating: BigInt(0),
+      investing: BigInt(0),
+      financing: BigInt(0),
+      unclassified: BigInt(0),
     };
     totals[
       entry.classification.toLowerCase() as 'operating' | 'investing' | 'financing' | 'unclassified'
@@ -151,14 +168,17 @@ export async function loadCashFlowProjection(
     period: { ...period, bounds: '[from,to)' as const },
     scope,
     evidence: details,
-    totals: [...currencies].map(([currency, value]) => ({
-      currency,
-      ...value,
-      netMovement: value.operating + value.investing + value.financing + value.unclassified,
-      closing:
-        value.opening + value.operating + value.investing + value.financing + value.unclassified,
-      discrepancy: 0n,
-    })),
+    totals: [...currencies].map(([currency, value]) => {
+      const netMovement = value.operating + value.investing + value.financing + value.unclassified;
+      const closing = value.opening + netMovement;
+      return {
+        currency,
+        ...value,
+        netMovement,
+        closing,
+        discrepancy: (independentlyEstablishedClosing.get(currency) ?? BigInt(0)) - closing,
+      };
+    }),
     metadata: {
       source: 'all_scoped_posted_finance_journal_lines' as const,
       retrievedAt: new Date(),
