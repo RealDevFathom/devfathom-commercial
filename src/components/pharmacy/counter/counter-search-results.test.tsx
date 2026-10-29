@@ -39,6 +39,22 @@ const row: CounterSearchRow = {
 };
 
 describe('CounterSearchResults safety flags', () => {
+  it('lets each medicine name determine its own text direction', () => {
+    render(
+      <CounterSearchResults
+        rows={[{ ...row, displayName: 'پیراسٹامول' }]}
+        state="ready"
+        query="پیرا"
+        activeMedicineId={null}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('پیراسٹامول')).toHaveAttribute('dir', 'auto');
+  });
+
   it('keeps controlled, prescription, high-alert, and cold-chain badges off the truncated stock line', () => {
     render(
       <CounterSearchResults

@@ -167,7 +167,7 @@ export function CounterSearchResults({
                 active ? 'bg-surface-sunken' : 'hover:bg-surface-sunken'
               }`}
             >
-              <span className="min-w-0 truncate text-sm font-semibold text-text-strong">
+              <span dir="auto" className="min-w-0 truncate text-sm font-semibold text-text-strong">
                 {row.displayName}
                 {row.strength ? (
                   <span className="ml-1 font-normal text-text-body">{row.strength}</span>

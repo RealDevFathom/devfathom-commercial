@@ -82,7 +82,10 @@ describe('AppShell module guard', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
-    expect(screen.getByRole('dialog', { name: 'Mobile navigation' })).toBeInTheDocument();
+    const drawer = screen.getByRole('dialog', { name: 'Mobile navigation' });
+    expect(drawer).toBeInTheDocument();
+    expect(drawer).toHaveClass('start-0');
+    expect(drawer).not.toHaveClass('left-0');
 
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Mobile navigation' })).not.toBeInTheDocument();
