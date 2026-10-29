@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   repeatRead: vi.fn().mockResolvedValue({ horizons: [] }),
-  can: vi.fn(async () => false),
+  can: vi.fn<typeof import('@/lib/abac').can>(async () => false),
   branchFindMany: vi.fn(),
   settingUpsert: vi.fn(),
   userFindUnique: vi.fn(),
