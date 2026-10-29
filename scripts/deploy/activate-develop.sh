@@ -60,7 +60,7 @@ test -x node_modules/.bin/prisma
 test -d node_modules/dotenv
 bun node_modules/.bin/prisma migrate deploy
 # Reconcile shipped modules/packages before replacing any inactive or live release.
-bun prisma/sync-catalog.ts
+DATABASE_URL="$MIGRATION_DATABASE_URL" bun prisma/sync-catalog.ts
 # Every extracted/installed file belongs to deploy (tar --no-same-owner).
 # Correct the group explicitly: deploy's primary group need not be app.
 # GNU chmod -R ignores nested symlinks; chgrp -hR -P changes links, not targets.

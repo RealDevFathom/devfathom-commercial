@@ -72,6 +72,7 @@ it('packages staged assets and nested traced dependencies, excluding checkout se
 
 for (const mode of [
   'success',
+  'migration-url-only',
   'restart-failure',
   'health-failure',
   'migration-failure',
@@ -108,7 +109,14 @@ for (const mode of [
       );
       symlinkSync('/stale-after-sigkill', join(root, 'releases/.current-next'));
       symlinkSync(join(root, 'releases/current'), join(root, 'web'));
-      put(root, 'develop.env', 'DATABASE_URL=postgresql://local:local@127.0.0.1:5432/local\n');
+      put(
+        root,
+        'develop.env',
+        'MIGRATION_DATABASE_URL=postgresql://migration:migration@127.0.0.1:5432/local\n' +
+          (mode === 'migration-url-only'
+            ? 'unset DATABASE_URL\n'
+            : 'DATABASE_URL=postgresql://runtime:runtime@127.0.0.1:5432/local\n')
+      );
       const mocks: Record<string, string> = {
         chgrp: `args=("$@"); for i in "\${!args[@]}"; do if [[ "\${args[$i]}" == app ]]; then args[$i]=$TEST_APP_GID; fi; done; exec /usr/bin/chgrp "\${args[@]}"`,
         aws: 'echo download >> "$TEST_ROOT/downloads"; cp "$TEST_ROOT/release.tar.gz" "$4"',
@@ -128,11 +136,13 @@ if [[ "$*" == 'node_modules/.bin/prisma migrate deploy' ]]; then
   [[ "$TEST_MODE" != *migration-failure ]]
 elif [[ "$*" == 'prisma/sync-catalog.ts' ]]; then
   [[ "$(readlink "$TEST_ROOT/releases/current")" == "$TEST_ROOT/releases/previous" ]]
+  [[ "\${DATABASE_URL:-}" == "$MIGRATION_DATABASE_URL" ]]
   [[ "$TEST_MODE" != *sync-failure ]]
 else
   exit 1
 fi`,
-        sudo: `[[ "$(tail -n 1 "$TEST_ROOT/bun-calls")" == prisma/sync-catalog.ts ]]
+        sudo: `[[ "\${DATABASE_URL:-}" == "$TEST_ORIGINAL_DATABASE_URL" ]]
+[[ "$(tail -n 1 "$TEST_ROOT/bun-calls")" == prisma/sync-catalog.ts ]]
 echo "$*" >> "$TEST_ROOT/restarts"\nif [[ "$TEST_MODE" == *restart-failure && ! -f "$TEST_ROOT/failed" ]]; then touch "$TEST_ROOT/failed"; exit 1; fi`,
         curl: 'if [[ "$TEST_MODE" == health-failure || "$TEST_MODE" == same-sha-unhealthy ]]; then printf 503; else printf 200; fi',
         sleep: ':',
@@ -150,10 +160,16 @@ echo "$*" >> "$TEST_ROOT/restarts"\nif [[ "$TEST_MODE" == *restart-failure && ! 
           TEST_MODE: mode,
           TEST_APP_GID: String(appGid),
           TEST_SHA: sha,
+          TEST_ORIGINAL_DATABASE_URL:
+            mode === 'migration-url-only'
+              ? ''
+              : 'postgresql://runtime:runtime@127.0.0.1:5432/local',
         },
         encoding: 'utf8',
       });
-      const success = ['success', 'replace-inactive', 'same-sha'].includes(mode);
+      const success = ['success', 'migration-url-only', 'replace-inactive', 'same-sha'].includes(
+        mode
+      );
       expect(result.status, result.stderr).toBe(success ? 0 : 1);
       expect(() => lstatSync(join(root, 'releases/.current-next'))).toThrow();
       const uploadAfter = statSync(join(root, 'shared/uploads/untouched'));
