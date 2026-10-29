@@ -1431,6 +1431,10 @@ export async function moveTable(
     const idem = await beginIdempotent(tx, input.actor, 'table.move');
     if (idem.replay) return { orderId: input.orderId, replayed: true };
 
+    // The active table links are a child-row set whose validity is owned by the
+    // order. Lock the parent before reading that set so concurrent moves cannot
+    // both consume the same active source link and create different destinations.
+    await lockRestaurantOrder(tx, input.orderId);
     const order = await loadOrder(tx, input.orderId);
     assertMutable(order);
     await assertTablesInBranch(tx, order.branchId, [input.toTableId]);
