@@ -1190,10 +1190,9 @@ export const pharmacyInventoryRouter = router({
     .input(z.object({ branchId, recallNoticeId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        return await acknowledgeRecall(
-          ctx.db,
-          await scopeFor(ctx, input.branchId),
-          input.recallNoticeId
+        const scope = await scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) =>
+          acknowledgeRecall(txDb(tx), scope, input.recallNoticeId)
         );
       } catch (error) {
         domainError(error);

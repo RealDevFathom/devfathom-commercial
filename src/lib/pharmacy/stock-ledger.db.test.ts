@@ -712,6 +712,86 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
   });
 
+  it('keeps a batch recalled when closure races a newer recall for that batch', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'recall-close-create-race');
+    const setup = await inOrg(ORG_A, async (db) => {
+      const { batch } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'recall-close-create-race',
+      });
+      const notice = await deps.operations.createRecall(
+        db,
+        { organizationId: ORG_A, actorId: ACTOR },
+        { batchId: batch.id, reference: tag('older-recall'), reason: 'Older recall' }
+      );
+      await deps.operations.acknowledgeRecall(db, scopeOf(fixture), notice.id);
+      return { batchId: batch.id, noticeId: notice.id };
+    });
+    let releaseNewRecall: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseNewRecall = resolve;
+    });
+    const newerRecall = inOrg(ORG_A, async (db) => {
+      const notice = await deps.operations.createRecall(
+        db,
+        { organizationId: ORG_A, actorId: ACTOR },
+        { batchId: setup.batchId, reference: tag('newer-recall'), reason: 'Newer recall' }
+      );
+      await held;
+      return notice;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const closure = inOrg(ORG_A, (db) =>
+      deps.operations.closeRecall(db, { organizationId: ORG_A, actorId: ACTOR }, setup.noticeId)
+    );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    releaseNewRecall();
+    await expect(newerRecall).resolves.toMatchObject({ status: 'OPEN' });
+    await expect(closure).resolves.toMatchObject({ status: 'CLOSED' });
+    const state = await inOrg(ORG_A, (db) =>
+      db.pharmacyManufacturingBatch.findFirstOrThrow({ where: { id: setup.batchId } })
+    );
+    expect(state.state).toBe('RECALLED');
+  });
+
+  it('serializes acknowledgement against concurrent recall closure', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'recall-ack-close-race');
+    const notice = await inOrg(ORG_A, async (db) => {
+      const { batch } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'recall-ack-close-race',
+      });
+      return deps.operations.createRecall(
+        db,
+        { organizationId: ORG_A, actorId: ACTOR },
+        { batchId: batch.id, reference: tag('ack-close-race'), reason: 'Concurrent close' }
+      );
+    });
+    let releaseAcknowledgement: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      releaseAcknowledgement = resolve;
+    });
+    const acknowledgement = inOrg(ORG_A, async (db) => {
+      const result = await deps.operations.acknowledgeRecall(db, scopeOf(fixture), notice.id);
+      await held;
+      return result;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    let closureSettled = false;
+    const closure = inOrg(ORG_A, (db) =>
+      deps.operations.closeRecall(db, { organizationId: ORG_A, actorId: ACTOR }, notice.id)
+    ).finally(() => {
+      closureSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(closureSettled).toBe(false);
+    releaseAcknowledgement();
+    await expect(acknowledgement).resolves.toMatchObject({ recallNoticeId: notice.id });
+    await expect(closure).resolves.toMatchObject({ status: 'CLOSED' });
+  });
+
   it('does not reserve a supplier claim against a recalled batch', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'recalled-supplier-claim');
     const lotId = await inOrg(ORG_A, async (db) => {

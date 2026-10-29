@@ -504,6 +504,8 @@ export async function createRecall(
 ) {
   if ((input.batchId ? 1 : 0) + (input.medicineId ? 1 : 0) !== 1)
     throw new PharmacyInventoryError('INVALID_STATE');
+  const lockedBatches = await lockRecallBatches(db, scope.organizationId, input);
+  if (!lockedBatches.length) throw new PharmacyInventoryError('NOT_FOUND');
   const where = input.batchId ? { id: input.batchId } : { medicineId: input.medicineId! };
   const result = await db.pharmacyManufacturingBatch.updateMany({
     where: { organizationId: scope.organizationId, ...where },
@@ -520,6 +522,25 @@ export async function createRecall(
       createdById: scope.actorId,
     },
   });
+}
+
+async function lockRecallBatches(
+  db: ScopedDb,
+  organizationId: string,
+  target: { batchId?: string | null; medicineId?: string | null }
+) {
+  return db.$queryRaw<Array<{ id: string; medicineId: string }>>(Prisma.sql`
+    SELECT id, "medicineId"
+    FROM "pharmacy_manufacturing_batches"
+    WHERE "organizationId" = ${organizationId}
+      AND ${
+        target.batchId
+          ? Prisma.sql`id = ${target.batchId}`
+          : Prisma.sql`"medicineId" = ${target.medicineId}`
+      }
+    ORDER BY id
+    FOR UPDATE
+  `);
 }
 
 export async function recallTrace(db: ScopedDb, organizationId: string, recallNoticeId: string) {
@@ -541,6 +562,16 @@ export async function recallTrace(db: ScopedDb, organizationId: string, recallNo
 }
 
 export async function acknowledgeRecall(db: ScopedDb, scope: LedgerScope, noticeId: string) {
+  // Closing and acknowledging a notice both take this row lock. The status
+  // check and immutable acknowledgement insert therefore form one atomic
+  // decision in the caller's transaction.
+  const [lockedNotice] = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT id
+    FROM "pharmacy_recall_notices"
+    WHERE id = ${noticeId} AND "organizationId" = ${scope.organizationId}
+    FOR UPDATE
+  `);
+  if (!lockedNotice) throw new PharmacyInventoryError('INVALID_STATE');
   const notice = await db.pharmacyRecallNotice.findFirst({
     where: { id: noticeId, organizationId: scope.organizationId, status: 'OPEN' },
   });
@@ -572,11 +603,23 @@ export async function closeRecall(
   scope: Pick<LedgerScope, 'organizationId' | 'actorId'>,
   noticeId: string
 ) {
+  const [lockedNotice] = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT id
+    FROM "pharmacy_recall_notices"
+    WHERE id = ${noticeId} AND "organizationId" = ${scope.organizationId}
+    FOR UPDATE
+  `);
+  if (!lockedNotice) throw new PharmacyInventoryError('INVALID_STATE');
   const notice = await db.pharmacyRecallNotice.findFirst({
     where: { id: noticeId, organizationId: scope.organizationId, status: 'OPEN' },
     include: { acknowledgements: true },
   });
   if (!notice) throw new PharmacyInventoryError('INVALID_STATE');
+  // Recall creation and closure serialize on the affected batches. Lock before
+  // checking competing notices so a recall that was waiting on this batch can
+  // never be hidden by the snapshot and then overwritten with ACTIVE.
+  const lockedBatches = await lockRecallBatches(db, scope.organizationId, notice);
+  if (!lockedBatches.length) throw new PharmacyInventoryError('INVALID_STATE');
   const affectedBranches = await db.pharmacyInventoryLot.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -595,15 +638,14 @@ export async function closeRecall(
   )
     throw new PharmacyInventoryError('INVALID_STATE');
   const where = notice.batchId ? { id: notice.batchId } : { medicineId: notice.medicineId! };
+  const batchIds = lockedBatches.map(({ id }) => id);
+  const medicineIds = [...new Set(lockedBatches.map(({ medicineId }) => medicineId))];
   const remaining = await db.pharmacyRecallNotice.count({
     where: {
       organizationId: scope.organizationId,
       status: 'OPEN',
       id: { not: notice.id },
-      OR: [
-        { batchId: notice.batchId ?? undefined },
-        { medicineId: notice.medicineId ?? undefined },
-      ],
+      OR: [{ batchId: { in: batchIds } }, { medicineId: { in: medicineIds } }],
     },
   });
   if (!remaining)

@@ -245,9 +245,17 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       },
       permissionOverrides: [],
     });
+    db.$queryRaw.mockResolvedValueOnce([{ id: 'recall_1' }] as never);
+    db.pharmacyRecallNotice.findFirst.mockResolvedValue({
+      id: 'recall_1',
+      batchId: 'batch_1',
+      medicineId: null,
+    });
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({ id: 'lot_1' });
 
     await caller().acknowledgeRecall({ branchId: 'branch_a', recallNoticeId: 'recall_1' });
 
+    expect(db.$transaction).toHaveBeenCalledTimes(1);
     expect(db.pharmacyRecallAcknowledgement.create).toHaveBeenCalledWith({
       data: {
         organizationId: 'org_a',
