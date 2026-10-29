@@ -303,7 +303,7 @@ export function SharedLoginForm({
             <div className="text-end">
               <a
                 href="/forgot-password"
-                className="rounded-[var(--radius-sm)] text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                className="studio-auth-link rounded-[var(--radius-sm)] text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
               >
                 Forgot password?
               </a>

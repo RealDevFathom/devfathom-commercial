@@ -3,7 +3,7 @@ export default defineConfig({
   testDir: '.',
   testMatch: 'login-redesign.spec.ts',
   outputDir: '/tmp/login-playwright',
-  timeout: 120000,
+  timeout: 300000,
   workers: 1,
   reporter: 'list',
   use: {

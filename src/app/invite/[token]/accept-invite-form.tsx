@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Button } from '@/components/ui/button';
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Loader2, Check, X } from 'lucide-react';
@@ -45,7 +46,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
   // Error / invalid / expired
   if (queryError || !data) {
     return (
-      <div className="space-y-5 text-center">
+      <div role="status" aria-live="polite" className="space-y-5 text-center">
         <h1 className="font-display text-2xl font-semibold tracking-tight text-text-strong">
           Invitation unavailable
         </h1>
@@ -169,7 +170,11 @@ export function AcceptInviteForm({ token }: { token: string }) {
       </dl>
 
       {error && (
-        <div className="mb-5 rounded-sm border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div
+          id="account-error"
+          role="alert"
+          className="mb-5 rounded-sm border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
           {error}
         </div>
       )}
@@ -183,6 +188,10 @@ export function AcceptInviteForm({ token }: { token: string }) {
           <div className="relative">
             <input
               id="password"
+              aria-invalid={Boolean(error)}
+              aria-describedby={
+                error ? 'account-error password-requirements' : 'password-requirements'
+              }
               type={showPassword ? 'text' : 'password'}
               placeholder="Create a password"
               autoComplete="new-password"
@@ -193,7 +202,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+              className="absolute right-1 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
               {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -201,7 +210,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
           </div>
 
           {/* Live password requirements checklist */}
-          <ul className="mt-2 space-y-1.5">
+          <ul id="password-requirements" className="mt-2 space-y-1.5">
             {passwordRules.map((rule) => {
               const met = rule.test(password);
               return (
@@ -234,6 +243,14 @@ export function AcceptInviteForm({ token }: { token: string }) {
           </label>
           <input
             id="confirm"
+            aria-invalid={Boolean(error) || (confirm.length > 0 && !confirmOk)}
+            aria-describedby={
+              error
+                ? 'account-error'
+                : confirm.length > 0 && !confirmOk
+                  ? 'confirm-error'
+                  : undefined
+            }
             type={showPassword ? 'text' : 'password'}
             placeholder="Re-enter your password"
             autoComplete="new-password"
@@ -242,7 +259,9 @@ export function AcceptInviteForm({ token }: { token: string }) {
             className={inputClass}
           />
           {confirm.length > 0 && !confirmOk && (
-            <p className="text-xs text-destructive">Passwords do not match.</p>
+            <p id="confirm-error" role="status" className="text-xs text-destructive">
+              Passwords do not match.
+            </p>
           )}
         </div>
 
@@ -309,7 +328,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
                   <button
                     type="button"
                     onClick={() => setSkills(skills.filter((sk) => sk !== s))}
-                    className="text-muted-foreground transition-colors hover:text-foreground"
+                    className="inline-flex min-h-11 min-w-11 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
                     aria-label={`Remove ${s}`}
                   >
                     <X className="h-3 w-3" />
@@ -320,7 +339,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
           )}
         </div>
 
-        <button
+        <Button
           type="submit"
           disabled={!canSubmit}
           className="group flex h-11 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
@@ -333,7 +352,7 @@ export function AcceptInviteForm({ token }: { token: string }) {
           ) : (
             'Create account'
           )}
-        </button>
+        </Button>
       </form>
     </div>
   );

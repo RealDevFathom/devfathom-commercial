@@ -17,6 +17,11 @@ const screens = [
   ['pharmacy-sign-in', '/login?vertical=pharmacy'],
   ['restaurant-sign-in', '/login?vertical=restaurant'],
   ['hotel-sign-in', '/login?vertical=hotel'],
+  ['agency-sign-in', '/login?vertical=agency'],
+  ['studio-sign-in', '/login?vertical=studio'],
+  ['forgot-password', '/forgot-password'],
+  ['reset-unavailable', '/reset-password/invalid-qa-token'],
+  ['invite-unavailable', '/invite/invalid-qa-token'],
   ['workspace-type', '/login/register'],
   ['pharmacy-register', '/login/register?vertical=pharmacy'],
   ['restaurant-register', '/login/register?vertical=restaurant'],
@@ -40,10 +45,8 @@ for (const theme of ['light', 'dark'] as const)
         });
         await page.goto(route);
         await page.waitForFunction(() => {
-          const form = document.querySelector('form');
-          return form
-            ? Object.keys(form).some((key) => key.startsWith('__reactProps$'))
-            : Object.keys(document).some((key) => key.startsWith('__reactContainer$'));
+          const main = document.querySelector('main');
+          return main && Object.keys(main).some((key) => key.startsWith('__reactProps$'));
         });
         await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
         await page.evaluate(() => document.fonts.ready);

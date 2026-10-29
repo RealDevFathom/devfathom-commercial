@@ -48,6 +48,13 @@ export function LoginHero({
 }
 
 function SetupGuide({ vertical }: { vertical: LoginVertical }) {
+  if (vertical === 'default' || vertical === 'agency') {
+    return (
+      <p className="mt-10 text-sm leading-7 text-text-on-accent">
+        Choose your workspace type, or ask your workspace admin for an account invitation.
+      </p>
+    );
+  }
   const steps =
     vertical === 'pharmacy'
       ? [
@@ -127,7 +134,7 @@ function SetupGuide({ vertical }: { vertical: LoginVertical }) {
 }
 
 function Sample({ vertical }: { vertical: LoginVertical }) {
-  if (vertical === 'default' || vertical === 'hotel')
+  if (vertical === 'default' || vertical === 'agency' || vertical === 'hotel')
     return (
       <p className="mt-auto pt-12 text-xs leading-6 text-text-on-accent">
         {vertical === 'hotel'

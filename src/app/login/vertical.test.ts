@@ -14,3 +14,14 @@ it('hotel sign-in describes setup without promising unimplemented operations', (
   expect(verticalCopy.hotel.signIn).toContain('setting up');
   expect(JSON.stringify(verticalCopy.hotel)).not.toMatch(/reservations|folios|night audit/i);
 });
+it('recognizes agency/studio while keeping tenant presentation authoritative', () => {
+  expect(loginVertical('agency')).toBe('agency');
+  expect(loginVertical('studio')).toBe('agency');
+  expect(loginVertical(undefined, 'studio.localhost:4321')).toBe('agency');
+  expect(loginVertical('pharmacy', 'pharmacy.localhost', 'AGENCY')).toBe('agency');
+  expect(loginVertical('studio', 'studio.localhost', 'PHARMACY')).toBe('pharmacy');
+});
+
+it('maps the persisted hospitality vertical before considering query or host', () => {
+  expect(loginVertical('pharmacy', 'pharmacy.localhost', 'HOSPITALITY')).toBe('hotel');
+});

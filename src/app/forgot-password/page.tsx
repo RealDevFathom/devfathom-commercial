@@ -8,7 +8,7 @@ export const metadata: Metadata = {
 
 export default function ForgotPasswordPage() {
   return (
-    <AuthRecoveryShell context="Fieldbook / recovery">
+    <AuthRecoveryShell context="DevFathom / recovery">
       <ForgotPasswordForm />
     </AuthRecoveryShell>
   );

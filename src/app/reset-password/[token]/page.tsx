@@ -10,7 +10,7 @@ export default async function ResetPasswordPage(props: { params: Promise<{ token
   const { token } = await props.params;
 
   return (
-    <AuthRecoveryShell context="Fieldbook / recovery">
+    <AuthRecoveryShell context="DevFathom / recovery">
       <ResetPasswordForm token={token} />
     </AuthRecoveryShell>
   );

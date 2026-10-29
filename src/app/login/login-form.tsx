@@ -195,7 +195,7 @@ export function LoginForm({
             <div className="text-end">
               <a
                 href="/forgot-password"
-                className="text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline"
+                className="studio-auth-link text-xs font-semibold text-text-muted underline-offset-4 transition-colors hover:text-primary hover:underline"
               >
                 Forgot password?
               </a>

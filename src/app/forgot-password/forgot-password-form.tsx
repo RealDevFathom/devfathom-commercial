@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Button } from '@/components/ui/button';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -48,7 +49,7 @@ export function ForgotPasswordForm() {
 
   if (sent) {
     return (
-      <div className="space-y-5 text-center">
+      <div role="status" aria-live="polite" className="space-y-5 text-center">
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-success/15 text-success">
           <MailCheck className="h-6 w-6" />
         </div>
@@ -87,14 +88,19 @@ export function ForgotPasswordForm() {
             type="email"
             placeholder="you@company.com"
             autoComplete="email"
-            autoFocus
+            aria-invalid={Boolean(errors.email)}
+            aria-describedby={errors.email ? 'email-error' : undefined}
             {...register('email')}
             className={inputClass}
           />
-          {errors.email && <p className="text-sm text-destructive">{errors.email.message}</p>}
+          {errors.email && (
+            <p id="email-error" role="alert" className="text-sm text-destructive">
+              {errors.email.message}
+            </p>
+          )}
         </div>
 
-        <button
+        <Button
           type="submit"
           disabled={isSubmitting}
           className="group flex h-11 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
@@ -107,7 +113,7 @@ export function ForgotPasswordForm() {
           ) : (
             'Send reset link'
           )}
-        </button>
+        </Button>
       </form>
 
       <p className="mt-6 text-center text-xs text-text-muted">

@@ -1,4 +1,4 @@
-export type LoginVertical = 'pharmacy' | 'restaurant' | 'hotel' | 'default';
+export type LoginVertical = 'pharmacy' | 'restaurant' | 'hotel' | 'agency' | 'default';
 
 /** Presentation only; never changes tenant identity, permissions, or auth routing. */
 export function loginVertical(
@@ -10,6 +10,8 @@ export function loginVertical(
   for (const value of candidates) {
     if (typeof value !== 'string') continue;
     const normalized = value.toLowerCase();
+    if (normalized === 'hospitality') return 'hotel';
+    if (normalized === 'agency' || normalized === 'studio') return 'agency';
     if (normalized === 'pharmacy' || normalized === 'restaurant' || normalized === 'hotel')
       return normalized;
   }
@@ -24,6 +26,14 @@ export const verticalCopy = {
     signIn: 'Sign in to pick up the work your team is moving forward.',
     setup: 'Request your workspace',
     opening: 'Starting a new workspace?',
+  },
+  agency: {
+    tag: 'Agency / Studio',
+    lines: ['Your clients.', 'Your team.', 'One studio.'],
+    description: 'Projects, clients and your team’s next decision, together in your workspace.',
+    signIn: 'Sign in to continue your client and project work.',
+    setup: 'Request your workspace',
+    opening: 'Starting a new studio?',
   },
   pharmacy: {
     tag: 'Pharmacy',

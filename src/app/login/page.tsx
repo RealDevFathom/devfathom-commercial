@@ -1,9 +1,8 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { Logo } from '@/components/brand/logo';
+import { AuthShell } from '@/components/auth/auth-shell';
 import { LoginForm } from './login-form';
-import { LoginHero } from './login-hero';
 import { loginVertical, verticalCopy, workspaceEyebrow } from './vertical';
 import { SharedLoginForm } from './shared-login-form';
 import { headers } from 'next/headers';
@@ -87,101 +86,80 @@ export default async function LoginPage(props: LoginPageProps) {
     : { connections: [], enforced: false };
 
   return (
-    <div className="studio-auth">
-      {/* Blueprint field panel — desktop only */}
-      <a
-        href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:z-50 focus:bg-surface-card focus:p-4"
-      >
-        Skip to sign in
-      </a>
-      <LoginHero vertical={vertical} />
-
-      {/* Sign-in sheet */}
-      <main id="main-content" className="studio-auth-main">
-        <div className="w-full max-w-[25rem]">
-          <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <Logo variant="auto" size="md" textClassName="text-foreground" />
-            <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-text-muted">
-              {copy.tag}
-            </span>
-          </div>
-
-          <div className="min-w-0">
-            {/* Mobile logo */}
-            {/* The shared form owns its heading because the heading changes with
+    <AuthShell vertical={vertical}>
+      <div className="min-w-0">
+        {/* Mobile logo */}
+        {/* The shared form owns its heading because the heading changes with
                 the step — "Welcome back" would be wrong on the selection screen.
                 Either way the page renders exactly one <h1>. */}
-            {shared ? null : (
-              <div className="mb-8">
-                <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-brand">
-                  {workspaceEyebrow(vertical)}
-                </p>
-                <h1 className="mt-3 font-display text-[clamp(2rem,4vw,2.7rem)] font-semibold tracking-[-0.05em] text-foreground">
-                  Welcome back
-                </h1>
-                <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
-                  {copy.signIn}
-                </p>
-              </div>
-            )}
-
-            {notice ? (
-              <p
-                role="status"
-                className="mb-5 border-s-2 border-accent-brand bg-muted px-4 py-3 text-sm leading-5 text-text-muted"
-              >
-                {notice}
-              </p>
-            ) : null}
-
-            {shared ? (
-              <SharedLoginForm
-                callbackUrl={callbackUrl}
-                initialError={initialError}
-                vertical={vertical}
-              />
-            ) : (
-              <LoginForm
-                vertical={vertical}
-                connections={identity.connections}
-                ssoEnforced={identity.enforced}
-                callbackUrl={callbackUrl}
-                initialError={initialError}
-              />
-            )}
+        {shared ? null : (
+          <div className="mb-8">
+            <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-accent-brand">
+              {workspaceEyebrow(vertical)}
+            </p>
+            <h1 className="mt-3 font-display text-[clamp(2rem,4vw,2.7rem)] font-semibold tracking-[-0.05em] text-foreground">
+              Welcome back
+            </h1>
+            <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
+              {copy.signIn}
+            </p>
           </div>
+        )}
 
-          {vertical === 'restaurant' && (
-            <div className="mt-7 rounded-[var(--radius-md)] border border-border-subtle bg-surface-card p-5 text-sm">
-              <p className="font-semibold">On a till or kitchen screen?</p>
-              <p className="mt-2 text-xs leading-5 text-text-muted">
-                Enrolled devices unlock with a staff PIN. Servers and cooks don’t need an email to
-                sign in there.
-              </p>
-              <a className="studio-auth-link mt-4 block" href="/login/till">
-                Unlock a till with your PIN →
-              </a>
-            </div>
-          )}
-          <div className="mt-8 border-t border-border-subtle pt-6 text-sm">
-            <p className="text-text-muted">{copy.opening}</p>
-            <a
-              className="studio-auth-link mt-2 inline-block"
-              href={`/login/register${vertical === 'default' ? '' : `?vertical=${vertical}`}`}
-            >
-              {copy.setup} →
-            </a>
-          </div>
-          <p className="mt-6 text-xs leading-6 text-muted-foreground">
-            {vertical === 'pharmacy'
-              ? 'Pharmacist or counter staff? Your account comes by invite. Need access? Contact your workspace admin.'
-              : vertical === 'restaurant'
-                ? 'Managers get their accounts by invite. Need access? Contact your workspace admin.'
-                : 'Need access? Contact your workspace admin.'}
+        {notice ? (
+          <p
+            role="status"
+            className="mb-5 border-s-2 border-accent-brand bg-muted px-4 py-3 text-sm leading-5 text-text-muted"
+          >
+            {notice}
           </p>
+        ) : null}
+
+        {shared ? (
+          <SharedLoginForm
+            callbackUrl={callbackUrl}
+            initialError={initialError}
+            vertical={vertical}
+          />
+        ) : (
+          <LoginForm
+            vertical={vertical}
+            connections={identity.connections}
+            ssoEnforced={identity.enforced}
+            callbackUrl={callbackUrl}
+            initialError={initialError}
+          />
+        )}
+      </div>
+
+      {vertical === 'restaurant' && (
+        <div className="mt-7 rounded-[var(--radius-md)] border border-border-subtle bg-surface-card p-5 text-sm">
+          <p className="font-semibold">On a till or kitchen screen?</p>
+          <p className="mt-2 text-xs leading-5 text-text-muted">
+            Enrolled devices unlock with a staff PIN. Servers and cooks don’t need an email to sign
+            in there.
+          </p>
+          <a className="studio-auth-link mt-4 block" href="/login/till">
+            Unlock a till with your PIN →
+          </a>
         </div>
-      </main>
-    </div>
+      )}
+      <div className="mt-8 border-t border-border-subtle pt-6 text-sm">
+        <p className="text-text-muted">{copy.opening}</p>
+        <a
+          className="studio-auth-link mt-2 inline-block"
+          href={`/login/register${vertical === 'default' ? '' : `?vertical=${vertical}`}`}
+        >
+          {copy.setup} →
+        </a>
+      </div>
+      <p className="mt-6 text-xs leading-6 text-muted-foreground">
+        {vertical === 'pharmacy'
+          ? 'Pharmacist or counter staff? Your account comes by invite. Need access? Contact your workspace admin.'
+          : vertical === 'restaurant'
+            ? 'Managers get their accounts by invite. Need access? Contact your workspace admin.'
+            : 'Need access? Contact your workspace admin.'}
+      </p>
+    </AuthShell>
   );
 }

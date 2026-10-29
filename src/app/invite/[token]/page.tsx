@@ -10,7 +10,7 @@ export default async function InvitePage(props: { params: Promise<{ token: strin
   const { token } = await props.params;
 
   return (
-    <AuthRecoveryShell context="Fieldbook / invitation">
+    <AuthRecoveryShell context="DevFathom / invitation">
       <AcceptInviteForm token={token} />
       <p className="mt-6 text-center text-xs text-muted-foreground">
         Already activated your account?{' '}

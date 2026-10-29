@@ -35,26 +35,20 @@ describe('Studio account-recovery composition', () => {
     }
   );
 
-  it('keeps the recovery form panel geometry aligned with sign-in', () => {
-    const login = source('login/page.tsx');
-    const shell = recoveryShell();
-
-    for (const layoutClass of [
-      'lg:grid-cols-[minmax(0,1.08fr)_minmax(26rem,0.92fr)]',
-      'w-full max-w-[25rem] animate-slide-up',
-      'border-l-2 border-primary pl-5 sm:pl-6',
-    ]) {
-      expect(login).toContain(layoutClass);
-      expect(shell).toContain(layoutClass);
+  it('delegates recovery and every public auth layout to one Studio shell', () => {
+    expect(recoveryShell()).toContain('<AuthShell context={context}>');
+    for (const path of ['login/page.tsx', 'login/register/page.tsx', 'login/till/page.tsx']) {
+      expect(source(path)).toContain('<AuthShell');
+      expect(source(path)).not.toContain('<LoginHero');
     }
-
-    expect(shell).not.toMatch(/max-w-\[30rem\]|rounded-md border|shadow-xs|\bwide\b/);
-  });
-
-  it('provides a keyboard-visible skip link to the recovery form', () => {
-    expect(recoveryShell()).toContain('href="#recovery-form"');
-    expect(recoveryShell()).toContain('id="recovery-form"');
-    expect(recoveryShell()).toContain('focus:not-sr-only');
+    const shell = source('../components/auth/auth-shell.tsx');
+    expect(shell).toContain('studio-auth-main');
+    expect(shell).toContain('max-w-[25rem]');
+    expect(shell).toContain('max-w-[34rem]');
+    expect(shell).toContain('href="#main-content"');
+    expect(shell).toContain('id="main-content"');
+    expect(shell).toContain('tabIndex={-1}');
+    expect(shell).toContain('focus:not-sr-only');
   });
 
   it('gives every async recovery state a page heading', () => {

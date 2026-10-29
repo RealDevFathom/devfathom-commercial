@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { Button } from '@/components/ui/button';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Loader2, Check, CheckCircle2 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
@@ -37,7 +38,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
   // Invalid / expired link
   if (!data?.valid) {
     return (
-      <div className="space-y-5 text-center">
+      <div role="status" aria-live="polite" className="space-y-5 text-center">
         <h1 className="font-display text-2xl font-semibold tracking-tight text-text-strong">
           Link unavailable
         </h1>
@@ -57,7 +58,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
   // Success state
   if (done) {
     return (
-      <div className="space-y-5 text-center">
+      <div role="status" aria-live="polite" className="space-y-5 text-center">
         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-success/15 text-success">
           <CheckCircle2 className="h-6 w-6" />
         </div>
@@ -115,7 +116,11 @@ export function ResetPasswordForm({ token }: { token: string }) {
       </div>
 
       {error && (
-        <div className="mb-5 rounded-sm border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div
+          id="account-error"
+          role="alert"
+          className="mb-5 rounded-sm border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
           {error}
         </div>
       )}
@@ -129,6 +134,10 @@ export function ResetPasswordForm({ token }: { token: string }) {
           <div className="relative">
             <input
               id="password"
+              aria-invalid={Boolean(error)}
+              aria-describedby={
+                error ? 'account-error password-requirements' : 'password-requirements'
+              }
               type={showPassword ? 'text' : 'password'}
               placeholder="Create a password"
               autoComplete="new-password"
@@ -140,7 +149,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted transition-colors hover:text-text-strong"
+              className="absolute right-1 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center text-text-muted transition-colors hover:text-text-strong"
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
               {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -148,7 +157,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
           </div>
 
           {/* Live password requirements checklist */}
-          <ul className="mt-2 space-y-1.5">
+          <ul id="password-requirements" className="mt-2 space-y-1.5">
             {passwordRules.map((rule) => {
               const met = rule.test(password);
               return (
@@ -179,6 +188,14 @@ export function ResetPasswordForm({ token }: { token: string }) {
           </label>
           <input
             id="confirm"
+            aria-invalid={Boolean(error) || (confirm.length > 0 && !confirmOk)}
+            aria-describedby={
+              error
+                ? 'account-error'
+                : confirm.length > 0 && !confirmOk
+                  ? 'confirm-error'
+                  : undefined
+            }
             type={showPassword ? 'text' : 'password'}
             placeholder="Re-enter your password"
             autoComplete="new-password"
@@ -187,11 +204,13 @@ export function ResetPasswordForm({ token }: { token: string }) {
             className={inputClass}
           />
           {confirm.length > 0 && !confirmOk && (
-            <p className="text-xs text-destructive">Passwords do not match.</p>
+            <p id="confirm-error" role="status" className="text-xs text-destructive">
+              Passwords do not match.
+            </p>
           )}
         </div>
 
-        <button
+        <Button
           type="submit"
           disabled={!canSubmit}
           className="group flex h-11 w-full items-center justify-center rounded-sm bg-primary text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50"
@@ -204,7 +223,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
           ) : (
             'Reset password'
           )}
-        </button>
+        </Button>
       </form>
     </div>
   );
