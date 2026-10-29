@@ -80,9 +80,7 @@ export function computeReconciledFinancials(input: {
   const refundedServiceChargeTotal = sum(
     input.refunds.map((refund) => refund.serviceChargeRefundAmount)
   );
-  const deliveryFeeRefunds = sum(
-    input.refunds.map((refund) => refund.deliveryFeeRefundAmount)
-  );
+  const deliveryFeeRefunds = sum(input.refunds.map((refund) => refund.deliveryFeeRefundAmount));
   const refundTotal = sub(sum(input.refunds.map((refund) => refund.amount)), deliveryFeeRefunds);
   const refundedSales = sum(
     input.refunds.map((refund) =>
