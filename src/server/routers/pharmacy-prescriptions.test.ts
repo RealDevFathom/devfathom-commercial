@@ -278,6 +278,28 @@ describe('prescription capture and private delivery', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  it('does not disclose or fill a missing or cross-tenant prescription line', async () => {
+    const ctx = context();
+    const create = vi.fn();
+    (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
+    mocks.prescriptionLine.mockResolvedValue(null);
+
+    await expect(
+      caller(ctx).fill({
+        id: 'fill-foreign',
+        prescriptionLineId: 'line-foreign',
+        fillSequence: 1,
+        quantityCanonicalUnits: 1,
+        idempotencyKey: 'fill-key-foreign',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Prescription line not found.' });
+    expect(mocks.prescriptionLine).toHaveBeenCalledWith({
+      where: { id: 'line-foreign', organizationId: 'org-a' },
+      select: { medicine: { select: { controlled: true } } },
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('continues to record non-controlled prescription fills', async () => {
     const ctx = context();
     const create = vi.fn(async ({ data }) => data);
