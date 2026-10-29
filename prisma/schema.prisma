@@ -12549,6 +12549,10 @@ model PharmacyGoodsReceipt {
   /// are not saleable. Required on the row, not only at the router.
   supplierInvoiceRef     String
   supplierInvoiceDate    DateTime
+  /// Tax identity printed on this bill. These are snapshots: changing a
+  /// supplier later must not make an earlier input-tax claim look compliant.
+  distributorNtn         String?
+  distributorStrn        String?
   warrantyEvidenceRef    String
   receivedByUserId       String
   receivedAt             DateTime
