@@ -97,6 +97,119 @@ describe('growth #746 transfer suggestions', () => {
     expect(result).toEqual([]);
   });
 
+  it('falls back to a later surplus branch when the first source has no expiry-eligible stock', () => {
+    const result = suggestInterbranchTransfers(
+      [
+        {
+          branchId: 'a-expiring',
+          medicineId: 'item',
+          destinationStockLocationId: 'unused',
+          forecastDailyUnits: 0,
+          lots: [
+            {
+              lotId: 'expiring',
+              stockLocationId: 'shelf',
+              availableUnits: 50,
+              expiresAt: new Date('2026-10-30'),
+            },
+          ],
+        },
+        {
+          branchId: 'b-eligible',
+          medicineId: 'item',
+          destinationStockLocationId: 'unused',
+          forecastDailyUnits: 0,
+          lots: [
+            {
+              lotId: 'eligible',
+              stockLocationId: 'shelf',
+              availableUnits: 50,
+              expiresAt: new Date('2027-10-30'),
+            },
+          ],
+        },
+        {
+          branchId: 'short',
+          medicineId: 'item',
+          destinationStockLocationId: 'store',
+          forecastDailyUnits: 1,
+          lots: [],
+        },
+      ],
+      policy,
+      asOf
+    );
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        fromBranchId: 'b-eligible',
+        toBranchId: 'short',
+        quantityUnits: 7,
+      }),
+    ]);
+  });
+
+  it.each([
+    ['asOf', [], new Date('invalid')],
+    [
+      'forecastDailyUnits',
+      [
+        {
+          branchId: 'branch',
+          medicineId: 'item',
+          destinationStockLocationId: 'store',
+          forecastDailyUnits: Number.NaN,
+          lots: [],
+        },
+      ],
+      asOf,
+    ],
+    [
+      'availableUnits',
+      [
+        {
+          branchId: 'branch',
+          medicineId: 'item',
+          destinationStockLocationId: 'store',
+          forecastDailyUnits: 1,
+          lots: [
+            {
+              lotId: 'lot',
+              stockLocationId: 'store',
+              availableUnits: -1,
+              expiresAt: new Date('2027-01-01'),
+            },
+          ],
+        },
+      ],
+      asOf,
+    ],
+    [
+      'expiresAt',
+      [
+        {
+          branchId: 'branch',
+          medicineId: 'item',
+          destinationStockLocationId: 'store',
+          forecastDailyUnits: 1,
+          lots: [
+            {
+              lotId: 'lot',
+              stockLocationId: 'store',
+              availableUnits: 1,
+              expiresAt: new Date('invalid'),
+            },
+          ],
+        },
+      ],
+      asOf,
+    ],
+  ])('rejects malformed planning input: %s', (field, positions, date) => {
+    expect(() => suggestInterbranchTransfers(positions, policy, date)).toThrow(
+      `INVALID_PLANNING_INPUT:${field}`
+    );
+  });
+
   it('rejects missing or inconsistent tenant policy instead of using research figures as defaults', () => {
     expect(() => suggestInterbranchTransfers([], { ...policy, targetCoverDays: 2 }, asOf)).toThrow(
       'INVALID_POLICY:targetCoverDays'

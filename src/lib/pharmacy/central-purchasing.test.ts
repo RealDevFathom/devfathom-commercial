@@ -132,6 +132,51 @@ describe('growth #746 suggested transfer draft', () => {
     expect(created).not.toHaveProperty('status', 'APPROVED');
     expect(draft).toMatchObject({ status: 'ALLOCATED', approvedById: null });
   });
+
+  it('rejects a suggestion whose source lot is not bound to its medicine and source branch', async () => {
+    let transfersCreated = 0;
+    const db = fakeDb({
+      pharmacyCentralPurchasingAccess: { findMany: async () => [{ branchId: null }] },
+      pharmacyInventoryLot: {
+        findFirst: async ({
+          where,
+        }: {
+          where: { branchId: string; batch?: { medicineId: string } };
+        }) =>
+          where.branchId === 'source' && where.batch?.medicineId === 'actual-medicine'
+            ? { id: 'lot' }
+            : null,
+      },
+      pharmacyStockLocation: { findFirst: async () => ({ id: 'source-shelf' }) },
+      pharmacyInterbranchTransfer: {
+        create: async () => {
+          transfersCreated += 1;
+          return { id: 'draft' };
+        },
+      },
+    });
+
+    await expect(
+      createSuggestedTransferDraft(db, scope, {
+        medicineId: 'tampered-medicine',
+        fromBranchId: 'source',
+        toBranchId: 'short',
+        sourceCoverDays: 15,
+        destinationCoverDays: 1,
+        quantityUnits: 4,
+        lines: [
+          {
+            sourceLotId: 'lot',
+            sourceStockLocationId: 'source-shelf',
+            destinationStockLocationId: 'destination',
+            quantityUnits: 4,
+            expiresAt: new Date('2027-01-01'),
+          },
+        ],
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_ALLOCATION' });
+    expect(transfersCreated).toBe(0);
+  });
 });
 
 describe('INV-10 receipt allocation', () => {

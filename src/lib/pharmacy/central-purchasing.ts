@@ -225,6 +225,32 @@ export async function createSuggestedTransferDraft(
   )
     throw new CentralPurchasingError('INVALID_ALLOCATION');
 
+  const boundSources = await Promise.all(
+    suggestion.lines.map((line) =>
+      Promise.all([
+        db.pharmacyInventoryLot.findFirst({
+          where: {
+            id: line.sourceLotId,
+            organizationId: scope.organizationId,
+            branchId: suggestion.fromBranchId,
+            batch: { medicineId: suggestion.medicineId },
+          },
+          select: { id: true },
+        }),
+        db.pharmacyStockLocation.findFirst({
+          where: {
+            id: line.sourceStockLocationId,
+            organizationId: scope.organizationId,
+            branchId: suggestion.fromBranchId,
+          },
+          select: { id: true },
+        }),
+      ])
+    )
+  );
+  if (boundSources.some(([lot, location]) => !lot || !location))
+    throw new CentralPurchasingError('INVALID_ALLOCATION');
+
   const transfer = await allocateTransfer(
     db,
     { ...scope, branchId: suggestion.fromBranchId },
