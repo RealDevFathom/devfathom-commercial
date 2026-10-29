@@ -799,6 +799,16 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
     });
+    await expect(
+      caller().reverseGoodsReceipt({
+        branchId: 'branch_a',
+        goodsReceiptId: 'gr_a',
+        reason: 'Posted in error',
+      })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
     expect(db.$transaction).not.toHaveBeenCalled();
   });

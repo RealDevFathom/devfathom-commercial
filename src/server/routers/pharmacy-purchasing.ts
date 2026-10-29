@@ -1200,6 +1200,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
         return await ctx.db.$transaction((tx) =>
