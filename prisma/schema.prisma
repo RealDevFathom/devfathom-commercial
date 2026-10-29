@@ -1000,6 +1000,7 @@ enum PharmacyTenderType {
 }
 
 enum PharmacyLoyaltyEntryKind {
+  ADJUSTMENT
   EARN_REVERSAL
   EARN
   REDEEM
@@ -1157,6 +1158,10 @@ enum PharmacyVoucherScope {
 /// One mutable tenant policy row. Every update is copied to the append-only
 /// audit table by the service before this row changes.
 model PharmacyLoyaltySettings {
+  pointsEnabled Boolean @default(false)
+  earnEveryMinor Int @default(100)
+  pointValueMinor Int @default(100)
+  minimumRedeemPoints Int @default(1)
   id                           String               @id @default(cuid())
   organizationId               String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   voucherScope                  PharmacyVoucherScope @default(WHOLE_BASKET)
@@ -1491,6 +1496,9 @@ model PharmacyLoyaltyPointsEntry {
   refundId        String?
   kind            PharmacyLoyaltyEntryKind
   points          Int
+  adjustmentReason String?
+  earnEveryMinor Int?
+  pointValueMinor Int?
   requestedPoints Int?
   netPaidMinor    Int?
   actorId         String

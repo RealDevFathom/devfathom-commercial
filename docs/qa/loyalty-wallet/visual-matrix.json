@@ -1,0 +1,437 @@
+{
+  "results": [
+    {
+      "route": "history",
+      "width": 375,
+      "theme": "light",
+      "motion": "no-preference",
+      "scroll": 375,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 375,
+      "theme": "light",
+      "motion": "reduce",
+      "scroll": 375,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 375,
+      "theme": "dark",
+      "motion": "no-preference",
+      "scroll": 375,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 375,
+      "theme": "dark",
+      "motion": "reduce",
+      "scroll": 375,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 768,
+      "theme": "light",
+      "motion": "no-preference",
+      "scroll": 768,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 768,
+      "theme": "light",
+      "motion": "reduce",
+      "scroll": 768,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 768,
+      "theme": "dark",
+      "motion": "no-preference",
+      "scroll": 768,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 768,
+      "theme": "dark",
+      "motion": "reduce",
+      "scroll": 768,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 1024,
+      "theme": "light",
+      "motion": "no-preference",
+      "scroll": 1024,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 1024,
+      "theme": "light",
+      "motion": "reduce",
+      "scroll": 1024,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 1024,
+      "theme": "dark",
+      "motion": "no-preference",
+      "scroll": 1024,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 1024,
+      "theme": "dark",
+      "motion": "reduce",
+      "scroll": 1024,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 1440,
+      "theme": "light",
+      "motion": "no-preference",
+      "scroll": 1440,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 1440,
+      "theme": "light",
+      "motion": "reduce",
+      "scroll": 1440,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 1440,
+      "theme": "dark",
+      "motion": "no-preference",
+      "scroll": 1440,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "history",
+      "width": 1440,
+      "theme": "dark",
+      "motion": "reduce",
+      "scroll": 1440,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 375,
+      "theme": "light",
+      "motion": "no-preference",
+      "scroll": 375,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 375,
+      "theme": "light",
+      "motion": "reduce",
+      "scroll": 375,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 375,
+      "theme": "dark",
+      "motion": "no-preference",
+      "scroll": 375,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 375,
+      "theme": "dark",
+      "motion": "reduce",
+      "scroll": 375,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 768,
+      "theme": "light",
+      "motion": "no-preference",
+      "scroll": 768,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 768,
+      "theme": "light",
+      "motion": "reduce",
+      "scroll": 768,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 768,
+      "theme": "dark",
+      "motion": "no-preference",
+      "scroll": 768,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 768,
+      "theme": "dark",
+      "motion": "reduce",
+      "scroll": 768,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 1024,
+      "theme": "light",
+      "motion": "no-preference",
+      "scroll": 1024,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 1024,
+      "theme": "light",
+      "motion": "reduce",
+      "scroll": 1024,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 1024,
+      "theme": "dark",
+      "motion": "no-preference",
+      "scroll": 1024,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 1024,
+      "theme": "dark",
+      "motion": "reduce",
+      "scroll": 1024,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 1440,
+      "theme": "light",
+      "motion": "no-preference",
+      "scroll": 1440,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 1440,
+      "theme": "light",
+      "motion": "reduce",
+      "scroll": 1440,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 1440,
+      "theme": "dark",
+      "motion": "no-preference",
+      "scroll": 1440,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "settings",
+      "width": 1440,
+      "theme": "dark",
+      "motion": "reduce",
+      "scroll": 1440,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 375,
+      "theme": "light",
+      "motion": "no-preference",
+      "scroll": 375,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 375,
+      "theme": "light",
+      "motion": "reduce",
+      "scroll": 375,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 375,
+      "theme": "dark",
+      "motion": "no-preference",
+      "scroll": 375,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 375,
+      "theme": "dark",
+      "motion": "reduce",
+      "scroll": 375,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 768,
+      "theme": "light",
+      "motion": "no-preference",
+      "scroll": 768,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 768,
+      "theme": "light",
+      "motion": "reduce",
+      "scroll": 768,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 768,
+      "theme": "dark",
+      "motion": "no-preference",
+      "scroll": 768,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 768,
+      "theme": "dark",
+      "motion": "reduce",
+      "scroll": 768,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 1024,
+      "theme": "light",
+      "motion": "no-preference",
+      "scroll": 1024,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 1024,
+      "theme": "light",
+      "motion": "reduce",
+      "scroll": 1024,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 1024,
+      "theme": "dark",
+      "motion": "no-preference",
+      "scroll": 1024,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 1024,
+      "theme": "dark",
+      "motion": "reduce",
+      "scroll": 1024,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 1440,
+      "theme": "light",
+      "motion": "no-preference",
+      "scroll": 1440,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 1440,
+      "theme": "light",
+      "motion": "reduce",
+      "scroll": 1440,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 1440,
+      "theme": "dark",
+      "motion": "no-preference",
+      "scroll": 1440,
+      "h1": 1,
+      "pass": true
+    },
+    {
+      "route": "counter",
+      "width": 1440,
+      "theme": "dark",
+      "motion": "reduce",
+      "scroll": 1440,
+      "h1": 1,
+      "pass": true
+    }
+  ],
+  "errors": []
+}

@@ -4,6 +4,9 @@ import { TRPCError } from '@trpc/server';
 const mocks = vi.hoisted(() => ({ branches: vi.fn(), customers: vi.fn(), history: vi.fn() }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: vi.fn().mockResolvedValue({}) }));
 vi.mock('./loyalty-router', () => ({ pharmacyLoyaltyRouter: { createCaller: () => mocks } }));
+vi.mock('@/components/pharmacy/points-adjustment', () => ({
+  PointsAdjustment: () => <div>Points correction form</div>,
+}));
 import LoyaltyPage from './page';
 import LoyaltyLoading from './loading';
 beforeEach(() => {

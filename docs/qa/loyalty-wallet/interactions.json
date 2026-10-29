@@ -1,0 +1,9 @@
+{
+  "settings": true,
+  "consent": true,
+  "focus": {
+    "focused": true,
+    "height": 44
+  },
+  "errors": []
+}

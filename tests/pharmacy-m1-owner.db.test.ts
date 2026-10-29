@@ -167,6 +167,7 @@ it('migrates real bootstrap admin identities, preserves DENYs and manual assignm
       `INSERT INTO pharmacy_branch_assignments (id,"organizationId","branchId","userId",active,"ownerManaged","updatedAt") VALUES ($1,$2,$3,$4,true,false,now())`,
       [`${org}_manual`, org, branch, user]
     );
+    await db.query(`UPDATE organizations SET "pharmacyOperatingMode"='SOLO' WHERE id=$1`, [org]);
     await db.query(await migration('20261029106000_pharmacy_bootstrap_and_pv_guard'));
     expect(
       (

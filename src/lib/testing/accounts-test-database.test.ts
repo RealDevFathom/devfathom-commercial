@@ -9,16 +9,19 @@ const fs = vi.hoisted(() => ({
   symlink: false,
   socket: true,
 }));
-vi.mock('node:fs', () => ({
-  realpathSync: () => fs.realpath,
-  lstatSync: (path: string) => ({
-    mode: fs.mode,
-    uid: fs.uid,
-    isDirectory: () => fs.directory,
-    isSymbolicLink: () => fs.symlink,
-    isSocket: () => path.endsWith('/.s.PGSQL.5432') && fs.socket,
-  }),
-}));
+vi.mock('node:fs', () => {
+  const mock = {
+    realpathSync: () => fs.realpath,
+    lstatSync: (path: string) => ({
+      mode: fs.mode,
+      uid: fs.uid,
+      isDirectory: () => fs.directory,
+      isSymbolicLink: () => fs.symlink,
+      isSocket: () => path.endsWith('/.s.PGSQL.5432') && fs.socket,
+    }),
+  };
+  return { ...mock, default: mock };
+});
 const runId = 'a'.repeat(32);
 const database = `qa603_${runId}`;
 const socket = '/tmp/qa603-private';
@@ -26,6 +29,7 @@ const role = 'qa603_runtime';
 const url = `postgresql://${role}@localhost/${database}?host=${socket}`;
 const pinnedUrl = url.replace('@localhost/', '@localhost:5432/');
 const env = (): NodeJS.ProcessEnv => ({
+  NODE_ENV: 'test',
   TEST_DATABASE_URL: url,
   PHARMACY_ACCOUNTS_TEST_RUN_ID: runId,
   PHARMACY_ACCOUNTS_TEST_DATABASE: database,

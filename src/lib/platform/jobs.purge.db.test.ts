@@ -98,6 +98,7 @@ type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
 
 let withPlatformDb: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
+let withOrganizationDefaults: typeof import('@/lib/tenancy/scoped-db').withOrganizationDefaults;
 let processPlatformJobs: typeof import('./jobs').processPlatformJobs;
 
 /** An organization plus the onboarding history that made it undeletable. */
@@ -112,6 +113,14 @@ async function seedTenant(db: ScopedDb, organizationId: string, status: string) 
     `INSERT INTO pharmacy_onboarding_states (id, "organizationId", "updatedAt") VALUES ($1, $2, now())`,
     `state_${organizationId}`,
     organizationId
+  );
+  await withOrganizationDefaults(db, organizationId, (tenant) =>
+    tenant.$executeRawUnsafe(
+      `INSERT INTO pharmacy_loyalty_settings_audits (id, "organizationId", "actorId", "oldValue", "newValue")
+     VALUES ($1, $2, 'synthetic-policy-manager', '{}'::jsonb, '{"pointsEnabled":true}'::jsonb)`,
+      `policy_${organizationId}`,
+      organizationId
+    )
   );
   // The row that the append-only trigger refused to let go of.
   await db.$executeRawUnsafe(
@@ -192,7 +201,8 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 
 describeIfDatabase('tenant purge, against PostgreSQL', () => {
   beforeAll(async () => {
-    ({ withPlatformDb, withTenantDb } = await import('@/lib/tenancy/scoped-db'));
+    ({ withPlatformDb, withTenantDb, withOrganizationDefaults } =
+      await import('@/lib/tenancy/scoped-db'));
     ({ processPlatformJobs } = await import('./jobs'));
 
     await withPlatformDb(async (db) => {
@@ -247,6 +257,16 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
   }, 60_000);
 
   it('purges a pharmacy tenant that has confirmed an onboarding step', async () => {
+    // The shipped wallet aggregate exposes organizationId but is not deletable.
+    // Prove it exists so this remains a regression for catalog view discovery.
+    const views = await withPlatformDb((db) =>
+      db.$queryRawUnsafe<Array<{ table_name: string }>>(
+        `SELECT c.table_name FROM information_schema.columns c
+         JOIN information_schema.views v USING (table_schema, table_name)
+         WHERE c.table_schema = 'public' AND c.column_name = 'organizationId'`
+      )
+    );
+    expect(views.map((row) => row.table_name)).toContain('stored_value_customer_statements');
     const result = await processPlatformJobs(1);
 
     const job = await withPlatformDb((db) =>
@@ -274,9 +294,10 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       failed: 0,
     });
 
-    const [remaining] = await withPlatformDb((db) =>
+    const [remaining] = await withTenantDb(PURGED_ORG, (db) =>
       db.$queryRawUnsafe<Array<Record<string, bigint>>>(
-        `SELECT (SELECT count(*) FROM pharmacy_branch_regulatory_profiles WHERE "organizationId" = $1) AS profiles,
+        `SELECT (SELECT count(*) FROM pharmacy_loyalty_settings_audits WHERE "organizationId" = $1) AS policies,
+                (SELECT count(*) FROM pharmacy_branch_regulatory_profiles WHERE "organizationId" = $1) AS profiles,
                 (SELECT count(*) FROM pharmacy_branches WHERE "organizationId" = $1) AS branches,
                 (SELECT count(*) FROM pharmacy_stock_locations WHERE "organizationId" = $1) AS locations,
                 (SELECT count(*) FROM pharmacy_onboarding_events WHERE "organizationId" = $1) AS events,
@@ -291,6 +312,7 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
     // literals, so compare against BigInt(0) rather than 0n.
     const none = BigInt(0);
     expect(remaining).toEqual({
+      policies: none,
       profiles: none,
       branches: none,
       locations: none,
@@ -300,14 +322,15 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       cameras: none,
     });
 
-    const [live] = await withPlatformDb((db) =>
+    const [live] = await withTenantDb(LIVE_ORG, (db) =>
       db.$queryRawUnsafe<Array<Record<string, bigint>>>(
-        `SELECT (SELECT count(*) FROM pharmacy_branch_regulatory_profiles WHERE "organizationId" = $1) AS profiles,
+        `SELECT (SELECT count(*) FROM pharmacy_loyalty_settings_audits WHERE "organizationId" = $1) AS policies,
+                (SELECT count(*) FROM pharmacy_branch_regulatory_profiles WHERE "organizationId" = $1) AS profiles,
                 (SELECT count(*) FROM pharmacy_branches WHERE "organizationId" = $1) AS branches`,
         LIVE_ORG
       )
     );
-    expect(live).toEqual({ profiles: BigInt(1), branches: BigInt(1) });
+    expect(live).toEqual({ policies: BigInt(1), profiles: BigInt(1), branches: BigInt(1) });
 
     const organization = await withPlatformDb((db) =>
       db.organization.findUniqueOrThrow({
@@ -737,6 +760,14 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
     const hotel = await seedHotelInventory(HOTEL_TENANT_ORG, 'ACTIVE');
 
     const guarded = [
+      {
+        organizationId: TENANT_ORG,
+        userId: undefined,
+        table: 'pharmacy_loyalty_settings_audits',
+        refusedDelete: /append only/,
+        rewrite: `UPDATE pharmacy_loyalty_settings_audits SET "newValue" = '{}'::jsonb WHERE "organizationId" = $1`,
+        refusedRewrite: /append only/,
+      },
       {
         organizationId: TENANT_ORG,
         userId: undefined,

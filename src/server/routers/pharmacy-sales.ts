@@ -1,3 +1,10 @@
+import {
+  pointsPolicySchema,
+  readPointsPolicy,
+  requirePointsManager,
+  savePointsPolicy,
+} from '@/lib/pharmacy/points-policy';
+import { lockCustomerConsent, writePatientConsent } from '@/lib/pharmacy/consent-writer';
 import { enforceOperatingMode } from '@/lib/pharmacy/operating-mode';
 import { isPharmacyOwner } from '@/lib/pharmacy/owner';
 import { assertBranchAssignment } from '@/lib/pharmacy/branch-assignment';
@@ -19,7 +26,6 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
-import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
   appendControlledSaleEntries,
   earlierRegisterEntry,
@@ -312,8 +318,6 @@ async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: 
 
 // Canonical names (#163) beside the legacy dotted ones, which still cover un-migrated grants.
 const RECEIPT_READ_CAPABILITIES = [
-  'pharmacy:dispense',
-  'pharmacy.dispense',
   'pharmacy:receipt',
   'pharmacy.receipt',
   'pharmacy:counter',
@@ -321,9 +325,6 @@ const RECEIPT_READ_CAPABILITIES = [
 ] as const;
 
 function capabilityCovers(rule: string, action: string): boolean {
-  // Dispensing is regulated: only its canonical, exact ALLOW can grant it. The
-  // central matcher still lets wildcard DENYs revoke that exact grant.
-  if (action === 'pharmacy:dispense') return capabilityMatches(rule, action, 'ALLOW');
   if (rule === '*' || rule === action) return true;
   if (rule.endsWith(':*') || rule.endsWith('.*')) return action.startsWith(rule.slice(0, -1));
   return false;
@@ -333,11 +334,7 @@ function counterCapabilityDecision(
   rules: { capability: string; effect: string }[]
 ): 'ALLOW' | 'DENY' | null {
   const matched = rules.filter((rule) =>
-    RECEIPT_READ_CAPABILITIES.some((action) =>
-      action === 'pharmacy:dispense' && rule.effect === 'DENY'
-        ? capabilityMatches(rule.capability, action, 'DENY')
-        : capabilityCovers(rule.capability, action)
-    )
+    RECEIPT_READ_CAPABILITIES.some((action) => capabilityCovers(rule.capability, action))
   );
   if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
   if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
@@ -420,10 +417,8 @@ async function requireCounterReceiptAccess(
 
   const overrides = member.permissionOverrides;
   const roleRules = member.organizationRole?.permissions ?? [];
-  // Treat the names as one capability family. Otherwise an ALLOW on one alias
-  // can accidentally outrun an explicit DENY on another alias.
-  // Combine user overrides and role rules into ONE family decision so any
-  // explicit DENY (user or role, on any alias) beats any ALLOW.
+  // Counter/receipt aliases share DENY precedence. Dispensing is checked
+  // independently: denying regulated dispensing must not revoke OTC access.
   const owner =
     member.status === 'ACTIVE' && (await isPharmacyOwner(ctx.db, scope.organizationId, user.id));
   const decision = counterCapabilityDecision([...overrides, ...roleRules]);
@@ -500,32 +495,154 @@ function requireCloseAccess(ctx: TRPCContext) {
 }
 
 export const pharmacySalesRouter = router({
-  updateLoyaltySettings: protectedProcedure
-    .input(z.object({
-      voucherScope: z.enum(['WHOLE_BASKET', 'NON_DRUG_ONLY']),
-      voucherValidityDays: z.number().int().min(1).max(3650),
-      maxIssuedPerCustomerPerPeriod: z.number().int().nonnegative(),
-      maxIssuedPerPhonePerPeriod: z.number().int().nonnegative(),
-      maxRedeemedPerCustomerPerPeriod: z.number().int().nonnegative(),
-      maxRedeemedPerPhonePerPeriod: z.number().int().nonnegative(),
-      abusePeriodDays: z.number().int().min(1).max(3650),
-      expiryOverrideGraceDays: z.number().int().min(0).max(365),
-    }).strict())
+  counterPointsPolicy: capabilityProcedure('pharmacy:counter').query(({ ctx }) =>
+    readPointsPolicy(ctx.db, ctx.entitlements.organizationId)
+  ),
+  adjustPoints: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          customerId: z.string().min(1),
+          saleId: z.string().min(1),
+          points: z
+            .number()
+            .int()
+            .min(-1000000)
+            .max(1000000)
+            .refine((n) => n !== 0),
+          reason: z.string().trim().min(3).max(500),
+          idempotencyKey: z.string().min(1).max(160),
+        })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
-      const organizationId = ctx.entitlements?.organizationId;
-      const actorId = ctx.session?.user?.id;
-      if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-      if (!(await can(subjectFromSession(ctx.session!.user), 'pharmacy:loyalty-manage', undefined, {
-        db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip,
-      }))) throw new TRPCError({ code: 'FORBIDDEN' });
+      await requirePointsManager(ctx);
+      const scope = await scopeFor(ctx, input.branchId);
+      annotateAudit(ctx, { action: 'pharmacy.loyalty.adjustment', targetId: input.customerId });
+      return ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        await lockCustomerConsent(db, scope.organizationId, input.customerId);
+        const sale = await db.pharmacySale.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            id: input.saleId,
+            customerId: input.customerId,
+            status: 'COMPLETED',
+          },
+        });
+        if (!sale) throw new TRPCError({ code: 'NOT_FOUND' });
+        const idempotencyKey = `loyalty:adjust:${input.idempotencyKey}`;
+        const prior = await db.pharmacyLoyaltyPointsEntry.findUnique({
+          where: {
+            organizationId_idempotencyKey: { organizationId: scope.organizationId, idempotencyKey },
+          },
+        });
+        if (prior) {
+          if (
+            prior.customerId !== input.customerId ||
+            prior.branchId !== scope.branchId ||
+            prior.saleId !== input.saleId ||
+            prior.points !== input.points ||
+            prior.adjustmentReason !== input.reason
+          )
+            throw new TRPCError({ code: 'CONFLICT' });
+          return prior;
+        }
+        const balance = await db.pharmacyLoyaltyPointsEntry.aggregate({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            customerId: input.customerId,
+          },
+          _sum: { points: true },
+        });
+        if ((balance._sum.points ?? 0) + input.points < 0)
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Adjustment exceeds available points.',
+          });
+        return db.pharmacyLoyaltyPointsEntry.create({
+          data: {
+            ...scope,
+            customerId: input.customerId,
+            saleId: input.saleId,
+            kind: 'ADJUSTMENT',
+            points: input.points,
+            adjustmentReason: input.reason,
+            idempotencyKey,
+          },
+        });
+      });
+    }),
+  pointsPolicy: protectedProcedure.query(async ({ ctx }) => {
+    const { organizationId } = await requirePointsManager(ctx);
+    return readPointsPolicy(ctx.db, organizationId);
+  }),
+  savePointsPolicy: protectedProcedure
+    .input(pointsPolicySchema)
+    .mutation(async ({ ctx, input }) => {
+      const { organizationId, actorId } = await requirePointsManager(ctx);
+      annotateAudit(ctx, {
+        action: 'pharmacy.loyalty.points-policy.update',
+        targetId: organizationId,
+      });
+      return ctx.db.$transaction((tx) =>
+        savePointsPolicy(txDb(tx), organizationId, actorId, input)
+      );
+    }),
+  loyaltyConsent: capabilityProcedure('pharmacy:counter')
+    .input(z.object({ branchId, patientId: z.string().min(1), granted: z.boolean() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      annotateAudit(ctx, { action: 'pharmacy.loyalty.consent', targetId: input.patientId });
+      return ctx.db.$transaction((tx) =>
+        writePatientConsent(txDb(tx), scope.organizationId, scope.actorId, {
+          patientId: input.patientId,
+          purpose: 'LOYALTY',
+          channel: 'IN_PERSON',
+          granted: input.granted,
+        })
+      );
+    }),
+  updateLoyaltySettings: protectedProcedure
+    .input(
+      z
+        .object({
+          voucherScope: z.enum(['WHOLE_BASKET', 'NON_DRUG_ONLY']),
+          voucherValidityDays: z.number().int().min(1).max(3650),
+          maxIssuedPerCustomerPerPeriod: z.number().int().nonnegative(),
+          maxIssuedPerPhonePerPeriod: z.number().int().nonnegative(),
+          maxRedeemedPerCustomerPerPeriod: z.number().int().nonnegative(),
+          maxRedeemedPerPhonePerPeriod: z.number().int().nonnegative(),
+          abusePeriodDays: z.number().int().min(1).max(3650),
+          expiryOverrideGraceDays: z.number().int().min(0).max(365),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { organizationId, actorId } = await requirePointsManager(ctx);
+      if (
+        !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:loyalty-manage', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        }))
+      )
+        throw new TRPCError({ code: 'FORBIDDEN' });
       return ctx.db.$transaction(async (tx) => {
         const rows = await tx.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
           SELECT * FROM pharmacy_loyalty_settings WHERE "organizationId"=${organizationId} FOR UPDATE`);
         const oldValue = rows[0] ?? {
-          voucherScope: 'WHOLE_BASKET', voucherValidityDays: 30,
-          maxIssuedPerCustomerPerPeriod: 5, maxIssuedPerPhonePerPeriod: 5,
-          maxRedeemedPerCustomerPerPeriod: 5, maxRedeemedPerPhonePerPeriod: 5,
-          abusePeriodDays: 30, expiryOverrideGraceDays: 0,
+          voucherScope: 'WHOLE_BASKET',
+          voucherValidityDays: 30,
+          maxIssuedPerCustomerPerPeriod: 5,
+          maxIssuedPerPhonePerPeriod: 5,
+          maxRedeemedPerCustomerPerPeriod: 5,
+          maxRedeemedPerPhonePerPeriod: 5,
+          abusePeriodDays: 30,
+          expiryOverrideGraceDays: 0,
         };
         await tx.$executeRaw(Prisma.sql`INSERT INTO pharmacy_loyalty_settings
           (id,"organizationId","voucherScope","voucherValidityDays","maxIssuedPerCustomerPerPeriod",
@@ -547,7 +664,10 @@ export const pharmacySalesRouter = router({
           (id,"organizationId","actorId","oldValue","newValue","occurredAt") VALUES
           (${randomUUID()},${organizationId},${actorId},${JSON.stringify(oldValue)}::jsonb,
            ${JSON.stringify(input)}::jsonb,now())`);
-        annotateAudit(ctx, { action: 'pharmacy.loyalty.settings.update', targetId: organizationId });
+        annotateAudit(ctx, {
+          action: 'pharmacy.loyalty.settings.update',
+          targetId: organizationId,
+        });
         return input;
       });
     }),
@@ -555,26 +675,46 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, code: z.string().trim().min(10).max(64) }).strict())
     .query(async ({ ctx, input }) => {
       const scope = await scopeFor(ctx, input.branchId);
-      if (!(await can(subjectFromSession(ctx.session!.user), 'pharmacy:counter', undefined, {
-        db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip,
-      }))) throw new TRPCError({ code: 'FORBIDDEN' });
+      if (
+        !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:counter', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        }))
+      )
+        throw new TRPCError({ code: 'FORBIDDEN' });
       try {
-        await admitVoucherLookup({ organizationId: scope.organizationId, branchId: scope.branchId,
-          userId: scope.actorId, ip: ctx.requestMeta.ip });
-        const rows = await ctx.db.$queryRaw<Array<{
-          id: string; status: 'ISSUED' | 'REDEEMED' | 'EXPIRED' | 'VOID'; valueMinor: number;
-          scope: 'WHOLE_BASKET' | 'NON_DRUG_ONLY'; expiresAt: Date; minNextBasketMinor: number;
-        }>>(Prisma.sql`SELECT id,status,"valueMinor",scope,"expiresAt","minNextBasketMinor"
+        await admitVoucherLookup({
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          userId: scope.actorId,
+          ip: ctx.requestMeta.ip,
+        });
+        const rows = await ctx.db.$queryRaw<
+          Array<{
+            id: string;
+            status: 'ISSUED' | 'REDEEMED' | 'EXPIRED' | 'VOID';
+            valueMinor: number;
+            scope: 'WHOLE_BASKET' | 'NON_DRUG_ONLY';
+            expiresAt: Date;
+            minNextBasketMinor: number;
+          }>
+        >(Prisma.sql`SELECT id,status,"valueMinor",scope,"expiresAt","minNextBasketMinor"
           FROM pharmacy_vouchers WHERE "organizationId"=${scope.organizationId}
           AND "branchId"=${scope.branchId} AND code=${input.code} LIMIT 1`);
         const voucher = publicVoucherResult(rows[0] ?? null);
-        return { valueMinor: voucher.valueMinor, scope: voucher.scope,
-          expiresAt: voucher.expiresAt, minNextBasketMinor: voucher.minNextBasketMinor };
+        return {
+          valueMinor: voucher.valueMinor,
+          scope: voucher.scope,
+          expiresAt: voucher.expiresAt,
+          minNextBasketMinor: voucher.minNextBasketMinor,
+        };
       } catch (error) {
-        if (error instanceof PharmacyVoucherError) throw new TRPCError({
-          code: error.reason === 'RATE_LIMITED' ? 'TOO_MANY_REQUESTS' : 'NOT_FOUND',
-          message: error.reason === 'RATE_LIMITED' ? 'RATE_LIMITED' : 'VOUCHER_NOT_FOUND',
-        });
+        if (error instanceof PharmacyVoucherError)
+          throw new TRPCError({
+            code: error.reason === 'RATE_LIMITED' ? 'TOO_MANY_REQUESTS' : 'NOT_FOUND',
+            message: error.reason === 'RATE_LIMITED' ? 'RATE_LIMITED' : 'VOUCHER_NOT_FOUND',
+          });
         throw error;
       }
     }),
@@ -1021,7 +1161,11 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) =>
-        createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
+        createSale(
+          txDb(tx),
+          await requireCounterReceiptAccess(ctx, input.branchId, true),
+          input.quotation
+        )
       )
     ),
   addLine: protectedProcedure
@@ -1128,7 +1272,7 @@ export const pharmacySalesRouter = router({
       try {
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
+          const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });

@@ -223,7 +223,18 @@ async function sale(f: Fixture, totalMinor = 2000, tenderMinor = 0) {
           idempotencyKey: unique('line'),
         },
       });
-      if (tenderMinor)
+      if (tenderMinor) {
+        const deviceId = unique('device');
+        const drawer = await db.pharmacyDrawerSession.create({
+          data: {
+            organizationId: f.scope.organizationId,
+            branchId: f.scope.branchId,
+            deviceId,
+            businessDate: new Date('2026-10-25T00:00:00Z'),
+            openingFloatMinor: 0,
+            openedByActorId: f.scope.actorId,
+          },
+        });
         await db.pharmacyTender.create({
           data: {
             organizationId: f.scope.organizationId,
@@ -231,11 +242,15 @@ async function sale(f: Fixture, totalMinor = 2000, tenderMinor = 0) {
             saleId: row.id,
             type: 'CASH',
             amountMinor: tenderMinor,
+            drawerSessionId: drawer.id,
+            cashReceivedMinor: tenderMinor,
+            changeGivenMinor: 0,
             businessDate: new Date('2026-10-25T00:00:00Z'),
             actorId: f.scope.actorId,
-            deviceId: unique('device'),
+            deviceId,
           },
         });
+      }
       return row.id;
     },
     { userId: f.scope.actorId }
@@ -797,6 +812,17 @@ describeDb('funded wallet bridge — real PostgreSQL, explicit fresh DB only', (
       scoped.withTenantDb(
         f.scope.organizationId,
         async (db) => {
+          const deviceId = unique('device');
+          const drawer = await db.pharmacyDrawerSession.create({
+            data: {
+              organizationId: f.scope.organizationId,
+              branchId: f.scope.branchId,
+              deviceId,
+              businessDate: new Date('2026-10-25T00:00:00Z'),
+              openingFloatMinor: 0,
+              openedByActorId: f.scope.actorId,
+            },
+          });
           await db.pharmacyTender.create({
             data: {
               organizationId: f.scope.organizationId,
@@ -804,9 +830,12 @@ describeDb('funded wallet bridge — real PostgreSQL, explicit fresh DB only', (
               saleId,
               type: 'CASH',
               amountMinor: 700,
+              drawerSessionId: drawer.id,
+              cashReceivedMinor: 700,
+              changeGivenMinor: 0,
               businessDate: new Date('2026-10-25T00:00:00Z'),
               actorId: f.scope.actorId,
-              deviceId: unique('device'),
+              deviceId,
             },
           });
           await bridge.postPharmacyStoredValueInTransaction(db, f.scope, spend(f, saleId, 400));

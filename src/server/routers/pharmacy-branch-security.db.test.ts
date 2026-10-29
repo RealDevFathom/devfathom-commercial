@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { randomBytes } from 'node:crypto';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { Client } from 'pg';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { assertBranchAssignment } from '@/lib/pharmacy/branch-assignment';
 import { ALL_ACTIONS } from '@/lib/abac/policies';
@@ -10,7 +11,10 @@ import { toAuditJson } from '@/server/audit';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
+const originalUrl = process.env.DATABASE_URL;
 const suffix = randomBytes(6).toString('hex');
+const runtimeRole = `branch_runtime_${suffix}`;
+let ownerConnection: Client;
 const org = `mbr_${suffix}`;
 const owner = `owner_${suffix}`;
 const cashier = `cashier_${suffix}`;
@@ -35,6 +39,22 @@ function inOrg<T>(run: (db: ScopedDb) => Promise<T>) {
 // Deliberately fail if the required local database is missing; this security gate never skips.
 beforeAll(async () => {
   if (!process.env.DATABASE_URL) throw new Error('Local Postgres DATABASE_URL required.');
+  ownerConnection = new Client({ connectionString: originalUrl });
+  await ownerConnection.connect();
+  await ownerConnection.query(`CREATE ROLE "${runtimeRole}" NOLOGIN NOSUPERUSER NOBYPASSRLS`);
+  await ownerConnection.query(`GRANT USAGE ON SCHEMA public TO "${runtimeRole}"`);
+  await ownerConnection.query(
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${runtimeRole}"`
+  );
+  await ownerConnection.query(
+    `GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "${runtimeRole}"`
+  );
+  const runtime = new URL(originalUrl!);
+  runtime.searchParams.set(
+    'options',
+    `${runtime.searchParams.get('options') ?? ''} -c role=${runtimeRole}`.trim()
+  );
+  process.env.DATABASE_URL = runtime.toString();
   process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
   ({ withTenantDb, withPlatformDb } = await import('@/lib/tenancy/scoped-db'));
   const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
@@ -657,4 +677,15 @@ describe.sequential('shared pharmacy branch and owner security (forced RLS)', ()
       ).toMatchObject({ active: true, ownerManaged: false });
     });
   });
+});
+
+afterAll(async () => {
+  const { db } = await import('@/lib/db');
+  await db.$disconnect();
+  if (originalUrl) process.env.DATABASE_URL = originalUrl;
+  if (ownerConnection) {
+    await ownerConnection.query(`DROP OWNED BY "${runtimeRole}"`);
+    await ownerConnection.query(`DROP ROLE "${runtimeRole}"`);
+    await ownerConnection.end();
+  }
 });

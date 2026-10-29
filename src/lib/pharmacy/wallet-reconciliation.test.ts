@@ -27,12 +27,12 @@ function wallet(overrides: Partial<WalletEventSnapshot> = {}): WalletEventSnapsh
     saleId: null,
     tender: 'CASH',
     counterAccountKind: 'CASH_CLEARING',
-    liabilityDeltaMinor: 20_000n,
-    balanceMinor: 0n,
-    lineCount: 2n,
-    liabilityLegCount: 1n,
-    currencyCount: 1n,
-    customerMismatchCount: 0n,
+    liabilityDeltaMinor: BigInt('20000'),
+    balanceMinor: BigInt('0'),
+    lineCount: BigInt('2'),
+    liabilityLegCount: BigInt('1'),
+    currencyCount: BigInt('1'),
+    customerMismatchCount: BigInt('0'),
     ...overrides,
   };
 }
@@ -49,14 +49,14 @@ function canonical(overrides: Partial<WalletCanonicalSnapshot> = {}): WalletCano
     headerBranchId: 'branch-a',
     idempotencyKey: `finance:PHARMACY_STORED_VALUE_JOURNAL:${overrides.sourceId ?? 'event-1'}`,
     actorId: 'actor-a',
-    sourceLineMismatchCount: 0n,
+    sourceLineMismatchCount: BigInt('0'),
     counterAccountCode: 'CASH',
-    liabilityDeltaMinor: 20_000n,
-    balanceMinor: 0n,
-    lineCount: 2n,
-    liabilityLegCount: 1n,
-    wrongBranchCount: 0n,
-    branchLiabilityDeltaMinor: overrides.liabilityDeltaMinor ?? 20_000n,
+    liabilityDeltaMinor: BigInt('20000'),
+    balanceMinor: BigInt('0'),
+    lineCount: BigInt('2'),
+    liabilityLegCount: BigInt('1'),
+    wrongBranchCount: BigInt('0'),
+    branchLiabilityDeltaMinor: overrides.liabilityDeltaMinor ?? BigInt('20000'),
     ...overrides,
   };
 }
@@ -101,10 +101,10 @@ describe('existing wallet to canonical Accounts reconciliation', () => {
           saleId: 'sale-1',
           tender: null,
           counterAccountKind: 'SALES_CLEARING',
-          liabilityDeltaMinor: -2_000n,
+          liabilityDeltaMinor: -BigInt('2000'),
         }),
       ],
-      [canonical({ counterAccountCode: 'SALES_CLEARING', liabilityDeltaMinor: -2_000n })]
+      [canonical({ counterAccountCode: 'SALES_CLEARING', liabilityDeltaMinor: -BigInt('2000') })]
     );
     expect(result.status).toBe('RECONCILED');
   });
@@ -129,7 +129,7 @@ describe('existing wallet to canonical Accounts reconciliation', () => {
     });
   });
   it('does not round large minor-unit totals through JS numbers', () => {
-    const large = 9007199254740993n;
+    const large = BigInt('9007199254740993');
     const result = reconcileWalletJournals(
       scope,
       [wallet({ liabilityDeltaMinor: large })],
@@ -152,7 +152,7 @@ describe('existing wallet to canonical Accounts reconciliation', () => {
     expect(reconcileWalletJournals(scope, [event], [entry])).toEqual(
       reconcileWalletJournals(scope, [event], [entry])
     );
-    expect(event.liabilityDeltaMinor).toBe(20_000n);
+    expect(event.liabilityDeltaMinor).toBe(BigInt('20000'));
   });
   it('returns EMPTY, not a false affirmative on a branch with no evidence', () => {
     expect(reconcileWalletJournals(scope, [], []).status).toBe('EMPTY');
@@ -169,7 +169,7 @@ describe('existing wallet to canonical Accounts reconciliation', () => {
   it('detects canonical duplicate posting even when totals are zero', () => {
     const result = issue(
       [wallet()],
-      [canonical(), canonical({ entryId: 'duplicate', liabilityDeltaMinor: -20_000n })],
+      [canonical(), canonical({ entryId: 'duplicate', liabilityDeltaMinor: -BigInt('20000') })],
       'DUPLICATE_CANONICAL_SOURCE'
     );
     expect(result.canonicalEntryCount).toBe(2);
@@ -183,8 +183,12 @@ describe('existing wallet to canonical Accounts reconciliation', () => {
     const result = issue(
       [wallet(), wallet({ sourceId: 'second' })],
       [
-        canonical({ liabilityDeltaMinor: 19_000n }),
-        canonical({ sourceId: 'second', entryId: 'second-entry', liabilityDeltaMinor: 21_000n }),
+        canonical({ liabilityDeltaMinor: BigInt('19000') }),
+        canonical({
+          sourceId: 'second',
+          entryId: 'second-entry',
+          liabilityDeltaMinor: BigInt('21000'),
+        }),
       ],
       'AMOUNT_MISMATCH'
     );
@@ -206,7 +210,7 @@ describe('existing wallet to canonical Accounts reconciliation', () => {
   it('detects canonical date beyond report end linked to an in-scope event', () => {
     issue([wallet()], [canonical({ occurredAt: scope.to })], 'TIME_MISMATCH');
   });
-  it.each([{ branchId: 'other-branch' }, { branchId: null }, { wrongBranchCount: 1n }])(
+  it.each([{ branchId: 'other-branch' }, { branchId: null }, { wrongBranchCount: BigInt('1') }])(
     'detects wrong or null canonical branch case %#',
     (overrides) => {
       issue([wallet()], [canonical(overrides)], 'DIMENSION_MISMATCH');
@@ -218,8 +222,8 @@ describe('existing wallet to canonical Accounts reconciliation', () => {
       [
         canonical({
           branchId: 'other-branch',
-          wrongBranchCount: 2n,
-          branchLiabilityDeltaMinor: 0n,
+          wrongBranchCount: BigInt('2'),
+          branchLiabilityDeltaMinor: BigInt('0'),
         }),
       ],
       'DIMENSION_MISMATCH'
@@ -230,19 +234,19 @@ describe('existing wallet to canonical Accounts reconciliation', () => {
     });
   });
   it.each([
-    { balanceMinor: 1n },
-    { lineCount: 1n },
-    { liabilityLegCount: 0n },
-    { liabilityDeltaMinor: 0n },
-    { currencyCount: 2n },
+    { balanceMinor: BigInt('1') },
+    { lineCount: BigInt('1') },
+    { liabilityLegCount: BigInt('0') },
+    { liabilityDeltaMinor: BigInt('0') },
+    { currencyCount: BigInt('2') },
   ])('detects invalid wallet legs case %#', (overrides) => {
     issue([wallet(overrides)], [canonical()], 'INVALID_WALLET_ENTRY');
   });
   it.each([
-    { balanceMinor: 1n },
-    { lineCount: 3n },
-    { liabilityLegCount: 0n },
-    { liabilityDeltaMinor: 0n },
+    { balanceMinor: BigInt('1') },
+    { lineCount: BigInt('3') },
+    { liabilityLegCount: BigInt('0') },
+    { liabilityDeltaMinor: BigInt('0') },
   ])('detects invalid canonical legs case %#', (overrides) => {
     issue([wallet()], [canonical(overrides)], 'INVALID_CANONICAL_ENTRY');
   });
@@ -270,13 +274,13 @@ describe('existing wallet to canonical Accounts reconciliation', () => {
       kind: 'SPEND',
       saleId: null,
       counterAccountKind: 'SALES_CLEARING',
-      liabilityDeltaMinor: -20_000n,
+      liabilityDeltaMinor: -BigInt('20000'),
     },
     {
       kind: 'SPEND',
       saleId: 'sale',
       counterAccountKind: 'SALES_CLEARING',
-      liabilityDeltaMinor: 20_000n,
+      liabilityDeltaMinor: BigInt('20000'),
     },
     { counterAccountKind: 'LOYALTY_EXPENSE' },
     { saleId: 'unexpected-sale' },
@@ -299,14 +303,14 @@ describe('existing wallet to canonical Accounts reconciliation', () => {
           tender: null,
           currency: 'USD',
           counterAccountKind: 'SALES_CLEARING',
-          liabilityDeltaMinor: -2000n,
+          liabilityDeltaMinor: -BigInt('2000'),
         }),
       ],
       [
         canonical({
           currency: 'USD',
           counterAccountCode: 'SALES_CLEARING',
-          liabilityDeltaMinor: -2000n,
+          liabilityDeltaMinor: -BigInt('2000'),
         }),
       ],
       'UNSUPPORTED_EVENT'
@@ -323,10 +327,10 @@ describe('existing wallet to canonical Accounts reconciliation', () => {
           saleId: 'sale-1',
           tender: 'WALLET',
           counterAccountKind: 'SALES_CLEARING',
-          liabilityDeltaMinor: -2000n,
+          liabilityDeltaMinor: -BigInt('2000'),
         }),
       ],
-      [canonical({ counterAccountCode: 'SALES_CLEARING', liabilityDeltaMinor: -2000n })],
+      [canonical({ counterAccountCode: 'SALES_CLEARING', liabilityDeltaMinor: -BigInt('2000') })],
       'UNSUPPORTED_EVENT'
     );
   });
@@ -340,7 +344,7 @@ describe('existing wallet to canonical Accounts reconciliation', () => {
   });
   it.each([
     { idempotencyKey: 'unrelated-key' },
-    { sourceLineMismatchCount: 1n },
+    { sourceLineMismatchCount: BigInt('1') },
     { actorId: 'other-actor' },
   ])('holds immutable canonical source-provenance mismatch case %#', (overrides) => {
     issue([wallet()], [canonical(overrides)], 'SOURCE_PROVENANCE_MISMATCH');
@@ -357,14 +361,14 @@ describe('existing wallet to canonical Accounts reconciliation', () => {
   });
   it('holds wallet account customer mismatch even when source and canonical net equally', () => {
     const result = issue(
-      [wallet({ customerMismatchCount: 1n })],
+      [wallet({ customerMismatchCount: BigInt('1') })],
       [canonical()],
       'INVALID_WALLET_ENTRY'
     );
     expect(result.currencies[0].closingDifferenceMinor).toBe('0');
   });
   it('does not conceal a missing persisted customer under a balanced event', () => {
-    issue([wallet({ customerMismatchCount: 2n })], [canonical()], 'INVALID_WALLET_ENTRY');
+    issue([wallet({ customerMismatchCount: BigInt('2') })], [canonical()], 'INVALID_WALLET_ENTRY');
   });
   it('rejects foreign-tenant wallet rows without leaking source ids', () => {
     expect(() => reconcileWalletJournals(scope, [wallet({ organizationId: 'other' })], [])).toThrow(

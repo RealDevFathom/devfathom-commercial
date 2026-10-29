@@ -7,6 +7,9 @@ import { PrismaClient } from '../src/generated/prisma/client.js';
 import type { ScopedDb } from '../src/lib/tenancy/scoped-db';
 import { receiveLot } from '../src/lib/pharmacy/stock-ledger';
 import { createSale, addSaleLine, returnSaleLine } from '../src/lib/pharmacy/sales';
+import { linkCustomerToSale } from '../src/lib/pharmacy/customer-loyalty';
+import { writePatientConsent } from '../src/lib/pharmacy/consent-writer';
+import { savePointsPolicy } from '../src/lib/pharmacy/points-policy';
 import { attachPrescriptionReference } from '../src/lib/pharmacy/rx-prescription-reference';
 import {
   applyPharmacyTender,
@@ -216,10 +219,11 @@ export async function seedDemoPharmacies(
           'pharmacy-procurement',
           'pharmacy-reports',
           'pharmacy-safety',
+          'pharmacy-crm',
         ]) {
           const definition = moduleDefinitionForKey(key);
           if (!definition) throw new Error('Missing pharmacy module definition');
-          const module = await tx.platformModule.upsert({
+          const platformModule = await tx.platformModule.upsert({
             where: { key },
             update: {},
             create: {
@@ -233,9 +237,9 @@ export async function seedDemoPharmacies(
             },
           });
           await tx.organizationModule.upsert({
-            where: { organizationId_moduleId: { organizationId, moduleId: module.id } },
+            where: { organizationId_moduleId: { organizationId, moduleId: platformModule.id } },
             update: {},
-            create: { organizationId, moduleId: module.id, startsAt: before },
+            create: { organizationId, moduleId: platformModule.id, startsAt: before },
           });
         }
         for (const role of plan.roles) {
@@ -545,6 +549,35 @@ export async function seedDemoPharmacies(
             registrationNumber: 'DEMO-NOT-A-REAL-REGISTRATION',
           },
         });
+        if (!(await tx.pharmacyLoyaltySettings.findUnique({ where: { organizationId } })))
+          await savePointsPolicy(db, organizationId, id('owner'), {
+            pointsEnabled: true,
+            earnEveryMinor: 1000,
+            pointValueMinor: 100,
+            minimumRedeemPoints: 5,
+          });
+        for (let customer = 0; customer < 4; customer++) {
+          const patientId = customer === 0 ? id('patient') : id(`loyalty-patient-${customer}`);
+          await tx.pharmacyPatient.upsert({
+            where: { id: patientId },
+            update: {},
+            create: {
+              id: patientId,
+              organizationId,
+              displayName: `Synthetic Loyalty Customer ${customer + 1}`,
+            },
+          });
+          const prior = await tx.patientConsent.findFirst({
+            where: { organizationId, patientId, purpose: 'LOYALTY' },
+          });
+          if (!prior)
+            await writePatientConsent(db, organizationId, id('owner'), {
+              patientId,
+              purpose: 'LOYALTY',
+              channel: 'IN_PERSON',
+              granted: true,
+            });
+        }
         for (let day = 0; day < demoSalesDays; day++) {
           const saleKey = id(`sale-${day}`);
           if (
@@ -610,6 +643,12 @@ export async function seedDemoPharmacies(
               saleLineId: result.line.id,
             });
           }
+          const loyaltyIndex = day % 2 === 0 ? 0 : (Math.floor(day / 2) % 3) + 1;
+          await linkCustomerToSale(db, saleScope, {
+            saleId: sale.id,
+            patientId: loyaltyIndex === 0 ? id('patient') : id(`loyalty-patient-${loyaltyIndex}`),
+            displayName: `Synthetic Loyalty Customer ${loyaltyIndex + 1}`,
+          });
           const drawer = await openPharmacyDrawer(db, saleScope, {
             deviceId: id(`counter-${day}`),
             businessDate: date,
@@ -664,6 +703,95 @@ export async function seedDemoPharmacies(
             },
           });
         }
+        // Upgrade pre-loyalty demo seats without rewriting completed receipts.
+        // Existing opt-outs, policy changes and append-only history stay authoritative.
+        const policy = await tx.pharmacyLoyaltySettings.findUnique({ where: { organizationId } });
+        if (policy?.pointsEnabled)
+          for (let customerIndex = 0; customerIndex < 4; customerIndex++) {
+            const patientId =
+              customerIndex === 0 ? id('patient') : id(`loyalty-patient-${customerIndex}`);
+            const consent = await tx.patientConsent.findFirst({
+              where: { organizationId, patientId, purpose: 'LOYALTY' },
+              orderBy: [{ recordedAt: 'desc' }, { version: 'desc' }],
+            });
+            if (!consent?.granted || consent.revokedAt) continue;
+            const existing = await tx.pharmacyCustomer.findUnique({
+              where: {
+                organizationId_patientId: { organizationId, patientId },
+              },
+            });
+            if (
+              existing &&
+              (await tx.pharmacyLoyaltyPointsEntry.findFirst({
+                where: {
+                  organizationId,
+                  customerId: existing.id,
+                  kind: 'EARN',
+                },
+              }))
+            )
+              continue;
+            const seedKey = id(`loyalty-welcome-${customerIndex}`);
+            if (
+              await tx.auditLog.findFirst({
+                where: { organizationId, action: 'DEMO:LOYALTY_SEEDED', targetId: seedKey },
+              })
+            )
+              continue;
+            const sale = await createSale(db, scope);
+            const line = await addSaleLine(db, scope, {
+              saleId: sale.id,
+              medicineId: id('medicine-1'),
+              presentationId: id('presentation-1'),
+              packLevelId: id('pack-1'),
+              saleUnit: 'PACK',
+              quantity: 1,
+              canonicalUnitsPerSaleUnit: 1,
+              idempotencyKey: seedKey,
+            });
+            await linkCustomerToSale(db, scope, {
+              saleId: sale.id,
+              patientId,
+              displayName: `Synthetic Loyalty Customer ${customerIndex + 1}`,
+            });
+            const businessDate = new Date(epoch);
+            businessDate.setUTCHours(0, 0, 0, 0);
+            const deviceId = id(`loyalty-counter-${customerIndex}`);
+            const drawer = await openPharmacyDrawer(db, scope, {
+              deviceId,
+              businessDate,
+              openingFloatMinor: 0,
+            });
+            await applyPharmacyTender(db, scope, {
+              saleId: sale.id,
+              deviceId,
+              businessDate,
+              type: 'CASH',
+              amountMinor: line.line.unitPriceMinor,
+              cashReceivedMinor: line.line.unitPriceMinor,
+              idempotencyKey: `${seedKey}:tender`,
+            });
+            await closePharmacyDrawer(db, scope, {
+              drawerSessionId: drawer.id,
+              countedCashMinor: line.line.unitPriceMinor,
+            });
+            await tx.auditLog.create({
+              data: {
+                organizationId,
+                actorId: scope.actorId,
+                source: 'SYSTEM',
+                category: 'PHARMACY',
+                action: 'DEMO:LOYALTY_SEEDED',
+                targetType: 'PharmacySale',
+                targetId: seedKey,
+                metadata: {
+                  saleId: sale.id,
+                  synthetic: true,
+                  businessDate: businessDate.toISOString(),
+                },
+              },
+            });
+          }
       },
       { timeout: 120000 }
     );

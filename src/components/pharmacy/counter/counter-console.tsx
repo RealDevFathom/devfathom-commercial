@@ -547,6 +547,8 @@ function ScopedPharmacyCounterConsole({
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
   const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
+  const loyaltyConsent = trpc.pharmacySales.loyaltyConsent.useMutation();
+  const pointsPolicy = trpc.pharmacySales.counterPointsPolicy.useQuery();
   const redeemLoyalty = trpc.pharmacySales.redeemPoints.useMutation();
   const authenticatePack = trpc.pharmacySales.authenticatePack.useMutation();
 
@@ -926,8 +928,10 @@ function ScopedPharmacyCounterConsole({
         }
         const refSerial = Number(controlledAuth.refSerial);
         const added = await addLine.mutateAsync({
-          prescriptionApproval: !controlled && (row.restriction.rx || row.restriction.restricted)
-            ? { pin: rxApprovalPin || undefined, checkerId: rxCheckerId || undefined } : undefined,
+          prescriptionApproval:
+            !controlled && (row.restriction.rx || row.restriction.restricted)
+              ? { pin: rxApprovalPin || undefined, checkerId: rxCheckerId || undefined }
+              : undefined,
           controlledAuthorization:
             controlled && patient
               ? {
@@ -2249,13 +2253,59 @@ function ScopedPharmacyCounterConsole({
                 type="button"
                 variant="outline"
                 className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                disabled={busy || !patient || !saleId}
+                disabled={busy || !patient || !saleId || !patientPanelQuery.data?.loyaltyConsent}
                 onClick={() => void attachCustomer()}
               >
                 {pending === 'customer' ? 'Linking…' : 'Link selected patient'}
               </Button>
             }
           >
+            {patient && (
+              <div className="mb-4 space-y-2 text-sm">
+                <p>
+                  Loyalty consent:{' '}
+                  {patientPanelQuery.data?.loyaltyConsent ? 'Opted in' : 'Not opted in'}. Ask the
+                  customer before recording a choice.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {[true, false].map((granted) => (
+                    <Button
+                      key={String(granted)}
+                      type="button"
+                      variant="outline"
+                      disabled={busy || loyaltyConsent.isPending}
+                      onClick={async () => {
+                        try {
+                          await loyaltyConsent.mutateAsync({
+                            branchId,
+                            patientId: patient.patientId,
+                            granted,
+                          });
+                          await patientPanelQuery.refetch();
+                          setNotice({
+                            tone: 'success',
+                            message: granted
+                              ? 'Customer opted in to loyalty.'
+                              : 'Customer opted out of loyalty.',
+                          });
+                        } catch (error) {
+                          setNotice({ tone: 'danger', message: messageFrom(error) });
+                        }
+                      }}
+                    >
+                      {granted ? 'Record customer opt in' : 'Record customer opt out'}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {pointsPolicy.data && (
+              <p className="mb-3 text-sm text-text-muted">
+                {pointsPolicy.data.pointsEnabled
+                  ? `Earn 1 point per ${formatMinor(pointsPolicy.data.earnEveryMinor)} paid. Each point redeems ${formatMinor(pointsPolicy.data.pointValueMinor)}; minimum ${pointsPolicy.data.minimumRedeemPoints} points.`
+                  : 'Points earning and redemption are disabled.'}
+              </p>
+            )}
             {customerQuery.data ? (
               <div className="space-y-4 text-sm text-text-body">
                 <div>
@@ -2271,10 +2321,8 @@ function ScopedPharmacyCounterConsole({
                     Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
                   </p>
                 </div>
-                <div className="flex gap-2">
-                  <Label htmlFor="counter-redeem-points" className="sr-only">
-                    Points to redeem
-                  </Label>
+                <div className="flex flex-wrap items-end gap-2">
+                  <Label htmlFor="counter-redeem-points">Points to redeem</Label>
                   <Input
                     id="counter-redeem-points"
                     type="number"
@@ -2290,7 +2338,12 @@ function ScopedPharmacyCounterConsole({
                     type="button"
                     className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
                     disabled={
-                      busy || redeemPoints <= 0 || balanceMinor === null || balanceMinor <= 0
+                      busy ||
+                      !pointsPolicy.data?.pointsEnabled ||
+                      redeemPoints < (pointsPolicy.data?.minimumRedeemPoints ?? 1) ||
+                      redeemPoints > customerQuery.data.pointsBalance ||
+                      balanceMinor === null ||
+                      balanceMinor <= 0
                     }
                     onClick={() => void redeemCustomerPoints()}
                   >

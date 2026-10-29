@@ -69,11 +69,11 @@ export async function readWalletLiability(
   `);
   // This legacy response is denominated in paisa. Multi-currency reconciliation
   // below is explicit; never add unlike currencies or silently drop one here.
-  if (row && (row.currencyCount > 1n || (row.currency !== null && row.currency !== 'PKR')))
+  if (row && (row.currencyCount > BigInt('1') || (row.currency !== null && row.currency !== 'PKR')))
     throw new RangeError('WALLET_REPORT_CURRENCY_REQUIRED');
   return {
-    liabilityMinor: safeMinor(row?.liabilityMinor ?? 0n),
-    topUpCashInMinor: safeMinor(row?.topUpCashInMinor ?? 0n),
+    liabilityMinor: safeMinor(row?.liabilityMinor ?? BigInt('0')),
+    topUpCashInMinor: safeMinor(row?.topUpCashInMinor ?? BigInt('0')),
   };
 }
 
@@ -136,7 +136,7 @@ export async function readWalletReconciliation(
       WHERE e."organizationId"=${scope.organizationId} AND e."sourceKind"::text='PHARMACY_STORED_VALUE_JOURNAL'
         AND ((e."occurredAt"<${scope.to} AND (e."branchId"=${scope.branchId} OR EXISTS (
           SELECT 1 FROM finance_journal_lines b WHERE b."organizationId"=e."organizationId" AND b."entryId"=e.id AND b."branchId"=${scope.branchId}
-        ))) OR EXISTS (SELECT 1 FROM wallet_events w WHERE w."sourceId"=e."sourceId"))
+        ))) OR e."sourceId" IN (SELECT w."sourceId" FROM wallet_events w))
       GROUP BY e.id,e."sourceId",e."organizationId",e.currency,e."occurredAt",e."reversesEntryId",e."reversalReason",e."branchId",e."idempotencyKey",e."actorId"
     )
     SELECT 'WALLET'::text AS "rowKind",NULL::text AS "entryId",w."sourceId",w."organizationId",w."branchId",COALESCE(w.currency,'UNKNOWN') AS currency,

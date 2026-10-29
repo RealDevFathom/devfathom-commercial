@@ -114,6 +114,7 @@ async function main(): Promise<void> {
       STAGING_DEMO_DATABASE_URL: appUrl,
       DATABASE_URL: appUrl,
       PHARMACY_E2E_GRANTS_ONLY: '1',
+      PHARMACY_E2E_ADMIN_EMAIL: logins.pharmacy.email,
       PHARMACY_E2E_ADMIN_PASSWORD: logins.pharmacy.password,
     });
     console.log('\n✓ Staging demo grants top-up complete.');

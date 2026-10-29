@@ -102,14 +102,14 @@ function expectedCounterAccount(event: WalletEventSnapshot): string | null {
     event.tender === null &&
     event.currency === 'PKR' &&
     event.journalCurrency === 'PKR' &&
-    event.liabilityDeltaMinor < 0n &&
+    event.liabilityDeltaMinor < BigInt('0') &&
     event.counterAccountKind === 'SALES_CLEARING'
   )
     return 'SALES_CLEARING';
   if (
     event.kind !== 'TOP_UP' ||
     event.saleId ||
-    event.liabilityDeltaMinor <= 0n ||
+    event.liabilityDeltaMinor <= BigInt('0') ||
     event.counterAccountKind !== 'CASH_CLEARING'
   )
     return null;
@@ -144,7 +144,12 @@ export function reconcileWalletJournals(
     if (row.occurredAt >= scope.to) return;
     let balance = totals.get(row.currency);
     if (!balance) {
-      balance = { walletOpening: 0n, walletChange: 0n, canonicalOpening: 0n, canonicalChange: 0n };
+      balance = {
+        walletOpening: BigInt('0'),
+        walletChange: BigInt('0'),
+        canonicalOpening: BigInt('0'),
+        canonicalChange: BigInt('0'),
+      };
       totals.set(row.currency, balance);
     }
     if (canonical) {
@@ -170,12 +175,12 @@ export function reconcileWalletJournals(
     if (walletById.has(event.sourceId)) addIssue(event.sourceId, 'DUPLICATE_WALLET_SOURCE');
     else walletById.set(event.sourceId, event);
     if (
-      event.lineCount !== 2n ||
-      event.liabilityLegCount !== 1n ||
-      event.currencyCount !== 1n ||
-      event.customerMismatchCount !== 0n ||
-      event.balanceMinor !== 0n ||
-      event.liabilityDeltaMinor === 0n
+      event.lineCount !== BigInt('2') ||
+      event.liabilityLegCount !== BigInt('1') ||
+      event.currencyCount !== BigInt('1') ||
+      event.customerMismatchCount !== BigInt('0') ||
+      event.balanceMinor !== BigInt('0') ||
+      event.liabilityDeltaMinor === BigInt('0')
     )
       addIssue(event.sourceId, 'INVALID_WALLET_ENTRY');
     if (!event.journalCurrency || !event.actorId)
@@ -201,20 +206,20 @@ export function reconcileWalletJournals(
     if (
       entry.branchId !== scope.branchId ||
       entry.headerBranchId !== scope.branchId ||
-      entry.wrongBranchCount !== 0n
+      entry.wrongBranchCount !== BigInt('0')
     )
       addIssue(entry.sourceId, 'DIMENSION_MISMATCH');
     if (
-      entry.lineCount !== 2n ||
-      entry.liabilityLegCount !== 1n ||
-      entry.balanceMinor !== 0n ||
-      entry.liabilityDeltaMinor === 0n
+      entry.lineCount !== BigInt('2') ||
+      entry.liabilityLegCount !== BigInt('1') ||
+      entry.balanceMinor !== BigInt('0') ||
+      entry.liabilityDeltaMinor === BigInt('0')
     )
       addIssue(entry.sourceId, 'INVALID_CANONICAL_ENTRY');
     if (
       entry.idempotencyKey !== `finance:PHARMACY_STORED_VALUE_JOURNAL:${entry.sourceId}` ||
       !entry.actorId ||
-      entry.sourceLineMismatchCount !== 0n
+      entry.sourceLineMismatchCount !== BigInt('0')
     )
       addIssue(entry.sourceId, 'SOURCE_PROVENANCE_MISMATCH');
     if (entry.reversesEntryId !== null || entry.reversalReason !== null)

@@ -13,6 +13,7 @@ const ConnectionParameters = createRequire(import.meta.url)(
 };
 const boundary = vi.hoisted(() => ({
   pool: vi.fn(function refusePool(_options: { connectionString: string; max: number }) {
+    void _options;
     throw new Error('ACCOUNTS_TEST_POOL_BOUNDARY_ONLY');
   }),
   adapter: vi.fn(),
@@ -21,22 +22,26 @@ const boundary = vi.hoisted(() => ({
 vi.mock('pg', () => ({ default: { Pool: boundary.pool } }));
 vi.mock('@prisma/adapter-pg', () => ({ PrismaPg: boundary.adapter }));
 vi.mock('@/generated/prisma/client', () => ({ PrismaClient: boundary.client }));
-vi.mock('node:fs', () => ({
-  realpathSync: () => '/tmp/qa603-private',
-  lstatSync: (path: string) => ({
-    mode: 0o40700,
-    uid: process.getuid?.(),
-    isDirectory: () => path === '/tmp/qa603-private',
-    isSymbolicLink: () => false,
-    isSocket: () => path === '/tmp/qa603-private/.s.PGSQL.5432',
-  }),
-}));
+vi.mock('node:fs', () => {
+  const mock = {
+    realpathSync: () => '/tmp/qa603-private',
+    lstatSync: (path: string) => ({
+      mode: 0o40700,
+      uid: process.getuid?.(),
+      isDirectory: () => path === '/tmp/qa603-private',
+      isSymbolicLink: () => false,
+      isSocket: () => path === '/tmp/qa603-private/.s.PGSQL.5432',
+    }),
+  };
+  return { ...mock, default: mock };
+});
 
 const runId = 'a'.repeat(32);
 const database = `qa603_${runId}`;
 const role = 'qa603_runtime';
 const socket = '/tmp/qa603-private';
 const env = (): NodeJS.ProcessEnv => ({
+  NODE_ENV: 'test',
   TEST_DATABASE_URL: `postgresql://${role}:synthetic@localhost/${database}?host=${encodeURIComponent(socket)}`,
   PHARMACY_ACCOUNTS_TEST_RUN_ID: runId,
   PHARMACY_ACCOUNTS_TEST_DATABASE: database,

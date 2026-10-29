@@ -1,0 +1,1 @@
+ALTER TYPE "PharmacyLoyaltyEntryKind" ADD VALUE IF NOT EXISTS 'ADJUSTMENT';

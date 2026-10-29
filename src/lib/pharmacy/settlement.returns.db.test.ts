@@ -96,6 +96,11 @@ async function ensureVisibilityParents() {
         effectiveFrom: new Date('2026-01-01'),
       },
     });
+    await db.pharmacyLoyaltySettings.upsert({
+      where: { organizationId: scope.organizationId },
+      create: { organizationId: scope.organizationId, pointsEnabled: true },
+      update: { pointsEnabled: true },
+    });
     for (const [id, code, name, kind] of [
       [fixture.stockLocationId, fixture.stockLocationCode, 'Store', 'STORE'],
       [fixture.quarantineLocationId, 'QUARANTINE', 'Quarantine', 'QUARANTINE'],

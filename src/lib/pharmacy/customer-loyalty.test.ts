@@ -1,3 +1,11 @@
+vi.mock('./points-policy', () => ({
+  readPointsPolicy: vi.fn(async () => ({
+    pointsEnabled: true,
+    earnEveryMinor: 100,
+    pointValueMinor: 100,
+    minimumRedeemPoints: 1,
+  })),
+}));
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
@@ -34,7 +42,7 @@ describe('CRM-L01 pharmacy loyalty', () => {
     expect(db.patientConsent.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ purpose: 'LOYALTY', organizationId: 'org-a' }),
-        orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
+        orderBy: [{ recordedAt: 'desc' }, { version: 'desc' }],
       })
     );
     expect(update).not.toHaveBeenCalled();
@@ -48,6 +56,7 @@ describe('CRM-L01 pharmacy loyalty', () => {
       pharmacySale: {
         findFirst: vi.fn().mockResolvedValue({
           id: 'sale-a',
+          status: 'COMPLETED',
           customerId: 'customer-a',
           tenders: [
             { type: 'CASH', amountMinor: 10_099 },
@@ -56,6 +65,11 @@ describe('CRM-L01 pharmacy loyalty', () => {
         }),
       },
     };
+    Object.assign(db, {
+      $queryRaw: vi.fn(async () => [{ id: 'sale-a', patientId: 'patient-a' }]),
+      pharmacyCustomer: { findFirst: vi.fn(async () => ({ patientId: 'patient-a' })) },
+      patientConsent: { findFirst: vi.fn(async () => ({ granted: true, revokedAt: null })) },
+    });
     await accrueSalePoints(db as never, scope, 'sale-a');
     expect(create).toHaveBeenCalledWith({
       data: expect.objectContaining({ points: 100, netPaidMinor: 10_099, kind: 'EARN' }),

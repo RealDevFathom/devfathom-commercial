@@ -528,9 +528,18 @@ describe('optional pharmacy Owner / Operator', () => {
       },
       {
         key: 'manager',
-        capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+        capabilities: [
+          'pharmacy:manage',
+          'pharmacy:orders',
+          'pharmacy:procurement',
+          'pharmacy:wallet-topup',
+          'pharmacy:wallet-adjust',
+        ],
       },
-      { key: 'cashier', capabilities: ['pharmacy:counter', 'pharmacy:orders'] },
+      {
+        key: 'cashier',
+        capabilities: ['pharmacy:counter', 'pharmacy:orders', 'pharmacy:wallet-topup'],
+      },
       { key: 'procurement', capabilities: ['pharmacy:procurement'] },
       { key: 'inventory', capabilities: ['pharmacy:inventory'] },
       { key: 'finance', capabilities: ['reports:financial'] },

@@ -112,6 +112,7 @@ describe('pharmacovigilance PostgreSQL authorization and review', () => {
               legalName: org,
               displayName: org,
               vertical: 'PHARMACY',
+              pharmacyOperatingMode: 'SOLO',
               status: 'ACTIVE',
               deploymentMode: 'SHARED',
             },

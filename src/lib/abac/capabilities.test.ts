@@ -6,6 +6,7 @@ import { ALL_ACTIONS } from './policies';
 export const intendedPharmacyGrants = {
   owner: [
     'pharmacy:*',
+    'pharmacy:loyalty-manage',
     'reports:operational',
     'reports:financial',
     'pharmacy:dispense',
@@ -21,8 +22,14 @@ export const intendedPharmacyGrants = {
     'pharmacy:safety',
   ],
   pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
-  manager: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
-  cashier: ['pharmacy:counter', 'pharmacy:orders'],
+  manager: [
+    'pharmacy:manage',
+    'pharmacy:orders',
+    'pharmacy:procurement',
+    'pharmacy:wallet-topup',
+    'pharmacy:wallet-adjust',
+  ],
+  cashier: ['pharmacy:counter', 'pharmacy:orders', 'pharmacy:wallet-topup'],
   procurement: ['pharmacy:procurement'],
   inventory: ['pharmacy:inventory'],
   finance: ['reports:financial'],
@@ -81,7 +88,7 @@ describe('canonical capability contract (#130)', () => {
 
   it.each([
     ['pharmacist', ['pharmacy:dispense', 'pharmacy:catalogue-review']],
-    ['cashier', ['pharmacy:counter', 'pharmacy:orders']],
+    ['cashier', ['pharmacy:counter', 'pharmacy:orders', 'pharmacy:wallet-topup']],
     ['finance', ['reports:financial']],
     ['auditor', ['reports:operational']],
   ])('limits %s to its intended checked actions', (key, actions) => {

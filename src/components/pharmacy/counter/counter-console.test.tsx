@@ -114,6 +114,8 @@ vi.mock('@/lib/trpc', () => {
         'declineSubstitute',
         'linkCustomer',
         'redeemPoints',
+        'loyaltyConsent',
+        'counterPointsPolicy',
         'authenticatePack',
         'substituteProposals',
       ]),
@@ -248,6 +250,12 @@ beforeEach(() => {
     'rxApprovers',
   ])
     mocks.queries[name] = query();
+  mocks.queries.counterPointsPolicy = query({
+    pointsEnabled: true,
+    earnEveryMinor: 100,
+    pointValueMinor: 100,
+    minimumRedeemPoints: 1,
+  });
   mocks.queries.drawerStatus = query({ openDrawer: null });
   mocks.queries.counterBranches = query({
     branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
@@ -265,6 +273,8 @@ beforeEach(() => {
     'declineSubstitute',
     'linkCustomer',
     'redeemPoints',
+    'loyaltyConsent',
+    'counterPointsPolicy',
     'authenticatePack',
   ])
     mocks.mutations[name] = vi.fn();
@@ -1170,6 +1180,12 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
         },
         blocked: [],
       };
+      mocks.queries.counterPointsPolicy = query({
+        pointsEnabled: true,
+        earnEveryMinor: 100,
+        pointValueMinor: 100,
+        minimumRedeemPoints: 1,
+      });
       mocks.queries.rxApprovers = query({ mode, users: [{ id: 'pharmacist', name: 'Checker' }] });
       mocks.queries.counterSearch = query({ rows: [row] });
       mocks.mutations.addLine!.mockResolvedValue({});

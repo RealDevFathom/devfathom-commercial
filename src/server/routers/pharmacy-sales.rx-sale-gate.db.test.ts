@@ -173,11 +173,8 @@ async function expectRefusedEverywhere(
   const tendered = await pharmacistSale();
   await expect(payInCash(userId, tendered)).rejects.toMatchObject(tenderRefusal);
   const redeemed = await pharmacistSale({ customer: true });
-  // Redemption has an exact dispense capability guard before the sale-level gate.
-  await expect(payInPoints(userId, redeemed)).rejects.toMatchObject({
-    code: 'FORBIDDEN',
-    message: 'You do not have permission for this action.',
-  });
+  // OTC counter access is independent; Rx redemption still requires dispensing permission.
+  await expect(payInPoints(userId, redeemed)).rejects.toMatchObject(DENIED);
   for (const sale of [tendered, redeemed])
     expect(await cart(sale.saleId)).toMatchObject({ status: 'OPEN', totals: { tenderedMinor: 0 } });
 }
@@ -344,6 +341,7 @@ beforeAll(async () => {
       presentationId: medicine.presentations[0]!.id,
       packLevelId: packLevel.id,
     };
+    await tx.pharmacyLoyaltySettings.create({ data: { pointsEnabled: true } });
     const patient = await tx.pharmacyPatient.create({ data: { displayName: 'Ayesha Khan' } });
     patientId = patient.id;
     await tx.patientConsent.create({

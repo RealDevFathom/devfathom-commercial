@@ -120,8 +120,7 @@ beforeEach(() => {
       $executeRawUnsafe: lock,
       restaurantBill: { findFirst: findBill, findFirstOrThrow: findBill },
       restaurantBranch: { findFirst: findLayout },
-      restaurantStaffJobRole: { findMany: async () => [] },
-      restaurantStaffCapabilityGrant: { findMany: async () => [] },
+
       restaurantStaffProfile: {
         findUnique: async () => ({
           status: 'ACTIVE',

@@ -32,7 +32,21 @@ describe('Rx approval on a discounted line', () => {
     }));
     mocks.add.mockResolvedValue({ line: { id: 'line' } });
     const db = {
-      pharmacyBranch: { findMany: vi.fn(async () => [{ id: 'branch' }]) },
+      user: {
+        findUnique: vi.fn(async () => ({
+          id: 'actor',
+          organizationId: 'org',
+          role: 'EMPLOYEE',
+          status: 'ACTIVE',
+          organizationRole: { permissions: [{ capability: 'pharmacy:counter', effect: 'ALLOW' }] },
+          permissionOverrides: [],
+        })),
+      },
+      pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch' }]) },
+      pharmacyBranch: {
+        findMany: vi.fn(async () => [{ id: 'branch' }]),
+        findFirst: vi.fn(async () => ({ id: 'branch' })),
+      },
       medicine: { findFirst: vi.fn(async () => ({ rx: true, controlled: false })) },
       pharmacySale: { findFirst: vi.fn(async () => ({ createdByUserId: 'maker' })) },
       $transaction: (run: (db: unknown) => unknown) => run(db),

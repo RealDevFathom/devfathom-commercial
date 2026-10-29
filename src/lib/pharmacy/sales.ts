@@ -1,3 +1,4 @@
+import { restoreVoidedSalePoints } from './points-void';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -399,6 +400,8 @@ export async function changeSaleStatus(
   if (claimed.count !== 1) throw new PharmacySaleError('INVALID_STATE');
 
   if (action === 'void') {
+    const voided = await saleInScope(db, scope, saleId);
+    if (voided.customerId) await restoreVoidedSalePoints(db, scope, saleId);
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
         organizationId: scope.organizationId,

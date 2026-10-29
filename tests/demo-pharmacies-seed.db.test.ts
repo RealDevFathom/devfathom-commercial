@@ -132,7 +132,38 @@ describe('persisted demo pharmacy seed', () => {
         );
         expect(sales.some((s) => s.lines.some((l) => l.medicine.otc))).toBe(true);
         expect(sales.some((s) => s.lines.some((l) => l.discountMinor > 0))).toBe(true);
+        const policy = await prisma.pharmacyLoyaltySettings.findUnique({
+          where: { organizationId },
+        });
+        expect(policy).toMatchObject({
+          pointsEnabled: true,
+          earnEveryMinor: 1000,
+          pointValueMinor: 100,
+          minimumRedeemPoints: 5,
+        });
+        const customers = await prisma.pharmacyCustomer.findMany({ where: { organizationId } });
+        expect(customers).toHaveLength(4);
+        for (const customer of customers) {
+          const consent = await prisma.patientConsent.findFirst({
+            where: { organizationId, patientId: customer.patientId, purpose: 'LOYALTY' },
+            orderBy: { version: 'desc' },
+          });
+          expect(consent).toMatchObject({ granted: true, revokedAt: null });
+          const entries = await prisma.pharmacyLoyaltyPointsEntry.findMany({
+            where: { organizationId, customerId: customer.id },
+          });
+          expect(entries.some((entry) => entry.kind === 'EARN')).toBe(true);
+          expect(entries.reduce((sum, entry) => sum + entry.points, 0)).toBeGreaterThan(0);
+          expect(
+            entries
+              .filter((entry) => entry.kind === 'EARN')
+              .every((entry) => entry.earnEveryMinor === 1000)
+          ).toBe(true);
+        }
         const counts = {
+          loyaltyEntries: await prisma.pharmacyLoyaltyPointsEntry.count({
+            where: { organizationId },
+          }),
           medicines: medicines.length,
           batches: batches.length,
           sales: sales.length,
@@ -166,3 +197,62 @@ describe('persisted demo pharmacy seed', () => {
     );
   }, 120000);
 });
+
+it('upgrades an existing demo with no earned history using new consented sales, preserving its receipts', async () => {
+  const plan = {
+    slug: `loyalty-upgrade-${randomUUID()}`,
+    name: 'Synthetic legacy demo',
+    mode: 'SOLO' as const,
+    roles: ['owner'],
+  };
+  const organization = await prisma.organization.create({
+    data: {
+      slug: plan.slug,
+      legalName: plan.name,
+      displayName: plan.name,
+      vertical: 'PHARMACY',
+      status: 'ACTIVE',
+      currency: 'PKR',
+      pharmacyOperatingMode: 'SOLO',
+      notes: 'Synthetic pharmacy demonstration fixture (seed-demo-pharmacies:v1)',
+    },
+  });
+  await prisma.pharmacyLoyaltySettings.create({
+    data: { organizationId: organization.id, pointsEnabled: false, earnEveryMinor: 1000 },
+  });
+  await seedDemoPharmacies(prisma, env, [plan]);
+  const original = await prisma.pharmacySale.findMany({
+    where: { organizationId: organization.id },
+    orderBy: { id: 'asc' },
+    select: { id: true, receiptNumber: true, customerId: true },
+  });
+  expect(original).toHaveLength(30);
+  expect(
+    await prisma.pharmacyLoyaltyPointsEntry.count({ where: { organizationId: organization.id } })
+  ).toBe(0);
+  await prisma.pharmacyLoyaltySettings.update({
+    where: { organizationId: organization.id },
+    data: { pointsEnabled: true },
+  });
+  await seedDemoPharmacies(prisma, env, [plan]);
+  expect(
+    await prisma.pharmacySale.findMany({
+      where: { organizationId: organization.id, id: { in: original.map((row) => row.id) } },
+      orderBy: { id: 'asc' },
+      select: { id: true, receiptNumber: true, customerId: true },
+    })
+  ).toEqual(original);
+  const entries = await prisma.pharmacyLoyaltyPointsEntry.findMany({
+    where: { organizationId: organization.id, kind: 'EARN' },
+  });
+  expect(entries).toHaveLength(4);
+  expect(new Set(entries.map((entry) => entry.customerId)).size).toBe(4);
+  expect(entries.every((entry) => entry.points > 0)).toBe(true);
+  await seedDemoPharmacies(prisma, env, [plan]);
+  expect(await prisma.pharmacySale.count({ where: { organizationId: organization.id } })).toBe(34);
+  expect(
+    await prisma.pharmacyLoyaltyPointsEntry.count({
+      where: { organizationId: organization.id, kind: 'EARN' },
+    })
+  ).toBe(4);
+}, 120000);

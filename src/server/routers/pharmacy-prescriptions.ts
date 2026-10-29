@@ -496,7 +496,16 @@ export const pharmacyPrescriptionsRouter = router({
           actorId: ctx.session.user.id,
           patientId: panel.patientId,
         });
-        return panel;
+        const loyalty = await ctx.db.patientConsent.findFirst({
+          where: {
+            organizationId: ctx.entitlements.organizationId,
+            patientId: input.patientId,
+            purpose: 'LOYALTY',
+          },
+          orderBy: [{ recordedAt: 'desc' }, { version: 'desc' }],
+          select: { granted: true, revokedAt: true },
+        });
+        return { ...panel, loyaltyConsent: Boolean(loyalty?.granted && !loyalty.revokedAt) };
       } catch (error) {
         if (error instanceof PharmacyCounterPrescriptionError) {
           throw new TRPCError({

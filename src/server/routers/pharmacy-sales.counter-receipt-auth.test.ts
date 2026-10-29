@@ -33,6 +33,8 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
+  createSale: vi.fn(async () => ({ id: 'sale-a' })),
+  addSaleLine: vi.fn(async () => ({ line: { id: 'line-a' } })),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
@@ -64,7 +66,7 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { readReturnHistory } from '@/lib/pharmacy/sales';
+import { readReturnHistory, createSale, addSaleLine } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -127,6 +129,9 @@ function fixture(
     },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => [] as { branchId: string }[]),
+    },
+    medicine: {
+      findFirst: vi.fn(async () => ({ rx: false, restricted: false, controlled: false })),
     },
     pharmacySale: {
       findMany: vi.fn(async () => [
@@ -225,6 +230,97 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  const otcLine = {
+    branchId: 'branch-a',
+    saleId: 'sale-a',
+    medicineId: 'medicine-a',
+    presentationId: 'presentation-a',
+    packLevelId: 'pack-a',
+    saleUnit: 'UNIT' as const,
+    quantity: 1,
+    canonicalUnitsPerSaleUnit: 1,
+    idempotencyKey: 'otc-line-1',
+  };
+
+  it.each(['role', 'override'])(
+    'keeps OTC access with %s dispensing DENY and refuses Rx',
+    async (source) => {
+      const counter: Permission = { capability: 'pharmacy:counter', effect: 'ALLOW' };
+      const deny: Permission = { capability: 'pharmacy:dispense', effect: 'DENY' };
+      const f = fixture(
+        source === 'role' ? [counter, deny] : [counter],
+        'EMPLOYEE',
+        source === 'override' ? [deny] : []
+      );
+      assign(f, ['branch-a']);
+      await expect(f.caller().create({ branchId: 'branch-a' })).resolves.toEqual({ id: 'sale-a' });
+      await expect(f.caller().addLine(otcLine)).resolves.toEqual({ line: { id: 'line-a' } });
+      for (const path of paths)
+        await expect(path.run(f.caller())).resolves.toMatchObject(path.allowed);
+      await expect(
+        f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
+      ).resolves.toMatchObject({ saleId: 'sale-a' });
+      await expect(
+        f.caller().tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01'),
+          type: 'CASH',
+          amountMinor: 100,
+          idempotencyKey: 'otc-deny-rx',
+        })
+      ).resolves.toEqual({ tenderId: 'tender-1' });
+      f.db.medicine.findFirst.mockResolvedValue({ rx: true, restricted: false, controlled: false });
+      await expect(f.caller().addLine(otcLine)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(addSaleLine).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each([
+    'unassigned',
+    'other-branch',
+    'counter-denied',
+    'counter-override-denied',
+    'dispense-only',
+  ])('refuses create and OTC allocation for %s employees', async (scenario) => {
+    const f = fixture(
+      [
+        { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+        ...(scenario === 'dispense-only'
+          ? []
+          : [
+              {
+                capability: 'pharmacy:counter',
+                effect: scenario === 'counter-denied' ? 'DENY' : 'ALLOW',
+              } as Permission,
+            ]),
+      ],
+      'EMPLOYEE',
+      scenario === 'counter-override-denied'
+        ? [{ capability: 'pharmacy.counter', effect: 'DENY' }]
+        : []
+    );
+    assign(
+      f,
+      scenario === 'unassigned' ? [] : [scenario === 'other-branch' ? 'branch-b' : 'branch-a']
+    );
+    await expect(f.caller().create({ branchId: 'branch-a' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(f.caller().addLine(otcLine)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(createSale).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(f.db.medicine.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('allows a live singleton system owner to create and add OTC without assignment', async () => {
+    const f = fixture([], 'EMPLOYEE', [], 'owner');
+    f.db.user.count.mockResolvedValue(1);
+    await expect(f.caller().create({ branchId: 'branch-a' })).resolves.toEqual({ id: 'sale-a' });
+    await expect(f.caller().addLine(otcLine)).resolves.toEqual({ line: { id: 'line-a' } });
+  });
+
   describe.each([
     { name: 'persisted admin', role: 'ADMIN' as const, key: 'custom' },
     { name: 'persisted owner', role: 'EMPLOYEE' as const, key: 'owner' },
@@ -252,8 +348,6 @@ describe('counter receipt authorization', () => {
         'pharmacy.counter',
         'pharmacy:receipt',
         'pharmacy.receipt',
-        'pharmacy:dispense',
-        'pharmacy.dispense',
       ]) {
         for (const source of ['role', 'override']) {
           const deny: Permission = { capability, effect: 'DENY' };

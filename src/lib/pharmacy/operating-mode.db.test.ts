@@ -1,10 +1,14 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { Client } from 'pg';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { hash } from 'bcryptjs';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import { enforceOperatingMode, type PharmacyApprovalKind } from './operating-mode';
 import { authorizeSoloApproval } from './solo-approval';
+const originalUrl = process.env.DATABASE_URL;
+const runtimeRole = `mode_runtime_${randomUUID().replaceAll('-', '')}`;
+let owner: Client;
 const suffix = randomUUID();
 const pin = '583917';
 const solo = {
@@ -21,6 +25,20 @@ const roles = (org: string, key: string) => `${org}-${key}`;
 beforeAll(async () => {
   if (!process.env.DATABASE_URL)
     throw new Error('Local DATABASE_URL required; operating-mode integration never skips');
+  owner = new Client({ connectionString: originalUrl });
+  await owner.connect();
+  await owner.query(`CREATE ROLE "${runtimeRole}" NOLOGIN NOSUPERUSER NOBYPASSRLS`);
+  await owner.query(`GRANT USAGE ON SCHEMA public TO "${runtimeRole}"`);
+  await owner.query(
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${runtimeRole}"`
+  );
+  await owner.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "${runtimeRole}"`);
+  const runtime = new URL(originalUrl!);
+  runtime.searchParams.set(
+    'options',
+    `${runtime.searchParams.get('options') ?? ''} -c role=${runtimeRole}`.trim()
+  );
+  process.env.DATABASE_URL = runtime.toString();
   const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
   await assertRlsEnforcingRole(withPlatformDb);
   for (const [scope, mode] of [
@@ -219,4 +237,15 @@ it('rolls back SOLO evidence if its transaction changes to STAFFED before commit
     },
     { skipDrain: true }
   );
+});
+
+afterAll(async () => {
+  const { db } = await import('@/lib/db');
+  await db.$disconnect();
+  if (originalUrl) process.env.DATABASE_URL = originalUrl;
+  if (owner) {
+    await owner.query(`DROP OWNED BY "${runtimeRole}"`);
+    await owner.query(`DROP ROLE "${runtimeRole}"`);
+    await owner.end();
+  }
 });

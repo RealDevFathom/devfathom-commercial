@@ -39,3 +39,11 @@ Only the active system owner can change operating mode, with fresh PIN reauthent
 `tests/demo-pharmacies-seed.db.test.ts` runs the seed twice against a disposable local database and checks persisted users/modes, 40 medicines and 80 batches per pharmacy, 30 sales days, Rx fills, discounts, returns/refunds, suppliers/POs, low-stock/expiry examples, password hashing, missing-secret refusal, and stable counts. `src/lib/pharmacy/operating-mode.db.test.ts` exercises the policy matrix with real PINs and RLS; the existing #683 regression suites cover audit rollback, stale evidence, lockout, branch restrictions, and roster races.
 
 All names, clinical records, supplier evidence, and transactions are demo data and must not be used for real dispensing or financial reporting.
+
+## Loyalty points wallet
+
+Both modes now include the Pharmacy CRM module, an enabled points policy, and four synthetic consenting retail customers. The initial policy earns one point per 1,000 paisa paid, redeems each point for 100 paisa, and requires at least five points per redemption. Completed demo sales create branch-scoped history; their cash refunds reverse earned points at the original rate.
+
+Reruns preserve owner policy changes and recorded consent choices. A pre-loyalty demo with no earned history receives separate, auditable starter sales for consenting customers; its completed receipts are never rewritten. Stable starter-sale keys prevent duplicate balances on later runs.
+
+Owners and authorized administrators configure the policy at `/pharmacy/settings/loyalty`. The counter exposes explicit customer opt in/out, checkout redemption, balance and history. `/pharmacy/loyalty` provides the branch ledger and reasoned, audited corrections. These points are separate from prepaid stored-value deposits and their accounting.

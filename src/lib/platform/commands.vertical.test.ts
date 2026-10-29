@@ -282,7 +282,6 @@ describe('organization.create vertical + package compatibility', () => {
 
   it('stamps an AGENCY organization by default and writes no restaurant rows', async () => {
     mocks.pkgFindUnique.mockResolvedValue({
-      defaultSeats: 25,
       id: 'pkg_1',
       active: true,
       defaultSeats: 25,
@@ -303,7 +302,6 @@ describe('organization.create vertical + package compatibility', () => {
 
   it('provisions a RESTAURANT organization: default branch, admin assignment, role templates', async () => {
     mocks.pkgFindUnique.mockResolvedValue({
-      defaultSeats: 25,
       id: 'pkg_r',
       active: true,
       defaultSeats: 25,
@@ -348,7 +346,6 @@ describe('organization.create vertical + package compatibility', () => {
   // unless provisioning seeds the vertical's departments first.
   it('seeds AGENCY departments from the catalog before creating the administrator', async () => {
     mocks.pkgFindUnique.mockResolvedValue({
-      defaultSeats: 25,
       id: 'pkg_1',
       active: true,
       defaultSeats: 25,
@@ -383,7 +380,6 @@ describe('organization.create vertical + package compatibility', () => {
 
   it('seeds RESTAURANT departments only, and files the admin front of house', async () => {
     mocks.pkgFindUnique.mockResolvedValue({
-      defaultSeats: 25,
       id: 'pkg_r',
       active: true,
       defaultSeats: 25,
@@ -424,7 +420,6 @@ describe('organization.create vertical + package compatibility', () => {
       id: `role_${data.key}`,
     }));
     mocks.pkgFindUnique.mockResolvedValue({
-      defaultSeats: 25,
       id: 'pkg_p',
       active: true,
       defaultSeats: 25,
@@ -492,7 +487,6 @@ describe('organization.create vertical + package compatibility', () => {
 
   it('refuses a PHARMACY create that names no premises for its first branch', async () => {
     mocks.pkgFindUnique.mockResolvedValue({
-      defaultSeats: 25,
       id: 'pkg_p',
       active: true,
       defaultSeats: 25,
@@ -524,7 +518,6 @@ describe('organization.create vertical + package compatibility', () => {
 
   it('refuses a province no pharmacy surface can name', async () => {
     mocks.pkgFindUnique.mockResolvedValue({
-      defaultSeats: 25,
       id: 'pkg_p',
       active: true,
       defaultSeats: 25,
@@ -547,7 +540,6 @@ describe('organization.create vertical + package compatibility', () => {
     // `admin` role and adds `member`; seeding it would collide on the
     // (organizationId, key) unique index and change every agency onboarding.
     mocks.pkgFindUnique.mockResolvedValue({
-      defaultSeats: 25,
       id: 'pkg_1',
       active: true,
       defaultSeats: 25,
@@ -567,7 +559,6 @@ describe('organization.create vertical + package compatibility', () => {
 
   it('rejects a crafted RESTAURANT create carrying an AGENCY package', async () => {
     mocks.pkgFindUnique.mockResolvedValue({
-      defaultSeats: 25,
       id: 'pkg_a',
       active: true,
       defaultSeats: 25,
@@ -588,7 +579,6 @@ describe('organization.create vertical + package compatibility', () => {
 
   it('rejects a crafted AGENCY create carrying a RESTAURANT package', async () => {
     mocks.pkgFindUnique.mockResolvedValue({
-      defaultSeats: 25,
       id: 'pkg_r',
       active: true,
       defaultSeats: 25,
@@ -1131,7 +1121,7 @@ function pharmacyOrg() {
 const VALID_PROFILE = {
   branchId: 'branch-p',
   licenceCategory: 'PHARMACY',
-  licenceEvidenceFileRef: 'licence-evidence',
+
   licenceValidFrom: new Date('2026-01-01'),
   licenceValidTo: new Date('2027-01-01'),
   licenceEvidenceFileRef: 'evidence://pharmacy-licence',

@@ -1,3 +1,11 @@
+vi.mock('./points-policy', () => ({
+  readPointsPolicy: vi.fn(async () => ({
+    pointsEnabled: true,
+    earnEveryMinor: 100,
+    pointValueMinor: 100,
+    minimumRedeemPoints: 1,
+  })),
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { redeemSalePoints } from './customer-loyalty';
 import { postSaleLineEntry, postTenderEntry } from './finance-postings';

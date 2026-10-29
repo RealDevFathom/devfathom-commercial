@@ -166,6 +166,10 @@ function dbFor(organizationId: string): ScopedDb {
               status: deniedScope === 'inactive' ? 'SUSPENDED' : 'ACTIVE',
             },
       findUnique: async () => ({
+        id: 'actor-a',
+        organizationId,
+        role: 'ADMIN',
+        status: deniedScope === 'inactive' ? 'SUSPENDED' : 'ACTIVE',
         organizationRole: { permissions: [{ capability: '*', effect: 'ALLOW' }] },
         permissionOverrides: deny ? [{ capability: deny, effect: 'DENY' }] : [],
       }),
