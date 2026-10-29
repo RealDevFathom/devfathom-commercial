@@ -103,6 +103,9 @@
   "trustedDependencies": [
     "unrs-resolver",
   ],
+  "patchedDependencies": {
+    "deepmerge@4.3.1": "patches/deepmerge@4.3.1.patch",
+  },
   "overrides": {
     "@ai-sdk/provider-utils": {
       ".": "4.0.62",

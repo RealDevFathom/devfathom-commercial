@@ -107,6 +107,10 @@ async function main() {
     };
     const files = [
       'src/lib/pharmacy/wallet-security.db.test.ts',
+      'src/lib/pharmacy/finance-postings.db.test.ts',
+      'src/lib/pharmacy/stock-ledger.db.test.ts',
+      'tests/support-read-only.db.test.ts',
+      'tests/support-session-hardening.db.test.ts',
       'src/lib/pharmacy/wallet-reporting.db.test.ts',
       'src/lib/pharmacy/stored-value-finance.db.test.ts',
       'src/server/routers/pharmacy-sales.counter-receipt-auth.db.test.ts',
@@ -157,6 +161,21 @@ async function main() {
     if (!branchAssertions.length || branchAssertions.some((test) => test.status !== 'passed'))
       throw Error('BRANCH_TESTS_REQUIRE_ZERO_SKIPS');
     console.log(`Branch security: ${branchAssertions.length} passed, zero skipped.`);
+    run(
+      'node_modules/.bin/vitest',
+      [
+        'run',
+        '--maxWorkers=1',
+        '--no-file-parallelism',
+        'src/lib/pharmacy/solo-approval.db.test.ts',
+        'src/lib/pharmacy/operating-mode.db.test.ts',
+        'src/server/routers/pharmacy-owner-authorization.db.test.ts',
+      ],
+      { ...env, DATABASE_URL: ownerUrl },
+      'approval-vitest'
+    );
+    console.log('SOLO PIN audit, owner and STAFFED approval regression suites passed.');
+
     run(
       'bun',
       ['prisma/seed.ts'],

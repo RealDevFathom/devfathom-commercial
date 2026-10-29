@@ -163,6 +163,17 @@ const demandReason = z.enum([
   'SEARCH_FAILURE',
   'SERVICE_FAILURE',
 ]);
+async function requireLoyaltyCounterAccess(ctx: TRPCContext, branch: string) {
+  const scope = await requireCounterReceiptAccess(ctx, branch);
+  const subject = subjectFromSession(ctx.session!.user);
+  if (
+    !(await can(subject, 'pharmacy:counter', undefined, { db: ctx.db })) &&
+    !(await can(subject, 'pharmacy:dispense', undefined, { db: ctx.db }))
+  )
+    throw new TRPCError({ code: 'FORBIDDEN' });
+  return scope;
+}
+
 const txDb = (tx: unknown) => tx as ScopedDb;
 
 async function tenantBranchScope(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
@@ -859,6 +870,69 @@ export const pharmacySalesRouter = router({
       } catch (error) {
         failDayClose(error);
       }
+    }),
+  // Nonclinical identity lookup: no prescription, CNIC, address or dispensing data.
+  counterCustomers: auditedProtectedProcedure
+    .input(z.object({ branchId, query: z.string().trim().min(2).max(100) }).strict())
+    .query(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true, metadata: { purpose: 'LOYALTY' } });
+      const scope = await requireLoyaltyCounterAccess(ctx, input.branchId);
+      const patients = await ctx.db.pharmacyPatient.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          OR: [
+            { displayName: { contains: input.query, mode: 'insensitive' } },
+            ...(/^\d{4}$/.test(input.query) ? [{ phone: { endsWith: input.query } }] : []),
+          ],
+        },
+        select: {
+          id: true,
+          displayName: true,
+          phone: true,
+          consents: {
+            where: { purpose: 'LOYALTY' },
+            orderBy: [{ recordedAt: 'desc' }, { version: 'desc' }],
+            take: 1,
+            select: { granted: true, revokedAt: true },
+          },
+        },
+        orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+        take: 10,
+      });
+      return patients.map((patient) => ({
+        patientId: patient.id,
+        displayName: patient.displayName
+          .trim()
+          .split(/\s+/)
+          .map((part) => part[0] + '…')
+          .join(' '),
+        phone: patient.phone ? '••••' + patient.phone.replace(/\D/g, '').slice(-4) : null,
+        loyaltyConsent: patient.consents[0]?.granted === true && !patient.consents[0]?.revokedAt,
+      }));
+    }),
+  linkCounterCustomer: auditedProtectedProcedure
+    .input(z.object({ branchId, saleId: z.string().min(1), patientId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true, metadata: { purpose: 'LOYALTY' } });
+      const scope = await requireLoyaltyCounterAccess(ctx, input.branchId);
+      return ctx.db.$transaction(async (tx) => {
+        const patient = await tx.pharmacyPatient.findFirst({
+          where: { organizationId: scope.organizationId, id: input.patientId },
+          select: { id: true, displayName: true, phone: true },
+        });
+        if (!patient) throw new TRPCError({ code: 'NOT_FOUND' });
+        try {
+          const customer = await linkCustomerToSale(txDb(tx), scope, {
+            saleId: input.saleId,
+            patientId: patient.id,
+            displayName: patient.displayName,
+            phoneLast4: patient.phone?.replace(/\D/g, '').slice(-4),
+          });
+          return { id: customer.id };
+        } catch (error) {
+          fail(error);
+        }
+      });
     }),
   customerSnapshot: protectedProcedure
     .input(

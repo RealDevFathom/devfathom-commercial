@@ -103,6 +103,8 @@ vi.mock('@/lib/trpc', () => {
         'counterLotOptions',
         'counterEvidence',
         'customerSnapshot',
+        'counterCustomers',
+        'linkCounterCustomer',
         'drawerStatus',
         'create',
         'rxApprovers',
@@ -242,6 +244,8 @@ beforeEach(() => {
     'counterLotOptions',
     'counterEvidence',
     'customerSnapshot',
+    'counterCustomers',
+    'linkCounterCustomer',
     'substituteProposals',
     'counterPatients',
     'counterPatientPanel',
@@ -1551,4 +1555,23 @@ describe('PharmacyCounterConsole module boundaries', () => {
     expect(mocks.queryOptions).toHaveBeenCalledWith('controlledPharmacists', { enabled: true });
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
   });
+});
+
+it('links a masked loyalty customer when the clinical patient panel is forbidden', async () => {
+  mocks.queries.counterPatients = { ...query(), isError: true, error: refused('FORBIDDEN') };
+  mocks.queries.counterPatientPanel = { ...query(), isError: true, error: refused('FORBIDDEN') };
+  mocks.queries.counterCustomers = query([
+    { patientId: 'loyalty-patient', displayName: 'A… K…', phone: '••••4567', loyaltyConsent: true },
+  ]);
+  mocks.mutations.linkCounterCustomer = vi.fn().mockResolvedValue({ id: 'loyalty-customer' });
+  render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  fireEvent.click(screen.getByRole('button', { name: 'A… K… · ••••4567' }));
+  await waitFor(() =>
+    expect(mocks.mutations.linkCounterCustomer).toHaveBeenCalledWith({
+      branchId: 'branch-a',
+      saleId: 'sale-a',
+      patientId: 'loyalty-patient',
+    })
+  );
+  expect(await screen.findByText('Loyalty customer linked to this bill.')).toBeInTheDocument();
 });

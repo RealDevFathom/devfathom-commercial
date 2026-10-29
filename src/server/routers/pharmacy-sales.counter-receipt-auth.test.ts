@@ -130,6 +130,19 @@ function fixture(
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => [] as { branchId: string }[]),
     },
+    pharmacyPatient: {
+      findMany: vi.fn(async (args: unknown) => {
+        void args;
+        return [
+          {
+            id: 'patient-a',
+            displayName: 'Ayesha Khan',
+            phone: '03001234567',
+            consents: [{ granted: true, revokedAt: null }],
+          },
+        ];
+      }),
+    },
     medicine: {
       findFirst: vi.fn(async () => ({ rx: false, restricted: false, controlled: false })),
     },
@@ -835,4 +848,66 @@ describe('counter receipt authorization', () => {
       })
     );
   });
+});
+
+describe('nonclinical counter loyalty lookup', () => {
+  it.each([
+    ['cashier', [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]],
+    ['pharmacist', [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]],
+    ['owner', [{ capability: '*', effect: 'ALLOW' }]],
+  ] as const)(
+    'allows %s and returns only masked loyalty identity',
+    async (roleKey, permissions) => {
+      const f = fixture([...permissions], 'EMPLOYEE', [], roleKey);
+      assign(f, ['branch-a']);
+      const result = await f.caller().counterCustomers({ branchId: 'branch-a', query: 'Ayesha' });
+      expect(result).toEqual([
+        { patientId: 'patient-a', displayName: 'A… K…', phone: '••••4567', loyaltyConsent: true },
+      ]);
+      expect(f.db.pharmacyPatient.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ organizationId: 'org-a' }),
+          take: 10,
+          select: expect.objectContaining({
+            consents: expect.objectContaining({ where: { purpose: 'LOYALTY' } }),
+          }),
+        })
+      );
+      const selection = f.db.pharmacyPatient.findMany.mock.calls[0]?.[0];
+      expect(JSON.stringify(selection)).not.toMatch(
+        /prescription|cnic|address|dateOfBirth|DISPENSING/
+      );
+    }
+  );
+  it.each(['foreign-branch', 'closed-branch', 'unassigned'])(
+    'denies %s before reading identities',
+    async (branchId) => {
+      const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+      assign(f, ['branch-a']);
+      await expect(
+        f.caller().counterCustomers({ branchId, query: 'Ayesha' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(f.db.pharmacyPatient.findMany).not.toHaveBeenCalled();
+    }
+  );
+  it('rejects enumeration and counter DENY', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'DENY' }]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterCustomers({ branchId: 'branch-a', query: '' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      f.caller().counterCustomers({ branchId: 'branch-a', query: 'Ayesha' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.pharmacyPatient.findMany).not.toHaveBeenCalled();
+  });
+});
+
+it('receipt-only permission cannot enumerate loyalty identities', async () => {
+  const f = fixture([{ capability: 'pharmacy:receipt', effect: 'ALLOW' }]);
+  assign(f, ['branch-a']);
+  await expect(
+    f.caller().counterCustomers({ branchId: 'branch-a', query: 'Ayesha' })
+  ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(f.db.pharmacyPatient.findMany).not.toHaveBeenCalled();
 });

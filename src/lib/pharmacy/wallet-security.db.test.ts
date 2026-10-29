@@ -77,6 +77,19 @@ suite('migrated wallet statement RLS and append-only purge boundaries', () => {
         );
       });
   });
+  it.each([null, '', '   '])(
+    'rejects an adjustment with missing or blank reason %s',
+    async (reason) => {
+      await expect(
+        transaction(orgs[0], false, null, (db) =>
+          db.query(
+            `INSERT INTO stored_value_journals (id,"organizationId",kind,"idempotencyKey","actorId",reason) VALUES ($1,$2,'ADJUSTMENT',$1,'synthetic-actor',$3)`,
+            [randomUUID(), orgs[0], reason]
+          )
+        )
+      ).rejects.toThrow(/stored_value_journals_adjustment_reason_check/);
+    }
+  );
   it.each([0, 1])('reveals only tenant %i through an unfiltered statement view', async (index) => {
     await transaction(orgs[index], false, null, async (db) => {
       const { rows } = await db.query('SELECT * FROM stored_value_customer_statements');

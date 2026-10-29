@@ -43,6 +43,33 @@ import fs from 'node:fs';
       }
     );
     if (restore.status !== 0) throw Error('Schema restore failed');
+    // Preserve the clone's migration history, then apply every pending migration.
+    // Schema-only dumps omit this table's rows and cannot establish the baseline.
+    const history = spawnSync(
+      'pg_dump',
+      ['--data-only', '--table=public._prisma_migrations', '--no-owner', '--no-privileges'],
+      {
+        env: pgEnv,
+        maxBuffer: 16 * 1024 * 1024,
+      }
+    );
+    if (history.status !== 0) throw Error('Migration history dump failed');
+    const baseline = spawnSync('psql', ['-X', '-v', 'ON_ERROR_STOP=1', '-q'], {
+      env: { ...pgEnv, PGDATABASE: database },
+      input: history.stdout,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (baseline.status !== 0) throw Error('Migration history restore failed');
+    const migrate = spawnSync('node_modules/.bin/prisma', ['migrate', 'deploy'], {
+      env: {
+        ...process.env,
+        DATABASE_URL: target.toString(),
+        MIGRATION_DATABASE_URL: target.toString(),
+      },
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    if (migrate.status !== 0) throw Error('Clone migration failed');
+
     const admin = new Client({ connectionString: target.toString() });
     await admin.connect();
     await admin.query(
@@ -52,7 +79,7 @@ import fs from 'node:fs';
     target.username = role;
     target.password = password;
     console.log(
-      'Running real local PostgreSQL tests with NOSUPERUSER NOBYPASSRLS on a disposable schema clone.'
+      'Running real local PostgreSQL tests with NOSUPERUSER NOBYPASSRLS on a fully migrated disposable schema clone.'
     );
     const run = spawnSync(
       'node_modules/.bin/vitest',

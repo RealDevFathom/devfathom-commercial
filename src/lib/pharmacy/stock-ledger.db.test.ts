@@ -29,6 +29,8 @@ import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { seedPharmacyChecker } from '@/lib/testing/pharmacy-approval-fixture';
+
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { PharmacyInventoryError } from './inventory';
@@ -245,6 +247,14 @@ beforeAll(async () => {
   ]);
   deps = { withTenantDb: scopedDb.withTenantDb, ledger, operations };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  await scopedDb.withPlatformDb((db) =>
+    db.$executeRawUnsafe(
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
+     SELECT id, id, id, id, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now() FROM unnest($1::text[]) AS id
+     ON CONFLICT (id) DO NOTHING`,
+      [ORG_A, ORG_B]
+    )
+  );
 }, 120_000);
 
 // ── INV-01 — the append-only ledger and its projection ──────────────────────
@@ -415,7 +425,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     const result = await inOrg(ORG_A, async (db) => {
       const approved = await deps.operations.approveCount(
         db,
-        { ...scopeOf(fixture), actorId: 'user_second_pharmacist' },
+        { ...scopeOf(fixture), actorId: await seedPharmacyChecker(db, ORG_A, `second_${suffix}`) },
         count.id,
         tag('coauth')
       );
@@ -489,7 +499,10 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       });
       await deps.operations.approveTransfer(
         db,
-        { ...scopeOf(fixture), actorId: 'transfer_approver' },
+        {
+          ...scopeOf(fixture),
+          actorId: await seedPharmacyChecker(db, ORG_A, `transfer_approver_${suffix}`),
+        },
         transfer.id
       );
       await deps.operations.dispatchTransfer(db, scopeOf(fixture), transfer.id, tag('dispatch'));
@@ -565,7 +578,10 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         });
         await deps.operations.approveTransfer(
           db,
-          { ...scopeOf(fixture), actorId: `approver_${label}` },
+          {
+            ...scopeOf(fixture),
+            actorId: await seedPharmacyChecker(db, ORG_A, `approver_${label}_${suffix}`),
+          },
           transfer.id
         );
         return transfer.id;

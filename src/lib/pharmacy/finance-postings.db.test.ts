@@ -24,6 +24,8 @@ import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { seedPharmacyChecker } from '@/lib/testing/pharmacy-approval-fixture';
+
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
@@ -46,7 +48,8 @@ const ORG_B = `org_wha1183_b_${suffix}`;
 const branch = (label: string) => `branch_${label}_${suffix}`;
 const BRANCH_B = branch('org_b');
 const ACTOR = 'user_pharmacist';
-const WITNESS = 'user_manager';
+const WITNESS = `user_manager_${suffix}`;
+const CHECKER_PIN = '642871';
 
 /** Fixed instants, so no case depends on the wall clock. */
 const RECEIVED_AT = new Date('2026-09-02T09:00:00.000Z');
@@ -405,6 +408,7 @@ beforeAll(async () => {
       [ORG_A, ORG_B]
     )
   );
+  await inOrg(ORG_A, (db) => seedPharmacyChecker(db, ORG_A, WITNESS, CHECKER_PIN));
 }, 120_000);
 
 // ── FIN-01 — one balanced entry per event kind ──────────────────────────────
@@ -719,6 +723,7 @@ describeIfDatabase('FIN-01 — expiry/damage write-off', () => {
         stockLocationId: f.storeId,
         units: 10,
         witnessId: WITNESS,
+        pin: CHECKER_PIN,
         reason: 'Expired stock destroyed',
         evidenceRef: `DEST-${tag('writeoff')}`,
         idempotencyKey: `writeoff-${tag('writeoff')}`,
@@ -843,7 +848,12 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
           },
         ],
       });
-      await deps.operations.approveCount(db, scopeOf(short), count.id, `count-${tag('short')}`);
+      await deps.operations.approveCount(
+        db,
+        { ...scopeOf(short), actorId: WITNESS },
+        count.id,
+        `count-${tag('short')}`
+      );
       return deps.postings.postCountAdjustmentEntry(db, scopeOf(short), {
         countLineId: count.lines[0]!.id,
         at: LATER,
@@ -873,7 +883,12 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
           },
         ],
       });
-      await deps.operations.approveCount(db, scopeOf(over), count.id, `count-${tag('over')}`);
+      await deps.operations.approveCount(
+        db,
+        { ...scopeOf(over), actorId: WITNESS },
+        count.id,
+        `count-${tag('over')}`
+      );
       return deps.postings.postCountAdjustmentEntry(db, scopeOf(over), {
         countLineId: count.lines[0]!.id,
         at: LATER,
@@ -905,7 +920,12 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
           },
         ],
       });
-      await deps.operations.approveCount(db, scopeOf(f), count.id, `count-${tag('exact')}`);
+      await deps.operations.approveCount(
+        db,
+        { ...scopeOf(f), actorId: WITNESS },
+        count.id,
+        `count-${tag('exact')}`
+      );
       return deps.postings.postCountAdjustmentEntry(db, scopeOf(f), {
         countLineId: count.lines[0]!.id,
         at: LATER,
@@ -1340,6 +1360,7 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
         stockLocationId: f.storeId,
         units: 10,
         witnessId: WITNESS,
+        pin: CHECKER_PIN,
         reason: 'Damaged in storage',
         evidenceRef: `DEST-${tag('leakage')}`,
         idempotencyKey: `writeoff-${tag('leakage')}`,
@@ -1359,7 +1380,12 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
           },
         ],
       });
-      await deps.operations.approveCount(db, scopeOf(f), count.id, `count-${tag('leakage')}`);
+      await deps.operations.approveCount(
+        db,
+        { ...scopeOf(f), actorId: WITNESS },
+        count.id,
+        `count-${tag('leakage')}`
+      );
       await deps.postings.postCountAdjustmentEntry(db, scopeOf(f), {
         countLineId: count.lines[0]!.id,
         at: LATER,

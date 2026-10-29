@@ -527,6 +527,13 @@ function ScopedPharmacyCounterConsole({
     if (!evidenceAuthorized) void utils.pharmacySales.counterEvidence.reset();
   }, [evidenceAuthorized, utils]);
 
+  const [loyaltySearch, setLoyaltySearch] = useState('');
+  const [loyaltyQuery, setLoyaltyQuery] = useState('');
+  const loyaltyCustomers = trpc.pharmacySales.counterCustomers.useQuery(
+    { branchId, query: loyaltyQuery },
+    { enabled: branchAuthorized && loyaltyQuery.trim().length >= 2, retry: false }
+  );
+  const linkCounterCustomer = trpc.pharmacySales.linkCounterCustomer.useMutation();
   const patientsQuery = trpc.pharmacyPrescriptions.counterPatients.useQuery(
     { branchId, query: submittedPatientQuery },
     { enabled: Boolean(branchId) && submittedPatientQuery.trim().length >= 2 && patientId === null }
@@ -2310,6 +2317,71 @@ function ScopedPharmacyCounterConsole({
               </Button>
             }
           >
+            <form
+              className="mb-4 space-y-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setLoyaltyQuery(loyaltySearch.trim());
+              }}
+            >
+              <Label htmlFor="counter-loyalty-search">
+                Find loyalty customer by name or last four phone digits
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  id="counter-loyalty-search"
+                  value={loyaltySearch}
+                  onChange={(event) => setLoyaltySearch(event.target.value)}
+                  maxLength={100}
+                />
+                <Button
+                  type="submit"
+                  variant="outline"
+                  disabled={busy || loyaltySearch.trim().length < 2}
+                >
+                  Search
+                </Button>
+              </div>
+              {loyaltyQuery && loyaltyCustomers.isLoading && (
+                <p role="status">Searching customers…</p>
+              )}
+              {loyaltyCustomers.isError && (
+                <p role="alert">{messageFrom(loyaltyCustomers.error)}</p>
+              )}
+              {loyaltyQuery && loyaltyCustomers.data?.length === 0 && (
+                <p>No customers match that search.</p>
+              )}
+              {branchAuthorized &&
+                !loyaltyCustomers.isError &&
+                loyaltyCustomers.data?.map((candidate) => (
+                  <Button
+                    key={candidate.patientId}
+                    type="button"
+                    variant="outline"
+                    disabled={busy || !candidate.loyaltyConsent || linkCounterCustomer.isPending}
+                    onClick={async () => {
+                      try {
+                        const activeSaleId = await ensureSale();
+                        const linked = await linkCounterCustomer.mutateAsync({
+                          branchId,
+                          saleId: activeSaleId,
+                          patientId: candidate.patientId,
+                        });
+                        if (linked) setCustomerId(linked.id);
+                        setNotice({
+                          tone: 'success',
+                          message: 'Loyalty customer linked to this bill.',
+                        });
+                      } catch (error) {
+                        setNotice({ tone: 'warning', message: messageFrom(error) });
+                      }
+                    }}
+                  >
+                    {candidate.displayName} · {candidate.phone ?? 'No phone'}
+                    {!candidate.loyaltyConsent ? ' · Loyalty consent required' : ''}
+                  </Button>
+                ))}
+            </form>
             {patient && (
               <div className="mb-4 space-y-2 text-sm">
                 <p>
@@ -2443,7 +2515,8 @@ function ScopedPharmacyCounterConsole({
               </div>
             ) : (
               <p className="text-sm text-text-muted">
-                Select a patient, open a bill, then link. Current loyalty consent is required.
+                Search for a customer above and select a match to link this bill. Current loyalty
+                consent is required.
               </p>
             )}
           </SectionCard>

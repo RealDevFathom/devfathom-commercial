@@ -34,3 +34,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build the image
         run: docker build --progress=plain .
+
+  final-gate:
+    name: Required validation gate
+    if: always()
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require completed validation for protected pull requests
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node <<'NODE'
+          if (process.env.EVENT_NAME === 'pull_request' && ['develop', 'main'].includes(process.env.BASE_REF)) {
+            const jobs = JSON.parse(process.env.RESULTS);
+            const failures = Object.entries(jobs).filter(([, job]) => job.result !== 'success');
+            if (failures.length) {
+              console.error('Required validation did not succeed: ' + failures.map(([name, job]) => `${name}=${job.result}`).join(', '));
+              process.exit(1);
+            }
+          }
+          NODE
