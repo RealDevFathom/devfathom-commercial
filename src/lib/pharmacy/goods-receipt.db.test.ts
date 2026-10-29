@@ -992,6 +992,72 @@ describeIfDatabase('PUR-04 — exceptions remain visible until resolved', () => 
 });
 
 describeIfDatabase('PUR-04 — reversal creates linked movements and never edits', () => {
+  it('keeps pre-finance-journal receipts reversible after an upgrade', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'legacy-reverse');
+    const result = await inOrg(ORG_A, async (db) => {
+      const drafted = await draftReceipt(db, f, 'legacy-reverse', {
+        line: { receivedPacks: 2, bonusPacks: 0 },
+      });
+      const line = drafted.lines[0]!;
+      const batch = await db.pharmacyManufacturingBatch.create({
+        data: {
+          organizationId: ORG_A,
+          medicineId: f.medicineId,
+          batchNumber: line.batchNumber,
+          expiresAt: EXPIRY,
+          expiryPrecision: line.expiryPrecision,
+        },
+      });
+      const received = await deps.ledger.receiveLot(db, scopeOf(f), {
+        manufacturingBatchId: batch.id,
+        packLevelId: line.packLevelId,
+        stockLocationId: line.stockLocationId,
+        unitsPerPack: line.canonicalUnitsPerPack,
+        supplierName: 'Legacy supplier',
+        supplierInvoiceRef: `${drafted.supplierInvoiceRef}#${line.lineNumber}`,
+        unitCostMinor: line.unitCostMinor,
+        printedMrpMinor: line.printedMrpMinor,
+        receivedExpiresAt: EXPIRY,
+        receivedExpiryPrecision: line.expiryPrecision,
+        quantityUnits: line.acceptedCanonicalUnits,
+        idempotencyKey: `pharmacy-receipt:${line.id}:accepted`,
+        receivedAt: RECEIVED_AT,
+      });
+      await db.pharmacyGoodsReceiptLine.update({
+        where: { id: line.id },
+        data: { inventoryLotId: received.lot.id },
+      });
+      await db.pharmacyGoodsReceipt.update({
+        where: { id: drafted.id },
+        data: { status: 'POSTED', postedAt: RECEIVED_AT },
+      });
+
+      const before = await db.financeJournalEntry.count({
+        where: { organizationId: ORG_A, sourceId: drafted.id },
+      });
+      const reversal = await deps.receipts.reverseGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: drafted.id,
+        reason: 'Legacy receipt returned after deployment.',
+        at: RECEIVED_AT,
+      });
+      return {
+        before,
+        reversal,
+        after: await db.financeJournalEntry.count({
+          where: { organizationId: ORG_A, sourceId: drafted.id },
+        }),
+        receipt: await db.pharmacyGoodsReceipt.findFirstOrThrow({ where: { id: drafted.id } }),
+        balances: await balancesFor(db, ORG_A, received.lot.id),
+      };
+    });
+
+    expect(result.before).toBe(0);
+    expect(result.after).toBe(0);
+    expect(result.reversal.reversalMovementIds).toHaveLength(1);
+    expect(result.receipt.status).toBe('REVERSED');
+    expect(result.balances).toEqual({ AVAILABLE: 0 });
+  });
+
   it('adds a negating ADJUSTMENT per posting, linked to what it cancels', async () => {
     const f = await fixture(ORG_A, BRANCH_A, 'reverse');
     const result = await inOrg(ORG_A, async (db) => {

@@ -515,12 +515,27 @@ export async function reverseGoodsReceipt(
     },
   });
 
-  await reversePostingForSource(db, scope, {
-    sourceKind: 'PHARMACY_GOODS_RECEIPT',
-    sourceId: receipt.id,
-    reason: input.reason,
-    at: input.at,
+  // Receipts posted before finance journals were wired into this operation do
+  // not have an original entry to negate. Preserve their long-standing
+  // reversibility during a rolling upgrade; receipts posted by current code do
+  // have an entry, and still receive the complete additive finance audit trail.
+  const financePosting = await db.financeJournalEntry.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      sourceKind: 'PHARMACY_GOODS_RECEIPT',
+      sourceId: receipt.id,
+      reversesEntryId: null,
+    },
+    select: { id: true },
   });
+  if (financePosting) {
+    await reversePostingForSource(db, scope, {
+      sourceKind: 'PHARMACY_GOODS_RECEIPT',
+      sourceId: receipt.id,
+      reason: input.reason,
+      at: input.at,
+    });
+  }
 
   return {
     goodsReceiptId: receipt.id,
