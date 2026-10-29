@@ -170,12 +170,6 @@ beforeAll(async () => {
   withPlatformDb = scoped.withPlatformDb;
   pharmacySalesRouter = sales.pharmacySalesRouter;
   disconnect = () => db.$disconnect();
-  const [role] = await withPlatformDb((tx) =>
-    tx.$queryRawUnsafe<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>(
-      'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
-    )
-  );
-  expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
   for (const org of [ids.org, ids.otherOrg])
     await withPlatformDb((tx) =>
       tx.$executeRawUnsafe(
@@ -417,6 +411,25 @@ afterAll(async () => {
 });
 
 describeIfDatabase('prescription references on counter sale lines (#518)', () => {
+  it('runs the fixture as the provisioned runtime role with tenant context (#389)', async () => {
+    const [role] = await withPlatformDb((tx) =>
+      tx.$queryRawUnsafe<Array<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }>>(
+        `SELECT rolcanlogin, rolsuper, rolbypassrls
+           FROM pg_roles
+          WHERE rolname = current_user`
+      )
+    );
+    expect(role).toEqual({ rolcanlogin: true, rolsuper: false, rolbypassrls: false });
+
+    const [scope] = await withTenantDb(ids.org, (tx) =>
+      tx.$queryRawUnsafe<Array<{ organization_id: string; is_platform_admin: string }>>(
+        `SELECT current_setting('app.current_organization_id') AS organization_id,
+                current_setting('app.is_platform_admin') AS is_platform_admin`
+      )
+    );
+    expect(scope).toEqual({ organization_id: ids.org, is_platform_admin: 'false' });
+  });
+
   it('refuses an unknown reference', async () => {
     await expectRefused(ids.pharmacist, rx, withReference(`rx-invented-${suffix}`), NOT_FOUND);
   });
@@ -628,19 +641,27 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     ).resolves.toBe(1);
   });
 
-  it('does not let two concurrent completions over-fill a prescription', async () => {
+  it('serializes competing completions from two different sales (#389)', async () => {
     const first = await addReferencedSale(lines.concurrent);
     const second = await addReferencedSale(lines.concurrent);
+    expect(first.saleId).not.toBe(second.saleId);
+    expect(first.saleLineId).not.toBe(second.saleLineId);
+
     const outcomes = await Promise.allSettled([
       recordCompletion(first.saleLineId),
       recordCompletion(second.saleLineId),
     ]);
     expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
     expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
-    await expect(
-      withTenantDb(ids.org, (tx) =>
-        tx.prescriptionFill.count({ where: { prescriptionLineId: lines.concurrent } })
-      )
-    ).resolves.toBe(1);
+
+    const winningLineId = outcomes[0].status === 'fulfilled' ? first.saleLineId : second.saleLineId;
+    const fills = await withTenantDb(ids.org, (tx) =>
+      tx.prescriptionFill.findMany({ where: { prescriptionLineId: lines.concurrent } })
+    );
+    expect(fills).toHaveLength(1);
+    expect(fills[0]).toMatchObject({
+      quantityCanonicalUnits: 10,
+      idempotencyKey: `rx-reference:${winningLineId}`,
+    });
   });
 });
