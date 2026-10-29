@@ -54,6 +54,7 @@ export const workspaceRequestSchema = z
       if (
         !/^\d{4}-\d{2}-\d{2}$/.test(data.validUntil) ||
         !Number.isFinite(Date.parse(data.validUntil)) ||
+        new Date(data.validUntil).toISOString().slice(0, 10) !== data.validUntil ||
         data.validUntil < new Date().toISOString().slice(0, 10)
       )
         ctx.addIssue({
