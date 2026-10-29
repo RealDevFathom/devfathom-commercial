@@ -304,6 +304,7 @@ async function readKhataAgingMinor(db: ScopedDb, branchIds: readonly string[]): 
 
 export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: PharmacyReportFilters) {
   const parsed = validatePharmacyReportFilters(filters);
+  const at = new Date();
   const branches = Prisma.join(filters.branchIds);
   // Same signed journal query as Finance: no rounded sale-unit cost arithmetic.
   const marginQuery = grossMarginQuery(
@@ -336,8 +337,9 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
       db.branchRegulatoryProfile.count({
         where: {
           branchId: { in: filters.branchIds },
-          effectiveFrom: { lte: new Date() },
-          OR: [{ effectiveTo: null }, { effectiveTo: { gt: new Date() } }],
+          effectiveFrom: { lte: at },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+          qualifiedPersonValidTo: { gt: at },
         },
       }),
       db.$queryRaw<Array<{ value: number }>>(
@@ -364,7 +366,7 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
     },
     freshness: {
       status: 'CURRENT' as const,
-      asOf: new Date().toISOString(),
+      asOf: at.toISOString(),
       source: 'transactional pharmacy ledgers',
     },
     metrics: {
