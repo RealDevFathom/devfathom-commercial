@@ -243,7 +243,12 @@ export const teamRouter = router({
         });
       } catch (err) {
         emailDelivery = 'FAILED';
-        console.error('[inviteMember] invite email failed for', email, err);
+        // Do not copy the recipient or provider response into application logs.
+        // The mutation's existing audit entry records the failure result without
+        // expanding provider-supplied metadata or invitation-recipient PII.
+        console.error('[inviteMember] invite email delivery failed', {
+          errorType: err instanceof Error ? err.name : 'UnknownError',
+        });
       }
 
       return { id: user.id, inviteUrl, emailDelivery };

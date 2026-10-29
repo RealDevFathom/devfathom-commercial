@@ -13,9 +13,7 @@ const credentials = {
   AGENCY_E2E_ADMIN_EMAIL: 'admin@agency-e2e.test',
   AGENCY_E2E_ADMIN_PASSWORD: 'test-only-password',
   NEXT_PUBLIC_APP_URL: 'https://agency-e2e.example.test',
-  EMAIL_DELIVERY_MODE: 'send',
-  BREVO_API_KEY: 'test-api-key',
-  BREVO_SENDER_EMAIL: 'invites@example.test',
+  EMAIL_DELIVERY_MODE: 'capture',
 };
 
 describe('Agency E2E fail-closed runner', () => {
@@ -31,7 +29,7 @@ describe('Agency E2E fail-closed runner', () => {
     expect(env.TEST_DATABASE_URL).toBe(env.DATABASE_URL);
   });
 
-  test('requires an HTTPS public URL and real invite email delivery settings', () => {
+  test('requires an HTTPS public URL and deterministic invite email capture', () => {
     const base = { AGENCY_E2E_DATABASE_URL: target, ...credentials };
     expect(() => agencyE2eEnvironment({ ...base, NEXT_PUBLIC_APP_URL: undefined })).toThrow(
       'NEXT_PUBLIC_APP_URL is required'
@@ -39,12 +37,21 @@ describe('Agency E2E fail-closed runner', () => {
     expect(() =>
       agencyE2eEnvironment({ ...base, NEXT_PUBLIC_APP_URL: 'http://example.test' })
     ).toThrow('must use HTTPS');
-    expect(() => agencyE2eEnvironment({ ...base, EMAIL_DELIVERY_MODE: 'capture' })).toThrow(
-      'EMAIL_DELIVERY_MODE=send'
+    expect(() => agencyE2eEnvironment({ ...base, EMAIL_DELIVERY_MODE: 'send' })).toThrow(
+      'EMAIL_DELIVERY_MODE=capture'
     );
-    expect(() => agencyE2eEnvironment({ ...base, BREVO_API_KEY: undefined })).toThrow(
-      'BREVO_API_KEY is required'
+    expect(() => agencyE2eEnvironment({ ...base, BREVO_API_KEY: 'real-provider-key' })).toThrow(
+      'Brevo credentials are forbidden'
     );
+  });
+
+  test('the browser workflow supplies the fail-closed Agency contract', () => {
+    const workflow = readFileSync(resolve('.github/workflows/qa.yml'), 'utf8');
+    const agencyStep = workflow.slice(workflow.indexOf('- name: 05-run-agency'));
+    expect(agencyStep).toContain("AGENCY_E2E: '1'");
+    expect(agencyStep).toContain('NEXT_PUBLIC_APP_URL: https://agency-e2e.invalid');
+    expect(agencyStep).toContain('EMAIL_DELIVERY_MODE: capture');
+    expect(agencyStep).not.toContain('BREVO_API_KEY:');
   });
 
   test.each([

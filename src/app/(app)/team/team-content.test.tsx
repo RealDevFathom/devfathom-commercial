@@ -91,6 +91,16 @@ describe('tenant department invitation', () => {
       if (status === 'FAILED') {
         fireEvent.click(screen.getByRole('button', { name: 'Retry email' }));
         expect(state.invite.mutate).toHaveBeenCalledTimes(2);
+        act(() =>
+          state.invite.mutate.mock.calls[1][1].onSuccess({
+            id: 'user_2',
+            inviteUrl: 'https://app.example/invite/refreshed-token',
+            emailDelivery: 'SENT',
+          })
+        );
+        expect(screen.getByText('Invitation sent to second@e2e.invalid')).toBeVisible();
+        expect(screen.getByText('https://app.example/invite/refreshed-token')).toBeVisible();
+        expect(screen.queryByRole('button', { name: 'Retry email' })).toBeNull();
       } else {
         expect(screen.queryByRole('button', { name: 'Retry email' })).toBeNull();
       }

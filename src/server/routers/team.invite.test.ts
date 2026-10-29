@@ -138,11 +138,11 @@ describe('team.inviteMember duplicate guard', () => {
     expect(result).toMatchObject({ id: 'user_2', emailDelivery: 'FAILED' });
     expect(result.inviteUrl).toMatch(/^https:\/\/www\.devfathom\.com\/invite\//);
     expect(mocks.invitationUpsert).toHaveBeenCalledOnce();
-    expect(consoleError).toHaveBeenCalledWith(
-      '[inviteMember] invite email failed for',
-      'new.person@company.com',
-      expect.any(Error)
-    );
+    expect(consoleError).toHaveBeenCalledWith('[inviteMember] invite email delivery failed', {
+      errorType: 'Error',
+    });
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain('new.person@company.com');
+    expect(JSON.stringify(consoleError.mock.calls)).not.toContain('provider unavailable');
     consoleError.mockRestore();
   });
 

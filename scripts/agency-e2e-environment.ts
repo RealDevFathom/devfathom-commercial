@@ -4,8 +4,6 @@ const COMMON_POSTGRES_PORTS = new Set(['5432', '6432']);
 const REQUIRED = [
   'AGENCY_E2E_ADMIN_EMAIL',
   'AGENCY_E2E_ADMIN_PASSWORD',
-  'BREVO_API_KEY',
-  'BREVO_SENDER_EMAIL',
 ] as const;
 
 function assertInviteDeliveryConfiguration(env: Record<string, string | undefined>): void {
@@ -20,8 +18,11 @@ function assertInviteDeliveryConfiguration(env: Record<string, string | undefine
   if (appUrl.protocol !== 'https:') {
     throw new Error('NEXT_PUBLIC_APP_URL must use HTTPS for the Agency E2E lane.');
   }
-  if (env.EMAIL_DELIVERY_MODE !== 'send') {
-    throw new Error('EMAIL_DELIVERY_MODE=send is required for the Agency E2E lane.');
+  if (env.EMAIL_DELIVERY_MODE !== 'capture') {
+    throw new Error('EMAIL_DELIVERY_MODE=capture is required for the Agency E2E lane.');
+  }
+  if (env.BREVO_API_KEY || env.BREVO_SENDER_EMAIL) {
+    throw new Error('Brevo credentials are forbidden for the Agency E2E lane.');
   }
 }
 
