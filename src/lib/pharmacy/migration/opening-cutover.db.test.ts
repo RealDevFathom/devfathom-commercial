@@ -399,6 +399,29 @@ describeIfDatabase('MIG-03 — posting opening stock', () => {
       expect(total.totalUnits).toBe(45);
       expect(total.totalValueMinor).toBe(BigInt(45 * 18_000));
       expect(total.actorId).toBe(ACTOR);
+
+      const journal = await db.financeJournalEntry.findFirstOrThrow({
+        where: {
+          organizationId: fixture.organizationId,
+          sourceKind: 'PHARMACY_OPENING_STOCK',
+          sourceId: total.id,
+        },
+        include: { lines: true },
+      });
+      expect(journal.lines).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            accountCode: 'INVENTORY',
+            side: 'DEBIT',
+            amountMinor: 45 * 18_000,
+          }),
+          expect.objectContaining({
+            accountCode: 'OPENING_BALANCE_EQUITY',
+            side: 'CREDIT',
+            amountMinor: 45 * 18_000,
+          }),
+        ])
+      );
     });
   });
 
@@ -478,6 +501,15 @@ describeIfDatabase('MIG-03 — posting opening stock', () => {
         expect(row.actorId).toBe(ACTOR);
         expect(row.postedAt).toBeInstanceOf(Date);
       }
+      const journals = await db.financeJournalEntry.findMany({
+        where: {
+          organizationId: fixture.organizationId,
+          sourceKind: 'PHARMACY_OPENING_LEDGER',
+        },
+        include: { lines: true },
+      });
+      expect(journals).toHaveLength(4);
+      expect(journals.every((journal) => journal.lines.length === 2)).toBe(true);
     });
   });
 

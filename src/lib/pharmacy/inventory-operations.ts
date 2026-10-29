@@ -3,6 +3,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { arrangementFor, PharmacyInventoryError } from './inventory';
+import { postCountAdjustmentEntry, postInterbranchTransferEntry } from './finance-postings';
 import type { LedgerScope } from './stock-ledger';
 
 function assertPositive(units: number) {
@@ -116,6 +117,7 @@ export async function approveCount(
   countId: string,
   idempotencyKeyPrefix: string
 ) {
+  const approvedAt = new Date();
   const count = await db.pharmacyInventoryCount.findFirst({
     where: { id: countId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: { lines: true },
@@ -144,10 +146,14 @@ export async function approveCount(
       },
     });
   }
-  return db.pharmacyInventoryCount.update({
+  const approved = await db.pharmacyInventoryCount.update({
     where: { id: count.id },
-    data: { status: 'APPROVED', approvedById: scope.actorId, approvedAt: new Date() },
+    data: { status: 'APPROVED', approvedById: scope.actorId, approvedAt },
   });
+  for (const line of count.lines) {
+    await postCountAdjustmentEntry(db, scope, { countLineId: line.id, at: approvedAt });
+  }
+  return approved;
 }
 
 export async function writeOff(
@@ -348,6 +354,7 @@ export async function dispatchTransfer(
   transferId: string,
   key: string
 ) {
+  const dispatchedAt = new Date();
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: { id: transferId, organizationId: scope.organizationId, fromBranchId: scope.branchId },
     include: { lines: true },
@@ -396,10 +403,14 @@ export async function dispatchTransfer(
       },
     });
   }
-  return db.pharmacyInterbranchTransfer.update({
+  const dispatched = await db.pharmacyInterbranchTransfer.update({
     where: { id: transfer.id },
-    data: { status: 'DISPATCHED', dispatchedById: scope.actorId, dispatchedAt: new Date() },
+    data: { status: 'DISPATCHED', dispatchedById: scope.actorId, dispatchedAt },
   });
+  for (const line of transfer.lines) {
+    await postInterbranchTransferEntry(db, scope, { transferLineId: line.id, at: dispatchedAt });
+  }
+  return dispatched;
 }
 
 export async function receiveTransferLine(

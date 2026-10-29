@@ -493,7 +493,15 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         transfer.id
       );
       await deps.operations.dispatchTransfer(db, scopeOf(fixture), transfer.id, tag('dispatch'));
-      return { transferId: transfer.id, lineId: transfer.lines[0]!.id, lotId: lot.id };
+      const journal = await db.financeJournalEntry.findFirstOrThrow({
+        where: {
+          organizationId: ORG_A,
+          sourceKind: 'PHARMACY_INTERBRANCH_TRANSFER_LINE',
+          sourceId: transfer.lines[0]!.id,
+        },
+        include: { lines: true },
+      });
+      return { transferId: transfer.id, lineId: transfer.lines[0]!.id, lotId: lot.id, journal };
     });
     const dispatched = await inOrg(ORG_A, (db) =>
       db.pharmacyStockBalance.findMany({ where: { inventoryLotId: setup.lotId } })
@@ -502,6 +510,20 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       expect.arrayContaining([
         expect.objectContaining({ disposition: 'AVAILABLE', onHandUnits: 10 }),
         expect.objectContaining({ disposition: 'IN_TRANSIT', onHandUnits: 30 }),
+      ])
+    );
+    expect(setup.journal.lines).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          accountCode: 'INVENTORY',
+          side: 'CREDIT',
+          amountMinor: 30 * 1_200,
+        }),
+        expect.objectContaining({
+          accountCode: 'INVENTORY_IN_TRANSIT',
+          side: 'DEBIT',
+          amountMinor: 30 * 1_200,
+        }),
       ])
     );
     const received = await inOrg(ORG_A, (db) =>

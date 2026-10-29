@@ -34,6 +34,7 @@ import {
 } from '@/lib/restaurant/operator-credentials';
 
 import { PharmacyInventoryError } from './inventory';
+import { postGoodsReceiptEntry, reversePostingForSource } from './finance-postings';
 import {
   assertGoodsReceiptTransition,
   assertSaleableOnReceipt,
@@ -337,6 +338,10 @@ export async function postGoodsReceipt(
     data: { status: 'POSTED', postedAt: input.at },
   });
 
+  // Inventory and its valuation are one event. Keep the journal write on this
+  // transaction client so a finance failure rolls the receipt and stock back.
+  await postGoodsReceiptEntry(db, scope, { goodsReceiptId: receipt.id, at: input.at });
+
   // PUR-02: the order is now being received against. SENT → RECEIVING is the
   // last transition of that status machine, so a second receipt against the
   // same order finds it already there and leaves it alone.
@@ -508,6 +513,13 @@ export async function reverseGoodsReceipt(
       reversedByUserId: scope.actorId,
       reversalReason: input.reason,
     },
+  });
+
+  await reversePostingForSource(db, scope, {
+    sourceKind: 'PHARMACY_GOODS_RECEIPT',
+    sourceId: receipt.id,
+    reason: input.reason,
+    at: input.at,
   });
 
   return {

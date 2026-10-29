@@ -417,9 +417,13 @@ describeIfDatabase('FIN-01 — goods receipt', () => {
       return {
         receiptId: received.draft.id,
         line: received.line,
-        entry: await deps.postings.postGoodsReceiptEntry(db, scopeOf(f), {
-          goodsReceiptId: received.draft.id,
-          at: RECEIVED_AT,
+        entry: await db.financeJournalEntry.findFirstOrThrow({
+          where: {
+            organizationId: ORG_A,
+            sourceKind: 'PHARMACY_GOODS_RECEIPT',
+            sourceId: received.draft.id,
+          },
+          include: { lines: true },
         }),
       };
     });
@@ -844,9 +848,13 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
         ],
       });
       await deps.operations.approveCount(db, scopeOf(short), count.id, `count-${tag('short')}`);
-      return deps.postings.postCountAdjustmentEntry(db, scopeOf(short), {
-        countLineId: count.lines[0]!.id,
-        at: LATER,
+      return db.financeJournalEntry.findFirstOrThrow({
+        where: {
+          organizationId: ORG_A,
+          sourceKind: 'PHARMACY_INVENTORY_COUNT_LINE',
+          sourceId: count.lines[0]!.id,
+        },
+        include: { lines: true },
       });
     });
 
@@ -874,9 +882,13 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
         ],
       });
       await deps.operations.approveCount(db, scopeOf(over), count.id, `count-${tag('over')}`);
-      return deps.postings.postCountAdjustmentEntry(db, scopeOf(over), {
-        countLineId: count.lines[0]!.id,
-        at: LATER,
+      return db.financeJournalEntry.findFirstOrThrow({
+        where: {
+          organizationId: ORG_A,
+          sourceKind: 'PHARMACY_INVENTORY_COUNT_LINE',
+          sourceId: count.lines[0]!.id,
+        },
+        include: { lines: true },
       });
     });
 
@@ -906,9 +918,12 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
         ],
       });
       await deps.operations.approveCount(db, scopeOf(f), count.id, `count-${tag('exact')}`);
-      return deps.postings.postCountAdjustmentEntry(db, scopeOf(f), {
-        countLineId: count.lines[0]!.id,
-        at: LATER,
+      return db.financeJournalEntry.findFirst({
+        where: {
+          organizationId: ORG_A,
+          sourceKind: 'PHARMACY_INVENTORY_COUNT_LINE',
+          sourceId: count.lines[0]!.id,
+        },
       });
     });
 
