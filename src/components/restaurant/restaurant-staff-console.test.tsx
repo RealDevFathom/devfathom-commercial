@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => ({
   issueReset: vi.fn(),
   noopMutate: vi.fn(),
   inviteMutate: vi.fn(),
+  inviteOptionsError: null as { message: string } | null,
   noopReset: vi.fn(),
   invalidate: vi.fn(),
   roleSave: vi.fn(),
@@ -97,6 +98,20 @@ vi.mock('@/lib/trpc', () => ({
       list: { useQuery: () => mocks.staff },
       listEligibleUsers: {
         useQuery: () => ({ data: mocks.eligibleUsers, error: null, isLoading: false }),
+      },
+      inviteOptions: {
+        useQuery: () => ({
+          data: {
+            departments: [{ id: 'dept_ops', key: 'OPERATIONS', name: 'Operations' }],
+            roles: [{ id: 'role_manager', key: 'manager', name: 'Restaurant Manager' }],
+          },
+          isFetching: false,
+          isError: Boolean(mocks.inviteOptionsError),
+          error: mocks.inviteOptionsError,
+        }),
+      },
+      invite: {
+        useMutation: () => ({ mutate: mocks.inviteMutate, isPending: false, error: null }),
       },
       listBranches: {
         useQuery: () => ({
@@ -182,27 +197,6 @@ vi.mock('@/lib/trpc', () => ({
         }),
       },
     },
-    organizationAdmin: {
-      departments: {
-        useQuery: () => ({
-          data: [{ id: 'dept_ops', key: 'OPERATIONS', name: 'Operations', active: true }],
-          isFetching: false,
-          isError: false,
-        }),
-      },
-      roles: {
-        useQuery: () => ({
-          data: [{ id: 'role_manager', key: 'manager', name: 'Restaurant Manager' }],
-          isFetching: false,
-          isError: false,
-        }),
-      },
-    },
-    team: {
-      inviteMember: {
-        useMutation: () => ({ mutate: mocks.inviteMutate, isPending: false, error: null }),
-      },
-    },
     restaurantDevices: {
       list: {
         useQuery: () => ({
@@ -284,10 +278,7 @@ describe('Restaurant staff credential UI', () => {
     expect(within(dialog).queryByText(/linked user id/i)).not.toBeInTheDocument();
   });
 
-  it('invites a new employee with a restaurant role, then links their staff profile', () => {
-    mocks.inviteMutate.mockImplementationOnce((_input, options) =>
-      options.onSuccess({ id: 'user_invited', inviteUrl: 'https://example.test/invite/token' })
-    );
+  it('atomically invites a new employee and creates their restaurant staff profile', () => {
     render(
       <EntitlementsProvider value={entitlements}>
         <RestaurantStaffConsole />
@@ -318,17 +309,13 @@ describe('Restaurant staff credential UI', () => {
 
     expect(mocks.inviteMutate).toHaveBeenCalledWith(
       expect.objectContaining({
-        name: 'Mina Manager',
+        displayName: 'Mina Manager',
         email: 'mina@example.com',
-        role: 'EMPLOYEE',
         department: 'OPERATIONS',
         organizationRoleId: 'role_manager',
-      }),
-      expect.objectContaining({ onSuccess: expect.any(Function) })
+      })
     );
-    expect(mocks.noopMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'user_invited', displayName: 'Mina Manager' })
-    );
+    expect(mocks.noopMutate).not.toHaveBeenCalled();
   });
   beforeEach(() => {
     vi.clearAllMocks();

@@ -95,11 +95,7 @@ export function RestaurantStaffConsole() {
   const eligibleUsersQuery = trpc.restaurantStaff.listEligibleUsers.useQuery(undefined, {
     enabled: restaurantEnabled && staffFormOpen,
   });
-  const departmentsQuery = trpc.organizationAdmin.departments.useQuery(undefined, {
-    enabled: restaurantEnabled && staffFormOpen && !editingStaff && createMode === 'INVITE',
-    retry: false,
-  });
-  const rolesQuery = trpc.organizationAdmin.roles.useQuery(undefined, {
+  const inviteOptionsQuery = trpc.restaurantStaff.inviteOptions.useQuery(undefined, {
     enabled: restaurantEnabled && staffFormOpen && !editingStaff && createMode === 'INVITE',
     retry: false,
   });
@@ -128,7 +124,13 @@ export function RestaurantStaffConsole() {
     },
     onError: mutationFailure,
   });
-  const inviteMember = trpc.team.inviteMember.useMutation({ onError: mutationFailure });
+  const inviteStaff = trpc.restaurantStaff.invite.useMutation({
+    onSuccess: () => {
+      refreshStaff();
+      setStaffFormOpen(false);
+    },
+    onError: mutationFailure,
+  });
   const updateStaff = trpc.restaurantStaff.update.useMutation({
     onSuccess: () => {
       refreshStaff();
@@ -195,7 +197,7 @@ export function RestaurantStaffConsole() {
   }, [branchFilter, search, staffQuery.data, statusFilter]);
 
   const permissionDenied = isPermissionError(staffQuery.error);
-  const staffFormPending = createStaff.isPending || updateStaff.isPending || inviteMember.isPending;
+  const staffFormPending = createStaff.isPending || updateStaff.isPending || inviteStaff.isPending;
   const credentialsPending = issueCredential.isPending || rotateCredential.isPending;
 
   const openCreate = () => {
@@ -225,18 +227,13 @@ export function RestaurantStaffConsole() {
     };
     if (editingStaff) updateStaff.mutate({ id: editingStaff.id, ...payload });
     else if (createMode === 'INVITE') {
-      inviteMember.mutate(
-        {
-          name: payload.displayName,
-          email: formText(data, 'email'),
-          role: 'EMPLOYEE',
-          organizationRoleId: formText(data, 'organizationRoleId') || null,
-          department: formText(data, 'department'),
-          title: formText(data, 'title'),
-          skills: [],
-        },
-        { onSuccess: ({ id }) => createStaff.mutate({ ...payload, userId: id }) }
-      );
+      inviteStaff.mutate({
+        ...payload,
+        email: formText(data, 'email'),
+        organizationRoleId: formText(data, 'organizationRoleId') || null,
+        department: formText(data, 'department'),
+        title: formText(data, 'title'),
+      });
     } else createStaff.mutate(payload);
   };
 
@@ -483,9 +480,9 @@ export function RestaurantStaffConsole() {
             </DialogDescription>
           </DialogHeader>
           <form key={editingStaff?.id ?? 'new-staff'} className="space-y-4" onSubmit={submitStaff}>
-            {(createStaff.error || updateStaff.error || inviteMember.error) && (
+            {(createStaff.error || updateStaff.error || inviteStaff.error) && (
               <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                {(createStaff.error ?? updateStaff.error ?? inviteMember.error)?.message}
+                {(createStaff.error ?? updateStaff.error ?? inviteStaff.error)?.message}
               </p>
             )}
             {!editingStaff ? (
@@ -597,16 +594,14 @@ export function RestaurantStaffConsole() {
                       name="department"
                       required
                       className={selectClass}
-                      disabled={departmentsQuery.isFetching || departmentsQuery.isError}
+                      disabled={inviteOptionsQuery.isFetching || inviteOptionsQuery.isError}
                     >
                       <option value="">Select department</option>
-                      {(departmentsQuery.data ?? [])
-                        .filter((department) => department.active)
-                        .map((department) => (
-                          <option key={department.id} value={department.key}>
-                            {department.name}
-                          </option>
-                        ))}
+                      {(inviteOptionsQuery.data?.departments ?? []).map((department) => (
+                        <option key={department.id} value={department.key}>
+                          {department.name}
+                        </option>
+                      ))}
                     </select>
                   </label>
                   <div className="space-y-1.5 sm:col-span-2">
@@ -617,10 +612,10 @@ export function RestaurantStaffConsole() {
                       id="staff-invite-role"
                       name="organizationRoleId"
                       className={selectClass}
-                      disabled={rolesQuery.isFetching || rolesQuery.isError}
+                      disabled={inviteOptionsQuery.isFetching || inviteOptionsQuery.isError}
                     >
                       <option value="">No role template</option>
-                      {(rolesQuery.data ?? []).map((role) => (
+                      {(inviteOptionsQuery.data?.roles ?? []).map((role) => (
                         <option key={role.id} value={role.id}>
                           {role.name}
                         </option>
