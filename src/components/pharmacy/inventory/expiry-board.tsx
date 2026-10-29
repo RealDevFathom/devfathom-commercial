@@ -64,6 +64,7 @@ export type ExpiryBoardProps = {
   branchName: string;
   withinDays: number;
   generatedAt: string;
+  riskBuckets: Array<{ days: number; valueAtRiskMinor: number }>;
   rows: ExpiryBoardRow[];
   suppliers: Array<{ id: string; name: string }>;
   boardHref: string;
@@ -131,14 +132,20 @@ export function nearExpiryCsv(rows: readonly ExpiryBoardRow[]): string {
   return [header.map(csvCell).join(','), ...lines].join('\n');
 }
 
-function Totals({ rows }: { rows: readonly ExpiryBoardRow[] }) {
+function Totals({ rows, riskBuckets }: Pick<ExpiryBoardProps, 'rows' | 'riskBuckets'>) {
   const units = rows.reduce((total, row) => total + row.onHandUnits, 0);
-  const value = rows.reduce((total, row) => total + row.valueAtRiskMinor, 0);
   const expired = rows.filter((row) => row.expired).length;
   const drafted = rows.filter((row) => row.markdown || row.returnDraft).length;
   return (
-    <section aria-label="Near-expiry summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      <Stat label="Value at risk" value={money(value)} sub="Units × landed unit cost" />
+    <section aria-label="Near-expiry summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      {riskBuckets.map((bucket) => (
+        <Stat
+          key={bucket.days}
+          label={`${bucket.days}-day PKR at risk`}
+          value={money(bucket.valueAtRiskMinor)}
+          sub="Cumulative units × landed cost"
+        />
+      ))}
       <Stat label="Units at risk" value={units.toLocaleString('en-PK')} sub="Still saleable" />
       <Stat label="Expired on the shelf" value={expired} sub="Quarantine these first" />
       <Stat label="Positions with a draft" value={drafted} sub="Mark-down or supplier return" />
@@ -279,10 +286,17 @@ function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps 
         <div className="rounded-[var(--radius-sm)] bg-surface-sunken p-3">
           <h4 className="text-sm font-medium text-text-strong">Mark down</h4>
           {row.markdown ? (
-            <p className="mt-1 text-xs text-text-body" role="note">
-              Draft: {money(row.markdown.printedMrpMinor)} →{' '}
-              {money(row.markdown.proposedPackPriceMinor)} per pack ({row.markdown.markdownPercent}%
-              off), recorded {day(row.markdown.recordedAt)}. Not applied at the counter yet.
+            <p
+              className={`mt-1 text-xs ${row.markdownEligible ? 'text-text-body' : 'text-warning'}`}
+              role="note"
+            >
+              {row.markdownEligible ? 'Draft' : 'Legacy draft — now ineligible'}:{' '}
+              {money(row.markdown.printedMrpMinor)} → {money(row.markdown.proposedPackPriceMinor)}{' '}
+              per pack ({row.markdown.markdownPercent}% off), recorded{' '}
+              {day(row.markdown.recordedAt)}. Not applied at the counter
+              {row.markdownEligible
+                ? ' yet.'
+                : '; retain it as audit history and do not advance it.'}
             </p>
           ) : null}
           {canMarkDown ? (
@@ -437,7 +451,7 @@ export function ExpiryBoard(props: ExpiryBoardProps) {
   if (props.view === 'print') return <PrintableList {...props} />;
   return (
     <div className="space-y-6">
-      <Totals rows={props.rows} />
+      <Totals riskBuckets={props.riskBuckets} rows={props.rows} />
       <SectionCard
         actions={
           <Link

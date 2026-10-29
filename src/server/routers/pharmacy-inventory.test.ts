@@ -36,6 +36,7 @@ import type { TRPCContext } from '../trpc';
 function model() {
   return {
     findFirst: vi.fn().mockResolvedValue(null),
+    findMany: vi.fn().mockResolvedValue([]),
     create: vi
       .fn()
       .mockImplementation(async ({ data }: { data: object }) => ({ id: 'new', ...data })),
@@ -64,6 +65,8 @@ function makeDb() {
     }),
     pharmacyRecallNotice: model(),
     pharmacyInventoryLot: model(),
+    pharmacySupplier: model(),
+    pharmacySupplierClaim: model(),
     pharmacyStockMovement: model(),
     pharmacyStockBalance: model(),
     pharmacyAllocationOverride: model(),
@@ -142,6 +145,108 @@ const CAPABILITY_REFUSAL = {
 beforeEach(() => {
   db = makeDb();
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
+});
+
+describe('PH-A5 expiry recovery integration', () => {
+  it('uses the active branch relationship and returns serialized-ready risk/calendar facts', async () => {
+    grant([allow('pharmacy:inventory')]);
+    const expiresAt = new Date(Date.now() + 45 * 86_400_000);
+    db.pharmacyStockBalance.findMany.mockResolvedValueOnce([
+      {
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        onHandUnits: 10,
+        location: { name: 'Main shelf' },
+        lot: {
+          supplierName: 'Fallback name',
+          unitsPerPack: 10,
+          unitCostMinor: 2_500,
+          printedMrpMinor: 5_000,
+          batch: {
+            batchNumber: 'B-1',
+            expiresAt,
+            state: 'ACTIVE',
+            medicine: {
+              productName: 'OTC medicine',
+              brandName: null,
+              rx: false,
+              otc: true,
+              restricted: false,
+              controlled: false,
+              productFamily: 'PHARMACEUTICAL',
+            },
+          },
+          receiptLines: [{ goodsReceipt: { supplierId: 'supplier_1' } }],
+        },
+      },
+    ]);
+    db.pharmacySupplier.findMany.mockResolvedValue([
+      {
+        id: 'supplier_1',
+        name: 'Branch distributor',
+        relationships: [{ expiryReturnWindowDays: 30 }],
+      },
+    ]);
+
+    const board = await caller().expiryBoardLots({ branchId: 'branch_a', withinDays: 60 });
+
+    expect(db.pharmacySupplier.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          relationships: expect.objectContaining({
+            where: { branchId: 'branch_a', active: true },
+          }),
+        }),
+      })
+    );
+    expect(board.riskBuckets).toEqual([
+      { days: 30, valueAtRiskMinor: 0 },
+      { days: 60, valueAtRiskMinor: 25_000 },
+      { days: 90, valueAtRiskMinor: 25_000 },
+    ]);
+    expect(board.rows[0]).toMatchObject({
+      suggestedSupplierId: 'supplier_1',
+      markdownEligible: true,
+      returnDeadlineAt: expiresAt,
+    });
+    expect(board.rows[0]?.returnWindowOpensAt?.toISOString()).toBe(
+      new Date(expiresAt.getTime() - 30 * 86_400_000).toISOString()
+    );
+  });
+
+  it.each([
+    ['Rx', { rx: true, restricted: false, controlled: false }],
+    ['restricted', { rx: false, restricted: true, controlled: false }],
+    ['controlled', { rx: false, restricted: false, controlled: true }],
+  ])(
+    'rejects a mark-down mutation for %s medicine before recording an event',
+    async (_kind, flags) => {
+      grant([allow('pharmacy:inventory')]);
+      db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+        printedMrpMinor: 5_000,
+        batch: {
+          expiresAt: new Date(Date.now() + 30 * 86_400_000),
+          state: 'ACTIVE',
+          medicineId: 'medicine_1',
+          medicine: { ...flags, otc: true, productFamily: 'PHARMACEUTICAL' },
+        },
+      });
+
+      await expect(
+        caller().draftExpiryMarkdown({
+          branchId: 'branch_a',
+          inventoryLotId: 'lot_1',
+          stockLocationId: 'location_1',
+          markdownPercent: 20,
+          reason: 'Near expiry',
+        })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'Mark-down suggestions are limited to OTC and non-drug stock.',
+      });
+      expect(db.pharmacyStockSignalEvent.create).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('pharmacy inventory entitlement and tenant boundaries', () => {

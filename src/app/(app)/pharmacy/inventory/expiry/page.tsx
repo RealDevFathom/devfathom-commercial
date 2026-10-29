@@ -242,6 +242,7 @@ export default async function PharmacyExpiryBoardPage({
         branchName={branch.name}
         generatedAt={board.generatedAt.toISOString()}
         printHref={url({ branch: branch.id, within: withinDays, view: 'print' })}
+        riskBuckets={board.riskBuckets}
         returnsHref={`/pharmacy/purchasing/returns?branch=${encodeURIComponent(branch.id)}`}
         rows={rows}
         suppliers={board.suppliers}

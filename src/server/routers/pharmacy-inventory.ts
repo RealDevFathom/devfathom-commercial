@@ -48,7 +48,11 @@ import {
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { PharmacyStockSignalError } from '@/lib/pharmacy/stock-signals';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
-import { maySuggestExpiryMarkdown, supplierReturnDates } from '@/lib/pharmacy/expiry-growth';
+import {
+  expiryRiskBuckets,
+  maySuggestExpiryMarkdown,
+  supplierReturnDates,
+} from '@/lib/pharmacy/expiry-growth';
 import { createPurchaseReturn } from '@/lib/pharmacy/supplier-returns-operations';
 import {
   acknowledgeSignal,
@@ -1522,7 +1526,9 @@ export const pharmacyInventoryRouter = router({
       await assertBranch(ctx.db, scope);
       const at = new Date();
       const { withinDays } = input;
-      const horizon = new Date(at.getTime() + withinDays * DAY_MS);
+      // Always read through 90 days so the headline recovery ledger can show
+      // the same cumulative 30/60/90 comparison regardless of the list filter.
+      const horizon = new Date(at.getTime() + Math.max(withinDays, 90) * DAY_MS);
       const tenant = { organizationId: scope.organizationId, branchId: scope.branchId };
 
       const [balances, suppliers] = await Promise.all([
@@ -1665,6 +1671,12 @@ export const pharmacyInventoryRouter = router({
         ])
       );
 
+      const riskBuckets = expiryRiskBuckets(
+        balances.map((row) => ({
+          daysLeft: Math.ceil((row.lot.batch.expiresAt.getTime() - at.getTime()) / DAY_MS),
+          valueAtRiskMinor: row.onHandUnits * row.lot.unitCostMinor,
+        }))
+      );
       const rows = balances
         .map((row) => {
           const { lot } = row;
@@ -1707,13 +1719,14 @@ export const pharmacyInventoryRouter = router({
             returnDraft: returnByLot.get(row.inventoryLotId) ?? null,
           };
         })
+        .filter((row) => row.expired || row.daysLeft <= withinDays)
         .sort(
           (left, right) =>
             left.expiresAt.getTime() - right.expiresAt.getTime() ||
             right.valueAtRiskMinor - left.valueAtRiskMinor ||
             left.key.localeCompare(right.key)
         );
-      return { generatedAt: at, withinDays, rows, suppliers };
+      return { generatedAt: at, withinDays, riskBuckets, rows, suppliers };
     }),
 
   /**
