@@ -12,6 +12,10 @@ vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: () => true }));
+vi.mock('@/lib/abac', async (original) => ({
+  ...(await original<typeof import('@/lib/abac')>()),
+  can: vi.fn(async () => true),
+}));
 vi.mock('@/server/audit', async (original) => ({
   ...(await original<typeof import('@/server/audit')>()),
   isAuditExcludedPath: () => true,

@@ -10,6 +10,7 @@ export function RequestForm({ vertical }: { vertical: Exclude<LoginVertical, 'de
   const [error, setError] = useState('');
   const [fields, setFields] = useState<Fields>({});
   const [reference, setReference] = useState('');
+  const [propertyMode, setPropertyMode] = useState('Hotel');
   const resultRef = useRef<HTMLDivElement>(null);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -142,14 +143,23 @@ export function RequestForm({ vertical }: { vertical: Exclude<LoginVertical, 'de
               ? 'Restaurant'
               : 'Property'}
         </legend>
-        {vertical === 'hotel' &&
-          select('propertyMode', 'How it operates', [
-            'Hotel',
-            'Hostel',
-            'Apartments',
-            'Resort',
-            'Venue',
-          ])}
+        {vertical === 'hotel' && (
+          <div className="space-y-2">
+            <label htmlFor="propertyMode" className="block">
+              How it operates
+            </label>
+            <select
+              id="propertyMode"
+              name="propertyMode"
+              value={propertyMode}
+              onChange={(event) => setPropertyMode(event.target.value)}
+            >
+              {['Hotel', 'Hostel', 'Apartments', 'Resort', 'Venue'].map((option) => (
+                <option key={option}>{option}</option>
+              ))}
+            </select>
+          </div>
+        )}
         {field(
           'companyName',
           vertical === 'pharmacy'
@@ -224,9 +234,9 @@ export function RequestForm({ vertical }: { vertical: Exclude<LoginVertical, 'de
               {field('city', 'City', 'text', 'Islamabad')}
             </div>
             <div className="grid gap-5 sm:grid-cols-3">
-              {field('rooms', 'Rooms', 'number', '24')}
-              {field('checkIn', 'Check-in from', 'time')}
-              {field('checkOut', 'Check-out by', 'time')}
+              {field('rooms', 'Rooms', 'number', '24', propertyMode !== 'Venue')}
+              {field('checkIn', 'Check-in from', 'time', '', propertyMode !== 'Venue')}
+              {field('checkOut', 'Check-out by', 'time', '', propertyMode !== 'Venue')}
             </div>
             <p className="text-xs text-text-muted">
               Proposed operating details for your setup review.

@@ -2,9 +2,16 @@ import { TRPCError } from '@trpc/server';
 import { can } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { authorizeSoloApproval, verifyPharmacyUserPin } from './solo-approval';
+import { assertBranchAssignment } from './branch-assignment';
 
 export type PharmacyApprovalKind =
-  'RX' | 'OVERRIDE' | 'REFUND' | 'RETURN' | 'DISCOUNT' | 'ADJUSTMENT' | 'PURCHASE';
+  | 'RX'
+  | 'OVERRIDE'
+  | 'REFUND'
+  | 'RETURN'
+  | 'DISCOUNT'
+  | 'ADJUSTMENT'
+  | 'PURCHASE';
 /** Call inside the document transaction. Identity and roles always come from storage. */
 export async function enforceOperatingMode(
   db: ScopedDb,
@@ -47,24 +54,33 @@ export async function enforceOperatingMode(
     if (!actor)
       throw new TRPCError({ code: 'FORBIDDEN', message: 'Active checker membership required.' });
     const role = actor.organizationRole?.key;
+    const capability =
+      input.kind === 'RX'
+        ? 'pharmacy:dispense'
+        : input.kind === 'PURCHASE'
+          ? 'pharmacy:procurement'
+          : input.kind === 'ADJUSTMENT'
+            ? 'pharmacy:inventory'
+            : 'pharmacy:counter';
+    const capabilityAllowed = await can(
+      { id: checkerId, role: 'EMPLOYEE', organizationId: scope.organizationId },
+      capability,
+      undefined,
+      { db }
+    );
     const eligible =
       input.kind === 'RX'
-        ? role === 'pharmacist' &&
-          (await can(
-            { id: checkerId, role: 'EMPLOYEE', organizationId: scope.organizationId },
-            'pharmacy:dispense',
-            undefined,
-            { db }
-          ))
+        ? role === 'pharmacist' && capabilityAllowed
         : input.kind === 'PURCHASE'
-          ? await can(
-              { id: checkerId, role: 'EMPLOYEE', organizationId: scope.organizationId },
-              'pharmacy:procurement',
-              undefined,
-              { db }
-            )
-          : role === 'owner' || role === 'manager';
+          ? capabilityAllowed
+          : (role === 'owner' || role === 'manager') && capabilityAllowed;
     if (eligible && !input.makerIds.includes(checkerId)) {
+      if (scope.branchId)
+        await assertBranchAssignment(db, {
+          ...scope,
+          branchId: scope.branchId,
+          actorId: checkerId,
+        });
       if (
         checkerId !== scope.actorId &&
         !(await verifyPharmacyUserPin({ ...scope, actorId: checkerId }, input.pin))

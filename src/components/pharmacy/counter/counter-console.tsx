@@ -529,6 +529,11 @@ function ScopedPharmacyCounterConsole({
 
   const [loyaltySearch, setLoyaltySearch] = useState('');
   const [loyaltyQuery, setLoyaltyQuery] = useState('');
+  const [loyaltyPatient, setLoyaltyPatient] = useState<{
+    patientId: string;
+    displayName: string;
+    loyaltyConsent: boolean;
+  } | null>(null);
   const loyaltyCustomers = trpc.pharmacySales.counterCustomers.useQuery(
     { branchId, query: loyaltyQuery },
     { enabled: branchAuthorized && loyaltyQuery.trim().length >= 2, retry: false }
@@ -2358,8 +2363,10 @@ function ScopedPharmacyCounterConsole({
                     key={candidate.patientId}
                     type="button"
                     variant="outline"
-                    disabled={busy || !candidate.loyaltyConsent || linkCounterCustomer.isPending}
+                    disabled={busy || linkCounterCustomer.isPending}
                     onClick={async () => {
+                      setLoyaltyPatient(candidate);
+                      if (!candidate.loyaltyConsent) return;
                       try {
                         const activeSaleId = await ensureSale();
                         const linked = await linkCounterCustomer.mutateAsync({
@@ -2382,12 +2389,12 @@ function ScopedPharmacyCounterConsole({
                   </Button>
                 ))}
             </form>
-            {patient && (
+            {loyaltyPatient && (
               <div className="mb-4 space-y-2 text-sm">
                 <p>
-                  Loyalty consent:{' '}
-                  {patientPanelQuery.data?.loyaltyConsent ? 'Opted in' : 'Not opted in'}. Ask the
-                  customer before recording a choice.
+                  Loyalty consent for {loyaltyPatient.displayName}:{' '}
+                  {loyaltyPatient.loyaltyConsent ? 'Opted in' : 'Not opted in'}. Ask the customer
+                  before recording a choice.
                 </p>
                 <div className="flex flex-wrap gap-2">
                   {[true, false].map((granted) => (
@@ -2400,10 +2407,13 @@ function ScopedPharmacyCounterConsole({
                         try {
                           await loyaltyConsent.mutateAsync({
                             branchId,
-                            patientId: patient.patientId,
+                            patientId: loyaltyPatient.patientId,
                             granted,
                           });
-                          await patientPanelQuery.refetch();
+                          setLoyaltyPatient((selected) =>
+                            selected ? { ...selected, loyaltyConsent: granted } : selected
+                          );
+                          await loyaltyCustomers.refetch();
                           setNotice({
                             tone: 'success',
                             message: granted

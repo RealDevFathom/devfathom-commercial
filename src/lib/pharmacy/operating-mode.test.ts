@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { enforceOperatingMode, type PharmacyApprovalKind } from './operating-mode';
-const mocks = vi.hoisted(() => ({ solo: vi.fn(), can: vi.fn() }));
+const mocks = vi.hoisted(() => ({ solo: vi.fn(), can: vi.fn(), branch: vi.fn() }));
 vi.mock('./solo-approval', () => ({
   authorizeSoloApproval: mocks.solo,
   verifyPharmacyUserPin: vi.fn(async (_scope, pin) => pin === '4729'),
 }));
 vi.mock('@/lib/abac', () => ({ can: mocks.can }));
+vi.mock('./branch-assignment', () => ({ assertBranchAssignment: mocks.branch }));
 const scope = { organizationId: 'org', branchId: 'branch', actorId: 'actor' };
 function fixture(mode: string, role = 'owner') {
   return {
@@ -18,6 +19,7 @@ function fixture(mode: string, role = 'owner') {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
+  mocks.branch.mockResolvedValue(scope);
   mocks.solo.mockImplementation(async (_db, _scope, _target, pin) => pin === '4729');
 });
 describe.each<PharmacyApprovalKind>([
@@ -81,6 +83,49 @@ it('fails closed when an Rx pharmacist has an explicit capability denial', async
       targetId: 'rx',
     })
   ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+});
+it.each([
+  ['OVERRIDE', 'pharmacy:counter'],
+  ['REFUND', 'pharmacy:counter'],
+  ['RETURN', 'pharmacy:counter'],
+  ['DISCOUNT', 'pharmacy:counter'],
+  ['ADJUSTMENT', 'pharmacy:inventory'],
+] as const)(
+  'fails closed when a manager has an explicit %s capability denial',
+  async (kind, capability) => {
+    mocks.can.mockResolvedValue(false);
+    await expect(
+      enforceOperatingMode(fixture('STAFFED', 'manager') as never, scope, {
+        kind,
+        makerIds: ['maker'],
+        targetType: 'Document',
+        targetId: 'document',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      capability,
+      undefined,
+      expect.anything()
+    );
+  }
+);
+it('requires the independent checker to have access to the affected branch', async () => {
+  mocks.branch.mockRejectedValueOnce(new Error('outside branch'));
+  await expect(
+    enforceOperatingMode(fixture('STAFFED', 'manager') as never, scope, {
+      kind: 'ADJUSTMENT',
+      makerIds: ['maker'],
+      checkerId: 'checker',
+      targetType: 'TransferVariance',
+      targetId: 'variance',
+      pin: '4729',
+    })
+  ).rejects.toThrow('outside branch');
+  expect(mocks.branch).toHaveBeenCalledWith(expect.anything(), {
+    ...scope,
+    actorId: 'checker',
+  });
 });
 it('fails closed when approval evidence cannot be persisted', async () => {
   const db = fixture('STAFFED');

@@ -125,16 +125,18 @@ export async function approveCount(
   });
   if (!count) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
   if (count.status === 'APPROVED') throw new PharmacyInventoryError('INVALID_STATE');
-  try {
-    await enforceOperatingMode(db, scope, {
-      kind: 'ADJUSTMENT',
-      makerIds: [count.createdById],
-      targetType: 'PharmacyInventoryCount',
-      targetId: count.id,
-      pin,
-    });
-  } catch {
-    throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  if (count.status === 'AWAITING_COAUTH') {
+    try {
+      await enforceOperatingMode(db, scope, {
+        kind: 'ADJUSTMENT',
+        makerIds: [count.createdById],
+        targetType: 'PharmacyInventoryCount',
+        targetId: count.id,
+        pin,
+      });
+    } catch {
+      throw new PharmacyInventoryError('COAUTH_REQUIRED');
+    }
   }
   for (const [index, line] of count.lines.entries()) {
     const variance = line.varianceUnits ?? 0;
