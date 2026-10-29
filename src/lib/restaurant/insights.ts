@@ -58,7 +58,11 @@ const DAILY_SELECT = {
   branch: { select: { name: true, timezone: true } },
   sourceDailyClose: {
     select: {
+      grossSales: true,
       netSales: true,
+      compTotal: true,
+      discountTotal: true,
+      refundTotal: true,
       supersededBy: { select: { id: true }, take: 1 },
     },
   },
@@ -106,7 +110,11 @@ type DailyRow = {
   updatedAt: Date;
   branch: { name: string; timezone: string };
   sourceDailyClose: {
+    grossSales: Prisma.Decimal;
     netSales: Prisma.Decimal;
+    compTotal: Prisma.Decimal;
+    discountTotal: Prisma.Decimal;
+    refundTotal: Prisma.Decimal;
     supersededBy: Array<{ id: string }>;
   };
 };
@@ -183,7 +191,7 @@ function serializeDaily(
     ...(kind === 'financial'
       ? {
           grossSales: row.grossSales.toString(),
-          // Read the authoritative close value even for cached pre-v4 projections.
+          // Normalize the immutable source close even for cached pre-v4 projections.
           netSales: reportNetSales(row.sourceDailyClose).toString(),
           deliveryFeeSales: row.deliveryFeeSales.toString(),
           deliveryFeeRefunds: row.deliveryFeeRefunds.toString(),

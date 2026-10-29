@@ -178,7 +178,13 @@ it.each(['7', '4'])(
       expect.objectContaining({
         select: expect.objectContaining({
           sourceDailyClose: expect.objectContaining({
-            select: expect.objectContaining({ netSales: true }),
+            select: expect.objectContaining({
+              grossSales: true,
+              netSales: true,
+              compTotal: true,
+              discountTotal: true,
+              refundTotal: true,
+            }),
           }),
         }),
       })

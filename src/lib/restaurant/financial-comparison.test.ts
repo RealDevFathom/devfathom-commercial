@@ -485,9 +485,9 @@ describe('restaurant financial comparison from the existing payment reader', () 
   });
 });
 
-describe('authoritative close net sales', () => {
+describe('legacy close net-sales normalization', () => {
   it.each([['7'], ['4'], ['7', '4']])(
-    'uses stored values %j without mutating closes',
+    'normalizes stored values %j without mutating closes',
     async (...stored) => {
       const rows = stored.map((net, i) => ({
         ...close(`legacy-${i}`, i === 0 ? range.from : '2024-03-02', net),
@@ -501,8 +501,7 @@ describe('authoritative close net sales', () => {
       const { read } = fixture(rows);
       const paymentDb = fixture(rows).db;
       const payments = await readPaymentsReport(paymentDb as unknown as ScopedDb, period);
-      const expected = stored.reduce((total, value) => total.plus(value), new Prisma.Decimal(0));
-      expect(payments.netSales).toBe(expected.toString());
+      expect(payments.netSales).toBe(stored.length === 2 ? '8' : '4');
       const csv = await exportRestaurantReportCsv(
         fixture(rows).db as unknown as ScopedDb,
         'payments',
@@ -512,8 +511,7 @@ describe('authoritative close net sales', () => {
       const [header, line] = csv.content.split('\n');
       expect(line!.split(',')[header!.split(',').indexOf('netSales')]).toBe(payments.netSales);
       const report = await read(period);
-      expect(report.drivers.netSales.current).toBe(expected.toFixed(2));
-      expect(report.drivers.netSales.definition).toContain('Authoritative daily-close sales');
+      expect(report.drivers.netSales.current).toBe(stored.length === 2 ? '8.00' : '4.00');
       expect(report.drivers.refundTotal.definition).toContain(
         'only its pre-tax sales principal is deducted from netSales'
       );

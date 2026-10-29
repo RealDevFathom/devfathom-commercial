@@ -89,25 +89,20 @@ describe('AppShell module guard', () => {
   });
 
   it('clearly warns when the pharmacy licence is a placeholder', () => {
-    render(
-      createElement(
-        AppShell,
-        {
-          brand: {
-            organizationId: 'org_test',
-            displayName: 'Test pharmacy',
-            logoUrl: null,
-            markUrl: null,
-            faviconUrl: null,
-            primaryColor: null,
-            accentColor: null,
-          },
-          pharmacyPlaceholder: true,
-          children: null,
-        },
-        createElement('p', null, 'Dashboard')
-      )
-    );
+    const placeholderProps = {
+      brand: {
+        organizationId: 'org_test',
+        displayName: 'Test pharmacy',
+        logoUrl: null,
+        markUrl: null,
+        faviconUrl: null,
+        primaryColor: null,
+        accentColor: null,
+      },
+      pharmacyPlaceholder: true,
+      children: createElement('p', null, 'Dashboard'),
+    };
+    render(createElement(AppShell, placeholderProps));
 
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Licence details are PLACEHOLDER – not a real licence'
