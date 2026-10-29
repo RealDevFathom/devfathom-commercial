@@ -250,39 +250,47 @@ export const projectsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const isAdmin = ctx.session.user.role === 'ADMIN';
       const isSelf = input.userId === ctx.session.user.id;
+      await ctx.db.$transaction(async (tx) => {
+        // Serialize every operation which can reduce this project's lead count.
+        // Locking the stable parent row avoids the write-skew possible when two
+        // different membership rows are removed/demoted concurrently.
+        await tx.$queryRaw`SELECT "id" FROM "projects" WHERE "id" = ${input.projectId} FOR UPDATE`;
 
-      const [target, callerMembership, leadCount] = await Promise.all([
-        ctx.db.projectMember.findUnique({
+        const [target, callerMembership, leadCount] = await Promise.all([
+          tx.projectMember.findUnique({
+            where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+          }),
+          tx.projectMember.findUnique({
+            where: {
+              projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id },
+            },
+          }),
+          tx.projectMember.count({
+            where: { projectId: input.projectId, role: 'LEAD' },
+          }),
+        ]);
+
+        if (!target)
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not on this project.' });
+
+        const callerIsLead = callerMembership?.role === 'LEAD';
+        if (!isAdmin && !callerIsLead && !isSelf) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the project lead or an admin can remove other members.',
+          });
+        }
+
+        if (target.role === 'LEAD' && leadCount <= 1) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Cannot remove the last lead. Promote another member to lead first.',
+          });
+        }
+
+        await tx.projectMember.delete({
           where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        }),
-        ctx.db.projectMember.findUnique({
-          where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
-        }),
-        ctx.db.projectMember.count({
-          where: { projectId: input.projectId, role: 'LEAD' },
-        }),
-      ]);
-
-      if (!target)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not on this project.' });
-
-      const callerIsLead = callerMembership?.role === 'LEAD';
-      if (!isAdmin && !callerIsLead && !isSelf) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Only the project lead or an admin can remove other members.',
         });
-      }
-
-      if (target.role === 'LEAD' && leadCount <= 1) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Cannot remove the last lead. Promote another member to lead first.',
-        });
-      }
-
-      await ctx.db.projectMember.delete({
-        where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
       });
       const [project, targetUser] = await Promise.all([
         ctx.db.project.findUnique({ where: { id: input.projectId }, select: { name: true } }),
@@ -315,35 +323,44 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const isAdmin = ctx.session.user.role === 'ADMIN';
-      const callerMembership = await ctx.db.projectMember.findUnique({
-        where: { projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id } },
-      });
-      if (!isAdmin && callerMembership?.role !== 'LEAD') {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Only the project lead or an admin can change roles.',
-        });
-      }
+      return ctx.db.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "projects" WHERE "id" = ${input.projectId} FOR UPDATE`;
 
-      // Block demoting the last lead
-      if (input.role === 'MEMBER') {
-        const leadCount = await ctx.db.projectMember.count({
-          where: { projectId: input.projectId, role: 'LEAD' },
+        const callerMembership = await tx.projectMember.findUnique({
+          where: {
+            projectId_userId: { projectId: input.projectId, userId: ctx.session.user.id },
+          },
         });
-        const target = await ctx.db.projectMember.findUnique({
-          where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        });
-        if (target?.role === 'LEAD' && leadCount <= 1) {
+        if (!isAdmin && callerMembership?.role !== 'LEAD') {
           throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Cannot demote the last lead. Promote another member first.',
+            code: 'FORBIDDEN',
+            message: 'Only the project lead or an admin can change roles.',
           });
         }
-      }
 
-      return ctx.db.projectMember.update({
-        where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        data: { role: input.role },
+        // Block demoting the last lead while holding the same project lock used
+        // by removals, so a concurrent mutation must observe this transaction.
+        if (input.role === 'MEMBER') {
+          const [leadCount, target] = await Promise.all([
+            tx.projectMember.count({
+              where: { projectId: input.projectId, role: 'LEAD' },
+            }),
+            tx.projectMember.findUnique({
+              where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+            }),
+          ]);
+          if (target?.role === 'LEAD' && leadCount <= 1) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Cannot demote the last lead. Promote another member first.',
+            });
+          }
+        }
+
+        return tx.projectMember.update({
+          where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+          data: { role: input.role },
+        });
       });
     }),
 
