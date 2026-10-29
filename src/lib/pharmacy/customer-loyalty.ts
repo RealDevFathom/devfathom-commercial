@@ -408,6 +408,21 @@ export async function readCustomerSnapshot(
 export const LOYALTY_HISTORY_PAGE_SIZE = 25;
 export const LOYALTY_HISTORY_MAX_PAGE = 10_000;
 
+/** Updates only the reminder language on the tenant-owned retail identity. */
+export async function setCustomerPreferredLanguage(
+  db: ScopedDb,
+  scope: LedgerScope,
+  customerId: string,
+  preferredLanguage: 'en' | 'ur'
+) {
+  const updated = await db.pharmacyCustomer.updateMany({
+    where: { id: customerId, organizationId: scope.organizationId, active: true },
+    data: { preferredLanguage },
+  });
+  if (updated.count !== 1) throw new PharmacyLoyaltyError('CUSTOMER_NOT_FOUND');
+  return { customerId, preferredLanguage };
+}
+
 async function assertLoyaltyHistoryBranch(db: ScopedDb, scope: LedgerScope) {
   const branch = await db.pharmacyBranch.findFirst({
     where: { id: scope.branchId, organizationId: scope.organizationId, active: true },

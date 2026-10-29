@@ -100,7 +100,12 @@ export async function processDueWhatsAppKhataReminders(
   const provider = options.provider ?? createWhatsAppProvider(config);
   const minBalanceMinor = options.minBalanceMinor ?? DEFAULT_MIN_BALANCE_MINOR;
   const result: KhataReminderRunResult = {
-    configured: Boolean(config.templates.khataReminder),
+    configured: Boolean(
+      config.templates.khataReminder &&
+      config.organizationId &&
+      config.phoneNumberId &&
+      (config.provider === 'mock' || config.accessToken)
+    ),
     scanned: 0,
     sent: 0,
     prepared: 0,
@@ -111,8 +116,7 @@ export async function processDueWhatsAppKhataReminders(
     notDue: 0,
   };
   const organizationId = config.organizationId;
-  if (!result.configured || config.provider === 'meta' || !organizationId || !config.phoneNumberId)
-    return { ...result, configured: false };
+  if (!result.configured || !organizationId) return { ...result, configured: false };
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   const accounts = await withPlatformDb((db) =>
@@ -176,6 +180,7 @@ export async function processDueWhatsAppKhataReminders(
           patientId: true,
           active: true,
           whatsappOptIn: true,
+          preferredLanguage: true,
           patient: { select: { phone: true } },
         },
       });
@@ -206,6 +211,12 @@ export async function processDueWhatsAppKhataReminders(
         month: '2-digit',
         day: '2-digit',
       }).format(now);
+      const preferredLanguage =
+        customer.preferredLanguage === 'ur' ? ('ur' as const) : ('en' as const);
+      const templateName =
+        preferredLanguage === 'ur'
+          ? config.templates.khataReminderUrdu
+          : config.templates.khataReminder;
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: account.organizationId,
         direction: 'OUTBOUND',
@@ -217,10 +228,17 @@ export async function processDueWhatsAppKhataReminders(
         customerId: customer.id,
         patientId: customer.patientId,
         phoneLast4: phoneLast4(to),
-        templateName: config.templates.khataReminder,
+        templateName,
         dueDate: plan.dueDate,
       });
-      return { customerId: customer.id, patientId: customer.patientId, to, logId };
+      return {
+        customerId: customer.id,
+        patientId: customer.patientId,
+        preferredLanguage,
+        templateName,
+        to,
+        logId,
+      };
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
@@ -240,14 +258,15 @@ export async function processDueWhatsAppKhataReminders(
         customerId: recipient.customerId,
         patientId: recipient.patientId,
         phoneLast4: phoneLast4(recipient.to),
-        templateName: config.templates.khataReminder,
+        templateName: recipient.templateName,
         dueDate: plan.dueDate,
       },
       recipient.logId,
       () =>
         provider.sendTemplate({
           to: recipient.to,
-          template: 'khataReminder',
+          template: recipient.preferredLanguage === 'ur' ? 'khataReminderUrdu' : 'khataReminder',
+          language: recipient.preferredLanguage,
           // Utility parameters only: who owes, and how much is outstanding.
           parameters: [sanitizeReminderDisplayName(account.displayName), formatMinor(balanceMinor)],
         })
