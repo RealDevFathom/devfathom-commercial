@@ -17,6 +17,8 @@ export type WhatsAppConfig = {
   organizationId?: string | null;
   appSecret: string | null;
   verifyToken: string | null;
+  /** Owner-facing Meta Account Quality destination included in strike alerts. */
+  accountAppealUrl: string;
   graphVersion: string;
   templateLanguage: string;
   templates: Record<WhatsAppTemplateKey, string | null>;
@@ -78,6 +80,9 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
     organizationId: envValue(env, 'PHARMACY_WHATSAPP_ORGANIZATION_ID'),
     appSecret: envValue(env, 'PHARMACY_WHATSAPP_APP_SECRET'),
     verifyToken: envValue(env, 'PHARMACY_WHATSAPP_VERIFY_TOKEN'),
+    accountAppealUrl:
+      envValue(env, 'PHARMACY_WHATSAPP_ACCOUNT_APPEAL_URL') ??
+      'https://business.facebook.com/accountquality',
     graphVersion: envValue(env, 'PHARMACY_WHATSAPP_GRAPH_VERSION') ?? 'v21.0',
     templateLanguage: envValue(env, 'PHARMACY_WHATSAPP_TEMPLATE_LANGUAGE') ?? 'en',
     templates: {

@@ -7,6 +7,10 @@ import { NextResponse } from 'next/server';
 
 import { handleInboundWhatsAppMessage } from '@/lib/pharmacy/whatsapp/inbound';
 import { createWhatsAppProvider, readWhatsAppConfig } from '@/lib/pharmacy/whatsapp/provider';
+import {
+  applyAccountQualityUpdates,
+  parseAccountQualityUpdates,
+} from '@/lib/pharmacy/whatsapp/account-quality';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import {
   isTenantLifecycleAccessible,
@@ -94,6 +98,12 @@ export async function POST(request: Request) {
   } catch {
     return json({ error: 'Invalid JSON body.' }, 400);
   }
+
+  const accountUpdates = parseAccountQualityUpdates(payload);
+  if (accountUpdates.length)
+    await withTenantDb(organization.id, (db) =>
+      applyAccountQualityUpdates(db, organization.id, accountUpdates, config.accountAppealUrl)
+    );
 
   const callbackPayload = z
     .object({
