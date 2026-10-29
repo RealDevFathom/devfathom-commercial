@@ -29,6 +29,7 @@ import { TimePicker } from '@/components/ui/time-picker';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { computePunctuality } from '@/lib/meeting-occurrence';
+import { MEETING_TIME_ORDER_MESSAGE, isValidMeetingTimeRange } from '@/lib/meetings/time-range';
 import { format, isToday, isTomorrow } from 'date-fns';
 
 const recurrenceLabels: Record<string, string> = {
@@ -205,9 +206,13 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
     ''
   );
   const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
+  const hasCompleteTimeRange = Boolean(date && startTime && endTime);
+  const hasInvalidTimeRange =
+    hasCompleteTimeRange &&
+    !isValidMeetingTimeRange(new Date(`${date}T${startTime}`), new Date(`${date}T${endTime}`));
 
   const handleCreate = () => {
-    if (!title.trim() || !date || !startTime || !endTime) return;
+    if (!title.trim() || !hasCompleteTimeRange || hasInvalidTimeRange) return;
     onSubmit({
       title: title.trim(),
       description: description.trim() || undefined,
@@ -236,6 +241,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
             <label className="block text-xs font-medium text-foreground mb-1">Title *</label>
             <input
               autoFocus
+              aria-label="Title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. Sprint Planning"
@@ -268,6 +274,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
             <label className="block text-xs font-medium text-foreground mb-1">Date *</label>
             <input
               type="date"
+              aria-label="Date"
               value={date}
               onChange={(e) => setDate(e.target.value)}
               className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -292,6 +299,11 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
             />
           </div>
         </div>
+        {hasInvalidTimeRange && (
+          <p role="alert" className="text-xs font-medium text-destructive">
+            {MEETING_TIME_ORDER_MESSAGE}
+          </p>
+        )}
 
         {/* Recurrence */}
         <div>
@@ -362,7 +374,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
           </button>
           <button
             onClick={handleCreate}
-            disabled={!title.trim() || !date || !startTime || !endTime || isPending}
+            disabled={!title.trim() || !hasCompleteTimeRange || hasInvalidTimeRange || isPending}
             className="flex items-center gap-1.5 rounded-xl bg-primary px-5 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {isPending ? (
@@ -418,6 +430,10 @@ const MeetingCard = memo(function MeetingCard({
     ''
   );
   const [eAttendees, setEAttendees] = useState<string[]>([]);
+  const hasCompleteEditTimeRange = Boolean(eDate && eStart && eEnd);
+  const hasInvalidEditTimeRange =
+    hasCompleteEditTimeRange &&
+    !isValidMeetingTimeRange(new Date(`${eDate}T${eStart}`), new Date(`${eDate}T${eEnd}`));
 
   const updateMeeting = trpc.meetings.update.useMutation({
     onSuccess: () => {
@@ -468,7 +484,7 @@ const MeetingCard = memo(function MeetingCard({
   };
 
   const handleSave = () => {
-    if (!eTitle.trim() || !eDate || !eStart || !eEnd) return;
+    if (!eTitle.trim() || !hasCompleteEditTimeRange || hasInvalidEditTimeRange) return;
     updateMeeting.mutate({
       id: meeting.id,
       title: eTitle.trim(),
@@ -542,6 +558,11 @@ const MeetingCard = memo(function MeetingCard({
               />
             </div>
           </div>
+          {hasInvalidEditTimeRange && (
+            <p role="alert" className="text-xs font-medium text-destructive">
+              {MEETING_TIME_ORDER_MESSAGE}
+            </p>
+          )}
           <div>
             <label className="block text-[10px] font-medium text-foreground mb-1">Repeat</label>
             <div className="flex gap-1">
@@ -603,7 +624,12 @@ const MeetingCard = memo(function MeetingCard({
             </button>
             <button
               onClick={handleSave}
-              disabled={!eTitle.trim() || !eDate || !eStart || !eEnd || updateMeeting.isPending}
+              disabled={
+                !eTitle.trim() ||
+                !hasCompleteEditTimeRange ||
+                hasInvalidEditTimeRange ||
+                updateMeeting.isPending
+              }
               className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
             >
               {updateMeeting.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Save

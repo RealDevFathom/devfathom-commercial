@@ -9,6 +9,11 @@ import { computePunctuality } from '@/lib/meeting-occurrence';
 import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
 import { materializeMeetingOccurrences } from '@/lib/meetings/materialize';
 import {
+  MEETING_TIME_ORDER_MESSAGE,
+  isValidMeetingTimeRange,
+  meetingTimeRangeSchema,
+} from '@/lib/meetings/time-range';
+import {
   cancelOccurrence,
   occurrenceJoinPath,
   rescheduleOccurrence,
@@ -323,15 +328,17 @@ export const meetingsRouter = router({
 
   create: protectedProcedure
     .input(
-      z.object({
-        title: z.string().min(1),
-        description: z.string().optional(),
-        startTime: z.date(),
-        endTime: z.date(),
-        location: z.string().optional(),
-        recurrence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).nullable().default(null),
-        attendeeIds: z.array(z.string()),
-      })
+      z
+        .object({
+          title: z.string().min(1),
+          description: z.string().optional(),
+          startTime: z.date(),
+          endTime: z.date(),
+          location: z.string().optional(),
+          recurrence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).nullable().default(null),
+          attendeeIds: z.array(z.string()),
+        })
+        .and(meetingTimeRangeSchema)
     )
     .mutation(async ({ ctx, input }) => {
       // Guard against stale sessions: if the session JWT references a user that
@@ -391,6 +398,19 @@ export const meetingsRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertMeetingManage(ctx, input.id);
       const { id, attendeeIds, ...data } = input;
+
+      const current = await ctx.db.meeting.findUniqueOrThrow({
+        where: { id },
+        select: { startTime: true, endTime: true },
+      });
+      if (
+        !isValidMeetingTimeRange(
+          data.startTime ?? current.startTime,
+          data.endTime ?? current.endTime
+        )
+      ) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: MEETING_TIME_ORDER_MESSAGE });
+      }
 
       if (attendeeIds) {
         const allAttendees = [...new Set([ctx.session.user.id, ...attendeeIds])];

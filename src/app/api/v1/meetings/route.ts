@@ -4,6 +4,7 @@ import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { materializeMeetingOccurrences } from '@/lib/meetings/materialize';
 import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
+import { MEETING_TIME_ORDER_MESSAGE, isValidMeetingTimeRange } from '@/lib/meetings/time-range';
 
 export const GET = withApiAuth('meetings:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -54,6 +55,11 @@ export const POST = withApiAuth('meetings:write', async (ctx, request) => {
   }
 
   const { attendeeIds, startTime, endTime, ...rest } = parsed.data;
+  const start = new Date(startTime);
+  const end = new Date(endTime);
+  if (!isValidMeetingTimeRange(start, end)) {
+    return NextResponse.json({ error: MEETING_TIME_ORDER_MESSAGE }, { status: 400 });
+  }
   const allAttendees = [...new Set([ctx.userId, ...attendeeIds])];
 
   // REST-07: validate attendee ids exist before insert (bad id → raw FK 500).
@@ -65,8 +71,8 @@ export const POST = withApiAuth('meetings:write', async (ctx, request) => {
   const meeting = await ctx.db.meeting.create({
     data: {
       ...rest,
-      startTime: new Date(startTime),
-      endTime: new Date(endTime),
+      startTime: start,
+      endTime: end,
       // WHA-235: the legacy `recurrence` value and its RRULE are written
       // together here for the same reason they are in `meetings.create` — this
       // route calls Prisma directly rather than going through the router, so a

@@ -21,6 +21,7 @@ import { appUrl, templates } from '@/lib/email';
 import { computePunctuality } from '@/lib/meeting-occurrence';
 import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
 import { materializeMeetingOccurrences } from '@/lib/meetings/materialize';
+import { MEETING_TIME_ORDER_MESSAGE, isValidMeetingTimeRange } from '@/lib/meetings/time-range';
 import { resolveRelevantOccurrence } from '@/lib/meetings/occurrences';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 
@@ -68,11 +69,11 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
   const resolveMeeting = async (title: string) => {
     const rows = await db.meeting.findMany({
       where: meetingScope(),
-      select: { id: true, title: true },
+      select: { id: true, title: true, startTime: true, endTime: true },
     });
     return h.resolveNamed(
       title,
-      rows.map((m) => ({ id: m.id, name: m.title }))
+      rows.map((m) => ({ ...m, name: m.title }))
     );
   };
 
@@ -267,8 +268,8 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
         const end = parseDate(endTime);
         if (!end)
           return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
-        if (end.getTime() <= start.getTime()) {
-          return { error: 'The end time must be after the start time.' };
+        if (!isValidMeetingTimeRange(start, end)) {
+          return { error: MEETING_TIME_ORDER_MESSAGE };
         }
 
         // Resolve every attendee name up front so we can ask for clarification
@@ -415,6 +416,12 @@ export function buildMeetingsTools(h: AssistantHelpers): ToolSet {
           if (!d)
             return { error: `Could not read the end time "${endTime}". Use an ISO datetime.` };
           data.endTime = d;
+        }
+
+        const nextStart = data.startTime instanceof Date ? data.startTime : r.value.startTime;
+        const nextEnd = data.endTime instanceof Date ? data.endTime : r.value.endTime;
+        if (!isValidMeetingTimeRange(nextStart, nextEnd)) {
+          return { error: MEETING_TIME_ORDER_MESSAGE };
         }
 
         // Replace the attendee list when provided (mirrors the router: the

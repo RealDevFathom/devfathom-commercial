@@ -21,6 +21,8 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+Element.prototype.scrollIntoView = vi.fn();
+
 const HOUR = 60 * 60 * 1000;
 
 type Meeting = {
@@ -50,6 +52,7 @@ const mocks = vi.hoisted(() => ({
   pages: [] as Array<{ items: unknown[]; nextCursor?: string }>,
   hasNextPage: false,
   fetchNextPage: vi.fn(),
+  createMeeting: vi.fn(),
 }));
 
 vi.mock('next-auth/react', () => ({
@@ -81,7 +84,7 @@ vi.mock('@/lib/trpc', () => {
             isFetchingNextPage: false,
           }),
         },
-        create: mutation(),
+        create: { useMutation: () => ({ mutate: mocks.createMeeting, isPending: false }) },
         update: mutation(),
         delete: mutation(),
       },
@@ -108,6 +111,7 @@ describe('MeetingsContent pagination', () => {
     mocks.pages = [];
     mocks.hasNextPage = false;
     mocks.fetchNextPage.mockClear();
+    mocks.createMeeting.mockClear();
   });
 
   // The defect issue #44 reports, at the surface that shows it. A tenant whose
@@ -183,5 +187,36 @@ describe('MeetingsContent pagination', () => {
 
     expect(screen.getByText('Past meeting 2')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
+  });
+});
+
+describe('meeting time validation', () => {
+  beforeEach(() => {
+    mocks.upcoming = [];
+    mocks.pages = [];
+    mocks.hasNextPage = false;
+    mocks.createMeeting.mockClear();
+  });
+
+  it.each([
+    ['equal to', '10:00 AM'],
+    ['before', '9:45 AM'],
+  ])('blocks a meeting whose end time is %s its start time', (_case, endTime) => {
+    render(<MeetingsContent />);
+    fireEvent.click(screen.getByRole('button', { name: /schedule meeting/i }));
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Invalid meeting' } });
+    fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2026-10-29' } });
+    fireEvent.click(screen.getByLabelText('Start time'));
+    fireEvent.click(screen.getByRole('option', { name: '10:00 AM' }));
+    fireEvent.click(screen.getByLabelText('End time'));
+    fireEvent.click(screen.getByRole('option', { name: endTime }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'The end time must be after the start time.'
+    );
+    const schedule = screen.getByRole('button', { name: /^schedule$/i });
+    expect(schedule).toBeDisabled();
+    fireEvent.click(schedule);
+    expect(mocks.createMeeting).not.toHaveBeenCalled();
   });
 });
