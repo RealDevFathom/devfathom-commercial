@@ -2,6 +2,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -40,6 +41,9 @@ function fixture(root: string) {
     'package.json': '{"dependencies":{"prisma":"7","dotenv":"17"}}',
     'bun.lock': 'lock',
     'prisma.config.ts': '// config',
+    'tsconfig.json': readFileSync(resolve('tsconfig.json'), 'utf8'),
+    'src/lib/module-catalog.ts': readFileSync(resolve('src/lib/module-catalog.ts'), 'utf8'),
+    'src/lib/vertical-catalog.ts': readFileSync(resolve('src/lib/vertical-catalog.ts'), 'utf8'),
     'prisma/schema.prisma': '// schema',
     'prisma/migrations/001/migration.sql': '-- migration',
     'scripts/start-standalone.mjs': readFileSync(resolve('scripts/start-standalone.mjs'), 'utf8'),
@@ -71,8 +75,10 @@ for (const mode of [
   'restart-failure',
   'health-failure',
   'migration-failure',
+  'sync-failure',
   'replace-inactive',
   'replace-migration-failure',
+  'replace-sync-failure',
   'replace-restart-failure',
   'same-sha',
   'same-sha-unhealthy',
@@ -118,8 +124,16 @@ if [[ "$1" == install ]]; then
 fi
 [[ "$PWD" == "$TEST_ROOT/releases/.staging/"* ]]
 [[ ! -e "$TEST_ROOT/releases/$TEST_SHA" || -f "$TEST_ROOT/releases/$TEST_SHA/original" ]]
-[[ "$TEST_MODE" != *migration-failure ]]`,
-        sudo: `echo "$*" >> "$TEST_ROOT/restarts"\nif [[ "$TEST_MODE" == *restart-failure && ! -f "$TEST_ROOT/failed" ]]; then touch "$TEST_ROOT/failed"; exit 1; fi`,
+if [[ "$*" == 'node_modules/.bin/prisma migrate deploy' ]]; then
+  [[ "$TEST_MODE" != *migration-failure ]]
+elif [[ "$*" == 'prisma/sync-catalog.ts' ]]; then
+  [[ "$(readlink "$TEST_ROOT/releases/current")" == "$TEST_ROOT/releases/previous" ]]
+  [[ "$TEST_MODE" != *sync-failure ]]
+else
+  exit 1
+fi`,
+        sudo: `[[ "$(tail -n 1 "$TEST_ROOT/bun-calls")" == prisma/sync-catalog.ts ]]
+echo "$*" >> "$TEST_ROOT/restarts"\nif [[ "$TEST_MODE" == *restart-failure && ! -f "$TEST_ROOT/failed" ]]; then touch "$TEST_ROOT/failed"; exit 1; fi`,
         curl: 'if [[ "$TEST_MODE" == health-failure || "$TEST_MODE" == same-sha-unhealthy ]]; then printf 503; else printf 200; fi',
         sleep: ':',
       };
@@ -199,7 +213,7 @@ fi
             readFileSync(join(current, '.next/standalone/.next/cache/runtime-data'), 'utf8')
           ).toBe('keep cache');
           expect(readFileSync(join(root, 'downloads'), 'utf8').trim().split('\n')).toHaveLength(1);
-          expect(readFileSync(join(root, 'bun-calls'), 'utf8').trim().split('\n')).toHaveLength(2);
+          expect(readFileSync(join(root, 'bun-calls'), 'utf8').trim().split('\n')).toHaveLength(3);
         }
         for (const path of ['public/uploads', '.next/standalone/public/uploads']) {
           expect(readlinkSync(join(current, path))).toBe(join(root, 'shared/uploads'));
@@ -207,12 +221,17 @@ fi
       } else {
         expect(current).toBe(join(root, 'releases/previous'));
       }
-      if (replacing && mode.endsWith('migration-failure'))
+      if (replacing && (mode.endsWith('migration-failure') || mode.endsWith('sync-failure')))
         expect(readFileSync(join(root, `releases/${sha}/original`), 'utf8')).toBe(
           'existing release'
         );
       expect(readdirSync(join(root, 'releases/.staging'))).toEqual([]);
-      if (mode.endsWith('migration-failure'))
+      expect(readFileSync(join(root, 'bun-calls'), 'utf8').trim().split('\n')).toEqual([
+        'install --frozen-lockfile --production',
+        'node_modules/.bin/prisma migrate deploy',
+        ...(mode.endsWith('migration-failure') ? [] : ['prisma/sync-catalog.ts']),
+      ]);
+      if (mode.endsWith('migration-failure') || mode.endsWith('sync-failure'))
         expect(existsSync(join(root, 'restarts'))).toBe(false);
       else {
         const restarts = readFileSync(join(root, 'restarts'), 'utf8').trim().split('\n');
@@ -366,3 +385,48 @@ it('keeps migration tooling in production dependencies for frozen server install
   expect(manifest.dependencies.prisma).toEqual(expect.any(String));
   expect(manifest.dependencies.dotenv).toEqual(expect.any(String));
 });
+
+it('pins every workflow action to a full commit with a version comment', () => {
+  const actions = [...workflow.matchAll(/uses: ([^\s]+)([^\n]*)/g)];
+  expect(actions).toHaveLength(6);
+  for (const [, reference, comment] of actions) {
+    expect(reference).toMatch(/^[\w-]+\/[\w-]+@[0-9a-f]{40}$/);
+    expect(comment).toMatch(/^ # v\d+/);
+  }
+});
+
+it('packages the complete catalog source graph and generates Prisma through postinstall', () => {
+  const root = mkdtempSync(join(tmpdir(), 'develop-catalog-source-'));
+  try {
+    const source = join(root, 'source');
+    fixture(source);
+    for (const path of ['prisma', 'prisma.config.ts', 'package.json', 'tsconfig.json'])
+      cpSync(resolve(path), join(source, path), { recursive: true });
+    const archive = join(root, 'release.tar.gz');
+    execFileSync(packageScript, [source, archive]);
+    const extracted = join(root, 'extracted');
+    mkdirSync(extracted);
+    execFileSync('tar', ['-xzf', archive, '-C', extracted]);
+    expect(existsSync(join(extracted, 'src/generated/prisma/client.ts'))).toBe(false);
+    // Use installed dependencies without fetching packages or contacting a DB.
+    symlinkSync(resolve('node_modules'), join(extracted, 'node_modules'));
+    execFileSync('bun', ['run', 'postinstall'], { cwd: extracted, stdio: 'pipe' });
+    expect(existsSync(join(extracted, 'src/generated/prisma/client.ts'))).toBe(true);
+    // Externalize packages only: every transitive local import must resolve
+    // inside the extracted artifact, including the catalogs' @/ alias.
+    execFileSync(
+      'bun',
+      [
+        'build',
+        'prisma/sync-catalog.ts',
+        '--target=bun',
+        '--packages=external',
+        '--outfile=catalog-sync.js',
+      ],
+      { cwd: extracted, stdio: 'pipe' }
+    );
+    expect(existsSync(join(extracted, 'catalog-sync.js'))).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}, 30_000);

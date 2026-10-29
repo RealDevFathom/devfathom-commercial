@@ -15,8 +15,12 @@ cp -a "$root/.next/static" "$stage/.next/standalone/.next/static"
 cp -a "$root/public" "$stage/.next/standalone/public"
 rm -rf -- "$stage/.next/standalone/public/uploads"
 cp "$root/scripts/start-standalone.mjs" "$stage/scripts/"
-cp "$root/package.json" "$root/bun.lock" "$root/prisma.config.ts" "$stage/"
+cp "$root/package.json" "$root/bun.lock" "$root/prisma.config.ts" "$root/tsconfig.json" "$stage/"
 cp -a "$root/prisma" "$stage/prisma"
+# Catalog reconciliation runs outside Next's traced server. Ship its local
+# sources explicitly; postinstall generates src/generated/prisma on the host.
+mkdir -p "$stage/src/lib"
+cp "$root/src/lib/module-catalog.ts" "$root/src/lib/vertical-catalog.ts" "$stage/src/lib/"
 # Tracing can carry dotenv files from the build host; never distribute them.
 find "$stage" -name '.env*' -exec rm -rf -- {} +
 # Assets are complete; startup must not overwrite persistent uploads or recopy.
