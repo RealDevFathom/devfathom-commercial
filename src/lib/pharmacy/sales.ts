@@ -1047,6 +1047,7 @@ export async function captureSafeRestockArrival(
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       status: 'OPEN',
+      createdAt: { gte: new Date(at.getTime() - 14 * 86_400_000) },
       demandEvent: { requestedMedicineId: lot.batch.medicineId, status: 'OPEN' },
     },
     include: { patient: { select: { phone: true } } },
@@ -1146,7 +1147,7 @@ export async function recoverRestockInterest(
       branchId: scope.branchId,
       status: { in: ['OPEN', 'NOTIFIED'] },
     },
-    include: { demandEvent: true },
+    include: { demandEvent: true, notifications: { orderBy: { queuedAt: 'desc' }, take: 1 } },
   });
   if (interest?.orderLineId) throw new PharmacySaleError('INVALID_STATE');
   const line = await db.pharmacySaleLine.findFirst({
@@ -1162,6 +1163,9 @@ export async function recoverRestockInterest(
   )
     throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
   const recoveredAt = new Date();
+  const notifiedAt = interest.notifications[0]?.queuedAt;
+  if (!notifiedAt || recoveredAt.getTime() - notifiedAt.getTime() > 7 * 86_400_000)
+    throw new PharmacySaleError('INVALID_STATE');
   await db.unfulfilledDemandEvent.update({
     where: {
       organizationId_id: { organizationId: scope.organizationId, id: interest.demandEventId },

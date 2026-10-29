@@ -245,6 +245,7 @@ describe('DEM-03 restock interest', () => {
           id: 'interest-a',
           demandEventId: 'demand-a',
           demandEvent: { requestedMedicineId: 'med-a' },
+          notifications: [{ queuedAt: new Date() }],
         }),
         update: async (args: { data: Record<string, unknown> }) => {
           writes.push(args.data);
