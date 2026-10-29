@@ -5,10 +5,25 @@ export const RESTOCK_REQUEST_TTL_DAYS = 14;
 export const RESTOCK_RECOVERY_WINDOW_DAYS = 7;
 
 export type BackInStockTemplateInput = {
-  branch: string;
+  branchId: string;
   requestedOn: Date;
-  reference: string;
+  notificationId: string;
 };
+
+const OPAQUE_ID = /^[A-Za-z0-9_-]{8,64}$/;
+
+function publicToken(kind: 'branch' | 'reference', value: string): string {
+  if (!OPAQUE_ID.test(value)) throw new TypeError(`Invalid ${kind} identifier`);
+  // Never send caller-supplied labels or identifier fragments. Hashing the
+  // syntactically opaque ID keeps the receipt useful without making free text,
+  // drug names, or PHI recoverable from a template parameter.
+  let hash = 0x811c9dc5;
+  for (const byte of new TextEncoder().encode(`${kind}:${value}`)) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `${kind === 'branch' ? 'Branch' : 'R'}-${hash.toString(36).toUpperCase().padStart(7, '0')}`;
+}
 
 /**
  * The only allowed template variables. Product, salt and therapeutic category
@@ -16,9 +31,9 @@ export type BackInStockTemplateInput = {
  */
 export function backInStockTemplateParameters(input: BackInStockTemplateInput): string[] {
   return [
-    input.branch.trim(),
+    publicToken('branch', input.branchId),
     input.requestedOn.toISOString().slice(0, 10),
-    input.reference.trim(),
+    publicToken('reference', input.notificationId),
   ];
 }
 
@@ -27,7 +42,7 @@ export function backInStockPreview(input: BackInStockTemplateInput): string {
   return `The item you asked about at ${branch} on ${date} is now available. Ref #${reference}. Reply STOP to opt out.`;
 }
 
-/** Provider boundary used by the GRN arrival worker; the narrow input prevents accidental PHI. */
+/** Provider boundary used by the GRN arrival worker; runtime validation rejects free text/PHI. */
 export function sendBackInStockNotice(
   provider: WhatsAppProvider,
   to: string,

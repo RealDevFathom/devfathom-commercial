@@ -92,6 +92,7 @@ import {
   returnSaleLine,
   readReturnHistory,
 } from '@/lib/pharmacy/sales';
+import { deliverBackInStockNotification } from '@/lib/pharmacy/back-in-stock-worker';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
@@ -1519,9 +1520,16 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, inventoryLotId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          captureSafeRestockArrival(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        const scope = await scopeFor(ctx, input.branchId);
+        const captured = await ctx.db.$transaction(async (tx) =>
+          captureSafeRestockArrival(txDb(tx), scope, input)
         );
+        await Promise.all(
+          captured
+            .filter((row) => row.notification?.channel === 'WHATSAPP')
+            .map((row) => deliverBackInStockNotification(ctx.db, scope, row.notification!.id))
+        );
+        return captured;
       } catch (error) {
         fail(error);
       }

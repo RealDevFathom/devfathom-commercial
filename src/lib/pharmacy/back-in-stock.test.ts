@@ -13,11 +13,42 @@ const now = new Date('2026-10-29T12:00:00Z');
 
 describe('back-in-stock policy', () => {
   it('never places product, salt, or category data in template variables or text', () => {
-    const input = { branch: 'Gulberg', requestedOn: new Date('2026-10-20'), reference: 'A123' };
-    expect(backInStockTemplateParameters(input)).toEqual(['Gulberg', '2026-10-20', 'A123']);
+    const input = {
+      branchId: 'branch01',
+      requestedOn: new Date('2026-10-20'),
+      notificationId: 'notice01',
+    };
+    expect(backInStockTemplateParameters(input)).toEqual([
+      expect.stringMatching(/^Branch-[0-9A-Z]{7}$/),
+      '2026-10-20',
+      expect.stringMatching(/^R-[0-9A-Z]{7}$/),
+    ]);
     const output = backInStockPreview(input);
     for (const prohibited of ['Panadol', 'paracetamol', 'analgesic', 'medicine', 'drug', 'salt'])
       expect(output.toLowerCase()).not.toContain(prohibited.toLowerCase());
+  });
+
+  it.each(['Panadol 500mg', 'salt:paracetamol', '{{malicious}}', 'patient@example.com'])(
+    'rejects free-text identifiers at the provider boundary: %s',
+    (hostile) => {
+      expect(() =>
+        backInStockTemplateParameters({
+          branchId: hostile,
+          requestedOn: now,
+          notificationId: 'notice01',
+        })
+      ).toThrow('Invalid branch identifier');
+    }
+  );
+
+  it('irreversibly tokenizes even syntactically valid drug-bearing identifiers', () => {
+    const parameters = backInStockTemplateParameters({
+      branchId: 'Panadol500',
+      requestedOn: now,
+      notificationId: 'Paracetamol',
+    });
+    expect(parameters.join(' ').toLowerCase()).not.toContain('panadol');
+    expect(parameters.join(' ').toLowerCase()).not.toContain('paracetamol');
   });
 
   it('uses a separately configurable approved utility template', () => {
@@ -32,16 +63,20 @@ describe('back-in-stock policy', () => {
       readWhatsAppConfig({ PHARMACY_WHATSAPP_TEMPLATE_BACK_IN_STOCK: 'stock_available_v1' })
     );
     await sendBackInStockNotice(provider, '923001234567', {
-      branch: 'Gulberg',
+      branchId: 'branch01',
       requestedOn: new Date('2026-10-20'),
-      reference: 'A123',
+      notificationId: 'notice01',
     });
     expect(provider.calls).toEqual([
       {
         kind: 'template',
         to: '923001234567',
         template: 'backInStock',
-        parameters: ['Gulberg', '2026-10-20', 'A123'],
+        parameters: backInStockTemplateParameters({
+          branchId: 'branch01',
+          requestedOn: new Date('2026-10-20'),
+          notificationId: 'notice01',
+        }),
         templateName: 'stock_available_v1',
       },
     ]);
@@ -75,6 +110,14 @@ describe('back-in-stock policy', () => {
       isRecoverableSale({
         notifiedAt,
         soldAt: new Date('2026-10-27T12:00:01Z'),
+        sameCustomer: false,
+        sameSku: true,
+      })
+    ).toBe(false);
+    expect(
+      isRecoverableSale({
+        notifiedAt: new Date('2026-10-30'),
+        soldAt: now,
         sameCustomer: false,
         sameSku: true,
       })

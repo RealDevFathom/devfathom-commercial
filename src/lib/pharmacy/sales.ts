@@ -17,6 +17,7 @@ import { appendControlledRestorations } from './controlled-register';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+import { isRecoverableSale, recoveryDashboard, RESTOCK_REQUEST_TTL_DAYS } from './back-in-stock';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -1047,7 +1048,7 @@ export async function captureSafeRestockArrival(
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       status: 'OPEN',
-      createdAt: { gte: new Date(at.getTime() - 14 * 86_400_000) },
+      createdAt: { gte: new Date(at.getTime() - RESTOCK_REQUEST_TTL_DAYS * 86_400_000) },
       demandEvent: { requestedMedicineId: lot.batch.medicineId, status: 'OPEN' },
     },
     include: { patient: { select: { phone: true } } },
@@ -1094,10 +1095,6 @@ export async function captureSafeRestockArrival(
         inventoryLotId: lot.id,
         idempotencyKey: `restock:${interest.id}:${lot.id}`,
       },
-    });
-    await db.pharmacyRestockInterest.update({
-      where: { organizationId_id: { organizationId: scope.organizationId, id: interest.id } },
-      data: { status: 'NOTIFIED' },
     });
     captured.push({ interestId: interest.id, reservation, notification });
   }
@@ -1147,7 +1144,14 @@ export async function recoverRestockInterest(
       branchId: scope.branchId,
       status: { in: ['OPEN', 'NOTIFIED'] },
     },
-    include: { demandEvent: true, notifications: { orderBy: { queuedAt: 'desc' }, take: 1 } },
+    include: {
+      demandEvent: true,
+      notifications: {
+        where: { status: 'SENT', sentAt: { not: null } },
+        orderBy: { sentAt: 'desc' },
+        take: 1,
+      },
+    },
   });
   if (interest?.orderLineId) throw new PharmacySaleError('INVALID_STATE');
   const line = await db.pharmacySaleLine.findFirst({
@@ -1163,8 +1167,16 @@ export async function recoverRestockInterest(
   )
     throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
   const recoveredAt = new Date();
-  const notifiedAt = interest.notifications[0]?.queuedAt;
-  if (!notifiedAt || recoveredAt.getTime() - notifiedAt.getTime() > 7 * 86_400_000)
+  const notifiedAt = interest.notifications[0]?.sentAt;
+  if (
+    !notifiedAt ||
+    !isRecoverableSale({
+      notifiedAt,
+      soldAt: recoveredAt,
+      sameCustomer: false,
+      sameSku: line.medicineId === interest.demandEvent.requestedMedicineId,
+    })
+  )
     throw new PharmacySaleError('INVALID_STATE');
   await db.unfulfilledDemandEvent.update({
     where: {
@@ -1200,7 +1212,7 @@ export async function restockRecoveryReport(
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
   campaignKey?: string
 ) {
-  return db.pharmacyRestockInterest.findMany({
+  const interests = await db.pharmacyRestockInterest.findMany({
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
@@ -1213,11 +1225,32 @@ export async function restockRecoveryReport(
       status: true,
       recoveredSaleLineId: true,
       recoveredAt: true,
-      demandEvent: { select: { requestedMedicineId: true, requestedText: true, quantity: true } },
+      demandEvent: {
+        select: {
+          requestedMedicineId: true,
+          requestedText: true,
+          quantity: true,
+          estimatedValueMinor: true,
+        },
+      },
       recoveredSale: {
         select: { id: true, receiptNumber: true, receiptDeviceId: true, businessDate: true },
       },
     },
     orderBy: { createdAt: 'desc' },
   });
+  const dashboard = recoveryDashboard(
+    interests.map((interest) => ({
+      branch: scope.branchId,
+      salt:
+        interest.demandEvent.requestedText ?? interest.demandEvent.requestedMedicineId ?? 'Unknown',
+      distributor: 'Unassigned',
+      estimatedLostMinor: interest.demandEvent.estimatedValueMinor ?? 0,
+      // Attribution is explicitly an estimate: the original demand value is
+      // the stable like-for-like amount when the linked sale was recovered.
+      recoveredMinor:
+        interest.status === 'RECOVERED' ? (interest.demandEvent.estimatedValueMinor ?? 0) : 0,
+    }))
+  );
+  return { ...dashboard, interests };
 }

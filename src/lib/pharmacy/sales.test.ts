@@ -245,7 +245,7 @@ describe('DEM-03 restock interest', () => {
           id: 'interest-a',
           demandEventId: 'demand-a',
           demandEvent: { requestedMedicineId: 'med-a' },
-          notifications: [{ queuedAt: new Date() }],
+          notifications: [{ sentAt: new Date() }],
         }),
         update: async (args: { data: Record<string, unknown> }) => {
           writes.push(args.data);
@@ -283,6 +283,35 @@ describe('DEM-03 restock interest', () => {
       ])
     );
     expect(result).toMatchObject({ recoveredSale: { receiptNumber: 42 } });
+  });
+
+  it('refuses recovery when the successful delivery timestamp is in the future', async () => {
+    const write = vi.fn();
+    const db = {
+      pharmacyRestockInterest: {
+        findFirst: async () => ({
+          id: 'interest-a',
+          demandEventId: 'demand-a',
+          demandEvent: { requestedMedicineId: 'med-a' },
+          notifications: [{ sentAt: new Date('2099-01-01') }],
+        }),
+      },
+      pharmacySaleLine: {
+        findFirst: async () => ({
+          id: 'line-a',
+          medicineId: 'med-a',
+          sale: { status: 'COMPLETED', receiptNumber: 42 },
+        }),
+      },
+      unfulfilledDemandEvent: { update: write },
+    };
+    await expect(
+      recoverRestockInterest(db as never, scope, {
+        interestId: 'interest-a',
+        saleLineId: 'line-a',
+      })
+    ).rejects.toThrow('INVALID_STATE');
+    expect(write).not.toHaveBeenCalled();
   });
 });
 
