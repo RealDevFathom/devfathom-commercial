@@ -658,6 +658,8 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  // Loyalty redemption can complete any sale, including an all-OTC sale, so it
+  // always requires the exact dispense capability before entering the domain.
   redeemPoints: capabilityProcedure('pharmacy:dispense')
     .input(
       z

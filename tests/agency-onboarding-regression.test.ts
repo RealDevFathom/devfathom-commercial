@@ -117,6 +117,7 @@ describe('§9 contract item 1 — AGENCY organization.create: zero branch rows',
       defaultSeats: 25,
       id: 'pkg_a',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });

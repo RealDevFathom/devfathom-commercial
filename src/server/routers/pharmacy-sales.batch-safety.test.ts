@@ -47,7 +47,7 @@ function caller(granted = true) {
         status: 'ACTIVE',
         organizationId: 'org-1',
         organizationRole: {
-          permissions: granted ? [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }] : [],
+          permissions: [{ capability: 'pharmacy:dispense', effect: granted ? 'ALLOW' : 'DENY' }],
         },
         permissionOverrides: [],
       })),
@@ -70,7 +70,7 @@ function caller(granted = true) {
 beforeEach(() => loyalty.redeemSalePoints.mockReset());
 
 describe('#633 batch refusal at tender', () => {
-  it('forbids loyalty redemption when the session has no dispense grant', async () => {
+  it('forbids loyalty redemption when an active branch user is denied dispense', async () => {
     await expect(
       caller(false).redeemPoints({
         branchId: BRANCH,

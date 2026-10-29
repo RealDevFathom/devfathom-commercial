@@ -64,7 +64,9 @@ export function DayClosePanel({
   const [reason, setReason] = useState('');
   const [managerId, setManagerId] = useState('');
   const [managerSecret, setManagerSecret] = useState('');
-  const eligibleManagers = operators.filter((operator) => operator.id !== actingOperatorId);
+  const eligibleManagers = operators.filter(
+    (operator) => operator.id !== actingOperatorId || operator.canSelfApprove
+  );
 
   async function setPanelOpen(next: boolean) {
     if (pending) return;
@@ -105,7 +107,7 @@ export function DayClosePanel({
     if (!preview) return;
     const correction = preview.existingCloseId !== null;
     if (correction && (!reason.trim() || !managerId.trim() || !managerSecret)) {
-      setError('A correction requires a reason and a distinct manager credential.');
+      setError('A correction requires a reason and an eligible approving manager PIN.');
       return;
     }
     const body = correction

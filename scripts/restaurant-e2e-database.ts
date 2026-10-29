@@ -124,10 +124,14 @@ export function restaurantE2eEnvironment(
     throw new Error('RESTAURANT_ACTOR_AGENCY_PASSWORD must equal RESTAURANT_ACTOR_ADMIN_PASSWORD.');
   }
   if (!env.PLATFORM_ADMIN_EMAIL || !env.PLATFORM_ADMIN_PASSWORD) {
-    throw new Error('Disposable template PLATFORM_ADMIN_EMAIL and PLATFORM_ADMIN_PASSWORD are required.');
+    throw new Error(
+      'Disposable template PLATFORM_ADMIN_EMAIL and PLATFORM_ADMIN_PASSWORD are required.'
+    );
   }
   if (env.RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL !== env.PLATFORM_ADMIN_EMAIL.toLowerCase()) {
-    throw new Error('RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL must match the seeded PLATFORM_ADMIN_EMAIL.');
+    throw new Error(
+      'RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL must match the seeded PLATFORM_ADMIN_EMAIL.'
+    );
   }
   if (env.RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD !== env.PLATFORM_ADMIN_PASSWORD) {
     throw new Error('RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD must equal PLATFORM_ADMIN_PASSWORD.');
@@ -137,6 +141,10 @@ export function restaurantE2eEnvironment(
     ...env,
     DATABASE_URL: databaseUrl,
     TEST_DATABASE_URL: databaseUrl,
+    // Browser and job worker share explicit disposable-only extraction/storage.
+    NODE_ENV: 'test',
+    MENU_IMPORT_ADAPTER: 'FIXTURE',
+    STORAGE_ADAPTER: 'local',
     // Set, never merged: the value has to hash to the seeded row, so a caller
     // override could only ever break the case it is meant to enable.
     RESTAURANT_E2E_REVOKED_BRIDGE_DEVICE_SECRET,
