@@ -480,7 +480,7 @@ export function OrganizationAdminContent() {
 
       <Card
         title="People and access"
-        description={`${entitlements.activeSeats} of ${entitlements.seatLimit} licensed seats are currently occupied.`}
+        description={`${entitlements.activeSeats} of ${entitlements.seatLimit} licensed ${entitlements.seatLimit === 1 ? 'seat' : 'seats'} ${entitlements.activeSeats === 1 ? 'is' : 'are'} currently occupied.`}
       >
         <form
           className="mb-5 grid gap-3 rounded-xl bg-muted/35 p-4 sm:grid-cols-2 lg:grid-cols-3"

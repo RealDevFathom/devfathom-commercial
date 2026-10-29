@@ -110,6 +110,21 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('organization people and access — staff onboarding', () => {
+  it('uses singular seat copy when the license limit is one', () => {
+    const data = overviewData.current as { entitlements: { seatLimit: number } };
+    data.entitlements.seatLimit = 1;
+
+    render(<OrganizationAdminContent />);
+
+    expect(screen.getByText('1 of 1 licensed seat is currently occupied.')).toBeInTheDocument();
+  });
+
+  it('keeps plural seat copy when the license limit is greater than one', () => {
+    render(<OrganizationAdminContent />);
+
+    expect(screen.getByText('1 of 10 licensed seats is currently occupied.')).toBeInTheDocument();
+  });
+
   it('offers an add-staff form with the organization pharmacy departments', () => {
     render(<OrganizationAdminContent />);
 
