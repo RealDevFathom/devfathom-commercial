@@ -285,6 +285,8 @@ jobs:
           # Private socket isolation is mandatory for the destructive wallet opt-ins.
           run wallet-postgres-install sudo apt-get install -y postgresql-16
           PHARMACY_WALLET_EVIDENCE_DIR=gate/pharmacy-wallet-db run vitest-wallet-db node scripts/verify-pharmacy-wallet-db.cjs
+          run initializer-snapshot python3 -B scripts/test-initializer-snapshot.py
+          run audit-production bun audit --production
           run lint bun run lint
 
           git diff --name-only -z b20b577f..HEAD -- '*.ts' '*.tsx' '*.css' '*.md' '*.json' '*.mjs' > gate/prettier-files.zlist

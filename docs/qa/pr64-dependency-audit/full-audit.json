@@ -1,0 +1,13 @@
+{
+  "deepmerge": [
+    {
+      "id": 1243505,
+      "url": "https://github.com/advisories/GHSA-gcqx-w48m-w2h4",
+      "title": "deepmerge mergeObject() allows prototype poisoning of returned objects",
+      "severity": "low",
+      "vulnerable_versions": ">=4.2.0 <=4.3.1",
+      "cwe": ["CWE-1321"],
+      "cvss": { "score": 5.3, "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:N" }
+    }
+  ]
+}

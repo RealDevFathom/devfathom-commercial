@@ -1,5 +1,8 @@
 # PR64 follow-up verification
 
+The subsequent [dependency audit follow-up](../pr64-dependency-audit/README.md)
+supersedes the audit findings and initializer-check limitation recorded below.
+
 Base: merged develop at `ddea7df2`. Changes retain existing recall/licence,
 security-invoker statement, witness-PIN, purge-trigger and email fallback fixes.
 AGENTS.md and Azure files, including deploy-staging.yml and promote-production.yml,

@@ -123,7 +123,7 @@
     "@types/pg": "^8.20.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@vitest/coverage-v8": "4.1.10",
+    "@vitest/coverage-v8": "4.1.12",
     "eslint": "^9",
     "shadcn": "^4.23.0",
     "eslint-config-next": "16.4.2",
@@ -132,7 +132,7 @@
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5",
-    "vitest": "4.1.10"
+    "vitest": "4.1.12"
   },
   "trustedDependencies": [
     "unrs-resolver"
@@ -156,7 +156,7 @@
     "exceljs": {
       "uuid": "11.1.1"
     },
-    "fast-uri": "3.1.8",
+    "fast-uri": "3.1.9",
     "hono": "4.12.27",
     "http-cache-semantics": "4.3.0",
     "ip-address": "10.7.4",
@@ -178,6 +178,13 @@
     "source-map-js": "1.2.2",
     "@vercel/cli-config": {
       "zod": "4.6.7"
+    },
+    "qs": "6.17.1",
+    "systeminformation": "5.33.18",
+    "vite": "8.3.5",
+    "deepmerge-ts": "8.0.2",
+    "@azure/identity": {
+      "@azure/msal-node": "7.1.2"
     }
   }
 }
