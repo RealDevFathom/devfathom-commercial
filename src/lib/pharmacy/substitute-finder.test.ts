@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { declineSubstitute, findSubstituteProposals } from './substitute-finder';
+import {
+  declineSubstitute,
+  findMarginOptimizedBrandProposals,
+  findSubstituteProposals,
+} from './substitute-finder';
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a' };
 const decimal = (value: string) => ({ toString: () => value });
@@ -19,6 +23,7 @@ function lot(overrides: Record<string, unknown> = {}) {
     packLevelId: 'pack-a',
     unitsPerPack: 10,
     printedMrpMinor: 800,
+    unitCostMinor: 40,
     balances: [{ onHandUnits: 20 }],
     batch: {
       medicine: { id: 'alternate', productName: 'Lower Cost Generic', strengths: strength() },
@@ -120,6 +125,55 @@ describe('AI-05 deterministic substitute finder', () => {
       ['lot-a', 800, 200],
       ['lot-z', 900, 100],
     ]);
+  });
+
+  it('ranks in-stock exact equivalents by observed margin only', async () => {
+    const rows = await findMarginOptimizedBrandProposals(
+      dbWith([
+        lot({ id: 'high-price-low-margin', printedMrpMinor: 1_000, unitCostMinor: 90 }),
+        lot({ id: 'best-margin', printedMrpMinor: 900, unitCostMinor: 40 }),
+      ]) as never,
+      scope,
+      {
+        medicineId: 'requested',
+        presentationId: 'presentation-requested',
+        quantityCanonicalUnits: 10,
+      }
+    );
+    expect(rows.map((row) => [row.inventoryLotId, row.marginMinor, row.marginBps])).toEqual([
+      ['best-margin', 500, 5_555],
+      ['high-price-low-margin', 100, 1_000],
+    ]);
+  });
+
+  it('never margin-ranks a different ingredient, strength, form, or route', async () => {
+    const rows = await findMarginOptimizedBrandProposals(
+      dbWith([
+        lot({
+          batch: { medicine: { id: 'salt', productName: 'Salt', strengths: strength('other') } },
+        }),
+        lot({
+          batch: {
+            medicine: {
+              id: 'strength',
+              productName: 'Strength',
+              strengths: strength('ingredient-a', '250'),
+            },
+          },
+        }),
+        lot({ packLevel: { presentation: { id: 'form', dosageForm: 'Capsule', route: 'Oral' } } }),
+        lot({
+          packLevel: { presentation: { id: 'route', dosageForm: 'Tablet', route: 'Topical' } },
+        }),
+      ]) as never,
+      scope,
+      {
+        medicineId: 'requested',
+        presentationId: 'presentation-requested',
+        quantityCanonicalUnits: 10,
+      }
+    );
+    expect(rows).toEqual([]);
   });
 
   it('closes a declined POS-10 event with reason substitute declined', async () => {

@@ -73,6 +73,7 @@ import { SaveReceiptLayoutSchema } from '@/lib/receipts/configuration';
 import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
 import {
   declineSubstitute,
+  findMarginOptimizedBrandProposals,
   findSubstituteProposals,
   PharmacySubstituteError,
 } from '@/lib/pharmacy/substitute-finder';
@@ -1430,6 +1431,31 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => {
       try {
         return await findSubstituteProposals(ctx.db, await scopeFor(ctx, input.branchId), input);
+      } catch (error) {
+        if (error instanceof PharmacySubstituteError) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: error.code });
+        }
+        throw error;
+      }
+    }),
+  marginOptimizedBrandProposals: capabilityProcedure('pharmacy:dispense')
+    .input(
+      z
+        .object({
+          branchId,
+          medicineId: z.string().min(1),
+          presentationId: z.string().min(1),
+          quantityCanonicalUnits: z.number().int().positive(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      try {
+        return await findMarginOptimizedBrandProposals(
+          ctx.db,
+          await scopeFor(ctx, input.branchId),
+          input
+        );
       } catch (error) {
         if (error instanceof PharmacySubstituteError) {
           throw new TRPCError({ code: 'NOT_FOUND', message: error.code });

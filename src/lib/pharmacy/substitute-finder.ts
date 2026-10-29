@@ -33,6 +33,12 @@ export type SubstituteProposal = {
   equivalenceBasis: string;
 };
 
+export type MarginOptimizedBrandProposal = SubstituteProposal & {
+  costMinor: number;
+  marginMinor: number;
+  marginBps: number;
+};
+
 function normalized(value: string | null | undefined) {
   return value?.trim().toLocaleLowerCase('en') ?? '';
 }
@@ -155,6 +161,98 @@ export async function findSubstituteProposals(
   return proposals.sort(
     (left, right) =>
       left.priceMinor - right.priceMinor ||
+      left.displayName.localeCompare(right.displayName, 'en') ||
+      left.inventoryLotId.localeCompare(right.inventoryLotId, 'en')
+  );
+}
+
+/**
+ * #745: pharmacist/purchasing decision support for brand mix. Unlike the
+ * patient-savings finder above, this ranks only exact, saleable equivalents by
+ * the observed lot margin. It remains read-only and deliberately does not
+ * infer an equivalent salt, strength, form, or route.
+ */
+export async function findMarginOptimizedBrandProposals(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  input: {
+    medicineId: string;
+    presentationId: string;
+    quantityCanonicalUnits: number;
+    at?: Date;
+  }
+): Promise<MarginOptimizedBrandProposal[]> {
+  const at = input.at ?? new Date();
+  const requested = await db.medicine.findFirst({
+    where: { id: input.medicineId, organizationId: scope.organizationId },
+    include: { strengths: true, presentations: true },
+  });
+  const requestedPresentation = requested?.presentations.find(
+    (presentation) => presentation.id === input.presentationId
+  );
+  if (!requested || !requestedPresentation) throw new PharmacySubstituteError('NOT_FOUND');
+
+  const lots: CandidateLot[] = await db.pharmacyInventoryLot.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      receivedAt: { not: null },
+      batch: {
+        state: 'ACTIVE',
+        expiresAt: { gt: at },
+        medicine: { saleable: true },
+      },
+      balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
+    },
+    ...candidateArgs,
+  });
+
+  const requestedStrength = strengthKey(requested.strengths);
+  const proposals = lots.flatMap((lot): MarginOptimizedBrandProposal[] => {
+    const medicine = lot.batch.medicine;
+    const presentation = lot.packLevel.presentation;
+    const availableCanonicalUnits = lot.balances.reduce(
+      (total, balance) => total + balance.onHandUnits,
+      0
+    );
+    if (
+      strengthKey(medicine.strengths) !== requestedStrength ||
+      normalized(presentation.dosageForm) !== normalized(requestedPresentation.dosageForm) ||
+      normalized(presentation.route) !== normalized(requestedPresentation.route) ||
+      availableCanonicalUnits < input.quantityCanonicalUnits
+    ) {
+      return [];
+    }
+    const priceMinor = Math.floor(
+      (lot.printedMrpMinor * input.quantityCanonicalUnits) / lot.unitsPerPack
+    );
+    const costMinor = lot.unitCostMinor * input.quantityCanonicalUnits;
+    const marginMinor = priceMinor - costMinor;
+    return [
+      {
+        medicineId: medicine.id,
+        presentationId: presentation.id,
+        inventoryLotId: lot.id,
+        packLevelId: lot.packLevelId,
+        displayName: medicine.productName,
+        strength: displayStrength(medicine.strengths),
+        dosageForm: presentation.dosageForm,
+        route: presentation.route,
+        availableCanonicalUnits,
+        priceMinor,
+        priceDifferenceMinor: 0,
+        costMinor,
+        marginMinor,
+        marginBps: priceMinor > 0 ? Math.trunc((marginMinor * 10_000) / priceMinor) : 0,
+        equivalenceBasis: 'Exact ingredient(s), strength component(s), dosage form and route',
+      },
+    ];
+  });
+
+  return proposals.sort(
+    (left, right) =>
+      right.marginMinor - left.marginMinor ||
+      right.marginBps - left.marginBps ||
       left.displayName.localeCompare(right.displayName, 'en') ||
       left.inventoryLotId.localeCompare(right.inventoryLotId, 'en')
   );
