@@ -4,7 +4,10 @@ import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 
-const databaseUrl = process.env.TEST_DATABASE_URL;
+// This fixture creates and owns an isolated schema so FORCE ROW LEVEL SECURITY
+// applies to a non-superuser table owner. Runtime roles intentionally have no
+// database CREATE privilege in CI.
+const databaseUrl = process.env.OWNER_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 const sql = readFileSync(
   'prisma/migrations/20261021141526_org_seat_limit_backfill/migration.sql',
   'utf8'

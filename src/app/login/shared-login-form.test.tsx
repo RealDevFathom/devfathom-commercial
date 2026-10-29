@@ -9,10 +9,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
-const mocks = vi.hoisted(() => ({ signIn: vi.fn(), replace: vi.fn() }));
+const mocks = vi.hoisted(() => ({ signIn: vi.fn(), refresh: vi.fn(), replace: vi.fn() }));
 
 vi.mock('next-auth/react', () => ({ signIn: mocks.signIn }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: mocks.replace }) }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh: mocks.refresh, replace: mocks.replace }),
+}));
 vi.mock('@/components/app-providers', () => ({ AppProviders: () => null }));
 
 import { SharedLoginForm } from './shared-login-form';
@@ -93,5 +95,45 @@ describe('SharedLoginForm rate-limit reporting', () => {
     // A limiter answer must never be mistaken for a successful sign-in.
     expect(mocks.signIn).not.toHaveBeenCalled();
     expect(mocks.replace).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the authenticated router state before entering a selected workspace', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json({
+          outcome: 'select',
+          organizations: [
+            {
+              id: 'org_agency',
+              slug: 'northstar-agency',
+              displayName: 'Northstar Agency E2E',
+              ssoEnforced: false,
+              ssoUrl: null,
+            },
+            {
+              id: 'org_other',
+              slug: 'alternate-agency',
+              displayName: 'Alternate Agency E2E',
+              ssoEnforced: false,
+              ssoUrl: null,
+            },
+          ],
+        })
+      )
+    );
+    mocks.signIn.mockResolvedValue({ ok: true, error: null });
+
+    render(<SharedLoginForm callbackUrl="/dashboard" />);
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'alex@company.com' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct-horse' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Northstar Agency E2E/i }));
+
+    await waitFor(() => expect(mocks.replace).toHaveBeenCalledWith('/dashboard'));
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+    expect(mocks.refresh.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.replace.mock.invocationCallOrder[0]!
+    );
   });
 });

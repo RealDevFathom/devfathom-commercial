@@ -990,12 +990,15 @@ function ScopedPharmacyCounterConsole({
     const row = found[0]!;
     const nextUnit = row.saleUnits[0]?.kind ?? null;
     if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
-      stageRow(row);
+      // Keep the query observer effect declarative; stage the UI update after
+      // React has completed this effect pass rather than cascading a render
+      // synchronously from inside it.
+      queueMicrotask(() => stageRow(row));
       return;
     }
     barcodeAdd.current = null;
     if (!preview?.sufficient || busy) return;
-    void addToCart();
+    queueMicrotask(() => void addToCart());
   }, [
     activeRow,
     addToCart,
