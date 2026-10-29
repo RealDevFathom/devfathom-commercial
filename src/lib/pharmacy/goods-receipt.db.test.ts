@@ -536,7 +536,7 @@ describeIfDatabase('PUR-02 — posting a receipt into the batch ledger', () => {
     expect(result.movements).toBeGreaterThan(0);
   });
 
-  it('refuses drafting when a concurrent cancellation wins the purchase-order lock', async () => {
+  it('refuses receipt creation when cancellation wins across two concurrent transactions', async () => {
     const f = await fixture(ORG_A, BRANCH_A, 'draft-cancel-race');
 
     let releaseCancellation!: () => void;

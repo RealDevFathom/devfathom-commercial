@@ -164,7 +164,7 @@ describe('postGoodsReceipt expiry', () => {
     expect(receiveLot).not.toHaveBeenCalled();
   });
 
-  it("refuses to post when the linked order belongs to another supplier", async () => {
+  it('refuses to post when the linked order belongs to another supplier', async () => {
     const { db, batchFind } = receiptDb({
       accepted: 10,
       rejected: 0,

@@ -1002,9 +1002,7 @@ const purchasingRouter = router({
           const lines = [];
           const seenSerials = new Set<string>();
           for (const [index, line] of input.lines.entries()) {
-            if (
-              !(await db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
-            )
+            if (!(await db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } })))
               throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
             if (!(await db.packLevel.findFirst({ where: { id: line.packLevelId } })))
               throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { createElement, type ComponentType } from 'react';
+import { createElement, type ComponentProps, type ComponentType } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -89,25 +89,20 @@ describe('AppShell module guard', () => {
   });
 
   it('clearly warns when the pharmacy licence is a placeholder', () => {
-    render(
-      createElement(
-        AppShell,
-        {
-          brand: {
-            organizationId: 'org_test',
-            displayName: 'Test pharmacy',
-            logoUrl: null,
-            markUrl: null,
-            faviconUrl: null,
-            primaryColor: null,
-            accentColor: null,
-          },
-          pharmacyPlaceholder: true,
-          children: null,
-        },
-        createElement('p', null, 'Dashboard')
-      )
-    );
+    const props: ComponentProps<typeof AppShell> = {
+      brand: {
+        organizationId: 'org_test',
+        displayName: 'Test pharmacy',
+        logoUrl: null,
+        markUrl: null,
+        faviconUrl: null,
+        primaryColor: null,
+        accentColor: null,
+      },
+      pharmacyPlaceholder: true,
+      children: createElement('p', null, 'Dashboard'),
+    };
+    render(createElement(AppShell, props));
 
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Licence details are PLACEHOLDER – not a real licence'
