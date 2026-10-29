@@ -5,6 +5,57 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { arrangementFor, PharmacyInventoryError } from './inventory';
 import type { LedgerScope } from './stock-ledger';
 
+/** Serialize recall-authority decisions that can overlap at batch or medicine scope. */
+async function lockRecallAuthority(db: ScopedDb, organizationId: string) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`pharmacy-recall-authority:${organizationId}`}, 0))`
+  );
+}
+
+export class OpenRecallConflictError extends Error {
+  constructor() {
+    super('Close the open recall before reactivating this batch.');
+  }
+}
+
+export async function setManufacturingBatchState(
+  db: ScopedDb,
+  organizationId: string,
+  input: {
+    manufacturingBatchId: string;
+    state: 'ACTIVE' | 'RECALLED' | 'QUARANTINED';
+    reason?: string;
+  }
+) {
+  // Callers run this inside a scoped interactive transaction. The lock is held
+  // through commit, closing the READ COMMITTED check/write race with recalls.
+  await lockRecallAuthority(db, organizationId);
+  const batch = await db.pharmacyManufacturingBatch.findFirst({
+    where: { id: input.manufacturingBatchId, organizationId },
+  });
+  if (!batch) throw new PharmacyInventoryError('NOT_FOUND');
+
+  if (input.state === 'ACTIVE') {
+    const openRecalls = await db.pharmacyRecallNotice.count({
+      where: {
+        organizationId,
+        status: 'OPEN',
+        OR: [{ batchId: batch.id }, { medicineId: batch.medicineId }],
+      },
+    });
+    if (openRecalls) throw new OpenRecallConflictError();
+  }
+
+  return db.pharmacyManufacturingBatch.update({
+    where: { id: batch.id },
+    data: {
+      state: input.state,
+      stateReason: input.state === 'ACTIVE' ? null : (input.reason ?? null),
+      stateChangedAt: input.state === 'ACTIVE' ? null : new Date(),
+    },
+  });
+}
+
 function assertPositive(units: number) {
   if (!Number.isSafeInteger(units) || units <= 0) throw new PharmacyInventoryError('INVALID_UNITS');
 }
@@ -504,6 +555,7 @@ export async function createRecall(
 ) {
   if ((input.batchId ? 1 : 0) + (input.medicineId ? 1 : 0) !== 1)
     throw new PharmacyInventoryError('INVALID_STATE');
+  await lockRecallAuthority(db, scope.organizationId);
   const where = input.batchId ? { id: input.batchId } : { medicineId: input.medicineId! };
   const result = await db.pharmacyManufacturingBatch.updateMany({
     where: { organizationId: scope.organizationId, ...where },
@@ -556,6 +608,7 @@ export async function closeRecall(
   scope: Pick<LedgerScope, 'organizationId' | 'actorId'>,
   noticeId: string
 ) {
+  await lockRecallAuthority(db, scope.organizationId);
   const notice = await db.pharmacyRecallNotice.findFirst({
     where: { id: noticeId, organizationId: scope.organizationId },
     include: { acknowledgements: true },

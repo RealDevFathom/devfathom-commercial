@@ -670,6 +670,102 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     });
   });
 
+  it('keeps open batch and medicine recalls authoritative across tenants and concurrent activation', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'recall-authority');
+    const foreign = await scenario(ORG_B, BRANCH_B, 'recall-authority-foreign');
+    const batches = await inOrg(ORG_A, async (db) => {
+      const batchScoped = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'batch-recall-authority',
+      });
+      const medicineScoped = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'medicine-recall-authority',
+      });
+      await deps.operations.createRecall(db, scopeOf(fixture), {
+        batchId: batchScoped.batch.id,
+        reference: tag('batch-authority'),
+        reason: 'Batch recall remains open',
+      });
+      await deps.operations.createRecall(db, scopeOf(fixture), {
+        medicineId: fixture.medicineId,
+        reference: tag('medicine-authority'),
+        reason: 'Medicine recall remains open',
+      });
+      return { batchId: batchScoped.batch.id, medicineBatchId: medicineScoped.batch.id };
+    });
+
+    for (const manufacturingBatchId of [batches.batchId, batches.medicineBatchId]) {
+      await expect(
+        inOrg(ORG_A, (db) =>
+          deps.operations.setManufacturingBatchState(db, ORG_A, {
+            manufacturingBatchId,
+            state: 'ACTIVE',
+          })
+        )
+      ).rejects.toBeInstanceOf(deps.operations.OpenRecallConflictError);
+    }
+
+    const foreignBatch = await inOrg(ORG_B, (db) =>
+      stockLot(db, foreign, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'foreign-recall-authority',
+      })
+    );
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.operations.setManufacturingBatchState(db, ORG_A, {
+          manufacturingBatchId: foreignBatch.batch.id,
+          state: 'ACTIVE',
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'NOT_FOUND' });
+
+    const race = await scenario(ORG_A, BRANCH_A_TWO, 'recall-activation-race');
+    const raceBatch = await inOrg(ORG_A, async (db) => {
+      const { batch } = await stockLot(db, race, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'recall-activation-race',
+      });
+      await deps.operations.setManufacturingBatchState(db, ORG_A, {
+        manufacturingBatchId: batch.id,
+        state: 'QUARANTINED',
+        reason: 'Awaiting regulator decision',
+      });
+      return batch;
+    });
+    const outcomes = await Promise.allSettled([
+      inOrg(ORG_A, (db) =>
+        deps.operations.setManufacturingBatchState(db, ORG_A, {
+          manufacturingBatchId: raceBatch.id,
+          state: 'ACTIVE',
+        })
+      ),
+      inOrg(ORG_A, (db) =>
+        deps.operations.createRecall(db, scopeOf(race), {
+          batchId: raceBatch.id,
+          reference: tag('concurrent-authority'),
+          reason: 'Concurrent regulator notice',
+        })
+      ),
+    ]);
+    expect(outcomes[1]?.status).toBe('fulfilled');
+    const final = await inOrg(ORG_A, async (db) => ({
+      batch: await db.pharmacyManufacturingBatch.findFirstOrThrow({
+        where: { id: raceBatch.id },
+      }),
+      openRecall: await db.pharmacyRecallNotice.count({
+        where: { batchId: raceBatch.id, status: 'OPEN' },
+      }),
+    }));
+    expect(final.openRecall).toBe(1);
+    expect(final.batch.state).toBe('RECALLED');
+  });
+
   it('excludes supplier-claim reserved units from sale allocation and reports expiry value windows', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'supplier-claim');
     const result = await inOrg(ORG_A, async (db) => {

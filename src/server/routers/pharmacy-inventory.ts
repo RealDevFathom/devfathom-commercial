@@ -31,10 +31,12 @@ import {
   createRecall,
   dispatchTransfer,
   nearExpiryBoard,
+  OpenRecallConflictError,
   quarantinePart,
   recallTrace,
   receiveTransferLine,
   reserveSupplierClaim,
+  setManufacturingBatchState,
   writeOff,
 } from '@/lib/pharmacy/inventory-operations';
 import {
@@ -790,38 +792,14 @@ export const pharmacyInventoryRouter = router({
         });
       }
       return ctx.db.$transaction(async (tx) => {
-        const db = txDb(tx);
-        const batch = await db.pharmacyManufacturingBatch.findFirst({
-          where: { id: input.manufacturingBatchId },
-        });
-        if (!batch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Batch not found.' });
-
-        // An OPEN batch- or medicine-level recall remains authoritative until it
-        // is closed through the recall workflow.  In particular, a safety user
-        // must not bypass acknowledgements by toggling the batch directly.
-        if (input.state === 'ACTIVE') {
-          const openRecalls = await db.pharmacyRecallNotice.count({
-            where: {
-              status: 'OPEN',
-              OR: [{ batchId: batch.id }, { medicineId: batch.medicineId }],
-            },
-          });
-          if (openRecalls) {
-            throw new TRPCError({
-              code: 'CONFLICT',
-              message: 'Close the open recall before reactivating this batch.',
-            });
+        try {
+          return await setManufacturingBatchState(txDb(tx), actorFor(ctx).organizationId, input);
+        } catch (error) {
+          if (error instanceof OpenRecallConflictError) {
+            throw new TRPCError({ code: 'CONFLICT', message: error.message });
           }
+          domainError(error);
         }
-
-        return db.pharmacyManufacturingBatch.update({
-          where: { id: batch.id },
-          data: {
-            state: input.state,
-            stateReason: input.state === 'ACTIVE' ? null : (input.reason ?? null),
-            stateChangedAt: input.state === 'ACTIVE' ? null : new Date(),
-          },
-        });
       });
     }),
 

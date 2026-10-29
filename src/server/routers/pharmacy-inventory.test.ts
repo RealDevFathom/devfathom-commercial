@@ -274,6 +274,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
 
     expect(db.pharmacyRecallNotice.count).toHaveBeenCalledWith({
       where: {
+        organizationId: 'org_a',
         status: 'OPEN',
         OR: [{ batchId: 'batch_1' }, { medicineId: 'medicine_1' }],
       },
