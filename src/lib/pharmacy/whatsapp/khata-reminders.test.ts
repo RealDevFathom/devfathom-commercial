@@ -40,6 +40,8 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       findFirst: async ({ where }: { where: { patientId: string } }) =>
         store.consents.find((consent) => consent.patientId === where.patientId) ?? null,
     },
+    medicine: { findMany: async () => [] },
+    pharmacyWhatsAppComplianceLog: { create: async ({ data }: { data: object }) => data },
     pharmacyMessageLog: {
       count: async () => store.logs.length,
       createManyAndReturn: async ({ data }: { data: Array<Omit<LogRow, 'id'>> }) => {

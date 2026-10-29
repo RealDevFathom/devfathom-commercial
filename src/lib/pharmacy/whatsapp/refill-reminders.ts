@@ -16,6 +16,7 @@ import {
   type WhatsAppConfig,
   type WhatsAppProvider,
 } from './provider';
+import { lintAndLogWhatsAppContent } from './compliance-linter';
 
 const DAY_MS = 86_400_000;
 
@@ -228,6 +229,17 @@ export async function processDueWhatsAppRefillReminders(
         },
       });
       if (prior) return null;
+      const compliance = await lintAndLogWhatsAppContent(
+        db,
+        { organizationId: capture.organizationId, branchId: capture.branchId },
+        {
+          templateText: 'Your refill reminder is due on {{1}}.',
+          variables: [plan.dueDate],
+          intent: 'UTILITY',
+          subject: `send:refill:${capture.id}`,
+        }
+      );
+      if (compliance.outcome === 'BLOCK') return null;
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: capture.organizationId,
         direction: 'OUTBOUND',

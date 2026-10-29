@@ -16,6 +16,7 @@ import {
   type WhatsAppConfig,
   type WhatsAppProvider,
 } from './provider';
+import { lintAndLogWhatsAppContent } from './compliance-linter';
 
 const DAY_MS = 86_400_000;
 const WEEK_MS = 7 * DAY_MS;
@@ -206,6 +207,21 @@ export async function processDueWhatsAppKhataReminders(
         month: '2-digit',
         day: '2-digit',
       }).format(now);
+      const variables = [
+        sanitizeReminderDisplayName(account.displayName),
+        formatMinor(balanceMinor),
+      ];
+      const compliance = await lintAndLogWhatsAppContent(
+        db,
+        { organizationId: account.organizationId, branchId: account.branchId },
+        {
+          templateText: 'Hello {{1}}, your account balance is {{2}}.',
+          variables,
+          intent: 'UTILITY',
+          subject: `send:khata:${account.familyAccountId}`,
+        }
+      );
+      if (compliance.outcome === 'BLOCK') return null;
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: account.organizationId,
         direction: 'OUTBOUND',

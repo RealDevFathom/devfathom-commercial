@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 import { z } from 'zod';
 import { lockCustomerConsent } from './consent-writer';
+import { lintAndLogWhatsAppContent } from './whatsapp/compliance-linter';
 
 const id = z.string().trim().min(1).max(128);
 export const marketingScopeInput = z.object({ branchId: id }).strict();
@@ -73,6 +74,15 @@ export async function approveMarketingTemplate(
 ) {
   marketingTemplateInput.parse(input);
   validateMarketingBody(input.body);
+  const compliance = await lintAndLogWhatsAppContent(db, scope, {
+    templateText: input.body,
+    intent: 'MARKETING',
+    subject: `template:${input.name}`,
+  });
+  if (compliance.outcome === 'BLOCK')
+    throw new MarketingWorkflowError(
+      `WhatsApp compliance blocked this template (${compliance.reasons.map((reason) => reason.code).join(', ')}).`
+    );
   return db.pharmacyMarketingTemplate.create({
     data: {
       ...whereScope(scope),
