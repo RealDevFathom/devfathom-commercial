@@ -200,7 +200,7 @@ export async function postSaleLineEntry(
     line.allocations.map((allocation) => allocation.inventoryLotId)
   );
 
-  const grossMinor = line.unitPriceMinor * line.quantity;
+  const grossMinor = line.grossMinor;
   const units = line.allocations.map((allocation) => allocation.canonicalUnits);
   const grossShares = apportion(grossMinor, units);
   const discountShares = apportion(line.discountMinor, units);
@@ -295,7 +295,7 @@ export async function postSaleReturnEntry(
   const lot = lots.get(returnLine.inventoryLotId);
   if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
-  const grossMinor = saleLine.unitPriceMinor * saleLine.quantity;
+  const grossMinor = saleLine.grossMinor;
   const returned = returnLine.canonicalUnits;
   const sold = saleLine.canonicalUnits;
   // returnSaleLine holds the sold-line lock and posts each newly inserted
@@ -392,8 +392,7 @@ export async function postUnidentifiedSaleReturnEntry(
     Math.floor((amount * through) / saleLine.canonicalUnits) -
     Math.floor((amount * before) / saleLine.canonicalUnits);
   const discount = delta(saleLine.discountMinor);
-  const gross =
-    delta(saleLine.unitPriceMinor * saleLine.quantity - saleLine.discountMinor) + discount;
+  const gross = delta(saleLine.grossMinor - saleLine.discountMinor) + discount;
   const dimensions = {
     branchId: holding.branchId,
     productId: saleLine.medicineId,

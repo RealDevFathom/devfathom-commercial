@@ -287,11 +287,11 @@ export function buildCounterReceiptDocument(
  * the sale lines do not add up to (POS-08 acceptance).
  */
 export function counterReceiptTotals(input: {
-  lines: readonly Pick<CounterReceiptLine, 'unitPriceMinor' | 'quantity' | 'discountMinor'>[];
+  lines: readonly Pick<CounterReceiptLine, 'lineTotalMinor' | 'discountMinor'>[];
   tenders: readonly Pick<CounterReceiptTender, 'amountMinor' | 'changeGivenMinor'>[];
 }): CounterReceipt['totals'] {
   const grossMinor = input.lines.reduce(
-    (total, line) => total + line.unitPriceMinor * line.quantity,
+    (total, line) => total + line.lineTotalMinor + line.discountMinor,
     0
   );
   const discountMinor = input.lines.reduce((total, line) => total + line.discountMinor, 0);

@@ -69,8 +69,14 @@ describe('formatMinor', () => {
 describe('counterReceiptTotals', () => {
   it('reconciles the total to the lines and tenders themselves', () => {
     const lines = [
-      receiptLine({ unitPriceMinor: 2_500, quantity: 2, discountMinor: 0 }),
-      receiptLine({ saleLineId: 'line-2', unitPriceMinor: 1_000, quantity: 3, discountMinor: 200 }),
+      receiptLine({ unitPriceMinor: 2_500, quantity: 2, discountMinor: 0, lineTotalMinor: 5_000 }),
+      receiptLine({
+        saleLineId: 'line-2',
+        unitPriceMinor: 1_000,
+        quantity: 3,
+        discountMinor: 200,
+        lineTotalMinor: 2_800,
+      }),
     ];
     const totals = counterReceiptTotals({
       lines,

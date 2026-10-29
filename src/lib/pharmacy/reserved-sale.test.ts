@@ -68,6 +68,32 @@ function fixture() {
   };
 }
 describe('internal reserved checkout allocation', () => {
+  it('bills each mixed-MRP allocation at its own lot price', async () => {
+    const db = fixture();
+    db.pharmacyInventoryLot.findMany.mockResolvedValue([
+      { id: 'reserved', printedMrpMinor: 100, unitsPerPack: 1, unitCostMinor: 50 },
+      { id: 'split', printedMrpMinor: 101, unitsPerPack: 1, unitCostMinor: 50 },
+    ]);
+    const result = await addReservedSaleLine(
+      db as never,
+      scope,
+      {
+        saleId: 'sale',
+        medicineId: 'medicine',
+        presentationId: 'presentation',
+        packLevelId: 'pack',
+        saleUnit: 'UNIT',
+        quantity: 3,
+        canonicalUnitsPerSaleUnit: 1,
+        idempotencyKey: 'mixed-lot-line',
+      },
+      reservation
+    );
+
+    expect(result.line).toMatchObject({ grossMinor: 301, unitPriceMinor: 100 });
+    expect(result.line.grossMinor).toBeLessThan(101 * result.line.quantity);
+  });
+
   it('keeps receipt allocations and movement identities despite a newer earlier-expiry lot', async () => {
     const db = fixture();
     const result = await addReservedSaleLine(

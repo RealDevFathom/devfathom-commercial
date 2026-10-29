@@ -1462,6 +1462,7 @@ model PharmacySaleLine {
   canonicalUnitsPerSaleUnit Int
   canonicalUnits            Int
   unitPriceMinor            Int
+  grossMinor                Int
   proRataCeilingMinor       Int
   unitCostMinor             Int
   discountKind              PharmacyDiscountKind?

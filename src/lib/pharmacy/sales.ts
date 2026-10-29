@@ -170,6 +170,21 @@ export function validateDiscount(input: {
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
 }
 
+export function priceMixedLotAllocation(
+  allocations: readonly { units: number; unitPriceMinor: number }[],
+  quantity: number,
+  canonicalUnitsPerSaleUnit: number
+) {
+  const weightedMinorUnits = allocations.reduce(
+    (total, allocation) => total + allocation.units * allocation.unitPriceMinor,
+    0
+  );
+  const grossMinor = Math.floor(weightedMinorUnits / canonicalUnitsPerSaleUnit);
+  if (!Number.isSafeInteger(grossMinor) || grossMinor < 0 || quantity <= 0)
+    throw new PharmacySaleError('INVALID_QUANTITY');
+  return { grossMinor, unitPriceMinor: Math.floor(grossMinor / quantity) };
+}
+
 async function saleInScope(db: ScopedDb, scope: LedgerScope, saleId: string) {
   const sale = await db.pharmacySale.findFirst({
     where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
@@ -300,9 +315,9 @@ async function addSaleLineWithAllocation(
     },
   });
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
-  let unitPriceMinor = 0,
-    ceiling = 0,
+  let ceiling = 0,
     costMinor = 0;
+  const pricedAllocations: { units: number; unitPriceMinor: number }[] = [];
   for (const part of allocation.allocations) {
     const lot = lotById.get(part.inventoryLotId);
     if (!lot) throw new PharmacySaleError('NOT_FOUND');
@@ -311,11 +326,15 @@ async function addSaleLineWithAllocation(
       canonicalUnitsInPack: lot.unitsPerPack,
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
     });
-    unitPriceMinor = Math.max(unitPriceMinor, price.unitPriceMinor);
+    pricedAllocations.push({ units: part.units, unitPriceMinor: price.unitPriceMinor });
     ceiling = Math.max(ceiling, price.proRataCeilingMinor);
     costMinor += lot.unitCostMinor * part.units;
   }
-  const grossMinor = unitPriceMinor * input.quantity;
+  const { grossMinor, unitPriceMinor } = priceMixedLotAllocation(
+    pricedAllocations,
+    input.quantity,
+    input.canonicalUnitsPerSaleUnit
+  );
   const discountMinor = input.discountMinor ?? 0;
   validateDiscount({
     regulated: medicine.rx || medicine.restricted || medicine.controlled,
@@ -338,6 +357,7 @@ async function addSaleLineWithAllocation(
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
       canonicalUnits,
       unitPriceMinor,
+      grossMinor,
       proRataCeilingMinor: ceiling,
       unitCostMinor: Math.ceil(costMinor / input.quantity),
       discountKind: input.discountKind,
@@ -445,13 +465,15 @@ export function returnedLineValue(
   line: {
     quantity: number;
     unitPriceMinor: number;
+    grossMinor?: number;
     discountMinor: number;
     canonicalUnits: number;
   },
   units: number
 ) {
   return Math.floor(
-    ((line.quantity * line.unitPriceMinor - line.discountMinor) * units) / line.canonicalUnits
+    (((line.grossMinor ?? line.quantity * line.unitPriceMinor) - line.discountMinor) * units) /
+      line.canonicalUnits
   );
 }
 
@@ -523,7 +545,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       unidentifiedUnits,
       lots,
       returnedMinor: returnedLineValue(line, returnedUnits),
-      netMinor: line.quantity * line.unitPriceMinor - line.discountMinor,
+      netMinor: line.grossMinor - line.discountMinor,
     };
   });
   const tenders = sale.tenders.map((tender) => ({

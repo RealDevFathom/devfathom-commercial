@@ -603,7 +603,7 @@ export async function readCounterCart(
       unitPriceMinor: line.unitPriceMinor,
       proRataCeilingMinor: line.proRataCeilingMinor,
       discountMinor: line.discountMinor,
-      lineTotalMinor: line.unitPriceMinor * line.quantity - line.discountMinor,
+      lineTotalMinor: line.grossMinor - line.discountMinor,
       rx: line.medicine.rx,
       controlled: line.medicine.controlled,
       restricted: line.medicine.restricted,
@@ -623,7 +623,7 @@ export async function readCounterCart(
     };
   });
 
-  const grossMinor = lines.reduce((total, line) => total + line.unitPriceMinor * line.quantity, 0);
+  const grossMinor = sale.lines.reduce((total, line) => total + line.grossMinor, 0);
   const discountMinor = lines.reduce((total, line) => total + line.discountMinor, 0);
   return {
     saleId: sale.id,
@@ -693,7 +693,7 @@ export async function readCounterReceipt(
       canonicalUnits: line.canonicalUnits,
       unitPriceMinor: line.unitPriceMinor,
       discountMinor: line.discountMinor,
-      lineTotalMinor: line.unitPriceMinor * line.quantity - line.discountMinor,
+      lineTotalMinor: line.grossMinor - line.discountMinor,
     };
   });
   const tenders = sale.tenders.map((tender) => ({

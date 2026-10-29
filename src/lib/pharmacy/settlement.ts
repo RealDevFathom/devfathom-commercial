@@ -71,10 +71,16 @@ export function requireReleaseSafeAdapter(
 }
 
 export function saleTotalMinor(
-  lines: readonly { quantity: number; unitPriceMinor: number; discountMinor: number }[]
+  lines: readonly {
+    quantity: number;
+    unitPriceMinor: number;
+    grossMinor?: number;
+    discountMinor: number;
+  }[]
 ) {
   return lines.reduce(
-    (total, line) => total + line.quantity * line.unitPriceMinor - line.discountMinor,
+    (total, line) =>
+      total + (line.grossMinor ?? line.quantity * line.unitPriceMinor) - line.discountMinor,
     0
   );
 }
