@@ -506,7 +506,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
       const invYear = new Date().getFullYear();
       const invoice = await db.$transaction(async (tx) => {
-        const invoiceNumber = await reserveInvoiceNumber(tx, h.organizationId, invYear);
+        const invoiceNumber = await reserveInvoiceNumber(tx, h.ctx.organizationId, invYear);
         return tx.invoice.create({
           data: {
             invoiceNumber,
