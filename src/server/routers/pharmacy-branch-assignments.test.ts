@@ -76,7 +76,10 @@ function fixture(role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN') {
       upsert: vi.fn(async () => ({ id: 'pba-1' })),
       update: vi.fn(async () => ({ id: 'pba-1' })),
     },
+    $queryRaw: vi.fn(async () => []),
+    $transaction: vi.fn(),
   };
+  db.$transaction.mockImplementation(async (run: (tx: typeof db) => Promise<unknown>) => run(db));
   const context = {
     db,
     entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-core'], modules: [] },

@@ -89,12 +89,15 @@ function fixture(
 ) {
   const db = {
     user: {
-      findUnique: vi.fn(async (_args?: unknown) => ({
-        status: 'ACTIVE',
-        organizationId: 'org-a',
-        organizationRole: { permissions },
-        permissionOverrides: overrides,
-      })),
+      findUnique: vi.fn(async (args?: unknown) => {
+        void args;
+        return {
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: { permissions },
+          permissionOverrides: overrides,
+        };
+      }),
     },
     pharmacyBranch: {
       findMany: vi.fn(async (args: { where: { id: { in: string[] }; organizationId?: string } }) =>
@@ -132,7 +135,10 @@ function fixture(
     },
     pharmacyTender: { findFirst: vi.fn(async () => ({ type: 'CASH' })) },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
-    $queryRaw: vi.fn(async () => []),
+    $queryRaw: vi.fn(async (query: { strings: readonly string[] }) => {
+      void query;
+      return [];
+    }),
     $transaction: vi.fn(),
   };
   db.$transaction.mockImplementation(async (fn: (inner: typeof db) => Promise<unknown>) => fn(db));
@@ -277,17 +283,20 @@ describe('counter receipt authorization', () => {
     ['refundTender', (caller: Caller) => caller.refundTender(refundInput)],
     ['returnLine', (caller: Caller) => caller.returnLine(returnInput)],
   ])(
-    '%s denies an organization administrator who is not assigned to the branch',
+    '%s allows an unassigned organization administrator and records the exception',
     async (_name, run) => {
       const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }], 'ADMIN');
 
-      await expect(run(f.caller())).rejects.toMatchObject({
-        code: 'FORBIDDEN',
-        message: 'Branch is outside your scope.',
+      await expect(run(f.caller())).resolves.toBeDefined();
+      expect(f.context.audit.detail).toMatchObject({
+        targetType: 'PharmacyBranch',
+        targetId: 'branch-a',
+        metadata: {
+          branchId: 'branch-a',
+          reason: 'org-admin-receipt-access-without-branch-assignment',
+        },
       });
-      expect(f.db.$transaction).not.toHaveBeenCalled();
-      expect(refundPharmacyTender).not.toHaveBeenCalled();
-      expect(returnSaleLine).not.toHaveBeenCalled();
+      expect(f.db.$transaction).toHaveBeenCalledOnce();
     }
   );
 
@@ -401,7 +410,7 @@ describe('counter receipt authorization', () => {
 
       await expect(run(f.caller())).rejects.toMatchObject({
         code: 'FORBIDDEN',
-        message: 'Counter capability is required.',
+        message: 'You do not have permission for this action.',
       });
       expect(f.db.$transaction).toHaveBeenCalledOnce();
       expect(refundPharmacyTender).not.toHaveBeenCalled();
@@ -550,11 +559,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('does not let a user ALLOW override a role DENY when tendering', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:counter', effect: 'DENY' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'DENY' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
     assign(f, ['branch-a']);
 
     await expect(
@@ -572,11 +579,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('lets a role DENY on pharmacy:receipt beat a user ALLOW on pharmacy:counter for reads and tender', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:receipt', effect: 'DENY' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'DENY' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
     assign(f, ['branch-a']);
     await expect(
       f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
@@ -597,11 +602,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('lets a user DENY on pharmacy:counter beat a role ALLOW on pharmacy:receipt', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:receipt', effect: 'ALLOW' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'DENY' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'ALLOW' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'DENY' },
+    ]);
     assign(f, ['branch-a']);
     await expect(
       f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })

@@ -507,4 +507,64 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
       tx.pharmacyBranch.update({ where: { id: ids.branchA }, data: { active: true } })
     );
   });
+
+  it('serializes a new permission override through the stable member row', async () => {
+    const { returnSaleLine } = await import('@/lib/pharmacy/sales');
+    let mutationStarted!: () => void;
+    const started = new Promise<void>((resolve) => (mutationStarted = resolve));
+    let finishMutation!: () => void;
+    const finish = new Promise<void>((resolve) => (finishMutation = resolve));
+    vi.mocked(returnSaleLine).mockImplementationOnce(async () => {
+      mutationStarted();
+      await finish;
+      return { returnLine: { id: 'permission-race-return' } } as never;
+    });
+
+    const mutation = act(
+      ids.orgA,
+      { id: ids.cashier, role: 'EMPLOYEE', organizationId: ids.orgA },
+      (api) =>
+        api.returnLine({
+          branchId: ids.branchA,
+          saleLineId: 'line-not-read-by-mock',
+          lotId: 'lot-not-read-by-mock',
+          canonicalUnits: 1,
+          disposition: 'QUARANTINE',
+          reason: 'Permission concurrency test',
+          integrityDecision: 'Quarantine',
+          idempotencyKey: `permission-lock-${suffix}`,
+        })
+    );
+    await started;
+
+    let overrideCommitted = false;
+    const override = withPlatformDb(async (tx) => {
+      // This is the lock contract used by authorization writers: lock the
+      // stable member before creating even the first (previously absent) row.
+      await tx.$queryRaw`SELECT id FROM users WHERE id=${ids.cashier} AND "organizationId"=${ids.orgA} FOR UPDATE`;
+      await tx.userPermissionOverride.create({
+        data: {
+          organizationId: ids.orgA,
+          userId: ids.cashier,
+          capability: 'pharmacy:counter',
+          effect: 'DENY',
+          reason: 'Concurrent revocation regression test',
+        },
+      });
+      overrideCommitted = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(overrideCommitted).toBe(false);
+
+    finishMutation();
+    await expect(mutation).resolves.toEqual({ returnLine: { id: 'permission-race-return' } });
+    await override;
+    expect(overrideCommitted).toBe(true);
+
+    await withPlatformDb((tx) =>
+      tx.userPermissionOverride.deleteMany({
+        where: { organizationId: ids.orgA, userId: ids.cashier, capability: 'pharmacy:counter' },
+      })
+    );
+  });
 });

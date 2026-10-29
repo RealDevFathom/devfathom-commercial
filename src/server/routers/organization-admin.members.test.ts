@@ -275,11 +275,13 @@ describe('organization member last-admin guard', () => {
       message: 'Cannot demote or deactivate the last active admin.',
     });
 
-    expect(mocks.queryRaw).toHaveBeenCalledOnce();
+    expect(mocks.queryRaw).toHaveBeenCalledTimes(2);
     expect(mocks.userCount).toHaveBeenCalledWith({
       where: { organizationId: 'org_a', role: 'ADMIN', status: 'ACTIVE' },
     });
-    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+    // The member parent is locked first, followed by the organization lock
+    // that serializes the last-admin count.
+    expect(mocks.queryRaw.mock.invocationCallOrder[1]).toBeLessThan(
       mocks.userCount.mock.invocationCallOrder[0]!
     );
     expect(mocks.userUpdate).not.toHaveBeenCalled();

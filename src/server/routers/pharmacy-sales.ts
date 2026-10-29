@@ -440,14 +440,9 @@ async function requireCounterReceiptAccess(
   const assigned = new Set(rows.map((row) => row.branchId));
   if (assigned.has(branch)) return scope;
 
-  // Returns and refunds move stock or money, so even organization administrators
-  // must be actively assigned to the branch where the movement is recorded.
-  if (requireAssignedBranch) {
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
-  }
-
   // Session role only. An organization-role key is not an administrator grant.
-  // An assigned admin still reaches every other active branch of this organization.
+  // The tenant owner/admin retains all-capability access, including for stock and
+  // money mutations, when a solo-owner workspace has no branch assignments.
   const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
   if (orgAdmin) {
     annotateAudit(ctx, {
@@ -463,17 +458,21 @@ async function requireCounterReceiptAccess(
     });
     return scope;
   }
+  // Returns and refunds move stock or money, so non-admin counter staff must be
+  // actively assigned to the branch where the movement is recorded.
+  if (requireAssignedBranch) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
 }
 
 /**
- * Stabilize every row that can revoke counter authority for the rest of the
- * transaction. The order is deliberate (branch, member, role, grants,
- * assignment) so
- * concurrent authorization changes cannot deadlock by taking these locks in a
- * different order. PostgreSQL holds the locks until the money/stock transaction
- * commits; an administrator's revocation therefore wins before a later action,
- * or waits until an already-authorized action has committed.
+ * Stabilize the parent rows for counter authority plus the current grant rows.
+ * Authorization writers lock the same member/role parent before inserting,
+ * deleting, or changing a grant, so absent rows are serialized as well. The
+ * order is deliberate (branch, member, role, grants, assignment). PostgreSQL
+ * holds the locks until the money/stock transaction commits; a revocation
+ * therefore wins before a later action, or waits for an admitted action.
  */
 async function lockCounterReceiptAuthorization(
   db: ScopedDb,
