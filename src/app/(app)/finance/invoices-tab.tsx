@@ -312,6 +312,8 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
   const [projectId, setProjectId] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [notes, setNotes] = useState('');
+  const [tax, setTax] = useState('0');
+  const [discount, setDiscount] = useState('0');
   const [items, setItems] = useState([{ description: '', quantity: 1, rate: 0 }]);
 
   const addItem = () => setItems([...items, { description: '', quantity: 1, rate: 0 }]);
@@ -323,7 +325,10 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
   };
 
   const subtotal = items.reduce((sum, item) => sum + item.quantity * item.rate, 0);
-  const total = subtotal;
+  const taxAmount = parseFloat(tax) || 0;
+  const discountAmount = parseFloat(discount) || 0;
+  const total = subtotal - discountAmount + taxAmount;
+  const invalidAdjustment = taxAmount < 0 || discountAmount < 0 || discountAmount > subtotal;
 
   const handleSubmit = () => {
     if (!clientId || !dueDate || items.some((i) => !i.description)) return;
@@ -332,7 +337,8 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
       projectId: projectId || undefined,
       items: items.map((i) => ({ ...i, amount: i.quantity * i.rate })),
       subtotal,
-      tax: 0,
+      tax: taxAmount,
+      discount: discountAmount,
       total,
       dueDate: new Date(dueDate),
       notes: notes || undefined,
@@ -438,6 +444,37 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-foreground">Tax</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={tax}
+              onChange={(event) => setTax(event.target.value)}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-right text-sm text-foreground focus:border-primary focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-foreground">Discount</label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={discount}
+              onChange={(event) => setDiscount(event.target.value)}
+              aria-invalid={invalidAdjustment}
+              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-right text-sm text-foreground focus:border-primary focus:outline-none"
+            />
+            {invalidAdjustment && (
+              <p className="mt-1 text-xs text-destructive">
+                Tax and discount must be non-negative; discount cannot exceed subtotal.
+              </p>
+            )}
+          </div>
+        </div>
+
         {/* Total */}
         <div className="flex justify-end border-t border-border/60 pt-3">
           <div className="text-right">
@@ -468,7 +505,7 @@ function CreateInvoiceForm({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={handleSubmit}
-            disabled={!clientId || !dueDate || createInvoice.isPending}
+            disabled={!clientId || !dueDate || invalidAdjustment || createInvoice.isPending}
             className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {createInvoice.isPending ? (

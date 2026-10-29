@@ -35,6 +35,7 @@ type ManageInvoice = {
   currency: string;
   total: unknown;
   tax: unknown;
+  discount: unknown;
   dueDate: Date | string;
   notes: string | null;
   items: unknown;
@@ -212,6 +213,7 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
 
   const [items, setItems] = useState(initialItems);
   const [tax, setTax] = useState(String(Number(inv.tax) || 0));
+  const [discount, setDiscount] = useState(String(Number(inv.discount) || 0));
   const [dueDate, setDueDate] = useState(format(new Date(inv.dueDate), 'yyyy-MM-dd'));
   const [notes, setNotes] = useState(inv.notes ?? '');
 
@@ -227,14 +229,17 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
 
   // Live preview — recomputed exactly as the server will (qty × rate, + tax).
   const taxNum = parseFloat(tax) || 0;
+  const discountNum = parseFloat(discount) || 0;
   const subtotal = items.reduce((s, it) => s + it.quantity * it.rate, 0);
-  const total = subtotal + taxNum;
+  const total = subtotal - discountNum + taxNum;
 
   const hasValidItems =
     items.length > 0 &&
     items.every((it) => it.description.trim() && it.quantity > 0 && it.rate > 0);
-  const taxTooLarge = taxNum > MAX_MONEY;
-  const canSave = hasValidItems && !taxTooLarge && !!dueDate && !updateInvoice.isPending;
+  const taxTooLarge = taxNum < 0 || taxNum > MAX_MONEY;
+  const invalidDiscount = discountNum < 0 || discountNum > subtotal || discountNum > MAX_MONEY;
+  const canSave =
+    hasValidItems && !taxTooLarge && !invalidDiscount && !!dueDate && !updateInvoice.isPending;
 
   const submit = () => {
     if (!canSave) return;
@@ -246,6 +251,7 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
         rate: it.rate,
       })),
       tax: taxNum,
+      discount: discountNum,
       dueDate: new Date(dueDate),
       notes: notes.trim() || undefined,
     });
@@ -305,8 +311,8 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
         </button>
       </div>
 
-      {/* Tax + due date */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {/* Tax, discount + due date */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div>
           <label className="mb-1 block text-xs font-medium text-foreground">
             Tax ({inv.currency})
@@ -326,6 +332,24 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
                 : 'border-border focus:border-primary focus:ring-primary/20'
             )}
           />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-medium text-foreground">
+            Discount ({inv.currency})
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            max={MAX_MONEY}
+            value={discount}
+            onChange={(e) => setDiscount(e.target.value)}
+            aria-invalid={invalidDiscount}
+            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-right text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+          />
+          {invalidDiscount && (
+            <p className="mt-1 text-xs text-destructive">Discount cannot exceed subtotal.</p>
+          )}
         </div>
         <div>
           <label className="mb-1 block text-xs font-medium text-foreground">Due date *</label>
@@ -355,6 +379,10 @@ function InvoiceEditForm({ inv, onSaved }: { inv: ManageInvoice; onSaved: () => 
           <div className="flex justify-between text-muted-foreground">
             <span>Subtotal</span>
             <span className="tabular-nums">{moneyLabel(subtotal, inv.currency)}</span>
+          </div>
+          <div className="flex justify-between text-muted-foreground">
+            <span>Discount</span>
+            <span className="tabular-nums">-{moneyLabel(discountNum, inv.currency)}</span>
           </div>
           <div className="flex justify-between text-muted-foreground">
             <span>Tax</span>

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { logActivity } from '@/server/activity';
 import { readJson } from '@/lib/api-json';
+import { calculateInvoiceMoney } from '@/lib/finance/invoice-money';
 
 export const GET = withApiAuth('finance:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -33,8 +34,6 @@ export const GET = withApiAuth('finance:read', async (ctx, request) => {
 // Bound + non-negative so an oversized/negative input is a clean 400, not a raw
 // DB 500 (FIN-07) and not a paid/outstanding-corrupting negative (FIN-01).
 const MAX_MONEY = 9_999_999_999.99;
-const round2 = (n: number) => Math.round(n * 100) / 100;
-
 const lineItemSchema = z.object({
   description: z.string().min(1),
   quantity: z.number().positive().max(1_000_000),
@@ -50,6 +49,7 @@ const createInvoiceSchema = z.object({
   items: z.array(lineItemSchema).min(1),
   // subtotal/total are intentionally NOT accepted — they are derived server-side.
   tax: z.number().nonnegative().max(MAX_MONEY).default(0),
+  discount: z.number().nonnegative().max(MAX_MONEY).default(0),
   currency: z.enum(['USD', 'PKR']).default('USD'),
   dueDate: z.string().datetime(),
   notes: z.string().optional(),
@@ -67,16 +67,16 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
   }
 
   // FIN-01: derive line amounts, subtotal and total on the server from
-  // quantity × rate (+ tax). Client-sent subtotal/total are never used.
-  const items = parsed.data.items.map((it) => ({
-    description: it.description,
-    quantity: it.quantity,
-    rate: it.rate,
-    amount: round2(it.quantity * it.rate),
-  }));
-  const subtotal = round2(items.reduce((s, it) => s + it.amount, 0));
-  const tax = round2(parsed.data.tax);
-  const total = round2(subtotal + tax);
+  // rounded quantity × rate lines, less discount, plus tax. Client-sent totals are ignored.
+  let money;
+  try {
+    money = calculateInvoiceMoney(parsed.data.items, parsed.data.tax, parsed.data.discount);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Invalid invoice totals' },
+      { status: 400 }
+    );
+  }
 
   // FIN-09: per-year sequence — scope the count to this year so it resets to -001.
   const year = new Date().getFullYear();
@@ -90,10 +90,11 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
       invoiceNumber,
       clientId: parsed.data.clientId,
       projectId: parsed.data.projectId || null,
-      items,
-      subtotal,
-      tax,
-      total,
+      items: money.items,
+      subtotal: money.subtotal,
+      discount: money.discount,
+      tax: money.tax,
+      total: money.total,
       currency: parsed.data.currency,
       status: 'DRAFT',
       dueDate: new Date(parsed.data.dueDate),

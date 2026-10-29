@@ -15,6 +15,7 @@ import {
   type CurrencyAmount,
 } from '@/lib/finance/currency';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
+import { calculateInvoiceMoney } from '@/lib/finance/invoice-money';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -47,6 +48,7 @@ export const createInvoiceInputSchema = z.object({
     .min(1, 'Invoice must have at least one line item'),
   subtotal: nonNegativeMoney(),
   tax: nonNegativeMoney().default(0),
+  discount: nonNegativeMoney().default(0),
   total: nonNegativeMoney(),
   currency: z.enum(['USD', 'PKR']).default('USD'),
   dueDate: z.date(),
@@ -249,18 +251,18 @@ export const financeRouter = router({
     await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
     await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
     // FIN-01: never trust client-sent money. Derive every line `amount`, the
-    // `subtotal` and the `total` from quantity × rate (+ tax) on the server, so
+    // `subtotal` and the `total` from rounded lines − discount + tax on the server, so
     // a request claiming subtotal/total = 0 (or a negative) cannot corrupt the
     // stored figure or the paid/outstanding aggregates. Mirrors the AI tool.
-    const lineItems = input.items.map((it) => ({
-      description: it.description,
-      quantity: it.quantity,
-      rate: it.rate,
-      amount: round2(it.quantity * it.rate),
-    }));
-    const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
-    const tax = round2(input.tax ?? 0);
-    const total = round2(subtotal + tax);
+    let money;
+    try {
+      money = calculateInvoiceMoney(input.items, input.tax, input.discount);
+    } catch (error) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: error instanceof Error ? error.message : 'Invalid invoice totals',
+      });
+    }
 
     // Generate invoice number. FIN-09: scope the count to THIS year's invoices
     // so the sequence resets to -001 each January (was a global count that never
@@ -276,10 +278,11 @@ export const financeRouter = router({
         invoiceNumber,
         clientId: input.clientId,
         projectId: input.projectId || null,
-        items: lineItems,
-        subtotal,
-        tax,
-        total,
+        items: money.items,
+        subtotal: money.subtotal,
+        discount: money.discount,
+        tax: money.tax,
+        total: money.total,
         currency: input.currency,
         status: 'DRAFT',
         dueDate: input.dueDate,
@@ -317,6 +320,7 @@ export const financeRouter = router({
           )
           .min(1),
         tax: nonNegativeMoney().optional(),
+        discount: nonNegativeMoney().optional(),
         dueDate: z.date().optional(),
         notes: z.string().optional(),
         status: z.enum(['DRAFT', 'SENT']).optional(),
@@ -325,7 +329,7 @@ export const financeRouter = router({
     .mutation(async ({ ctx, input }) => {
       const current = await ctx.db.invoice.findUnique({
         where: { id: input.id },
-        select: { status: true },
+        select: { status: true, tax: true, discount: true },
       });
       if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Invoice not found' });
       if (current.status !== 'DRAFT' && current.status !== 'SENT') {
@@ -336,17 +340,21 @@ export const financeRouter = router({
       }
 
       // Recompute money server-side, identical to createInvoice.
-      const lineItems = input.items.map((it) => ({
-        description: it.description,
-        quantity: it.quantity,
-        rate: it.rate,
-        amount: round2(it.quantity * it.rate),
-      }));
-      const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
-      const tax = round2(input.tax ?? 0);
-      const total = round2(subtotal + tax);
+      let money;
+      try {
+        money = calculateInvoiceMoney(
+          input.items,
+          input.tax ?? Number(current.tax),
+          input.discount ?? Number(current.discount)
+        );
+      } catch (error) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: error instanceof Error ? error.message : 'Invalid invoice totals',
+        });
+      }
 
-      const data: Record<string, unknown> = { items: lineItems, subtotal, tax, total };
+      const data: Record<string, unknown> = money;
       if (input.dueDate) data.dueDate = input.dueDate;
       if (input.notes !== undefined) data.notes = input.notes.trim() || null;
       if (input.status && input.status !== current.status) {

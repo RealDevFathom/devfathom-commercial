@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
+import { calculateInvoiceMoney } from '@/lib/finance/invoice-money';
 import {
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
@@ -61,8 +62,6 @@ function rollForwardDueDate(due: Date, interval: string, now: Date): Date {
   }
   return next;
 }
-
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /** Display label for a money amount, e.g. "$1,200" / "Rs 50,000". */
 const moneyLabel = (amount: number, currency: string) =>
@@ -453,7 +452,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
   tools.createInvoice = tool({
     description:
-      'Create a DRAFT invoice for a client. Give the client name, the line items as [{ description, quantity, unitPrice }] (totals are computed for you), an optional tax amount, currency and due date. Use for "invoice <client> for ...", "draft an invoice". ADMIN ONLY.',
+      'Create a DRAFT invoice for a client. Give the client name, line items, optional tax and discount amounts, currency and due date. Totals are computed for you. ADMIN ONLY.',
     inputSchema: z.object({
       clientName: z.string().describe('Client to bill (fuzzy name match)'),
       projectName: z.string().nullish().describe('Optional project to attach the invoice to'),
@@ -468,12 +467,24 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         .min(1)
         .describe('Line items; each amount = quantity × unitPrice'),
       tax: nonNegativeMoney().nullish().describe('Tax amount to add to the subtotal (default 0)'),
+      discount: nonNegativeMoney()
+        .nullish()
+        .describe('Discount amount to subtract from the subtotal (default 0)'),
       currency: z.enum(['USD', 'PKR']).nullish().describe('Default USD'),
       dueDate: z.string().describe('ISO date the invoice is due'),
       notes: z.string().nullish(),
     }),
     needsApproval: true,
-    execute: async ({ clientName, projectName, items, tax, currency, dueDate, notes }) => {
+    execute: async ({
+      clientName,
+      projectName,
+      items,
+      tax,
+      discount,
+      currency,
+      dueDate,
+      notes,
+    }) => {
       if (!h.isAdmin) return { error: FINANCE_RESTRICTED };
 
       const rc = await resolveClient(clientName);
@@ -492,15 +503,20 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         resolvedProject = rp.value.name;
       }
 
-      const lineItems = items.map((it) => ({
-        description: it.description,
-        quantity: it.quantity,
-        rate: it.unitPrice,
-        amount: round2(it.quantity * it.unitPrice),
-      }));
-      const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
-      const taxAmount = round2(tax ?? 0);
-      const total = round2(subtotal + taxAmount);
+      let money;
+      try {
+        money = calculateInvoiceMoney(
+          items.map((item) => ({
+            description: item.description,
+            quantity: item.quantity,
+            rate: item.unitPrice,
+          })),
+          tax ?? 0,
+          discount ?? 0
+        );
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : 'Invalid invoice totals' };
+      }
       const invCurrency = currency ?? 'USD';
 
       // Invoice number: INV-<year>-<sequence>. Mirrors the tRPC mutation.
@@ -516,10 +532,11 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
           invoiceNumber,
           clientId: rc.value.id,
           projectId,
-          items: lineItems,
-          subtotal,
-          tax: taxAmount,
-          total,
+          items: money.items,
+          subtotal: money.subtotal,
+          discount: money.discount,
+          tax: money.tax,
+          total: money.total,
           currency: invCurrency,
           status: 'DRAFT',
           dueDate: new Date(dueDate),
@@ -549,16 +566,17 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         targetType: 'Invoice',
         targetId: invoice.id,
         targetLabel: invoice.invoiceNumber,
-        metadata: { total, currency: invCurrency },
+        metadata: { total: money.total, currency: invCurrency },
       });
 
       return {
         invoiceNumber: invoice.invoiceNumber,
         client: invoice.client.name,
         project: resolvedProject ?? null,
-        subtotal,
-        tax: taxAmount,
-        total,
+        subtotal: money.subtotal,
+        discount: money.discount,
+        tax: money.tax,
+        total: money.total,
         currency: invCurrency,
         status: invoice.status,
         dueDate: invoice.dueDate,
