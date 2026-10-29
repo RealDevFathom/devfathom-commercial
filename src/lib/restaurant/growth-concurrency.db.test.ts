@@ -14,6 +14,13 @@ const admitted =
   process.env.RESTAURANT_GROWTH_TEST_ENVIRONMENT === 'TEST_SANDBOX';
 const suite = admitted && url ? describe : describe.skip;
 const hash = 'a'.repeat(64);
+type FixtureScope = {
+  org: string;
+  branch: string;
+  insight: string;
+  user: string;
+  role: string;
+};
 const binding: RestaurantGrowthBinding = {
   validatePersisted: () => ({
     currency: 'PKR',
@@ -60,14 +67,14 @@ async function connect() {
   expect(['127.0.0.1', '::1']).toContain(identity.address);
   return db;
 }
-async function fixture(
-  run: (scope: { org: string; branch: string; insight: string }, admin: Client) => Promise<void>
-) {
+async function fixture(run: (scope: FixtureScope, admin: Client) => Promise<void>) {
   const db = await connect();
   const scope = {
     org: 'growth_test_' + randomUUID(),
     branch: 'branch_' + randomUUID(),
     insight: randomUUID(),
+    user: 'user_' + randomUUID(),
+    role: 'role_' + randomUUID(),
   };
   try {
     await db.query('BEGIN');
@@ -84,6 +91,39 @@ async function fixture(
       [scope.branch, scope.org]
     );
     await db.query(
+      `INSERT INTO organization_departments (id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,'test','Test',now())`,
+      [`department_${scope.user}`, scope.org]
+    );
+    await db.query(
+      `INSERT INTO organization_roles (id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,'growth-test','Growth test',now())`,
+      [scope.role, scope.org]
+    );
+    await db.query(
+      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES
+         ($1,$2,$3,'reports:financial','ALLOW'),($4,$2,$3,'restaurant:configure','ALLOW')`,
+      [
+        `permission_reports_${scope.user}`,
+        scope.org,
+        scope.role,
+        `permission_configure_${scope.user}`,
+      ]
+    );
+    await db.query(
+      `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,role,department,title,"updatedAt") VALUES
+         ($1,$2,$3,'Growth test actor',$1 || '@test.invalid','EMPLOYEE','test','Test',now())`,
+      [scope.user, scope.org, scope.role]
+    );
+    await db.query(
+      `INSERT INTO restaurant_staff_profiles (id,"organizationId","userId","displayName","primaryBranchId","updatedAt") VALUES
+         ($1,$2,$3,'Growth test actor',$4,now())`,
+      [`staff_${scope.user}`, scope.org, scope.user, scope.branch]
+    );
+    await db.query(
+      `INSERT INTO restaurant_branch_assignments (id,"organizationId","branchId","userId","updatedAt") VALUES
+         ($1,$2,$3,$4,now())`,
+      [`assignment_${scope.user}`, scope.org, scope.branch, scope.user]
+    );
+    await db.query(
       `INSERT INTO growth_insights (id,"organizationId","branchId",vertical,"actorId","schemaVersion","inputHash",status,provider,model,snapshot,output) VALUES ($1,$2,$3,'RESTAURANT','TEST_DOUBLE',1,$4,'READY','TEST_DOUBLE','TEST_DOUBLE','{"actions":[{"ref":"a1","kind":"LOYALTY_REVIEW"}]}','{"recommendations":[{"actionRef":"a1"}]}')`,
       [scope.insight, scope.org, scope.branch, hash]
     );
@@ -93,27 +133,25 @@ async function fixture(
     await db.end();
   } // Append-only synthetic fixtures retained in named disposable DB.
 }
-function actor(
-  scope: { org: string; branch: string; insight: string },
-  failDraft = false
-): GrowthActor {
+function actor(scope: FixtureScope, failDraft = false): GrowthActor {
   return {
     ctx: {
       organizationId: scope.org,
-      userId: 'TEST_DOUBLE',
+      userId: scope.user,
       role: 'OWNER',
       vertical: 'RESTAURANT',
       enabledModules: ['restaurant-core', 'restaurant-pos'],
     },
-    can: async () => true,
+    can: async (capability: string) =>
+      capability === 'reports:financial' || capability === 'restaurant:configure',
     db: {
       $transaction: async (work: (tx: unknown) => Promise<unknown>) => {
         const db = await connect();
         try {
           await db.query('BEGIN');
           await db.query(
-            `SELECT set_config('app.current_organization_id',$1,true),set_config('app.current_branch_id','',true),set_config('app.is_platform_admin','false',true)`,
-            [scope.org]
+            `SELECT set_config('app.current_organization_id',$1,true),set_config('app.current_branch_id',$2,true),set_config('app.is_platform_admin','false',true)`,
+            [scope.org, scope.branch]
           );
           const tx = {
             organization: {
@@ -151,7 +189,7 @@ function actor(
     },
   } as unknown as GrowthActor;
 }
-const request = (scope: { branch: string; insight: string }) => ({
+const request = (scope: Pick<FixtureScope, 'branch' | 'insight'>) => ({
   branchId: scope.branch,
   insightId: scope.insight,
   recommendation: 0,
@@ -162,7 +200,7 @@ const request = (scope: { branch: string; insight: string }) => ({
   decision: 'APPROVE',
   settings: { priority: 'NORMAL', objective: 'REVIEW_RETENTION' },
 });
-async function counts(db: Client, scope: { org: string; branch: string; insight: string }) {
+async function counts(db: Client, scope: FixtureScope) {
   await db.query('BEGIN');
   try {
     await db.query(

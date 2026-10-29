@@ -25,10 +25,14 @@ export default defineConfig({
     env: {
       AUTH_SECRET: process.env.AUTH_SECRET ?? '',
       AUTH_TRUST_HOST: 'true',
+      // The lane supplies one synthetic client address per device/case.
+      CLIENT_IP_HEADER: 'x-forwarded-for',
       DATABASE_URL: process.env.DATABASE_URL ?? '',
       RESTAURANT_INTEGRATED_E2E: '1',
       // Opt in only for this test server; production runtime throttles stay active.
       NODE_ENV: 'test',
+      MENU_IMPORT_ADAPTER: 'FIXTURE',
+      STORAGE_ADAPTER: 'local',
       RESTAURANT_E2E_RELAX_TERMINAL_FLOOD_LIMITS: '1',
     },
   },

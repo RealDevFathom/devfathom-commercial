@@ -277,6 +277,11 @@ export async function getPlatformSession(request?: Request): Promise<PlatformIde
   return readPlatformSession(request);
 }
 
+/** The login page needs only enrollment state, never an enrollment identity's privileges. */
+export async function platformLoginNeedsEnrollment(request?: Request): Promise<boolean> {
+  return Boolean((await readPlatformSession(request, true))?.enrollmentOnly);
+}
+
 // Only the MFA endpoint may use this accessor. Enrollment tokens never pass
 // getPlatformSession/requirePlatformSession, including after another enrollment.
 export async function requirePlatformMfaSession(request: Request): Promise<PlatformIdentity> {
