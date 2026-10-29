@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { Prisma } from '@/generated/prisma/client';
 import { format } from 'date-fns';
 import { router, adminProcedure } from '../trpc';
 import { logActivity } from '../activity';
@@ -15,6 +16,29 @@ import {
   type CurrencyAmount,
 } from '@/lib/finance/currency';
 import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
+
+type OutstandingInvoiceGroup = {
+  currency: string;
+  amount: unknown;
+  count: bigint | number;
+};
+
+export function getOutstandingInvoiceGroups(db: { $queryRaw<T>(query: Prisma.Sql): Promise<T> }) {
+  return db.$queryRaw<OutstandingInvoiceGroup[]>(Prisma.sql`
+    SELECT i.currency::text AS currency,
+           SUM(GREATEST(i.total - COALESCE(p.paid, 0), 0)) AS amount,
+           COUNT(*) AS count
+      FROM invoices AS i
+      LEFT JOIN (
+        SELECT "invoiceId", SUM(amount) AS paid
+          FROM payments
+         GROUP BY "invoiceId"
+      ) AS p ON p."invoiceId" = i.id
+     WHERE i.status IN ('SENT', 'OVERDUE')
+     GROUP BY i.currency
+     ORDER BY i.currency
+  `);
+}
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -817,7 +841,7 @@ export const financeRouter = router({
       yearlyIncomeG,
       yearlyExpenseG,
       paidInvoicesG,
-      outstandingInvoices,
+      outstandingInvoicesG,
       recurring,
     ] = await Promise.all([
       // FIN-04: cap each "this period" window at `now` so future-dated rows can't
@@ -832,14 +856,10 @@ export const financeRouter = router({
         _count: true,
         where: { status: 'PAID' },
       }),
-      ctx.db.invoice.findMany({
-        where: { status: { in: ['SENT', 'OVERDUE'] } },
-        select: {
-          currency: true,
-          total: true,
-          payments: { select: { amount: true } },
-        },
-      }),
+      // Keep this aggregation in Postgres. Loading every open invoice and all
+      // of its payments makes this dashboard query grow with the tenant's full
+      // receivables history. Both tables remain protected by request-scoped RLS.
+      getOutstandingInvoiceGroups(ctx.db),
       ctx.db.recurringExpense.findMany({
         where: { active: true },
         select: { amount: true, currency: true, interval: true },
@@ -881,21 +901,14 @@ export const financeRouter = router({
       recurringYearly
     );
 
-    // An open invoice can already have one or more partial payments. Aggregate
-    // its remaining balance rather than its original total so Outstanding agrees
-    // with the invoice list/detail views. Clamp at zero in case legacy data has
-    // an overpaid invoice that has not yet transitioned to PAID.
+    // Postgres subtracts all partial payments per invoice and clamps anomalous
+    // legacy overpayments before summing, so one overpayment cannot hide another
+    // invoice's positive balance.
     const totalOutstanding = sumByCurrency(
-      outstandingInvoices.map((invoice) => {
-        const amountPaid = invoice.payments.reduce(
-          (sum, payment) => sum + Number(payment.amount),
-          0
-        );
-        return {
-          currency: invoice.currency,
-          amount: Math.max(0, round2(Number(invoice.total) - amountPaid)),
-        };
-      })
+      outstandingInvoicesG.map(({ currency, amount }) => ({
+        currency,
+        amount: Number(amount ?? 0),
+      }))
     );
 
     return {
@@ -908,7 +921,7 @@ export const financeRouter = router({
       totalPaid: fromCurrencyGroups(paidInvoicesG, 'total'),
       paidCount: paidInvoicesG.reduce((s, g) => s + g._count, 0),
       totalOutstanding,
-      outstandingCount: outstandingInvoices.length,
+      outstandingCount: outstandingInvoicesG.reduce((sum, group) => sum + Number(group.count), 0),
     };
   }),
 
