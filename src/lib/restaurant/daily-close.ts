@@ -240,8 +240,18 @@ export function resolveChainTip<T extends CloseChainNode>(closes: readonly T[]):
 
 type LoadedInputs = AggregateInputs & {
   openBillCount: number;
+  unbilledOrderCount: number;
   openDrawerCount: number;
 };
+
+const UNRESOLVED_ORDER_STATUSES = [
+  'OPEN',
+  'SENT',
+  'IN_PREPARATION',
+  'READY',
+  'SERVED',
+  'PAYMENT_PENDING',
+] as const;
 
 async function loadCloseInputs(
   db: ScopedDb,
@@ -261,6 +271,16 @@ async function loadCloseInputs(
       compTotal: true,
       discountTotal: true,
       grandTotal: true,
+    },
+  });
+  // A bill can still be cut for an active order whose only prior bills were
+  // voided. Such an order is unresolved even though no OPEN bill exists yet.
+  const unbilledOrderCount = await db.restaurantOrder.count({
+    where: {
+      branchId,
+      businessDate,
+      status: { in: [...UNRESOLVED_ORDER_STATUSES] },
+      bills: { none: { status: { in: ['OPEN', 'SETTLED'] } } },
     },
   });
   const tenders = await db.restaurantTender.findMany({
@@ -295,6 +315,7 @@ async function loadCloseInputs(
       countedCash: d.countedCash,
     })),
     openBillCount: bills.filter((b) => b.status === 'OPEN').length,
+    unbilledOrderCount,
     openDrawerCount: drawers.filter((d) => d.status === 'OPEN').length,
   };
 }
@@ -310,6 +331,7 @@ export type ClosePreview = CloseAggregate & {
     allBillsResolved: boolean;
     allDrawersClosed: boolean;
     openBillCount: number;
+    unbilledOrderCount: number;
     openDrawerCount: number;
   };
   /** The current chain-tip close for the date, if one has already been cut. */
@@ -335,9 +357,10 @@ export async function closePreview(db: ScopedDb, input: ClosePreviewInput): Prom
     businessDate,
     ...aggregate,
     readiness: {
-      allBillsResolved: loaded.openBillCount === 0,
+      allBillsResolved: loaded.openBillCount === 0 && loaded.unbilledOrderCount === 0,
       allDrawersClosed: loaded.openDrawerCount === 0,
       openBillCount: loaded.openBillCount,
+      unbilledOrderCount: loaded.unbilledOrderCount,
       openDrawerCount: loaded.openDrawerCount,
     },
     existingCloseId: resolveChainTip(existing)?.id ?? null,
@@ -404,6 +427,12 @@ async function persistClose(
 /** Guard: a close can only be cut/corrected when every bill for the date is
  * SETTLED or VOID and every drawer session for the date is CLOSED (C9). */
 function assertReadyToClose(loaded: LoadedInputs): void {
+  if (loaded.unbilledOrderCount > 0) {
+    throw new DailyCloseError(
+      'The business day has active orders without a payable bill; cut and resolve every bill before closing.',
+      'UNSETTLED_BILL'
+    );
+  }
   if (loaded.openBillCount > 0) {
     throw new DailyCloseError(
       'The business day has unsettled bills; settle or void every bill before closing.',

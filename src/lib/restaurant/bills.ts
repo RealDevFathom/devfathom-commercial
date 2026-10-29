@@ -6,6 +6,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { buildCoAuthorizationRecord } from './co-authorization';
+import { assertMoneyDayOpen } from './daily-close';
 import { accrueLoyaltyForSettledBill, releaseLoyaltyRedemption } from './loyalty';
 import {
   add,
@@ -648,6 +649,10 @@ export async function cutBills(db: ScopedDb, input: CutBillsInput): Promise<CutB
       const billIds = await liveBillIds(tx, input.orderId, input.branchId);
       return { orderId: input.orderId, billIds, replayed: true };
     }
+
+    // Serialize bill creation/re-cut with the immutable branch-day close. The
+    // replay path above remains available after close because it performs no write.
+    await assertMoneyDayOpen(tx, order.branchId, order.businessDate);
 
     // Serialize every cut of this order on a key that exists BEFORE any bill does.
     // Locking the bill ROWS is not enough, because the dangerous row is the one that is
