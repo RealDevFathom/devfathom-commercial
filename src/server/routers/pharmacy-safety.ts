@@ -1,3 +1,4 @@
+import { assertBranchAssignment } from '@/lib/pharmacy/branch-assignment';
 import { enforceOperatingMode } from '@/lib/pharmacy/operating-mode';
 import { authorizeSoloApproval, pinProfileBelongsToActor } from '@/lib/pharmacy/solo-approval';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -186,6 +187,11 @@ export const pharmacySafetyRouter = router({
           if (!eligible || !credential || !pharmacist) {
             return { blocked: 'A different qualified person must enter their PIN.' };
           }
+          await assertBranchAssignment(db, {
+            organizationId,
+            branchId: input.branchId,
+            actorId: pharmacist.id,
+          });
           if (
             solo &&
             !(await authorizeSoloApproval(

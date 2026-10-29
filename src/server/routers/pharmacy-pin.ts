@@ -2,7 +2,11 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { ensurePharmacyStaffProfile } from '@/lib/pharmacy/pin-enrollment';
-import { issueOperatorCredential } from '@/lib/restaurant/credential-lifecycle';
+import { verifyPharmacyUserPin } from '@/lib/pharmacy/solo-approval';
+import {
+  issueOperatorCredential,
+  rotateOperatorCredential,
+} from '@/lib/restaurant/credential-lifecycle';
 import { annotateAudit } from '@/server/audit';
 import { assertModuleLicensed, protectedProcedure, router, type TRPCContext } from '../trpc';
 
@@ -39,7 +43,17 @@ export const pharmacyPinRouter = router({
       annotateAudit(ctx, { skipInput: true });
       return next();
     })
-    .input(z.object({ pin: z.string().regex(/^\d{4,8}$/, 'Use 4–8 digits.') }).strict())
+    .input(
+      z
+        .object({
+          pin: z.string().regex(/^\d{4,8}$/, 'Use 4–8 digits.'),
+          currentPin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
+        })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
       const { organizationId, userId } = pharmacyIdentity(ctx);
       return ctx.db.$transaction(async (tx) => {
@@ -55,20 +69,29 @@ export const pharmacyPinRouter = router({
           },
           select: { id: true },
         });
-        if (existing)
+        // The identity lock serializes rotations; lockout commits independently of this request.
+        const verified =
+          existing && input.currentPin
+            ? await verifyPharmacyUserPin({ organizationId, actorId: userId }, input.currentPin)
+            : false;
+        if (existing && !verified)
           throw new TRPCError({
             code: 'CONFLICT',
-            message: 'Your PIN is already enrolled. Ask your administrator for a credential reset.',
+            message: 'Enter your current pharmacy PIN to rotate it.',
           });
-        const credential = await issueOperatorCredential(db, {
-          staffProfileId: profile.id,
-          type: 'PIN',
-          secret: input.pin,
-        });
+        const credential = existing
+          ? await rotateOperatorCredential(db, { credentialId: existing.id, secret: input.pin })
+          : await issueOperatorCredential(db, {
+              staffProfileId: profile.id,
+              type: 'PIN',
+              secret: input.pin,
+            });
         annotateAudit(ctx, {
           targetType: 'RestaurantOperatorCredential',
           targetId: credential.id,
-          description: 'Enrolled own pharmacy approval PIN',
+          description: existing
+            ? 'Rotated own pharmacy approval PIN'
+            : 'Enrolled own pharmacy approval PIN',
           metadata: { staffProfileId: profile.id },
         });
         return { enrolled: true };

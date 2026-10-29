@@ -658,3 +658,59 @@ describe.sequential('shared pharmacy branch and owner security (forced RLS)', ()
     });
   });
 });
+
+it('rejects every STAFFED checker approval outside the assigned branch before PIN or audit', async () => {
+  const { enforceOperatingMode } = await import('@/lib/pharmacy/operating-mode');
+  const checker = `checker_${suffix}`;
+  await inOrg(async (db) => {
+    const role = await db.organizationRole.create({
+      data: { key: `manager_${suffix}`, name: 'Manager' },
+    });
+    await db.user.create({
+      data: {
+        id: checker,
+        name: 'Checker',
+        email: `${checker}@test.invalid`,
+        department: 'COUNTER',
+        title: 'Manager',
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationRoleId: role.id,
+      },
+    });
+    await db.pharmacyBranchAssignment.create({ data: { userId: checker, branchId: branchB } });
+  });
+  // Roll back mode and all candidate evidence, keeping the fixture independent of other tests.
+  const rollback = new Error('rollback branch checker regression');
+  await expect(
+    inOrg(async (db) => {
+      await db.organization.update({
+        where: { id: org },
+        data: { pharmacyOperatingMode: 'STAFFED' },
+      });
+      const before = await db.auditLog.count({ where: { actorId: checker } });
+      for (const kind of [
+        'RX',
+        'OVERRIDE',
+        'REFUND',
+        'RETURN',
+        'DISCOUNT',
+        'ADJUSTMENT',
+        'PURCHASE',
+      ] as const) {
+        await expect(
+          enforceOperatingMode(db, scope(owner), {
+            kind,
+            makerIds: [owner],
+            targetType: 'BranchRegression',
+            targetId: kind,
+            checkerId: checker,
+            pin: '4729',
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+      }
+      expect(await db.auditLog.count({ where: { actorId: checker } })).toBe(before);
+      throw rollback;
+    })
+  ).rejects.toBe(rollback);
+});

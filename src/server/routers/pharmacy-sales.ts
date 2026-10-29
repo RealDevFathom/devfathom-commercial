@@ -1,7 +1,11 @@
 import { enforceOperatingMode } from '@/lib/pharmacy/operating-mode';
 import { isPharmacyOwner } from '@/lib/pharmacy/owner';
 import { assertBranchAssignment } from '@/lib/pharmacy/branch-assignment';
-import { authorizeSoloApproval, pinProfileBelongsToActor } from '@/lib/pharmacy/solo-approval';
+import {
+  authorizeSoloApproval,
+  pinProfileBelongsToActor,
+  soloOwnerEligible,
+} from '@/lib/pharmacy/solo-approval';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
@@ -852,6 +856,7 @@ export const pharmacySalesRouter = router({
       z
         .object({
           branchId,
+          checkerId: z.string().min(1).optional(),
           approvalPin: z
             .string()
             .regex(/^\d{4,8}$/)
@@ -888,9 +893,11 @@ export const pharmacySalesRouter = router({
             targetType: 'PharmacyTender',
             targetId: input.originalTenderId,
             pin: input.approvalPin,
+            checkerId: input.checkerId,
           });
-          const { approvalPin: _approvalPin, ...refundInput } = input;
+          const { approvalPin: _approvalPin, checkerId: _checkerId, ...refundInput } = input;
           void _approvalPin;
+          void _checkerId;
           if (tender?.type !== 'CREDIT') return refundPharmacyTender(db, scope, refundInput);
           await khataScope(ctx, input.branchId);
           await bindKhataBranch(db, scope);
@@ -1196,6 +1203,7 @@ export const pharmacySalesRouter = router({
             isLockedOut(credential, now)
           )
             return blocked;
+          await assertBranchAssignment(db, { ...scope, actorId: pharmacist.id });
           if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
           if (
             !solo &&
@@ -1503,6 +1511,7 @@ export const pharmacySalesRouter = router({
       z
         .object({
           branchId,
+          checkerId: z.string().min(1).optional(),
           approvalPin: z
             .string()
             .regex(/^\d{4,8}$/)
@@ -1543,9 +1552,11 @@ export const pharmacySalesRouter = router({
               targetType: 'PharmacySaleLine',
               targetId: input.saleLineId,
               pin: input.approvalPin,
+              checkerId: input.checkerId,
             });
-            const { approvalPin: _approvalPin, ...returnInput } = input;
+            const { approvalPin: _approvalPin, checkerId: _checkerId, ...returnInput } = input;
             void _approvalPin;
+            void _checkerId;
             return await returnSaleLine(db, scope, returnInput);
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
@@ -1734,10 +1745,6 @@ export const pharmacySalesRouter = router({
   /** Live branch-scoped identities; the write repeats role, permission and PIN checks. */
   rxApprovers: protectedProcedure.input(z.object({ branchId })).query(async ({ ctx, input }) => {
     const scope = await scopeFor(ctx, input.branchId);
-    const organization = await ctx.db.organization.findUniqueOrThrow({
-      where: { id: scope.organizationId },
-      select: { pharmacyOperatingMode: true },
-    });
     const users = await ctx.db.user.findMany({
       where: {
         organizationId: scope.organizationId,
@@ -1747,8 +1754,37 @@ export const pharmacySalesRouter = router({
       },
       select: { id: true, name: true, email: true },
     });
-    return { mode: organization.pharmacyOperatingMode, users };
+    const soloApprovalAllowed = await soloOwnerEligible(ctx.db, scope);
+    return {
+      mode: soloApprovalAllowed ? ('SOLO' as const) : ('STAFFED' as const),
+      users,
+      soloApprovalAllowed,
+    };
   }),
+
+  approvalCheckers: protectedProcedure
+    .input(z.object({ branchId }))
+    .query(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      const users = await ctx.db.user.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          status: 'ACTIVE',
+          organizationRole: { key: { in: ['owner', 'manager'] } },
+          OR: [
+            { organizationRole: { key: 'owner', isSystem: true } },
+            { pharmacyBranchAssignments: { some: { branchId: input.branchId, active: true } } },
+          ],
+        },
+        select: { id: true, name: true },
+      });
+      const soloApprovalAllowed = await soloOwnerEligible(ctx.db, scope);
+      return {
+        mode: soloApprovalAllowed ? ('SOLO' as const) : ('STAFFED' as const),
+        users,
+        soloApprovalAllowed,
+      };
+    }),
 
   /** The branches this counter may open a bill against, with the money format. */
   counterBranches: protectedProcedure.query(async ({ ctx }) => {

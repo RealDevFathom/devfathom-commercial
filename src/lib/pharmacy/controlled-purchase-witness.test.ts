@@ -1,3 +1,4 @@
+vi.mock('@/lib/pharmacy/branch-assignment', () => ({ assertBranchAssignment: vi.fn() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';

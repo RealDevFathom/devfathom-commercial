@@ -135,15 +135,21 @@ test('pharmacy PIN enrollment is discoverable, accessible and works without Rest
   await expect(pin).toHaveValue('482916');
   await page.getByLabel('Confirm pharmacy PIN', { exact: true }).fill('482916');
   await page.getByRole('button', { name: 'Enroll pharmacy PIN' }).click();
-  await expect(page.getByRole('button', { name: 'Enrolling…' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Saving…' })).toBeDisabled();
   await expect(
-    page.getByRole('status').filter({ hasText: 'Your pharmacy approval PIN is enrolled.' })
+    page.getByRole('status').filter({ hasText: 'Your pharmacy approval PIN has been saved.' })
   ).toBeVisible();
-  await expect(pin).toHaveCount(0);
+  await expect(pin).toHaveValue('');
   await page.reload();
+  await expect(page.getByLabel('Current pharmacy PIN', { exact: true })).toBeVisible();
+  await page.getByLabel('Current pharmacy PIN', { exact: true }).fill('482916');
+  await pin.fill('583917');
+  await page.getByLabel('Confirm pharmacy PIN', { exact: true }).fill('583917');
+  await page.getByRole('button', { name: 'Rotate pharmacy PIN' }).click();
   await expect(
-    page.getByRole('status').filter({ hasText: 'Your pharmacy approval PIN is enrolled.' })
+    page.getByRole('status').filter({ hasText: 'Your pharmacy approval PIN has been saved.' })
   ).toBeVisible();
+  await expect(page.getByLabel('Current pharmacy PIN', { exact: true })).toHaveValue('');
   expect(errors).toEqual([]);
 });
 

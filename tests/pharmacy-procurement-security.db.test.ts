@@ -30,7 +30,7 @@ async function fixture(run: (tx: ScopedDb, ctx: TRPCContext) => Promise<void>) {
     org,
     async (tx) => {
       await tx.$queryRaw`SELECT set_config('app.is_platform_admin', 'true', true)`;
-      await tx.$executeRaw`INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"createdAt","updatedAt") VALUES (${org},${org},${org},${org},'ACTIVE','SHARED','PHARMACY',now(),now())`;
+      await tx.$executeRaw`INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"pharmacyOperatingMode","createdAt","updatedAt") VALUES (${org},${org},${org},${org},'ACTIVE','SHARED','PHARMACY','SOLO',now(),now())`;
       await tx.$queryRaw`SELECT set_config('app.is_platform_admin', 'false', true)`;
       await tx.organizationDepartment.create({ data: { key: 'PHARMACY', name: 'PHARMACY' } });
       const role = await tx.organizationRole.create({

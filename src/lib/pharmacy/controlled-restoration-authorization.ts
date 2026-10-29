@@ -1,3 +1,4 @@
+import { assertBranchAssignment } from '@/lib/pharmacy/branch-assignment';
 import { authorizeSoloApproval, pinProfileBelongsToActor } from './solo-approval';
 import { randomUUID } from 'node:crypto';
 import { can } from '@/lib/abac';
@@ -75,6 +76,7 @@ export async function authorizeControlledRestoration(
   ) {
     throw new ControlledRestorationDenied();
   }
+  await assertBranchAssignment(db, { ...scope, actorId: witness.id });
   if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },

@@ -52,6 +52,11 @@ export function OperatingModeSettings({ initialMode }: { initialMode: 'SOLO' | '
           onChange={(event) => setPin(event.target.value)}
         />
       </div>
+      <p className="text-sm text-text-muted">
+        <a href="/pharmacy/settings/pin" className="underline">
+          Enroll or rotate your pharmacy approval PIN
+        </a>
+      </p>
       <Button type="submit" disabled={mutation.isPending || !/^\d{4,8}$/.test(pin)}>
         {mutation.isPending ? 'Changing…' : `Switch to ${next}`}
       </Button>

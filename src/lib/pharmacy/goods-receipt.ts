@@ -1,3 +1,4 @@
+import { assertBranchAssignment } from '@/lib/pharmacy/branch-assignment';
 import {
   authorizeSoloApproval,
   pinProfileBelongsToActor,
@@ -165,6 +166,7 @@ export async function verifyControlledPurchaseWitness(
     !isLockedOut(credential, now) &&
     (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
   if (!eligible || !credential || !pharmacist) return { blocked: WITNESS_BLOCKED };
+  await assertBranchAssignment(db, { ...scope, actorId: pharmacist.id });
   if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },

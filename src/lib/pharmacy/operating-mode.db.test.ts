@@ -90,6 +90,13 @@ beforeAll(async () => {
             provinceCode: 'PB',
           },
         });
+        if (mode === 'STAFFED')
+          await db.pharmacyBranchAssignment.createMany({
+            data: ['manager', 'pharmacist', 'cashier'].map((key) => ({
+              userId: roles(scope.organizationId, key),
+              branchId: scope.branchId,
+            })),
+          });
       },
       { skipDrain: true }
     );

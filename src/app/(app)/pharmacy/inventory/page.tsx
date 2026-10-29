@@ -807,7 +807,23 @@ export default async function PharmacyInventoryPage({
                 ))}
               </select>
             </label>
-            {solo ? <SoloApprovalPin /> : null}
+            {solo ? (
+              <SoloApprovalPin />
+            ) : (
+              <label className="text-sm">
+                Witness PIN
+                <Input
+                  name="pin"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  pattern="[0-9]{4,8}"
+                  maxLength={8}
+                  required
+                  className="mt-1"
+                />
+              </label>
+            )}
             <label className="text-sm">
               Evidence reference
               <Input

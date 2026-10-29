@@ -1020,6 +1020,12 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
     await withTenantDb(
       f.org,
       (db) =>
+        db.pharmacyBranchAssignment.create({ data: { userId: second.id, branchId: f.branch } }),
+      { skipDrain: true }
+    );
+    await withTenantDb(
+      f.org,
+      (db) =>
         caller(db, { ...f, user: second.id }).approvePurchaseOrder({
           purchaseOrderId: po.id,
           decision: 'APPROVED',
@@ -2128,6 +2134,50 @@ it('serializes concurrent enrollment through the request-scoped database facade'
           where: { staffProfileId: profiles[0].id, type: 'PIN', revokedAt: null },
         })
       ).toBe(1);
+    },
+    { skipDrain: true }
+  );
+});
+
+it('rotates an enrolled pharmacy PIN only after fresh current-PIN verification and revokes the old secret', async () => {
+  const f = await fixture('provisioned');
+  const { verifyPharmacyUserPin } = await import('./solo-approval');
+  const rotate = (currentPin: string, nextPin: string) =>
+    withTenantDb(
+      f.org,
+      (db) =>
+        pharmacyPinRouter
+          .createCaller({
+            db,
+            entitlements: { organizationId: f.org, enabledModules: ['pharmacy-core'], modules: [] },
+            session: {
+              expires: 'later',
+              user: { id: f.user, organizationId: f.org, role: 'ADMIN', status: 'ACTIVE' },
+            },
+            organization: { id: f.org, vertical: 'PHARMACY' },
+            support: null,
+            requestMeta: { ip: null, userAgent: null },
+            audit: { detail: {}, db },
+          } as never)
+          .enroll({ pin: nextPin, currentPin }),
+      { skipDrain: true }
+    );
+  await expect(rotate('9999', '5836')).rejects.toMatchObject({ code: 'CONFLICT' });
+  expect(await verifyPharmacyUserPin({ organizationId: f.org, actorId: f.user }, pin)).toBe(true);
+  await expect(rotate(pin, '5836')).resolves.toEqual({ enrolled: true });
+  expect(await verifyPharmacyUserPin({ organizationId: f.org, actorId: f.user }, pin)).toBe(false);
+  expect(await verifyPharmacyUserPin({ organizationId: f.org, actorId: f.user }, '5836')).toBe(
+    true
+  );
+  await withTenantDb(
+    f.org,
+    async (db) => {
+      expect(
+        await db.restaurantOperatorCredential.count({
+          where: { staffProfileId: f.profile, revokedAt: null },
+        })
+      ).toBe(1);
+      expect(JSON.stringify(await db.auditLog.findMany())).not.toContain('5836');
     },
     { skipDrain: true }
   );

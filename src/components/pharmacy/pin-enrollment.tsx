@@ -8,12 +8,14 @@ import { trpc } from '@/lib/trpc';
 
 export function PharmacyPinEnrollment() {
   const status = trpc.pharmacyPin.status.useQuery();
+  const [currentPin, setCurrentPin] = useState('');
   const [pin, setPin] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [error, setError] = useState('');
   const enroll = trpc.pharmacyPin.enroll.useMutation({
     onSuccess: () => {
       setPin('');
+      setCurrentPin('');
       setConfirmation('');
       void status.refetch();
     },
@@ -25,7 +27,7 @@ export function PharmacyPinEnrollment() {
       return;
     }
     setError('');
-    enroll.mutate({ pin });
+    enroll.mutate({ pin, currentPin: status.data?.enrolled ? currentPin : undefined });
   }
   if (status.isPending) return <p role="status">Loading your PIN enrollment…</p>;
   if (status.error)
@@ -34,16 +36,28 @@ export function PharmacyPinEnrollment() {
         {status.error.message}
       </p>
     );
-  if (status.data?.enrolled || enroll.isSuccess)
-    return (
-      <p role="status" className="text-text-body">
-        Your pharmacy approval PIN is enrolled. Use it to confirm purchasing and other sensitive
-        decisions. Ask your administrator if you need a reset.
-      </p>
-    );
   const message = error || enroll.error?.message;
   return (
     <form onSubmit={submit} className="max-w-md space-y-4">
+      {enroll.isSuccess && <p role="status">Your pharmacy approval PIN has been saved.</p>}
+      {status.data?.enrolled && (
+        <div className="space-y-2">
+          <Label htmlFor="pharmacy-current-pin">Current pharmacy PIN</Label>
+          <Input
+            id="pharmacy-current-pin"
+            type="password"
+            inputMode="numeric"
+            autoComplete="off"
+            pattern="[0-9]{4,8}"
+            minLength={4}
+            maxLength={8}
+            required
+            value={currentPin}
+            onChange={(event) => setCurrentPin(event.target.value)}
+            className="min-h-11"
+          />
+        </div>
+      )}
       <p className="text-sm text-text-muted">
         Choose your own 4–8 digit PIN. It confirms your identity without granting additional
         permissions. A sole owner can use it for audited self-approval; staffed pharmacies require a
@@ -91,7 +105,11 @@ export function PharmacyPinEnrollment() {
         </p>
       )}
       <Button type="submit" disabled={enroll.isPending} className="min-h-11">
-        {enroll.isPending ? 'Enrolling…' : 'Enroll pharmacy PIN'}
+        {enroll.isPending
+          ? 'Saving…'
+          : status.data?.enrolled
+            ? 'Rotate pharmacy PIN'
+            : 'Enroll pharmacy PIN'}
       </Button>
     </form>
   );

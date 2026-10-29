@@ -1,3 +1,4 @@
+vi.mock('@/lib/pharmacy/branch-assignment', () => ({ assertBranchAssignment: vi.fn() }));
 import { describe, expect, it, vi } from 'vitest';
 import { authorizeControlledRestoration } from './controlled-restoration-authorization';
 import { changeSaleStatus, returnSaleLine } from './sales';

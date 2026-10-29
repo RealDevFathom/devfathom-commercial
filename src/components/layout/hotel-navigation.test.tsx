@@ -86,7 +86,6 @@ const priorHrefs = [
   '/restaurant/integrations/cameras',
   '/restaurant/catalog',
   '/restaurant/menus',
-  '/restaurant/menu-import',
   '/restaurant/promotions',
   '/restaurant/notifications',
   '/restaurant/loyalty',

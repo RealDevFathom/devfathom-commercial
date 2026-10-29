@@ -92,6 +92,11 @@ async function scenario(organizationId: string, label: string): Promise<Scenario
   const branchId = `${BRANCH_A}_${organizationId}_${suffix}`;
   return inOrg(organizationId, async (db) => {
     await ensureBranch(db, organizationId, branchId);
+    if (organizationId === ORG_A)
+      await db.pharmacyBranchAssignment.createMany({
+        data: [{ organizationId, branchId, userId: CONTROLLER }],
+        skipDuplicates: true,
+      });
     const medicine = await db.medicine.create({
       data: {
         organizationId,

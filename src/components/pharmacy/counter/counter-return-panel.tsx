@@ -114,6 +114,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     () => navigator.onLine,
     () => false
   );
+  const [approvalPin, setApprovalPin] = useState('');
+  const [checkerId, setCheckerId] = useState('');
+  const checkers = trpc.pharmacySales.approvalCheckers.useQuery({ branchId });
   const [number, setNumber] = useState('');
   const [searched, setSearched] = useState(0);
   const [saleId, setSaleId] = useState(recovery.attempt?.saleId ?? '');
@@ -168,6 +171,18 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
 
   async function execute(next: Attempt) {
     if (latch.current || !online || !ready) return;
+    if (
+      !checkers.data ||
+      !/^\d{4,8}$/.test(approvalPin) ||
+      (checkers.data.mode === 'STAFFED' && !checkerId)
+    ) {
+      setError('Enter a fresh approval PIN and select an authorized checker in STAFFED mode.');
+      return;
+    }
+    const authorization = {
+      approvalPin,
+      checkerId: checkers.data.mode === 'STAFFED' ? checkerId : undefined,
+    };
     latch.current = true;
     setBusy(true);
     setError('');
@@ -176,10 +191,11 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       // Write before sending; an ambiguous network outcome can only replay this exact request.
       localStorage.setItem(storageKey, JSON.stringify(next));
       setAttempt(next);
-      if (next.kind === 'return') await returnLine.mutateAsync(next.input);
+      if (next.kind === 'return') await returnLine.mutateAsync({ ...next.input, ...authorization });
       else
         await refund.mutateAsync({
           ...next.input,
+          ...authorization,
           businessDate: new Date(next.input.businessDate),
         });
       await history.refetch({ throwOnError: true });
@@ -207,6 +223,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         `${counterErrorMessage(cause)} Check history before handing out cash; an unknown outcome must use the saved retry.`
       );
     } finally {
+      setApprovalPin('');
       latch.current = false;
       setBusy(false);
     }
@@ -257,6 +274,49 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         </p>
       )}
       {message && <p role="status">{message}</p>}
+      <fieldset disabled={busy || !online} className="space-y-2">
+        <legend className="font-semibold">Approval</legend>
+        {checkers.isPending && <p role="status">Loading approval options…</p>}
+        {checkers.error && <p role="alert">{counterErrorMessage(checkers.error)}</p>}
+        {checkers.data?.mode === 'STAFFED' && (
+          <>
+            <Label htmlFor="return-checker">Approving checker</Label>
+            <select
+              id="return-checker"
+              className={selectClass}
+              value={checkerId}
+              onChange={(event) => setCheckerId(event.target.value)}
+            >
+              <option value="">Choose an independent checker</option>
+              {checkers.data.users.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.name}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+        <Label htmlFor="return-approval-pin">
+          {checkers.data?.mode === 'SOLO' ? 'Owner PIN' : 'Checker PIN'}
+        </Label>
+        <Input
+          id="return-approval-pin"
+          type="password"
+          inputMode="numeric"
+          autoComplete="off"
+          pattern="[0-9]{4,8}"
+          maxLength={8}
+          value={approvalPin}
+          className="h-11"
+          onChange={(event) => setApprovalPin(event.target.value)}
+        />
+        <p className="text-sm text-text-muted">
+          Enter a fresh PIN for each return, refund or retry.{' '}
+          <a href="/pharmacy/settings/pin" className="underline">
+            Manage pharmacy PIN
+          </a>
+        </p>
+      </fieldset>
       {attempt && (
         <Button
           className="h-11"

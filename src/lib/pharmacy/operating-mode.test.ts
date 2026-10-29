@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { enforceOperatingMode, type PharmacyApprovalKind } from './operating-mode';
-const mocks = vi.hoisted(() => ({ solo: vi.fn(), can: vi.fn() }));
+const mocks = vi.hoisted(() => ({ solo: vi.fn(), can: vi.fn(), branch: vi.fn() }));
 vi.mock('./solo-approval', () => ({
   authorizeSoloApproval: mocks.solo,
   verifyPharmacyUserPin: vi.fn(async (_scope, pin) => pin === '4729'),
 }));
+vi.mock('./procurement-access', () => ({
+  actorCanProcure: (...args: unknown[]) => mocks.can(...args),
+}));
+vi.mock('./branch-assignment', () => ({ assertBranchAssignment: mocks.branch }));
 vi.mock('@/lib/abac', () => ({ can: mocks.can }));
 const scope = { organizationId: 'org', branchId: 'branch', actorId: 'actor' };
 function fixture(mode: string, role = 'owner') {

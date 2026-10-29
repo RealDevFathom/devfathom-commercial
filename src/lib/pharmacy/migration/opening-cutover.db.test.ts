@@ -96,6 +96,10 @@ async function scenario(label: string, organizationId = ORG_A): Promise<Scenario
         provinceCode: 'PB',
       },
     });
+    if (organizationId === ORG_A)
+      await db.pharmacyBranchAssignment.create({
+        data: { organizationId, branchId, userId: SIGNER },
+      });
     const medicine = await db.medicine.create({
       data: {
         organizationId,

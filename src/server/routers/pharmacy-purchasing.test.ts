@@ -140,6 +140,9 @@ beforeEach(() => {
   mocks.can.mockReset().mockResolvedValue(true);
   db.user.findFirst.mockResolvedValue({ organizationRole: { key: 'manager' } });
   db.user.findUnique.mockResolvedValue({
+    id: 'user_a',
+    organizationId: 'org_a',
+    role: 'EMPLOYEE',
     status: 'ACTIVE',
     organizationRole: {
       permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
@@ -749,6 +752,7 @@ describe('PUR-02 approval', () => {
   it('records the approval event with its actor and policy', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
       id: 'po_a',
+      branchId: 'branch_a',
       status: 'SUBMITTED',
       supplierId: 'supplier_a',
       createdByUserId: 'user_a',
@@ -775,6 +779,7 @@ describe('PUR-02 approval', () => {
   it('records a rejection and returns the order to DRAFT', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
       id: 'po_a',
+      branchId: 'branch_a',
       status: 'SUBMITTED',
       supplierId: 'supplier_a',
       createdByUserId: 'user_a',
@@ -1009,6 +1014,9 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     resolvableCatalog();
     resolvableOrder();
     db.user.findUnique.mockResolvedValue({
+      id: 'approver_a',
+      organizationId: 'org_a',
+      role: 'EMPLOYEE',
       status: 'ACTIVE',
       organizationRole: {
         permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],

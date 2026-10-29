@@ -1,4 +1,6 @@
+import { actorCanProcure } from './procurement-access';
 import { TRPCError } from '@trpc/server';
+import { assertBranchAssignment } from './branch-assignment';
 import { can } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { authorizeSoloApproval, verifyPharmacyUserPin } from './solo-approval';
@@ -23,7 +25,11 @@ export async function enforceOperatingMode(
     where: { id: scope.organizationId, vertical: 'PHARMACY' },
     select: { pharmacyOperatingMode: true },
   });
-  if (organization.pharmacyOperatingMode === 'SOLO') {
+  if (
+    organization.pharmacyOperatingMode === 'SOLO' &&
+    (input.checkerId ?? scope.actorId) === scope.actorId &&
+    input.makerIds.includes(scope.actorId)
+  ) {
     if (
       await authorizeSoloApproval(
         db,
@@ -35,6 +41,9 @@ export async function enforceOperatingMode(
       return { actorId: scope.actorId, policy: 'PHARMACY:SOLO_OWNER_PIN' };
   } else {
     const checkerId = input.checkerId ?? scope.actorId;
+    if (!scope.branchId)
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Approval branch is required.' });
+    await assertBranchAssignment(db, { ...scope, branchId: scope.branchId, actorId: checkerId });
     const actor = await db.user.findFirst({
       where: { id: checkerId, organizationId: scope.organizationId, status: 'ACTIVE' },
       select: { organizationRole: { select: { key: true } } },
@@ -52,12 +61,7 @@ export async function enforceOperatingMode(
             { db }
           ))
         : input.kind === 'PURCHASE'
-          ? await can(
-              { id: checkerId, role: 'EMPLOYEE', organizationId: scope.organizationId },
-              'pharmacy:procurement',
-              undefined,
-              { db }
-            )
+          ? await actorCanProcure(db, checkerId)
           : role === 'owner' || role === 'manager';
     if (eligible && !input.makerIds.includes(checkerId)) {
       if (

@@ -5,12 +5,17 @@ const mocks = vi.hoisted(() => ({
   returnLine: vi.fn(),
   refund: vi.fn(),
   refetch: vi.fn(),
+  checkers: { mode: 'SOLO', users: [] } as {
+    mode: string;
+    users: Array<{ id: string; name: string }>;
+  },
   history: {} as Record<string, unknown>,
   lookup: {} as Record<string, unknown>,
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     pharmacySales: {
+      approvalCheckers: { useQuery: () => ({ data: mocks.checkers }) },
       lookupReceiptByNumber: { useQuery: () => mocks.lookup },
       returnHistory: { useQuery: () => mocks.history },
       counterReceipt: { useQuery: () => ({}) },
@@ -28,10 +33,12 @@ const props = {
 };
 function chooseReceipt() {
   fireEvent.click(screen.getByRole('button', { name: /Receipt 12/ }));
+  fireEvent.change(screen.getByLabelText('Owner PIN'), { target: { value: '4729' } });
 }
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
+  mocks.checkers = { mode: 'SOLO', users: [] };
   mocks.refetch.mockResolvedValue({});
   mocks.returnLine.mockResolvedValue({});
   mocks.refund.mockResolvedValue({});
@@ -160,6 +167,8 @@ describe('counter returns', () => {
       }
       view.unmount();
       render(<ReturnForm {...props} />);
+      expect(localStorage.getItem('pharmacy-return:o:a:b') ?? '').not.toContain('4729');
+      fireEvent.change(screen.getByLabelText('Owner PIN'), { target: { value: '4729' } });
       fireEvent.click(await screen.findByRole('button', { name: 'Retry saved refund' }));
       await waitFor(() => expect(mocks.refund).toHaveBeenCalledTimes(2));
       expect(mocks.refund.mock.calls[1][0]).toEqual(first);
@@ -203,3 +212,40 @@ it('offers sold lots, prevents unsafe restock and caps the selected lot', async 
     )
   );
 });
+
+it.each(['SOLO', 'STAFFED'])(
+  'submits %s return approval and never saves the PIN for recovery',
+  async (mode) => {
+    mocks.checkers = { mode, users: [{ id: 'checker', name: 'Branch manager' }] };
+    render(<ReturnForm {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: /Receipt 12/ }));
+    fireEvent.change(screen.getByLabelText(mode === 'SOLO' ? 'Owner PIN' : 'Checker PIN'), {
+      target: { value: '4729' },
+    });
+    if (mode === 'STAFFED')
+      fireEvent.change(screen.getByLabelText('Approving checker'), {
+        target: { value: 'checker' },
+      });
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    fireEvent.change(screen.getByLabelText('Quarantine location'), { target: { value: 'q' } });
+    fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
+      target: { value: 'Package intact' },
+    });
+    fireEvent.click(
+      screen.getByLabelText('I confirm the quantity, inspection and stock disposition.')
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+    await waitFor(() =>
+      expect(mocks.returnLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          approvalPin: '4729',
+          checkerId: mode === 'STAFFED' ? 'checker' : undefined,
+        })
+      )
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(mode === 'SOLO' ? 'Owner PIN' : 'Checker PIN')).toHaveValue('')
+    );
+    expect(localStorage.getItem('pharmacy-return:o:a:b') ?? '').not.toContain('4729');
+  }
+);
