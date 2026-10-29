@@ -4,6 +4,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   appendControlledCorrection,
   appendControlledPurchaseEntries,
+  appendControlledPurchaseReversals,
   appendControlledSaleEntries,
   derivedCorrectionDelta,
   emergencyNoRxDecision,
@@ -27,6 +28,7 @@ describe('derivedCorrectionDelta', () => {
     expect(derivedCorrectionDelta('PURCHASE', 4, 9)).toBeNull();
     expect(derivedCorrectionDelta('CORRECTION', 4, 3)).toBeNull();
     expect(derivedCorrectionDelta('SALE', 4, 0)).toBeNull();
+    expect(derivedCorrectionDelta('PURCHASE', 4, 0)).toBe(-4);
   });
 });
 
@@ -223,6 +225,57 @@ describe('appendControlledCorrection', () => {
       })
     ).rejects.toThrow('CAP');
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('appendControlledPurchaseReversals', () => {
+  it('appends a zero-quantity correction for the reversed controlled purchase', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'correction' });
+    const purchase = {
+      ...original,
+      entryKind: 'PURCHASE' as const,
+      quantityCanonicalUnits: 2,
+      witnessedByUserId: 'pharmacist',
+      signatureRef: 'pin:pharmacist',
+      stockMovementId: 'receipt-movement',
+    };
+    const db = {
+      $queryRaw: vi.fn(),
+      pharmacyControlledRegisterEntry: {
+        findMany: vi.fn().mockResolvedValue([purchase]),
+        findFirst: vi
+          .fn()
+          .mockResolvedValueOnce(purchase)
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce({ runningBalance: 2 }),
+        aggregate: vi.fn().mockResolvedValue({ _max: { serial: 1 } }),
+        create,
+      },
+      pharmacyStockBalance: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { onHandUnits: 0 } }),
+      },
+    } as unknown as ScopedDb;
+
+    await appendControlledPurchaseReversals(db, {
+      organizationId: 'org',
+      branchId: 'branch',
+      recordedByUserId: 'receiver',
+      reason: 'Supplier sent the wrong consignment.',
+      reversedMovementIds: ['receipt-movement'],
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        entryKind: 'CORRECTION',
+        correctsEntryId: 'entry_1',
+        quantityCanonicalUnits: 0,
+        balanceDelta: -2,
+        runningBalance: 0,
+        recordedByUserId: 'receiver',
+        witnessedByUserId: 'pharmacist',
+        correctionReason: 'Supplier sent the wrong consignment.',
+      }),
+    });
   });
 });
 

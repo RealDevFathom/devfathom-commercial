@@ -50,7 +50,12 @@ export function derivedCorrectionDelta(
 ): number | null {
   if (entryKind === 'CORRECTION') return null;
   if (!Number.isSafeInteger(originalQuantity) || originalQuantity <= 0) return null;
-  if (!Number.isSafeInteger(correctedQuantity) || correctedQuantity <= 0) return null;
+  if (
+    !Number.isSafeInteger(correctedQuantity) ||
+    correctedQuantity < 0 ||
+    (entryKind !== 'PURCHASE' && correctedQuantity === 0)
+  )
+    return null;
   const delta =
     entryKind === 'SALE'
       ? originalQuantity - correctedQuantity
@@ -264,6 +269,45 @@ export async function appendControlledPurchaseEntries(
       counterpartyName: line.counterpartyName,
       rxSerialWritten: false,
       emergency: false,
+    });
+  }
+}
+
+/**
+ * Correct purchase rows whose receipt movements have been reversed. The original
+ * witness remains part of the audit trail; a reversal is an operational correction,
+ * not a second purchase that requires another witness signature.
+ */
+export async function appendControlledPurchaseReversals(
+  db: ScopedDb,
+  input: {
+    organizationId: string;
+    branchId: string;
+    recordedByUserId: string;
+    reason: string;
+    reversedMovementIds: readonly string[];
+  }
+) {
+  if (input.reversedMovementIds.length === 0) return;
+  const purchases = await db.pharmacyControlledRegisterEntry.findMany({
+    where: {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      entryKind: 'PURCHASE',
+      stockMovementId: { in: input.reversedMovementIds },
+    },
+    orderBy: { serial: 'asc' },
+  });
+  for (const purchase of purchases) {
+    await appendControlledCorrection(db, {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      correctsEntryId: purchase.id,
+      correctionReason: input.reason,
+      quantityCanonicalUnits: 0,
+      recordedByUserId: input.recordedByUserId,
+      witnessedByUserId: purchase.witnessedByUserId,
+      signatureRef: purchase.signatureRef ?? `reversal:${purchase.id}`,
     });
   }
 }

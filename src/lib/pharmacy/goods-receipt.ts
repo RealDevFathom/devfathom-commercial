@@ -25,7 +25,10 @@
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
-import { appendControlledPurchaseEntries } from './controlled-register';
+import {
+  appendControlledPurchaseEntries,
+  appendControlledPurchaseReversals,
+} from './controlled-register';
 import {
   clearLockout,
   isLockedOut,
@@ -498,6 +501,14 @@ export async function reverseGoodsReceipt(
     movementIds: posted.map((movement) => movement.id),
     reason: input.reason,
     at: input.at,
+  });
+
+  await appendControlledPurchaseReversals(db, {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    recordedByUserId: scope.actorId,
+    reason: input.reason,
+    reversedMovementIds: posted.map((movement) => movement.id),
   });
 
   await db.pharmacyGoodsReceipt.update({
