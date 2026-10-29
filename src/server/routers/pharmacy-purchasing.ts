@@ -42,6 +42,7 @@ import {
   assertRequisitionTransition,
   assertSupplierEligible,
   compareQuotes,
+  effectiveCostPerSellableUnit,
   landedCost,
   PharmacyPurchasingError,
   SEGREGATION_OF_DUTIES_POLICY,
@@ -526,6 +527,7 @@ const purchasingRouter = router({
                   moqPacks: z.number().int().positive().default(1),
                   leadTimeDays: z.number().int().nonnegative().default(0),
                   minimumExpiryDays: z.number().int().nonnegative().default(0),
+                  forecastSellThroughPacks: z.number().int().positive(),
                   canonicalUnitsPerPack: z.number().int().positive(),
                 })
                 .strict()
@@ -601,6 +603,7 @@ const purchasingRouter = router({
           moqPacks: line.moqPacks,
           leadTimeDays: line.leadTimeDays,
           minimumExpiryDays: line.minimumExpiryDays,
+          forecastSellThroughPacks: line.forecastSellThroughPacks ?? requisitionLine.quantityPacks,
         }));
         return {
           requisitionLineId: requisitionLine.id,
@@ -646,6 +649,9 @@ const purchasingRouter = router({
                   rebateBps: bps.default(0),
                   taxBps: bps.default(0),
                   taxCreditable: z.boolean().default(false),
+                  forecastSellThroughPacks: z.number().int().positive().optional(),
+                  minimumExpiryDays: z.number().int().nonnegative().optional(),
+                  leadTimeDays: z.number().int().nonnegative().optional(),
                 })
                 .strict()
             )
@@ -856,6 +862,15 @@ const purchasingRouter = router({
             ...line,
             purchaseOrderLineId: order.lines[index]!.id,
             medicineId: order.lines[index]!.medicineId,
+            ...(order.lines[index]!.forecastSellThroughPacks
+              ? effectiveCostPerSellableUnit({
+                  costMinor: line.landedCostMinor,
+                  paidPacks: order.lines[index]!.orderedPacks,
+                  bonusPacks: order.lines[index]!.bonusPacks,
+                  canonicalUnitsPerPack: order.lines[index]!.canonicalUnitsPerPack,
+                  forecastSellThroughPacks: order.lines[index]!.forecastSellThroughPacks!,
+                })
+              : {}),
           })),
         };
       } catch (error) {

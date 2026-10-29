@@ -7,6 +7,7 @@ import {
   assertSupplierEligible,
   compareQuotes,
   costPurchaseOrderLine,
+  effectiveCostPerSellableUnit,
   landedCost,
   MICRO,
   type QuoteCandidate,
@@ -301,7 +302,30 @@ describe('PUR-02 quote comparison', () => {
     moqPacks: 1,
     leadTimeDays: 3,
     minimumExpiryDays: 365,
+    forecastSellThroughPacks: 12,
   };
+
+  it('treats 10+1 as 9.1% equivalent only when the bonus is forecast to sell', () => {
+    const allSell = effectiveCostPerSellableUnit({
+      costMinor: 100_000,
+      paidPacks: 10,
+      bonusPacks: 1,
+      canonicalUnitsPerPack: 1,
+      forecastSellThroughPacks: 11,
+    });
+    const bonusExpires = effectiveCostPerSellableUnit({
+      costMinor: 100_000,
+      paidPacks: 10,
+      bonusPacks: 1,
+      canonicalUnitsPerPack: 1,
+      forecastSellThroughPacks: 10,
+    });
+
+    expect(allSell.effectiveUnitCostMicroMinor).toBe(9_090_909_091);
+    expect(allSell.atRiskBonusPacks).toBe(0);
+    expect(bonusExpires.effectiveUnitCostMicroMinor).toBe(10_000 * MICRO);
+    expect(bonusExpires.atRiskBonusPacks).toBe(1);
+  });
 
   it('ranks by effective landed unit cost and explains every position', () => {
     const ranking = compareQuotes({
@@ -344,7 +368,7 @@ describe('PUR-02 quote comparison', () => {
       1_000 * MICRO,
     ]);
     expect(ranking[0]!.reasons).toContainEqual(
-      'Scheme adds 2 free packs, lowering the unit cost without adding revenue.'
+      'Scheme adds 2 free packs and the configured forecast sells all before expiry.'
     );
     expect(ranking[1]!.reasons).toContainEqual('Trade discount of 15.00% off list.');
     expect(ranking.every((row) => row.reasons.length > 0)).toBe(true);

@@ -11860,8 +11860,10 @@ model PharmacyQuoteLine {
   leadTimeDays          Int      @default(0)
   /// Shortest remaining shelf life the supplier will ship, in days.
   minimumExpiryDays     Int      @default(0)
-  canonicalUnitsPerPack Int
-  createdAt             DateTime @default(now())
+  /// Configured demand forecast through the offered expiry window.
+  forecastSellThroughPacks Int?
+  canonicalUnitsPerPack    Int
+  createdAt                DateTime @default(now())
 
   quote           PharmacyQuote           @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict)
   requisitionLine PharmacyRequisitionLine @relation(fields: [organizationId, requisitionLineId], references: [organizationId, id], onDelete: Restrict)
@@ -11934,7 +11936,11 @@ model PharmacyPurchaseOrderLine {
   taxBps                Int      @default(0)
   /// A creditable input tax is recovered and so is not stock cost.
   taxCreditable         Boolean  @default(false)
-  createdAt             DateTime @default(now())
+  /// Quote-time comparison assumptions retained on the draft for review.
+  forecastSellThroughPacks Int?
+  minimumExpiryDays        Int?
+  leadTimeDays             Int?
+  createdAt                DateTime @default(now())
 
   purchaseOrder       PharmacyPurchaseOrder        @relation(fields: [organizationId, purchaseOrderId], references: [organizationId, id], onDelete: Restrict)
   medicine            Medicine                     @relation(fields: [medicineId], references: [id], onDelete: Restrict)
