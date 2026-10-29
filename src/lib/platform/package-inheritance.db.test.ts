@@ -50,6 +50,14 @@ type Deps = {
 };
 
 let deps: Deps;
+const additionalBaselineKeys = ['api', 'identity', 'team'] as const;
+let originalBaselineRows: Array<{
+  id: string;
+  key: string;
+  band: import('@/generated/prisma/enums').PlatformModuleBand;
+  vertical: import('@/generated/prisma/enums').OrganizationVertical | null;
+  active: boolean;
+}> = [];
 
 // Package A enables a1..a6; package B enables b1,b2; `free` is in no package.
 const MODULE_NAMES = ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'b1', 'b2', 'free'] as const;
@@ -88,6 +96,21 @@ describeIfDatabase('package-module inheritance, against PostgreSQL', () => {
     };
 
     await deps.withPlatformDb(async (db) => {
+      await syncPlatformCatalog(db);
+      // Reproduce the legacy/operator baseline catalog reported in PR683.
+      // Fresh code defaults api/identity to PLATFORM and has no team row;
+      // sync deliberately preserves persisted operator customizations.
+      originalBaselineRows = await db.platformModule.findMany({
+        where: { key: { in: [...additionalBaselineKeys] } },
+        select: { id: true, key: true, band: true, vertical: true, active: true },
+      });
+      for (const key of additionalBaselineKeys) {
+        await db.platformModule.upsert({
+          where: { key },
+          create: { key, name: key, category: 'inheritance-test', band: 'BASELINE' },
+          update: { band: 'BASELINE', vertical: null, active: true },
+        });
+      }
       await syncPlatformCatalog(db);
       for (const name of MODULE_NAMES) {
         await db.platformModule.create({
@@ -151,8 +174,33 @@ describeIfDatabase('package-module inheritance, against PostgreSQL', () => {
       await db.platformModule.deleteMany({
         where: { id: { in: MODULE_NAMES.map((name) => moduleId(name)) } },
       });
+      for (const key of additionalBaselineKeys) {
+        const original = originalBaselineRows.find((row) => row.key === key);
+        if (original) {
+          await db.platformModule.update({
+            where: { id: original.id },
+            data: {
+              band: original.band,
+              vertical: original.vertical,
+              active: original.active,
+            },
+          });
+        } else {
+          await db.platformModule.deleteMany({ where: { key } });
+        }
+      }
     });
   }, 60_000);
+
+  it('preserves explicit api, identity and team baselines through catalog sync', async () => {
+    const entitlements = await resolve(ORG_AB);
+    for (const key of additionalBaselineKeys) {
+      expect(entitlements.modules.find((module) => module.key === key)).toMatchObject({
+        enabled: true,
+        source: 'BASELINE',
+      });
+    }
+  });
 
   it('(a) resolves package modules as PACKAGE with zero OrganizationModule rows', async () => {
     const rows = await deps.withPlatformDb((db) =>
@@ -165,6 +213,9 @@ describeIfDatabase('package-module inheritance, against PostgreSQL', () => {
     expect(enabled).toEqual(
       [
         'admin',
+        'api',
+        'identity',
+        'team',
         'dashboard',
         'notifications',
         ...(['a1', 'a2', 'a3', 'a4', 'a5', 'a6'] as ModuleName[]).map(moduleKey),
@@ -187,7 +238,16 @@ describeIfDatabase('package-module inheritance, against PostgreSQL', () => {
 
     const entitlements = await resolve(ORG_AB);
     expect([...entitlements.enabledModules].sort()).toEqual(
-      ['admin', 'dashboard', 'notifications', moduleKey('b1'), moduleKey('b2')].sort()
+      [
+        'admin',
+        'api',
+        'dashboard',
+        'identity',
+        'notifications',
+        'team',
+        moduleKey('b1'),
+        moduleKey('b2'),
+      ].sort()
     );
     for (const name of ['a1', 'a2', 'a3', 'a4', 'a5', 'a6'] as ModuleName[]) {
       expect(entitlements.enabledModules).not.toContain(moduleKey(name));

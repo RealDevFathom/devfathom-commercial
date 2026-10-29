@@ -10,7 +10,10 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 const originalUrl = process.env.DATABASE_URL;
 const configuredUrl = process.env.M8_TEST_OWNER_DATABASE_URL ?? originalUrl;
 const suffix = randomUUID().replaceAll('-', '');
-const runtimeRole = `h1_runtime_${suffix}`;
+const providedRuntimeUrl = process.env.M8_TEST_RUNTIME_DATABASE_URL;
+const runtimeRole = providedRuntimeUrl
+  ? decodeURIComponent(new URL(providedRuntimeUrl).username)
+  : `h1_runtime_${suffix}`;
 let owner: Client;
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
 let authorize: typeof import('./solo-approval').authorizeSoloApproval;
@@ -27,20 +30,35 @@ beforeAll(async () => {
     throw new Error('DATABASE_URL is required for solo approval integration tests');
   owner = new Client({ connectionString: configuredUrl });
   await owner.connect();
-  // Use the configured database, with a temporary NOLOGIN/NOBYPASSRLS role.
-  // No password or connection string is ever printed.
-  await owner.query(`CREATE ROLE "${runtimeRole}" NOLOGIN NOSUPERUSER NOBYPASSRLS`);
-  await owner.query(`GRANT USAGE ON SCHEMA public TO "${runtimeRole}"`);
-  await owner.query(
-    `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${runtimeRole}"`
-  );
-  await owner.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "${runtimeRole}"`);
-  const runtime = new URL(configuredUrl);
-  runtime.searchParams.set(
-    'options',
-    `${runtime.searchParams.get('options') ?? ''} -c role=${runtimeRole}`.trim()
-  );
+  await owner.query("SELECT set_config('app.is_platform_admin', 'true', false)");
+  // Prefer a real restricted app login; retain temporary-role support for manual runs.
+  if (!providedRuntimeUrl) {
+    // Use the configured database, with a temporary NOLOGIN/NOBYPASSRLS role.
+    // No password or connection string is ever printed.
+    await owner.query(`CREATE ROLE "${runtimeRole}" NOLOGIN NOSUPERUSER NOBYPASSRLS`);
+    await owner.query(`GRANT USAGE ON SCHEMA public TO "${runtimeRole}"`);
+    await owner.query(
+      `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${runtimeRole}"`
+    );
+    await owner.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "${runtimeRole}"`);
+  }
+  const runtime = new URL(providedRuntimeUrl ?? configuredUrl);
+  if (!providedRuntimeUrl)
+    runtime.searchParams.set(
+      'options',
+      `${runtime.searchParams.get('options') ?? ''} -c role=${runtimeRole}`.trim()
+    );
   process.env.DATABASE_URL = runtime.toString();
+  const probe = new Client({ connectionString: runtime.toString() });
+  await probe.connect();
+  try {
+    const {
+      rows: [role],
+    } = await probe.query('SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user');
+    expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
+  } finally {
+    await probe.end();
+  }
   ({ withTenantDb } = await import('@/lib/tenancy/scoped-db'));
   ({ authorizeSoloApproval: authorize } = await import('./solo-approval'));
   ({ can } = await import('@/lib/abac'));
@@ -60,8 +78,10 @@ afterAll(async () => {
   if (owner) {
     // Immutable clinical/audit evidence is intentionally retained as isolated,
     // randomly named fixtures, following the existing purchasing DB suites.
-    await owner.query(`DROP OWNED BY "${runtimeRole}"`);
-    await owner.query(`DROP ROLE "${runtimeRole}"`);
+    if (!providedRuntimeUrl) {
+      await owner.query(`DROP OWNED BY "${runtimeRole}"`);
+      await owner.query(`DROP ROLE "${runtimeRole}"`);
+    }
     await owner.end();
   }
 });
@@ -1299,10 +1319,10 @@ it('offers direct-purchase approvers by persisted procurement permission and bra
 
 // Independent tenant-scoped connections make lock waits and MVCC snapshots real.
 async function tenantConnection(f: Fixture, isolation = 'READ COMMITTED') {
-  const client = new Client({ connectionString: configuredUrl });
+  const client = new Client({ connectionString: providedRuntimeUrl ?? configuredUrl });
   await client.connect();
   await client.query(`BEGIN ISOLATION LEVEL ${isolation}`);
-  await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
+  if (!providedRuntimeUrl) await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
   await client.query(
     `SELECT set_config('app.current_organization_id', $1, true), set_config('app.current_branch_id', $2, true)`,
     [f.org, f.branch]
@@ -1945,7 +1965,7 @@ it('PV READY database guard rechecks a concurrent staff activation and holds the
     await expect(approve(approval)).rejects.toMatchObject({ code: '23514' });
     await approval.query('ROLLBACK');
     await approval.query('BEGIN');
-    await approval.query(`SET LOCAL ROLE "${runtimeRole}"`);
+    if (!providedRuntimeUrl) await approval.query(`SET LOCAL ROLE "${runtimeRole}"`);
     await approval.query(
       `SELECT set_config('app.current_organization_id',$1,true), set_config('app.current_branch_id',$2,true)`,
       [f.org, f.branch]

@@ -222,11 +222,11 @@ describeIfDatabase('pharmacy medicine PostgreSQL RLS and immutability', () => {
   it('records p95 catalog search latency on a 20k-row tenant fixture', async () => {
     await client.query(
       `INSERT INTO pharmacy_medicines
-        (id,"productName","brandName","productFamily","updatedAt")
-       SELECT 'perf_' || $1 || '_' || n, 'Generic ' || n, 'Brand ' || n,
+        (id,"organizationId","productName","brandName","productFamily","updatedAt")
+       SELECT 'perf_' || $1 || '_' || n, $2, 'Generic ' || n, 'Brand ' || n,
               'PHARMACEUTICAL', now()
          FROM generate_series(1,20000) AS n`,
-      [suffix]
+      [suffix, orgA]
     );
     const samples: number[] = [];
     for (let iteration = 0; iteration < 12; iteration += 1) {

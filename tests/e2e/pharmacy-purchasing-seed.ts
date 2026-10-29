@@ -107,15 +107,15 @@ async function main() {
       if (missing.length > 0) {
         throw new Error(`Catalog is missing ${missing.join(', ')} after a sync.`);
       }
-      for (const module of modules) {
+      for (const catalogModule of modules) {
         await tx.organizationModule.upsert({
           where: {
-            organizationId_moduleId: { organizationId: organization.id, moduleId: module.id },
+            organizationId_moduleId: { organizationId: organization.id, moduleId: catalogModule.id },
           },
           update: { status: 'ENABLED', startsAt: day(-1), expiresAt: null },
           create: {
             organizationId: organization.id,
-            moduleId: module.id,
+            moduleId: catalogModule.id,
             status: 'ENABLED',
             startsAt: day(-1),
           },

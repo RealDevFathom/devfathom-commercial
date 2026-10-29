@@ -10,6 +10,8 @@ import { receiveLot } from './stock-ledger';
 import { applyPharmacyTender, openPharmacyDrawer, refundPharmacyTender } from './settlement';
 
 const enabled = process.env.PHARMACY_E2E === '1' && !!process.env.PHARMACY_E2E_DATABASE_URL;
+// Run services on the same disposable target that the safety assertions verify.
+if (enabled) process.env.DATABASE_URL = process.env.PHARMACY_E2E_DATABASE_URL;
 const scope = {
   organizationId: fixture.organizationId,
   branchId: fixture.branchId,
