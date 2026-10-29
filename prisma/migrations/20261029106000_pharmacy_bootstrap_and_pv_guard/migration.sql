@@ -1,14 +1,14 @@
 BEGIN;
 SELECT set_config('app.is_platform_admin', 'true', true);
 -- Provisioning previously left the named administrator on the system admin role.
--- Only a sole tenant user on the system admin role proves a bootstrap owner.
+-- Only a sole active tenant user on the system admin role proves a bootstrap owner.
 -- A staffed tenant or an existing proprietor must never be promoted by inference.
 CREATE TEMP TABLE pharmacy_bootstrap_owners ON COMMIT DROP AS
 SELECT u.id FROM users u
 JOIN organizations o ON o.id=u."organizationId" AND o.vertical='PHARMACY'
 JOIN organization_roles r ON r.id=u."organizationRoleId" AND r."organizationId"=o.id
 WHERE u.role='ADMIN' AND r.key='admin' AND r."isSystem"
-AND NOT EXISTS (SELECT 1 FROM users other WHERE other."organizationId"=o.id AND other.id<>u.id);
+AND NOT EXISTS (SELECT 1 FROM users other WHERE other."organizationId"=o.id AND other.id<>u.id AND other.status='ACTIVE');
 -- Preserve explicit DENYs when binding that bootstrap identity to the owner role.
 INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt")
 SELECT 'pbd_'||md5(u.id||p.capability),u."organizationId",u.id,p.capability,'DENY','Preserved bootstrap role denial',now()

@@ -1267,10 +1267,11 @@ const purchasingRouter = router({
           organizationId: scope.organizationId,
           branchId: scope.branchId,
         },
-        select: { purchaseOrder: { select: { branchId: true } } },
+        select: {
+          purchaseOrder: { select: { branchId: true, requisitionId: true, quoteId: true } },
+        },
       });
-      if (receipt?.purchaseOrder?.branchId)
-        await receivingScope(ctx, receipt.purchaseOrder.branchId);
+      if (receipt?.purchaseOrder) await assertOrderBranches(ctx, receipt.purchaseOrder);
       const attempt = await ctx.db.$transaction((tx) =>
         verifyControlledPurchaseWitness(
           txDb(tx),

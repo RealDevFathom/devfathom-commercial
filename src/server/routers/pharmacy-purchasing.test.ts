@@ -1067,6 +1067,38 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.update).not.toHaveBeenCalled();
   });
 
+  it.each(['requisition', 'quote'] as const)(
+    'refuses posting a central order linked to an unassigned %s branch before side effects',
+    async (linked) => {
+      db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_a' }]);
+      db.pharmacyGoodsReceipt.findFirst.mockResolvedValue({
+        purchaseOrder: {
+          branchId: null,
+          requisitionId: linked === 'requisition' ? 'req' : null,
+          quoteId: linked === 'quote' ? 'quote' : null,
+        },
+      });
+      db.pharmacyRequisition.findFirst.mockResolvedValue({ id: 'req', branchId: 'branch_b' });
+      db.pharmacyQuote.findFirst.mockResolvedValue({
+        id: 'quote',
+        requisitionId: 'req',
+        requisition: { branchId: 'branch_b' },
+      });
+      await expect(
+        caller().postGoodsReceipt({ branchId: 'branch_a', goodsReceiptId: 'receipt' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledWith({
+        where: { id: 'receipt', organizationId: 'org_a', branchId: 'branch_a' },
+        select: {
+          purchaseOrder: { select: { branchId: true, requisitionId: true, quoteId: true } },
+        },
+      });
+      expect(db.$transaction).not.toHaveBeenCalled();
+      expect(db.pharmacyPurchaseOrder.update).not.toHaveBeenCalled();
+      expect(db.pharmacyGoodsReceipt.update).not.toHaveBeenCalled();
+    }
+  );
+
   it('derives canonical units and the landed unit cost instead of trusting the payload', async () => {
     await caller().createGoodsReceipt(RECEIPT);
     const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];

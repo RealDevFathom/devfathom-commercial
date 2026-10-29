@@ -119,144 +119,154 @@ const url = process.env.DATABASE_URL;
   }
 );
 
-it('migrates real bootstrap admin identities, preserves DENYs and manual assignment provenance, and safely repeats the owner migration', async () => {
-  expect(url).toBeTruthy();
-  const { readFile } = await import('node:fs/promises');
-  // Replacing migration functions requires their schema owner, while the
-  // runtime behavior above continues to execute under the restricted URL.
-  const migrationUrl = process.env.M8_TEST_OWNER_DATABASE_URL ?? url;
-  assertDisposableRlsDatabase(migrationUrl!);
-  const db = new pg.Client({ connectionString: migrationUrl });
-  await db.connect();
-  const org = `bootstrap_${randomUUID().replaceAll('-', '')}`;
-  const adminRole = `${org}_admin`,
-    user = `${org}_user`,
-    branch = `${org}_branch`;
-  const migration = async (name: string) =>
-    (await readFile(`prisma/migrations/${name}/migration.sql`, 'utf8'))
-      .replace(/^BEGIN;\s*/m, '')
-      .replace(/^COMMIT;\s*/m, '');
-  try {
-    await db.query('BEGIN');
-    await db.query("SELECT set_config('app.is_platform_admin','true',true)");
-    await db.query(
-      `INSERT INTO organizations (id,slug,"legalName","displayName",vertical,"updatedAt") VALUES ($1,$1,$1,$1,'PHARMACY',now())`,
-      [org]
-    );
-    await db.query(
-      `INSERT INTO organization_departments (id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,'PHARMACY','Pharmacy',now())`,
-      [`${org}_department`, org]
-    );
-    await db.query(
-      `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,'admin','Bootstrap administrator',true,now())`,
-      [adminRole, org]
-    );
-    await db.query(
-      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'*','ALLOW'),($4,$2,$3,'pharmacy:safety','DENY')`,
-      [`${org}_allow`, org, adminRole, `${org}_deny`]
-    );
-    await db.query(
-      `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,role,department,title,"updatedAt") VALUES ($1,$2,$3,$1,$1,'ADMIN','PHARMACY','Organization administrator',now())`,
-      [user, org, adminRole]
-    );
-    await db.query(
-      `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode","updatedAt") VALUES ($1,$2,'MAIN','Main','Road','Lahore','PK-PB',now())`,
-      [branch, org]
-    );
-    await db.query(
-      `INSERT INTO pharmacy_branch_assignments (id,"organizationId","branchId","userId",active,"ownerManaged","updatedAt") VALUES ($1,$2,$3,$4,true,false,now())`,
-      [`${org}_manual`, org, branch, user]
-    );
-    // A second tenant already has a proprietor: its ordinary system admin
-    // must retain the admin role, DENYs and manually assigned branch scope.
-    const staffed = `${org}_staffed`;
-    await db.query(
-      `INSERT INTO organizations (id,slug,"legalName","displayName",vertical,"updatedAt") VALUES ($1,$1,$1,$1,'PHARMACY',now())`,
-      [staffed]
-    );
-    await db.query(
-      `INSERT INTO organization_departments (id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,'PHARMACY','Pharmacy',now())`,
-      [`${staffed}_dept`, staffed]
-    );
-    await db.query(
-      `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$3,'admin','Admin',true,now()),($2,$3,'owner','Owner',true,now())`,
-      [`${staffed}_admin`, `${staffed}_owner`, staffed]
-    );
-    await db.query(
-      `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,role,department,title,"updatedAt") VALUES ($1,$3,$4,$1,$1,'ADMIN','PHARMACY','Admin',now()),($2,$3,$5,$2,$2,'EMPLOYEE','PHARMACY','Proprietor',now())`,
-      [
-        `${staffed}_admin_user`,
-        `${staffed}_owner_user`,
-        staffed,
-        `${staffed}_admin`,
-        `${staffed}_owner`,
-      ]
-    );
-    await db.query(
-      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:safety','DENY')`,
-      [`${staffed}_deny`, staffed, `${staffed}_admin`]
-    );
-    await db.query(await migration('20261029106000_pharmacy_bootstrap_and_pv_guard'));
-    expect(
-      (
-        await db.query(`SELECT "organizationRoleId" FROM users WHERE id=$1`, [
+it.each(['INACTIVE', 'ON_LEAVE', 'INVITED'] as const)(
+  'migrates a bootstrap admin with %s former staff, preserves DENYs and manual assignments, and refuses staffed promotion',
+  async (formerStatus) => {
+    expect(url).toBeTruthy();
+    const { readFile } = await import('node:fs/promises');
+    // Replacing migration functions requires their schema owner, while the
+    // runtime behavior above continues to execute under the restricted URL.
+    const migrationUrl = process.env.M8_TEST_OWNER_DATABASE_URL ?? url;
+    assertDisposableRlsDatabase(migrationUrl!);
+    const db = new pg.Client({ connectionString: migrationUrl });
+    await db.connect();
+    const org = `bootstrap_${randomUUID().replaceAll('-', '')}`;
+    const adminRole = `${org}_admin`,
+      user = `${org}_user`,
+      branch = `${org}_branch`;
+    const migration = async (name: string) =>
+      (await readFile(`prisma/migrations/${name}/migration.sql`, 'utf8'))
+        .replace(/^BEGIN;\s*/m, '')
+        .replace(/^COMMIT;\s*/m, '');
+    try {
+      await db.query('BEGIN');
+      await db.query("SELECT set_config('app.is_platform_admin','true',true)");
+      await db.query(
+        `INSERT INTO organizations (id,slug,"legalName","displayName",vertical,"updatedAt") VALUES ($1,$1,$1,$1,'PHARMACY',now())`,
+        [org]
+      );
+      await db.query(
+        `INSERT INTO organization_departments (id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,'PHARMACY','Pharmacy',now())`,
+        [`${org}_department`, org]
+      );
+      await db.query(
+        `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,'admin','Bootstrap administrator',true,now())`,
+        [adminRole, org]
+      );
+      await db.query(
+        `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'*','ALLOW'),($4,$2,$3,'pharmacy:safety','DENY')`,
+        [`${org}_allow`, org, adminRole, `${org}_deny`]
+      );
+      await db.query(
+        `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,role,department,title,"updatedAt") VALUES ($1,$2,$3,$1,$1,'ADMIN','PHARMACY','Organization administrator',now())`,
+        [user, org, adminRole]
+      );
+      await db.query(
+        `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode","updatedAt") VALUES ($1,$2,'MAIN','Main','Road','Lahore','PK-PB',now())`,
+        [branch, org]
+      );
+      await db.query(
+        `INSERT INTO pharmacy_branch_assignments (id,"organizationId","branchId","userId",active,"ownerManaged","updatedAt") VALUES ($1,$2,$3,$4,true,false,now())`,
+        [`${org}_manual`, org, branch, user]
+      );
+      // Non-active colleagues must not prevent the runtime-eligible solo owner
+      // from receiving the bootstrap owner role during migration.
+      await db.query(
+        `INSERT INTO users (id,"organizationId",name,email,role,status,department,title,"updatedAt") VALUES ($1,$2,$1,$1,'EMPLOYEE',$3,'PHARMACY','Former staff',now())`,
+        [`${org}_former`, org, formerStatus]
+      );
+      // A second tenant already has a proprietor: its ordinary system admin
+      // must retain the admin role, DENYs and manually assigned branch scope.
+      const staffed = `${org}_staffed`;
+      await db.query(
+        `INSERT INTO organizations (id,slug,"legalName","displayName",vertical,"updatedAt") VALUES ($1,$1,$1,$1,'PHARMACY',now())`,
+        [staffed]
+      );
+      await db.query(
+        `INSERT INTO organization_departments (id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,'PHARMACY','Pharmacy',now())`,
+        [`${staffed}_dept`, staffed]
+      );
+      await db.query(
+        `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$3,'admin','Admin',true,now()),($2,$3,'owner','Owner',true,now())`,
+        [`${staffed}_admin`, `${staffed}_owner`, staffed]
+      );
+      await db.query(
+        `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,role,department,title,"updatedAt") VALUES ($1,$3,$4,$1,$1,'ADMIN','PHARMACY','Admin',now()),($2,$3,$5,$2,$2,'EMPLOYEE','PHARMACY','Proprietor',now())`,
+        [
           `${staffed}_admin_user`,
-        ])
-      ).rows
-    ).toEqual([{ organizationRoleId: `${staffed}_admin` }]);
-    expect(
-      (
-        await db.query(`SELECT count(*)::int n FROM user_permission_overrides WHERE "userId"=$1`, [
-          `${staffed}_admin_user`,
-        ])
-      ).rows[0].n
-    ).toBe(0);
-    expect(
-      (
-        await db.query(`SELECT "organizationRoleId" FROM users WHERE id=$1`, [
           `${staffed}_owner_user`,
-        ])
-      ).rows
-    ).toEqual([{ organizationRoleId: `${staffed}_owner` }]);
+          staffed,
+          `${staffed}_admin`,
+          `${staffed}_owner`,
+        ]
+      );
+      await db.query(
+        `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:safety','DENY')`,
+        [`${staffed}_deny`, staffed, `${staffed}_admin`]
+      );
+      await db.query(await migration('20261029106000_pharmacy_bootstrap_and_pv_guard'));
+      expect(
+        (
+          await db.query(`SELECT "organizationRoleId" FROM users WHERE id=$1`, [
+            `${staffed}_admin_user`,
+          ])
+        ).rows
+      ).toEqual([{ organizationRoleId: `${staffed}_admin` }]);
+      expect(
+        (
+          await db.query(
+            `SELECT count(*)::int n FROM user_permission_overrides WHERE "userId"=$1`,
+            [`${staffed}_admin_user`]
+          )
+        ).rows[0].n
+      ).toBe(0);
+      expect(
+        (
+          await db.query(`SELECT "organizationRoleId" FROM users WHERE id=$1`, [
+            `${staffed}_owner_user`,
+          ])
+        ).rows
+      ).toEqual([{ organizationRoleId: `${staffed}_owner` }]);
 
-    expect(
-      (
-        await db.query(
-          `SELECT r.key,r."isSystem" FROM users u JOIN organization_roles r ON r.id=u."organizationRoleId" WHERE u.id=$1`,
-          [user]
-        )
-      ).rows
-    ).toEqual([{ key: 'owner', isSystem: true }]);
-    expect(
-      (
-        await db.query('SELECT pharmacy_solo_owner_eligible($1,$2,$3) AS eligible', [
-          org,
-          branch,
-          user,
-        ])
-      ).rows[0].eligible
-    ).toBe(true);
-    expect(
-      (
-        await db.query(
-          `SELECT effect,"expiresAt" FROM user_permission_overrides WHERE "userId"=$1 AND capability='pharmacy:safety'`,
-          [user]
-        )
-      ).rows
-    ).toEqual([{ effect: 'DENY', expiresAt: null }]);
-    await db.query(await migration('20261029104000_pharmacy_owner_branch_assignments'));
-    await db.query(await migration('20261029104000_pharmacy_owner_branch_assignments'));
-    await db.query(`UPDATE users SET "organizationRoleId"=NULL WHERE id=$1`, [user]);
-    expect(
-      (
-        await db.query(
-          `SELECT active,"ownerManaged" FROM pharmacy_branch_assignments WHERE id=$1`,
-          [`${org}_manual`]
-        )
-      ).rows
-    ).toEqual([{ active: true, ownerManaged: false }]);
-  } finally {
-    await db.query('ROLLBACK');
-    await db.end();
+      expect(
+        (
+          await db.query(
+            `SELECT r.key,r."isSystem" FROM users u JOIN organization_roles r ON r.id=u."organizationRoleId" WHERE u.id=$1`,
+            [user]
+          )
+        ).rows
+      ).toEqual([{ key: 'owner', isSystem: true }]);
+      expect(
+        (
+          await db.query('SELECT pharmacy_solo_owner_eligible($1,$2,$3) AS eligible', [
+            org,
+            branch,
+            user,
+          ])
+        ).rows[0].eligible
+      ).toBe(true);
+      expect(
+        (
+          await db.query(
+            `SELECT effect,"expiresAt" FROM user_permission_overrides WHERE "userId"=$1 AND capability='pharmacy:safety'`,
+            [user]
+          )
+        ).rows
+      ).toEqual([{ effect: 'DENY', expiresAt: null }]);
+      await db.query(await migration('20261029104000_pharmacy_owner_branch_assignments'));
+      await db.query(await migration('20261029104000_pharmacy_owner_branch_assignments'));
+      await db.query(`UPDATE users SET "organizationRoleId"=NULL WHERE id=$1`, [user]);
+      expect(
+        (
+          await db.query(
+            `SELECT active,"ownerManaged" FROM pharmacy_branch_assignments WHERE id=$1`,
+            [`${org}_manual`]
+          )
+        ).rows
+      ).toEqual([{ active: true, ownerManaged: false }]);
+    } finally {
+      await db.query('ROLLBACK');
+      await db.end();
+    }
   }
-});
+);
