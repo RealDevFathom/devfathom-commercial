@@ -133,10 +133,8 @@ describe('#129 pending-legal-review enforcement', () => {
     const confirmed = confirm(sindh());
     confirmed.ruleSet.code = 'PK-TEST';
     for (const field of fields) {
-      const { pendingLegalReview: _unused, ...rule } = confirmed.ruleSet[field] as Record<
-        string,
-        unknown
-      >;
+      const rule = { ...(confirmed.ruleSet[field] as Record<string, unknown>) };
+      delete rule.pendingLegalReview;
       confirmed.ruleSet[field] = rule;
     }
     expect(() => assertBranchMayOperate(confirmed, action)).not.toThrow();
@@ -191,7 +189,8 @@ describe('#129 stored profile version resolution', () => {
   }
 
   function profile(state = sindh()) {
-    const { ruleSet, auditDenied: _unused, ...value } = state;
+    const { ruleSet, auditDenied, ...value } = state;
+    void auditDenied;
     return { ...value, jurisdictionRuleSet: ruleSet };
   }
 
@@ -222,10 +221,8 @@ describe('#129 stored profile version resolution', () => {
     vi.stubEnv('NODE_ENV', 'production');
     const legacy = sindh();
     for (const field of fields) {
-      const { pendingLegalReview: _unused, ...rule } = legacy.ruleSet[field] as Record<
-        string,
-        unknown
-      >;
+      const rule = { ...(legacy.ruleSet[field] as Record<string, unknown>) };
+      delete rule.pendingLegalReview;
       legacy.ruleSet[field] = rule;
     }
     const { db } = database(profile(legacy), null);

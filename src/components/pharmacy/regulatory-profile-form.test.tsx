@@ -76,9 +76,7 @@ function regulatory(selectedBranchId: string) {
 describe('pharmacy regulatory profile form', () => {
   it('selects the branch jurisdiction in router order and updates it when branches change', async () => {
     fetchRegulatory.mockResolvedValueOnce(regulatory('branch-2'));
-    render(
-      <PharmacyRegulatoryProfileForm initial={regulatory('branch-1')} />
-    );
+    render(<PharmacyRegulatoryProfileForm initial={regulatory('branch-1')} />);
 
     expect(screen.getByLabelText('Province')).toHaveValue('PK-SD');
     expect(

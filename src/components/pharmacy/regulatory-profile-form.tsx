@@ -58,8 +58,7 @@ function provinceCodeForBranch(data: Regulatory, branchId: string) {
   return (
     data.jurisdictions.find(
       (jurisdiction) =>
-        jurisdiction.provinceCode === branchCode ||
-        jurisdiction.provinceCode === `PK-${branchCode}`
+        jurisdiction.provinceCode === branchCode || jurisdiction.provinceCode === `PK-${branchCode}`
     )?.provinceCode ?? ''
   );
 }
