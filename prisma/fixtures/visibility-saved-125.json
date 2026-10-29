@@ -143,18 +143,12 @@
           "nullable": false
         }
       ],
-      "primaryKey": [
-        "id"
-      ],
+      "primaryKey": ["id"],
       "foreignKeys": [
         {
-          "columns": [
-            "packageId"
-          ],
+          "columns": ["packageId"],
           "table": "platform_packages",
-          "references": [
-            "id"
-          ],
+          "references": ["id"],
           "validated": true
         }
       ],
@@ -163,9 +157,7 @@
           "name": "organization_isolation",
           "command": "*",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": "((current_setting('app.is_platform_admin'::text, true) = 'true'::text) OR (id = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text)))",
           "check": "((current_setting('app.is_platform_admin'::text, true) = 'true'::text) OR (id = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text)))"
         }
@@ -244,18 +236,14 @@
           "nullable": false
         }
       ],
-      "primaryKey": [
-        "id"
-      ],
+      "primaryKey": ["id"],
       "foreignKeys": [],
       "policies": [
         {
           "name": "jurisdiction_rules_platform_insert",
           "command": "a",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": null,
           "check": "(current_setting('app.is_platform_admin'::text, true) = 'true'::text)"
         },
@@ -263,9 +251,7 @@
           "name": "jurisdiction_rules_platform_update",
           "command": "w",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": "(current_setting('app.is_platform_admin'::text, true) = 'true'::text)",
           "check": "(current_setting('app.is_platform_admin'::text, true) = 'true'::text)"
         },
@@ -273,9 +259,7 @@
           "name": "jurisdiction_rules_read",
           "command": "r",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": "true",
           "check": null
         }
@@ -344,20 +328,12 @@
           "nullable": false
         }
       ],
-      "primaryKey": [
-        "id"
-      ],
+      "primaryKey": ["id"],
       "foreignKeys": [
         {
-          "columns": [
-            "organizationId",
-            "sourceId"
-          ],
+          "columns": ["organizationId", "sourceId"],
           "table": "pharmacy_migration_sources",
-          "references": [
-            "organizationId",
-            "id"
-          ],
+          "references": ["organizationId", "id"],
           "validated": true
         }
       ],
@@ -366,9 +342,7 @@
           "name": "pharmacy_migration_batches_tenant_insert",
           "command": "a",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": null,
           "check": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))"
         },
@@ -376,9 +350,7 @@
           "name": "pharmacy_migration_batches_tenant_select",
           "command": "r",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))",
           "check": null
         },
@@ -386,9 +358,7 @@
           "name": "pharmacy_migration_batches_tenant_update",
           "command": "w",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))",
           "check": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))"
         }
@@ -467,44 +437,24 @@
           "nullable": false
         }
       ],
-      "primaryKey": [
-        "id"
-      ],
+      "primaryKey": ["id"],
       "foreignKeys": [
         {
-          "columns": [
-            "organizationId",
-            "batchId"
-          ],
+          "columns": ["organizationId", "batchId"],
           "table": "pharmacy_migration_batches",
-          "references": [
-            "organizationId",
-            "id"
-          ],
+          "references": ["organizationId", "id"],
           "validated": true
         },
         {
-          "columns": [
-            "organizationId",
-            "rowId"
-          ],
+          "columns": ["organizationId", "rowId"],
           "table": "pharmacy_migration_rows",
-          "references": [
-            "organizationId",
-            "id"
-          ],
+          "references": ["organizationId", "id"],
           "validated": true
         },
         {
-          "columns": [
-            "organizationId",
-            "signedOffByUserId"
-          ],
+          "columns": ["organizationId", "signedOffByUserId"],
           "table": "users",
-          "references": [
-            "organizationId",
-            "id"
-          ],
+          "references": ["organizationId", "id"],
           "validated": true
         }
       ],
@@ -513,9 +463,7 @@
           "name": "pharmacy_migration_exceptions_tenant_insert",
           "command": "a",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": null,
           "check": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))"
         },
@@ -523,9 +471,7 @@
           "name": "pharmacy_migration_exceptions_tenant_select",
           "command": "r",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))",
           "check": null
         },
@@ -533,9 +479,7 @@
           "name": "pharmacy_migration_exceptions_tenant_update",
           "command": "w",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))",
           "check": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))"
         }
@@ -654,20 +598,12 @@
           "nullable": false
         }
       ],
-      "primaryKey": [
-        "id"
-      ],
+      "primaryKey": ["id"],
       "foreignKeys": [
         {
-          "columns": [
-            "organizationId",
-            "batchId"
-          ],
+          "columns": ["organizationId", "batchId"],
           "table": "pharmacy_migration_batches",
-          "references": [
-            "organizationId",
-            "id"
-          ],
+          "references": ["organizationId", "id"],
           "validated": true
         }
       ],
@@ -676,9 +612,7 @@
           "name": "pharmacy_migration_rows_tenant_insert",
           "command": "a",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": null,
           "check": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))"
         },
@@ -686,9 +620,7 @@
           "name": "pharmacy_migration_rows_tenant_select",
           "command": "r",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))",
           "check": null
         }
@@ -742,18 +674,14 @@
           "nullable": false
         }
       ],
-      "primaryKey": [
-        "id"
-      ],
+      "primaryKey": ["id"],
       "foreignKeys": [],
       "policies": [
         {
           "name": "pharmacy_migration_sources_tenant_insert",
           "command": "a",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": null,
           "check": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))"
         },
@@ -761,9 +689,7 @@
           "name": "pharmacy_migration_sources_tenant_select",
           "command": "r",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))",
           "check": null
         }
@@ -847,18 +773,14 @@
           "nullable": false
         }
       ],
-      "primaryKey": [
-        "id"
-      ],
+      "primaryKey": ["id"],
       "foreignKeys": [],
       "policies": [
         {
           "name": "tenant_isolation",
           "command": "*",
           "permissive": true,
-          "roles": [
-            "public"
-          ],
+          "roles": ["public"],
           "using": "((current_setting('app.is_platform_admin'::text, true) = 'true'::text) OR (\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text)))",
           "check": "((current_setting('app.is_platform_admin'::text, true) = 'true'::text) OR (\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text)))"
         }

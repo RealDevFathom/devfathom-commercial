@@ -87,6 +87,7 @@ function fixture(
   roleKey?: string
 ) {
   const db = {
+    $queryRaw: vi.fn(async () => []),
     user: {
       count: vi.fn().mockResolvedValue(2),
       findUnique: vi.fn(async () => ({

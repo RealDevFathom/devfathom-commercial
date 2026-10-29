@@ -1,3 +1,4 @@
+import { recordOwnerPinReauthentication } from '@/lib/restaurant/owner-reauthentication';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
@@ -28,7 +29,7 @@ const bodySchema = z.object({
  * ADDS their identity to the evidence record and never changes who is acting.
  * The record pins acting + approving staff, capability, target, reason, device
  * and terminal session, with a SERVER timestamp. A self-approval (approver ==
- * actor) is rejected by the L1 primitive.
+ * actor) requires a fresh PIN and server-verified sole-owner evidence.
  */
 export const POST = withTerminalAuth(async (ctx, request) => {
   const actingStaffProfileId = ctx.session.activeStaffProfileId;
@@ -63,8 +64,30 @@ export const POST = withTerminalAuth(async (ctx, request) => {
     );
   }
 
-  // Validate the co-authorization invariants (distinct identities, etc.) BEFORE
-  // spending a bcrypt compare, so a self-approval fails fast and cheaply.
+  const now = new Date();
+  const auth = await authenticateOperator(ctx.db, {
+    staffProfileId: approvingStaffProfileId,
+    deviceId: ctx.device.id,
+    type,
+    secret,
+    branchId: ctx.device.branchId,
+    now,
+  });
+  if (!auth.ok) {
+    if (auth.reason === 'LOCKED') {
+      return NextResponse.json(
+        { error: "Approving manager's credential is temporarily locked." },
+        { status: 423, headers: { 'Retry-After': String(Math.ceil(auth.retryAfterMs / 1000)) } }
+      );
+    }
+    return NextResponse.json({ error: 'Invalid approving credential.' }, { status: 401 });
+  }
+
+  if (type === 'PIN')
+    await recordOwnerPinReauthentication(ctx.db, approvingStaffProfileId, ctx.device.branchId);
+
+  // Ordinary approval requires distinct identities. The sole-owner exception
+  // is available only after the PIN proof above has been verified on the server.
   let record;
   try {
     record = buildCoAuthorizationRecord({
@@ -84,25 +107,6 @@ export const POST = withTerminalAuth(async (ctx, request) => {
     throw err;
   }
 
-  const now = new Date();
-  const auth = await authenticateOperator(ctx.db, {
-    staffProfileId: approvingStaffProfileId,
-    deviceId: ctx.device.id,
-    branchId: ctx.device.branchId,
-    type,
-    secret,
-    now,
-  });
-  if (!auth.ok) {
-    if (auth.reason === 'LOCKED') {
-      return NextResponse.json(
-        { error: "Approving manager's credential is temporarily locked." },
-        { status: 423, headers: { 'Retry-After': String(Math.ceil(auth.retryAfterMs / 1000)) } }
-      );
-    }
-    return NextResponse.json({ error: 'Invalid approving credential.' }, { status: 401 });
-  }
-
   const created = await ctx.db.restaurantCoAuthorization.create({ data: record });
   // C7 attribution: the actor stays the ACTING operator (approval never changes
   // who acts); the approving manager and the evidence are pinned in metadata.
@@ -117,6 +121,10 @@ export const POST = withTerminalAuth(async (ctx, request) => {
       approvingStaffProfileId: record.approvingStaffProfileId,
       capability: record.capability,
       reason: record.reason,
+      approvalMode:
+        record.actingStaffProfileId === record.approvingStaffProfileId
+          ? 'OWNER_PIN_REAUTHENTICATION'
+          : 'SECOND_OPERATOR',
     },
   });
   return NextResponse.json(

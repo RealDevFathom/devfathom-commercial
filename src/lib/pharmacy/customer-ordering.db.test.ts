@@ -45,14 +45,22 @@ async function insertOrder(
     branchId: string;
     customerId: string;
     userId: string;
+    createdAt: string;
   }
 ) {
   await client.query(
     `INSERT INTO pharmacy_customer_orders
       (id, "organizationId", "branchId", "customerId", "placedByUserId", fulfillment,
        status, "intendedPaymentMethod", "reservationExpiresAt", "createdAt", "updatedAt")
-     VALUES ($1, $2, $3, $4, $5, 'COLLECT', 'PROPOSED', 'CASH', now() + interval '30 minutes', now(), now())`,
-    [input.id, input.organizationId, input.branchId, input.customerId, input.userId]
+     VALUES ($1, $2, $3, $4, $5, 'COLLECT', 'PROPOSED', 'CASH', now() + interval '30 minutes', $6, $6)`,
+    [
+      input.id,
+      input.organizationId,
+      input.branchId,
+      input.customerId,
+      input.userId,
+      input.createdAt,
+    ]
   );
 }
 
@@ -168,6 +176,7 @@ beforeAll(async () => {
       branchId: BRANCH_A,
       customerId: CUSTOMER_A,
       userId: CUSTOMER_USER_A,
+      createdAt: '2026-01-01T00:00:00.000Z',
     });
     await insertOrder(customerA2, {
       id: `order_a2_${suffix}`,
@@ -175,6 +184,7 @@ beforeAll(async () => {
       branchId: BRANCH_A,
       customerId: CUSTOMER_A2,
       userId: CUSTOMER_USER_A2,
+      createdAt: '2026-01-02T00:00:00.000Z',
     });
     await insertOrder(customerA2, {
       id: `order_a2_other_branch_${suffix}`,
@@ -182,6 +192,7 @@ beforeAll(async () => {
       branchId: BRANCH_A2,
       customerId: CUSTOMER_A2,
       userId: CUSTOMER_USER_A2,
+      createdAt: '2026-01-03T00:00:00.000Z',
     });
     await insertOrder(customerB, {
       id: `order_b_${suffix}`,
@@ -189,6 +200,7 @@ beforeAll(async () => {
       branchId: BRANCH_B,
       customerId: CUSTOMER_B,
       userId: CUSTOMER_USER_B,
+      createdAt: '2026-01-01T00:00:00.000Z',
     });
   } finally {
     await Promise.all([customerA.end(), customerA2.end(), customerB.end()]);
@@ -248,7 +260,7 @@ describeIfDatabase('MKT-03/MKT-05 customer-order RLS', () => {
     const client = await runtime(ORG_A, STAFF_USER_A, BRANCH_A);
     try {
       const rows = await client.query<{ id: string }>(
-        'SELECT id FROM pharmacy_customer_orders ORDER BY id'
+        'SELECT id FROM pharmacy_customer_orders ORDER BY "createdAt" DESC, id ASC'
       );
       expect(rows.rows.map((row) => row.id)).toEqual([`order_a2_${suffix}`, `order_a_${suffix}`]);
       expect(rows.rows.map((row) => row.id)).not.toContain(`order_a2_other_branch_${suffix}`);

@@ -114,13 +114,16 @@ describe('private attachment delivery', () => {
     expect((await read('chat.png')).status).toBe(200);
   });
 
-  it.each(['disabled', 'invalid_configuration'] as const)('preserves accepted %s storage 503 without leaking provider details', async (reason) => {
-    mocks.getUpload.mockRejectedValueOnce(new StorageUnavailableError(reason));
-    const response = await read('ordinary.png');
-    expect(response.status).toBe(503);
-    expect(await response.text()).toBe('Files are unavailable.');
-    expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'ordinary.png');
-  });
+  it.each(['disabled', 'invalid_configuration'] as const)(
+    'preserves accepted %s storage 503 without leaking provider details',
+    async (reason) => {
+      mocks.getUpload.mockRejectedValueOnce(new StorageUnavailableError(reason));
+      const response = await read('ordinary.png');
+      expect(response.status).toBe(503);
+      expect(await response.text()).toBe('Files are unavailable.');
+      expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'ordinary.png');
+    }
+  );
 
   it('retains storage 404 behavior and database error propagation', async () => {
     mocks.getUpload.mockRejectedValueOnce(new Error('storage unavailable'));
