@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   cancelMyCustomerOrder,
   isCustomerOrderableMedicine,
   isCustomerOrderReleaseEligible,
   isCustomerOrderReservationDeadlineEnforced,
+  PharmacyCustomerOrderError,
+  transitionCustomerOrder,
 } from './customer-ordering';
 
 const otc = {
@@ -33,6 +35,37 @@ describe('MKT-03/MKT-05 reservation lifecycle', () => {
   it('keeps a ready collection order recoverable after its proposal deadline', () => {
     expect(isCustomerOrderReleaseEligible('READY_FOR_COLLECTION')).toBe(true);
     expect(isCustomerOrderReservationDeadlineEnforced('READY_FOR_COLLECTION')).toBe(false);
+  });
+
+  it('refuses to expire an overdue ready collection order without releasing its stock', async () => {
+    const releaseReservations = vi.fn();
+    const db = {
+      $queryRaw: async () => [],
+      pharmacyCustomerOrder: {
+        findFirst: async () => ({
+          id: 'order-1',
+          status: 'READY_FOR_COLLECTION',
+          counterSaleId: null,
+          reservationExpiresAt: new Date(Date.now() - 60_000),
+        }),
+        update: vi.fn(),
+      },
+      pharmacyRestockReservation: { updateMany: releaseReservations },
+      pharmacyCustomerOrderEvent: { create: vi.fn() },
+    };
+
+    await expect(
+      transitionCustomerOrder(
+        db as never,
+        { organizationId: 'org-1', branchId: 'branch-1', actorId: 'user-1' },
+        { orderId: 'order-1', action: 'expire' }
+      )
+    ).rejects.toMatchObject({
+      reason: 'INVALID_STATE',
+    } satisfies Partial<PharmacyCustomerOrderError>);
+    expect(releaseReservations).not.toHaveBeenCalled();
+    expect(db.pharmacyCustomerOrder.update).not.toHaveBeenCalled();
+    expect(db.pharmacyCustomerOrderEvent.create).not.toHaveBeenCalled();
   });
 
   it('allows checkout after delivery handoff without making dispatched stock releasable', () => {
