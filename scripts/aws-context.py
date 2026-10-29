@@ -122,7 +122,7 @@ SOURCE_GUARD_EXCEPTIONS = {
 
 
 def category(path):
-    if path in SOURCE_ROUTE_EXCEPTIONS | SOURCE_GUARD_EXCEPTIONS:
+    if path == 'patches/deepmerge@4.3.1.patch' or path in SOURCE_ROUTE_EXCEPTIONS | SOURCE_GUARD_EXCEPTIONS:
         return 'not-required'
 
     parts = PurePosixPath(path).parts

@@ -1,6 +1,7 @@
 FROM oven/bun:1.4.2-slim AS dependencies
 WORKDIR /app
 COPY package.json bun.lock ./
+COPY patches ./patches
 RUN bun install --frozen-lockfile --ignore-scripts
 
 # Bun 1.3.14 segfaulted inside `next build` while it collected page data
@@ -51,6 +52,7 @@ ENV NODE_ENV=production \
     HOSTNAME=0.0.0.0 \
     PORT=3000
 COPY package.json bun.lock prisma.config.ts ./
+COPY patches ./patches
 COPY prisma ./prisma
 # The builder's Prisma engines are resolved for Debian trixie (node:22-trixie-slim).
 RUN . /etc/os-release && test "$VERSION_CODENAME" = trixie

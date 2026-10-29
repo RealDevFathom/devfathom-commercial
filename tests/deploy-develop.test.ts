@@ -43,6 +43,7 @@ function fixture(root: string) {
     '.env.local': 'must not ship',
     'package.json': '{"dependencies":{"prisma":"7","dotenv":"17"}}',
     'bun.lock': 'lock',
+    'patches/deepmerge@4.3.1.patch': readFileSync(resolve('patches/deepmerge@4.3.1.patch'), 'utf8'),
     'prisma.config.ts': '// config',
     'tsconfig.json': readFileSync(resolve('tsconfig.json'), 'utf8'),
     'src/lib/module-catalog.ts': readFileSync(resolve('src/lib/module-catalog.ts'), 'utf8'),
@@ -69,6 +70,7 @@ it('packages staged assets and nested traced dependencies, excluding checkout se
     expect(entries).toContain('./.next/standalone/public/font.txt');
     expect(entries).toContain('./.next/standalone/.assets-staged');
     expect(entries).toContain('./prisma/migrations/001/migration.sql');
+    expect(entries).toContain('./patches/deepmerge@4.3.1.patch');
     expect(entries).not.toMatch(/\.env|root-secret|uploads|innocent-alias|^\.\/node_modules\//m);
     expect(readFileSync(join(root, 'private-uploads/keep.txt'), 'utf8')).toBe('persistent');
   } finally {

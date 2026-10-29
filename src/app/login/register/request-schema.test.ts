@@ -99,3 +99,54 @@ it.each([
   if (!result.success)
     expect(result.error.issues.map((issue) => issue.path)).toContainEqual(['validUntil']);
 });
+
+it.each([undefined, '', '0', '100000'])(
+  'accepts Venue without accommodation times (rooms %s)',
+  (rooms) => {
+    expect(
+      workspaceRequestSchema.safeParse({
+        ...restaurant,
+        vertical: 'hotel',
+        propertyMode: 'Venue',
+        city: 'Lahore',
+        rooms,
+      }).success
+    ).toBe(true);
+  }
+);
+
+it.each(['Hotel', 'Hostel', 'Apartments', 'Resort'])(
+  'requires accommodation facts for %s',
+  (propertyMode) => {
+    const property = {
+      ...restaurant,
+      vertical: 'hotel',
+      propertyMode,
+      city: 'Lahore',
+      rooms: '1',
+      checkIn: '14:00',
+      checkOut: '12:00',
+    };
+    expect(workspaceRequestSchema.safeParse(property).success).toBe(true);
+    for (const change of [{ rooms: '0' }, { rooms: '' }, { checkIn: '' }, { checkOut: '' }])
+      expect(workspaceRequestSchema.safeParse({ ...property, ...change }).success).toBe(false);
+  }
+);
+
+it.each([
+  { rooms: '-1' },
+  { rooms: '100001' },
+  { rooms: '1.5' },
+  { checkIn: '25:00' },
+  { city: '' },
+])('rejects invalid Venue facts %j', (change) => {
+  expect(
+    workspaceRequestSchema.safeParse({
+      ...restaurant,
+      vertical: 'hotel',
+      propertyMode: 'Venue',
+      city: 'Lahore',
+      ...change,
+    }).success
+  ).toBe(false);
+});

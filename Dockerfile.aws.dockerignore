@@ -4,6 +4,7 @@
 !bun.lock
 !next.config.ts
 !package.json
+!patches/deepmerge@4.3.1.patch
 !postcss.config.mjs
 !prisma.config.ts
 !prisma/schema.prisma

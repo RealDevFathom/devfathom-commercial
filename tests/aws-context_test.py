@@ -21,6 +21,10 @@ def initializer_root():
 
 
 class ContextTests(unittest.TestCase):
+    def test_dependency_patch_is_allowed_but_arbitrary_patches_are_not(self):
+        self.assertEqual(context.category("patches/deepmerge@4.3.1.patch"), "not-required")
+        self.assertEqual(context.category("patches/other.patch"), "artifacts-credentials")
+
     def test_comments_strings_templates_and_regex_are_not_imports(self):
         source = r'''// import x from '@/missing-comment';
 /* import('@/missing-block'); require('@/missing-require'); */

@@ -1209,7 +1209,8 @@ it('runs catalogue, dispensing, PV and a controlled prescription sale as the rea
     },
     { skipDrain: true, timeout: 60_000 }
   );
-});
+  // Includes cold router imports, provisioning, and multiple real PIN hashes.
+}, 60_000);
 
 it('offers direct-purchase approvers by persisted procurement permission and branch access, including owners', async () => {
   const f = await fixture('owner');

@@ -308,8 +308,18 @@ async function pair(
 }
 
 async function report(f: Fixture, branchId = f.branchId) {
-  return scoped.withTenantDb(f.organizationId, (db) =>
-    reporting.readWalletReconciliation(db, scope(f, branchId))
+  return scoped.withTenantDb(
+    f.organizationId,
+    async (db) => {
+      // Pin the prepared-query plan: cold fixture cardinality estimates can pick
+      // a quadratic custom plan for the canonical evidence join. Keep the real
+      // query, row cap, and tenant policies, without JIT startup variance.
+      await db.$executeRawUnsafe('SET LOCAL jit = off');
+      await db.$executeRawUnsafe('SET LOCAL plan_cache_mode = force_generic_plan');
+      return reporting.readWalletReconciliation(db, scope(f, branchId));
+    },
+    // The cap regression reads 10,000 persisted rows under enforced RLS.
+    { timeout: 30_000 }
   );
 }
 function currencyRow(result: Report, currency: Currency = 'PKR') {

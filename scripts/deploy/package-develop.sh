@@ -24,6 +24,7 @@ find "$stage/.next/standalone/public" -mindepth 1 -type d \
 cp "$root/scripts/start-standalone.mjs" "$stage/scripts/"
 cp "$root/package.json" "$root/bun.lock" "$root/prisma.config.ts" "$root/tsconfig.json" "$stage/"
 cp -a "$root/prisma" "$stage/prisma"
+cp -a "$root/patches" "$stage/patches"
 # Catalog reconciliation runs outside Next's traced server. Ship its local
 # sources explicitly; postinstall generates src/generated/prisma on the host.
 mkdir -p "$stage/src/lib"

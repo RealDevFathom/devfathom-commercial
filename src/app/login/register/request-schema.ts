@@ -75,14 +75,23 @@ export const workspaceRequestSchema = z
     }
     if (data.vertical === 'hotel') {
       requireField('city');
-      requireField('rooms');
-      requireField('checkIn');
-      requireField('checkOut');
-      if (!/^\d+$/.test(data.rooms) || Number(data.rooms) < 1 || Number(data.rooms) > 100000)
+      const accommodation = data.propertyMode !== 'Venue';
+      if (accommodation) {
+        requireField('rooms');
+        requireField('checkIn');
+        requireField('checkOut');
+      }
+      const minimumRooms = accommodation ? 1 : 0;
+      if (
+        (accommodation || data.rooms) &&
+        (!/^\d+$/.test(data.rooms) ||
+          Number(data.rooms) < minimumRooms ||
+          Number(data.rooms) > 100000)
+      )
         ctx.addIssue({
           code: 'custom',
           path: ['rooms'],
-          message: 'Enter a room count between 1 and 100000.',
+          message: `Enter a room count between ${minimumRooms} and 100000.`,
         });
     }
     for (const key of ['businessDayCloses', 'checkIn', 'checkOut'] as const) {
