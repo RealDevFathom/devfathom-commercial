@@ -137,10 +137,14 @@ function SelectedCatalog({ initial, branchId }: { initial: CatalogView; branchId
   const generation = useRef(0);
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; generation.current += 1; };
+    return () => {
+      mounted.current = false;
+      generation.current += 1;
+    };
   }, []);
   const errorCode = (error: unknown) => (error as { data?: { code?: string } } | null)?.data?.code;
-  const accessDenied = (error: unknown) => ['FORBIDDEN', 'UNAUTHORIZED'].includes(errorCode(error) ?? '');
+  const accessDenied = (error: unknown) =>
+    ['FORBIDDEN', 'UNAUTHORIZED'].includes(errorCode(error) ?? '');
 
   const utils = trpc.useUtils();
   const refresh = async (withInactive = includeInactive) => {
@@ -149,9 +153,14 @@ function SelectedCatalog({ initial, branchId }: { initial: CatalogView; branchId
     setRefreshing(true);
     setRefreshFailed(false);
     try {
-      const next = await utils.hotelProperty.extras.list.fetch({
-        branchId, includeInactive: withInactive, upsellableOnly: false,
-      }, { staleTime: 0 });
+      const next = await utils.hotelProperty.extras.list.fetch(
+        {
+          branchId,
+          includeInactive: withInactive,
+          upsellableOnly: false,
+        },
+        { staleTime: 0 }
+      );
       if (mounted.current && request === generation.current) setView(next);
     } catch (error) {
       if (!mounted.current || request !== generation.current) return;
@@ -167,11 +176,19 @@ function SelectedCatalog({ initial, branchId }: { initial: CatalogView; branchId
     if (accessDenied(error)) setUnavailable(true);
     const fields = validationErrors(error);
     setSaved(null);
-    setErrors(errorCode(error) === 'CONFLICT'
-      ? { form: 'This charge changed elsewhere. Your edits are kept. Cancel and reopen the refreshed charge to review the latest values.' }
-      : errorCode(error) === 'NOT_FOUND'
-        ? { form: 'This charge is no longer available. Refresh the catalog and choose a charge again.' }
-        : Object.keys(fields).length ? fields : { form: error.message });
+    setErrors(
+      errorCode(error) === 'CONFLICT'
+        ? {
+            form: 'This charge changed elsewhere. Your edits are kept. Cancel and reopen the refreshed charge to review the latest values.',
+          }
+        : errorCode(error) === 'NOT_FOUND'
+          ? {
+              form: 'This charge is no longer available. Refresh the catalog and choose a charge again.',
+            }
+          : Object.keys(fields).length
+            ? fields
+            : { form: error.message }
+    );
   };
 
   const startEditing = (extra: CatalogItem | null) => {
@@ -247,12 +264,20 @@ function SelectedCatalog({ initial, branchId }: { initial: CatalogView; branchId
     else create.mutate(fields);
   };
 
-  if (unavailable) return (
-    <SectionCard title="Choose a property again" titleLevel={2}>
-      <p className="text-sm text-text-muted">Your property access changed. Choose a property you can manage to continue.</p>
-      <a href="/hotel/settings/extras" className="mt-3 inline-flex min-h-11 items-center underline">Choose a property</a>
-    </SectionCard>
-  );
+  if (unavailable)
+    return (
+      <SectionCard title="Choose a property again" titleLevel={2}>
+        <p className="text-sm text-text-muted">
+          Your property access changed. Choose a property you can manage to continue.
+        </p>
+        <a
+          href="/hotel/settings/extras"
+          className="mt-3 inline-flex min-h-11 items-center underline"
+        >
+          Choose a property
+        </a>
+      </SectionCard>
+    );
 
   return (
     <div className="space-y-6">
@@ -351,7 +376,12 @@ function SelectedCatalog({ initial, branchId }: { initial: CatalogView; branchId
                     className="min-h-11"
                     disabled={busy}
                     onClick={() =>
-                      setActive.mutate({ branchId, id: extra.id, active: !extra.active, expectedUpdatedAt: extra.updatedAt })
+                      setActive.mutate({
+                        branchId,
+                        id: extra.id,
+                        active: !extra.active,
+                        expectedUpdatedAt: extra.updatedAt,
+                      })
                     }
                   >
                     {extra.active ? 'Retire' : 'Restore'}

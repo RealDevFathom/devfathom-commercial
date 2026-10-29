@@ -13,8 +13,20 @@ const baseline = baselineModule.default || baselineModule;
 const fingerprint = fingerprintModule.default || fingerprintModule;
 const runner = runnerModule.default || runnerModule;
 const paths = baseline.sourceContextPaths(process.cwd());
-const source = Object.fromEntries(paths.map(p => [p, fingerprint.sha256(fs.readFileSync(p))]));
+const source = Object.fromEntries(paths.map((p) => [p, fingerprint.sha256(fs.readFileSync(p))]));
 baseline.verifySourceContext(process.cwd(), source);
-assert.throws(() => baseline.verifySourceContext(process.cwd(), {...source, 'prisma/schema.prisma': '0'.repeat(64)}));
-await assert.rejects(runner.loadPrivateConfig('not-read-without-approval'), /Independent approval required/);
-console.log(JSON.stringify({outcome:'OFFLINE_CONTEXT_OK', sourceFiles:paths.length, tamperRejected:true, missingApprovalRejected:true}));
+assert.throws(() =>
+  baseline.verifySourceContext(process.cwd(), { ...source, 'prisma/schema.prisma': '0'.repeat(64) })
+);
+await assert.rejects(
+  runner.loadPrivateConfig('not-read-without-approval'),
+  /Independent approval required/
+);
+console.log(
+  JSON.stringify({
+    outcome: 'OFFLINE_CONTEXT_OK',
+    sourceFiles: paths.length,
+    tamperRejected: true,
+    missingApprovalRejected: true,
+  })
+);

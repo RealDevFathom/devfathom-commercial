@@ -554,6 +554,7 @@ describe('PUR-07 — the stock action centre transport', () => {
   });
 
   it('refuses a snooze or a dismissal with no reason (§8A invariant 29)', async () => {
+    grant([allow('pharmacy:inventory')]);
     for (const call of [
       () =>
         caller().snoozeSignal({
