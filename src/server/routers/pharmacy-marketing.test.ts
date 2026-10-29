@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   settings: vi.fn(),
   assist: vi.fn(),
   capture: vi.fn(),
+  reply: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -58,8 +59,11 @@ vi.mock('@/lib/ai/growth-recommendations', async () => ({
   )),
   generateGrowthRecommendations: mocks.growthGenerate,
 }));
+vi.mock('@/lib/pharmacy/business-profile', () => ({
+  draftBusinessReviewReply: mocks.reply,
+}));
 import { pharmacyMarketingRouter } from './pharmacy-marketing';
-function caller(role = 'ADMIN') {
+function callerWithContext(role = 'ADMIN') {
   const transactionDb = {
     user: { findFirst: mocks.actor },
     $queryRaw: mocks.branchMatch,
@@ -68,7 +72,7 @@ function caller(role = 'ADMIN') {
   };
   const db = { ...transactionDb, $transaction: mocks.transaction };
   mocks.transaction.mockImplementation((fn) => fn(transactionDb));
-  return pharmacyMarketingRouter.createCaller({
+  const context = {
     db,
     entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-crm'], modules: [] },
     organization: { id: 'org-a' },
@@ -79,7 +83,11 @@ function caller(role = 'ADMIN') {
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
-  } as unknown as TRPCContext);
+  } as unknown as TRPCContext;
+  return { caller: pharmacyMarketingRouter.createCaller(context), context };
+}
+function caller(role = 'ADMIN') {
+  return callerWithContext(role).caller;
 }
 beforeEach(() => {
   vi.resetAllMocks();
@@ -100,6 +108,12 @@ beforeEach(() => {
   mocks.branch.mockResolvedValue({ id: 'branch-a' });
   mocks.history.mockResolvedValue({ campaigns: [] });
   mocks.capture.mockResolvedValue({ prepared: 1 });
+  mocks.reply.mockResolvedValue({
+    available: true,
+    draft: 'Thank you.',
+    posted: false,
+    approved: false,
+  });
 });
 const input = { branchId: 'branch-a' };
 describe('marketing workflow authorization', () => {
@@ -180,6 +194,46 @@ describe('marketing workflow authorization', () => {
     mocks.settings.mockResolvedValue({ askFathomEnabled: true });
     await caller().assist({ ...input, occasion: 'WELCOME', tone: 'FRIENDLY' });
     expect(mocks.assist).toHaveBeenCalledWith({ occasion: 'WELCOME', tone: 'FRIENDLY' });
+  });
+  it('authorizes and audits review drafting without retaining review text', async () => {
+    mocks.settings.mockResolvedValue({ askFathomEnabled: true });
+    const { caller: ownerCaller, context } = callerWithContext();
+    await ownerCaller.draftReviewReply({ ...input, rating: 4, review: 'Helpful.', tone: 'WARM' });
+    expect(mocks.reply).toHaveBeenCalledWith({ rating: 4, review: 'Helpful.', tone: 'WARM' });
+    expect(context.audit.detail).toMatchObject({
+      action: 'business_review_reply_draft',
+      targetId: 'branch-a',
+      skipInput: true,
+      metadata: {
+        providerAttempted: true,
+        outcome: 'draft_generated',
+        approved: false,
+        posted: false,
+      },
+    });
+    expect(JSON.stringify(context.audit.detail)).not.toContain('Helpful.');
+  });
+  it('denies nonowners and foreign branches before review provider use', async () => {
+    mocks.settings.mockResolvedValue({ askFathomEnabled: true });
+    const request = { ...input, rating: 2, review: 'Slow.', tone: 'FORMAL' as const };
+    await expect(caller('STAFF').draftReviewReply(request)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    mocks.branch.mockResolvedValue(null);
+    await expect(caller().draftReviewReply(request)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.reply).not.toHaveBeenCalled();
+  });
+  it('records disabled AI without attempting review generation', async () => {
+    mocks.settings.mockResolvedValue({ askFathomEnabled: false });
+    const { caller: ownerCaller, context } = callerWithContext();
+    await ownerCaller.draftReviewReply({ ...input, rating: 3, review: 'Okay.', tone: 'WARM' });
+    expect(mocks.reply).not.toHaveBeenCalled();
+    expect(context.audit.detail.metadata).toEqual({
+      providerAttempted: false,
+      outcome: 'disabled',
+      approved: false,
+      posted: false,
+    });
   });
 });
 

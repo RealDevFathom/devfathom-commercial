@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { MarketingActionForm } from './action-form';
@@ -14,12 +14,49 @@ const PROFILE_ITEMS = [
 ] as const;
 
 export function BusinessProfilePanel({ branchId }: { branchId: string }) {
+  const storageKey = `pharmacy-business-profile-health:${branchId}`;
+  const [storageLoaded, setStorageLoaded] = useState(false);
+  const [checkedItems, setCheckedItems] = useState<string[]>([]);
   const [photoAge, setPhotoAge] = useState('');
   const [photoTarget, setPhotoTarget] = useState('30');
   const age = Number(photoAge);
   const target = Number(photoTarget);
-  const photoNeedsAttention =
-    photoAge !== '' && Number.isFinite(age) && Number.isFinite(target) && age > target;
+  const hasPhotoValues = photoAge !== '' || photoTarget !== '';
+  const photoValuesValid =
+    photoAge !== '' &&
+    photoTarget !== '' &&
+    Number.isInteger(age) &&
+    Number.isInteger(target) &&
+    age >= 0 &&
+    target >= 1;
+  const photoNeedsAttention = photoValuesValid && age > target;
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null') as {
+          checkedItems?: unknown;
+          photoAge?: unknown;
+          photoTarget?: unknown;
+        } | null;
+        if (Array.isArray(saved?.checkedItems))
+          setCheckedItems(
+            saved.checkedItems.filter((item): item is string => typeof item === 'string')
+          );
+        if (typeof saved?.photoAge === 'string') setPhotoAge(saved.photoAge);
+        if (typeof saved?.photoTarget === 'string') setPhotoTarget(saved.photoTarget);
+      } catch {
+        // Treat malformed device-local data as an empty checklist.
+      } finally {
+        setStorageLoaded(true);
+      }
+    });
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!storageLoaded) return;
+    localStorage.setItem(storageKey, JSON.stringify({ checkedItems, photoAge, photoTarget }));
+  }, [checkedItems, photoAge, photoTarget, storageKey, storageLoaded]);
 
   return (
     <SectionCard title="Google Business Profile health" titleLevel={2}>
@@ -31,13 +68,26 @@ export function BusinessProfilePanel({ branchId }: { branchId: string }) {
             </h3>
             <p className="mt-1 text-sm text-text-muted">
               Check the live profile manually. DevFathom does not change or publish profile data.
+              Your progress is saved on this device for this branch.
             </p>
           </div>
           <fieldset className="space-y-2">
             <legend className="sr-only">Profile health checks</legend>
             {PROFILE_ITEMS.map(([key, label]) => (
               <label key={key} className="flex min-h-11 items-center gap-3 text-sm">
-                <input type="checkbox" className="size-5" /> {label}
+                <input
+                  type="checkbox"
+                  className="size-5"
+                  checked={checkedItems.includes(key)}
+                  onChange={(event) =>
+                    setCheckedItems((current) =>
+                      event.target.checked
+                        ? [...new Set([...current, key])]
+                        : current.filter((item) => item !== key)
+                    )
+                  }
+                />{' '}
+                {label}
               </label>
             ))}
           </fieldset>
@@ -63,7 +113,13 @@ export function BusinessProfilePanel({ branchId }: { branchId: string }) {
               />
             </label>
           </div>
-          {photoAge !== '' && (
+          {hasPhotoValues && !photoValuesValid && (
+            <p role="alert" className="text-sm text-text-body">
+              Enter whole numbers: zero or more days since the latest photo and a target of at least
+              one day.
+            </p>
+          )}
+          {photoValuesValid && (
             <p role="status" className="text-sm text-text-body">
               {photoNeedsAttention
                 ? 'Photo check needs attention against your configured target.'

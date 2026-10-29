@@ -193,6 +193,15 @@ export const pharmacyMarketingRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const resolved = await scope(ctx, input.branchId);
+      ctx.audit.detail = {
+        category: 'PHARMACY_MARKETING',
+        operation: 'CREATE',
+        action: 'business_review_reply_draft',
+        targetType: 'pharmacy_branch',
+        targetId: resolved.branchId,
+        skipInput: true,
+        metadata: { providerAttempted: false, outcome: 'disabled', approved: false, posted: false },
+      };
       const settings = await readAskFathomSettings(ctx.db, resolved.organizationId);
       if (!settings?.askFathomEnabled)
         return {
@@ -201,11 +210,19 @@ export const pharmacyMarketingRouter = router({
           posted: false as const,
           approved: false as const,
         };
-      return draftBusinessReviewReply({
+      ctx.audit.detail.metadata = {
+        providerAttempted: true,
+        outcome: 'unavailable',
+        approved: false,
+        posted: false,
+      };
+      const result = await draftBusinessReviewReply({
         rating: input.rating,
         review: input.review,
         tone: input.tone,
       });
+      ctx.audit.detail.metadata.outcome = result.available ? 'draft_generated' : 'unavailable';
+      return result;
     }),
   growthHistory: protectedProcedure
     .input(marketingScopeInput)

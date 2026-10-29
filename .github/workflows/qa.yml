@@ -155,6 +155,9 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
           fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.20.0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
@@ -279,6 +282,10 @@ jobs:
           CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55678/postgres run vitest-boundary-setup bunx tsx scripts/ci-reserved-tests.ts
           run growth-acceptance-db-start docker run -d --name growth-acceptance-postgres --network host -e POSTGRES_PASSWORD=gate-reserved-ci-only postgres:16 -p 55683 -c listen_addresses=127.0.0.1
           CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55683/postgres run vitest-growth-setup bunx tsx scripts/ci-reserved-tests.ts
+          # The reserved runner writes one JSON report per nested Vitest lane. Make that
+          # contract explicit here so the final assertion can never fail merely because
+          # a runner stopped producing evidence while returning zero.
+          run reserved-json-reports test -s gate/vitest-counter-evidence.json -a -s gate/vitest-growth.json -a -s gate/vitest-platform-concurrency.json -a -s gate/vitest-price-intelligence.json -a -s gate/vitest-returns.json -a -s gate/vitest-boundary-http.json -a -s gate/vitest-growth-ready.json -a -s gate/vitest-growth-sandbox.json
           RESTAURANT_DEMO_RESET_DB=1 run vitest bunx vitest run --exclude=tests/platform-login-accessibility.browser.test.ts --exclude=src/lib/pharmacy/counter-evidence.db.test.ts --exclude=tests/restaurant-growth-ready.db.test.ts --exclude=tests/restaurant-growth-sandbox.db.test.ts --exclude=src/app/api/trpc/transaction-boundary.real-http.test.ts --exclude=src/lib/restaurant/growth-concurrency.db.test.ts --exclude=tests/platform-sensitive-concurrency.db.test.ts --exclude=tests/pharmacy-price-intelligence.integration.test.ts --exclude=src/lib/pharmacy/settlement.returns.db.test.ts --exclude=src/lib/pharmacy/repeat-purchasing.db.test.ts --exclude=src/lib/pharmacy/receipt-identity.db.test.ts --exclude=src/lib/restaurant/catering-money.db.test.ts --exclude=src/lib/restaurant/catering-runtime.db.test.ts --exclude=src/lib/restaurant/catering-endpoints.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
           # test:rls creates its own NOLOGIN role and does not start the app.
           DATABASE_URL="$SUPERUSER_URL" TEST_DATABASE_URL="$SUPERUSER_URL" run test-rls bun run test:rls
@@ -299,6 +306,7 @@ jobs:
           NODE_OPTIONS=--max-old-space-size=8192 run build bun run build
           run browser-dependencies bunx playwright install --with-deps chromium
           run vitest-platform-login bunx tsx scripts/ci-platform-login-a11y.ts
+          run platform-login-json-report test -s gate/vitest-platform-login.json
           for file in infra/*.bicep; do
             name="bicep-$(basename "$file" .bicep)"
             run "$name" az bicep build --file "$file" --outfile "gate/${name}.json"
@@ -398,6 +406,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.20.0
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
