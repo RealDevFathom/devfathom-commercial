@@ -19,11 +19,7 @@ import {
   type TenderDraft,
 } from './tender-attempt-storage';
 
-import {
-  CounterCartPanel,
-  CounterLotOverride,
-  type CounterLotOverrideValue,
-} from './counter-cart';
+import { CounterCartPanel, CounterLotOverride, type CounterLotOverrideValue } from './counter-cart';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import {
   CounterReceiptView,
@@ -988,6 +984,8 @@ function ScopedPharmacyCounterConsole({
     const row = found[0]!;
     const nextUnit = row.saleUnits[0]?.kind ?? null;
     if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
+      // Barcode reconciliation is an external scanner synchronization, not derived render state.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       stageRow(row);
       return;
     }

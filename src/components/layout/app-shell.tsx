@@ -170,7 +170,7 @@ export function AppShell({
   brand,
   pharmacyPlaceholder = false,
 }: {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   brand: TenantBrand;
   pharmacyPlaceholder?: boolean;
 }) {
@@ -234,7 +234,10 @@ export function AppShell({
 
       <div className="studio-shell flex h-full min-w-0 flex-1 flex-col overflow-hidden">
         {pharmacyPlaceholder ? (
-          <div role="alert" className="min-h-10 border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs font-semibold text-amber-950">
+          <div
+            role="alert"
+            className="min-h-10 border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs font-semibold text-amber-950"
+          >
             Licence details are PLACEHOLDER – not a real licence
           </div>
         ) : null}

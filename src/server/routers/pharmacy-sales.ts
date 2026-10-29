@@ -186,8 +186,17 @@ async function authorizedSaleLineApprover(
     !approver ||
     approver.organizationId !== scope.organizationId ||
     approver.status !== 'ACTIVE' ||
-    approver.id === scope.actorId ||
     isLockedOut(credential, now)
+  )
+    return null;
+  // A second approver is required whenever one exists. A tenant whose only active member is the
+  // operator must not lose the owner's all-capability workflow, though: their own manager PIN is
+  // still independently verified and the resulting approver id/policy are persisted on the line.
+  if (
+    approver.id === scope.actorId &&
+    (await db.user.count({
+      where: { organizationId: scope.organizationId, status: 'ACTIVE' },
+    })) !== 1
   )
     return null;
   const assignment = await db.pharmacyBranchAssignment.findFirst({
@@ -1058,7 +1067,7 @@ export const pharmacySalesRouter = router({
           if (needsDiscountApproval && !approverId) {
             // Return a refusal so a failed PIN attempt commits its durable lockout update.
             return {
-              blocked: 'An active manager must independently approve this discount with their PIN.',
+              blocked: 'An active manager must approve this discount with their PIN.',
             };
           }
           if (
@@ -1073,7 +1082,8 @@ export const pharmacySalesRouter = router({
               message: 'Pharmacy safety permission is required for a FEFO override.',
             });
           }
-          const { discountAuthorization: _discountAuthorization, ...lineInputWithoutSecret } = input;
+          const { discountAuthorization: _discountAuthorization, ...lineInputWithoutSecret } =
+            input;
           void _discountAuthorization;
           const approvedInput = {
             ...lineInputWithoutSecret,

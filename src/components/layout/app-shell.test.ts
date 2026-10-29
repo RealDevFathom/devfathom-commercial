@@ -103,7 +103,6 @@ describe('AppShell module guard', () => {
             accentColor: null,
           },
           pharmacyPlaceholder: true,
-          children: null,
         },
         createElement('p', null, 'Dashboard')
       )

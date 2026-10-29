@@ -67,6 +67,7 @@ function fixture() {
     pharmacyInventoryLot: { findMany: lotRead },
     user: {
       findFirst: vi.fn(async () => ({ id: 'manager-1', status: 'ACTIVE' })),
+      count: vi.fn(async () => 2),
       findUnique: vi.fn(async () => ({
         organizationRole: {
           permissions: [
@@ -83,7 +84,7 @@ function fixture() {
         id: 'credential-1',
         credentialHash: 'hash',
         failedAttempts: 0,
-        lockedUntil: null,
+        lockedUntil: null as Date | null,
         staffProfile: {
           status: 'ACTIVE',
           user: { id: 'manager-1', status: 'ACTIVE', organizationId: 'org-1' },
@@ -281,7 +282,7 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
     const f = fixture();
 
     await expect(f.caller.addLine({ ...line, discountMinor: 1 })).resolves.toEqual({
-      blocked: 'An active manager must independently approve this discount with their PIN.',
+      blocked: 'An active manager must approve this discount with their PIN.',
     });
 
     expect(f.db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
@@ -328,7 +329,7 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
         discountAuthorization: { staffProfileId: 'manager-profile', pin: '9999' },
       })
     ).resolves.toEqual({
-      blocked: 'An active manager must independently approve this discount with their PIN.',
+      blocked: 'An active manager must approve this discount with their PIN.',
     });
     expect(f.db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
       where: { id: 'credential-1', organizationId: 'org-1' },
@@ -348,13 +349,16 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
         discountAuthorization,
       })
     ).resolves.toEqual({
-      blocked: 'An active manager must independently approve this discount with their PIN.',
+      blocked: 'An active manager must approve this discount with their PIN.',
     });
     expect(addSaleLine).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['the current operator', { id: 'actor-1', status: 'ACTIVE', organizationId: 'org-1' }],
+    [
+      'the current operator when another active member exists',
+      { id: 'actor-1', status: 'ACTIVE', organizationId: 'org-1' },
+    ],
     ['an inactive user', { id: 'manager-1', status: 'INACTIVE', organizationId: 'org-1' }],
     [
       'a user in another organization',
@@ -375,6 +379,38 @@ describe('pharmacySales.addLine discount approval (#482)', () => {
     ).resolves.toHaveProperty('blocked');
     expect(verifyOperatorCredential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
+  });
+
+  it('lets a solo all-capability owner approve with their own PIN and retains the audit fields', async () => {
+    const f = fixture();
+    f.db.user.count.mockResolvedValue(1);
+    f.db.restaurantOperatorCredential.findFirst.mockResolvedValue({
+      id: 'credential-1',
+      credentialHash: 'hash',
+      failedAttempts: 0,
+      lockedUntil: null,
+      staffProfile: {
+        status: 'ACTIVE',
+        user: { id: 'actor-1', status: 'ACTIVE', organizationId: 'org-1' },
+      },
+    });
+    vi.mocked(addSaleLine).mockResolvedValue({ line: { id: 'line-1' } } as never);
+
+    await f.caller.addLine({ ...line, discountMinor: 1, discountAuthorization });
+
+    expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
+    expect(addSaleLine).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ organizationId: 'org-1', branchId: 'branch-1' }),
+      expect.objectContaining({
+        approvedByUserId: 'actor-1',
+        approvalPolicy: 'PHARMACY_MANAGER',
+      })
+    );
+    expect(f.db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'credential-1', organizationId: 'org-1' },
+      data: { failedAttempts: 0, lockedUntil: null },
+    });
   });
 
   it('rejects an inactive staff profile', async () => {
