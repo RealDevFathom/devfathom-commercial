@@ -15,7 +15,7 @@ it.each(['default', 'pharmacy', 'restaurant', 'hotel', 'agency'] as const)(
     expect(screen.getAllByRole('main')).toHaveLength(1);
     expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content');
     expect(screen.getByRole('main')).toHaveAttribute('tabindex', '-1');
-    expect(screen.getByRole('link', { name: 'Skip to account form' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Skip to content' })).toHaveAttribute(
       'href',
       '#main-content'
     );

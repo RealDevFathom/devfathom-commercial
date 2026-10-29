@@ -19,9 +19,9 @@ export function AuthShell({
     <div className={`studio-auth${registration ? ' studio-auth-register' : ''}`}>
       <a
         href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:z-50 focus:bg-surface-card focus:p-4"
+        className="sr-only fixed top-3 left-3 z-50 rounded-[var(--radius-xs)] bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground focus:not-sr-only"
       >
-        Skip to account form
+        Skip to content
       </a>
       <LoginHero vertical={vertical} registration={registration} />
       <main id="main-content" tabIndex={-1} className="studio-auth-main">

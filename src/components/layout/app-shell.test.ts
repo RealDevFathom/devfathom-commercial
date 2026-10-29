@@ -2,10 +2,12 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { createElement, type ComponentType } from 'react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({ pathname: vi.fn(() => '/dashboard') }));
 
 vi.mock('next/dynamic', () => ({ default: () => () => null }));
-vi.mock('next/navigation', () => ({ usePathname: () => '/dashboard' }));
+vi.mock('next/navigation', () => ({ usePathname: mocks.pathname }));
 vi.mock('next-auth/react', () => ({ useSession: () => ({ data: null }) }));
 vi.mock('@/components/entitlements-provider', () => ({
   useEntitlements: () => ({ vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] }),
@@ -36,6 +38,10 @@ vi.mock('@/components/restaurant/administrator-staff-profile-callout', () => ({
 import { AppShell, isPathModuleEnabled } from './app-shell';
 
 describe('AppShell module guard', () => {
+  beforeEach(() => {
+    mocks.pathname.mockReturnValue('/dashboard');
+  });
+
   it('keeps the responsive dashboard brand link explicitly named', () => {
     const topbar = readFileSync(
       path.join(process.cwd(), 'src/components/layout/topbar.tsx'),
@@ -87,6 +93,42 @@ describe('AppShell module guard', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Mobile navigation' })).not.toBeInTheDocument();
   });
+
+  it.each(['/dashboard', '/pharmacy/counter'])(
+    'makes the skip link the first shell element and targets the main landmark on %s',
+    (pathname) => {
+      mocks.pathname.mockReturnValue(pathname);
+      const TestAppShell = AppShell as ComponentType<{
+        brand: Parameters<typeof AppShell>[0]['brand'];
+        children?: React.ReactNode;
+      }>;
+      const { container } = render(
+        createElement(
+          TestAppShell,
+          {
+            brand: {
+              organizationId: 'org_test',
+              displayName: 'Test workspace',
+              logoUrl: null,
+              markUrl: null,
+              faviconUrl: null,
+              primaryColor: null,
+              accentColor: null,
+            },
+          },
+          createElement('p', null, 'Workspace content')
+        )
+      );
+
+      const viewport = container.firstElementChild;
+      const skipLink = screen.getByRole('link', { name: 'Skip to content' });
+      const main = screen.getByRole('main');
+      expect(viewport?.firstElementChild).toBe(skipLink);
+      expect(skipLink).toHaveAttribute('href', '#main-content');
+      expect(main).toHaveAttribute('id', 'main-content');
+      expect(main).toHaveAttribute('tabindex', '-1');
+    }
+  );
 
   it('clearly warns when the pharmacy licence is a placeholder', () => {
     const TestAppShell = AppShell as ComponentType<{
