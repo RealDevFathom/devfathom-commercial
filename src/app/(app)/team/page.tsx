@@ -5,6 +5,11 @@ export const metadata: Metadata = {
   title: 'Team',
 };
 
-export default function TeamPage() {
-  return <TeamContent />;
+export default async function TeamPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ invite?: string | string[] }>;
+}) {
+  const query = await searchParams;
+  return <TeamContent initialShowAddMember={query.invite === '1'} />;
 }

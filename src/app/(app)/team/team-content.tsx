@@ -45,7 +45,7 @@ const statusDot: Record<string, string> = {
   INVITED: 'bg-sky-500',
 };
 
-export function TeamContent() {
+export function TeamContent({ initialShowAddMember = false }: { initialShowAddMember?: boolean }) {
   const { data: session } = useSession();
   const entitlements = useEntitlements();
   const canReadDirectory = isModuleGranted('hr', entitlements.enabledModules);
@@ -54,7 +54,7 @@ export function TeamContent() {
     isModuleGranted(moduleForProcedure('team.inviteMember')!, entitlements.enabledModules);
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');
-  const [showAddMember, setShowAddMember] = useState(false);
+  const [showAddMember, setShowAddMember] = useState(initialShowAddMember);
   const { data: team, isLoading } = trpc.team.getAll.useQuery(undefined, {
     enabled: canReadDirectory,
   });

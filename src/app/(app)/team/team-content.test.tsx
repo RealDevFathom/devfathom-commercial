@@ -142,6 +142,11 @@ describe('tenant department invitation', () => {
 });
 
 describe('baseline workspace invitations', () => {
+  it('opens the invitation form from a Restaurant Staff handoff', () => {
+    render(<TeamContent initialShowAddMember />);
+    expect(screen.getByText('Add Team Member')).toBeVisible();
+  });
+
   it('shows Add Member without HR and opens the invitation form without fetching HR data', () => {
     render(<TeamContent />);
     fireEvent.click(screen.getByRole('button', { name: 'Add Member' }));

@@ -2,10 +2,11 @@
 
 import { useMemo, useState, type FormEvent } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
+import Link from 'next/link';
 import { toast } from 'sonner';
 
 import { useEntitlements } from '@/components/entitlements-provider';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Eyebrow } from '@/components/ui/eyebrow';
 import {
   Dialog,
@@ -455,7 +456,9 @@ export function RestaurantStaffConsole() {
           <DialogHeader>
             <DialogTitle>{editingStaff ? 'Edit staff member' : 'Add staff member'}</DialogTitle>
             <DialogDescription>
-              Profile details control restaurant access and branch assignment.
+              {editingStaff
+                ? 'Profile details control restaurant access and branch assignment.'
+                : 'Link an existing workspace user, or invite a new person before assigning their restaurant access.'}
             </DialogDescription>
           </DialogHeader>
           <form key={editingStaff?.id ?? 'new-staff'} className="space-y-4" onSubmit={submitStaff}>
@@ -534,6 +537,25 @@ export function RestaurantStaffConsole() {
                     ? 'No active, unlinked organization users are available.'
                     : 'Unavailable users remain visible for context but cannot be selected.'}
                 </span>
+                {!editingStaff ? (
+                  <div className="rounded-md border border-border-default bg-surface-sunken p-3 text-sm">
+                    <p className="font-medium text-text-strong">Need to add someone new?</p>
+                    <p className="mt-1 leading-relaxed text-text-muted">
+                      Invite the waiter or manager in Team and choose their Restaurant staff role.
+                      After they accept, return here to link their account and manage Job roles.
+                    </p>
+                    <Link
+                      href="/team?invite=1"
+                      className={buttonVariants({
+                        variant: 'outline',
+                        size: 'sm',
+                        className: 'mt-3',
+                      })}
+                    >
+                      Invite a new team member
+                    </Link>
+                  </div>
+                ) : null}
               </div>
               <div className="space-y-1.5">
                 <label htmlFor="staff-primary-branch" className={labelClass}>
