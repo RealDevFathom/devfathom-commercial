@@ -271,8 +271,14 @@ describe('pharmacy owner digest capability boundary', () => {
 });
 
 describe('RX-08 pharmacovigilance state boundaries', () => {
+  const revision = new Date('2026-10-29T00:00:00.000Z');
+
   it('completing internal review does not mark the report externally submitted', async () => {
-    mocks.reportFindFirst.mockResolvedValue({ id: 'pv_1', state: 'UNDER_REVIEW' });
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'UNDER_REVIEW',
+      updatedAt: revision,
+    });
     mocks.reportUpdate.mockResolvedValue({
       id: 'pv_1',
       state: 'READY',
@@ -285,6 +291,12 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     });
     expect(mocks.reportUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org_1',
+          branchId: 'branch_1',
+          state: 'UNDER_REVIEW',
+          updatedAt: revision,
+        }),
         data: expect.not.objectContaining({ externalSubmissionState: expect.anything() }),
       })
     );
@@ -292,7 +304,14 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
   });
 
   it('records a failed submission without changing or deleting the report', async () => {
-    mocks.reportFindFirst.mockResolvedValue({ id: 'pv_1', state: 'READY' });
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'NOT_SUBMITTED',
+      externalReference: null,
+      externalFailureReason: null,
+      updatedAt: revision,
+    });
     mocks.reportUpdate.mockResolvedValue({
       id: 'pv_1',
       state: 'READY',
@@ -305,9 +324,89 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
       failureReason: 'DRAP endpoint unavailable',
     });
     expect(mocks.reportUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.not.objectContaining({ state: expect.anything() }) })
+      expect.objectContaining({
+        where: expect.objectContaining({
+          state: 'READY',
+          externalSubmissionState: 'NOT_SUBMITTED',
+          externalReference: null,
+          externalFailureReason: null,
+          updatedAt: revision,
+        }),
+        data: expect.not.objectContaining({ state: expect.anything() }),
+      })
     );
     expect(mocks.reportUpdate.mock.calls[0]?.[0].data.externalSubmissionState).toBe('FAILED');
+  });
+
+  it('refuses competing lifecycle writes instead of overwriting the winning transition', async () => {
+    mocks.reportFindFirst.mockResolvedValue({ id: 'pv_1', state: 'READY', updatedAt: revision });
+    mocks.reportUpdate.mockRejectedValueOnce({ code: 'P2025' });
+
+    await expect(
+      pvCaller().transitionPharmacovigilanceReport({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'CLOSED',
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
+  it.each([
+    ['DRAFT', 'NOT_SUBMITTED', 'PENDING'],
+    ['READY', 'SUBMITTED', 'PENDING'],
+    ['SUBMITTED', 'SUBMITTED', 'FAILED'],
+  ] as const)(
+    'rejects invalid internal/external submission transition %s/%s -> %s',
+    async (state, externalSubmissionState, requestedState) => {
+      mocks.reportFindFirst.mockResolvedValue({
+        id: 'pv_1',
+        state,
+        externalSubmissionState,
+        externalReference: externalSubmissionState === 'SUBMITTED' ? 'DRAP-1' : null,
+        externalFailureReason: null,
+        updatedAt: revision,
+      });
+
+      await expect(
+        pvCaller().recordPharmacovigilanceSubmission({
+          id: 'pv_1',
+          branchId: 'branch_1',
+          state: requestedState,
+          ...(requestedState === 'FAILED' ? { failureReason: 'Network failure' } : {}),
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(mocks.reportUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('compare-and-sets the full failure evidence so concurrent FAILED retries cannot overwrite it', async () => {
+    mocks.reportFindFirst.mockResolvedValue({
+      id: 'pv_1',
+      state: 'READY',
+      externalSubmissionState: 'FAILED',
+      externalReference: null,
+      externalFailureReason: 'First failure',
+      updatedAt: revision,
+    });
+    mocks.reportUpdate.mockRejectedValueOnce({ code: 'P2025' });
+
+    await expect(
+      pvCaller().recordPharmacovigilanceSubmission({
+        id: 'pv_1',
+        branchId: 'branch_1',
+        state: 'FAILED',
+        failureReason: 'Second failure',
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(mocks.reportUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          externalSubmissionState: 'FAILED',
+          externalFailureReason: 'First failure',
+          updatedAt: revision,
+        }),
+      })
+    );
   });
 
   it('exports every report in range with internal and external states distinguished', async () => {
