@@ -152,6 +152,11 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
           fetch-depth: 0
+      # Vitest's transitive Undici runtime requires modern Node bindings even
+      # when the package command itself is launched through Bun.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
@@ -383,6 +388,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2

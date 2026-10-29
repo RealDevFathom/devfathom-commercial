@@ -35,6 +35,39 @@ const employee = {
   status: 'ACTIVE',
 };
 
+describe('restaurant order void access', () => {
+  const permissionsFor = (key: string): Permission[] =>
+    roleTemplatesForVertical('RESTAURANT')
+      .find((role) => role.key === key)!
+      .capabilities.map((capability) => ({ capability, effect: 'ALLOW' }));
+
+  it.each(['owner', 'general-manager', 'branch-manager'])(
+    'grants orders:void through the %s template and a tenant-scoped lookup',
+    async (role) => {
+      const db = authorizationDb({ rolePermissions: permissionsFor(role) });
+
+      await expect(can(employee, 'orders:void', undefined, { db })).resolves.toBe(true);
+      expect(db.user.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: employee.id } })
+      );
+    }
+  );
+
+  it('keeps the catalogue default-deny and lets an explicit deny override owner wildcard access', async () => {
+    await expect(
+      can(employee, 'orders:void', undefined, { db: authorizationDb({}) })
+    ).resolves.toBe(false);
+    await expect(
+      can(employee, 'orders:void', undefined, {
+        db: authorizationDb({
+          rolePermissions: permissionsFor('owner'),
+          overrides: [{ capability: 'orders:void', effect: 'DENY' }],
+        }),
+      })
+    ).resolves.toBe(false);
+  });
+});
+
 describe('opt-in pharmacy Owner / Operator access', () => {
   const grantedActions = [
     'reports:operational',
@@ -262,7 +295,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);
