@@ -570,11 +570,37 @@ export async function closeRecall(
   scope: Pick<LedgerScope, 'organizationId' | 'actorId'>,
   noticeId: string
 ) {
-  const notice = await db.pharmacyRecallNotice.findFirst({
-    where: { id: noticeId, organizationId: scope.organizationId, status: 'OPEN' },
-    include: { acknowledgements: true },
-  });
+  // Serialize closers on the audit record. PostgreSQL rechecks the OPEN
+  // predicate after a lock wait, so only the transaction that actually closes
+  // the notice can persist its actor and timestamp.
+  const [notice] = await db.$queryRaw<
+    Array<{ id: string; batchId: string | null; medicineId: string | null }>
+  >(Prisma.sql`
+    SELECT n.id, n."batchId", n."medicineId"
+    FROM "pharmacy_recall_notices" n
+    WHERE n.id = ${noticeId}
+      AND n."organizationId" = ${scope.organizationId}
+      AND n.status = 'OPEN'
+    FOR UPDATE OF n
+  `);
   if (!notice) throw new PharmacyInventoryError('INVALID_STATE');
+
+  // Receipts take the same batch lock before checking ACTIVE. Holding every
+  // affected batch until commit makes the affected-branch predicate stable
+  // through the acknowledgement check and any reactivation.
+  await db.$queryRaw(Prisma.sql`
+    SELECT mb.id
+    FROM "pharmacy_manufacturing_batches" mb
+    WHERE mb."organizationId" = ${scope.organizationId}
+      AND (${notice.batchId}::text IS NULL OR mb.id = ${notice.batchId})
+      AND (${notice.medicineId}::text IS NULL OR mb."medicineId" = ${notice.medicineId})
+    ORDER BY mb.id
+    FOR UPDATE OF mb
+  `);
+  const acknowledgements = await db.pharmacyRecallAcknowledgement.findMany({
+    where: { organizationId: scope.organizationId, recallNoticeId: notice.id },
+    select: { branchId: true },
+  });
   const affectedBranches = await db.pharmacyInventoryLot.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -585,7 +611,7 @@ export async function closeRecall(
     select: { branchId: true },
     distinct: ['branchId'],
   });
-  const acknowledgedBranches = new Set(notice.acknowledgements.map(({ branchId }) => branchId));
+  const acknowledgedBranches = new Set(acknowledgements.map(({ branchId }) => branchId));
   if (affectedBranches.some(({ branchId }) => !acknowledgedBranches.has(branchId)))
     throw new PharmacyInventoryError('INVALID_STATE');
   const where = notice.batchId ? { id: notice.batchId } : { medicineId: notice.medicineId! };
@@ -605,9 +631,13 @@ export async function closeRecall(
       where: { organizationId: scope.organizationId, ...where },
       data: { state: 'ACTIVE', stateReason: null, stateChangedAt: null },
     });
-  return db.pharmacyRecallNotice.update({
-    where: { id: notice.id },
+  const closed = await db.pharmacyRecallNotice.updateMany({
+    where: { id: notice.id, organizationId: scope.organizationId, status: 'OPEN' },
     data: { status: 'CLOSED', closedById: scope.actorId, closedAt: new Date() },
+  });
+  if (closed.count !== 1) throw new PharmacyInventoryError('INVALID_STATE');
+  return db.pharmacyRecallNotice.findFirstOrThrow({
+    where: { id: notice.id, organizationId: scope.organizationId },
   });
 }
 

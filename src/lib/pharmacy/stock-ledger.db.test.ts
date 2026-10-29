@@ -691,6 +691,126 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     });
   });
 
+  it('serializes recall closure with a receipt into a new branch (#629 race)', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'recall-receipt-race');
+    const otherBranch = `branch_recall_race_${suffix}`;
+    const setup = await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, otherBranch);
+      const destination = await db.pharmacyStockLocation.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: otherBranch,
+          code: `RECALL-RACE-${tag('location')}`,
+          name: 'Recall race destination',
+          kind: 'STORE',
+        },
+      });
+      const { batch } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 20,
+        label: 'recall-receipt-race',
+      });
+      const notice = await deps.operations.createRecall(
+        db,
+        { organizationId: ORG_A, actorId: ACTOR },
+        { batchId: batch.id, reference: tag('race-recall'), reason: 'Race regression' }
+      );
+      await deps.operations.acknowledgeRecall(db, scopeOf(fixture), notice.id);
+      return { batchId: batch.id, destinationId: destination.id, noticeId: notice.id };
+    });
+
+    let releaseReceipt!: () => void;
+    const mayAttemptReceipt = new Promise<void>((resolve) => {
+      releaseReceipt = resolve;
+    });
+    let receiptHasLock!: () => void;
+    const receiptLocked = new Promise<void>((resolve) => {
+      receiptHasLock = resolve;
+    });
+    const receipt = inOrg(ORG_A, async (db) => {
+      // Deterministically put the receipt transaction first in the batch-lock
+      // queue; closeRecall must wait until this transaction rejects its receipt.
+      await db.$queryRaw`SELECT id FROM "pharmacy_manufacturing_batches" WHERE id = ${setup.batchId} AND "organizationId" = ${ORG_A} FOR UPDATE`;
+      receiptHasLock();
+      await mayAttemptReceipt;
+      return deps.ledger.receiveLot(
+        db,
+        { ...scopeOf(fixture), branchId: otherBranch },
+        {
+          manufacturingBatchId: setup.batchId,
+          packLevelId: fixture.packLevelId,
+          stockLocationId: setup.destinationId,
+          unitsPerPack: 10,
+          supplierName: 'Race distributor',
+          supplierInvoiceRef: tag('race-invoice'),
+          unitCostMinor: 100,
+          printedMrpMinor: 200,
+          receivedExpiresAt: LATER,
+          receivedExpiryPrecision: 'DAY',
+          quantityUnits: 10,
+          idempotencyKey: tag('race-receipt'),
+          receivedAt: NOW,
+        }
+      );
+    });
+    await receiptLocked;
+    const close = inOrg(ORG_A, (db) =>
+      deps.operations.closeRecall(
+        db,
+        { organizationId: ORG_A, actorId: 'race_closer' },
+        setup.noticeId
+      )
+    );
+    releaseReceipt();
+
+    await expect(receipt).rejects.toMatchObject({ reason: 'BLOCKED_STOCK' });
+    await expect(close).resolves.toMatchObject({ status: 'CLOSED', closedById: 'race_closer' });
+    const state = await inOrg(ORG_A, async (db) => ({
+      lots: await db.pharmacyInventoryLot.count({
+        where: { manufacturingBatchId: setup.batchId, branchId: otherBranch },
+      }),
+      batch: await db.pharmacyManufacturingBatch.findFirstOrThrow({
+        where: { id: setup.batchId },
+      }),
+    }));
+    expect(state.lots).toBe(0);
+    expect(state.batch.state).toBe('ACTIVE');
+  });
+
+  it('allows only one concurrent closer to own the recall audit trail', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'concurrent-recall-close');
+    const noticeId = await inOrg(ORG_A, async (db) => {
+      const { batch } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'concurrent-close',
+      });
+      const notice = await deps.operations.createRecall(
+        db,
+        { organizationId: ORG_A, actorId: ACTOR },
+        { batchId: batch.id, reference: tag('concurrent-close'), reason: 'Audit race' }
+      );
+      await deps.operations.acknowledgeRecall(db, scopeOf(fixture), notice.id);
+      return notice.id;
+    });
+    const actors = ['closer_a', 'closer_b'] as const;
+    const results = await Promise.allSettled(
+      actors.map((actorId) =>
+        inOrg(ORG_A, (db) =>
+          deps.operations.closeRecall(db, { organizationId: ORG_A, actorId }, noticeId)
+        )
+      )
+    );
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const winningActor = actors[results.findIndex((result) => result.status === 'fulfilled')];
+    const notice = await inOrg(ORG_A, (db) =>
+      db.pharmacyRecallNotice.findFirstOrThrow({ where: { id: noticeId } })
+    );
+    expect(notice.closedById).toBe(winningActor);
+    expect(actors).toContain(notice.closedById);
+  });
+
   it('excludes supplier-claim reserved units from sale allocation and reports expiry value windows', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'supplier-claim');
     const result = await inOrg(ORG_A, async (db) => {
@@ -727,7 +847,11 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
   it('does not sell units a concurrent claim reserved while the sale waited (#355, claim-first)', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'claim-first');
     const lotId = await inOrg(ORG_A, async (db) => {
-      const { lot } = await stockLot(db, fixture, { expiresAt: LATER, units: 10, label: 'claim-first' });
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'claim-first',
+      });
       return lot.id;
     });
     let releaseClaim: () => void = () => {};
@@ -766,7 +890,11 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
   it('serializes a supplier claim against a concurrent sale of the same units (#355)', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'claim-race');
     const lotId = await inOrg(ORG_A, async (db) => {
-      const { lot } = await stockLot(db, fixture, { expiresAt: LATER, units: 10, label: 'claim-race' });
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'claim-race',
+      });
       return lot.id;
     });
     let releaseSale: () => void = () => {};
