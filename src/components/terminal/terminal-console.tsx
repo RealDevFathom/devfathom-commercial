@@ -58,7 +58,8 @@ type ApprovalEvidence = {
 };
 
 type Notice = (
-  TerminalFailure | { kind: 'success'; title: string; message: string; reset: 'none' }
+  | TerminalFailure
+  | { kind: 'success'; title: string; message: string; reset: 'none' }
 ) & { source?: 'heartbeat' };
 
 type EstablishResponse = {
@@ -533,7 +534,7 @@ export function TerminalConsole() {
     <div className="studio-viewport h-dvh overflow-hidden text-text-strong">
       <a
         href="#terminal-main"
-        className="sr-only fixed top-3 left-3 z-50 rounded-[3px] bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground focus:not-sr-only"
+        className="sr-only fixed top-3 left-3 z-50 rounded-sm bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground focus:not-sr-only"
       >
         Skip to terminal controls
       </a>

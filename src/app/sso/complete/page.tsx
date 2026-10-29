@@ -39,7 +39,7 @@ export default function SsoCompletePage() {
             <p className="mt-3 text-sm leading-6 text-text-muted">{error}</p>
             <a
               href="/login"
-              className="mt-6 inline-flex h-10 items-center bg-abyss-900 px-4 text-xs font-semibold text-paper-white"
+              className="mt-6 inline-flex h-10 items-center bg-primary px-4 text-xs font-semibold text-primary-foreground"
             >
               Return to sign in
             </a>

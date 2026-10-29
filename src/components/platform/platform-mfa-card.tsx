@@ -82,7 +82,7 @@ export function PlatformMfaCard() {
             type="button"
             disabled={pending}
             onClick={() => void action('begin')}
-            className="inline-flex h-10 items-center gap-2 rounded-[3px] bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-60"
+            className="inline-flex h-10 items-center gap-2 rounded-sm bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-60"
           >
             {pending ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -126,7 +126,7 @@ export function PlatformMfaCard() {
               type="button"
               disabled={pending || code.length < 6}
               onClick={() => void action(secret ? 'confirm' : 'regenerate')}
-              className="h-10 rounded-[3px] bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-60"
+              className="h-10 rounded-sm bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-60"
             >
               {secret ? 'Confirm and require MFA' : 'Regenerate recovery codes'}
             </button>

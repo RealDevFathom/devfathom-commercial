@@ -1954,12 +1954,12 @@ export default async function OrganizationDetailPage({
         </div>
 
         <aside className="space-y-7">
-          <section className="border border-border-default bg-abyss-900 p-5 text-paper-50">
+          <section className="border border-border-default bg-primary p-5 text-text-inverse">
             <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-primary-foreground">
               Audited support
             </p>
             <h2 className="mt-2 font-display text-xl font-semibold">Enter workspace</h2>
-            <p className="mt-2 text-xs leading-5 text-abyss-200">
+            <p className="mt-2 text-xs leading-5 text-text-inverse">
               Opens a time-boxed session as the tenant administrator. The reason and every action
               are recorded.
             </p>
