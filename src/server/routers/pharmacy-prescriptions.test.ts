@@ -42,6 +42,7 @@ import type { TRPCContext } from '../trpc';
 import { pharmacyPrescriptionsRouter } from './pharmacy-prescriptions';
 import { GET } from '@/app/api/pharmacy/prescription-files/route';
 import { GET as sharedFileGET } from '@/app/api/files/[name]/route';
+import { proposeRxPrefill } from '@/lib/pharmacy/rx-ocr';
 
 function context(userId = 'user-a', organizationId = 'org-a', status = 'ACTIVE') {
   return {
@@ -468,6 +469,38 @@ describe('PH-A3 prescription OCR prefill', () => {
       if (!bytes) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
       return bytes;
     });
+  });
+
+  it.each([
+    ['Augmentin', '625mg'],
+    ['Augmentin 625', '625 mg'],
+    ['Amoxicillin + Clavulanic Acid', '625 mg'],
+  ])('matches branded, qualified, and multi-salt medicine names: %s', (drugName, strength) => {
+    const proposal = proposeRxPrefill(
+      {
+        adapter: 'FIXTURE',
+        adapterVersion: 'test',
+        lines: [
+          {
+            drugName: { value: drugName, confidence: 1 },
+            strength: { value: strength, confidence: 1 },
+            dose: { value: null, confidence: 0 },
+          },
+        ],
+      },
+      [
+        {
+          id: 'augmentin-625',
+          productName: 'Augmentin 625 mg Tablets',
+          brandName: 'Augmentin',
+          strengths: [{ ingredient: 'Amoxicillin + Clavulanic Acid', value: 625, unit: 'mg' }],
+        },
+      ]
+    );
+
+    expect(proposal.draftCart.lines[0]?.candidates).toEqual([
+      expect.objectContaining({ medicineId: 'augmentin-625', match: 'SALT_AND_STRENGTH' }),
+    ]);
   });
 
   it('is refused unless PHARMACY_RX_OCR_ADAPTER opts in, before reading storage', async () => {

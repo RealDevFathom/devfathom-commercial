@@ -36,13 +36,25 @@ export function deliveryRadiusProfitabilityReport(
     throw new Error('INVALID_DELIVERY_RADIUS');
   }
   const grossMargin = config.estimatedOrderRevenueMinor - config.estimatedOrderCogsMinor;
+  if (!Number.isSafeInteger(grossMargin)) {
+    throw new Error('DELIVERY_PROFITABILITY_OVERFLOW');
+  }
   return [...new Set(config.radiiKm)]
     .sort((a, b) => a - b)
     .map((radiusKm) => {
-      const deliveryCost = Math.round(
-        config.baseDeliveryCostMinor + radiusKm * config.deliveryCostPerKmMinor
-      );
+      const variableDeliveryCost = radiusKm * config.deliveryCostPerKmMinor;
+      const unroundedDeliveryCost = config.baseDeliveryCostMinor + variableDeliveryCost;
+      const deliveryCost = Math.round(unroundedDeliveryCost);
       const contribution = grossMargin - deliveryCost;
+      if (
+        !Number.isFinite(variableDeliveryCost) ||
+        Math.abs(variableDeliveryCost) > Number.MAX_SAFE_INTEGER ||
+        variableDeliveryCost > Number.MAX_SAFE_INTEGER - config.baseDeliveryCostMinor ||
+        !Number.isSafeInteger(deliveryCost) ||
+        !Number.isSafeInteger(contribution)
+      ) {
+        throw new Error('DELIVERY_PROFITABILITY_OVERFLOW');
+      }
       return {
         radiusKm,
         estimatedRevenueMinor: config.estimatedOrderRevenueMinor,

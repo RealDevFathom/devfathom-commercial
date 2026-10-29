@@ -297,6 +297,20 @@ const token = (value: string) =>
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 
+const sameNameOrQualifiedName = (left: string, right: string) => {
+  const normalizedLeft = token(left);
+  const normalizedRight = token(right);
+  if (!normalizedLeft || !normalizedRight) return false;
+  return (
+    normalizedLeft === normalizedRight ||
+    ` ${normalizedLeft} `.includes(` ${normalizedRight} `) ||
+    ` ${normalizedRight} `.includes(` ${normalizedLeft} `)
+  );
+};
+
+const sameStrength = (left: string, right: string) =>
+  token(left).replaceAll(' ', '') === token(right).replaceAll(' ', '');
+
 /** Map read drug names onto catalogue medicines as candidates, never a choice. */
 export function proposeRxPrefill(
   extraction: RxOcrExtraction,
@@ -335,9 +349,14 @@ export function proposeRxPrefill(
               (medicine.strengths ?? [])
                 .filter((strength) => {
                   const catalogueStrength = token(`${strength.value} ${strength.unit}`);
+                  const medicineNames = [
+                    medicine.productName,
+                    medicine.brandName ?? '',
+                    ...(medicine.strengths ?? []).map((item) => item.ingredient),
+                  ];
                   return (
-                    token(strength.ingredient) === normalizedSalt &&
-                    catalogueStrength === normalizedStrength
+                    medicineNames.some((name) => sameNameOrQualifiedName(name, readSalt ?? '')) &&
+                    sameStrength(catalogueStrength, normalizedStrength)
                   );
                 })
                 .map((strength) => ({
