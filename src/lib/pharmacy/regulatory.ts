@@ -3,6 +3,8 @@ import { recordAudit } from '@/server/audit';
 
 export type BranchOperationDenialReason =
   | 'PROFILE_MISSING'
+  | 'BRANCH_INACTIVE'
+  | 'PROFILE_PREMISES_MISMATCH'
   | 'RULE_SET_UNCONFIRMED'
   | 'LICENCE_INVALID'
   | 'QUALIFIED_PERSON_COVERAGE_MISSING'
@@ -122,7 +124,7 @@ export async function assertStoredBranchMayOperate(
       effectiveFrom: { lte: at },
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
     },
-    include: { jurisdictionRuleSet: true },
+    include: { jurisdictionRuleSet: true, branch: true },
     orderBy: { effectiveFrom: 'desc' },
   });
   const auditDenied = (reason: BranchOperationDenialReason, deniedAction: BranchOperationAction) =>
@@ -144,6 +146,24 @@ export async function assertStoredBranchMayOperate(
   if (!profile) {
     auditDenied('PROFILE_MISSING', action);
     throw new BranchOperationDeniedError('PROFILE_MISSING');
+  }
+
+  if (!profile.branch.active) {
+    auditDenied('BRANCH_INACTIVE', action);
+    throw new BranchOperationDeniedError('BRANCH_INACTIVE');
+  }
+
+  const premises = profile.premises as { addressLine?: unknown; city?: unknown } | null;
+  const normalizeProvince = (value: string) => value.trim().toUpperCase().replace(/^PK-/, '');
+  const normalizePremises = (value: unknown) =>
+    typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en') : '';
+  if (
+    normalizeProvince(profile.provinceCode) !== normalizeProvince(profile.branch.provinceCode) ||
+    normalizePremises(premises?.addressLine) !== normalizePremises(profile.branch.addressLine) ||
+    normalizePremises(premises?.city) !== normalizePremises(profile.branch.city)
+  ) {
+    auditDenied('PROFILE_PREMISES_MISMATCH', action);
+    throw new BranchOperationDeniedError('PROFILE_PREMISES_MISMATCH');
   }
 
   assertBranchMayOperate(

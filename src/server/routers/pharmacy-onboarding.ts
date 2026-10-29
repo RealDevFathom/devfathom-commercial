@@ -392,10 +392,26 @@ export const pharmacyOnboardingRouter = router({
 
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { organizationId, id: input.branchId, active: true },
-        select: { id: true },
+        select: { id: true, provinceCode: true, addressLine: true, city: true },
       });
       if (!branch) {
         throw badRequest('branchId', 'Choose one of this workspace’s active branches.');
+      }
+
+      const normalizeProvince = (value: string) => value.trim().toUpperCase().replace(/^PK-/, '');
+      const normalizePremises = (value: string) =>
+        value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en');
+      if (normalizeProvince(input.provinceCode) !== normalizeProvince(branch.provinceCode)) {
+        throw badRequest('provinceCode', 'The regulatory province must match the selected branch.');
+      }
+      if (normalizePremises(input.premisesAddressLine) !== normalizePremises(branch.addressLine)) {
+        throw badRequest(
+          'premisesAddressLine',
+          'The premises address must match the selected branch address.'
+        );
+      }
+      if (normalizePremises(input.premisesCity) !== normalizePremises(branch.city)) {
+        throw badRequest('premisesCity', 'The premises city must match the selected branch city.');
       }
 
       const activePlaceholder = await ctx.db.branchRegulatoryProfile.findFirst({

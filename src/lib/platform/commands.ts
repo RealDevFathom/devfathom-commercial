@@ -457,6 +457,7 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
     const profile = await db.branchRegulatoryProfile.findFirst({
       where: {
         organizationId,
+        branch: { active: true },
         effectiveFrom: { lte: now },
         OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
       },
@@ -1632,7 +1633,7 @@ async function runCommand(
             effectiveFrom: branchEffectiveFrom,
             provinceCode: branch.provinceCode,
             jurisdictionRuleSetId: ruleSet.id,
-            premises: { label },
+            premises: { addressLine: branch.addressLine, city: branch.city, label },
             licenceCategory: '*',
             licenceNumber: label,
             licenceIssuingAuthority: label,

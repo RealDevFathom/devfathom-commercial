@@ -240,6 +240,29 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     });
   });
 
+  it('binds the regulatory province and premises to the selected branch', async () => {
+    await withTenantDb(organizationId, async (db) => {
+      await expect(
+        caller(db).saveRegulatoryProfile({ ...profile, provinceCode: 'PK-SD' })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'The regulatory province must match the selected branch.',
+      });
+      await expect(
+        caller(db).saveRegulatoryProfile({ ...profile, premisesAddressLine: '99 Other Road' })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'The premises address must match the selected branch address.',
+      });
+      await expect(
+        caller(db).saveRegulatoryProfile({ ...profile, premisesCity: 'Rawalpindi' })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'The premises city must match the selected branch city.',
+      });
+    });
+  });
+
   it('refuses literal PLACEHOLDER licence text when the platform override is not active', async () => {
     await withTenantDb(organizationId, async (db) => {
       await expect(

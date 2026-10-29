@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   assertBranchMayOperate,
+  assertStoredBranchMayOperate,
   BranchOperationDeniedError,
   type BranchRegulatoryState,
 } from './regulatory';
+
+vi.mock('@/server/audit', () => ({ recordAudit: vi.fn() }));
 
 const at = new Date('2026-09-02T12:00:00.000Z');
 
@@ -123,5 +126,54 @@ describe('assertBranchMayOperate', () => {
     const state = validState();
     state.ruleSet.licenceCategories = { provisional: true, values: ['PHARMACY'] };
     expectDenied(state, 'RULE_SET_UNCONFIRMED');
+  });
+});
+
+describe('assertStoredBranchMayOperate', () => {
+  function storedProfile(overrides: Record<string, unknown> = {}) {
+    return {
+      ...validState(),
+      provinceCode: 'PK-PB',
+      premises: { addressLine: '12 Mall Road', city: 'Lahore' },
+      branch: {
+        active: true,
+        provinceCode: 'PB',
+        addressLine: '12 Mall Road',
+        city: 'Lahore',
+      },
+      jurisdictionRuleSet: validState().ruleSet,
+      ...overrides,
+    };
+  }
+
+  function storedDb(profile: ReturnType<typeof storedProfile>) {
+    return {
+      branchRegulatoryProfile: { findFirst: vi.fn(async () => profile) },
+    } as never;
+  }
+
+  it('refuses an otherwise valid profile when its branch is inactive', async () => {
+    const profile = storedProfile({
+      branch: { ...storedProfile().branch, active: false },
+    });
+    await expect(
+      assertStoredBranchMayOperate(storedDb(profile), 'org-a', 'branch-a', {
+        name: 'ACTIVATE',
+        at,
+      })
+    ).rejects.toThrowError(new BranchOperationDeniedError('BRANCH_INACTIVE'));
+  });
+
+  it.each([
+    ['province', { provinceCode: 'PK-SD' }],
+    ['address', { premises: { addressLine: '99 Other Road', city: 'Lahore' } }],
+    ['city', { premises: { addressLine: '12 Mall Road', city: 'Karachi' } }],
+  ])('refuses a profile whose %s is not bound to the branch', async (_field, mismatch) => {
+    await expect(
+      assertStoredBranchMayOperate(storedDb(storedProfile(mismatch)), 'org-a', 'branch-a', {
+        name: 'ACTIVATE',
+        at,
+      })
+    ).rejects.toThrowError(new BranchOperationDeniedError('PROFILE_PREMISES_MISMATCH'));
   });
 });
