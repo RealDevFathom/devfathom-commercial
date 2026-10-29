@@ -657,6 +657,14 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     ).rejects.toMatchObject({ reason: 'BLOCKED_STOCK' });
     await inOrg(ORG_A, async (db) => {
       await deps.operations.acknowledgeRecall(db, scopeOf(a), setup.notice.id);
+      await expect(
+        deps.operations.closeRecall(db, { organizationId: ORG_A, actorId: ACTOR }, setup.notice.id)
+      ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+      await deps.operations.acknowledgeRecall(
+        db,
+        { ...scopeOf(a), branchId: otherBranch },
+        setup.notice.id
+      );
       await deps.operations.closeRecall(
         db,
         { organizationId: ORG_A, actorId: ACTOR },
@@ -668,6 +676,66 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       });
       expect(lot.batch.state).toBe('ACTIVE');
     });
+  });
+
+  it('refuses recall acknowledgements from unaffected branches and after closure', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'recall-ack-scope');
+    const otherBranch = `branch_unaffected_${suffix}`;
+    const notice = await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, otherBranch);
+      const { batch } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'recall-ack-scope',
+      });
+      return deps.operations.createRecall(
+        db,
+        { organizationId: ORG_A, actorId: ACTOR },
+        { batchId: batch.id, reference: tag('ack-scope'), reason: 'Recall acknowledgement test' }
+      );
+    });
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.operations.acknowledgeRecall(
+          db,
+          { ...scopeOf(fixture), branchId: otherBranch },
+          notice.id
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+    await inOrg(ORG_A, async (db) => {
+      await deps.operations.acknowledgeRecall(db, scopeOf(fixture), notice.id);
+      await deps.operations.closeRecall(db, { organizationId: ORG_A, actorId: ACTOR }, notice.id);
+    });
+    await expect(
+      inOrg(ORG_A, (db) => deps.operations.acknowledgeRecall(db, scopeOf(fixture), notice.id))
+    ).rejects.toMatchObject({ reason: 'INVALID_STATE' });
+  });
+
+  it('does not reserve a supplier claim against a recalled batch', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'recalled-supplier-claim');
+    const lotId = await inOrg(ORG_A, async (db) => {
+      const { lot, batch } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'recalled-supplier-claim',
+      });
+      await deps.operations.createRecall(
+        db,
+        { organizationId: ORG_A, actorId: ACTOR },
+        { batchId: batch.id, reference: tag('claim-recall'), reason: 'Supplier recall' }
+      );
+      return lot.id;
+    });
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.operations.reserveSupplierClaim(db, scopeOf(fixture), {
+          inventoryLotId: lotId,
+          reservedUnits: 1,
+          returnBy: LATER,
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'BLOCKED_STOCK' });
   });
 
   it('excludes supplier-claim reserved units from sale allocation and reports expiry value windows', async () => {
