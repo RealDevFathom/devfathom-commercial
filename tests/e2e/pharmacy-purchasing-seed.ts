@@ -159,8 +159,7 @@ async function main() {
               password: passwordHash,
               department: 'pharmacy',
               title: index === 0 ? 'Receiving pharmacist' : 'Branch manager',
-              // The receiver is an ADMIN so the whole console is reachable; the
-              // approver only has to be somebody else for PUR-02 to be satisfied.
+              // Both people receive explicit procurement grants and branch scope below.
               role: index === 0 ? 'ADMIN' : 'EMPLOYEE',
               status: 'ACTIVE',
             },
@@ -168,6 +167,18 @@ async function main() {
           })
         )
       );
+
+      // The browser acceptance enrolls through the real pharmacy UI on every
+      // seed run. Retain past credential/audit history but revoke its old PIN.
+      await tx.restaurantOperatorCredential.updateMany({
+        where: {
+          organizationId,
+          type: 'PIN',
+          revokedAt: null,
+          staffProfile: { userId: receiver.id },
+        },
+        data: { revokedAt: new Date() },
+      });
 
       const branch = await tx.pharmacyBranch.upsert({
         where: { organizationId_code: { organizationId, code: FIXTURE.branch.code } },
@@ -183,6 +194,33 @@ async function main() {
         },
         select: { id: true },
       });
+
+      // Procurement is an exact grant, and branch scope is persisted even for
+      // administrators. Seed the same authorization an owner assigns in Studio.
+      for (const person of [receiver, approver]) {
+        await tx.userPermissionOverride.upsert({
+          where: { userId_capability: { userId: person.id, capability: 'pharmacy.procurement' } },
+          create: {
+            organizationId,
+            userId: person.id,
+            capability: 'pharmacy.procurement',
+            effect: 'ALLOW',
+            reason: 'Purchasing acceptance operator',
+          },
+          update: { effect: 'ALLOW', expiresAt: null },
+        });
+        await tx.pharmacyBranchAssignment.upsert({
+          where: {
+            organizationId_branchId_userId: {
+              organizationId,
+              branchId: branch.id,
+              userId: person.id,
+            },
+          },
+          create: { organizationId, branchId: branch.id, userId: person.id, active: true },
+          update: { active: true },
+        });
+      }
 
       const [shelf, quarantine] = await Promise.all(
         [

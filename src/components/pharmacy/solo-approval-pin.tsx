@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Input } from '@/components/ui/input';
 
 /** Shared Studio control for the explicit solo-owner exception. Never prefill a PIN. */
@@ -18,7 +19,14 @@ export function SoloApprovalPin({ required = false }: { required?: boolean }) {
         className="min-h-11"
       />
       <span className="block text-xs text-text-muted">
-        Required for self-approval by the sole active owner. Your decision is audited.
+        Required for self-approval by the sole active owner. Your decision is audited.{' '}
+        <Link
+          href="/pharmacy/settings/pin"
+          className="underline focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Enroll your pharmacy PIN
+        </Link>
+        .
       </span>
     </label>
   );
