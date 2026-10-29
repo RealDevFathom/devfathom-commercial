@@ -887,6 +887,7 @@ describeIfDatabase('PUR-04 — rejected goods never enter available stock', () =
         at: RECEIVED_AT,
       });
       return {
+        postedLine: posted.lines[0],
         balances: await balancesFor(db, ORG_A, posted.lines[0]!.inventoryLotId),
         exceptions: await deps.receipts.listReceivingExceptions(db, f, {
           goodsReceiptId: drafted.id,
@@ -895,6 +896,12 @@ describeIfDatabase('PUR-04 — rejected goods never enter available stock', () =
       };
     });
     expect(result.receipt?.status).toBe('POSTED');
+    expect(result.postedLine).toEqual(
+      expect.objectContaining({
+        acceptedMovementId: expect.any(String),
+        quarantineMovementId: expect.any(String),
+      })
+    );
     expect(result.balances).toEqual({ AVAILABLE: 100, QUARANTINE: 10 });
     expect(result.exceptions).toHaveLength(2);
     expect(result.exceptions).toEqual(
