@@ -17,7 +17,7 @@
  * server says another PAST page exists the control that fetches it is on
  * screen.
  */
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -150,8 +150,13 @@ describe('MeetingsContent pagination', () => {
 
     render(<MeetingsContent />);
 
-    const loadMore = screen.getByRole('button', { name: /load more/i });
-    expect(screen.getByText(/more remain/i)).toBeInTheDocument();
+    const continuation = screen.getByText(/more remain/i);
+    expect(continuation).toBeInTheDocument();
+    // Keep the 170-meeting fixture, but query its pagination controls locally
+    // instead of computing accessible names for every meeting-card button.
+    const loadMore = within(continuation.parentElement!).getByRole('button', {
+      name: /load more/i,
+    });
 
     fireEvent.click(loadMore);
     expect(mocks.fetchNextPage).toHaveBeenCalledTimes(1);
