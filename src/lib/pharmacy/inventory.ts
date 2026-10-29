@@ -248,8 +248,7 @@ export function planRemovalArrangement(input: {
   });
   const looseAfterBreak = looseUnits + breakPack.looseUnitDelta;
   const maxLoose = Math.min(looseAfterBreak, quantityUnits);
-  const removedLoose =
-    remainder + Math.floor((maxLoose - remainder) / unitsPerPack) * unitsPerPack;
+  const removedLoose = remainder + Math.floor((maxLoose - remainder) / unitsPerPack) * unitsPerPack;
 
   return {
     breakPack,
