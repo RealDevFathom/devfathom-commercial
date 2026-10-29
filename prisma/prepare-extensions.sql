@@ -44,6 +44,10 @@ DECLARE
   public_execute_count integer;
   owner record;
   member record;
+  migration_role name := nullif(
+    pg_catalog.current_setting('devfathom.migration_role', true),
+    ''
+  )::name;
 BEGIN
   SELECT role.oid, role.rolsuper
     INTO STRICT configured_role_oid, configured_role_is_superuser
@@ -162,6 +166,18 @@ BEGIN
          ORDER BY procedure.oid
       LOOP
         EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC', member.identity);
+        IF target_extension = 'pg_trgm'
+           AND member.identity = 'similarity_op(text,text)'::regprocedure
+           AND migration_role IS NOT NULL THEN
+          -- The migration connection provisions the restricted runtime role after
+          -- deploy. Delegate only this application dependency, with grant option,
+          -- while executing as the actual extension-function owner.
+          EXECUTE format(
+            'GRANT EXECUTE ON FUNCTION %s TO %I WITH GRANT OPTION',
+            member.identity,
+            migration_role
+          );
+        END IF;
       END LOOP;
 
       EXECUTE format('SET LOCAL ROLE %I', configured_role);
