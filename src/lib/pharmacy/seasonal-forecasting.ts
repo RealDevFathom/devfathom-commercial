@@ -83,6 +83,41 @@ function validateWindow(window: SeasonalCalendarWindow): void {
   }
 }
 
+function overlaps(a: SeasonalCalendarWindow, b: SeasonalCalendarWindow): boolean {
+  return a.startDate <= b.endDate && b.startDate <= a.endDate;
+}
+
+function validateLearningConfig(config: SeasonalLearningConfig): void {
+  if (
+    !Number.isSafeInteger(config.minimumEventDays) ||
+    config.minimumEventDays < 1 ||
+    !Number.isSafeInteger(config.minimumBaselineDays) ||
+    config.minimumBaselineDays < 1 ||
+    !Number.isSafeInteger(config.minimumUpliftBps) ||
+    config.minimumUpliftBps <= 0 ||
+    !Number.isSafeInteger(config.maximumUpliftBps) ||
+    config.maximumUpliftBps < config.minimumUpliftBps
+  ) {
+    throw new RangeError('Seasonal learning configuration is invalid');
+  }
+}
+
+function validateSpikeConfig(config: SpikeDetectionConfig): void {
+  if (
+    !Number.isSafeInteger(config.baselineDays) ||
+    config.baselineDays < 1 ||
+    !Number.isSafeInteger(config.minimumBaselineDays) ||
+    config.minimumBaselineDays < 1 ||
+    config.minimumBaselineDays > config.baselineDays ||
+    !Number.isSafeInteger(config.thresholdBps) ||
+    config.thresholdBps <= 0 ||
+    !Number.isSafeInteger(config.minimumUnits) ||
+    config.minimumUnits < 1
+  ) {
+    throw new RangeError('Spike detection configuration is invalid');
+  }
+}
+
 /** Owner-facing update primitive: callers persist the returned branch calendar. */
 export function upsertSeasonalWindow(
   calendar: readonly SeasonalCalendarWindow[],
@@ -91,6 +126,18 @@ export function upsertSeasonalWindow(
   validateWindow(window);
   if (calendar.some((item) => item.id === window.id && item.branchId !== window.branchId)) {
     throw new RangeError('A calendar window cannot be moved between branches');
+  }
+  for (const item of calendar) {
+    validateWindow(item);
+    if (
+      item.id !== window.id &&
+      item.enabled &&
+      window.enabled &&
+      item.branchId === window.branchId &&
+      overlaps(item, window)
+    ) {
+      throw new RangeError('Enabled calendar windows for a branch cannot overlap');
+    }
   }
   return [...calendar.filter((item) => item.id !== window.id), { ...window }].sort(
     (a, b) => a.startDate.localeCompare(b.startDate) || a.id.localeCompare(b.id)
@@ -109,7 +156,8 @@ function mean(values: readonly number[]): number {
 }
 
 function checkedHistory(history: readonly SaltSalesDay[]): SaltSalesDay[] {
-  return history.map((day) => {
+  const totals = new Map<string, SaltSalesDay>();
+  history.forEach((day) => {
     dateMs(day.date);
     if (
       !day.branchId.trim() ||
@@ -119,8 +167,12 @@ function checkedHistory(history: readonly SaltSalesDay[]): SaltSalesDay[] {
     ) {
       throw new RangeError('Sales history requires branch, salt and non-negative integer units');
     }
-    return day;
+    const key = `${day.branchId}\u0000${day.saltId}\u0000${day.date}`;
+    const units = (totals.get(key)?.units ?? 0) + day.units;
+    if (!Number.isSafeInteger(units)) throw new RangeError('Daily sales units exceed safe range');
+    totals.set(key, { ...day, units });
   });
+  return [...totals.values()];
 }
 
 /** Learns an event's uplift only from the selected branch and salt's own observations. */
@@ -134,7 +186,8 @@ export function learnCalendarUplift(input: {
 }): LearnedCalendarUplift | null {
   const forecastMs = dateMs(input.forecastDate);
   const config = input.config ?? DEFAULT_SEASONAL_LEARNING_CONFIG;
-  const active = input.calendar.find((window) => {
+  validateLearningConfig(config);
+  const activeWindows = input.calendar.filter((window) => {
     validateWindow(window);
     return (
       window.enabled &&
@@ -143,6 +196,10 @@ export function learnCalendarUplift(input: {
       forecastMs <= dateMs(window.endDate)
     );
   });
+  if (activeWindows.length > 1) {
+    throw new RangeError('A forecast date cannot belong to multiple enabled calendar windows');
+  }
+  const active = activeWindows[0];
   if (!active) return null;
 
   const ownHistory = checkedHistory(input.history).filter(
@@ -183,6 +240,7 @@ export function detectSalesSpikes(
   history: readonly SaltSalesDay[],
   config: SpikeDetectionConfig = DEFAULT_SPIKE_DETECTION_CONFIG
 ): SalesSpike[] {
+  validateSpikeConfig(config);
   const groups = new Map<string, SaltSalesDay[]>();
   for (const day of checkedHistory(history)) {
     const key = `${day.branchId}\u0000${day.saltId}`;

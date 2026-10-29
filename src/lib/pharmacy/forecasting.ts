@@ -18,10 +18,12 @@ import {
 } from './demand-evidence';
 import { blockReasonFor, planAllocation, type AllocationCandidate } from './inventory';
 import {
+  detectSalesSpikes,
   learnCalendarUplift,
   type SaltSalesDay,
   type SeasonalCalendarWindow,
   type SeasonalLearningConfig,
+  type SpikeDetectionConfig,
 } from './seasonal-forecasting';
 
 export * from './seasonal-forecasting';
@@ -78,6 +80,7 @@ export type ForecastFixtureLine = {
     calendar: readonly SeasonalCalendarWindow[];
     history: readonly SaltSalesDay[];
     config?: SeasonalLearningConfig;
+    spikeConfig?: SpikeDetectionConfig;
   };
   leadTimeDays: number;
   fillRateBps: number;
@@ -200,7 +203,20 @@ function forecastLine(line: ForecastFixtureLine): ForecastLine {
     integer(value, false)
   );
   const learnedUplift = line.seasonalContext ? learnCalendarUplift(line.seasonalContext) : null;
-  const seasonalityBps = learnedUplift?.upliftBps ?? line.seasonalityBps ?? BPS;
+  const detectedSpike = line.seasonalContext
+    ? detectSalesSpikes(line.seasonalContext.history, line.seasonalContext.spikeConfig)
+        .filter(
+          (spike) =>
+            spike.branchId === line.seasonalContext!.branchId &&
+            spike.saltId === line.seasonalContext!.saltId &&
+            spike.date < line.seasonalContext!.forecastDate
+        )
+        .at(-1)
+    : undefined;
+  const seasonalityBps = Math.max(
+    learnedUplift?.upliftBps ?? line.seasonalityBps ?? BPS,
+    detectedSpike?.ratioBps ?? BPS
+  );
   if (seasonalityBps <= 0 || line.fillRateBps <= 0 || line.fillRateBps > BPS) {
     throw new RangeError('Rates must be positive basis points and fill rate cannot exceed 100%');
   }
@@ -239,7 +255,9 @@ function forecastLine(line: ForecastFixtureLine): ForecastLine {
         input: 'SEASONALITY',
         value: learnedUplift
           ? `${seasonalityBps} bps learned from ${learnedUplift.eventDays} branch event days (${learnedUplift.windowName})`
-          : `${seasonalityBps} bps${line.seasonalityBps ? ' legacy input' : ' neutral (insufficient calendar history)'}`,
+          : detectedSpike
+            ? `${seasonalityBps} bps from branch-local sales spike on ${detectedSpike.date}`
+            : `${seasonalityBps} bps${line.seasonalityBps ? ' legacy input' : ' neutral (insufficient calendar history)'}`,
       },
       {
         input: 'LEAD_TIME_AND_FILL_HISTORY',

@@ -239,11 +239,33 @@ model PharmacyBranch {
   visibilityUnfulfilledDemandEvent         UnfulfilledDemandEvent[]          @relation("UnfulfilledDemandEventVisibilityAnchor")
   visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
   branchAssignments                        PharmacyBranchAssignment[]
+  seasonalCalendarWindows                  PharmacySeasonalCalendarWindow[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
   @@index([organizationId, active], map: "pharmacy_branches_org_active_idx")
   @@map("pharmacy_branches")
+}
+
+/// Owner-maintained branch calendar used by replenishment forecasting.
+model PharmacySeasonalCalendarWindow {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  name           String
+  startDate      DateTime @db.Date
+  endDate        DateTime @db.Date
+  enabled        Boolean  @default(true)
+  createdById    String
+  updatedById    String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, id])
+  @@index([organizationId, branchId, startDate, endDate])
+  @@map("pharmacy_seasonal_calendar_windows")
 }
 
 /// Active assignment of a tenant user to one pharmacy branch. Receipt reads use

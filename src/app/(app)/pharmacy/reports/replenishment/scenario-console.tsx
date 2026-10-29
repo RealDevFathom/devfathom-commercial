@@ -22,6 +22,7 @@ import type {
   PharmacyReplenishmentReportInput,
 } from '@/lib/pharmacy/replenishment-report';
 import { trpc } from '@/lib/trpc';
+import { SeasonalCalendar } from './seasonal-calendar';
 
 type Props = {
   organizationId: string;
@@ -326,7 +327,9 @@ function ScenarioWorkspace({
       </SectionCard>
     );
   return (
-    <div className="space-y-6">
+    <>
+      {financial && branchId ? <SeasonalCalendar branchId={branchId} /> : null}
+      <div className="space-y-6">
       <SectionCard title="Report scope" titleLevel={2}>
         {invalidInitialBranch && !branchId && (
           <p role="alert" className="mb-4 text-sm text-text-muted">
@@ -549,7 +552,8 @@ function ScenarioWorkspace({
           }
         />
       )}
-    </div>
+      </div>
+    </>
   );
 }
 

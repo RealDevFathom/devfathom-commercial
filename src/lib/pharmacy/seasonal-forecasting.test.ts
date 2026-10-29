@@ -53,6 +53,59 @@ describe('branch seasonal calendar', () => {
       })
     ).toMatchObject({ upliftBps: 20_000, eventDays: 2, baselineDays: 10 });
   });
+
+  it('rejects overlapping enabled windows independent of input order', () => {
+    expect(() =>
+      upsertSeasonalWindow([window], {
+        ...window,
+        id: 'overlap',
+        startDate: '2026-09-01',
+        endDate: '2026-10-01',
+      })
+    ).toThrow(/cannot overlap/);
+    expect(() =>
+      learnCalendarUplift({
+        branchId: 'branch-a',
+        saltId: 'salt-a',
+        forecastDate: '2026-07-03',
+        calendar: [window, { ...window, id: 'overlap' }],
+        history: baseline,
+      })
+    ).toThrow(/multiple enabled/);
+  });
+
+  it('aggregates duplicate same-day rows and validates learning configuration', () => {
+    const history = [
+      ...baseline,
+      { branchId: 'branch-a', saltId: 'salt-a', date: '2026-07-01', units: 8 },
+      { branchId: 'branch-a', saltId: 'salt-a', date: '2026-07-01', units: 12 },
+      { branchId: 'branch-a', saltId: 'salt-a', date: '2026-07-02', units: 20 },
+    ];
+    expect(
+      learnCalendarUplift({
+        branchId: 'branch-a',
+        saltId: 'salt-a',
+        forecastDate: '2026-07-03',
+        calendar: [window],
+        history,
+      })
+    ).toMatchObject({ eventDays: 2, eventMeanUnits: 20 });
+    expect(() =>
+      learnCalendarUplift({
+        branchId: 'branch-a',
+        saltId: 'salt-a',
+        forecastDate: '2026-07-03',
+        calendar: [window],
+        history,
+        config: {
+          minimumEventDays: 0,
+          minimumBaselineDays: 1,
+          minimumUpliftBps: 1,
+          maximumUpliftBps: 2,
+        },
+      })
+    ).toThrow(/configuration/);
+  });
 });
 
 describe('branch and salt sales spike detection', () => {
@@ -72,5 +125,17 @@ describe('branch and salt sales spike detection', () => {
         ratioBps: 30_000,
       },
     ]);
+  });
+
+  it('aggregates duplicate dates and rejects invalid spike configuration', () => {
+    expect(detectSalesSpikes([...baseline, { ...baseline[0], units: 5 }])).toEqual([]);
+    expect(() =>
+      detectSalesSpikes(baseline, {
+        baselineDays: 0,
+        minimumBaselineDays: 1,
+        thresholdBps: 0,
+        minimumUnits: 0,
+      })
+    ).toThrow(/configuration/);
   });
 });
