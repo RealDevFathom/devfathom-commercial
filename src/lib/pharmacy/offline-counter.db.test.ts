@@ -736,6 +736,54 @@ describeIfDatabase('PH-OFF OFF-01 — the append-only command log', () => {
     expect(message).toBe('SEQUENCE_CONFLICT');
   });
 
+  it('rejects sequence gaps and late lower commands with a durable device cursor', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'log-fifo');
+
+    const gap = await refusal(ORG_A, (db) =>
+      deps.log.recordOfflineCommand(
+        db,
+        scopeOf(fixture),
+        command(fixture, { sequence: 2, idempotencyKey: 'gap-key-2' })
+      )
+    );
+    expect(gap).toBe('SEQUENCE_OUT_OF_ORDER');
+
+    await inOrg(ORG_A, (db) =>
+      deps.log.recordOfflineCommand(db, scopeOf(fixture), command(fixture))
+    );
+    await inOrg(ORG_A, (db) =>
+      deps.log.recordOfflineCommand(
+        db,
+        scopeOf(fixture),
+        command(fixture, { sequence: 2, idempotencyKey: 'fifo-key-2' })
+      )
+    );
+
+    const late = await refusal(ORG_A, (db) =>
+      deps.log.recordOfflineCommand(
+        db,
+        scopeOf(fixture),
+        command(fixture, { sequence: 1, idempotencyKey: 'late-key-1' })
+      )
+    );
+    expect(late).toBe('SEQUENCE_CONFLICT');
+  });
+
+  it('serializes concurrent retries without rejecting the identical command', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'log-concurrent-retry');
+    const [first, second] = await Promise.all([
+      inOrg(ORG_A, (db) => deps.log.recordOfflineCommand(db, scopeOf(fixture), command(fixture))),
+      inOrg(ORG_A, (db) => deps.log.recordOfflineCommand(db, scopeOf(fixture), command(fixture))),
+    ]);
+
+    expect(first.command.id).toBe(second.command.id);
+    expect(
+      await inOrg(ORG_A, (db) =>
+        db.pharmacyOfflineCommand.count({ where: { deviceId: fixture.deviceId } })
+      )
+    ).toBe(1);
+  });
+
   it('the identity of a recorded command is immutable and it is never deleted', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'log-immutable');
     const recorded = await inOrg(ORG_A, (db) =>
@@ -822,7 +870,7 @@ describeIfDatabase('PH-OFF OFF-01 — the append-only command log', () => {
 
   it('dead-letters a command that exhausts its attempts rather than looping', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'log-dead');
-    const dead = await inOrg(ORG_A, async (db) => {
+    const outcome = await inOrg(ORG_A, async (db) => {
       const recorded = await deps.log.recordOfflineCommand(db, scopeOf(fixture), command(fixture));
       let row = recorded.command;
       for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -834,10 +882,18 @@ describeIfDatabase('PH-OFF OFF-01 — the append-only command log', () => {
           NOW
         );
       }
-      return row;
+      const recovered = await deps.log.recordOfflineCommand(
+        db,
+        scopeOf(fixture),
+        command(fixture, { sequence: 2, idempotencyKey: 'after-dead-key-2' })
+      );
+      return { dead: row, recovered };
     });
-    expect(dead).toMatchObject({ status: 'DEAD', attempts: 8, nextAttemptAt: null });
-    expect(dead.rejectionReason).toContain('8 attempts');
+    expect(outcome.dead).toMatchObject({ status: 'DEAD', attempts: 8, nextAttemptAt: null });
+    expect(outcome.dead.rejectionReason).toContain('8 attempts');
+    // Dead-lettering is the explicit recovery path: it settles the missing work
+    // while preserving its sequence, so the next contiguous command can enter.
+    expect(outcome.recovered.command).toMatchObject({ sequence: 2, status: 'PENDING' });
   });
 
   it('refuses to record anything for a revoked counter', async () => {
