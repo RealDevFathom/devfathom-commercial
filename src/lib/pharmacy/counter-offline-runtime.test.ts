@@ -129,7 +129,8 @@ function cashSale(units = 1) {
   return {
     deviceId: SCOPE.deviceId,
     action: 'CASH_OTC_SALE' as const,
-    payload: { lines: [{ medicineId: 'med_1', units }] },
+    payload: { leasedReceipt: { leaseId: 'lease_1' }, lines: [{ medicineId: 'med_1', units }] },
+    replaySignatures: { command: 'command-signature', receipt: 'receipt-signature' },
     clientOriginAt: '2026-09-02T12:05:00.000Z',
     bucket: { inventoryLotId: 'lot_1', stockLocationId: 'loc_1' },
     requestedUnits: units,
@@ -422,14 +423,15 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
     const outcome = await reconnected.replay(async (request) => {
       sent.push({
         key: request.headers['Idempotency-Key'],
-        receiptNumber: request.body.receiptNumber,
+        receiptNumber: (request.body.leasedReceipt as { receiptNumber: unknown }).receiptNumber,
         sequence: request.body.sequence,
       });
       if (failFirst) {
         failFirst = false;
         return { status: 0 };
       }
-      return { status: 200, serverRef: `sale_${String(request.body.receiptNumber)}` };
+      const receipt = request.body.leasedReceipt as { receiptNumber: unknown };
+      return { status: 200, serverRef: `sale_${String(receipt.receiptNumber)}` };
     });
     expect(outcome.state).toBe('PAUSED');
 
@@ -437,10 +439,11 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
     const drained = await reconnected.replay(async (request) => {
       sent.push({
         key: request.headers['Idempotency-Key'],
-        receiptNumber: request.body.receiptNumber,
+        receiptNumber: (request.body.leasedReceipt as { receiptNumber: unknown }).receiptNumber,
         sequence: request.body.sequence,
       });
-      return { status: 200, serverRef: `sale_${String(request.body.receiptNumber)}` };
+      const receipt = request.body.leasedReceipt as { receiptNumber: unknown };
+      return { status: 200, serverRef: `sale_${String(receipt.receiptNumber)}` };
     });
     expect(drained.state).toBe('IDLE');
 

@@ -57,6 +57,8 @@ export type CounterQueuedCommand = {
   sequence: number;
   action: PharmacyOfflineAction;
   payload: Record<string, unknown>;
+  /** Device-authentication material computed for the immutable replay body. */
+  replaySignatures: CounterReplaySignatures | null;
   /** Client-origin UTC instant, metadata only. */
   clientOriginAt: string;
   /** The lease number ALREADY PRINTED for this command, or null when it printed none. */
@@ -184,6 +186,8 @@ export type CounterCommandInput = {
   deviceId: string;
   action: PharmacyOfflineAction;
   payload: Record<string, unknown>;
+  /** Required by the pharmacy counter replay route for a deliverable sale. */
+  replaySignatures?: CounterReplaySignatures;
   /** Client-origin UTC instant, metadata only. */
   clientOriginAt: string;
   /** The bucket this command draws stock from, and how much. */
@@ -310,6 +314,7 @@ export function enqueueCounterCommand(
     sequence: snapshot.nextSequence,
     action: input.action,
     payload: input.payload,
+    replaySignatures: input.replaySignatures ?? null,
     clientOriginAt: input.clientOriginAt,
     receiptNumber,
     status: 'PENDING',
@@ -360,30 +365,50 @@ export function nextCounterReplay(
 }
 
 /** The replay request for one queued command. The key is the command id, always. */
+export type CounterReplaySignatures = {
+  command: string;
+  receipt: string;
+};
+
 export type CounterReplayRequest = {
   path: string;
   method: 'POST';
-  headers: { 'Idempotency-Key': string };
+  headers: {
+    'Idempotency-Key': string;
+    'X-Command-Signature': string;
+    'X-Receipt-Signature': string;
+  };
   body: Record<string, unknown>;
 };
 
 export function buildCounterReplayRequest(
-  snapshot: CounterQueueSnapshot,
+  _snapshot: CounterQueueSnapshot,
   command: CounterQueuedCommand
 ): CounterReplayRequest {
+  if (!command.replaySignatures) {
+    throw new Error('A queued pharmacy sale cannot replay without command and receipt signatures.');
+  }
+  const leasedReceipt = command.payload.leasedReceipt;
+  const payload =
+    leasedReceipt && typeof leasedReceipt === 'object' && !Array.isArray(leasedReceipt)
+      ? {
+          ...command.payload,
+          leasedReceipt: { ...leasedReceipt, receiptNumber: command.receiptNumber },
+        }
+      : command.payload;
   return {
-    path: '/api/pharmacy/offline/commands',
+    path: '/api/pharmacy/counter/replay',
     method: 'POST',
-    headers: { 'Idempotency-Key': command.idempotencyKey },
+    headers: {
+      'Idempotency-Key': command.idempotencyKey,
+      'X-Command-Signature': command.replaySignatures.command,
+      'X-Receipt-Signature': command.replaySignatures.receipt,
+    },
     body: {
-      deviceId: snapshot.deviceId,
+      ...payload,
       sequence: command.sequence,
+      idempotencyKey: command.idempotencyKey,
       action: command.action,
-      payload: command.payload,
-      clientOriginAt: command.clientOriginAt,
-      // The number this counter ALREADY printed. The server records it; it never
-      // assigns a different one (§8A invariant 16).
-      receiptNumber: command.receiptNumber,
     },
   };
 }
