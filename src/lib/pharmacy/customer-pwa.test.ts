@@ -9,21 +9,75 @@ import {
 
 describe('pharmacy customer PWA policy', () => {
   it('scopes OTP verification to exactly one customer and tenant', () => {
-    const created = createCustomerOtp('customer-a', 'org-a', new Date('2026-01-01T00:00:00Z'));
+    const now = new Date('2026-01-01T00:00:00Z');
+    const created = createCustomerOtp('customer-a', 'org-a', now);
     expect(
-      verifyCustomerOtp(created.challenge, {
-        code: created.code,
-        customerId: 'customer-b',
-        organizationId: 'org-a',
-      })
+      verifyCustomerOtp(
+        created.challenge,
+        {
+          code: created.code,
+          customerId: 'customer-b',
+          organizationId: 'org-a',
+        },
+        now
+      )
     ).toEqual({ ok: false, reason: 'SCOPE_MISMATCH' });
     expect(
-      verifyCustomerOtp(created.challenge, {
-        code: created.code,
-        customerId: 'customer-a',
-        organizationId: 'org-a',
-      })
+      verifyCustomerOtp(
+        created.challenge,
+        {
+          code: created.code,
+          customerId: 'customer-a',
+          organizationId: 'org-a',
+        },
+        now
+      )
     ).toMatchObject({ ok: true, customerId: 'customer-a' });
+  });
+  it('denies cross-tenant use and consumes a successful code with an audit trail', () => {
+    const now = new Date('2026-01-01T00:00:00Z');
+    const created = createCustomerOtp('customer-a', 'org-a', now);
+    const input = { code: created.code, customerId: 'customer-a', organizationId: 'org-a' };
+    expect(
+      verifyCustomerOtp(created.challenge, { ...input, organizationId: 'org-b' }, now)
+    ).toEqual({
+      ok: false,
+      reason: 'SCOPE_MISMATCH',
+    });
+    expect(verifyCustomerOtp(created.challenge, input, now)).toMatchObject({ ok: true });
+    expect(verifyCustomerOtp(created.challenge, input, now)).toEqual({
+      ok: false,
+      reason: 'CONSUMED',
+    });
+    expect(created.challenge.audit.map(({ kind }) => kind)).toEqual([
+      'ISSUED',
+      'FAILED',
+      'VERIFIED',
+      'REPLAY_BLOCKED',
+    ]);
+  });
+  it('validates scope and TTL and locks after the configured attempts', () => {
+    expect(() => createCustomerOtp('', 'org-a')).toThrow('OTP_SCOPE_REQUIRED');
+    expect(() => createCustomerOtp('customer-a', 'org-a', new Date(), 31)).toThrow(
+      'OTP_TTL_OUT_OF_RANGE'
+    );
+    const now = new Date('2026-01-01T00:00:00Z');
+    const created = createCustomerOtp('customer-a', 'org-a', now);
+    const input = {
+      code: created.code === '000000' ? '999999' : '000000',
+      customerId: 'customer-a',
+      organizationId: 'org-a',
+    };
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect(verifyCustomerOtp(created.challenge, input, now)).toEqual({
+        ok: false,
+        reason: 'INVALID',
+      });
+    }
+    expect(verifyCustomerOtp(created.challenge, input, now)).toEqual({
+      ok: false,
+      reason: 'LOCKED',
+    });
   });
   it('requires pharmacist approval before an Rx request can be fulfilled', () => {
     expect(() => transitionRxRequest('AWAITING_PHARMACIST', 'FULFIL')).toThrow(

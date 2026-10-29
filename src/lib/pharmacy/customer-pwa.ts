@@ -12,6 +12,22 @@ export type CustomerPortalConfig = {
   nonDrugOffersEnabled: boolean;
 };
 
+export type CustomerOtpAuditEvent = {
+  kind: 'ISSUED' | 'FAILED' | 'LOCKED' | 'VERIFIED' | 'REPLAY_BLOCKED';
+  at: Date;
+};
+
+export type CustomerOtpChallenge = {
+  customerId: string;
+  organizationId: string;
+  digest: Buffer;
+  salt: string;
+  expiresAt: Date;
+  attempts: number;
+  consumedAt: Date | null;
+  audit: CustomerOtpAuditEvent[];
+};
+
 export const DEFAULT_CUSTOMER_PORTAL_CONFIG: CustomerPortalConfig = {
   otpTtlMinutes: 10,
   otpMaxAttempts: 5,
@@ -40,8 +56,14 @@ export function createCustomerOtp(
   now = new Date(),
   ttlMinutes = 10
 ) {
+  if (!customerId.trim() || !organizationId.trim()) throw new Error('OTP_SCOPE_REQUIRED');
+  validateCustomerPortalConfig({
+    ...DEFAULT_CUSTOMER_PORTAL_CONFIG,
+    otpTtlMinutes: ttlMinutes,
+  });
   const code = String(randomBytes(4).readUInt32BE() % 1_000_000).padStart(6, '0');
   const salt = randomBytes(16).toString('hex');
+  const expiresAt = new Date(now.getTime() + ttlMinutes * 60_000);
   return {
     code,
     challenge: {
@@ -49,9 +71,11 @@ export function createCustomerOtp(
       organizationId,
       digest: otpDigest(code, salt, customerId, organizationId),
       salt,
-      expiresAt: new Date(now.getTime() + ttlMinutes * 60_000),
+      expiresAt,
       attempts: 0,
-    },
+      consumedAt: null,
+      audit: [{ kind: 'ISSUED', at: new Date(now) }],
+    } satisfies CustomerOtpChallenge,
   };
 }
 
@@ -60,28 +84,49 @@ function otpDigest(code: string, salt: string, customerId: string, organizationI
 }
 
 export function verifyCustomerOtp(
-  challenge: ReturnType<typeof createCustomerOtp>['challenge'],
+  challenge: CustomerOtpChallenge,
   input: { code: string; customerId: string; organizationId: string },
   now = new Date(),
   maxAttempts = 5
 ) {
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10)
+    throw new Error('OTP_ATTEMPTS_OUT_OF_RANGE');
   if (
     challenge.customerId !== input.customerId ||
     challenge.organizationId !== input.organizationId
-  )
+  ) {
+    challenge.audit.push({ kind: 'FAILED', at: new Date(now) });
     return { ok: false as const, reason: 'SCOPE_MISMATCH' as const };
-  if (now >= challenge.expiresAt) return { ok: false as const, reason: 'EXPIRED' as const };
-  if (challenge.attempts >= maxAttempts) return { ok: false as const, reason: 'LOCKED' as const };
+  }
+  if (now >= challenge.expiresAt) {
+    challenge.audit.push({ kind: 'FAILED', at: new Date(now) });
+    return { ok: false as const, reason: 'EXPIRED' as const };
+  }
+  if (challenge.consumedAt) {
+    challenge.audit.push({ kind: 'REPLAY_BLOCKED', at: new Date(now) });
+    return { ok: false as const, reason: 'CONSUMED' as const };
+  }
+  if (challenge.attempts >= maxAttempts) {
+    challenge.audit.push({ kind: 'LOCKED', at: new Date(now) });
+    return { ok: false as const, reason: 'LOCKED' as const };
+  }
   challenge.attempts += 1;
-  if (!/^\d{6}$/.test(input.code)) return { ok: false as const, reason: 'INVALID' as const };
+  if (!/^\d{6}$/.test(input.code)) {
+    challenge.audit.push({ kind: 'FAILED', at: new Date(now) });
+    return { ok: false as const, reason: 'INVALID' as const };
+  }
   const actual = otpDigest(input.code, challenge.salt, input.customerId, input.organizationId);
-  return timingSafeEqual(actual, challenge.digest)
-    ? {
-        ok: true as const,
-        customerId: challenge.customerId,
-        organizationId: challenge.organizationId,
-      }
-    : { ok: false as const, reason: 'INVALID' as const };
+  if (!timingSafeEqual(actual, challenge.digest)) {
+    challenge.audit.push({ kind: 'FAILED', at: new Date(now) });
+    return { ok: false as const, reason: 'INVALID' as const };
+  }
+  challenge.consumedAt = new Date(now);
+  challenge.audit.push({ kind: 'VERIFIED', at: new Date(now) });
+  return {
+    ok: true as const,
+    customerId: challenge.customerId,
+    organizationId: challenge.organizationId,
+  };
 }
 
 /** Only transactional, content-free copy is permitted on WhatsApp (Meta/DRAP safe). */
