@@ -436,7 +436,7 @@ describe('counter receipt authorization', () => {
   });
 
   it('keeps Khata tender off the branch-assignment guard', async () => {
-    const f = fixture(dispense);
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
     f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
     await expect(
       f.caller().tender({

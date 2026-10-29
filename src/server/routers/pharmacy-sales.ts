@@ -164,7 +164,7 @@ async function khataScope(ctx: TRPCContext, branch: string) {
     ctx.organization.id !== scope.organizationId ||
     ctx.session!.user.organizationId !== scope.organizationId ||
     !hasModule(ctx.entitlements, 'pharmacy-counter') ||
-    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:counter', undefined, {
       db: ctx.db,
       source: 'TRPC',
     }))
