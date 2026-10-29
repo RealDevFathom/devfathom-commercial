@@ -9,13 +9,13 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { moneyLabel } from '@/lib/finance/currency';
+import {
+  allowedInvoiceStatusTransitions,
+  type InvoiceStatusValue,
+} from '@/lib/finance/invoice-status';
 import { format } from 'date-fns';
 
-type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
-
-const INVOICE_STATUSES: InvoiceStatus[] = ['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED'];
-
-const statusConfig: Record<string, { bg: string; label: string }> = {
+const statusConfig: Record<InvoiceStatusValue, { bg: string; label: string }> = {
   DRAFT: { bg: 'bg-muted text-muted-foreground', label: 'Draft' },
   SENT: { bg: 'bg-blue-500/10 text-blue-500', label: 'Sent' },
   PAID: { bg: 'bg-emerald-500/10 text-emerald-500', label: 'Paid' },
@@ -26,7 +26,7 @@ const statusConfig: Record<string, { bg: string; label: string }> = {
 type InvoiceRowData = {
   id: string;
   invoiceNumber: string;
-  status: string;
+  status: InvoiceStatusValue;
   currency: string;
   total: unknown;
   dueDate: Date | string;
@@ -60,7 +60,7 @@ export function InvoicesTab() {
   });
 
   const handleUpdateStatus = useCallback(
-    (id: string, status: InvoiceStatus) => mutateStatus({ id, status }),
+    (id: string, status: InvoiceStatusValue) => mutateStatus({ id, status }),
     [mutateStatus]
   );
 
@@ -174,12 +174,13 @@ const InvoiceRow = memo(function InvoiceRow({
   onUpdateStatus,
 }: {
   inv: InvoiceRowData;
-  onUpdateStatus: (id: string, status: InvoiceStatus) => void;
+  onUpdateStatus: (id: string, status: InvoiceStatusValue) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const config = statusConfig[inv.status] || statusConfig.DRAFT;
+  const allowedStatuses = allowedInvoiceStatusTransitions(inv.status);
 
   // Anchor the menu to the button's viewport rect and render it in a portal, so it
   // escapes the virtualizer's per-row transform stacking contexts (which otherwise
@@ -187,7 +188,7 @@ const InvoiceRow = memo(function InvoiceRow({
   const openMenu = useCallback(() => {
     const rect = btnRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const MENU_HEIGHT = 160; // ~5 status rows
+    const MENU_HEIGHT = allowedStatuses.length * 30 + 8;
     const below = rect.bottom + 4;
     const openUp = below + MENU_HEIGHT > window.innerHeight;
     setMenuPos({
@@ -195,7 +196,7 @@ const InvoiceRow = memo(function InvoiceRow({
       left: rect.left + rect.width / 2,
     });
     setMenuOpen(true);
-  }, []);
+  }, [allowedStatuses.length]);
 
   // The menu is viewport-fixed, so dismiss it when the page scrolls or resizes
   // rather than letting it detach from the button.
@@ -247,17 +248,14 @@ const InvoiceRow = memo(function InvoiceRow({
                 className="fixed z-[61] w-32 -translate-x-1/2 rounded-xl border border-border bg-card py-1 shadow-xl shadow-black/10"
                 style={{ top: menuPos.top, left: menuPos.left }}
               >
-                {INVOICE_STATUSES.map((s) => (
+                {allowedStatuses.map((s) => (
                   <button
                     key={s}
                     onClick={() => {
                       onUpdateStatus(inv.id, s);
                       setMenuOpen(false);
                     }}
-                    className={cn(
-                      'flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-secondary',
-                      inv.status === s && 'bg-secondary font-medium'
-                    )}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-secondary"
                   >
                     <div
                       className={cn(
