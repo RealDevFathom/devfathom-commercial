@@ -15,11 +15,13 @@ const projectFindUnique = vi.fn();
 const projectUpdate = vi.fn();
 const membershipFindUnique = vi.fn();
 const userFindMany = vi.fn();
+const activityCreate = vi.fn();
 const db = {
   project: { create: projectCreate, findUnique: projectFindUnique, update: projectUpdate },
   projectMember: { findUnique: membershipFindUnique },
   user: { findMany: userFindMany },
   client: { findMany: vi.fn() },
+  activity: { create: activityCreate },
 };
 
 function caller() {
@@ -48,6 +50,7 @@ describe('project date ranges', () => {
     vi.clearAllMocks();
     membershipFindUnique.mockResolvedValue({ role: 'MEMBER' });
     userFindMany.mockResolvedValue([{ id: 'user_1' }]);
+    activityCreate.mockResolvedValue({ id: 'activity_1' });
   });
 
   it('rejects an invalid range when creating a project', async () => {
