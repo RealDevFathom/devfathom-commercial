@@ -1123,19 +1123,6 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
   });
 
-<<<<<<< HEAD
-  it.each([
-    'single',
-    'gs1',
-    'stockout',
-    'stale',
-    'error',
-    'busy',
-    'unmount',
-    'unmount-create',
-    'stale-create',
-  ])('handles %s barcode results without adding an unsafe or stale line', async (mode) => {
-=======
   it.each(['SOLO', 'STAFFED'] as const)(
     'submits fresh %s authorization for a non-controlled Rx line',
     async (mode) => {
@@ -1216,8 +1203,17 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     }
   );
 
-  it('adds a barcode on Enter only when the search returns that single medicine', async () => {
->>>>>>> origin/codex/demo-operating-mode
+  it.each([
+    'single',
+    'gs1',
+    'stockout',
+    'stale',
+    'error',
+    'busy',
+    'unmount',
+    'unmount-create',
+    'stale-create',
+  ])('handles %s barcode results without adding an unsafe or stale line', async (mode) => {
     const row = {
       medicineId: 'med-barcode',
       displayName: 'Paracetamol',

@@ -514,17 +514,12 @@ describe('optional pharmacy Owner / Operator', () => {
         key: 'owner',
         capabilities: [
           'pharmacy:*',
-<<<<<<< HEAD
           'pharmacy:loyalty-manage',
-          'reports:operational',
-          'reports:financial',
-=======
           'reports:operational',
           'reports:financial',
           'pharmacy:dispense',
           'pharmacy:safety',
           'pharmacy:catalogue-review',
->>>>>>> origin/codex/demo-operating-mode
         ],
       },
       {

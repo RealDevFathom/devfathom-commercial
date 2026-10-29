@@ -125,11 +125,7 @@ beforeEach(() => {
       restaurantStaffProfile: {
         findUnique: async () => ({
           status: 'ACTIVE',
-<<<<<<< HEAD
           primaryBranchId: 'branch-1',
-=======
-          primaryBranchId: mocks.ctx.device.branchId,
->>>>>>> origin/codex/demo-operating-mode
           jobRoles: [],
           directCapabilityGrants: [],
           user: {

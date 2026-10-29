@@ -889,7 +889,6 @@ function ScopedPharmacyCounterConsole({
         });
         return;
       }
-<<<<<<< HEAD
       const overrideLotId = batchOverride?.inventoryLotId ?? null;
       if (overrideLotId && !batchOverride?.reason.trim()) {
         setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
@@ -927,6 +926,8 @@ function ScopedPharmacyCounterConsole({
         }
         const refSerial = Number(controlledAuth.refSerial);
         const added = await addLine.mutateAsync({
+          prescriptionApproval: !controlled && (row.restriction.rx || row.restriction.restricted)
+            ? { pin: rxApprovalPin || undefined, checkerId: rxCheckerId || undefined } : undefined,
           controlledAuthorization:
             controlled && patient
               ? {
@@ -954,16 +955,6 @@ function ScopedPharmacyCounterConsole({
           // the add chord cannot post the same line twice.
           idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
           ...(overrideLotId && batchOverride
-=======
-      const refSerial = Number(controlledAuth.refSerial);
-      const added = await addLine.mutateAsync({
-        prescriptionApproval:
-          !controlled && (activeRow.restriction.rx || activeRow.restriction.restricted)
-            ? { pin: rxApprovalPin || undefined, checkerId: rxCheckerId || undefined }
-            : undefined,
-        controlledAuthorization:
-          controlled && patient
->>>>>>> origin/codex/demo-operating-mode
             ? {
                 override: {
                   inventoryLotId: overrideLotId,
@@ -999,14 +990,16 @@ function ScopedPharmacyCounterConsole({
         });
       } finally {
         setControlledAuth((value) => ({ ...value, pin: '' }));
+        setRxApprovalPin('');
         setPending(null);
       }
-<<<<<<< HEAD
     },
     [
       activeRow,
       addLine,
       controlledAuth,
+      rxApprovalPin,
+      rxCheckerId,
       patient,
       patientAddress,
       branchId,
@@ -1021,57 +1014,10 @@ function ScopedPharmacyCounterConsole({
       utils,
     ]
   );
-=======
-      await refreshCart();
-      await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
-      await utils.pharmacySafety.controlledRegister.invalidate();
-      await utils.pharmacySales.counterSearch.invalidate();
-      setLotOverride(null);
-      setNotice({
-        tone: 'success',
-        message: `${quantity} × ${activeRow.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
-      });
-      setQuery('');
-      focusSearch();
-    } catch (error) {
-      const message = messageFrom(error);
-      setNotice({
-        tone: 'danger',
-        message,
-        ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
-          ? { inventoryBranchId: branchId }
-          : {}),
-      });
-    } finally {
-      setControlledAuth((value) => ({ ...value, pin: '' }));
-      setRxApprovalPin('');
-      setPending(null);
-    }
-  }, [
-    activeRow,
-    addLine,
-    controlledAuth,
-    rxApprovalPin,
-    rxCheckerId,
-    patient,
-    patientAddress,
-    branchId,
-    busy,
-    ensureSale,
-    focusSearch,
-    lotOverride,
-    preview,
-    quantity,
-    refreshCart,
-    selectedOption,
-    utils,
-  ]);
->>>>>>> origin/codex/demo-operating-mode
 
   // Authentication belongs to this scan; other pending actions must still block its add.
   const barcodeBusy = useRef(false);
   useEffect(() => {
-<<<<<<< HEAD
     barcodeBusy.current = busy && pending !== 'authenticatePack';
   }, [busy, pending]);
 
@@ -1099,48 +1045,6 @@ function ScopedPharmacyCounterConsole({
       // The search query renders its own error; a failed scan never adds a line.
     }
   }, [activeRow, addToCart, branchId, busy, preview, runSearch, saleUnit, stageRow, utils]);
-=======
-    const token = barcodeAdd.current;
-    if (!token || token !== trimmedQuery || !searchCurrent) return;
-    if (searchQuery.isFetching || searchQuery.isPlaceholderData || searchQuery.isError) return;
-    // Deliver the asynchronous search result as a cancellable scan callback.
-    // A new scan, changed preview or unmount invalidates this delivery.
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (cancelled || barcodeAdd.current !== token) return;
-      const found = searchQuery.data?.rows ?? [];
-      if (found.length !== 1) {
-        barcodeAdd.current = null;
-        return;
-      }
-      const row = found[0]!;
-      const nextUnit = row.saleUnits[0]?.kind ?? null;
-      if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
-        stageRow(row);
-        return;
-      }
-      barcodeAdd.current = null;
-      if (!preview?.sufficient || busy) return;
-      void addToCart();
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    activeRow,
-    addToCart,
-    busy,
-    preview,
-    saleUnit,
-    searchCurrent,
-    searchQuery.data,
-    searchQuery.isError,
-    searchQuery.isFetching,
-    searchQuery.isPlaceholderData,
-    stageRow,
-    trimmedQuery,
-  ]);
->>>>>>> origin/codex/demo-operating-mode
 
   const runTransition = useCallback(
     async (action: 'hold' | 'resume' | 'void', reason?: string) => {

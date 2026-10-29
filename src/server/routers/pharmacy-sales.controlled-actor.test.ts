@@ -50,8 +50,8 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
   const register = vi.fn();
   const db = {
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
-<<<<<<< HEAD
-    pharmacyBranch: { findMany: async () => [{ id: 'branch-1' }] },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
+    pharmacyBranch: { findFirst: vi.fn(async () => ({ id: 'branch-1' })), findMany: async () => [{ id: 'branch-1' }] },
     branchRegulatoryProfile: {
       findFirst: async () => ({
         branchId: 'branch-1',
@@ -70,12 +70,6 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
           pharmacistCoverageRule: { provisional: false },
         },
       }),
-=======
-    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
-    pharmacyBranch: {
-      findFirst: vi.fn(async () => ({ id: 'branch-1' })),
-      findMany: async () => [{ id: 'branch-1' }],
->>>>>>> origin/codex/demo-operating-mode
     },
     medicine: {
       findFirst: async () => ({ id: 'medicine-1', controlled: true, manufacturer: 'Maker' }),

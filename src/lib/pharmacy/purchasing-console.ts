@@ -375,11 +375,8 @@ export async function purchasingWorkspace(
     branches,
     stockLocations,
     suppliers,
-<<<<<<< HEAD
-=======
     soloApprovalAllowed: solo,
     directPurchaseApprovers,
->>>>>>> origin/codex/demo-operating-mode
     approvers: eligibleApprovers.map(({ id, name, email }) => ({ id, name, email })),
     medicines: medicines.map((medicine) => ({
       id: medicine.id,

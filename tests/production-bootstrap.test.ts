@@ -13,7 +13,6 @@ import {
   HOSPITALITY_PACKAGES,
   packageDefaultSeats,
   PHARMACY_PACKAGES,
-  packageDefaultSeats,
   RESTAURANT_MODULES,
   RESTAURANT_DEPARTMENTS,
   RESTAURANT_ROLE_TEMPLATES,
@@ -86,7 +85,6 @@ function fakeTransaction() {
     }),
   };
   const platformPackage = {
-<<<<<<< HEAD
     findMany: vi.fn(async (args: { where: { key: { in: string[] } } }) =>
       args.where.key.in.filter((key) => packages.has(key)).map((key) => ({ key }))
     ),
@@ -107,12 +105,6 @@ function fakeTransaction() {
           key: args.where.key,
           defaultSeats: args.create?.defaultSeats,
         });
-=======
-    updateMany: vi.fn(async () => ({ count: 0 })),
-    findMany: findManyByKey(packageKeys),
-    upsert: vi.fn(async (args: { where: { key: string } }) => {
-      packageKeys.add(args.where.key);
->>>>>>> origin/codex/demo-operating-mode
       return { id: `package_${args.where.key}` };
     }),
   };
@@ -670,11 +662,7 @@ describe('explicit Restaurant fresh bootstrap', () => {
         status: 'ONBOARDING',
         isDemo: false,
         packageId: 'package_restaurant-essentials',
-<<<<<<< HEAD
         seatLimit: packageDefaultSeats(selected),
-=======
-        seatLimit: 10,
->>>>>>> origin/codex/demo-operating-mode
       }),
     ]);
     expect([...fake.packages.keys()]).toEqual(['restaurant-essentials']);

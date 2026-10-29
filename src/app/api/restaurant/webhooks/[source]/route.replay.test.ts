@@ -19,7 +19,6 @@ vi.mock('@/lib/tenancy/host', () => ({
   resolveExplicitOrganizationByHost: mocks.resolveOrganization,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: mocks.createTenantDb }));
-<<<<<<< HEAD
 vi.mock('@/lib/restaurant/webhook-inbox', () => ({
   recordInboundWebhook: mocks.recordInboundWebhook,
   webhookEnvelopeSchema: z
@@ -30,21 +29,6 @@ vi.mock('@/lib/restaurant/webhook-inbox', () => ({
     })
     .strict(),
 }));
-=======
-vi.mock('@/lib/restaurant/webhook-inbox', async () => {
-  const { z } = await import('zod');
-  return {
-    recordInboundWebhook: mocks.recordInboundWebhook,
-    webhookEnvelopeSchema: z
-      .object({
-        externalEventId: z.string().min(1).max(200),
-        eventType: z.string().min(1).max(200).optional(),
-        payload: z.record(z.string(), z.unknown()),
-      })
-      .strict(),
-  };
-});
->>>>>>> origin/codex/demo-operating-mode
 
 import { POST } from './route';
 
