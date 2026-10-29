@@ -156,6 +156,10 @@ describe('pharmacy report catalog filters', () => {
     expect(screen.getByText('Source:').parentElement).toHaveTextContent('pharmacy_sales');
     expect(screen.getByRole('heading', { name: 'Daily owner digest' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Anomaly review signals' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Open related audit trail' })).toHaveAttribute(
+      'href',
+      expect.stringContaining('/audit-logs?')
+    );
     expect(
       screen.getByRole('heading', { name: 'Expiry and supplier-return advisor' })
     ).toBeVisible();

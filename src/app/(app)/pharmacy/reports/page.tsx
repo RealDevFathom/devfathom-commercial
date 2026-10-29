@@ -655,6 +655,19 @@ export default async function PharmacyReportsPage({
                             {new Date(signal.sourceObservedAt).toLocaleString()} · policy{' '}
                             {signal.policyVersion}
                           </p>
+                          <div className="mt-3 flex flex-wrap gap-3 text-xs">
+                            {scope.userId ? (
+                              <span className="font-mono text-text-body">
+                                Staff drill-down · {scope.userId}
+                              </span>
+                            ) : null}
+                            <Link
+                              className="font-semibold text-accent-brand underline-offset-4 hover:underline"
+                              href={`/audit-logs?${new URLSearchParams({ query: scope.userId ?? signal.id })}`}
+                            >
+                              Open related audit trail
+                            </Link>
+                          </div>
                           {signal.estimateMethod ? (
                             <dl className="mt-3 grid gap-1 text-xs leading-5 text-text-muted">
                               <div>

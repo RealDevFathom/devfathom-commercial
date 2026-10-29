@@ -14,6 +14,7 @@ const LIVE_STATUSES = ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'STALE'] as const;
 type ShrinkageRow = {
   countLineId: string;
   branchId: string;
+  userId: string;
   medicineId: string;
   batchId: string;
   expectedUnits: number;
@@ -41,10 +42,28 @@ type ReturnRow = {
 type CashRow = {
   closeId: string;
   branchId: string;
+  userId: string;
   businessDate: Date;
   expectedMinor: number;
   countedMinor: number;
   varianceMinor: number;
+  occurredAt: Date;
+};
+type StaffVoidRow = {
+  branchId: string;
+  userId: string;
+  voidEvents: number;
+  completedSales: number;
+  occurredAt: Date;
+};
+type TenderMismatchRow = {
+  closeId: string;
+  branchId: string;
+  userId: string;
+  businessDate: Date;
+  tenderNetMinor: number;
+  closeExpectedMinor: number;
+  mismatchMinor: number;
   occurredAt: Date;
 };
 type PriceRow = {
@@ -82,7 +101,7 @@ export async function readPharmacyAnomalyFacts(
   const shrinkage = filters.supplierId
     ? []
     : await db.$queryRaw<ShrinkageRow[]>(Prisma.sql`
-        SELECT cl."id" AS "countLineId", cl."branchId", lot."batchMedicineId" AS "medicineId",
+        SELECT cl."id" AS "countLineId", cl."branchId", c."createdById" AS "userId", lot."batchMedicineId" AS "medicineId",
                lot."manufacturingBatchId" AS "batchId", cl."expectedUnits", cl."countedUnits",
                cl."varianceUnits", c."varianceThreshold" AS "approvedThresholdUnits", c."approvedAt" AS "occurredAt"
         FROM "pharmacy_inventory_count_lines" cl
@@ -122,13 +141,61 @@ export async function readPharmacyAnomalyFacts(
             AND NOT EXISTS (SELECT 1 FROM "pharmacy_sale_returns" sr WHERE sr."organizationId"=r."organizationId" AND sr."branchId"=r."branchId" AND sr."originalSaleId"=r."saleId")
           GROUP BY r."branchId", r."actorId" ORDER BY MAX(r."createdAt") DESC LIMIT 200`);
 
+  const staffVoid =
+    filters.supplierId || filters.ingredientId || filters.batchId
+      ? []
+      : await db.$queryRaw<StaffVoidRow[]>(Prisma.sql`
+          WITH staff_activity AS (
+            SELECT e."branchId", e."actorId" AS "userId",
+                   COUNT(*) FILTER (WHERE e."kind"='VOIDED')::int AS "voidEvents",
+                   0::int AS "completedSales", MAX(e."occurredAt") AS "occurredAt"
+            FROM "pharmacy_sale_events" e
+            WHERE e."branchId" IN (${branches}) AND e."occurredAt">=${window.from} AND e."occurredAt"<${window.to}
+            GROUP BY e."branchId", e."actorId"
+            UNION ALL
+            SELECT s."branchId", s."createdByUserId", 0::int, COUNT(*)::int, MAX(s."completedAt")
+            FROM "pharmacy_sales" s
+            WHERE s."branchId" IN (${branches}) AND s."status"='COMPLETED'
+              AND s."businessDate">=${window.from} AND s."businessDate"<${window.to}
+            GROUP BY s."branchId", s."createdByUserId"
+          )
+          SELECT "branchId", "userId", SUM("voidEvents")::int AS "voidEvents",
+                 SUM("completedSales")::int AS "completedSales", MAX("occurredAt") AS "occurredAt"
+          FROM staff_activity GROUP BY "branchId", "userId"
+          ORDER BY MAX("occurredAt") DESC LIMIT 200`);
+
   const cashVariance =
     filters.supplierId || filters.ingredientId || filters.batchId
       ? []
       : await db.$queryRaw<CashRow[]>(Prisma.sql`
-          SELECT c."id" AS "closeId", c."branchId", c."businessDate", c."cashExpectedMinor" AS "expectedMinor",
+          SELECT c."id" AS "closeId", c."branchId", c."actorId" AS "userId", c."businessDate", c."cashExpectedMinor" AS "expectedMinor",
                  c."cashCountedMinor" AS "countedMinor", c."cashVarianceMinor" AS "varianceMinor", c."createdAt" AS "occurredAt"
           FROM "pharmacy_daily_closes" c
+          WHERE c."branchId" IN (${branches}) AND c."isFinal"=true
+            AND c."businessDate">=${window.from} AND c."businessDate"<${window.to}
+            AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")
+          ORDER BY c."businessDate" DESC LIMIT 200`);
+
+  const tenderMismatch =
+    filters.supplierId || filters.ingredientId || filters.batchId
+      ? []
+      : await db.$queryRaw<TenderMismatchRow[]>(Prisma.sql`
+          SELECT c."id" AS "closeId", c."branchId", c."actorId" AS "userId", c."businessDate",
+                 (cash."tenderMinor"-cash."refundMinor")::int AS "tenderNetMinor",
+                 c."cashExpectedMinor" AS "closeExpectedMinor",
+                 (cash."tenderMinor"-cash."refundMinor"-c."cashExpectedMinor")::int AS "mismatchMinor",
+                 c."createdAt" AS "occurredAt"
+          FROM "pharmacy_daily_closes" c
+          CROSS JOIN LATERAL (
+            SELECT COALESCE(SUM(t."amountMinor"),0)::int AS "tenderMinor",
+                   COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r
+                     JOIN "pharmacy_tenders" original ON original."organizationId"=r."organizationId" AND original."id"=r."originalTenderId"
+                     WHERE r."organizationId"=c."organizationId" AND r."branchId"=c."branchId"
+                       AND r."businessDate"=c."businessDate" AND original."type"='CASH'),0)::int AS "refundMinor"
+            FROM "pharmacy_tenders" t
+            WHERE t."organizationId"=c."organizationId" AND t."branchId"=c."branchId"
+              AND t."businessDate"=c."businessDate" AND t."type"='CASH'
+          ) cash
           WHERE c."branchId" IN (${branches}) AND c."isFinal"=true
             AND c."businessDate">=${window.from} AND c."businessDate"<${window.to}
             AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")
@@ -169,8 +236,13 @@ export async function readPharmacyAnomalyFacts(
     facts: {
       shrinkage: stamp(shrinkage),
       discountOverride: stamp(discountOverride),
+      staffVoid: stamp(staffVoid),
       ghostReturn: stamp(ghostReturn),
       cashVariance: stamp(cashVariance).map((row) => ({
+        ...row,
+        businessDate: row.businessDate.toISOString().slice(0, 10),
+      })),
+      tenderMismatch: stamp(tenderMismatch).map((row) => ({
         ...row,
         businessDate: row.businessDate.toISOString().slice(0, 10),
       })),
