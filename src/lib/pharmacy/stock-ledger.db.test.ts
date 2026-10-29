@@ -457,6 +457,85 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     );
   });
 
+  it('writes quarantined stock off with custody evidence', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'quarantine-write-off');
+    const result = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 20,
+        label: 'quarantine-write-off',
+      });
+      await deps.operations.quarantinePart(db, scopeOf(fixture), {
+        inventoryLotId: lot.id,
+        stockLocationId: fixture.locationId,
+        units: 10,
+        reason: 'Manual recall hold',
+        idempotencyKeyPrefix: tag('quarantine-write-off-hold'),
+      });
+      const written = await deps.operations.writeOff(db, scopeOf(fixture), {
+        inventoryLotId: lot.id,
+        stockLocationId: fixture.locationId,
+        units: 10,
+        disposition: 'QUARANTINE',
+        witnessId: 'user_witness',
+        reason: 'Recall destruction',
+        evidenceRef: 'destruction-certificate-1',
+        idempotencyKey: tag('quarantine-write-off-destroy'),
+      });
+      const balances = await db.pharmacyStockBalance.findMany({
+        where: { inventoryLotId: lot.id },
+      });
+      return { written, balances };
+    });
+    expect(result.written.movement).toMatchObject({
+      disposition: 'QUARANTINE',
+      kind: 'WRITE_OFF',
+      quantityUnits: -10,
+    });
+    expect(result.written.custody).toMatchObject({
+      witnessId: 'user_witness',
+      evidenceRef: 'destruction-certificate-1',
+    });
+    expect(result.balances).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ disposition: 'AVAILABLE', onHandUnits: 10 }),
+        expect.objectContaining({ disposition: 'QUARANTINE', onHandUnits: 0 }),
+      ])
+    );
+  });
+
+  it('releases manually quarantined stock back to available', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'quarantine-release');
+    const balances = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 20,
+        label: 'quarantine-release',
+      });
+      await deps.operations.quarantinePart(db, scopeOf(fixture), {
+        inventoryLotId: lot.id,
+        stockLocationId: fixture.locationId,
+        units: 10,
+        reason: 'Inspection hold',
+        idempotencyKeyPrefix: tag('quarantine-release-hold'),
+      });
+      await deps.operations.releaseQuarantinedPart(db, scopeOf(fixture), {
+        inventoryLotId: lot.id,
+        stockLocationId: fixture.locationId,
+        units: 10,
+        reason: 'Inspection passed',
+        idempotencyKeyPrefix: tag('quarantine-release-clear'),
+      });
+      return db.pharmacyStockBalance.findMany({ where: { inventoryLotId: lot.id } });
+    });
+    expect(balances).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ disposition: 'AVAILABLE', onHandUnits: 20 }),
+        expect.objectContaining({ disposition: 'QUARANTINE', onHandUnits: 0 }),
+      ])
+    );
+  });
+
   it('dispatches into transit, records a batch receipt discrepancy, and enforces destination branch scope', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-workflow');
     const destinationBranch = `branch_transfer_destination_${suffix}`;

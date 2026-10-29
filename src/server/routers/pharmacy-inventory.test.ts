@@ -436,6 +436,28 @@ describe('#355 — remaining stock mutations require pharmacy:inventory', () => 
         idempotencyKeyPrefix: 'receive-1',
       },
     ],
+    [
+      'quarantinePart',
+      {
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        reason: 'Manual safety hold',
+        idempotencyKeyPrefix: 'hold-1',
+      },
+    ],
+    [
+      'releaseQuarantinedPart',
+      {
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        reason: 'Inspection passed',
+        idempotencyKeyPrefix: 'release-1',
+      },
+    ],
   ] as const)('honours an explicit DENY for %s before handler access', async (procedure, input) => {
     grant([allow('pharmacy:inventory')], [deny('pharmacy:inventory')]);
 
