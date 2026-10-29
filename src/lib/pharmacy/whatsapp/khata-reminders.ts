@@ -76,6 +76,7 @@ export type KhataReminderRunResult = {
   unknown: number;
   failed: number;
   duplicate: number;
+  complianceBlocked: number;
   skippedNoConsent: number;
   notDue: number;
 };
@@ -108,6 +109,7 @@ export async function processDueWhatsAppKhataReminders(
     unknown: 0,
     failed: 0,
     duplicate: 0,
+    complianceBlocked: 0,
     skippedNoConsent: 0,
     notDue: 0,
   };
@@ -221,7 +223,7 @@ export async function processDueWhatsAppKhataReminders(
           subject: `send:khata:${account.familyAccountId}`,
         }
       );
-      if (compliance.outcome === 'BLOCK') return null;
+      if (compliance.outcome === 'BLOCK') return { outcome: 'COMPLIANCE_BLOCKED' as const };
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: account.organizationId,
         direction: 'OUTBOUND',
@@ -236,10 +238,20 @@ export async function processDueWhatsAppKhataReminders(
         templateName: config.templates.khataReminder,
         dueDate: plan.dueDate,
       });
-      return { customerId: customer.id, patientId: customer.patientId, to, logId };
+      return {
+        outcome: 'ELIGIBLE' as const,
+        customerId: customer.id,
+        patientId: customer.patientId,
+        to,
+        logId,
+      };
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
+      continue;
+    }
+    if (recipient.outcome === 'COMPLIANCE_BLOCKED') {
+      result.complianceBlocked += 1;
       continue;
     }
     if (!recipient.logId) {

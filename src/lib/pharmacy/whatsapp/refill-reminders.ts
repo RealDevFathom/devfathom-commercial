@@ -71,6 +71,7 @@ export type RefillReminderRunResult = {
   unknown: number;
   failed: number;
   duplicate: number;
+  complianceBlocked: number;
   skippedNoConsent: number;
   notDue: number;
 };
@@ -100,6 +101,7 @@ export async function processDueWhatsAppRefillReminders(
     unknown: 0,
     failed: 0,
     duplicate: 0,
+    complianceBlocked: 0,
     skippedNoConsent: 0,
     notDue: 0,
   };
@@ -239,7 +241,7 @@ export async function processDueWhatsAppRefillReminders(
           subject: `send:refill:${capture.id}`,
         }
       );
-      if (compliance.outcome === 'BLOCK') return null;
+      if (compliance.outcome === 'BLOCK') return { outcome: 'COMPLIANCE_BLOCKED' as const };
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: capture.organizationId,
         direction: 'OUTBOUND',
@@ -254,10 +256,14 @@ export async function processDueWhatsAppRefillReminders(
         refillCaptureId: capture.id,
         dueDate: plan.dueDate,
       });
-      return { customerId: customer.id, to, logId };
+      return { outcome: 'ELIGIBLE' as const, customerId: customer.id, to, logId };
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
+      continue;
+    }
+    if (recipient.outcome === 'COMPLIANCE_BLOCKED') {
+      result.complianceBlocked += 1;
       continue;
     }
 
