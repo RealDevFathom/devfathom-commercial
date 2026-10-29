@@ -30,7 +30,15 @@ function fixture(assigned = true) {
     findFirstOrThrow: vi.fn(async () => patient),
   };
   const db = {
-    user: { findFirst: vi.fn(async () => ({ id: 'staff', role: 'EMPLOYEE' })) },
+    user: {
+      findFirst: vi.fn(async () => ({ id: 'staff', role: 'EMPLOYEE' })),
+      findUnique: vi.fn(async () => ({
+        id: 'staff',
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org',
+      })),
+    },
     pharmacyBranch: {
       findMany: vi.fn(async () => (assigned ? [{ id: 'branch-a', name: 'A' }] : [])),
     },

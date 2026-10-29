@@ -24,6 +24,11 @@ export async function enforceOperatingMode(
     select: { pharmacyOperatingMode: true },
   });
   if (organization.pharmacyOperatingMode === 'SOLO') {
+    if (input.checkerId && input.checkerId !== scope.actorId)
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'SOLO approval must name the authenticated owner.',
+      });
     if (
       await authorizeSoloApproval(
         db,

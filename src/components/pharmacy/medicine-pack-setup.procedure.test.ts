@@ -67,6 +67,7 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
         }),
       },
       pharmacyBranch: { findMany: vi.fn(async () => []) },
+      pharmacyBranchAssignment: { findMany: vi.fn(async () => []) },
       pharmacyStockLocation: { findMany: vi.fn(async () => []) },
       pharmacySupplier: { findMany: vi.fn(async () => []) },
       user: {

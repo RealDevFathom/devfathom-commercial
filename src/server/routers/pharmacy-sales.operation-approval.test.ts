@@ -34,8 +34,17 @@ import { pharmacySalesRouter } from './pharmacy-sales';
 function fixture(mode: 'SOLO' | 'STAFFED', maker = 'maker') {
   const db = {
     $queryRaw: vi.fn(async () => []),
-    organization: { findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: mode })) },
-    user: { findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager' } })) },
+    organization: {
+      findFirstOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: mode })),
+      findUniqueOrThrow: vi.fn(async () => ({ pharmacyOperatingMode: mode })),
+    },
+    user: {
+      findFirst: vi.fn(async () => ({ organizationRole: { key: 'manager' } })),
+      findMany: vi.fn(async ({ select }) => {
+        const record = { id: 'checker', name: 'Checker', email: 'private@example.test' };
+        return [Object.fromEntries(Object.entries(record).filter(([key]) => select[key]))];
+      }),
+    },
     pharmacyBranch: { findMany: vi.fn(async () => [{ id: 'branch' }]) },
     pharmacyTender: {
       findFirst: vi.fn(async () => ({ type: 'CASH', sale: { createdByUserId: maker } })),
@@ -54,6 +63,7 @@ function fixture(mode: 'SOLO' | 'STAFFED', maker = 'maker') {
   const caller = pharmacySalesRouter.createCaller(ctx);
   return {
     db,
+    caller,
     call: (
       kind: 'RETURN' | 'REFUND',
       approval: { approvalPin?: string; approvedByUserId?: string }
@@ -138,3 +148,22 @@ describe.each(['RETURN', 'REFUND'] as const)(
     });
   }
 );
+
+describe('counter approver privacy', () => {
+  it.each(['RX', 'OPERATION'] as const)(
+    'exposes only identity and display name for %s',
+    async (purpose) => {
+      const f = fixture('STAFFED');
+      await expect(f.caller.rxApprovers({ branchId: 'branch', purpose })).resolves.toEqual({
+        mode: 'STAFFED',
+        users: [{ id: 'checker', name: 'Checker' }],
+      });
+      expect(f.db.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: { id: true, name: true },
+          where: expect.objectContaining({ organizationId: 'org', status: 'ACTIVE' }),
+        })
+      );
+    }
+  );
+});

@@ -98,6 +98,7 @@ describe('write-off operating-mode integration', () => {
       { type: 'PharmacyCustodyRecord', id: result.custody.id },
       input.pin
     );
+    expect(result.custody.witnessId).toBe(scope.actorId);
     expect(mocks.verify).not.toHaveBeenCalled();
     expect(db.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -105,5 +106,40 @@ describe('write-off operating-mode integration', () => {
         targetId: result.custody.id,
       }),
     });
+  });
+});
+
+describe('write-off witness identity', () => {
+  it('rejects a substituted SOLO witness even with a valid owner PIN', async () => {
+    const db = fixture('SOLO');
+    await expect(writeOff(db as never, scope, input)).rejects.toMatchObject({
+      reason: 'COAUTH_REQUIRED',
+    });
+    expect(mocks.solo).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects inactive SOLO owner eligibility before moving stock', async () => {
+    const db = fixture('SOLO');
+    mocks.solo.mockResolvedValue(false);
+    await expect(
+      writeOff(db as never, scope, { ...input, witnessId: scope.actorId })
+    ).rejects.toMatchObject({ reason: 'COAUTH_REQUIRED' });
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a STAFFED witness whose PIN belongs to a different checker', async () => {
+    const db = fixture();
+    mocks.verify.mockImplementation(async (actor) => actor.actorId === 'different-checker');
+    await expect(writeOff(db as never, scope, input)).rejects.toMatchObject({
+      reason: 'COAUTH_REQUIRED',
+    });
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
   });
 });

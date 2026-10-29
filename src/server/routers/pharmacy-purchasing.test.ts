@@ -30,8 +30,9 @@ import { pharmacyPurchasingRouter } from './pharmacy-purchasing';
 import type { TRPCContext } from '../trpc';
 import { moduleForProcedure } from '@/lib/module-catalog';
 
-const FUTURE = new Date('2030-01-01T00:00:00.000Z');
-const PAST = new Date('2020-01-01T00:00:00.000Z');
+const FIXTURE_NOW = Date.now();
+const FUTURE = new Date(FIXTURE_NOW + 365 * 86_400_000);
+const PAST = new Date(FIXTURE_NOW - 365 * 86_400_000);
 
 function model() {
   return {

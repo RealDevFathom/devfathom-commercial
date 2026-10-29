@@ -526,8 +526,9 @@ async function receiveTransferWithVariance(
     if (step.varianceUnits === 0) continue;
     const evidence = input.variance!;
     const custodyId = randomUUID();
+    let approverId: string;
     try {
-      await enforceOperatingMode(
+      const approval = await enforceOperatingMode(
         db,
         { ...scope, branchId: transfer.fromBranchId },
         {
@@ -539,6 +540,7 @@ async function receiveTransferWithVariance(
           pin: evidence.pin,
         }
       );
+      approverId = approval.actorId;
     } catch {
       throw new PharmacyInventoryError('COAUTH_REQUIRED');
     }
@@ -565,7 +567,7 @@ async function receiveTransferWithVariance(
         branchId: transfer.fromBranchId,
         movementId: movement.id,
         actorId: scope.actorId,
-        witnessId: evidence.witnessId,
+        witnessId: approverId,
         reason: evidence.reason,
         evidenceRef: evidence.evidenceRef,
       },

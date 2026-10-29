@@ -2474,7 +2474,7 @@ function ScopedPharmacyCounterConsole({
                       <option value="">Select independent pharmacist</option>
                       {rxApproversQuery.data?.users.map((checker) => (
                         <option key={checker.id} value={checker.id}>
-                          {checker.name || checker.email}
+                          {checker.name || 'Pharmacist'}
                         </option>
                       ))}
                     </select>

@@ -213,6 +213,20 @@ describe('pharmacovigilance PostgreSQL authorization and review', () => {
           expect(
             (await act('owner', (api) => api.exportPharmacovigilanceDrap(exportInput))).reports
           ).toHaveLength(1);
+          // Non-owner roles retain their explicit assignment when role grants change.
+          await withTenantDb(org, (tx) =>
+            tx.pharmacyBranchAssignment.upsert({
+              where: {
+                organizationId_branchId_userId: {
+                  organizationId: org,
+                  branchId: id('branch'),
+                  userId: id('owner'),
+                },
+              },
+              create: { userId: id('owner'), branchId: id('branch'), ownerManaged: false },
+              update: { ownerManaged: false },
+            })
+          );
           for (const roleId of ['admin_role', 'all_role', 'owner_role']) {
             await withTenantDb(org, (tx) =>
               tx.user.update({

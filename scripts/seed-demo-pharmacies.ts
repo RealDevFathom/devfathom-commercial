@@ -223,10 +223,9 @@ export async function seedDemoPharmacies(
         ]) {
           const definition = moduleDefinitionForKey(key);
           if (!definition) throw new Error('Missing pharmacy module definition');
-          const platformModule = await tx.platformModule.upsert({
-            where: { key },
-            update: {},
-            create: {
+          await tx.platformModule.createMany({
+            skipDuplicates: true,
+            data: {
               key,
               name: definition.name,
               category: definition.category,
@@ -236,6 +235,7 @@ export async function seedDemoPharmacies(
               active: true,
             },
           });
+          const platformModule = await tx.platformModule.findUniqueOrThrow({ where: { key } });
           await tx.organizationModule.upsert({
             where: { organizationId_moduleId: { organizationId, moduleId: platformModule.id } },
             update: {},

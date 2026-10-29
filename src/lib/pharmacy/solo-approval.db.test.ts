@@ -1005,6 +1005,9 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
         }),
       { skipDrain: true }
     );
+    await withTenantDb(f.org, (db) =>
+      db.pharmacyBranchAssignment.create({ data: { userId: second.id, branchId: f.branch } })
+    );
     await withTenantDb(
       f.org,
       (db) =>

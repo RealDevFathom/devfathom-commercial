@@ -2026,7 +2026,7 @@ export const pharmacySalesRouter = router({
               : []),
           ],
         },
-        select: { id: true, name: true, email: true },
+        select: { id: true, name: true },
       });
       return { mode: organization.pharmacyOperatingMode, users };
     }),

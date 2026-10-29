@@ -37,8 +37,10 @@ function receiptDb(line: {
           authorized: true,
           licences: [
             {
-              expiresAt: new Date('2030-01-01T00:00:00.000Z'),
-              verifiedAt: new Date('2020-01-01T00:00:00.000Z'),
+              id: 'licence',
+              supersedesId: null,
+              expiresAt: new Date(AT.getTime() + 365 * 86_400_000),
+              verifiedAt: new Date(AT.getTime() - 86_400_000),
             },
           ],
         },

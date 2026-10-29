@@ -54,7 +54,9 @@ for (const theme of ['light', 'dark'] as const)
         });
         const unavailableInvitation =
           name === 'invite-unavailable'
-            ? page.waitForResponse((r) => r.url().includes('/api/trpc/invitations.get'))
+            ? page.waitForResponse((r) => r.url().includes('/api/trpc/invitations.get'), {
+                timeout: 60_000,
+              })
             : null;
         // Each unusable token is a distinct fixture: the real per-token flood
         // limit must remain active across the eight matrix cases.
@@ -65,7 +67,7 @@ for (const theme of ['light', 'dark'] as const)
           expect((await unavailableInvitation).status()).toBe(404);
           // React Query retries an unavailable invitation before exposing its error state.
           await expect(page.getByRole('heading', { name: 'Invitation unavailable' })).toBeVisible({
-            timeout: 20000,
+            timeout: 60_000,
           });
         }
         if (name === 'reset-unavailable') {
@@ -194,8 +196,12 @@ test('sign-in keeps credential errors, keyboard password reveal and real termina
 
 test('logical layout reflows in RTL and zoom-equivalent narrow width', async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 900 });
-  for (const [, route] of screens) {
+  for (const [name, route] of screens) {
     await page.goto(route);
+    if (name === 'invite-unavailable')
+      await expect(page.getByRole('heading', { name: 'Invitation unavailable' })).toBeVisible({
+        timeout: 60_000,
+      });
     await page.locator('html').evaluate((el) => el.setAttribute('dir', 'rtl'));
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true

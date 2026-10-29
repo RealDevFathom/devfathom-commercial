@@ -939,7 +939,7 @@ export const projectsRouter = router({
     .input(z.object({ taskIds: z.array(z.string()).min(1) }))
     .mutation(async ({ ctx, input }) => {
       for (const taskId of input.taskIds) {
-        await assertTaskAccess(ctx, taskId);
+        await assertTaskAccess(ctx, taskId, { manage: true });
       }
       await ctx.db.task.deleteMany({ where: { id: { in: input.taskIds } } });
       return { success: true };

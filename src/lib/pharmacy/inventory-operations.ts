@@ -178,8 +178,9 @@ export async function writeOff(
 ) {
   assertPositive(input.units);
   const custodyId = randomUUID();
+  let approverId: string;
   try {
-    await enforceOperatingMode(db, scope, {
+    const approval = await enforceOperatingMode(db, scope, {
       kind: 'ADJUSTMENT',
       makerIds: [scope.actorId],
       checkerId: input.witnessId,
@@ -187,6 +188,7 @@ export async function writeOff(
       targetId: custodyId,
       pin: input.pin,
     });
+    approverId = approval.actorId;
   } catch {
     throw new PharmacyInventoryError('COAUTH_REQUIRED');
   }
@@ -229,7 +231,7 @@ export async function writeOff(
       branchId: scope.branchId,
       movementId: movement.id,
       actorId: scope.actorId,
-      witnessId: input.witnessId,
+      witnessId: approverId,
       reason: input.reason,
       evidenceRef: input.evidenceRef,
     },
