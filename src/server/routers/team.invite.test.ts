@@ -155,6 +155,43 @@ describe('team.inviteMember duplicate guard', () => {
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
+  it('rejects an administrator denied team:setRole before reading invitation data', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'team:setRole');
+
+    await expect(
+      caller().inviteMember({ ...invite, email: 'cashier@example.com' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'team:setRole',
+      undefined,
+      expect.objectContaining({ source: 'TRPC', db })
+    );
+    expect(mocks.departmentFindFirst).not.toHaveBeenCalled();
+    expect(mocks.findFirst).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an administrator denied team:setRole before updating a member role', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'team:setRole');
+
+    await expect(caller().adminUpdateMember({ id: 'user_2', role: 'ADMIN' })).rejects.toMatchObject(
+      {
+        code: 'FORBIDDEN',
+      }
+    );
+
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'team:setRole',
+      undefined,
+      expect.objectContaining({ source: 'TRPC', db })
+    );
+    expect(mocks.departmentFindFirst).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
   it('retains seat limits without HR', async () => {
     mocks.findFirst.mockResolvedValue(null);
     await expect(

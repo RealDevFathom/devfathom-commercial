@@ -151,6 +151,24 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // `adminProcedure` only proves the caller has coarse admin access. Role
+      // assignment is independently revocable, so honor a custom DENY before
+      // looking up invitation data or creating a member.
+      const maySetRole = await can(
+        subjectFromSession(ctx.session.user),
+        'team:setRole',
+        undefined,
+        {
+          source: 'TRPC',
+          db: ctx.db,
+        }
+      );
+      if (!maySetRole) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission for this action.',
+        });
+      }
       const email = input.email;
       const department = await ctx.db.organizationDepartment.findFirst({
         where: { key: input.department, active: true },
@@ -813,6 +831,22 @@ export const teamRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      if (input.role !== undefined) {
+        // Keep profile-only edits behind the existing admin gate, but require
+        // the independently revocable role capability for privilege changes.
+        const maySetRole = await can(
+          subjectFromSession(ctx.session.user),
+          'team:setRole',
+          undefined,
+          { source: 'TRPC', db: ctx.db }
+        );
+        if (!maySetRole) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You do not have permission for this action.',
+          });
+        }
+      }
       if (input.department) {
         const department = await ctx.db.organizationDepartment.findFirst({
           where: { key: input.department, active: true },
