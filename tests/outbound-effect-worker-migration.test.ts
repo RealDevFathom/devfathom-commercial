@@ -1,14 +1,18 @@
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import pg from 'pg';
 import { describe, expect, it } from 'vitest';
 
-const migrationPath = 'prisma/migrations/20261021160000_outbound_effect_worker/migration.sql';
+const migrationPath = 'prisma/migrations/20261029000361_outbound_effect_worker/migration.sql';
 const migration = readFileSync(migrationPath, 'utf8');
 
 describe('outbound effect worker migration', () => {
-  it('uses a timestamp after the pharmacy register migrations', () => {
+  it('uses its reserved unique timestamp after the pharmacy register migrations', () => {
     expect(existsSync(migrationPath)).toBe(true);
+    const migrationNames = readdirSync('prisma/migrations');
+    expect(migrationNames.filter((name) => name.startsWith('20261029000361_'))).toEqual([
+      '20261029000361_outbound_effect_worker',
+    ]);
     expect(existsSync('prisma/migrations/20261021140000_outbound_effect_worker')).toBe(false);
     expect(existsSync('prisma/migrations/20261021150000_outbound_effect_worker')).toBe(false);
   });
