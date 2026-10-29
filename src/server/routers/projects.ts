@@ -42,6 +42,63 @@ const hoursInput = z
 // same 2-decimal precision the column stores.
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+type ProjectMemberRole = 'LEAD' | 'MEMBER';
+
+/**
+ * Serialize membership changes for one project inside the request transaction.
+ * The transaction-scoped advisory lock makes the lead count and the following
+ * write one critical section, including when two different leads are demoted
+ * concurrently.
+ */
+async function changeProjectMemberRole(
+  db: Parameters<typeof logActivity>[0],
+  input: { projectId: string; userId: string; role: ProjectMemberRole },
+  createIfMissing: boolean
+) {
+  return db.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      input.projectId
+    );
+
+    const target = await tx.projectMember.findUnique({
+      where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+    });
+
+    if (!target) {
+      if (!createIfMissing) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not on this project.' });
+      }
+      return {
+        created: true,
+        membership: await tx.projectMember.create({ data: input }),
+      };
+    }
+
+    if (target.role === input.role) return { created: false, membership: target };
+
+    if (target.role === 'LEAD' && input.role === 'MEMBER') {
+      const leadCount = await tx.projectMember.count({
+        where: { projectId: input.projectId, role: 'LEAD' },
+      });
+      if (leadCount <= 1) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Cannot demote the last lead. Promote another member first.',
+        });
+      }
+    }
+
+    return {
+      created: false,
+      membership: await tx.projectMember.update({
+        where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
+        data: { role: input.role },
+      }),
+    };
+  });
+}
+
 export const projectsRouter = router({
   getAll: protectedProcedure.query(async ({ ctx }) => {
     const isAdmin = ctx.session.user.role === 'ADMIN';
@@ -212,18 +269,14 @@ export const projectsRouter = router({
       }
       await assertInOrganization(ctx.db.user, workspaceId(ctx), [input.userId]);
 
-      // Adding a member is idempotent. Role changes for existing memberships must
-      // go through setMemberRole, which enforces the last-lead invariant.
-      const membership = await ctx.db.projectMember.upsert({
-        where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        create: { projectId: input.projectId, userId: input.userId, role: input.role },
-        update: {},
-      });
+      // Preserve the documented upsert semantics. Existing members are promoted
+      // or demoted through the same locked invariant used by setMemberRole.
+      const { membership, created } = await changeProjectMemberRole(ctx.db, input, true);
       const [project, targetUser] = await Promise.all([
         ctx.db.project.findUnique({ where: { id: input.projectId }, select: { name: true } }),
         ctx.db.user.findUnique({ where: { id: input.userId }, select: { name: true } }),
       ]);
-      if (project && targetUser) {
+      if (created && project && targetUser) {
         logActivity(ctx.db, ctx.session.user.id, {
           type: 'project_member_added',
           message: `added ${targetUser.name} to ${project.name}`,
@@ -326,26 +379,8 @@ export const projectsRouter = router({
         });
       }
 
-      // Block demoting the last lead
-      if (input.role === 'MEMBER') {
-        const leadCount = await ctx.db.projectMember.count({
-          where: { projectId: input.projectId, role: 'LEAD' },
-        });
-        const target = await ctx.db.projectMember.findUnique({
-          where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        });
-        if (target?.role === 'LEAD' && leadCount <= 1) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Cannot demote the last lead. Promote another member first.',
-          });
-        }
-      }
-
-      return ctx.db.projectMember.update({
-        where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
-        data: { role: input.role },
-      });
+      const { membership } = await changeProjectMemberRole(ctx.db, input, false);
+      return membership;
     }),
 
   getById: protectedProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {

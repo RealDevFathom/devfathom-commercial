@@ -11,14 +11,24 @@ vi.mock('@/server/audit', () => ({
 import { projectsRouter } from './projects';
 
 const membershipFindUnique = vi.fn();
-const membershipUpsert = vi.fn();
+const membershipCreate = vi.fn();
+const membershipUpdate = vi.fn();
+const membershipCount = vi.fn();
 const userFindMany = vi.fn();
 const userFindUnique = vi.fn();
 const projectFindUnique = vi.fn();
 const activityCreate = vi.fn();
+const executeRaw = vi.fn();
 
 const db = {
-  projectMember: { findUnique: membershipFindUnique, upsert: membershipUpsert },
+  $executeRawUnsafe: executeRaw,
+  $transaction: vi.fn(async (run: (tx: typeof db) => Promise<unknown>) => run(db)),
+  projectMember: {
+    findUnique: membershipFindUnique,
+    create: membershipCreate,
+    update: membershipUpdate,
+    count: membershipCount,
+  },
   user: { findMany: userFindMany, findUnique: userFindUnique },
   project: { findUnique: projectFindUnique },
   activity: { create: activityCreate },
@@ -53,40 +63,64 @@ describe('projects.addMember role invariants', () => {
       userId: 'lead_1',
       role: 'LEAD',
     });
+    membershipCount.mockResolvedValue(1);
     userFindMany.mockResolvedValue([{ id: 'lead_1' }]);
-    projectFindUnique.mockResolvedValue(null);
-    userFindUnique.mockResolvedValue(null);
+    projectFindUnique.mockResolvedValue({ name: 'Project' });
+    userFindUnique.mockResolvedValue({ name: 'Person' });
     activityCreate.mockResolvedValue({});
+    executeRaw.mockResolvedValue(0);
   });
 
-  it('does not demote an existing lead when called with the MEMBER role', async () => {
-    const existingLead = { projectId: 'project_1', userId: 'lead_1', role: 'LEAD' };
-    membershipUpsert.mockResolvedValue(existingLead);
-
+  it('refuses to demote the last lead', async () => {
     await expect(
       caller().addMember({ projectId: 'project_1', userId: 'lead_1', role: 'MEMBER' })
-    ).resolves.toEqual(existingLead);
-
-    expect(membershipUpsert).toHaveBeenCalledWith({
-      where: { projectId_userId: { projectId: 'project_1', userId: 'lead_1' } },
-      create: { projectId: 'project_1', userId: 'lead_1', role: 'MEMBER' },
-      update: {},
-    });
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(membershipUpdate).not.toHaveBeenCalled();
+    expect(activityCreate).not.toHaveBeenCalled();
   });
 
-  it('still creates a new membership with the requested role', async () => {
-    const newLead = { projectId: 'project_1', userId: 'user_2', role: 'LEAD' };
+  it('promotes an existing member without recording a false add activity', async () => {
+    const member = { projectId: 'project_1', userId: 'user_2', role: 'MEMBER' };
+    const promoted = { ...member, role: 'LEAD' };
+    membershipFindUnique
+      .mockResolvedValueOnce({ projectId: 'project_1', userId: 'lead_1', role: 'LEAD' })
+      .mockResolvedValueOnce(member);
     userFindMany.mockResolvedValue([{ id: 'user_2' }]);
-    membershipUpsert.mockResolvedValue(newLead);
+    membershipUpdate.mockResolvedValue(promoted);
+
+    await expect(
+      caller().addMember({ projectId: 'project_1', userId: 'user_2', role: 'LEAD' })
+    ).resolves.toEqual(promoted);
+    expect(membershipUpdate).toHaveBeenCalledWith({
+      where: { projectId_userId: { projectId: 'project_1', userId: 'user_2' } },
+      data: { role: 'LEAD' },
+    });
+    expect(activityCreate).not.toHaveBeenCalled();
+  });
+
+  it('keeps an existing role idempotently without recording add activity', async () => {
+    const lead = { projectId: 'project_1', userId: 'lead_1', role: 'LEAD' };
+    await expect(
+      caller().addMember({ projectId: 'project_1', userId: 'lead_1', role: 'LEAD' })
+    ).resolves.toEqual(lead);
+    expect(membershipUpdate).not.toHaveBeenCalled();
+    expect(activityCreate).not.toHaveBeenCalled();
+  });
+
+  it('creates a new membership and records the add activity once', async () => {
+    const newLead = { projectId: 'project_1', userId: 'user_2', role: 'LEAD' };
+    membershipFindUnique
+      .mockResolvedValueOnce({ projectId: 'project_1', userId: 'lead_1', role: 'LEAD' })
+      .mockResolvedValueOnce(null);
+    userFindMany.mockResolvedValue([{ id: 'user_2' }]);
+    membershipCreate.mockResolvedValue(newLead);
 
     await expect(
       caller().addMember({ projectId: 'project_1', userId: 'user_2', role: 'LEAD' })
     ).resolves.toEqual(newLead);
-
-    expect(membershipUpsert).toHaveBeenCalledWith({
-      where: { projectId_userId: { projectId: 'project_1', userId: 'user_2' } },
-      create: { projectId: 'project_1', userId: 'user_2', role: 'LEAD' },
-      update: {},
+    expect(membershipCreate).toHaveBeenCalledWith({
+      data: { projectId: 'project_1', userId: 'user_2', role: 'LEAD' },
     });
+    expect(activityCreate).toHaveBeenCalledOnce();
   });
 });
