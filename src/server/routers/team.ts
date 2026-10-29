@@ -840,24 +840,32 @@ export const teamRouter = router({
         >,
       });
 
-      // AUTHZ-02: never strand the workspace without an admin. Block demoting or
-      // deactivating the LAST active admin (mirrors the layOffMember guard) — the
-      // sole remaining admin could otherwise lock everyone out by editing self.
       const demoting = input.role !== undefined && input.role !== 'ADMIN';
       const deactivating = input.status !== undefined && input.status !== 'ACTIVE';
-      if ((before as { role?: string } | null)?.role === 'ADMIN' && (demoting || deactivating)) {
-        const otherActiveAdmins = await ctx.db.user.count({
-          where: { id: { not: id }, role: 'ADMIN', status: 'ACTIVE' },
-        });
-        if (otherActiveAdmins === 0) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Cannot demote or deactivate the last active admin.',
+      const removesActiveAdmin =
+        (before as { role?: string; status?: string } | null)?.role === 'ADMIN' &&
+        (before as { status?: string } | null)?.status === 'ACTIVE' &&
+        (demoting || deactivating);
+      const organizationId = workspaceId(ctx);
+      const updated = await ctx.db.$transaction(async (tx) => {
+        // Serialize every path that can remove an active admin on the same
+        // organization row. The count and update must share this transaction:
+        // otherwise two admins can concurrently observe each other and both
+        // pass the last-admin guard.
+        if (removesActiveAdmin) {
+          await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
+          const activeAdmins = await tx.user.count({
+            where: { organizationId, role: 'ADMIN', status: 'ACTIVE' },
           });
+          if (activeAdmins <= 1) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Cannot demote or deactivate the last active admin.',
+            });
+          }
         }
-      }
-
-      const updated = await ctx.db.user.update({ where: { id }, data });
+        return tx.user.update({ where: { id }, data });
+      });
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: id,
@@ -938,26 +946,28 @@ export const teamRouter = router({
           message: 'You do not have permission to lay off this member.',
         });
       }
-      // Never strand the workspace without an admin: if the target is the last
-      // active ADMIN, block the lay-off.
-      if (before.role === 'ADMIN') {
-        const otherActiveAdmins = await ctx.db.user.count({
-          where: { id: { not: input.id }, role: 'ADMIN', status: 'ACTIVE' },
-        });
-        if (otherActiveAdmins === 0) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'You cannot lay off the last active admin',
-          });
-        }
-      }
       const reason = input.reason.trim();
       // AUTH-01: revoke the laid-off member's live sessions immediately (the
       // status flip already blocks new auth; bumping tokenVersion cuts off any
       // already-issued JWT on its next revalidation rather than at token expiry).
-      const updated = await ctx.db.user.update({
-        where: { id: input.id },
-        data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+      const organizationId = workspaceId(ctx);
+      const updated = await ctx.db.$transaction(async (tx) => {
+        if (before.role === 'ADMIN' && before.status === 'ACTIVE') {
+          await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
+          const activeAdmins = await tx.user.count({
+            where: { organizationId, role: 'ADMIN', status: 'ACTIVE' },
+          });
+          if (activeAdmins <= 1) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'You cannot lay off the last active admin',
+            });
+          }
+        }
+        return tx.user.update({
+          where: { id: input.id },
+          data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+        });
       });
       annotateAudit(ctx, {
         targetType: 'User',
