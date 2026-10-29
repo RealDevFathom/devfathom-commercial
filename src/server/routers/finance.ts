@@ -817,7 +817,7 @@ export const financeRouter = router({
       yearlyIncomeG,
       yearlyExpenseG,
       paidInvoicesG,
-      outstandingInvoicesG,
+      outstandingInvoices,
       recurring,
     ] = await Promise.all([
       // FIN-04: cap each "this period" window at `now` so future-dated rows can't
@@ -832,11 +832,13 @@ export const financeRouter = router({
         _count: true,
         where: { status: 'PAID' },
       }),
-      ctx.db.invoice.groupBy({
-        by: ['currency'],
-        _sum: { total: true },
-        _count: true,
+      ctx.db.invoice.findMany({
         where: { status: { in: ['SENT', 'OVERDUE'] } },
+        select: {
+          currency: true,
+          total: true,
+          payments: { select: { amount: true } },
+        },
       }),
       ctx.db.recurringExpense.findMany({
         where: { active: true },
@@ -879,6 +881,23 @@ export const financeRouter = router({
       recurringYearly
     );
 
+    // An open invoice can already have one or more partial payments. Aggregate
+    // its remaining balance rather than its original total so Outstanding agrees
+    // with the invoice list/detail views. Clamp at zero in case legacy data has
+    // an overpaid invoice that has not yet transitioned to PAID.
+    const totalOutstanding = sumByCurrency(
+      outstandingInvoices.map((invoice) => {
+        const amountPaid = invoice.payments.reduce(
+          (sum, payment) => sum + Number(payment.amount),
+          0
+        );
+        return {
+          currency: invoice.currency,
+          amount: Math.max(0, round2(Number(invoice.total) - amountPaid)),
+        };
+      })
+    );
+
     return {
       monthlyIncome,
       monthlyExpense,
@@ -888,8 +907,8 @@ export const financeRouter = router({
       yearlyProfit: diffByCurrency(yearlyIncome, yearlyExpense),
       totalPaid: fromCurrencyGroups(paidInvoicesG, 'total'),
       paidCount: paidInvoicesG.reduce((s, g) => s + g._count, 0),
-      totalOutstanding: fromCurrencyGroups(outstandingInvoicesG, 'total'),
-      outstandingCount: outstandingInvoicesG.reduce((s, g) => s + g._count, 0),
+      totalOutstanding,
+      outstandingCount: outstandingInvoices.length,
     };
   }),
 
