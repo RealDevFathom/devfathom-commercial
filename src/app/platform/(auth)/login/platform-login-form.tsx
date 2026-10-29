@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Eye, EyeOff, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -9,6 +9,8 @@ const inputClass =
   'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-muted transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
 
 export function PlatformLoginForm({ initialEnrollment = false }: { initialEnrollment?: boolean }) {
+  const errorId = useId();
+  const emailRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const [error, setError] = useState('');
   const [pending, setPending] = useState(false);
@@ -17,6 +19,15 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
   const [secret, setSecret] = useState('');
   const [code, setCode] = useState('');
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+
+  function clearSignInError() {
+    setError('');
+  }
+
+  function showSignInError(message: string) {
+    setError(message);
+    emailRef.current?.focus();
+  }
 
   async function enroll(action: 'begin' | 'confirm') {
     setPending(true);
@@ -83,7 +94,7 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
       });
       const body = (await response.json()) as { error?: string; enrollmentRequired?: boolean };
       if (!response.ok) {
-        setError(body.error ?? 'Sign in failed.');
+        showSignInError(body.error ?? 'Sign in failed.');
         return;
       }
       if (body.enrollmentRequired) {
@@ -93,7 +104,7 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
       router.replace('/platform');
       router.refresh();
     } catch {
-      setError('The control desk could not be reached. Check the connection and try again.');
+      showSignInError('The control desk could not be reached. Check the connection and try again.');
     } finally {
       setPending(false);
     }
@@ -178,6 +189,7 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
     <form method="post" onSubmit={submit} className="space-y-5">
       {error ? (
         <div
+          id={errorId}
           role="alert"
           className="rounded-[3px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
         >
@@ -190,6 +202,7 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
           Work email
         </label>
         <input
+          ref={emailRef}
           id="platform-email"
           aria-label="Work email"
           name="email"
@@ -197,6 +210,9 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
           autoComplete="username"
           autoFocus
           required
+          onChange={clearSignInError}
+          aria-invalid={Boolean(error)}
+          aria-describedby={error ? errorId : undefined}
           maxLength={254}
           className={inputClass}
           placeholder="operator@devfathom.com"
@@ -214,6 +230,9 @@ export function PlatformLoginForm({ initialEnrollment = false }: { initialEnroll
             type={showPassword ? 'text' : 'password'}
             autoComplete="current-password"
             required
+            onChange={clearSignInError}
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? errorId : undefined}
             minLength={8}
             maxLength={256}
             className={`${inputClass} pr-10`}

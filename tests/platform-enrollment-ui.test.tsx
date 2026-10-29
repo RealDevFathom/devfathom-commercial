@@ -46,3 +46,33 @@ it('resumes an enrollment cookie after refresh and permits logout', async () => 
     headers: { 'Content-Type': 'application/json' },
   });
 });
+
+it('associates a failed sign-in error with both credentials until either is edited', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({ error: 'Email or password is incorrect.' }),
+    })
+  );
+  const { container } = render(<PlatformLoginForm />);
+  const email = screen.getByLabelText('Work email');
+  const password = screen.getByLabelText('Password');
+
+  fireEvent.change(email, { target: { value: 'operator@example.test' } });
+  fireEvent.change(password, { target: { value: 'wrong password' } });
+  fireEvent.submit(container.querySelector('form')!);
+
+  const alert = await screen.findByRole('alert');
+  expect(email).toHaveAttribute('aria-invalid', 'true');
+  expect(password).toHaveAttribute('aria-invalid', 'true');
+  expect(email).toHaveAttribute('aria-describedby', alert.id);
+  expect(password).toHaveAttribute('aria-describedby', alert.id);
+  expect(email).toHaveFocus();
+
+  fireEvent.change(email, { target: { value: 'another@example.test' } });
+  expect(email).toHaveAttribute('aria-invalid', 'false');
+  expect(password).toHaveAttribute('aria-invalid', 'false');
+  expect(email).not.toHaveAttribute('aria-describedby');
+  expect(password).not.toHaveAttribute('aria-describedby');
+});

@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState, type FormEvent } from 'react';
+import { useId, useRef, useState, type FormEvent } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { Building2, Loader2 } from 'lucide-react';
@@ -30,6 +30,7 @@ export function LoginForm({
   initialError?: LoginErrorKey;
 }) {
   const errorId = useId();
+  const emailRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const hydrated = useHydrated();
   const [showPassword, setShowPassword] = useState(false);
@@ -41,6 +42,13 @@ export function LoginForm({
   const [twoFactor, setTwoFactor] = useState(
     initialError === '2fa-required' || initialError === '2fa-invalid'
   );
+
+  const clearError = () => setError('');
+
+  const showError = (message: string) => {
+    setError(message);
+    emailRef.current?.focus();
+  };
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -74,16 +82,16 @@ export function LoginForm({
         if (result.code === '2fa_required') {
           // Password was correct; the account needs a second factor. Reveal the field.
           setTwoFactor(true);
-          setError('Enter the 6-digit code from your authenticator app.');
+          showError('Enter the 6-digit code from your authenticator app.');
         } else if (result.code === '2fa_invalid') {
           setTwoFactor(true);
-          setError('That code is incorrect or expired. Try again, or use a recovery code.');
+          showError('That code is incorrect or expired. Try again, or use a recovery code.');
         } else if (result.code === 'sso_required') {
           setTwoFactor(false);
-          setError('Password sign-in is disabled. Use your organization identity provider.');
+          showError('Password sign-in is disabled. Use your organization identity provider.');
         } else {
           setTwoFactor(false);
-          setError(
+          showError(
             result.code === 'suspended'
               ? 'Your account has been suspended. Please contact your workspace administrator.'
               : 'Invalid email or password. Please try again.'
@@ -96,7 +104,7 @@ export function LoginForm({
       await appProvidersReady;
       router.replace(callbackUrl);
     } catch {
-      setError('Unable to sign in right now. Please check your connection and try again.');
+      showError('Unable to sign in right now. Please check your connection and try again.');
       setIsSubmitting(false);
     }
   };
@@ -153,6 +161,7 @@ export function LoginForm({
               Email
             </label>
             <input
+              ref={emailRef}
               id="email"
               type="email"
               placeholder={vertical === 'default' ? 'you@company.com' : `you@${vertical}.pk`}
@@ -160,6 +169,7 @@ export function LoginForm({
               autoFocus
               name="email"
               required
+              onChange={clearError}
               aria-invalid={Boolean(error)}
               aria-describedby={error ? errorId : undefined}
               className={inputClass}
@@ -180,6 +190,7 @@ export function LoginForm({
               autoComplete="current-password"
               name="password"
               required
+              onChange={clearError}
               aria-invalid={Boolean(error)}
               aria-describedby={error ? errorId : undefined}
               className={inputClass}

@@ -62,3 +62,27 @@ it('retains entered credentials and submits MFA/recovery codes through the exist
     redirect: false,
   });
 });
+
+it('associates a failed sign-in error with both fields until either field is edited', async () => {
+  m.signIn.mockResolvedValue({ error: 'CredentialsSignin', code: 'credentials' });
+  render(<LoginForm callbackUrl="/dashboard" ssoEnforced={false} connections={[]} />);
+  const email = screen.getByLabelText('Email');
+  const password = screen.getByLabelText('Password');
+
+  fireEvent.change(email, { target: { value: 'missing@example.test' } });
+  fireEvent.change(password, { target: { value: 'wrong password' } });
+  fireEvent.submit(screen.getByRole('button', { name: 'Sign in' }));
+
+  const alert = await screen.findByRole('alert');
+  expect(email).toHaveAttribute('aria-invalid', 'true');
+  expect(password).toHaveAttribute('aria-invalid', 'true');
+  expect(email).toHaveAttribute('aria-describedby', alert.id);
+  expect(password).toHaveAttribute('aria-describedby', alert.id);
+  expect(email).toHaveFocus();
+
+  fireEvent.change(password, { target: { value: 'another password' } });
+  expect(email).toHaveAttribute('aria-invalid', 'false');
+  expect(password).toHaveAttribute('aria-invalid', 'false');
+  expect(email).not.toHaveAttribute('aria-describedby');
+  expect(password).not.toHaveAttribute('aria-describedby');
+});
