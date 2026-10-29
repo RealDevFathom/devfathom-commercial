@@ -548,20 +548,6 @@ function restaurantTransaction() {
     },
     platformPackage: {
       findMany: vi.fn(async () => [...packages.values()]),
-      updateMany: vi.fn(
-        async ({
-          where,
-          data,
-        }: {
-          where: { key: string; defaultSeats: number };
-          data: { defaultSeats: number };
-        }) => {
-          const row = packages.get(where.key);
-          if (!row || row.defaultSeats !== where.defaultSeats) return { count: 0 };
-          Object.assign(row, data);
-          return { count: 1 };
-        }
-      ),
       findUnique: findPackage,
       findUniqueOrThrow: vi.fn(async (args: { where: { key: string } }) => {
         const row = await findPackage(args);

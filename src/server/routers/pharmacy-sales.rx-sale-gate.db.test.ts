@@ -170,11 +170,8 @@ async function expectRefusedEverywhere(
   const tendered = await pharmacistSale();
   await expect(payInCash(userId, tendered)).rejects.toMatchObject(tenderRefusal);
   const redeemed = await pharmacistSale({ customer: true });
-  // Redemption has an exact dispense capability guard before the sale-level gate.
-  await expect(payInPoints(userId, redeemed)).rejects.toMatchObject({
-    code: 'FORBIDDEN',
-    message: 'You do not have permission for this action.',
-  });
+  // Redemption has the exact dispense guard and its pharmacist-specific refusal.
+  await expect(payInPoints(userId, redeemed)).rejects.toMatchObject(DENIED);
   for (const sale of [tendered, redeemed])
     expect(await cart(sale.saleId)).toMatchObject({ status: 'OPEN', totals: { tenderedMinor: 0 } });
 }

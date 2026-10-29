@@ -106,7 +106,6 @@ function catalogDb(existing: string[] = []) {
       upsert: vi.fn(async (arg: { create: { key: string } }) => ({ id: arg.create.key })),
     },
     platformPackage: {
-      updateMany: vi.fn(async () => ({ count: 0 })),
       findMany: vi.fn(async () => existing.map((key) => ({ key }))),
       findUnique: vi.fn(async () => null),
       updateMany: vi.fn(async () => ({ count: 0 })),
