@@ -45,7 +45,13 @@ const statusDot: Record<string, string> = {
   INVITED: 'bg-sky-500',
 };
 
-export function TeamContent({ initialShowAddMember = false }: { initialShowAddMember?: boolean }) {
+export function TeamContent({
+  initialShowAddMember = false,
+  invitationReturnTo,
+}: {
+  initialShowAddMember?: boolean;
+  invitationReturnTo?: '/restaurant/staff';
+}) {
   const { data: session } = useSession();
   const entitlements = useEntitlements();
   const canReadDirectory = isModuleGranted('hr', entitlements.enabledModules);
@@ -54,7 +60,9 @@ export function TeamContent({ initialShowAddMember = false }: { initialShowAddMe
     isModuleGranted(moduleForProcedure('team.inviteMember')!, entitlements.enabledModules);
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');
-  const [showAddMember, setShowAddMember] = useState(initialShowAddMember);
+  // Query-string entry points are only a convenience. They must never bypass
+  // the same capability check that protects the visible Add Member action.
+  const [showAddMember, setShowAddMember] = useState(initialShowAddMember && isAdmin);
   const { data: team, isLoading } = trpc.team.getAll.useQuery(undefined, {
     enabled: canReadDirectory,
   });
@@ -170,7 +178,9 @@ export function TeamContent({ initialShowAddMember = false }: { initialShowAddMe
         </div>
       )}
 
-      {showAddMember && <AddMemberModal onClose={() => setShowAddMember(false)} />}
+      {isAdmin && showAddMember && (
+        <AddMemberModal onClose={() => setShowAddMember(false)} returnTo={invitationReturnTo} />
+      )}
     </div>
   );
 }
@@ -250,7 +260,13 @@ const TeamMemberCard = memo(function TeamMemberCard({ member }: { member: TeamMe
   );
 });
 
-export function AddMemberModal({ onClose }: { onClose: () => void }) {
+export function AddMemberModal({
+  onClose,
+  returnTo,
+}: {
+  onClose: () => void;
+  returnTo?: '/restaurant/staff';
+}) {
   const utils = trpc.useUtils();
   const inviteMember = trpc.team.inviteMember.useMutation();
   const departmentQuery = trpc.organizationAdmin.departments.useQuery(undefined, { retry: false });
@@ -367,6 +383,14 @@ export function AddMemberModal({ onClose }: { onClose: () => void }) {
                     Done
                   </button>
                 </div>
+                {returnTo ? (
+                  <Link
+                    href={`${returnTo}?invitedEmail=${encodeURIComponent(sent.email)}`}
+                    className="mt-3 text-sm font-medium text-primary hover:underline"
+                  >
+                    Return to Restaurant staff
+                  </Link>
+                ) : null}
               </div>
             </div>
           ) : (

@@ -155,8 +155,9 @@ describe('baseline workspace invitations', () => {
   });
   it('keeps invitations unavailable to employees', () => {
     state.role = 'EMPLOYEE';
-    render(<TeamContent />);
+    render(<TeamContent initialShowAddMember />);
     expect(screen.queryByRole('button', { name: 'Add Member' })).toBeNull();
+    expect(screen.queryByText('Add Team Member')).toBeNull();
     state.role = 'ADMIN';
   });
 });

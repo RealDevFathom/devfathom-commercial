@@ -124,10 +124,10 @@
     "@types/react-dom": "^19.2.3",
     "@vitest/coverage-v8": "4.1.10",
     "eslint": "^9",
-    "shadcn": "^4.2.0",
     "eslint-config-next": "16.4.2",
-    "jsdom": "30.0.0",
+    "jsdom": "29.0.0",
     "prettier": "^3.8.2",
+    "shadcn": "^4.2.0",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5",
@@ -160,9 +160,6 @@
     "http-cache-semantics": "4.3.0",
     "ip-address": "10.7.4",
     "js-yaml": "4.3.2",
-    "jsdom": {
-      "undici": "8.12.3"
-    },
     "nanoid": "3.3.18",
     "postcss": "8.5.23",
     "prisma": {

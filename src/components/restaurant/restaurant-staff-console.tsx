@@ -545,7 +545,14 @@ export function RestaurantStaffConsole() {
                       After they accept, return here to link their account and manage Job roles.
                     </p>
                     <Link
-                      href="/team?invite=1"
+                      href={{
+                        pathname: '/team',
+                        query: {
+                          invite: '1',
+                          source: 'restaurant-staff',
+                          returnTo: '/restaurant/staff',
+                        },
+                      }}
                       className={buttonVariants({
                         variant: 'outline',
                         size: 'sm',

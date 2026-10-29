@@ -8,8 +8,13 @@ export const metadata: Metadata = {
 export default async function TeamPage({
   searchParams,
 }: {
-  searchParams: Promise<{ invite?: string | string[] }>;
+  searchParams: Promise<{ invite?: string | string[]; returnTo?: string | string[] }>;
 }) {
   const query = await searchParams;
-  return <TeamContent initialShowAddMember={query.invite === '1'} />;
+  return (
+    <TeamContent
+      initialShowAddMember={query.invite === '1'}
+      invitationReturnTo={query.returnTo === '/restaurant/staff' ? query.returnTo : undefined}
+    />
+  );
 }

@@ -223,6 +223,33 @@ const entitlements = {
 } as EntitlementView;
 
 describe('Restaurant staff credential UI', () => {
+  it('offers the contextual Team invitation handoff only while creating staff', () => {
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add staff member' }));
+    const createDialog = screen.getByRole('dialog', { name: 'Add staff member' });
+    expect(
+      within(createDialog).getByRole('link', { name: 'Invite a new team member' })
+    ).toHaveAttribute(
+      'href',
+      '/team?invite=1&source=restaurant-staff&returnTo=%2Frestaurant%2Fstaff'
+    );
+
+    fireEvent.click(within(createDialog).getByRole('button', { name: 'Close' }));
+    fireEvent.click(
+      within(screen.getByRole('row', { name: /Shift Lead/ })).getByRole('button', { name: 'Edit' })
+    );
+    expect(
+      within(screen.getByRole('dialog', { name: 'Edit staff member' })).queryByRole('link', {
+        name: 'Invite a new team member',
+      })
+    ).toBeNull();
+  });
+
   it('shows the branch name without exposing its ID and preserves branch selection', () => {
     render(
       <EntitlementsProvider value={entitlements}>
