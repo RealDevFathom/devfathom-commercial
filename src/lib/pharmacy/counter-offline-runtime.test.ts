@@ -685,7 +685,7 @@ describe('PH-OFF OFF-01 — storage minimization is enforced on every write', ()
         {
           ...cashSale(1),
           payload: { ...cashSale(1).payload, customerPhone: '+92-300-0000000' },
-        },
+        } as unknown as Parameters<typeof counter.enqueue>[0],
         MATRIX
       )
     ).rejects.toMatchObject({ reason: 'FORBIDDEN_FIELD' });
@@ -695,7 +695,10 @@ describe('PH-OFF OFF-01 — storage minimization is enforced on every write', ()
     const counter = await readyCounter(createMemoryDriver());
     await expect(
       counter.enqueue(
-        { ...cashSale(1), payload: { ...cashSale(1).payload, deviceSecret: 'pcd_x' } },
+        {
+          ...cashSale(1),
+          payload: { ...cashSale(1).payload, deviceSecret: 'pcd_x' },
+        } as unknown as Parameters<typeof counter.enqueue>[0],
         MATRIX
       )
     ).rejects.toMatchObject({ reason: 'FORBIDDEN_FIELD' });

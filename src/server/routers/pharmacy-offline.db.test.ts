@@ -381,7 +381,7 @@ async function setup() {
       },
       {
         nowMs: Date.parse(command.leasedReceipt.originalSaleAt),
-        snapshots: command.snapshots.map((snapshot) => ({
+        snapshots: command.snapshots.map((snapshot: (typeof command.snapshots)[number]) => ({
           kind: snapshot.envelope.kind,
           verified: true,
           expiresAtMs: Date.parse(snapshot.envelope.expiresAt),
@@ -434,12 +434,19 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
       consumed: 1,
       nextNumber: f.lease.blockStart + 1,
     });
-    const journal = await inOrg(ORG_A, (db) =>
-      db.financeJournalEntry.findMany({
-        where: { branchId: f.fixture.branchId },
+    const journal = await inOrg(ORG_A, async (db) => {
+      const sale = await db.pharmacySale.findFirstOrThrow({
+        where: { id: results[0].saleId },
+        include: { lines: { select: { id: true } } },
+      });
+      return db.financeJournalEntry.findMany({
+        where: {
+          sourceKind: 'PHARMACY_SALE_LINE',
+          sourceId: { in: sale.lines.map(({ id }) => id) },
+        },
         include: { lines: true },
-      })
-    );
+      });
+    });
     const lines = journal.flatMap((entry) => entry.lines);
     const debits = lines
       .filter((line) => line.side === 'DEBIT')
