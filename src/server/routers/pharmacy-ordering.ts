@@ -20,6 +20,11 @@ import {
 } from '@/lib/pharmacy/customer-delivery';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  ChronicRefillError,
+  createChronicRefillSubscription,
+  createDueChronicRefillOrder,
+} from '@/lib/pharmacy/chronic-refills';
 
 import { assertInOrganization } from '../org-refs';
 import { capabilityProcedure, protectedProcedure, router, type TRPCContext } from '../trpc';
@@ -46,6 +51,11 @@ async function isStaff(ctx: TRPCContext) {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof ChronicRefillError)
+    throw new TRPCError({
+      code: error.reason === 'SUBSCRIPTION_NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+      message: error.reason,
+    });
   if (error instanceof PharmacyDeliveryError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof PharmacyCustomerOrderError) {
@@ -71,6 +81,57 @@ const orderLine = z
   .strict();
 
 export const pharmacyOrderingRouter = router({
+  createChronicRefill: staffProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          customerId: z.string().min(1),
+          medicineId: z.string().min(1),
+          presentationId: z.string().min(1),
+          packLevelId: z.string().min(1),
+          quantityPacks: z.number().int().positive().max(100),
+          prescriptionLineId: z.string().min(1).optional(),
+          fulfillment: z.enum(['COLLECT', 'DELIVER']),
+          paymentMode: z.enum(['PREPAY', 'KHATA']),
+          addressLine: z.string().trim().min(1).max(300).optional(),
+          city: z.string().trim().min(1).max(120).optional(),
+          deliveryInstructions: z.string().trim().max(500).optional(),
+          cadenceDays: z.number().int().positive().max(365),
+          nextDueAt: z.date(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          createChronicRefillSubscription(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  createDueChronicRefillOrder: staffProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          subscriptionId: z.string().min(1),
+          pharmacistDecisionId: z.string().min(1).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          createDueChronicRefillOrder(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
   deliveryCommand: staffProcedure.input(deliveryCommandInput).mutation(async ({ ctx, input }) => {
     try {
       return await ctx.db.$transaction(async (tx) =>

@@ -61,7 +61,12 @@ type ReservationCandidate = {
   branchId: string;
   batchState: 'ACTIVE' | 'RECALLED' | 'QUARANTINED';
   disposition:
-    'AVAILABLE' | 'QUARANTINE' | 'DAMAGED' | 'DESTROYED' | 'IN_TRANSIT' | 'RETURN_TO_SUPPLIER';
+    | 'AVAILABLE'
+    | 'QUARANTINE'
+    | 'DAMAGED'
+    | 'DESTROYED'
+    | 'IN_TRANSIT'
+    | 'RETURN_TO_SUPPLIER';
   expiresAt: Date;
   receivedAt: Date | null;
   packLevelId: string;
@@ -72,17 +77,20 @@ type ReservationCandidate = {
 
 const ACTIVE_ORDER_STATUSES: CustomerOrderStatus[] = ['PROPOSED', 'ACCEPTED', 'PACKING'];
 
-export function isCustomerOrderableMedicine(medicine: {
-  saleable: boolean;
-  otc: boolean;
-  rx: boolean;
-  restricted: boolean;
-  controlled: boolean;
-}) {
+export function isCustomerOrderableMedicine(
+  medicine: {
+    saleable: boolean;
+    otc: boolean;
+    rx: boolean;
+    restricted: boolean;
+    controlled: boolean;
+  },
+  reviewedRx = false
+) {
   return (
     medicine.saleable &&
-    medicine.otc &&
-    !medicine.rx &&
+    (medicine.otc || (reviewedRx && medicine.rx)) &&
+    (!medicine.rx || reviewedRx) &&
     !medicine.restricted &&
     !medicine.controlled
   );
@@ -323,6 +331,8 @@ export async function placeCustomerOrder(
     city?: string;
     deliveryInstructions?: string;
     reservationMinutes?: number;
+    /** Internal clinical gate. Public order callers must never set this. */
+    reviewedRx?: boolean;
     lines: Array<{
       medicineId: string;
       presentationId: string;
@@ -386,7 +396,7 @@ export async function placeCustomerOrder(
     });
     if (
       !medicine ||
-      !isCustomerOrderableMedicine(medicine) ||
+      !isCustomerOrderableMedicine(medicine, input.reviewedRx) ||
       medicine.presentations[0]?.packLevels.length !== 1
     ) {
       throw new PharmacyCustomerOrderError('ITEM_NOT_ORDERABLE');
