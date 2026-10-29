@@ -301,7 +301,7 @@ describe.sequential('shared pharmacy branch and owner security (forced RLS)', ()
       expect(await db.pharmacyDrawerSession.count()).toBe(0);
     });
   });
-  it('filters sibling receipts and received totals on shared orders for a branch-restricted buyer', async () => {
+  it('filters sibling receipt details but counts full shared-order progress for a branch-restricted buyer', async () => {
     const { pharmacyPurchasingRouter } = await import('./pharmacy-purchasing');
     await inOrg(async (db) => {
       const permission = await db.userPermissionOverride.create({
@@ -442,8 +442,10 @@ describe.sequential('shared pharmacy branch and owner security (forced RLS)', ()
         );
         const visible = (await buyer.purchaseOrders()).find((row) => row.id === order.id);
         expect(visible?.goodsReceipts.map((row) => row.id)).toEqual([receipts[0]!.id]);
+        expect(JSON.stringify(visible)).not.toContain(receipts[1]!.id);
+        expect(JSON.stringify(visible)).not.toContain(`NESTED-${branchB}`);
         expect(await buyer.receivedAgainstOrder({ purchaseOrderId: order.id })).toEqual({
-          [order.lines[0]!.id]: { receivedUnits: 10, acceptedUnits: 10, rejectedUnits: 0 },
+          [order.lines[0]!.id]: { receivedUnits: 30, acceptedUnits: 30, rejectedUnits: 0 },
         });
         const assertAllBranches = async (actorId: string) => {
           const caller = api(actorId);
@@ -472,7 +474,7 @@ describe.sequential('shared pharmacy branch and owner security (forced RLS)', ()
               const shared = (await scoped.purchaseOrders()).find((row) => row.id === order.id);
               expect(shared?.goodsReceipts.map((row) => row.id)).toEqual([receipts[0]!.id]);
               expect(await scoped.receivedAgainstOrder({ purchaseOrderId: order.id })).toEqual({
-                [order.lines[0]!.id]: { receivedUnits: 10, acceptedUnits: 10, rejectedUnits: 0 },
+                [order.lines[0]!.id]: { receivedUnits: 30, acceptedUnits: 30, rejectedUnits: 0 },
               });
             }
           } finally {

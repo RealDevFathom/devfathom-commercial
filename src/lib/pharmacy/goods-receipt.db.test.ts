@@ -422,6 +422,150 @@ describeIfDatabase('PH-PUR receiving — row level security', () => {
 // ── PUR-02 — receiving into the batch ledger ────────────────────────────────
 
 describeIfDatabase('PUR-02 — posting a receipt into the batch ledger', () => {
+  it('counts both branches of a shared order without disclosing hidden receipts or posting overage', async () => {
+    const { listPurchaseOrders, receivedAgainstOrder } = await import('./purchasing-console');
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    await withPlatformDb((db) =>
+      db.organization.create({
+        data: {
+          id: ORG_A,
+          slug: `shared-order-${suffix}`,
+          legalName: 'Shared order pharmacy',
+          displayName: 'Shared order pharmacy',
+          status: 'ACTIVE',
+          vertical: 'PHARMACY',
+        },
+      })
+    );
+    const f = await fixture(ORG_A, BRANCH_A, 'shared-order');
+    const b = await fixture(ORG_A, BRANCH_B, 'shared-branch');
+    const buyerId = tag('restricted-buyer');
+    const receiptIds = await inOrg(ORG_A, async (db) => {
+      await db.organizationDepartment.create({ data: { key: 'Pharmacy', name: 'Pharmacy' } });
+      await db.user.create({
+        data: {
+          id: buyerId,
+          organizationId: ORG_A,
+          email: `${buyerId}@example.test`,
+          name: 'Restricted buyer',
+          department: 'Pharmacy',
+          title: 'Buyer',
+          role: 'EMPLOYEE',
+          status: 'ACTIVE',
+        },
+      });
+      await db.userPermissionOverride.create({
+        data: {
+          userId: buyerId,
+          capability: 'pharmacy:procurement',
+          effect: 'ALLOW',
+          reason: 'Shared order regression',
+        },
+      });
+      await db.pharmacyBranchAssignment.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          userId: buyerId,
+        },
+      });
+      const order = await db.pharmacyPurchaseOrder.create({
+        data: {
+          organizationId: ORG_A,
+          reference: tag('shared-po'),
+          branchId: null,
+          supplierId: f.supplierId,
+          createdByUserId: buyerId,
+          lines: {
+            create: {
+              lineNumber: 1,
+              medicineId: f.medicineId,
+              packLevelId: f.packLevelId,
+              orderedPacks: 3,
+              bonusPacks: 0,
+              canonicalUnitsPerPack: 10,
+              orderedCanonicalUnits: 30,
+              bonusCanonicalUnits: 0,
+              listPricePerPackMinor: 10000,
+            },
+          },
+        },
+        include: { lines: true },
+      });
+      for (const status of ['SUBMITTED', 'APPROVED', 'SENT'] as const) {
+        await db.pharmacyPurchaseOrder.update({
+          where: { id: order.id },
+          data: {
+            status,
+            ...(status === 'APPROVED'
+              ? { approvedByUserId: APPROVER, approvedAt: RECEIVED_AT }
+              : {}),
+          },
+        });
+      }
+      f.purchaseOrderId = order.id;
+      f.purchaseOrderLineId = order.lines[0]!.id;
+      const a = await draftReceipt(db, f, 'shared-a', {
+        line: { receivedPacks: 1, bonusPacks: 0 },
+      });
+      const other = await draftReceipt(
+        db,
+        { ...f, branchId: BRANCH_B, storeId: b.storeId, quarantineId: b.quarantineId },
+        'shared-b',
+        { line: { receivedPacks: 2, bonusPacks: 0 } }
+      );
+      await deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: a.id,
+        at: RECEIVED_AT,
+      });
+      await deps.receipts.postGoodsReceipt(
+        db,
+        { ...scopeOf(f), branchId: BRANCH_B },
+        { goodsReceiptId: other.id, at: RECEIVED_AT }
+      );
+      return { a: a.id, b: other.id, hiddenReference: other.reference };
+    });
+    await inOrg(ORG_A, async (db) => {
+      const scope = { organizationId: ORG_A, actorId: buyerId };
+      const orders = await listPurchaseOrders(db, scope);
+      const order = orders.find((row) => row.id === f.purchaseOrderId)!;
+      expect(order.goodsReceipts.map((row) => row.id)).toEqual([receiptIds.a]);
+      expect(JSON.stringify(order)).not.toContain(receiptIds.b);
+      expect(JSON.stringify(order)).not.toContain(receiptIds.hiddenReference);
+      const totals = await receivedAgainstOrder(db, scope, f.purchaseOrderId);
+      expect(totals.get(f.purchaseOrderLineId)).toEqual({
+        receivedUnits: 30,
+        acceptedUnits: 30,
+        rejectedUnits: 0,
+      });
+      expect(
+        order.lines[0]!.orderedCanonicalUnits - totals.get(f.purchaseOrderLineId)!.receivedUnits
+      ).toBe(0);
+    });
+    const excess = await inOrg(ORG_A, (db) =>
+      draftReceipt(db, f, 'shared-excess', { line: { receivedPacks: 1, bonusPacks: 0 } })
+    );
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.receipts.postGoodsReceipt(
+          db,
+          { ...scopeOf(f), actorId: buyerId },
+          { goodsReceiptId: excess.id, at: RECEIVED_AT }
+        )
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID_QUANTITY' });
+    await inOrg(ORG_A, async (db) => {
+      expect(
+        (await db.pharmacyGoodsReceipt.findFirstOrThrow({ where: { id: excess.id } })).status
+      ).toBe('DRAFT');
+      expect(
+        await db.pharmacyInventoryLot.count({
+          where: { supplierInvoiceRef: `${excess.supplierInvoiceRef}#1` },
+        })
+      ).toBe(0);
+    });
+  });
+
   it('creates the lot and the RECEIPT movement, and on-hand projects from them', async () => {
     const f = await fixture(ORG_A, BRANCH_A, 'post');
     const result = await inOrg(ORG_A, async (db) => {

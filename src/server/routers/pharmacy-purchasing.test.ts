@@ -1826,6 +1826,53 @@ describe('purchasing read scope and linked approval branches', () => {
       })
     );
   });
+  it('returns full shared-order quantities but keeps nested receipt details branch filtered', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'po', branchId: null });
+    db.pharmacyGoodsReceiptLine.findMany.mockImplementation(async ({ where }) => {
+      const posted = [
+        {
+          branchId: 'branch_a',
+          purchaseOrderLineId: 'line',
+          receivedCanonicalUnits: 10,
+          bonusCanonicalUnits: 0,
+          acceptedCanonicalUnits: 10,
+          rejectedCanonicalUnits: 0,
+        },
+        {
+          branchId: 'branch_b',
+          purchaseOrderLineId: 'line',
+          receivedCanonicalUnits: 20,
+          bonusCanonicalUnits: 0,
+          acceptedCanonicalUnits: 20,
+          rejectedCanonicalUnits: 0,
+        },
+      ];
+      return posted.filter(
+        (line) =>
+          !where.goodsReceipt.branchId || where.goodsReceipt.branchId.in.includes(line.branchId)
+      );
+    });
+    expect(await caller().receivedAgainstOrder({ purchaseOrderId: 'po' })).toEqual({
+      line: { receivedUnits: 30, acceptedUnits: 30, rejectedUnits: 0 },
+    });
+    const query = db.pharmacyGoodsReceiptLine.findMany.mock.lastCall![0];
+    expect(query.where.goodsReceipt).toEqual({
+      organizationId: 'org_a',
+      purchaseOrderId: 'po',
+      status: 'POSTED',
+    });
+    expect(query.select).toEqual({
+      purchaseOrderLineId: true,
+      receivedCanonicalUnits: true,
+      bonusCanonicalUnits: true,
+      acceptedCanonicalUnits: true,
+      rejectedCanonicalUnits: true,
+    });
+    await caller().purchaseOrders();
+    expect(db.pharmacyPurchaseOrder.findMany.mock.lastCall![0].include.goodsReceipts.where).toEqual(
+      { organizationId: 'org_a', branchId: { in: ['branch_a'] } }
+    );
+  });
   it('refuses received quantities for an order outside the assigned branches', async () => {
     db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'po', branchId: 'other' });
     await expect(caller().receivedAgainstOrder({ purchaseOrderId: 'po' })).rejects.toMatchObject({

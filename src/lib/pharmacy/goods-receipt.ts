@@ -247,6 +247,33 @@ export async function postGoodsReceipt(
     });
   }
 
+  // Serialize receipts for a shared order before reading its full received
+  // balance. Otherwise two branches could both consume the same remainder.
+  if (receipt.purchaseOrderId) {
+    await db.$queryRaw`SELECT id FROM pharmacy_purchase_orders
+      WHERE id = ${receipt.purchaseOrderId} AND "organizationId" = ${scope.organizationId}
+      FOR UPDATE`;
+  }
+  const arrivingByOrderLine = new Map<string, number>();
+  for (const line of receipt.lines) {
+    if (!line.purchaseOrderLineId) continue;
+    const arriving =
+      (arrivingByOrderLine.get(line.purchaseOrderLineId) ?? 0) +
+      line.receivedCanonicalUnits +
+      line.bonusCanonicalUnits;
+    arrivingByOrderLine.set(line.purchaseOrderLineId, arriving);
+  }
+  for (const [orderLineId, arriving] of arrivingByOrderLine) {
+    const ordered = await orderedTermsFor(db, scope, orderLineId, receipt.id);
+    if (
+      ordered &&
+      arriving + ordered.previouslyReceivedUnits >
+        ordered.orderedCanonicalUnits + ordered.bonusCanonicalUnits
+    ) {
+      throw new PharmacyReceivingError('INVALID_QUANTITY');
+    }
+  }
+
   const lines: PostGoodsReceiptResult['lines'][number][] = [];
   const exceptions: PostGoodsReceiptResult['exceptions'][number][] = [];
 
@@ -450,7 +477,7 @@ async function orderedTermsFor(
       organizationId: scope.organizationId,
       purchaseOrderLineId,
       goodsReceiptId: { not: currentReceiptId },
-      goodsReceipt: { status: 'POSTED' },
+      goodsReceipt: { organizationId: scope.organizationId, status: 'POSTED' },
     },
     select: { receivedCanonicalUnits: true, bonusCanonicalUnits: true },
   });

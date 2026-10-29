@@ -515,9 +515,9 @@ export async function receivedAgainstOrder(
   scope: OrganizationScope & { actorId?: string },
   purchaseOrderId: string
 ): Promise<Map<string, { receivedUnits: number; acceptedUnits: number; rejectedUnits: number }>> {
-  const branchIds = scope.actorId
-    ? await assignedRegisterBranchIds(db, scope.organizationId, scope.actorId)
-    : undefined;
+  // Order progress spans every receiving branch. Only quantities keyed by the
+  // already-authorized order line leave this reader; receipt details stay in
+  // the independently branch-filtered nested list above.
   const lines = await db.pharmacyGoodsReceiptLine.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -525,7 +525,6 @@ export async function receivedAgainstOrder(
         organizationId: scope.organizationId,
         purchaseOrderId,
         status: 'POSTED',
-        ...(branchIds ? { branchId: { in: branchIds } } : {}),
       },
       purchaseOrderLineId: { not: null },
     },
