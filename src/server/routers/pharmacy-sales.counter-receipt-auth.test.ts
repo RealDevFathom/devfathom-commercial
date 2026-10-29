@@ -523,6 +523,50 @@ describe('counter receipt authorization', () => {
     expect(write).toHaveBeenCalledOnce();
   });
 
+  it('keeps refund and witnessed return writes available to an unassigned organization admin', async () => {
+    const admin = fixture(dispense, 'ADMIN');
+    const controlledWitness = { staffProfileId: 'pharmacist-a', pin: '1234' };
+
+    await expect(
+      admin.caller().refundTender({
+        branchId: 'branch-a',
+        originalTenderId: 'tender-1',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        amountMinor: 100,
+        reason: 'Returned medicine',
+        idempotencyKey: 'admin-refund',
+      })
+    ).resolves.toBeDefined();
+    await expect(
+      admin.caller().returnLine({
+        branchId: 'branch-a',
+        saleLineId: 'line-1',
+        controlledWitness,
+        canonicalUnits: 1,
+        disposition: 'RESTOCK',
+        reason: 'Returned medicine',
+        integrityDecision: 'Sealed pack',
+        idempotencyKey: 'admin-return',
+      })
+    ).resolves.toBeDefined();
+
+    expect(refundPharmacyTender).toHaveBeenCalledOnce();
+    expect(returnSaleLine).toHaveBeenCalledWith(
+      admin.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      expect.objectContaining({ controlledWitness })
+    );
+    expect(admin.context.audit.detail).toMatchObject({
+      targetType: 'PharmacyBranch',
+      targetId: 'branch-a',
+      metadata: {
+        branchId: 'branch-a',
+        reason: 'org-admin-receipt-access-without-branch-assignment',
+      },
+    });
+  });
+
   it('keeps Khata tender off the branch-assignment guard', async () => {
     const f = fixture(dispense);
     f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
