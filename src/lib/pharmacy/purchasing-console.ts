@@ -82,7 +82,7 @@ export function daysBetween(from: Date, to: Date): number {
 
 function eligibility(
   supplier: { authorized: boolean },
-  licences: readonly { expiresAt: Date; verified: boolean }[],
+  licences: readonly { expiresAt: Date; verified: boolean; superseded: boolean }[],
   at: Date
 ): SupplierEligibility {
   try {
@@ -152,15 +152,15 @@ function summarizeSupplier(
   at: Date
 ): SupplierSummary {
   const licences = licenceViews(supplier.licences, at);
-  // `assertSupplierEligible` counts every verified, unexpired filing, including
-  // a superseded one; mirroring that here rather than pre-filtering keeps the
-  // badge and the refusal the same decision.
   const evidence = licences.map((licence) => ({
     expiresAt: licence.expiresAt,
     verified: licence.verified,
+    superseded: licence.superseded,
   }));
   const governing =
-    licences.find((licence) => licence.verified && licence.daysToExpiry >= 0) ??
+    licences.find(
+      (licence) => licence.verified && !licence.superseded && licence.daysToExpiry >= 0
+    ) ??
     licences[0] ??
     null;
   return {

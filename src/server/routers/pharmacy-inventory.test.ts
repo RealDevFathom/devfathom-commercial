@@ -13,9 +13,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
-  return { hasModule };
+  const can = vi.fn().mockResolvedValue(true);
+  return { can, hasModule };
 });
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/abac', async (original) => {
+  const actual = await original<typeof import('@/lib/abac')>();
+  return { ...actual, can: mocks.can };
+});
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
@@ -147,6 +152,10 @@ const CAPABILITY_REFUSAL = {
 
 beforeEach(() => {
   db = makeDb();
+  mocks.can.mockReset().mockImplementation(async (...args) => {
+    const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+    return actual.can(...args);
+  });
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 
@@ -240,7 +249,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
   });
 
   it.each([
-    ['setBatchState', { manufacturingBatchId: 'batch_1', state: 'ACTIVE' }],
+    ['setBatchState', { manufacturingBatchId: 'batch_1', state: 'RECALLED', reason: 'Recall' }],
     ['acknowledgeRecall', { branchId: 'branch_a', recallNoticeId: 'recall_1' }],
     ['closeRecall', { recallNoticeId: 'recall_1' }],
   ] as const)('requires pharmacy:safety for %s', async (procedure, input) => {
@@ -268,6 +277,19 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
         actorId: 'user_a',
       },
     });
+  });
+
+  it('cannot reactivate a recalled or quarantined batch outside the reviewed reversal flow', async () => {
+    grant([allow('pharmacy:safety')]);
+    db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
+      id: 'batch_1',
+      state: 'RECALLED',
+    });
+
+    await expect(
+      caller().setBatchState({ manufacturingBatchId: 'batch_1', state: 'ACTIVE' } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
   });
 
   it('refuses a transfer whose source and destination are the same location', async () => {

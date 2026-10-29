@@ -143,6 +143,7 @@ function fixture(
         },
       ]),
     },
+    medicine: { findFirst: vi.fn(async () => ({ controlled: false })) },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     $transaction: vi.fn(),
   };
@@ -453,6 +454,28 @@ describe('counter receipt authorization', () => {
     expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
     for (const read of reads()) expect(read).not.toHaveBeenCalled();
     expect(f.db.pharmacySale.findMany).not.toHaveBeenCalled();
+  });
+
+  it('does not carry a support administrator role into another organization', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    f.user.organizationId = 'org-b';
+    f.context.session.expires = new Date(Date.now() + 60_000).toISOString();
+    Object.assign(f.context, {
+      support: {
+        supportSessionId: 'support-1',
+        organizationId: 'org-b',
+        platformUserId: 'platform-1',
+        tenantUserId: 'user-a',
+        tenantUserRole: 'ADMIN',
+        expiresAt: new Date(Date.now() + 60_000),
+        reason: 'Investigating an authorized support request.',
+      },
+    });
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.user.findUnique).not.toHaveBeenCalled();
+    expect(readCounterReceipt).not.toHaveBeenCalled();
   });
 
   it.each(paths)('$name denies when the pharmacy module is off', async (path) => {

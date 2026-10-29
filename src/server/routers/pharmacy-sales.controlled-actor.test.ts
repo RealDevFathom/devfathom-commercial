@@ -112,7 +112,7 @@ beforeEach(() => {
 describe('pharmacySales.addLine controlled actor', () => {
   it('denies a cashier before the witness PIN and writes no register row', async () => {
     const { caller, credential, register } = callerFor([
-      { capability: 'pharmacy.counter', effect: 'ALLOW' },
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
       { capability: 'pharmacy:orders', effect: 'ALLOW' },
     ]);
     await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });

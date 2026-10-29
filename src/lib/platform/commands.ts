@@ -624,32 +624,26 @@ async function syncContractEntitlements(
   }
 ) {
   if (!['ACTIVE', 'GRACE', 'RENEWAL_DUE'].includes(input.status)) return;
-  const catalogModules = await db.platformModule.findMany({
-    where: { active: true },
-    select: { id: true },
-  });
-  const included = new Set(input.moduleIds);
   const expiresAt = input.graceUntil ?? input.endDate;
-  for (const catalogModule of catalogModules) {
-    const enabled = included.has(catalogModule.id);
+  for (const moduleId of input.moduleIds) {
     await db.organizationModule.upsert({
       where: {
         organizationId_moduleId: {
           organizationId: input.organizationId,
-          moduleId: catalogModule.id,
+          moduleId,
         },
       },
       update: {
-        status: enabled ? 'ENABLED' : 'DISABLED',
-        expiresAt: enabled ? expiresAt : null,
+        status: 'ENABLED',
+        expiresAt,
         reason: `Contract ${input.number}`,
         changedById: actor.id,
       },
       create: {
         organizationId: input.organizationId,
-        moduleId: catalogModule.id,
-        status: enabled ? 'ENABLED' : 'DISABLED',
-        expiresAt: enabled ? expiresAt : null,
+        moduleId,
+        status: 'ENABLED',
+        expiresAt,
         reason: `Contract ${input.number}`,
         changedById: actor.id,
       },
