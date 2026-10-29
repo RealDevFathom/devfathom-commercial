@@ -1,6 +1,11 @@
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import type { demandAggregate } from '@/lib/pharmacy/sales';
+import {
+  DEFAULT_LOST_DEMAND_TRIGGER_CONFIG,
+  evaluateLostDemandTriggers,
+} from '@/lib/pharmacy/lost-demand-procurement';
+import Link from 'next/link';
 
 type Demand = Awaited<ReturnType<typeof demandAggregate>>;
 
@@ -17,6 +22,12 @@ export function ObservedDemand({
 }) {
   const events = report?.rows.reduce((total, row) => total + row._count._all, 0) ?? 0;
   const stockouts = report?.rows.filter((row) => row.reason === 'STOCKOUT') ?? [];
+  const estimatedLossMinor =
+    report?.rows.reduce((total, row) => total + (row._sum.estimatedValueMinor ?? 0), 0) ?? 0;
+  const triggers = evaluateLostDemandTriggers(
+    { requests: events, estimatedLossMinor, walkOuts: 0, visits: 0 },
+    DEFAULT_LOST_DEMAND_TRIGGER_CONFIG
+  );
   return (
     <SectionCard title="Observed unmet demand" titleLevel={2}>
       {!report ? (
@@ -43,6 +54,22 @@ export function ObservedDemand({
               value={stockouts.reduce((n, row) => n + row._count._all, 0)}
             />
           </div>
+          {triggers.length > 0 ? (
+            <div className="mt-4 rounded-lg border border-border bg-surface-subtle p-4 text-sm">
+              <p className="font-medium text-text-strong">Procurement review recommended</p>
+              <p className="mt-1 text-text-muted">
+                Recorded demand crossed {triggers.join(', ').toLowerCase().replaceAll('_', ' ')}.
+                Review current stock and supplier terms before creating an inert draft; approval,
+                PIN and audit controls remain in the purchasing workflow.
+              </p>
+              <Link
+                className="mt-3 inline-flex min-h-11 items-center font-medium text-primary hover:underline"
+                href="/pharmacy/purchasing"
+              >
+                Review purchasing drafts
+              </Link>
+            </div>
+          ) : null}
           {!events ? (
             <p className="mt-3 text-sm text-text-muted">
               No recorded events. This does not prove no unmet demand.
