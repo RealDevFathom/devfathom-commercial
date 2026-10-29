@@ -143,6 +143,7 @@ export const teamStatsRouter = router({
       ctx.db.task.findMany({
         where: {
           column: { name: 'Done' },
+          completedAt: { not: null },
           assignees: { some: {} },
         },
         select: {
@@ -542,6 +543,7 @@ export const teamStatsRouter = router({
         ctx.db.task.findMany({
           where: {
             column: { name: 'Done' },
+            completedAt: { not: null },
             assignees: { some: { userId: input.userId } },
           },
           select: { createdAt: true, completedAt: true },
@@ -580,18 +582,21 @@ export const teamStatsRouter = router({
       const today = startOfDay(now);
       const sparkline = [0, 0, 0, 0, 0, 0, 0];
       for (const t of completedThisWeek) {
-        const daysAgo = diffDays(today, startOfDay(t.completedAt!));
+        if (!t.completedAt) continue;
+        const daysAgo = diffDays(today, startOfDay(t.completedAt));
         if (daysAgo >= 0 && daysAgo < 7) sparkline[6 - daysAgo]++;
       }
 
       // Cycle time
       let avgCycleTimeDays: number | null = null;
-      if (cycleTasks.length > 0) {
-        const total = cycleTasks.reduce(
-          (sum, t) => sum + (t.completedAt!.getTime() - t.createdAt.getTime()) / DAY_MS,
-          0
-        );
-        avgCycleTimeDays = Math.round((total / cycleTasks.length) * 10) / 10;
+      const validCycleTimes = cycleTasks.flatMap((task) => {
+        if (!task.completedAt) return [];
+        const days = (task.completedAt.getTime() - task.createdAt.getTime()) / DAY_MS;
+        return days >= 0 && days <= 365 ? [days] : [];
+      });
+      if (validCycleTimes.length > 0) {
+        const total = validCycleTimes.reduce((sum, days) => sum + days, 0);
+        avgCycleTimeDays = Math.round((total / validCycleTimes.length) * 10) / 10;
       }
 
       // Meetings invited = sum of past occurrences across all meetings I'm on
