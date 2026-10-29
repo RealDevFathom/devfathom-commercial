@@ -77,6 +77,8 @@ import {
 } from '@/lib/pharmacy/counter-browser-print';
 import { workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import type { LostSaleOutcome } from '@/lib/pharmacy/lost-sales';
 
 type Notice = {
   tone: 'success' | 'warning' | 'danger' | 'neutral';
@@ -1368,7 +1370,10 @@ function ScopedPharmacyCounterConsole({
     todayBusinessDate,
   ]);
 
-  const captureShortfall = useCallback(async () => {
+  const [outcomeSheetOpen, setOutcomeSheetOpen] = useState(false);
+  const [notifyWhenBack, setNotifyWhenBack] = useState(false);
+  const [notifyPhone, setNotifyPhone] = useState('');
+  const captureShortfall = useCallback(async (outcome: LostSaleOutcome = 'UNKNOWN') => {
     if (busy || !branchAuthorized) return;
     const requested = activeRow?.displayName ?? query.trim();
     if (!requested) {
@@ -1402,7 +1407,11 @@ function ScopedPharmacyCounterConsole({
           blocked: activeRow?.blocked ?? [],
           capturedAt: new Date().toISOString(),
         },
+        outcome,
+        notifyOptIn: notifyWhenBack && notifyPhone.trim().length >= 7,
+        ...(notifyWhenBack && notifyPhone.trim().length >= 7 ? { notifyPhone } : {}),
       });
+      setOutcomeSheetOpen(false);
       setNotice({
         tone: 'success',
         message: `Captured ${capturedUnits} canonical units of unfulfilled demand for ${requested}.`,
@@ -1422,12 +1431,20 @@ function ScopedPharmacyCounterConsole({
     focusSearch,
     query,
     quantity,
+    notifyPhone,
+    notifyWhenBack,
     saleId,
     saleUnit,
     selectedOption,
     requestedCanonicalUnits,
     shortfallUnits,
   ]);
+
+  useEffect(() => {
+    if (!outcomeSheetOpen) return;
+    const timer = window.setTimeout(() => void captureShortfall('UNKNOWN'), 5_000);
+    return () => window.clearTimeout(timer);
+  }, [captureShortfall, outcomeSheetOpen]);
 
   const declineVisibleSubstitutes = useCallback(async () => {
     if (!activeRow || busy) return;
@@ -2022,13 +2039,53 @@ function ScopedPharmacyCounterConsole({
                     variant="outline"
                     className="h-auto min-h-11 whitespace-normal"
                     disabled={busy || !branchAuthorized}
-                    onClick={() => void captureShortfall()}
+                    onClick={() => setOutcomeSheetOpen(true)}
                   >
                     {pending === 'captureDemand'
                       ? 'Capturing…'
                       : `Capture shortfall: ${shortfallUnits} canonical units`}
                   </Button>
                 ) : null}
+                <Sheet open={outcomeSheetOpen} onOpenChange={setOutcomeSheetOpen} modal={false}>
+                  <SheetContent side="bottom" className="p-4" showCloseButton={false}>
+                    <SheetHeader className="p-0">
+                      <SheetTitle>What happened at the counter?</SheetTitle>
+                      <SheetDescription>
+                        Optional. Choose once; Unknown is saved after 5 seconds. Tender stays available.
+                      </SheetDescription>
+                    </SheetHeader>
+                    <div className="flex flex-wrap gap-2" role="group" aria-label="Unfulfilled demand outcome">
+                      {([
+                        ['SUBSTITUTE_TAKEN', 'Substitute taken'],
+                        ['WILL_RETURN', 'Will return'],
+                        ['WENT_ELSEWHERE', 'Went elsewhere'],
+                        ['ORDERED_FOR_CUSTOMER', 'Ordered for customer'],
+                        ['UNKNOWN', 'Unknown'],
+                      ] as const).map(([outcome, label]) => (
+                        <Button key={outcome} type="button" variant="outline" disabled={busy} onClick={() => void captureShortfall(outcome)}>
+                          {label}
+                        </Button>
+                      ))}
+                    </div>
+                    <label className="flex min-h-11 items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={notifyWhenBack}
+                        onChange={(event) => setNotifyWhenBack(event.target.checked)}
+                      />
+                      Notify when back (opt-in)
+                    </label>
+                    {notifyWhenBack ? (
+                      <Input
+                        aria-label="Notification phone"
+                        inputMode="tel"
+                        placeholder="Phone number"
+                        value={notifyPhone}
+                        onChange={(event) => setNotifyPhone(event.target.value)}
+                      />
+                    ) : null}
+                  </SheetContent>
+                </Sheet>
                 <CounterLotOverride
                   value={lotOverride}
                   lots={lotOptionsQuery.data ?? []}

@@ -1405,6 +1405,22 @@ export const pharmacySalesRouter = router({
           estimatedMarginMinor: z.number().int().optional(),
           customerId: z.string().min(1).optional(),
           consentRecorded: z.boolean().optional(),
+          outcome: z
+            .enum([
+              'SUBSTITUTE_TAKEN',
+              'WILL_RETURN',
+              'WENT_ELSEWHERE',
+              'ORDERED_FOR_CUSTOMER',
+              'UNKNOWN',
+            ])
+            .optional(),
+          terminalId: z.string().min(1).optional(),
+          substituteProductId: z.string().min(1).optional(),
+          notifyOptIn: z.boolean().optional(),
+          notifyPhone: z.string().trim().min(7).max(32).optional(),
+          freeText: z.string().trim().max(500).optional(),
+          matchedProductId: z.string().min(1).optional(),
+          matchConfidence: z.number().min(0).max(1).optional(),
         })
         .strict()
     )

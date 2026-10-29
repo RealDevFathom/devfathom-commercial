@@ -17,6 +17,13 @@ import { appendControlledRestorations } from './controlled-register';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
+import {
+  effectiveUnknownProbability,
+  estimatedLossPkr,
+  outcomeLossProbability,
+  VISIT_WINDOW_MS,
+  type LostSaleOutcome,
+} from './lost-sales';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -892,14 +899,108 @@ export async function captureDemand(
     estimatedMarginMinor?: number;
     customerId?: string;
     consentRecorded?: boolean;
+    outcome?: LostSaleOutcome;
+    terminalId?: string;
+    substituteProductId?: string;
+    notifyOptIn?: boolean;
+    notifyPhone?: string;
+    freeText?: string;
+    matchedProductId?: string;
+    matchConfidence?: number;
   }
 ) {
   if (!input.requestedMedicineId && !input.requestedText?.trim())
     throw new PharmacySaleError('INVALID_QUANTITY');
   if (input.customerId && !input.consentRecorded) throw new PharmacySaleError('CONSENT_REQUIRED');
+  if (input.notifyOptIn && !input.notifyPhone?.trim())
+    throw new PharmacySaleError('CONSENT_REQUIRED');
+
+  const now = new Date();
+  const sale = input.saleId
+    ? await db.pharmacySale.findFirst({
+        where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
+        select: { customerId: true, receiptDeviceId: true, _count: { select: { lines: true } } },
+      })
+    : null;
+  const terminalId = input.terminalId ?? sale?.receiptDeviceId ?? `operator:${scope.actorId}`;
+  const customerId = input.customerId ?? sale?.customerId ?? undefined;
+  const previous = await db.unfulfilledDemandEvent.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      terminalId,
+      customerId: customerId ?? null,
+      createdAt: { gte: new Date(now.getTime() - VISIT_WINDOW_MS) },
+    },
+    orderBy: { createdAt: 'desc' },
+    select: { visitId: true },
+  });
+  const branch = await db.pharmacyBranch.findFirstOrThrow({
+    where: { organizationId: scope.organizationId, id: scope.branchId },
+    select: { lostSalesUnknownProbability: true, lostSalesMeasuredRateMinimum: true },
+  });
+  const [knownOutcomes, knownLostOutcomes, lot] = await Promise.all([
+    db.unfulfilledDemandEvent.count({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        outcome: { not: 'UNKNOWN' },
+      },
+    }),
+    db.unfulfilledDemandEvent.count({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        OR: [
+          { outcome: 'WENT_ELSEWHERE' },
+          {
+            outcome: 'WILL_RETURN',
+            resolvedBySaleId: null,
+            createdAt: { lte: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) },
+          },
+        ],
+      },
+    }),
+    input.requestedMedicineId
+      ? db.pharmacyInventoryLot.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            batch: { medicineId: input.requestedMedicineId },
+          },
+          orderBy: { receivedAt: 'desc' },
+          select: { printedMrpMinor: true, unitsPerPack: true },
+        })
+      : null,
+  ]);
+  const unknownProbability = effectiveUnknownProbability({
+    configuredEstimate: Number(branch.lostSalesUnknownProbability),
+    knownOutcomes,
+    knownLostOutcomes,
+    minimumKnownOutcomes: branch.lostSalesMeasuredRateMinimum,
+  });
+  const outcome = input.outcome ?? 'UNKNOWN';
+  const lossProbability = outcomeLossProbability(outcome, { unknownProbability });
+  // Price is deliberately resolved from branch inventory on the server; clients
+  // cannot submit or alter lost-sales value.
+  const unitPricePkr = lot ? lot.printedMrpMinor / lot.unitsPerPack / 100 : 0;
+  const legacyInput = { ...input };
+  delete legacyInput.outcome;
+  delete legacyInput.terminalId;
+  const { notifyPhone } = input;
   return db.unfulfilledDemandEvent.create({
     data: {
-      ...input,
+      ...legacyInput,
+      customerId,
+      outcome,
+      terminalId,
+      visitId: previous?.visitId ?? crypto.randomUUID(),
+      visitType: sale?._count.lines ? 'PARTIAL' : 'WALK_OUT',
+      requestedQty: input.quantity,
+      unitPricePkr,
+      lossProbability,
+      estLossPkr: estimatedLossPkr(input.quantity, unitPricePkr, lossProbability),
+      notifyPhone: input.notifyOptIn ? notifyPhone?.trim() : undefined,
       inventoryRuleSnapshot: input.inventoryRuleSnapshot as Prisma.InputJsonValue,
       organizationId: scope.organizationId,
       branchId: scope.branchId,
@@ -939,6 +1040,19 @@ export async function demandAggregate(
   from: Date,
   to: Date
 ) {
+  // A promised return becomes loss only after its seven-day matching window
+  // closes. Recovery matching sets resolvedBySaleId and keeps the probability 0.
+  await db.$executeRaw(Prisma.sql`
+    UPDATE pharmacy_unfulfilled_demand_events
+    SET "lossProbability" = 1,
+        "estLossPkr" = ROUND("requestedQty" * "unitPricePkr", 2)
+    WHERE "organizationId" = ${scope.organizationId}
+      AND "branchId" = ${scope.branchId}
+      AND outcome = 'WILL_RETURN'::"PharmacyDemandOutcome"
+      AND "resolvedBySaleId" IS NULL
+      AND "createdAt" <= ${new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)}
+      AND "lossProbability" = 0
+  `);
   const rows = await db.unfulfilledDemandEvent.groupBy({
     by: ['requestedMedicineId', 'requestedText', 'reason'],
     where: {

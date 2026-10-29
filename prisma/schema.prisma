@@ -211,6 +211,10 @@ model PharmacyBranch {
   /// because modelling it as a Prisma relation would make `id` a relation
   /// scalar of this model and break ordinary writes to it.
   defaultStockLocationId String?
+  /// Configurable estimate, replaced by the branch's measured known-outcome rate
+  /// after `lostSalesMeasuredRateMinimum` observations.
+  lostSalesUnknownProbability Decimal @default(0.43) @db.Decimal(5, 4)
+  lostSalesMeasuredRateMinimum Int @default(200)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1037,6 +1041,19 @@ enum PharmacyDemandStatus {
   CLOSED
 }
 
+enum PharmacyDemandVisitType {
+  PARTIAL
+  WALK_OUT
+}
+
+enum PharmacyDemandOutcome {
+  SUBSTITUTE_TAKEN
+  WILL_RETURN
+  WENT_ELSEWHERE
+  ORDERED_FOR_CUSTOMER
+  UNKNOWN
+}
+
 enum PharmacyRestockInterestStatus {
   OPEN
   NOTIFIED
@@ -1627,6 +1644,22 @@ model UnfulfilledDemandEvent {
   closedAt              DateTime?
   capturedByUserId      String
   createdAt             DateTime                  @default(now())
+  visitId               String
+  visitType             PharmacyDemandVisitType
+  outcome               PharmacyDemandOutcome     @default(UNKNOWN)
+  requestedQty          Int
+  unitPricePkr          Decimal                   @db.Decimal(12, 2)
+  estLossPkr            Decimal                   @db.Decimal(12, 2)
+  lossProbability       Decimal                   @db.Decimal(5, 4)
+  substituteProductId   String?
+  notifyOptIn           Boolean                   @default(false)
+  notifyPhone           String?
+  resolvedAt            DateTime?
+  resolvedBySaleId      String?
+  freeText              String?
+  matchedProductId      String?
+  matchConfidence       Decimal?                  @db.Decimal(5, 4)
+  terminalId            String
   sale                  PharmacySale?             @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
   medicine              Medicine?                 @relation(fields: [requestedMedicineId], references: [id], onDelete: Restrict)
   customer              PharmacyPatient?          @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
@@ -1634,7 +1667,8 @@ model UnfulfilledDemandEvent {
   visibilityAnchor      PharmacyBranch            @relation("UnfulfilledDemandEventVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_unfulfilled_demand_events_visibility_fkey")
 
   @@unique([organizationId, id])
-  @@index([organizationId, branchId, createdAt, reason])
+  @@index([organizationId, branchId, createdAt, reason], map: "pharmacy_unfulfilled_demand_events_organizationId_branchId__idx")
+  @@index([organizationId, branchId, visitId], map: "ph_demand_visit_idx")
   @@map("pharmacy_unfulfilled_demand_events")
 }
 
