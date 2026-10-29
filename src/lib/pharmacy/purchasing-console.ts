@@ -491,6 +491,10 @@ export async function listPurchaseOrders(
       },
       approvals: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] },
       goodsReceipts: {
+        where: {
+          organizationId: scope.organizationId,
+          ...(branchIds ? { branchId: { in: branchIds } } : {}),
+        },
         orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
         select: { id: true, reference: true, status: true, receivedAt: true },
       },
@@ -508,13 +512,21 @@ export type PurchaseOrderDetail = Awaited<ReturnType<typeof listPurchaseOrders>>
  */
 export async function receivedAgainstOrder(
   db: ScopedDb,
-  scope: OrganizationScope,
+  scope: OrganizationScope & { actorId?: string },
   purchaseOrderId: string
 ): Promise<Map<string, { receivedUnits: number; acceptedUnits: number; rejectedUnits: number }>> {
+  const branchIds = scope.actorId
+    ? await assignedRegisterBranchIds(db, scope.organizationId, scope.actorId)
+    : undefined;
   const lines = await db.pharmacyGoodsReceiptLine.findMany({
     where: {
       organizationId: scope.organizationId,
-      goodsReceipt: { organizationId: scope.organizationId, purchaseOrderId, status: 'POSTED' },
+      goodsReceipt: {
+        organizationId: scope.organizationId,
+        purchaseOrderId,
+        status: 'POSTED',
+        ...(branchIds ? { branchId: { in: branchIds } } : {}),
+      },
       purchaseOrderLineId: { not: null },
     },
     select: {

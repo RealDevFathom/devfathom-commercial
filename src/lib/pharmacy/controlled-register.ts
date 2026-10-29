@@ -502,7 +502,7 @@ export async function assignedRegisterBranchIds(
   )
     return [];
   const rows = await db.pharmacyBranchAssignment.findMany({
-    where: { organizationId, userId, active: true },
+    where: { organizationId, userId, active: true, branch: { active: true } },
     select: { branchId: true },
   });
   return rows.map((row) => row.branchId);

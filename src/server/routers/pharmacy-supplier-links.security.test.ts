@@ -138,7 +138,7 @@ describe.each(Object.keys(actions) as (keyof typeof actions)[])(
 it('creates a relationship only for the assigned tenant branch and tenant supplier', async () => {
   await expect(actions.createRelationship()).resolves.toEqual({ id: 'new' });
   expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
-    where: { organizationId: 'org', userId: 'actor', active: true },
+    where: { organizationId: 'org', userId: 'actor', active: true, branch: { active: true } },
     select: { branchId: true },
   });
   expect(f.db.pharmacySupplierRelationship.create).toHaveBeenCalledWith({

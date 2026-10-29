@@ -1703,7 +1703,12 @@ describe.each(Object.keys(branchActions) as (keyof typeof branchActions)[])(
           }
         }
         expect(db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
-          where: { organizationId: 'org_a', userId: 'user_a', active: true },
+          where: {
+            organizationId: 'org_a',
+            userId: 'user_a',
+            active: true,
+            branch: { active: true },
+          },
           select: { branchId: true },
         });
         if (mode !== 'unassigned')

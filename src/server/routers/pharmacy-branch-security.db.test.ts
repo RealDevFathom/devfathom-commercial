@@ -301,6 +301,193 @@ describe.sequential('shared pharmacy branch and owner security (forced RLS)', ()
       expect(await db.pharmacyDrawerSession.count()).toBe(0);
     });
   });
+  it('filters sibling receipts and received totals on shared orders for a branch-restricted buyer', async () => {
+    const { pharmacyPurchasingRouter } = await import('./pharmacy-purchasing');
+    await inOrg(async (db) => {
+      const permission = await db.userPermissionOverride.create({
+        data: {
+          userId: cashier,
+          capability: 'pharmacy:procurement',
+          effect: 'ALLOW',
+          reason: 'Nested receiving branch regression',
+        },
+      });
+      const api = (actorId: string) =>
+        pharmacyPurchasingRouter.createCaller({
+          db,
+          entitlements: { organizationId: org, enabledModules: ['pharmacy-procurement'] },
+          session: {
+            user: {
+              id: actorId,
+              role: actorId === owner ? 'ADMIN' : 'EMPLOYEE',
+              organizationId: org,
+              status: 'ACTIVE',
+            },
+          },
+          organization: { id: org, vertical: 'PHARMACY' },
+          support: null,
+          requestMeta: { ip: null, userAgent: null },
+        } as never);
+      try {
+        const supplier = await db.pharmacySupplier.create({
+          data: {
+            name: 'Shared order supplier',
+            authorized: true,
+            licences: {
+              create: {
+                licenceType: 'Wholesale',
+                licenceNumber: 'NESTED',
+                issuingAuthority: 'Test',
+                issuedAt: new Date('2020-01-01'),
+                expiresAt: new Date('2099-01-01'),
+                verifiedAt: new Date(),
+                verifiedByUserId: owner,
+              },
+            },
+          },
+        });
+        const medicine = await db.medicine.create({
+          data: { productName: 'Branch regression medicine', productFamily: 'PHARMACEUTICAL' },
+        });
+        const presentation = await db.presentation.create({
+          data: { medicineId: medicine.id, presentation: 'Tablet' },
+        });
+        const pack = await db.packLevel.create({
+          data: {
+            presentationId: presentation.id,
+            versionGroupId: `nested-receipt-${suffix}`,
+            version: 1,
+            level: 'STRIP',
+            unitsPerParent: 10,
+            effectiveFrom: new Date('2026-01-01'),
+          },
+        });
+        // A central order is visible to both buyers; its receipts remain branch-owned.
+        const order = await db.pharmacyPurchaseOrder.create({
+          data: {
+            reference: 'NESTED-RECEIPTS',
+            status: 'SENT',
+            branchId: null,
+            supplierId: supplier.id,
+            createdByUserId: owner,
+            lines: {
+              create: {
+                lineNumber: 1,
+                medicineId: medicine.id,
+                packLevelId: pack.id,
+                orderedPacks: 3,
+                canonicalUnitsPerPack: 10,
+                orderedCanonicalUnits: 30,
+                listPricePerPackMinor: 100,
+              },
+            },
+          },
+          include: { lines: true },
+        });
+        const receipts: { id: string }[] = [];
+        for (const [branchId, packs] of [
+          [branchA, 1],
+          [branchB, 2],
+        ] as const) {
+          const location = await db.pharmacyStockLocation.create({
+            data: { branchId, code: 'NESTED', name: 'Receiving', kind: 'STORE' },
+          });
+          receipts.push(
+            await db.pharmacyGoodsReceipt.create({
+              data: {
+                branchId,
+                reference: `NESTED-${branchId}`,
+                supplierId: supplier.id,
+                purchaseOrderId: order.id,
+                supplierInvoiceRef: `NESTED-${branchId}`,
+                supplierInvoiceDate: new Date('2026-10-28'),
+                warrantyEvidenceRef: 'test-warranty',
+                receivedByUserId: owner,
+                receivedAt: new Date('2026-10-28'),
+                lines: {
+                  create: {
+                    lineNumber: 1,
+                    purchaseOrderLineId: order.lines[0]!.id,
+                    medicineId: medicine.id,
+                    packLevelId: pack.id,
+                    batchNumber: `NESTED-${branchId}`,
+                    printedExpiry: new Date('2028-01-01'),
+                    expiryPrecision: 'DAY',
+                    printedMrpMinor: 200,
+                    canonicalUnitsPerPack: 10,
+                    receivedPacks: packs,
+                    receivedCanonicalUnits: packs * 10,
+                    acceptedCanonicalUnits: packs * 10,
+                    invoicedPricePerPackMinor: 100,
+                    unitCostMinor: 10,
+                    stockLocationId: location.id,
+                  },
+                },
+              },
+            })
+          );
+        }
+        for (const receipt of receipts) {
+          await db.pharmacyGoodsReceipt.update({
+            where: { id: receipt.id },
+            data: { status: 'POSTED', postedAt: new Date('2026-10-28') },
+          });
+        }
+        const buyer = api(cashier);
+        await expect(buyer.goodsReceipts({ branchId: branchB })).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+        });
+        expect((await buyer.goodsReceipts({ branchId: branchA })).map((row) => row.id)).toContain(
+          receipts[0]!.id
+        );
+        const visible = (await buyer.purchaseOrders()).find((row) => row.id === order.id);
+        expect(visible?.goodsReceipts.map((row) => row.id)).toEqual([receipts[0]!.id]);
+        expect(await buyer.receivedAgainstOrder({ purchaseOrderId: order.id })).toEqual({
+          [order.lines[0]!.id]: { receivedUnits: 10, acceptedUnits: 10, rejectedUnits: 0 },
+        });
+        const assertAllBranches = async (actorId: string) => {
+          const caller = api(actorId);
+          const shared = (await caller.purchaseOrders()).find((row) => row.id === order.id);
+          expect(shared?.goodsReceipts.map((row) => row.id).sort()).toEqual(
+            receipts.map((row) => row.id).sort()
+          );
+          expect(
+            (await caller.goodsReceipts({ branchId: branchB })).map((row) => row.id)
+          ).toContain(receipts[1]!.id);
+          expect(await caller.receivedAgainstOrder({ purchaseOrderId: order.id })).toEqual({
+            [order.lines[0]!.id]: { receivedUnits: 30, acceptedUnits: 30, rejectedUnits: 0 },
+          });
+        };
+        await assertAllBranches(owner);
+        await db.pharmacyBranchAssignment.create({ data: { userId: cashier, branchId: branchB } });
+        try {
+          await assertAllBranches(cashier);
+          await db.pharmacyBranch.update({ where: { id: branchB }, data: { active: false } });
+          try {
+            for (const actorId of [cashier, owner]) {
+              const scoped = api(actorId);
+              await expect(scoped.goodsReceipts({ branchId: branchB })).rejects.toMatchObject({
+                code: 'FORBIDDEN',
+              });
+              const shared = (await scoped.purchaseOrders()).find((row) => row.id === order.id);
+              expect(shared?.goodsReceipts.map((row) => row.id)).toEqual([receipts[0]!.id]);
+              expect(await scoped.receivedAgainstOrder({ purchaseOrderId: order.id })).toEqual({
+                [order.lines[0]!.id]: { receivedUnits: 10, acceptedUnits: 10, rejectedUnits: 0 },
+              });
+            }
+          } finally {
+            await db.pharmacyBranch.update({ where: { id: branchB }, data: { active: true } });
+          }
+        } finally {
+          await db.pharmacyBranchAssignment.deleteMany({
+            where: { userId: cashier, branchId: branchB },
+          });
+        }
+      } finally {
+        await db.userPermissionOverride.delete({ where: { id: permission.id } });
+      }
+    });
+  });
   it('denies multi-staff self approval despite valid owner PIN', async () => {
     const result = await inOrg((db) =>
       authorizeMakerChecker(db, {

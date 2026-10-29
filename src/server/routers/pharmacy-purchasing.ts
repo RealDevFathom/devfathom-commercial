@@ -1652,7 +1652,11 @@ const purchasingRouter = router({
       if (!order) throw new TRPCError({ code: 'NOT_FOUND' });
       await assertOrderBranches(ctx, order);
       return Object.fromEntries(
-        await receivedAgainstOrder(ctx.db, tenantScope(ctx), input.purchaseOrderId)
+        await receivedAgainstOrder(
+          ctx.db,
+          { ...tenantScope(ctx), actorId: ctx.session.user.id },
+          input.purchaseOrderId
+        )
       );
     }),
 
