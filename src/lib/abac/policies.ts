@@ -134,13 +134,7 @@ export const POLICIES: Record<Action, Policy[]> = {
   // Reviewing a resignation requires HR/admin, a still-PENDING request, that it
   // isn't your own, and — for HR reviewers — that the resignee isn't an admin
   // (an admin's departure is reviewed by another admin).
-  'resignation:review': [
-    ({ subject, resource }) =>
-      (subject.role === 'ADMIN' || subject.role === 'HR') &&
-      resource?.status === 'PENDING' &&
-      resource?.userId !== subject.id &&
-      !(subject.role === 'HR' && resource?.targetRole === 'ADMIN'),
-  ],
+  'resignation:review': [isHrOrAdmin],
 
   // Restaurant M2 (§8): staff & operator-credential management is granted through
   // an organization role/override carrying the `staff:manage` capability (or `*`,
@@ -266,4 +260,20 @@ export const POLICIES: Record<Action, Policy[]> = {
   'hotel:banquets': [],
   'hotel:maintenance': [],
   'hotel:api-admin': [],
+};
+
+/**
+ * Resource and state constraints that every grant path must satisfy.
+ *
+ * Unlike `POLICIES`, these predicates do not establish action eligibility. They
+ * narrow an otherwise valid static or persisted grant and therefore cannot be
+ * bypassed by an organization-role permission or user override.
+ */
+export const MANDATORY_CONSTRAINTS: Partial<Record<Action, Policy[]>> = {
+  'resignation:review': [
+    ({ subject, resource }) =>
+      resource?.status === 'PENDING' &&
+      resource?.userId !== subject.id &&
+      !(subject.role === 'HR' && resource?.targetRole === 'ADMIN'),
+  ],
 };

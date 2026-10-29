@@ -145,6 +145,87 @@ describe('opt-in pharmacy Owner / Operator access', () => {
 });
 
 describe('custom ABAC decisions', () => {
+  it.each([
+    {
+      grantKind: 'exact role',
+      dbOptions: {
+        rolePermissions: [{ capability: 'resignation:review', effect: 'ALLOW' as const }],
+      },
+    },
+    {
+      grantKind: 'wildcard role',
+      dbOptions: { rolePermissions: [{ capability: '*', effect: 'ALLOW' as const }] },
+    },
+    {
+      grantKind: 'user override',
+      dbOptions: {
+        overrides: [{ capability: 'resignation:review', effect: 'ALLOW' as const }],
+      },
+    },
+  ])(
+    'applies mandatory resignation review constraints after a persisted $grantKind grant',
+    async ({ dbOptions }) => {
+      const reviewer = { ...employee, id: 'reviewer' };
+      const db = authorizationDb(dbOptions);
+
+      await expect(
+        can(
+          reviewer,
+          'resignation:review',
+          { type: 'Resignation', userId: 'reviewer', status: 'PENDING', targetRole: 'EMPLOYEE' },
+          { db }
+        )
+      ).resolves.toBe(false);
+      await expect(
+        can(
+          reviewer,
+          'resignation:review',
+          { type: 'Resignation', userId: 'other', status: 'APPROVED', targetRole: 'EMPLOYEE' },
+          { db }
+        )
+      ).resolves.toBe(false);
+      await expect(
+        can(
+          reviewer,
+          'resignation:review',
+          { type: 'Resignation', userId: 'other', status: 'PENDING', targetRole: 'EMPLOYEE' },
+          { db }
+        )
+      ).resolves.toBe(true);
+    }
+  );
+
+  it('keeps mandatory resignation constraints on the built-in admin grant', async () => {
+    const admin = { ...employee, id: 'admin', role: 'ADMIN' };
+    const db = authorizationDb({});
+
+    await expect(
+      can(
+        admin,
+        'resignation:review',
+        { type: 'Resignation', userId: 'admin', status: 'PENDING', targetRole: 'ADMIN' },
+        { db }
+      )
+    ).resolves.toBe(false);
+  });
+
+  it('prevents HR from reviewing an admin resignation despite a persisted grant', async () => {
+    const hr = { ...employee, id: 'hr', role: 'HR' };
+
+    await expect(
+      can(
+        hr,
+        'resignation:review',
+        { type: 'Resignation', userId: 'admin', status: 'PENDING', targetRole: 'ADMIN' },
+        {
+          db: authorizationDb({
+            rolePermissions: [{ capability: '*', effect: 'ALLOW' }],
+          }),
+        }
+      )
+    ).resolves.toBe(false);
+  });
+
   it('preserves procurement access for managers and tenant admins without a role', async () => {
     const managerPermissions = roleTemplatesForVertical('PHARMACY')
       .find((role) => role.key === 'manager')!
