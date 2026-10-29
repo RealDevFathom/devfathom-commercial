@@ -201,11 +201,7 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
                     >
                       {deleteProject.isPending ? 'Deleting...' : 'Confirm Delete'}
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="lg"
-                      onClick={() => setShowDeleteConfirm(false)}
-                    >
+                    <Button variant="ghost" size="lg" onClick={() => setShowDeleteConfirm(false)}>
                       Cancel
                     </Button>
                   </>
@@ -377,11 +373,7 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
                     name: editName.trim() || undefined,
                     description: editDesc || null,
                     status: editStatus as
-                      | 'ACTIVE'
-                      | 'IN_DEVELOPMENT'
-                      | 'ON_HOLD'
-                      | 'COMPLETED'
-                      | 'CANCELLED',
+                      'ACTIVE' | 'IN_DEVELOPMENT' | 'ON_HOLD' | 'COMPLETED' | 'CANCELLED',
                     startDate: editStart ? new Date(editStart) : null,
                     endDate: editEnd ? new Date(editEnd) : null,
                     techStack: editTech,
@@ -508,7 +500,10 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
                             )}
                           </div>
                           {m.role === 'LEAD' && (
-                            <Crown className="h-3.5 w-3.5 shrink-0 text-primary" aria-label="Lead" />
+                            <Crown
+                              className="h-3.5 w-3.5 shrink-0 text-primary"
+                              aria-label="Lead"
+                            />
                           )}
                         </div>
                       ))}
@@ -648,10 +643,22 @@ function BoardsTab({
             <div className="flex flex-wrap gap-1.5">
               {(
                 [
-                  { id: 'kanban', label: 'Kanban', cols: 'Backlog · To Do · In Progress · Review · Done' },
-                  { id: 'scrum', label: 'Scrum', cols: 'Backlog · Sprint · In Progress · Review · Done' },
+                  {
+                    id: 'kanban',
+                    label: 'Kanban',
+                    cols: 'Backlog · To Do · In Progress · Review · Done',
+                  },
+                  {
+                    id: 'scrum',
+                    label: 'Scrum',
+                    cols: 'Backlog · Sprint · In Progress · Review · Done',
+                  },
                   { id: 'simple', label: 'Simple', cols: 'To Do · Doing · Done' },
-                  { id: 'bugtracker', label: 'Bug tracker', cols: 'Reported · Triaged · In Progress · Testing · Closed' },
+                  {
+                    id: 'bugtracker',
+                    label: 'Bug tracker',
+                    cols: 'Reported · Triaged · In Progress · Testing · Closed',
+                  },
                 ] as const
               ).map((t) => (
                 <button
@@ -678,7 +685,11 @@ function BoardsTab({
             <button
               onClick={() => {
                 if (boardName.trim())
-                  createBoard.mutate({ projectId, name: boardName.trim(), template: boardTemplate });
+                  createBoard.mutate({
+                    projectId,
+                    name: boardName.trim(),
+                    template: boardTemplate,
+                  });
               }}
               disabled={!boardName.trim() || createBoard.isPending}
               className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
@@ -1030,7 +1041,8 @@ function MilestonesTab({
                 disabled={!msName.trim() || !msDue || createMilestone.isPending}
                 className="flex items-center gap-1 rounded-xl bg-primary px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[#0C2E2C] disabled:opacity-40"
               >
-                {createMilestone.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Add
+                {createMilestone.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}{' '}
+                Add
               </button>
             </div>
           </CardContent>
@@ -1422,7 +1434,14 @@ function ProjectTeamTab({
       await utils.projects.getById.cancel({ id: projectId });
       const prev = utils.projects.getById.getData({ id: projectId });
       const candidate = (team.data ?? []).find((u) => u.id === vars.userId) as
-        | { id: string; name: string; avatar: string | null; title: string | null; email?: string; department?: string | null }
+        | {
+            id: string;
+            name: string;
+            avatar: string | null;
+            title: string | null;
+            email?: string;
+            department?: string | null;
+          }
         | undefined;
       utils.projects.getById.setData({ id: projectId }, (old) => {
         if (!old || !candidate) return old;
@@ -1672,7 +1691,9 @@ function Fact({ label, value, numeric }: { label: string; value: string; numeric
       <p className="mb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
         {label}
       </p>
-      <p className={cn('text-sm font-medium text-foreground', numeric && 'tabular-nums')}>{value}</p>
+      <p className={cn('text-sm font-medium text-foreground', numeric && 'tabular-nums')}>
+        {value}
+      </p>
     </div>
   );
 }

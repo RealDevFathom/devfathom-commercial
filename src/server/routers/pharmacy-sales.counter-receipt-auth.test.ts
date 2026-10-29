@@ -86,6 +86,7 @@ function fixture(
   overrides: Permission[] = []
 ) {
   const db = {
+    $queryRaw: vi.fn(async () => []),
     user: {
       findUnique: vi.fn(async () => ({
         status: 'ACTIVE',
@@ -356,11 +357,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('does not let a user ALLOW override a role DENY when tendering', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:counter', effect: 'DENY' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'DENY' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
     assign(f, ['branch-a']);
 
     await expect(
@@ -378,11 +377,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('lets a role DENY on pharmacy:receipt beat a user ALLOW on pharmacy:counter for reads and tender', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:receipt', effect: 'DENY' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'DENY' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
     assign(f, ['branch-a']);
     await expect(
       f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
@@ -403,11 +400,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('lets a user DENY on pharmacy:counter beat a role ALLOW on pharmacy:receipt', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:receipt', effect: 'ALLOW' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy:counter', effect: 'DENY' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:receipt', effect: 'ALLOW' }], 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'DENY' },
+    ]);
     assign(f, ['branch-a']);
     await expect(
       f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })

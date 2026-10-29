@@ -62,7 +62,13 @@ export const statusConfig: Record<string, StatusStyle> = {
   },
 };
 
-export const STATUS_ORDER = ['ACTIVE', 'IN_DEVELOPMENT', 'ON_HOLD', 'COMPLETED', 'CANCELLED'] as const;
+export const STATUS_ORDER = [
+  'ACTIVE',
+  'IN_DEVELOPMENT',
+  'ON_HOLD',
+  'COMPLETED',
+  'CANCELLED',
+] as const;
 
 // Milestone completion → a progress reading. Null when there are no milestones,
 // so callers omit the bar rather than imply 0%.
