@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { resolve } from 'node:path';
 const io = vi.hoisted(() => ({
+  realpath: vi.fn(),
   mkdir: vi.fn(),
   readFile: vi.fn(),
   rm: vi.fn(),
@@ -17,6 +19,7 @@ const io = vi.hoisted(() => ({
   s3send: vi.fn(),
 }));
 vi.mock('node:fs/promises', () => io);
+vi.mock('node:fs', () => ({ realpathSync: io.realpath }));
 vi.mock('@azure/identity', () => ({
   DefaultAzureCredential: class {
     constructor() {
@@ -62,6 +65,8 @@ import {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  io.realpath.mockImplementation((path: string) => path);
+  vi.stubEnv('LOCAL_UPLOADS_DIR', undefined);
   vi.stubGlobal('fetch', io.fetch);
   vi.stubEnv('STORAGE_ADAPTER', 'disabled');
   vi.stubEnv('NODE_ENV', 'production');
@@ -150,6 +155,102 @@ test.each(['test', 'development'])(
     expect(io.credential).not.toHaveBeenCalled();
   }
 );
+test.each(['test', 'development'])(
+  'configured local root in %s is dynamic for every operation',
+  async (mode) => {
+    vi.stubEnv('STORAGE_ADAPTER', 'local');
+    vi.stubEnv('NODE_ENV', mode);
+    const bytes = Buffer.from('shared upload');
+    io.readFile.mockResolvedValue(bytes);
+    for (const root of ['/srv/shared/private-uploads', '/srv/other/private-uploads']) {
+      vi.stubEnv('LOCAL_UPLOADS_DIR', root);
+      expect(getStorageAvailability()).toEqual({ available: true, adapter: 'local', root });
+      await putUpload('org-a', 'file.png', bytes, 'image/png');
+      expect(await getUpload('org-a', 'file.png')).toBe(bytes);
+      await deleteUpload('org-a', 'file.png');
+      expect(io.mkdir).toHaveBeenLastCalledWith(`${root}/org-a`, { recursive: true });
+      expect(io.writeFile).toHaveBeenLastCalledWith(`${root}/org-a/file.png`, bytes);
+      expect(io.readFile).toHaveBeenLastCalledWith(`${root}/org-a/file.png`);
+      expect(io.rm).toHaveBeenLastCalledWith(`${root}/org-a/file.png`, { force: true });
+    }
+    expect(io.service).not.toHaveBeenCalled();
+    expect(io.s3send).not.toHaveBeenCalled();
+  }
+);
+
+test.each([
+  '',
+  ' ',
+  'relative/uploads',
+  '/',
+  '/srv/public',
+  '/srv/public/uploads',
+  resolve('public/uploads'),
+  resolve('.next/standalone/public/private-uploads'),
+  '/srv/public/../private-uploads',
+  '/srv/private-uploads\nbad',
+])('rejects unsafe local root %j before file or provider access', async (root) => {
+  vi.stubEnv('STORAGE_ADAPTER', 'local');
+  vi.stubEnv('NODE_ENV', 'test');
+  vi.stubEnv('LOCAL_UPLOADS_DIR', root);
+  expect(getStorageAvailability()).toEqual({ available: false, reason: 'invalid_configuration' });
+  for (const operation of [
+    () => putUpload('org-a', 'file.png', Buffer.from('data'), 'image/png'),
+    () => getUpload('org-a', 'file.png'),
+    () => deleteUpload('org-a', 'file.png'),
+  ])
+    await expect(operation()).rejects.toBeInstanceOf(StorageUnavailableError);
+  for (const [name, fn] of Object.entries(io)) {
+    if (name !== 'realpath') expect(fn).not.toHaveBeenCalled();
+  }
+});
+
+test('rejects a NUL in a supplied configuration record before filesystem access', () => {
+  // process.env itself truncates NULs, so exercise the preflight record directly.
+  expect(
+    getStorageAvailability({
+      STORAGE_ADAPTER: 'local',
+      NODE_ENV: 'test',
+      LOCAL_UPLOADS_DIR: '/srv/shared\0bad',
+    })
+  ).toEqual({ available: false, reason: 'invalid_configuration' });
+  for (const operation of Object.values(io)) expect(operation).not.toHaveBeenCalled();
+});
+
+test('rejects symlinked roots and public aliases, including not-yet-created children', () => {
+  const env = {
+    STORAGE_ADAPTER: 'local',
+    NODE_ENV: 'development',
+    LOCAL_UPLOADS_DIR: '/srv/shared/new',
+  };
+  io.realpath.mockImplementation((path: string) => {
+    if (path === '/srv/shared/new') throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    return path === '/srv/shared' ? '/srv/public' : path;
+  });
+  expect(getStorageAvailability(env)).toEqual({
+    available: false,
+    reason: 'invalid_configuration',
+  });
+  io.realpath.mockImplementation((path: string) =>
+    path === resolve('public') ? '/srv/shared' : path
+  );
+  expect(getStorageAvailability(env)).toEqual({
+    available: false,
+    reason: 'invalid_configuration',
+  });
+});
+
+test('configured local root never enables production local storage', () => {
+  expect(
+    getStorageAvailability({
+      STORAGE_ADAPTER: 'local',
+      NODE_ENV: 'production',
+      LOCAL_UPLOADS_DIR: '/srv/shared/private-uploads',
+    })
+  ).toEqual({ available: false, reason: 'invalid_configuration' });
+  expect(io.realpath).not.toHaveBeenCalled();
+});
+
 test('configured Azure uses fake SDK and disabling afterward blocks cached client', async () => {
   vi.stubEnv('STORAGE_ADAPTER', 'azure');
   const bytes = Buffer.from('data');

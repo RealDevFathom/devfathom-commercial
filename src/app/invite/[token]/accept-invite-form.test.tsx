@@ -75,3 +75,21 @@ it.each(['accept', 'signIn'] as const)(
     if (stage === 'accept') expect(mocks.signIn).not.toHaveBeenCalled();
   }
 );
+
+it('associates a confirmation mismatch and submission error with the fields', async () => {
+  render(<AcceptInviteForm token="invitation" />);
+  const password = screen.getByLabelText(/New Password/);
+  const confirm = screen.getByLabelText(/Confirm Password/);
+  fireEvent.change(password, { target: { value: 'Strong-Password92!' } });
+  fireEvent.change(confirm, { target: { value: 'different' } });
+  expect(confirm).toHaveAttribute('aria-invalid', 'true');
+  expect(confirm).toHaveAccessibleDescription('Passwords do not match.');
+  fireEvent.change(confirm, { target: { value: 'Strong-Password92!' } });
+  fireEvent.change(screen.getByLabelText(/Phone/), { target: { value: '+17865550100' } });
+  mocks.accept.mockRejectedValueOnce(new Error('Invitation expired'));
+  fireEvent.click(screen.getByRole('button', { name: 'Create account' }));
+  await screen.findByRole('alert');
+  expect(password).toHaveAttribute('aria-invalid', 'true');
+  expect(password.getAttribute('aria-describedby')).toContain('account-error');
+  expect(confirm).toHaveAccessibleDescription('Invitation expired');
+});
