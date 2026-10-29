@@ -49,6 +49,7 @@ const mocks = vi.hoisted(() => {
     findStaffProfiles: fn(),
     findBranchAssignments: fn(),
     findPurchaseOrder: fn(),
+    findPurchaseReceipt: fn(),
     findStockLocation: fn(),
     annotateAudit: fn(),
   };
@@ -108,6 +109,7 @@ function caller() {
         ),
       },
       restaurantPurchaseOrder: { findUnique: mocks.findPurchaseOrder },
+      restaurantPurchaseReceipt: { findUnique: mocks.findPurchaseReceipt },
       restaurantStockLocation: { findUnique: mocks.findStockLocation },
     } as never,
     entitlements: {
@@ -142,6 +144,7 @@ beforeEach(() => {
   mocks.findStaffProfiles.mockResolvedValue([{ id: 'staff_server', primaryBranchId: 'b1' }]);
   mocks.findBranchAssignments.mockResolvedValue([]);
   mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b1', locationId: 'loc1' });
+  mocks.findPurchaseReceipt.mockResolvedValue({ branchId: 'b1' });
   mocks.findStockLocation.mockResolvedValue({ branchId: 'b1' });
 });
 
@@ -245,6 +248,74 @@ describe('Decimal-as-string serialization (D07)', () => {
 });
 
 describe('actor + idempotency plumbing', () => {
+  it.each([
+    ['getPurchaseOrder', { purchaseOrderId: 'po1' }, 'getPurchaseOrder'],
+    [
+      'addPurchaseOrderLine',
+      {
+        purchaseOrderId: 'po1',
+        line: { stockItemId: 'si1', orderedQuantity: '1', unitId: 'u1', unitCost: '2' },
+      },
+      'addPurchaseOrderLine',
+    ],
+    [
+      'updatePurchaseOrderLine',
+      { purchaseOrderId: 'po1', lineId: 'line1', unitCost: '3' },
+      'updatePurchaseOrderLine',
+    ],
+    [
+      'removePurchaseOrderLine',
+      { purchaseOrderId: 'po1', lineId: 'line1' },
+      'removePurchaseOrderLine',
+    ],
+    ['submitPurchaseOrder', { purchaseOrderId: 'po1' }, 'submitPurchaseOrder'],
+    ['cancelPurchaseOrder', { purchaseOrderId: 'po1' }, 'cancelPurchaseOrder'],
+    ['closePurchaseOrder', { purchaseOrderId: 'po1' }, 'closePurchaseOrder'],
+  ] as const)(
+    'denies another branch before %s reaches the domain',
+    async (procedure, input, domainMock) => {
+      mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b2', locationId: 'loc2' });
+      mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+
+      await expect(
+        (caller()[procedure] as (value: never) => Promise<unknown>)(input as never)
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+      expect(mocks[domainMock]).not.toHaveBeenCalled();
+      expect(mocks.annotateAudit).not.toHaveBeenCalled();
+    }
+  );
+
+  it('denies a receipt from another branch before reading its details', async () => {
+    mocks.findPurchaseReceipt.mockResolvedValue({ branchId: 'b2' });
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+
+    await expect(caller().getReceipt({ receiptId: 'receipt2' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.getPurchaseReceipt).not.toHaveBeenCalled();
+  });
+
+  it('denies an unscoped list containing another branch before returning it', async () => {
+    mocks.listPurchaseOrders.mockResolvedValue({
+      orders: [{ ...minimalOrder(), branchId: 'b2', lineCount: 0, receiptCount: 0 }],
+      nextCursor: null,
+    });
+    mocks.can.mockImplementation(async (_subject, action) => action !== 'restaurant:configure');
+
+    await expect(caller().listPurchaseOrders({})).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('allows an all-branch configurator to read another branch', async () => {
+    mocks.findPurchaseOrder.mockResolvedValue({ branchId: 'b2', locationId: 'loc2' });
+    mocks.getPurchaseOrder.mockResolvedValue({ ...minimalOrder(), branchId: 'b2' });
+
+    await expect(caller().getPurchaseOrder({ purchaseOrderId: 'po1' })).resolves.toMatchObject({
+      branchId: 'b2',
+    });
+    expect(usedActions()).toContain('restaurant:configure');
+  });
+
   it('rejects a create location outside the authorized branch before mutation', async () => {
     mocks.findStockLocation.mockResolvedValue({ branchId: 'b2' });
 
