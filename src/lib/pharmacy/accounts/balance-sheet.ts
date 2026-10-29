@@ -56,6 +56,7 @@ export type CurrencyBalanceSheet = {
  * Values remain exact signed debit balances; no residual is plugged into equity.
  */
 export function classifyBalanceSheet(accounts: PostedAccountBalance[]): CurrencyBalanceSheet[] {
+  const zero = BigInt(0);
   const currencies = new Map<string, PostedAccountBalance[]>();
   for (const account of accounts) {
     const rows = currencies.get(account.currency) ?? [];
@@ -66,16 +67,16 @@ export function classifyBalanceSheet(accounts: PostedAccountBalance[]): Currency
   return [...currencies.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([currency, rows]) => {
-      let assets = 0n;
-      let liabilities = 0n;
-      let openingEquity = 0n;
-      let currentResult = 0n;
+      let assets = zero;
+      let liabilities = zero;
+      let openingEquity = zero;
+      let currentResult = zero;
       const unmapped = new Set<string>();
       const classified = rows.map((account): ClassifiedBalance => {
         const closing = BigInt(account.closingMinor);
         const classification = CLASSIFICATIONS[account.accountCode];
         if (!classification) {
-          if (closing !== 0n) unmapped.add(account.accountCode);
+          if (closing !== zero) unmapped.add(account.accountCode);
           return {
             ...account,
             section: 'unmapped',
@@ -107,9 +108,9 @@ export function classifyBalanceSheet(accounts: PostedAccountBalance[]): Currency
         currentResultMinor: currentResult.toString(),
         liabilitiesAndEquityMinor: liabilitiesAndEquity.toString(),
         reconciliationGapMinor: gap.toString(),
-        equationBalanced: gap === 0n,
+        equationBalanced: gap === zero,
         unmappedAccountCodes: [...unmapped].sort(),
-        reconciled: gap === 0n && unmapped.size === 0,
+        reconciled: gap === zero && unmapped.size === 0,
       };
     });
 }

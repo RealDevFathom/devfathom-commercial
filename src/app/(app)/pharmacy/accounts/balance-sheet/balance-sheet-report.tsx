@@ -16,8 +16,10 @@ import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 
 const money = (minor: string) => {
   const value = BigInt(minor);
-  const absolute = value < 0n ? -value : value;
-  return `${value < 0n ? '-' : ''}${absolute / 100n}.${String(absolute % 100n).padStart(2, '0')}`;
+  const zero = BigInt(0);
+  const hundred = BigInt(100);
+  const absolute = value < zero ? -value : value;
+  return `${value < zero ? '-' : ''}${absolute / hundred}.${String(absolute % hundred).padStart(2, '0')}`;
 };
 
 const heading: Record<string, string> = {

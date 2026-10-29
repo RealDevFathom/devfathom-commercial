@@ -17,19 +17,19 @@ const row = (
 describe('classifyBalanceSheet', () => {
   it('separates opening equity, all-time current result, and operational positions', () => {
     const [sheet] = classifyBalanceSheet([
-      row('CASH', 1_000n),
-      row('INVENTORY', 400n),
-      row('INVENTORY_IN_TRANSIT', 100n),
-      row('ACCOUNTS_RECEIVABLE', 300n),
-      row('SUPPLIER_CLAIM_RECEIVABLE', 50n),
-      row('SALES_CLEARING', 25n),
-      row('ACCOUNTS_PAYABLE', -300n),
-      row('GOODS_RECEIVED_ACCRUAL', -200n),
-      row('OPENING_BALANCE_EQUITY', -1_000n),
-      row('SALES_REVENUE', -1_000n),
-      row('SALES_DISCOUNT', 50n),
-      row('COST_OF_GOODS_SOLD', 300n),
-      row('OPERATING_EXPENSE', 25n),
+      row('CASH', BigInt('1000')),
+      row('INVENTORY', BigInt('400')),
+      row('INVENTORY_IN_TRANSIT', BigInt('100')),
+      row('ACCOUNTS_RECEIVABLE', BigInt('300')),
+      row('SUPPLIER_CLAIM_RECEIVABLE', BigInt('50')),
+      row('SALES_CLEARING', BigInt('25')),
+      row('ACCOUNTS_PAYABLE', BigInt('-300')),
+      row('GOODS_RECEIVED_ACCRUAL', BigInt('-200')),
+      row('OPENING_BALANCE_EQUITY', BigInt('-1000')),
+      row('SALES_REVENUE', BigInt('-1000')),
+      row('SALES_DISCOUNT', BigInt('50')),
+      row('COST_OF_GOODS_SOLD', BigInt('300')),
+      row('OPERATING_EXPENSE', BigInt('25')),
     ]);
 
     expect(sheet).toMatchObject({
@@ -51,14 +51,14 @@ describe('classifyBalanceSheet', () => {
 
   it('nets returns, discounts, expenses, settlements, and reversals exactly once', () => {
     const [sheet] = classifyBalanceSheet([
-      row('CASH', 550n),
-      row('ACCOUNTS_RECEIVABLE', 50n),
-      row('INVENTORY', 250n),
-      row('ACCOUNTS_PAYABLE', -100n),
-      row('OPENING_BALANCE_EQUITY', -200n),
-      row('SALES_REVENUE', -900n), // already includes posted returns/reversals
-      row('SALES_DISCOUNT', 50n),
-      row('COST_OF_GOODS_SOLD', 300n),
+      row('CASH', BigInt('550')),
+      row('ACCOUNTS_RECEIVABLE', BigInt('50')),
+      row('INVENTORY', BigInt('250')),
+      row('ACCOUNTS_PAYABLE', BigInt('-100')),
+      row('OPENING_BALANCE_EQUITY', BigInt('-200')),
+      row('SALES_REVENUE', BigInt('-900')), // already includes posted returns/reversals
+      row('SALES_DISCOUNT', BigInt('50')),
+      row('COST_OF_GOODS_SOLD', BigInt('300')),
     ]);
     expect(sheet.currentResultMinor).toBe('550');
     expect(sheet.reconciliationGapMinor).toBe('0');
@@ -66,12 +66,12 @@ describe('classifyBalanceSheet', () => {
   });
 
   it('keeps currencies separate and safely handles integer values beyond Number precision', () => {
-    const huge = 9_007_199_254_740_993n;
+    const huge = BigInt('9007199254740993');
     const sheets = classifyBalanceSheet([
       row('CASH', huge, 'USD'),
       row('OPENING_BALANCE_EQUITY', -huge, 'USD'),
-      row('CASH', 5n, 'PKR'),
-      row('OPENING_BALANCE_EQUITY', -5n, 'PKR'),
+      row('CASH', BigInt('5'), 'PKR'),
+      row('OPENING_BALANCE_EQUITY', BigInt('-5'), 'PKR'),
     ]);
     expect(sheets.map((sheet) => [sheet.currency, sheet.assetsMinor, sheet.reconciled])).toEqual([
       ['PKR', '5', true],
@@ -81,9 +81,9 @@ describe('classifyBalanceSheet', () => {
 
   it('shows nonzero unknown codes and blocks a reconciled claim without guessing policy', () => {
     const [sheet] = classifyBalanceSheet([
-      row('CASH', 100n),
-      row('FUTURE_WALLET', -100n),
-      row('ZERO_FUTURE_CODE', 0n),
+      row('CASH', BigInt('100')),
+      row('FUTURE_WALLET', BigInt('-100')),
+      row('ZERO_FUTURE_CODE', BigInt('0')),
     ]);
     expect(sheet.unmappedAccountCodes).toEqual(['FUTURE_WALLET']);
     expect(sheet.equationBalanced).toBe(false);

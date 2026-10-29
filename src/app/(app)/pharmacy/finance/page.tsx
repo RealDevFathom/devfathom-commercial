@@ -4,8 +4,9 @@ import { Suspense } from 'react';
 import { MarginComparisonSection } from './margin-comparison';
 import { LedgerReportsSection, LedgerReportsLoading } from './ledger-reports';
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { redirect, unstable_rethrow } from 'next/navigation';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -271,6 +272,14 @@ export default async function PharmacyFinancePage({
         eyebrow="Pharmacy operations"
         heading="Finance"
         description="Post and allocate money, reconcile the bank, control periods, and publish approved tax versions."
+        actions={
+          <Link
+            href={`/pharmacy/accounts/balance-sheet?${new URLSearchParams({ branch: branch.id })}`}
+            className={buttonVariants({ variant: 'outline', size: 'lg' })}
+          >
+            Balance sheet
+          </Link>
+        }
       />
       <Suspense fallback={<LedgerReportsLoading />}>
         <FinancialStatements
