@@ -17,6 +17,14 @@ import {
   type DemandSource,
 } from './demand-evidence';
 import { blockReasonFor, planAllocation, type AllocationCandidate } from './inventory';
+import {
+  learnCalendarUplift,
+  type SaltSalesDay,
+  type SeasonalCalendarWindow,
+  type SeasonalLearningConfig,
+} from './seasonal-forecasting';
+
+export * from './seasonal-forecasting';
 
 export { forecastDemandEvidence, backtestDemandEvidence } from './demand-evidence';
 export type {
@@ -61,7 +69,16 @@ export type ForecastFixtureLine = {
   medicineId: string;
   demandUnits: number;
   demandWindowDays: number;
-  seasonalityBps: number;
+  /** @deprecated Supply seasonalContext so uplift is learned from branch-local history. */
+  seasonalityBps?: number;
+  seasonalContext?: {
+    branchId: string;
+    saltId: string;
+    forecastDate: string;
+    calendar: readonly SeasonalCalendarWindow[];
+    history: readonly SaltSalesDay[];
+    config?: SeasonalLearningConfig;
+  };
   leadTimeDays: number;
   fillRateBps: number;
   openPurchaseOrderUnits: number;
@@ -182,12 +199,14 @@ function forecastLine(line: ForecastFixtureLine): ForecastLine {
   [line.demandWindowDays, line.leadTimeDays, line.packSize].forEach((value) =>
     integer(value, false)
   );
-  if (line.seasonalityBps <= 0 || line.fillRateBps <= 0 || line.fillRateBps > BPS) {
+  const learnedUplift = line.seasonalContext ? learnCalendarUplift(line.seasonalContext) : null;
+  const seasonalityBps = learnedUplift?.upliftBps ?? line.seasonalityBps ?? BPS;
+  if (seasonalityBps <= 0 || line.fillRateBps <= 0 || line.fillRateBps > BPS) {
     throw new RangeError('Rates must be positive basis points and fill rate cannot exceed 100%');
   }
 
   const velocityLeadDemand = Math.ceil(
-    (line.demandUnits * line.leadTimeDays * line.seasonalityBps * BPS) /
+    (line.demandUnits * line.leadTimeDays * seasonalityBps * BPS) /
       (line.demandWindowDays * BPS * line.fillRateBps)
   );
   const inbound = line.openPurchaseOrderUnits + line.openTransferUnits;
@@ -216,7 +235,12 @@ function forecastLine(line: ForecastFixtureLine): ForecastLine {
         input: 'DEMAND_VELOCITY',
         value: `${line.demandUnits} units / ${line.demandWindowDays} days`,
       },
-      { input: 'SEASONALITY', value: `${line.seasonalityBps} bps` },
+      {
+        input: 'SEASONALITY',
+        value: learnedUplift
+          ? `${seasonalityBps} bps learned from ${learnedUplift.eventDays} branch event days (${learnedUplift.windowName})`
+          : `${seasonalityBps} bps${line.seasonalityBps ? ' legacy input' : ' neutral (insufficient calendar history)'}`,
+      },
       {
         input: 'LEAD_TIME_AND_FILL_HISTORY',
         value: `${line.leadTimeDays} days; ${line.fillRateBps} bps fill`,

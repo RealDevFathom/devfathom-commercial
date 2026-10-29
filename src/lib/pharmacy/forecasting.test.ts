@@ -87,6 +87,46 @@ describe('PUR-09 comparison harness', () => {
       estimate: { label: 'ESTIMATE' },
     });
   });
+
+  it('uses uplift learned from the branch seasonal calendar in the forecast', () => {
+    const history = [
+      ...Array.from({ length: 7 }, (_, index) => ({
+        branchId: 'branch-a',
+        saltId: 'salt-a',
+        date: `2026-06-${String(index + 1).padStart(2, '0')}`,
+        units: 10,
+      })),
+      { branchId: 'branch-a', saltId: 'salt-a', date: '2026-07-01', units: 20 },
+      { branchId: 'branch-a', saltId: 'salt-a', date: '2026-07-02', units: 20 },
+    ];
+    const result = compareReplenishment(
+      [
+        {
+          ...fixture,
+          seasonalityBps: undefined,
+          seasonalContext: {
+            branchId: 'branch-a',
+            saltId: 'salt-a',
+            forecastDate: '2026-07-03',
+            history,
+            calendar: [
+              {
+                id: 'season-2026',
+                branchId: 'branch-a',
+                name: 'Owner seasonal window',
+                startDate: '2026-07-01',
+                endDate: '2026-08-31',
+                enabled: true,
+              },
+            ],
+          },
+        },
+      ],
+      { organizationId: 'organization-a', enabled: true }
+    );
+    expect(result.forecast[0]).toMatchObject({ forecastQuantityUnits: 150 });
+    expect(result.forecast[0]!.reasons[1]!.value).toContain('20000 bps learned');
+  });
 });
 
 describe('PUR-09 / invariant 29 approval property', () => {
