@@ -142,6 +142,7 @@ export class PharmacySaleError extends Error {
       | 'MARGIN_GUARDRAIL'
       | 'APPROVAL_REQUIRED'
       | 'REGULATED_DISCOUNT_REFUSED'
+      | 'VOUCHER_NOT_ELIGIBLE'
       | 'RETURN_EXCEEDS_SOLD'
       | 'IDEMPOTENCY_CONFLICT'
       | 'CONSENT_REQUIRED'
@@ -168,6 +169,31 @@ export function validateDiscount(input: {
     throw new PharmacySaleError('APPROVAL_REQUIRED');
   if (input.grossMinor - input.discountMinor < input.costMinor)
     throw new PharmacySaleError('MARGIN_GUARDRAIL');
+}
+
+export async function assertVoucherEligibility(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  voucherCampaignId: string,
+  productFamily: string
+) {
+  const voucher = await db.pharmacyCampaign.findFirst({
+    where: {
+      id: voucherCampaignId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      voucherEnabled: true,
+      status: { in: ['APPROVED', 'CAPTURED'] },
+    },
+    select: { eligibleCategoryAllowlist: true },
+  });
+  const eligible = Array.isArray(voucher?.eligibleCategoryAllowlist)
+    ? voucher.eligibleCategoryAllowlist
+    : [];
+  // Product family is server-owned. Rx, OTC, supplements/alternative products and
+  // devices can therefore never be made eligible by a counter request.
+  if (!voucher || productFamily !== 'FRONT_SHOP' || !eligible.includes('FRONT_SHOP'))
+    throw new PharmacySaleError('VOUCHER_NOT_ELIGIBLE');
 }
 
 async function saleInScope(db: ScopedDb, scope: LedgerScope, saleId: string) {
@@ -223,6 +249,7 @@ type AddSaleLineInput = {
   canonicalUnitsPerSaleUnit: number;
   discountKind?: 'DISCOUNT' | 'PROMOTION' | 'COMPLIMENTARY';
   discountMinor?: number;
+  voucherCampaignId?: string;
   approvedByUserId?: string;
   approvalPolicy?: string;
   override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
@@ -282,6 +309,8 @@ async function addSaleLineWithAllocation(
     where: { id: input.medicineId, organizationId: scope.organizationId, saleable: true },
   });
   if (!medicine) throw new PharmacySaleError('NOT_FOUND');
+  if (input.voucherCampaignId)
+    await assertVoucherEligibility(db, scope, input.voucherCampaignId, medicine.productFamily);
   const allocationInput = {
     medicineId: input.medicineId,
     requiredUnits: canonicalUnits,

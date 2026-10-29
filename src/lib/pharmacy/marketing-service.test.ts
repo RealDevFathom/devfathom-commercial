@@ -7,6 +7,8 @@ import {
   marketingConsent,
   marketingDraftInput,
   previewMarketingCampaign,
+  renderMarketingBody,
+  VOUCHER_FOOTER,
   requireCaptureWindow,
 } from './marketing-service';
 
@@ -29,6 +31,8 @@ const campaign = () => ({
   promotesRegulatedItem: false,
   quietHours: { startHour: 22, endHour: 8 },
   frequencyCap: { max: 1, windowDays: 7 },
+  voucherEnabled: false,
+  eligibleCategoryAllowlist: ['FRONT_SHOP'],
 });
 let row: ReturnType<typeof campaign>;
 let captures: Array<Record<string, unknown>>;
@@ -131,6 +135,8 @@ describe('persisted capture workflow', () => {
       quietHours: row.quietHours,
       frequencyCap: row.frequencyCap,
       promotesRegulatedItem: false as const,
+      voucherEnabled: false,
+      eligibleCategoryAllowlist: ['FRONT_SHOP' as const],
     };
     expect(await createMarketingDraft(db, scope, input)).toMatchObject({
       status: 'DRAFT',
@@ -145,6 +151,14 @@ describe('persisted capture workflow', () => {
         channel: 'WHATSAPP',
       },
     });
+  });
+  it('automatically appends the bilingual exclusion footer to voucher messages', () => {
+    const rendered = renderMarketingBody('Save on eligible essentials. Reply STOP.', true);
+    expect(rendered).toContain(VOUCHER_FOOTER);
+    expect(renderMarketingBody(rendered, true).match(new RegExp(VOUCHER_FOOTER, 'g'))).toHaveLength(
+      1
+    );
+    expect(rendered.replace(VOUCHER_FOOTER, '')).not.toMatch(/\b(?:drug|medicine|rx|salt)\b/i);
   });
   it('rejects unsupported or clinical segment fields', () => {
     for (const field of ['medicine', 'otcOnly', 'familyAccount']) {

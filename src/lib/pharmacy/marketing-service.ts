@@ -23,6 +23,17 @@ const quietHours = z
 const frequencyCap = z
   .object({ max: z.number().int().min(1).max(10), windowDays: z.number().int().min(1).max(90) })
   .strict();
+export const VOUCHER_FOOTER = 'Medicines excluded / Adviyaat shamil nahin';
+const eligibleCategoryAllowlist = z
+  .array(z.literal('FRONT_SHOP'))
+  .min(1)
+  .max(1)
+  .default(['FRONT_SHOP']);
+
+export function renderMarketingBody(body: string, voucherEnabled: boolean) {
+  if (!voucherEnabled || body.includes(VOUCHER_FOOTER)) return body;
+  return `${body}\n\n${VOUCHER_FOOTER}`;
+}
 export const marketingDraftInput = marketingScopeInput
   .extend({
     name: z.string().trim().min(1).max(100),
@@ -32,6 +43,8 @@ export const marketingDraftInput = marketingScopeInput
     quietHours,
     frequencyCap,
     promotesRegulatedItem: z.literal(false),
+    voucherEnabled: z.boolean().default(false),
+    eligibleCategoryAllowlist,
   })
   .strict();
 export const marketingTemplateInput = marketingScopeInput
@@ -121,6 +134,8 @@ export async function createMarketingDraft(
       quietHours: input.quietHours,
       frequencyCap: input.frequencyCap,
       promotesRegulatedItem: false,
+      voucherEnabled: input.voucherEnabled,
+      eligibleCategoryAllowlist: input.eligibleCategoryAllowlist,
       status: 'DRAFT',
     },
   });
@@ -246,7 +261,7 @@ async function evaluateCampaign(
       }),
       exclusions: {} as Record<string, number>,
       replay: true,
-      body: template.body,
+      body: renderMarketingBody(template.body, campaign.voucherEnabled),
     };
   requireCaptureWindow(campaign, scope, now);
   const cap = frequencyCap.parse(campaign.frequencyCap);
@@ -333,7 +348,12 @@ async function evaluateCampaign(
   }
   if (persist)
     await db.pharmacyCampaign.update({ where: { id: campaignId }, data: { status: 'CAPTURED' } });
-  return { prepared, exclusions, replay: false, body: template.body };
+  return {
+    prepared,
+    exclusions,
+    replay: false,
+    body: renderMarketingBody(template.body, campaign.voucherEnabled),
+  };
 }
 
 export const previewMarketingCampaign = (

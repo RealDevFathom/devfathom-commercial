@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   addSaleLine,
+  assertVoucherEligibility,
   addRestockInterest,
   captureSafeRestockArrival,
   changeSaleStatus,
@@ -12,6 +13,33 @@ import {
   returnSaleLine,
   validateDiscount,
 } from './sales';
+
+describe('voucher category enforcement', () => {
+  const voucherDb = (eligibleCategoryAllowlist: unknown = ['FRONT_SHOP']) =>
+    ({
+      pharmacyCampaign: {
+        findFirst: vi.fn(async () => ({ eligibleCategoryAllowlist })),
+      },
+    }) as never;
+
+  it.each(['PHARMACEUTICAL', 'BIOLOGICAL', 'ALTERNATIVE', 'DEVICE'])(
+    'refuses a voucher for server-classified %s lines',
+    async (family) => {
+      await expect(
+        assertVoucherEligibility(voucherDb(), scope, 'voucher-a', family)
+      ).rejects.toThrow('VOUCHER_NOT_ELIGIBLE');
+    }
+  );
+
+  it('accepts only an allowlisted non-drug front-shop line', async () => {
+    await expect(
+      assertVoucherEligibility(voucherDb(), scope, 'voucher-a', 'FRONT_SHOP')
+    ).resolves.toBeUndefined();
+    await expect(
+      assertVoucherEligibility(voucherDb([]), scope, 'voucher-a', 'FRONT_SHOP')
+    ).rejects.toThrow('VOUCHER_NOT_ELIGIBLE');
+  });
+});
 
 // Finance posting is outside these physical return-disposition assertions.
 vi.mock('./finance-postings', async () => ({

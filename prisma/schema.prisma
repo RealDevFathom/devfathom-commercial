@@ -13766,6 +13766,10 @@ model PharmacyCampaign {
   quietHours            Json
   frequencyCap          Json
   promotesRegulatedItem Boolean                @default(false)
+  /// Voucher redemption is deliberately limited to this explicit retail allowlist.
+  /// The only currently classified non-drug family is FRONT_SHOP.
+  voucherEnabled        Boolean                @default(false)
+  eligibleCategoryAllowlist Json               @default("[\"FRONT_SHOP\"]")
   status                PharmacyCampaignStatus @default(DRAFT)
   ownerApprovedByUserId String?
   ownerApprovedAt       DateTime?
