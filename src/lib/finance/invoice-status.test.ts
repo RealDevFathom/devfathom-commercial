@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  allowedInvoiceStatusTransitions,
+  INVOICE_STATUS_VALUES,
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
   PAID_STATUS_ERROR,
@@ -7,6 +9,20 @@ import {
 } from './invoice-status';
 
 describe('invoice status contract shared by REST, tRPC, and AI', () => {
+  it.each<InvoiceStatusValue>(INVOICE_STATUS_VALUES)(
+    'only exposes server-accepted destinations from %s',
+    (prior) => {
+      const allowed = allowedInvoiceStatusTransitions(prior);
+
+      expect(allowed).not.toContain(prior);
+      for (const next of INVOICE_STATUS_VALUES) {
+        if (next !== prior) {
+          expect(allowed.includes(next)).toBe(invoiceStatusTransitionError(prior, next) === null);
+        }
+      }
+    }
+  );
+
   it.each<InvoiceStatusValue>(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED'])(
     'rejects direct PAID from %s',
     (prior) => expect(invoiceStatusTransitionError(prior, 'PAID')).toBe(PAID_STATUS_ERROR)

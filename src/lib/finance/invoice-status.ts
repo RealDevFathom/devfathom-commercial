@@ -12,6 +12,13 @@ const TRANSITIONS: Record<InvoiceStatusValue, readonly InvoiceStatusValue[]> = {
   CANCELLED: ['DRAFT'],
 };
 
+/** Valid destination statuses for status controls and API clients. */
+export function allowedInvoiceStatusTransitions(
+  prior: InvoiceStatusValue
+): readonly InvoiceStatusValue[] {
+  return TRANSITIONS[prior];
+}
+
 export function invoiceStatusTransitionError(
   prior: InvoiceStatusValue,
   next: InvoiceStatusValue
