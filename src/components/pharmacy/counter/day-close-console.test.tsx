@@ -2,6 +2,8 @@ import { fireEvent, render, screen, cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   role: 'ADMIN',
+  closeAllowed: true,
+  accessLoading: false,
   loading: false,
   error: null as Error | null,
   close: null as Record<string, unknown> | null,
@@ -36,6 +38,13 @@ vi.mock('@/components/entitlements-provider', () => ({
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     pharmacySales: {
+      closeAccess: {
+        useQuery: () => ({
+          data: mocks.closeAllowed ? { allowed: true } : undefined,
+          isLoading: mocks.accessLoading,
+          error: mocks.closeAllowed || mocks.accessLoading ? null : new Error('Forbidden'),
+        }),
+      },
       counterBranches: {
         useQuery: () => ({
           data: { branches: [{ id: 'b', name: 'Main' }], timezone: mocks.zone },
@@ -82,6 +91,8 @@ afterEach(() => {
 beforeEach(() => {
   mocks.zone = WORKSPACE_ZONE;
   mocks.role = 'ADMIN';
+  mocks.closeAllowed = true;
+  mocks.accessLoading = false;
   mocks.loading = false;
   mocks.error = null;
   mocks.close = null;
@@ -146,10 +157,16 @@ describe('day-close console', () => {
       );
     }
   );
-  it('shows permission denial for a non-administrator', () => {
+  it('renders the close controls for a capable non-administrator', () => {
     mocks.role = 'MEMBER';
     render(<PharmacyDayCloseConsole />);
-    expect(screen.getByText(/Sign in as a pharmacy administrator/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
+  });
+  it('shows the server-derived permission denial', () => {
+    mocks.role = 'MEMBER';
+    mocks.closeAllowed = false;
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText(/do not have permission/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
   });
   it('shows loading and retryable errors', () => {

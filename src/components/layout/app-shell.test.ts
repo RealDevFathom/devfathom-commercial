@@ -103,8 +103,7 @@ describe('AppShell module guard', () => {
             accentColor: null,
           },
           pharmacyPlaceholder: true,
-          children: null,
-        },
+        } as React.ComponentProps<typeof AppShell>,
         createElement('p', null, 'Dashboard')
       )
     );

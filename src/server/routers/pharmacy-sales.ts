@@ -471,6 +471,10 @@ async function requireCloseAccess(ctx: TRPCContext) {
 }
 
 export const pharmacySalesRouter = router({
+  closeAccess: protectedProcedure.query(async ({ ctx }) => {
+    await requireCloseAccess(ctx);
+    return { allowed: true as const };
+  }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
     try {

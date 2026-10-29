@@ -990,11 +990,15 @@ function ScopedPharmacyCounterConsole({
     const row = found[0]!;
     const nextUnit = row.saleUnits[0]?.kind ?? null;
     if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
+      // Barcode search completion is an external async result that must be
+      // synchronized into the staged sale selection.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       stageRow(row);
       return;
     }
     barcodeAdd.current = null;
     if (!preview?.sufficient || busy) return;
+    // Completing the scanner workflow is the purpose of this external-result effect.
     void addToCart();
   }, [
     activeRow,

@@ -103,8 +103,8 @@ beforeEach(() => {
 });
 
 describe('pharmacy close family refusals', () => {
-  it('allows a non-admin pharmacist with the close capability to preview the day', async () => {
-    const pharmacist = app.createCaller({
+  function pharmacist() {
+    return app.createCaller({
       db: f.db,
       entitlements: { organizationId: 'org-1', enabledModules: ['pharmacy-counter'], modules: [] },
       session: {
@@ -116,13 +116,48 @@ describe('pharmacy close family refusals', () => {
       requestMeta: { ip: null, userAgent: null },
       audit: { detail: {} },
     } as unknown as TRPCContext).pharmacySales;
+  }
 
+  it('allows a non-admin pharmacist with the close capability to preview the day', async () => {
     await expect(
-      pharmacist.closePreview({ branchId: BRANCH, businessDate })
-    ).resolves.toMatchObject({ sourceHash: previewHash });
+      pharmacist().closePreview({ branchId: BRANCH, businessDate })
+    ).resolves.toMatchObject({ totals: { sourceHash: previewHash } });
     expect(f.db.user.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'pharmacist-1' } })
     );
+  });
+
+  it('uses the same capability gate for both close mutations', async () => {
+    f.db.pharmacyDrawerSession.count.mockResolvedValue(1);
+    await expect(pharmacist().dailyClose({ branchId: BRANCH, businessDate })).rejects.toMatchObject(
+      {
+        code: 'CONFLICT',
+        message: 'OPEN_DRAWER',
+      }
+    );
+    await expect(
+      pharmacist().closeDay({
+        branchId: BRANCH,
+        businessDate,
+        sourceHash: 'b'.repeat(64),
+        counts: [{ drawerSessionId: openDrawer.id, countedCashMinor: 500 }],
+        varianceNote: '',
+      })
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: /day changed/i });
+  });
+
+  it('honors wildcard grants and explicit denies in the UI-visible access decision', async () => {
+    f.db.user.findUnique.mockResolvedValue({
+      organizationRole: { permissions: [{ capability: 'pharmacy:*', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    });
+    await expect(pharmacist().closeAccess()).resolves.toEqual({ allowed: true });
+
+    f.db.user.findUnique.mockResolvedValue({
+      organizationRole: { permissions: [{ capability: 'pharmacy:*', effect: 'ALLOW' }] },
+      permissionOverrides: [{ capability: 'pharmacy:manage', effect: 'DENY' }],
+    });
+    await expect(pharmacist().closeAccess()).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
   it('answers a daily close with a drawer still open as a CONFLICT, writing no close', async () => {
