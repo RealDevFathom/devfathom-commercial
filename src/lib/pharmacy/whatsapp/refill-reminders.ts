@@ -60,6 +60,9 @@ type DueCapture = {
   directionsEnglish: string;
   quantityDispensed: number;
   dispensedAt: Date;
+  subscriptionId: string | null;
+  subscriptionDueAt: Date | null;
+  consentEventId: string;
 };
 
 export type RefillReminderRunResult = {
@@ -110,7 +113,8 @@ export async function processDueWhatsAppRefillReminders(
     db.$queryRaw<DueCapture[]>(Prisma.sql`
       SELECT capture."id", capture."organizationId", capture."branchId", capture."patientId",
              line."medicineId", capture."medicineName", capture."directionsEnglish",
-             capture."quantityDispensed", fill."dispensedAt"
+             capture."quantityDispensed", fill."dispensedAt", NULL::text AS "subscriptionId",
+             NULL::timestamp AS "subscriptionDueAt", capture."consentEventId"
       FROM "pharmacy_refill_reminder_captures" capture
       JOIN "pharmacy_prescription_fills" fill
         ON fill."organizationId" = capture."organizationId" AND fill."id" = capture."prescriptionFillId"
@@ -124,7 +128,24 @@ export async function processDueWhatsAppRefillReminders(
           WHERE log."organizationId" = capture."organizationId"
             AND log."refillCaptureId" = capture."id"
         )
-      ORDER BY capture."expectedExhaustionAt", capture."id"
+      UNION ALL
+      SELECT subscription."id", subscription."organizationId", subscription."branchId",
+             customer."patientId", subscription."medicineId", '' AS "medicineName",
+             '' AS "directionsEnglish", subscription."quantityPacks" AS "quantityDispensed",
+             subscription."nextDueAt" AS "dispensedAt", subscription."id" AS "subscriptionId",
+             subscription."nextDueAt" AS "subscriptionDueAt", subscription."reminderConsentId" AS "consentEventId"
+      FROM "pharmacy_chronic_refill_subscriptions" subscription
+      JOIN "pharmacy_customers" customer
+        ON customer."organizationId" = subscription."organizationId"
+       AND customer."id" = subscription."customerId"
+      WHERE subscription."active" AND subscription."reminderConsentId" IS NOT NULL
+        AND subscription."nextDueAt" > ${now} AND subscription."nextDueAt" <= ${windowEnd}
+        AND NOT EXISTS (
+          SELECT 1 FROM "pharmacy_message_logs" log
+          WHERE log."organizationId" = subscription."organizationId"
+            AND log."dedupeKey" = 'chronic-refill:' || subscription."id" || ':' || to_char(subscription."nextDueAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD')
+        )
+      ORDER BY "subscriptionDueAt" NULLS LAST, "id"
       LIMIT ${limit}
     `)
   );
@@ -133,17 +154,29 @@ export async function processDueWhatsAppRefillReminders(
     result.scanned += 1;
     let plan: ReturnType<typeof planRefillReminder>;
     try {
-      plan = planRefillReminder(
-        {
-          patientId: capture.patientId,
-          medicineId: capture.medicineId,
-          dispensedAt: capture.dispensedAt,
-          quantityDispensed: Number(capture.quantityDispensed),
-          directions: capture.directionsEnglish,
-        },
-        now,
-        config.reminderLeadDays
-      );
+      plan = capture.subscriptionId
+        ? {
+            dueDate: capture.subscriptionDueAt!.toISOString().slice(0, 10),
+            sendAt: new Date(
+              capture.subscriptionDueAt!.getTime() - config.reminderLeadDays * DAY_MS
+            ),
+            expectedExhaustionAt: capture.subscriptionDueAt!,
+            due:
+              new Date(capture.subscriptionDueAt!.getTime() - config.reminderLeadDays * DAY_MS) <=
+                now && now < capture.subscriptionDueAt!,
+            dedupeKey: `chronic-refill:${capture.subscriptionId}:${capture.subscriptionDueAt!.toISOString().slice(0, 10)}`,
+          }
+        : planRefillReminder(
+            {
+              patientId: capture.patientId,
+              medicineId: capture.medicineId,
+              dispensedAt: capture.dispensedAt,
+              quantityDispensed: Number(capture.quantityDispensed),
+              directions: capture.directionsEnglish,
+            },
+            now,
+            config.reminderLeadDays
+          );
     } catch (error) {
       if (!(error instanceof RefillSupportError)) throw error;
       result.notDue += 1;
@@ -203,6 +236,7 @@ export async function processDueWhatsAppRefillReminders(
             patientId: capture.patientId,
             purpose: 'REMINDERS',
             channel: 'WHATSAPP',
+            ...(capture.subscriptionId ? { id: capture.consentEventId } : {}),
           },
           orderBy: { version: 'desc' },
           select: { granted: true, revokedAt: true, recordedAt: true },
@@ -239,7 +273,7 @@ export async function processDueWhatsAppRefillReminders(
         patientId: capture.patientId,
         phoneLast4: phoneLast4(to),
         templateName: config.templates.refillReminder,
-        refillCaptureId: capture.id,
+        refillCaptureId: capture.subscriptionId ? null : capture.id,
         dueDate: plan.dueDate,
       });
       return { customerId: customer.id, to, logId };
@@ -263,7 +297,7 @@ export async function processDueWhatsAppRefillReminders(
         patientId: capture.patientId,
         phoneLast4: phoneLast4(recipient.to),
         templateName: config.templates.refillReminder,
-        refillCaptureId: capture.id,
+        refillCaptureId: capture.subscriptionId ? null : capture.id,
         dueDate: plan.dueDate,
       },
       recipient.logId,

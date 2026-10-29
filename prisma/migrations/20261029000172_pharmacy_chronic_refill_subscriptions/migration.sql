@@ -11,6 +11,7 @@ CREATE TABLE "pharmacy_chronic_refill_subscriptions" (
   "packLevelId" TEXT NOT NULL,
   "quantityPacks" INTEGER NOT NULL,
   "prescriptionLineId" TEXT,
+  "reminderConsentId" TEXT,
   "fulfillment" "PharmacyCustomerOrderFulfillment" NOT NULL,
   "paymentMode" "PharmacyChronicRefillPayment" NOT NULL,
   "addressLine" TEXT,
@@ -19,6 +20,7 @@ CREATE TABLE "pharmacy_chronic_refill_subscriptions" (
   "cadenceDays" INTEGER NOT NULL,
   "nextDueAt" TIMESTAMP(3) NOT NULL,
   "active" BOOLEAN NOT NULL DEFAULT true,
+  "cancelledAt" TIMESTAMP(3),
   "createdByUserId" TEXT NOT NULL,
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
   "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -32,11 +34,65 @@ CREATE TABLE "pharmacy_chronic_refill_subscriptions" (
   CONSTRAINT "pharmacy_chronic_refill_subscription_branch_fkey" FOREIGN KEY ("organizationId", "branchId") REFERENCES "pharmacy_branches"("organizationId", "id") ON DELETE RESTRICT,
   CONSTRAINT "pharmacy_chronic_refill_subscription_customer_fkey" FOREIGN KEY ("organizationId", "customerId") REFERENCES "pharmacy_customers"("organizationId", "id") ON DELETE RESTRICT,
   CONSTRAINT "pharmacy_chronic_refill_subscription_medicine_fkey" FOREIGN KEY ("organizationId", "medicineId") REFERENCES "pharmacy_medicines"("organizationId", "id") ON DELETE RESTRICT,
+  CONSTRAINT "pharmacy_chronic_refill_subscription_presentation_fkey" FOREIGN KEY ("presentationId") REFERENCES "pharmacy_presentations"("id") ON DELETE RESTRICT,
+  CONSTRAINT "pharmacy_chronic_refill_subscription_pack_fkey" FOREIGN KEY ("organizationId", "packLevelId") REFERENCES "pharmacy_pack_levels"("organizationId", "id") ON DELETE RESTRICT,
   CONSTRAINT "pharmacy_chronic_refill_subscription_prescription_fkey" FOREIGN KEY ("organizationId", "prescriptionLineId") REFERENCES "pharmacy_prescription_lines"("organizationId", "id") ON DELETE RESTRICT,
+  CONSTRAINT "pharmacy_chronic_refill_subscription_reminder_consent_fkey" FOREIGN KEY ("organizationId", "reminderConsentId") REFERENCES "pharmacy_patient_consents"("organizationId", "id") ON DELETE RESTRICT,
   CONSTRAINT "pharmacy_chronic_refill_subscription_user_fkey" FOREIGN KEY ("organizationId", "createdByUserId") REFERENCES "users"("organizationId", "id") ON DELETE RESTRICT
 );
 
 CREATE INDEX "pharmacy_chronic_refill_subscription_due_idx" ON "pharmacy_chronic_refill_subscriptions" ("organizationId", "branchId", "active", "nextDueAt");
+
+-- Defense in depth for every writer, including privileged maintenance SQL. The
+-- catalog hierarchy and clinical/payer identity must describe the same item.
+CREATE FUNCTION pharmacy_validate_chronic_refill_subscription() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM "pharmacy_presentations" presentation
+    JOIN "pharmacy_pack_levels" pack
+      ON pack."organizationId" = presentation."organizationId"
+     AND pack."presentationId" = presentation."id"
+    WHERE presentation."organizationId" = NEW."organizationId"
+      AND presentation."id" = NEW."presentationId"
+      AND presentation."medicineId" = NEW."medicineId"
+      AND pack."id" = NEW."packLevelId"
+  ) THEN
+    RAISE EXCEPTION 'chronic refill item hierarchy is invalid' USING ERRCODE = '23514';
+  END IF;
+  IF NEW."prescriptionLineId" IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM "pharmacy_prescription_lines" line
+    JOIN "pharmacy_prescriptions" prescription
+      ON prescription."organizationId" = line."organizationId"
+     AND prescription."id" = line."prescriptionId"
+    JOIN "pharmacy_customers" customer
+      ON customer."organizationId" = prescription."organizationId"
+     AND customer."patientId" = prescription."patientId"
+    WHERE line."organizationId" = NEW."organizationId"
+      AND line."id" = NEW."prescriptionLineId"
+      AND line."medicineId" = NEW."medicineId"
+      AND line."presentationId" = NEW."presentationId"
+      AND customer."id" = NEW."customerId"
+  ) THEN
+    RAISE EXCEPTION 'chronic refill prescription does not authorize this customer and item' USING ERRCODE = '23514';
+  END IF;
+  IF NEW."reminderConsentId" IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM "pharmacy_patient_consents" consent
+    JOIN "pharmacy_customers" customer
+      ON customer."organizationId" = consent."organizationId"
+     AND customer."patientId" = consent."patientId"
+    WHERE consent."organizationId" = NEW."organizationId"
+      AND consent."id" = NEW."reminderConsentId" AND customer."id" = NEW."customerId"
+      AND consent."purpose" = 'REMINDERS' AND consent."channel" = 'WHATSAPP'
+      AND consent."granted" AND consent."revokedAt" IS NULL
+  ) THEN
+    RAISE EXCEPTION 'chronic refill reminder requires current patient consent' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER pharmacy_chronic_refill_subscription_valid
+  BEFORE INSERT OR UPDATE OF "customerId", "medicineId", "presentationId", "packLevelId", "prescriptionLineId", "reminderConsentId"
+  ON "pharmacy_chronic_refill_subscriptions"
+  FOR EACH ROW EXECUTE FUNCTION pharmacy_validate_chronic_refill_subscription();
 
 CREATE TABLE "pharmacy_chronic_refill_cycles" (
   "id" TEXT NOT NULL,
@@ -59,6 +115,21 @@ CREATE TABLE "pharmacy_chronic_refill_cycles" (
 
 CREATE INDEX "pharmacy_chronic_refill_cycle_order_idx" ON "pharmacy_chronic_refill_cycles" ("organizationId", "branchId", "orderId");
 
+CREATE TABLE "pharmacy_chronic_refill_events" (
+  "id" TEXT NOT NULL,
+  "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true),
+  "branchId" TEXT NOT NULL,
+  "subscriptionId" TEXT NOT NULL,
+  "kind" TEXT NOT NULL CHECK ("kind" IN ('EDIT', 'PAUSE', 'REACTIVATE', 'CANCEL')),
+  "actorUserId" TEXT NOT NULL,
+  "details" JSONB NOT NULL DEFAULT '{}'::jsonb,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "pharmacy_chronic_refill_events_pkey" PRIMARY KEY ("id"),
+  CONSTRAINT "pharmacy_chronic_refill_event_subscription_fkey" FOREIGN KEY ("organizationId", "branchId", "subscriptionId") REFERENCES "pharmacy_chronic_refill_subscriptions"("organizationId", "branchId", "id") ON DELETE RESTRICT,
+  CONSTRAINT "pharmacy_chronic_refill_event_actor_fkey" FOREIGN KEY ("organizationId", "actorUserId") REFERENCES "users"("organizationId", "id") ON DELETE RESTRICT
+);
+CREATE INDEX "pharmacy_chronic_refill_event_timeline_idx" ON "pharmacy_chronic_refill_events" ("organizationId", "branchId", "subscriptionId", "createdAt");
+
 ALTER TABLE "pharmacy_chronic_refill_subscriptions" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "pharmacy_chronic_refill_subscriptions" FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON "pharmacy_chronic_refill_subscriptions"
@@ -69,7 +140,15 @@ ALTER TABLE "pharmacy_chronic_refill_cycles" FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON "pharmacy_chronic_refill_cycles"
   USING ("organizationId" = current_setting('app.current_organization_id', true))
   WITH CHECK ("organizationId" = current_setting('app.current_organization_id', true));
+ALTER TABLE "pharmacy_chronic_refill_events" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "pharmacy_chronic_refill_events" FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON "pharmacy_chronic_refill_events"
+  USING ("organizationId" = current_setting('app.current_organization_id', true))
+  WITH CHECK ("organizationId" = current_setting('app.current_organization_id', true));
 
 CREATE TRIGGER pharmacy_chronic_refill_cycles_append_only
   BEFORE UPDATE OR DELETE ON "pharmacy_chronic_refill_cycles"
+  FOR EACH ROW EXECUTE FUNCTION pharmacy_reject_append_only_change();
+CREATE TRIGGER pharmacy_chronic_refill_events_append_only
+  BEFORE UPDATE OR DELETE ON "pharmacy_chronic_refill_events"
   FOR EACH ROW EXECUTE FUNCTION pharmacy_reject_append_only_change();

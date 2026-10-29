@@ -24,6 +24,8 @@ import {
   ChronicRefillError,
   createChronicRefillSubscription,
   createDueChronicRefillOrder,
+  listChronicRefillSubscriptions,
+  updateChronicRefillSubscription,
 } from '@/lib/pharmacy/chronic-refills';
 
 import { assertInOrganization } from '../org-refs';
@@ -81,6 +83,47 @@ const orderLine = z
   .strict();
 
 export const pharmacyOrderingRouter = router({
+  chronicRefills: staffProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) =>
+        listChronicRefillSubscriptions(txDb(tx), await scopeFor(ctx, input.branchId))
+      )
+    ),
+
+  updateChronicRefill: staffProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          subscriptionId: z.string().min(1),
+          action: z.enum(['PAUSE', 'REACTIVATE', 'CANCEL']).optional(),
+          cadenceDays: z.number().int().min(1).max(365).optional(),
+          nextDueAt: z.date().optional(),
+          quantityPacks: z.number().int().min(1).max(100).optional(),
+          fulfillment: z.enum(['COLLECT', 'DELIVER']).optional(),
+          paymentMode: z.enum(['PREPAY', 'KHATA']).optional(),
+          addressLine: z.string().trim().min(1).max(300).nullable().optional(),
+          city: z.string().trim().min(1).max(120).nullable().optional(),
+          deliveryInstructions: z.string().trim().max(500).nullable().optional(),
+        })
+        .strict()
+        .refine(
+          (value) =>
+            Object.keys(value).some((key) => !['branchId', 'subscriptionId'].includes(key)),
+          'No change requested'
+        )
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          updateChronicRefillSubscription(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
   createChronicRefill: staffProcedure
     .input(
       z
@@ -92,6 +135,7 @@ export const pharmacyOrderingRouter = router({
           packLevelId: z.string().min(1),
           quantityPacks: z.number().int().positive().max(100),
           prescriptionLineId: z.string().min(1).optional(),
+          reminderConsentId: z.string().min(1).optional(),
           fulfillment: z.enum(['COLLECT', 'DELIVER']),
           paymentMode: z.enum(['PREPAY', 'KHATA']),
           addressLine: z.string().trim().min(1).max(300).optional(),

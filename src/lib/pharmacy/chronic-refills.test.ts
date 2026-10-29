@@ -6,7 +6,9 @@ import { placeCustomerOrder } from './customer-ordering';
 import {
   chronicRefillReminderText,
   ChronicRefillError,
+  createChronicRefillSubscription,
   createDueChronicRefillOrder,
+  updateChronicRefillSubscription,
 } from './chronic-refills';
 
 const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'owner-1' };
@@ -33,6 +35,10 @@ function db(rows: unknown[][]) {
     $queryRaw: vi.fn().mockImplementation(() => Promise.resolve(rows.shift() ?? [])),
     $executeRaw: vi.fn().mockResolvedValue(1),
   };
+}
+
+function sqlText(value: unknown) {
+  return (value as { strings: string[] }).strings.join('?');
 }
 
 describe('chronic refill cycles', () => {
@@ -63,6 +69,30 @@ describe('chronic refill cycles', () => {
     expect(placeCustomerOrder).not.toHaveBeenCalled();
   });
 
+  it('rejects an Rx subscription when the prescription does not match the customer and item', async () => {
+    const database = db([[]]);
+    await expect(
+      createChronicRefillSubscription(database as never, scope, {
+        customerId: 'customer-1',
+        medicineId: 'medicine-2',
+        presentationId: 'presentation-2',
+        packLevelId: 'pack-2',
+        quantityPacks: 1,
+        prescriptionLineId: 'rx-line-1',
+        fulfillment: 'COLLECT',
+        paymentMode: 'PREPAY',
+        cadenceDays: 30,
+        nextDueAt: subscription.nextDueAt,
+      })
+    ).rejects.toEqual(
+      expect.objectContaining<Partial<ChronicRefillError>>({ reason: 'SUBSCRIPTION_ITEM_INVALID' })
+    );
+    const query = sqlText(database.$queryRaw.mock.calls[0]?.[0]);
+    expect(query).toContain('prescription."patientId" = customer."patientId"');
+    expect(query).toContain('rx_line."medicineId" = medicine."id"');
+    expect(query).toContain('rx_line."presentationId" = presentation."id"');
+  });
+
   it('creates a Khata due order that reserves the monthly pack and records its cycle', async () => {
     const database = db([[subscription], [{ id: 'approval-1' }]]);
     vi.mocked(placeCustomerOrder).mockResolvedValueOnce({ id: 'order-1' } as never);
@@ -82,9 +112,28 @@ describe('chronic refill cycles', () => {
       })
     );
     expect(database.$executeRaw).toHaveBeenCalledTimes(2);
+    const approvalQuery = sqlText(database.$queryRaw.mock.calls[1]?.[0]);
+    expect(approvalQuery).toContain('sale_line."medicineId" = subscription."medicineId"');
+    expect(approvalQuery).toContain('sale_line."presentationId" = subscription."presentationId"');
+    expect(approvalQuery).toContain('customer."id" = subscription."customerId"');
+    expect(approvalQuery).toContain('sale_line."quantity" = subscription."quantityPacks"');
     expect(result).toEqual({
       order: { id: 'order-1' },
       nextDueAt: new Date('2026-11-28T00:00:00.000Z'),
     });
+  });
+
+  it('records an immutable lifecycle event when a subscription is paused', async () => {
+    const database = db([[{ id: subscription.id, active: true, cancelledAt: null }]]);
+    await expect(
+      updateChronicRefillSubscription(database as never, scope, {
+        subscriptionId: subscription.id,
+        action: 'PAUSE',
+      })
+    ).resolves.toMatchObject({ id: subscription.id, active: false });
+    expect(database.$executeRaw).toHaveBeenCalledTimes(2);
+    expect(sqlText(database.$executeRaw.mock.calls[1]?.[0])).toContain(
+      'pharmacy_chronic_refill_events'
+    );
   });
 });
