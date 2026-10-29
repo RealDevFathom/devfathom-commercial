@@ -109,6 +109,25 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('Inventory pack-action integration', () => {
+  it.each([false, true])('requires a masked write-off approval PIN (solo=%s)', async (solo) => {
+    ctx.db.$queryRaw.mockResolvedValue([{ allowed: solo }]);
+    ctx.db.user.findMany.mockResolvedValue([
+      { id: 'witness', name: 'Witness', title: 'Manager' },
+    ] as never);
+    await show();
+    const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
+    const pin = within(form).getByLabelText(solo ? 'Owner PIN' : 'Witness PIN');
+    expect(pin).toBeRequired();
+    expect(pin).toHaveAttribute('name', 'pin');
+    expect(pin).toHaveAttribute('type', 'password');
+    expect(pin).toHaveAttribute('pattern', '[0-9]{4,8}');
+    expect(within(form).getByLabelText('Co-authorizing witness')).toHaveAttribute(
+      'name',
+      'witnessId'
+    );
+    expect(form.checkValidity()).toBe(false);
+  });
+
   it.each([
     ['OPEN', 'user', true, true],
     ['AWAITING_COAUTH', 'user', true, true],

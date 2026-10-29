@@ -807,7 +807,29 @@ export default async function PharmacyInventoryPage({
                 ))}
               </select>
             </label>
-            {solo ? <SoloApprovalPin /> : null}
+            {solo ? (
+              <SoloApprovalPin required />
+            ) : (
+              <label className="block min-w-0 space-y-1 text-sm text-text-body">
+                <span>Witness PIN</span>
+                <Input
+                  aria-label="Witness PIN"
+                  name="pin"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  minLength={4}
+                  maxLength={8}
+                  pattern="[0-9]{4,8}"
+                  required
+                  className="min-h-11"
+                />
+                <span className="block text-xs text-text-muted">
+                  The selected owner or manager must confirm with their own PIN. This decision is
+                  audited.
+                </span>
+              </label>
+            )}
             <label className="text-sm">
               Evidence reference
               <Input

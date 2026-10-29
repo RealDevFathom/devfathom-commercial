@@ -62,7 +62,9 @@ export function appUrl(): string {
     process.env.NEXTAUTH_URL ??
     process.env.AUTH_URL ??
     DEFAULT_APP_URL
-  ).replace(/\/$/, '');
+  )
+    .trim()
+    .replace(/\/$/, '');
 
   // Fail closed: only parseable http(s) URLs are honoured. Anything else — an
   // unparseable value or a non-web scheme (javascript:, data:, file:, ftp:,
@@ -85,7 +87,9 @@ export function appUrl(): string {
   const isDevelopmentHost =
     hostname === 'localhost' || hostname === 'lvh.me' || hostname.endsWith('.localhost');
 
-  return isDevelopmentHost ? configuredUrl : configuredUrl.replace(/^http:/, 'https:');
+  if (isDevelopmentHost) return configuredUrl;
+  parsed.protocol = 'https:';
+  return parsed.href.replace(/\/$/, '');
 }
 
 // Hosted logo mark (the chevron on an Abyss tile). Overridable via env so it can

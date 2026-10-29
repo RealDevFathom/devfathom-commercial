@@ -109,7 +109,7 @@ function orderableSupplier() {
   db.pharmacySupplier.findFirst.mockResolvedValue({
     id: 'supplier_a',
     authorized: true,
-    licences: [{ expiresAt: FUTURE, verifiedAt: PAST }],
+    licences: [{ id: 'licence_a', supersedesId: null, expiresAt: FUTURE, verifiedAt: PAST }],
   });
 }
 
@@ -639,7 +639,7 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
     db.pharmacySupplier.findFirst.mockResolvedValue({
       id: 'supplier_a',
       authorized: false,
-      licences: [{ expiresAt: FUTURE, verifiedAt: PAST }],
+      licences: [{ id: 'licence_a', supersedesId: null, expiresAt: FUTURE, verifiedAt: PAST }],
     });
     await expect(
       caller().createPurchaseOrder({
@@ -656,7 +656,7 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
     db.pharmacySupplier.findFirst.mockResolvedValue({
       id: 'supplier_a',
       authorized: true,
-      licences: [{ expiresAt: PAST, verifiedAt: PAST }],
+      licences: [{ id: 'licence_a', supersedesId: null, expiresAt: PAST, verifiedAt: PAST }],
     });
     await expect(
       caller().createPurchaseOrder({
@@ -677,7 +677,7 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
     db.pharmacySupplier.findFirst.mockResolvedValue({
       id: 'supplier_a',
       authorized: false,
-      licences: [{ expiresAt: FUTURE, verifiedAt: PAST }],
+      licences: [{ id: 'licence_a', supersedesId: null, expiresAt: FUTURE, verifiedAt: PAST }],
     });
     await expect(caller().sendPurchaseOrder({ purchaseOrderId: 'po_a' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
@@ -889,7 +889,7 @@ describe('PUR-02/PUR-03 comparison and landed cost over stored rows', () => {
         id,
         name,
         authorized,
-        licences: [{ expiresAt: FUTURE, verifiedAt: PAST }],
+        licences: [{ id: 'licence_a', supersedesId: null, expiresAt: FUTURE, verifiedAt: PAST }],
       },
       validUntil: FUTURE,
     });
@@ -1165,7 +1165,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     db.pharmacySupplier.findFirst.mockResolvedValue({
       id: 'supplier_a',
       authorized: true,
-      licences: [{ expiresAt: PAST, verifiedAt: PAST }],
+      licences: [{ id: 'licence_a', supersedesId: null, expiresAt: PAST, verifiedAt: PAST }],
     });
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
       code: 'FORBIDDEN',
@@ -1849,4 +1849,54 @@ it('keeps the branch-filtered workspace available to financial-only readers', as
   expect(db.pharmacyBranch.findMany).toHaveBeenCalledWith(
     expect.objectContaining({ where: expect.objectContaining({ id: { in: ['branch_a'] } }) })
   );
+});
+
+describe('supplier licence supersession', () => {
+  const licence = {
+    supplierId: 'supplier_a',
+    licenceType: 'wholesale',
+    licenceNumber: 'LIC-2',
+    issuingAuthority: 'Regulator',
+    issuedAt: PAST,
+    expiresAt: FUTURE,
+    supersedesId: 'licence_old',
+    verified: true,
+  };
+  beforeEach(() => {
+    db.pharmacySupplier.findFirst.mockResolvedValue({ id: 'supplier_a' });
+  });
+  it('rejects missing, foreign-tenant or another supplier licence evidence', async () => {
+    db.pharmacySupplierLicence.findFirst.mockResolvedValue(null);
+    await expect(caller().recordSupplierLicence(licence)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacySupplierLicence.findFirst).toHaveBeenCalledWith({
+      where: { id: 'licence_old', supplierId: 'supplier_a' },
+    });
+    expect(db.pharmacySupplierLicence.create).not.toHaveBeenCalled();
+  });
+  it('rejects a second replacement of an already superseded licence', async () => {
+    db.pharmacySupplierLicence.findFirst
+      .mockResolvedValueOnce({ id: 'licence_old' })
+      .mockResolvedValueOnce({ id: 'licence_new' });
+    await expect(caller().recordSupplierLicence(licence)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    expect(db.pharmacySupplierLicence.create).not.toHaveBeenCalled();
+  });
+  it('appends a verified replacement linked to the original evidence', async () => {
+    db.pharmacySupplierLicence.findFirst
+      .mockResolvedValueOnce({ id: 'licence_old' })
+      .mockResolvedValueOnce(null);
+    await caller().recordSupplierLicence(licence);
+    expect(db.pharmacySupplierLicence.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        supplierId: 'supplier_a',
+        supersedesId: 'licence_old',
+        verifiedAt: expect.any(Date),
+        verifiedByUserId: 'user_a',
+      }),
+    });
+    expect(db.pharmacySupplierLicence.update).not.toHaveBeenCalled();
+  });
 });

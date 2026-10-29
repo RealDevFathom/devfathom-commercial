@@ -143,7 +143,6 @@ function fixture(
         },
       ]),
     },
-    medicine: { findFirst: vi.fn(async () => ({ controlled: false })) },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     $transaction: vi.fn(),
   };

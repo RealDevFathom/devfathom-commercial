@@ -335,7 +335,12 @@ function tenantScope(ctx: TRPCContext): { organizationId: string } {
 function assertOrderableSupplier(
   supplier: {
     authorized: boolean;
-    licences: { id: string; expiresAt: Date; verifiedAt: Date | null; supersedesId: string | null }[];
+    licences: {
+      id: string;
+      expiresAt: Date;
+      verifiedAt: Date | null;
+      supersedesId: string | null;
+    }[];
   } | null,
   at: Date
 ) {
@@ -433,6 +438,21 @@ const purchasingRouter = router({
     .mutation(async ({ ctx, input }) => {
       if (!(await ctx.db.pharmacySupplier.findFirst({ where: { id: input.supplierId } })))
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Supplier is outside this workspace.' });
+      if (input.supersedesId) {
+        const previous = await ctx.db.pharmacySupplierLicence.findFirst({
+          where: { id: input.supersedesId, supplierId: input.supplierId },
+        });
+        if (!previous)
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Licence is outside this supplier.' });
+        const replacement = await ctx.db.pharmacySupplierLicence.findFirst({
+          where: { supersedesId: input.supersedesId },
+        });
+        if (replacement)
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'Licence has already been superseded.',
+          });
+      }
       const { verified, ...licence } = input;
       return ctx.db.pharmacySupplierLicence.create({
         data: {

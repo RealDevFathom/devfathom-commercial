@@ -152,10 +152,12 @@ const CAPABILITY_REFUSAL = {
 
 beforeEach(() => {
   db = makeDb();
-  mocks.can.mockReset().mockImplementation(async (...args) => {
-    const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
-    return actual.can(...args);
-  });
+  mocks.can
+    .mockReset()
+    .mockImplementation(async (...args: Parameters<typeof import('@/lib/abac').can>) => {
+      const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+      return actual.can(...args);
+    });
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 

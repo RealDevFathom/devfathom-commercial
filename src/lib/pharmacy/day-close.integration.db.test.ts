@@ -36,6 +36,31 @@ describe.skipIf(!enabled)('pharmacy day close database boundaries', () => {
           },
         });
         if (withSale) {
+          const medicine = await db.medicine.create({
+            data: {
+              organizationId: scope.organizationId,
+              productName: 'Synthetic day-close medicine',
+              productFamily: 'PHARMACEUTICAL',
+            },
+          });
+          const presentation = await db.presentation.create({
+            data: {
+              organizationId: scope.organizationId,
+              medicineId: medicine.id,
+              presentation: 'Tablet',
+            },
+          });
+          const pack = await db.packLevel.create({
+            data: {
+              organizationId: scope.organizationId,
+              presentationId: presentation.id,
+              versionGroupId: `close-pack-${id}`,
+              version: 1,
+              level: 'UNIT',
+              unitsPerParent: 1,
+              effectiveFrom: new Date('2036-01-01'),
+            },
+          });
           const sale = await db.pharmacySale.create({
             data: {
               organizationId: scope.organizationId,
@@ -51,9 +76,9 @@ describe.skipIf(!enabled)('pharmacy day close database boundaries', () => {
               organizationId: scope.organizationId,
               branchId,
               saleId: sale.id,
-              medicineId: fixture.medicines.otc.id,
-              presentationId: fixture.medicines.otc.presentationId,
-              packLevelId: fixture.medicines.otc.packLevelIds.unit,
+              medicineId: medicine.id,
+              presentationId: presentation.id,
+              packLevelId: pack.id,
               saleUnit: 'UNIT',
               quantity: 1,
               canonicalUnitsPerSaleUnit: 1,
