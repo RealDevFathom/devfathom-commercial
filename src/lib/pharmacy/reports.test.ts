@@ -185,11 +185,15 @@ describe('PH-RPT aggregate corrections', () => {
     const sql = queryRaw.mock.calls
       .map(([query]) => (query as { strings: readonly string[] }).strings.join('?'))
       .join('\n');
-    expect(sql).toContain('FROM "pharmacy_sale_line_allocations" allocation');
+    expect(sql).toContain('SUM("revenueMinor" - "discountMinor")');
+    expect(sql).toContain('journal_sales');
     expect(sql).toContain('FROM "pharmacy_medicine_strength_components" component');
     expect(sql).toContain('filter_lot."manufacturingBatchId"=?');
     expect(sql).toContain('filter_receipt."supplierId"=?');
     expect(sql).toContain('FROM "pharmacy_recall_notices" recall');
+    expect(sql).toContain(
+      'recall."batchId" IS NULL AND EXISTS (SELECT 1 FROM "pharmacy_manufacturing_batches"'
+    );
     expect(recallCount).not.toHaveBeenCalled();
     expect(claimCount).toHaveBeenCalledWith({
       where: expect.objectContaining({
