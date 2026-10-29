@@ -1,4 +1,5 @@
 import { TRPCError } from '@trpc/server';
+import { isPharmacyOwner } from '@/lib/pharmacy/owner';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from './audit';
 import type { TRPCContext } from './trpc';
@@ -22,7 +23,7 @@ export async function pharmacyReadBranches(ctx: TRPCContext) {
     where: {
       organizationId,
       active: true,
-      ...(user.role === 'ADMIN' && member.role === 'ADMIN'
+      ...((await isPharmacyOwner(ctx.db, organizationId, user.id))
         ? {}
         : {
             branchAssignments: { some: { organizationId, userId: user.id, active: true } },

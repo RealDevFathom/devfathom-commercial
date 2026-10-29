@@ -110,7 +110,9 @@ sudo ln -s /etc/devfathom/develop.env /home/app/develop.env
 ```
 
 Use shell-compatible quoted assignments in `develop.env` (no command substitutions) for
-develop-only `MIGRATION_DATABASE_URL` and any migration tooling settings. This file is available to
+develop-only `MIGRATION_DATABASE_URL`, `APP_DATABASE_URL` (the restricted runtime identity on the
+same database), and any migration tooling settings. Role preparation runs idempotently before
+migrations; a preparation failure leaves the current release active. This file is available to
 deploy, not the app account. Put `NODE_ENV=production`, `PORT=3001`, `HOSTNAME=127.0.0.1`, runtime
 `DATABASE_URL` and develop auth/application settings in `develop-runtime.env` using systemd-compatible
 assignments. Do not put the migration URL in the runtime file. Use an isolated develop database and

@@ -486,7 +486,7 @@ export async function assignedRegisterBranchIds(
   if (
     admin?.status === 'ACTIVE' &&
     admin.organizationId === organizationId &&
-    (admin.role === 'ADMIN' || (await isPharmacyOwner(db, organizationId, userId)))
+    (await isPharmacyOwner(db, organizationId, userId))
   ) {
     return (
       await db.pharmacyBranch.findMany({

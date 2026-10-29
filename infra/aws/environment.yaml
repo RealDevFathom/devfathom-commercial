@@ -751,7 +751,7 @@ Resources:
             - /bin/sh
             - -c
             - !Sub
-              - 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/prepare-runtime-role.ts && bun prisma/sync-catalog.ts${After}'
+              - 'bun prisma/prepare-extensions.ts && bun prisma/prepare-runtime-role.ts && bunx prisma migrate deploy && bun prisma/sync-catalog.ts${After}'
               - After: !If
                   - MigrationSeeds
                   # The guarded staging seed runs prisma/seed.ts itself, after its target checks.

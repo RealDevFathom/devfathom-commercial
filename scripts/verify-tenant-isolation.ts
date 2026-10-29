@@ -92,6 +92,17 @@ async function main() {
   try {
     await client.query('BEGIN');
 
+    // Views have no RLS flags: require caller privileges instead of treating
+    // security_invoker views as tables or silently exempting tenant views.
+    const unsafeViews = await client.query<{ name: string }>(`
+      SELECT DISTINCT c.relname AS name FROM pg_class c
+      JOIN pg_namespace n ON n.oid=c.relnamespace
+      JOIN information_schema.columns col ON col.table_schema=n.nspname AND col.table_name=c.relname
+      WHERE n.nspname='public' AND col.column_name='organizationId'
+        AND c.relkind='v' AND NOT COALESCE(c.reloptions @> ARRAY['security_invoker=true'], false)
+    `);
+    assertEqual(unsafeViews.rows.length, 0, 'every tenant view must use security_invoker');
+
     const tenantAUser = await client.query<{ id: string; organizationId: string }>(
       `SELECT "id", "organizationId" FROM "users"
        WHERE "organizationId" = 'org_devfathom'
@@ -134,6 +145,7 @@ async function main() {
        WHERE columns.table_schema = 'public'
          AND columns.column_name = 'organizationId'
          AND namespace.nspname = 'public'
+         AND relation.relkind <> 'v'
          AND (NOT relation.relrowsecurity OR NOT relation.relforcerowsecurity)`
     );
     assertEqual(

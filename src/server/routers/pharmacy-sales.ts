@@ -1100,6 +1100,7 @@ export const pharmacySalesRouter = router({
       z
         .object({
           branchId,
+          approvedByUserId: z.string().min(1).optional(),
           approvalPin: z
             .string()
             .regex(/^\d{4,8}$/)
@@ -1130,15 +1131,19 @@ export const pharmacySalesRouter = router({
             },
             select: { type: true, sale: { select: { createdByUserId: true } } },
           });
+          if (input.approvedByUserId && input.approvedByUserId !== scope.actorId)
+            await assertBranchAssignment(db, { ...scope, actorId: input.approvedByUserId });
           await enforceOperatingMode(db, scope, {
             kind: 'REFUND',
             makerIds: [tender?.sale.createdByUserId ?? scope.actorId],
             targetType: 'PharmacyTender',
             targetId: input.originalTenderId,
             pin: input.approvalPin,
+            checkerId: input.approvedByUserId,
           });
-          const { approvalPin: _approvalPin, ...refundInput } = input;
+          const { approvedByUserId: _checker, approvalPin: _approvalPin, ...refundInput } = input;
           void _approvalPin;
+          void _checker;
           if (tender?.type !== 'CREDIT') return refundPharmacyTender(db, scope, refundInput);
           await khataScope(ctx, input.branchId);
           await bindKhataBranch(db, scope);
@@ -1308,6 +1313,8 @@ export const pharmacySalesRouter = router({
                 branchId: scope.branchId,
               },
             });
+            if (input.approvedByUserId && input.approvedByUserId !== scope.actorId)
+              await assertBranchAssignment(db, { ...scope, actorId: input.approvedByUserId });
             const approval = await enforceOperatingMode(db, scope, {
               kind: input.override ? 'OVERRIDE' : 'DISCOUNT',
               makerIds: [sale?.createdByUserId ?? scope.actorId],
@@ -1755,6 +1762,7 @@ export const pharmacySalesRouter = router({
       z
         .object({
           branchId,
+          approvedByUserId: z.string().min(1).optional(),
           approvalPin: z
             .string()
             .regex(/^\d{4,8}$/)
@@ -1789,15 +1797,19 @@ export const pharmacySalesRouter = router({
               },
               include: { sale: true },
             });
+            if (input.approvedByUserId && input.approvedByUserId !== scope.actorId)
+              await assertBranchAssignment(db, { ...scope, actorId: input.approvedByUserId });
             await enforceOperatingMode(db, scope, {
               kind: 'RETURN',
               makerIds: [line?.sale.createdByUserId ?? scope.actorId],
               targetType: 'PharmacySaleLine',
               targetId: input.saleLineId,
               pin: input.approvalPin,
+              checkerId: input.approvedByUserId,
             });
-            const { approvalPin: _approvalPin, ...returnInput } = input;
+            const { approvedByUserId: _checker, approvalPin: _approvalPin, ...returnInput } = input;
             void _approvalPin;
+            void _checker;
             return await returnSaleLine(db, scope, returnInput);
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
@@ -1984,23 +1996,40 @@ export const pharmacySalesRouter = router({
   // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────
 
   /** Live branch-scoped identities; the write repeats role, permission and PIN checks. */
-  rxApprovers: protectedProcedure.input(z.object({ branchId })).query(async ({ ctx, input }) => {
-    const scope = await scopeFor(ctx, input.branchId);
-    const organization = await ctx.db.organization.findUniqueOrThrow({
-      where: { id: scope.organizationId },
-      select: { pharmacyOperatingMode: true },
-    });
-    const users = await ctx.db.user.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        status: 'ACTIVE',
-        organizationRole: { key: 'pharmacist' },
-        pharmacyBranchAssignments: { some: { branchId: input.branchId, active: true } },
-      },
-      select: { id: true, name: true, email: true },
-    });
-    return { mode: organization.pharmacyOperatingMode, users };
-  }),
+  rxApprovers: protectedProcedure
+    .input(z.object({ branchId, purpose: z.enum(['RX', 'OPERATION']).optional() }))
+    .query(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      const organization = await ctx.db.organization.findUniqueOrThrow({
+        where: { id: scope.organizationId },
+        select: { pharmacyOperatingMode: true },
+      });
+      const users = await ctx.db.user.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          status: 'ACTIVE',
+          organizationRole: {
+            key: input.purpose === 'OPERATION' ? { in: ['owner', 'manager'] } : 'pharmacist',
+          },
+          OR: [
+            { pharmacyBranchAssignments: { some: { branchId: input.branchId, active: true } } },
+            ...(input.purpose === 'OPERATION'
+              ? [
+                  {
+                    organizationRole: {
+                      key: 'owner',
+                      isSystem: true,
+                      organizationId: scope.organizationId,
+                    },
+                  },
+                ]
+              : []),
+          ],
+        },
+        select: { id: true, name: true, email: true },
+      });
+      return { mode: organization.pharmacyOperatingMode, users };
+    }),
 
   /** The branches this counter may open a bill against, with the money format. */
   counterBranches: protectedProcedure.query(async ({ ctx }) => {

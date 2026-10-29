@@ -58,6 +58,7 @@ bun install --frozen-lockfile --production
 # These must resolve locally: bunx must never fetch migration tooling at deploy time.
 test -x node_modules/.bin/prisma
 test -d node_modules/dotenv
+APP_DATABASE_URL="${APP_DATABASE_URL:-${DATABASE_URL:?APP_DATABASE_URL required}}" DATABASE_URL="$MIGRATION_DATABASE_URL" bun prisma/prepare-runtime-role.ts
 bun node_modules/.bin/prisma migrate deploy
 # Reconcile shipped modules/packages before replacing any inactive or live release.
 DATABASE_URL="$MIGRATION_DATABASE_URL" bun prisma/sync-catalog.ts

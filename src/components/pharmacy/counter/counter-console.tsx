@@ -1,5 +1,7 @@
 'use client';
 
+import { OperationApproval, operationApprovalReady } from './operation-approval';
+
 import { browserUuid } from '@/lib/browser-uuid';
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -312,6 +314,8 @@ function ScopedPharmacyCounterConsole({
   const [heldSaleId, setHeldSaleId] = useState<string | null>(null);
   const [patientQuery, setPatientQuery] = useState('');
   const [submittedPatientQuery, setSubmittedPatientQuery] = useState('');
+  const [overridePin, setOverridePin] = useState('');
+  const [overrideCheckerId, setOverrideCheckerId] = useState('');
   const [rxApprovalPin, setRxApprovalPin] = useState('');
   const [rxCheckerId, setRxCheckerId] = useState('');
   const [controlledAuth, setControlledAuth] = useState({
@@ -368,6 +372,10 @@ function ScopedPharmacyCounterConsole({
   const branchId = selectedBranchId || (branches[0]?.id ?? '');
   const rxApproversQuery = trpc.pharmacySales.rxApprovers.useQuery(
     { branchId },
+    { enabled: Boolean(branchId) }
+  );
+  const overrideApprovers = trpc.pharmacySales.rxApprovers.useQuery(
+    { branchId, purpose: 'OPERATION' },
     { enabled: Boolean(branchId) }
   );
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(
@@ -863,6 +871,7 @@ function ScopedPharmacyCounterConsole({
     setActiveRow(row);
     setQuantity(1);
     setSaleUnit(row.saleUnits[0]?.kind ?? null);
+    setOverridePin('');
     setLotOverride(null);
   }, []);
 
@@ -896,6 +905,19 @@ function ScopedPharmacyCounterConsole({
         setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
         return;
       }
+      if (
+        overrideLotId &&
+        (overrideApprovers.isFetching ||
+          overrideApprovers.isError ||
+          !operationApprovalReady(overrideApprovers.data, overridePin, overrideCheckerId))
+      ) {
+        setNotice({
+          tone: 'warning',
+          message:
+            'Enter the batch approval PIN and select an independent checker in staffed mode.',
+        });
+        return;
+      }
       setPending('addToCart');
       setNotice(null);
       try {
@@ -927,7 +949,11 @@ function ScopedPharmacyCounterConsole({
           return;
         }
         const refSerial = Number(controlledAuth.refSerial);
+        const batchPin = overridePin;
+        if (overrideLotId) setOverridePin('');
         const added = await addLine.mutateAsync({
+          approvalPin: overrideLotId ? batchPin : undefined,
+          approvedByUserId: overrideLotId ? overrideCheckerId || undefined : undefined,
           prescriptionApproval:
             !controlled && (row.restriction.rx || row.restriction.restricted)
               ? { pin: rxApprovalPin || undefined, checkerId: rxCheckerId || undefined }
@@ -994,6 +1020,7 @@ function ScopedPharmacyCounterConsole({
         });
       } finally {
         setControlledAuth((value) => ({ ...value, pin: '' }));
+        setOverridePin('');
         setRxApprovalPin('');
         setPending(null);
       }
@@ -1002,6 +1029,11 @@ function ScopedPharmacyCounterConsole({
       activeRow,
       addLine,
       controlledAuth,
+      overridePin,
+      overrideCheckerId,
+      overrideApprovers.data,
+      overrideApprovers.isFetching,
+      overrideApprovers.isError,
       rxApprovalPin,
       rxCheckerId,
       patient,
@@ -1915,6 +1947,8 @@ function ScopedPharmacyCounterConsole({
                     disabled={busy}
                     onChange={(event) => {
                       scannerRevision.current += 1;
+                      setOverridePin('');
+                      setOverrideCheckerId('');
                       setSelectedBranchId(event.target.value);
                       setRxApprovalPin('');
                       setRxCheckerId('');
@@ -2062,9 +2096,25 @@ function ScopedPharmacyCounterConsole({
                   }
                   error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
                   disabled={busy}
-                  onChange={setLotOverride}
+                  onChange={(value) => {
+                    setOverridePin('');
+                    setLotOverride(value);
+                  }}
                   onRetry={() => void lotOptionsQuery.refetch()}
                 />
+                {lotOverride?.inventoryLotId && (
+                  <OperationApproval
+                    id="batch-approval"
+                    data={overrideApprovers.data}
+                    loading={overrideApprovers.isLoading}
+                    error={overrideApprovers.isError}
+                    disabled={busy}
+                    pin={overridePin}
+                    checkerId={overrideCheckerId}
+                    onPin={setOverridePin}
+                    onChecker={setOverrideCheckerId}
+                  />
+                )}
               </div>
             ) : (
               <p className="text-sm text-text-muted">

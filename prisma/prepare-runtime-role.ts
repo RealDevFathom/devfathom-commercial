@@ -85,8 +85,11 @@ export async function prepareRuntimeRole(
     }
   } else logger.log('password: skipped (APP_DATABASE_URL has no password)');
 
+  const database = (await client.query<{ name: string }>('SELECT current_database() AS name'))
+    .rows[0]!.name;
+  const databaseIdentifier = '"' + database.replaceAll('"', '""') + '"';
   const grants = [
-    ['database connect', `GRANT CONNECT ON DATABASE devfathom TO ${ROLE_NAME}`],
+    ['database connect', `GRANT CONNECT ON DATABASE ${databaseIdentifier} TO ${ROLE_NAME}`],
     ['schema usage', `GRANT USAGE ON SCHEMA public TO ${ROLE_NAME}`],
     [
       'existing tables',
@@ -95,10 +98,6 @@ export async function prepareRuntimeRole(
     [
       'existing sequences',
       `GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ${ROLE_NAME}`,
-    ],
-    [
-      'medicine search similarity operator',
-      `GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO ${ROLE_NAME}`,
     ],
     [
       'future tables',
@@ -114,6 +113,11 @@ export async function prepareRuntimeRole(
     logger.log(`${step}: granted`);
   }
 
+  const similarity = await client.query<{ present: boolean }>(
+    "SELECT to_regprocedure('public.similarity_op(text,text)') IS NOT NULL AS present"
+  );
+  if (similarity.rows[0]?.present)
+    await client.query(`GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO ${ROLE_NAME}`);
   const finalRole = await readRole(client);
   if (!hasRequiredPosture(finalRole))
     throw new Error(`${ROLE_NAME} does not have the required restricted role attributes.`);

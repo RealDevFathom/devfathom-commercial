@@ -137,7 +137,6 @@ vi.mock('./counter-rx-panel', () => ({
     props.controlled ? <div data-testid="controlled-authorization" /> : null,
 }));
 vi.mock('./counter-keymap-legend', () => ({ CounterKeymapLegend: () => null }));
-vi.mock('./counter-search-results', () => ({ CounterSearchResults: () => null }));
 vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: () => null }));
 vi.mock('./counter-unit-toggle', () => ({ CounterUnitToggle: () => null }));
 
@@ -1212,6 +1211,113 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
               checkerId: mode === 'STAFFED' ? 'pharmacist' : undefined,
             },
             controlledAuthorization: undefined,
+          })
+        )
+      );
+      await waitFor(() => expect(pin).toHaveValue(''));
+    }
+  );
+
+  it.each(['SOLO', 'STAFFED'] as const)(
+    'submits fresh %s authorization for a non-FEFO batch',
+    async (mode) => {
+      const row = {
+        medicineId: 'med-barcode',
+        displayName: 'Paracetamol',
+        brandName: null,
+        manufacturer: null,
+        strength: '500 mg',
+        presentationId: 'presentation-a',
+        presentation: 'Tablet',
+        dosageForm: 'Tablet',
+        route: 'Oral',
+        matchedOn: 'BARCODE',
+        recommendedLotId: 'lot-a',
+        packLevelId: 'pack-a',
+        unitsPerPack: 1,
+        printedMrpMinor: 10000,
+        roundingIncrementMinor: 1,
+        batchNumber: 'B-1',
+        nearestSafeExpiry: '2028-06-30T00:00:00.000Z',
+        onHandUnits: 10,
+        saleableUnits: [],
+        saleUnits: [
+          {
+            kind: 'UNIT',
+            packLevelId: 'pack-a',
+            levelLabel: 'UNIT',
+            canonicalUnitsPerSaleUnit: 1,
+          },
+        ],
+        restriction: {
+          rx: false,
+          otc: false,
+          restricted: false,
+          controlled: false,
+          highAlert: false,
+          lasa: false,
+        },
+        storage: {
+          coldChain: false,
+          locationKind: 'STORE',
+          locationCode: 'A',
+          locationName: 'Store',
+        },
+        blocked: [],
+      };
+      mocks.queries.counterPointsPolicy = query({
+        pointsEnabled: true,
+        earnEveryMinor: 100,
+        pointValueMinor: 100,
+        minimumRedeemPoints: 1,
+      });
+      mocks.queries.rxApprovers = query({ mode, users: [{ id: 'pharmacist', name: 'Checker' }] });
+      mocks.queries.counterLotOptions = query([
+        {
+          inventoryLotId: 'lot-a',
+          batchNumber: 'FIRST',
+          expiresAt: '2028-06-30',
+          sellableUnits: 10,
+          blockedBy: null,
+        },
+        {
+          inventoryLotId: 'lot-b',
+          batchNumber: 'LATER',
+          expiresAt: '2029-06-30',
+          sellableUnits: 10,
+          blockedBy: null,
+        },
+      ]);
+      mocks.queries.counterSearch = query({ rows: [row] });
+      mocks.mutations.addLine!.mockResolvedValue({});
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: 'para' } });
+      fireEvent.click(await screen.findByRole('button', { name: /Paracetamol/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Sell a different batch' }));
+      fireEvent.click(await screen.findByRole('radio', { name: /Batch LATER/ }));
+      fireEvent.change(screen.getByLabelText('Override reason'), {
+        target: { value: 'Customer requests original batch' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /Add.*cart/i }));
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+      const pin = screen.getByLabelText(mode === 'SOLO' ? 'Owner PIN' : 'Checker PIN');
+      if (mode === 'STAFFED')
+        fireEvent.change(screen.getByLabelText('Independent owner or manager'), {
+          target: { value: 'pharmacist' },
+        });
+      fireEvent.change(pin, { target: { value: '4729' } });
+      fireEvent.click(screen.getByRole('button', { name: /Add.*cart/i }));
+      await waitFor(() =>
+        expect(mocks.mutations.addLine).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            approvalPin: '4729',
+            approvedByUserId: mode === 'STAFFED' ? 'pharmacist' : undefined,
+            override: {
+              inventoryLotId: 'lot-b',
+              reason: 'Customer requests original batch',
+              approvalPolicy: 'PHARMACIST_ON_DUTY',
+            },
           })
         )
       );

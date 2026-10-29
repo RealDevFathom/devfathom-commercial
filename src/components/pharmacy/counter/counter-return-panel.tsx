@@ -1,5 +1,6 @@
 'use client';
 
+import { OperationApproval, operationApprovalReady } from './operation-approval';
 import { useRef, useState, useSyncExternalStore } from 'react';
 import { z } from '@/lib/zod-csp';
 import { Button } from '@/components/ui/button';
@@ -91,6 +92,13 @@ function subscribeConnection(changed: () => void) {
 }
 
 export function ReturnForm({ branchId, organizationId, accountId, deviceId, businessDate }: Props) {
+  const [approvalPin, setApprovalPin] = useState('');
+  const [checkerId, setCheckerId] = useState('');
+  const approvers = trpc.pharmacySales.rxApprovers.useQuery({ branchId, purpose: 'OPERATION' });
+  const approvalReady =
+    !approvers.isFetching &&
+    !approvers.isError &&
+    operationApprovalReady(approvers.data, approvalPin, checkerId);
   const storageKey = `pharmacy-return:${organizationId}:${accountId}:${branchId}`;
   // This form mounts only after opening the client-side dialog. Read recovery once,
   // before enabling any mutation; the parent key isolates account and branch changes.
@@ -167,7 +175,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const stale = history.isFetching || history.isError;
 
   async function execute(next: Attempt) {
-    if (latch.current || !online || !ready) return;
+    if (latch.current || !online || !ready || !approvalReady) return;
+    const approval = { approvalPin, approvedByUserId: checkerId || undefined };
+    setApprovalPin('');
     latch.current = true;
     setBusy(true);
     setError('');
@@ -176,10 +186,13 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       // Write before sending; an ambiguous network outcome can only replay this exact request.
       localStorage.setItem(storageKey, JSON.stringify(next));
       setAttempt(next);
-      if (next.kind === 'return') await returnLine.mutateAsync(next.input);
-      else
+      if (next.kind === 'return') {
+        const result = await returnLine.mutateAsync({ ...next.input, ...approval });
+        if (result && 'blocked' in result) throw new Error(result.blocked);
+      } else
         await refund.mutateAsync({
           ...next.input,
+          ...approval,
           businessDate: new Date(next.input.businessDate),
         });
       await history.refetch({ throwOnError: true });
@@ -257,10 +270,21 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
         </p>
       )}
       {message && <p role="status">{message}</p>}
+      <OperationApproval
+        id="return-approval"
+        data={approvers.data}
+        loading={approvers.isLoading}
+        error={approvers.isError}
+        disabled={busy || !online || !ready}
+        pin={approvalPin}
+        checkerId={checkerId}
+        onPin={setApprovalPin}
+        onChecker={setCheckerId}
+      />
       {attempt && (
         <Button
           className="h-11"
-          disabled={busy || !online || !ready}
+          disabled={busy || !online || !ready || !approvalReady}
           onClick={() => void execute(attempt)}
         >
           Retry saved {attempt.kind}
@@ -503,6 +527,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               className="h-11"
               variant="destructive"
               disabled={
+                !approvalReady ||
                 !line ||
                 !confirmed ||
                 !integrity.trim() ||
@@ -583,6 +608,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               variant="destructive"
               className="h-11"
               disabled={
+                !approvalReady ||
                 !tender ||
                 !Number.isSafeInteger(amountMinor) ||
                 amountMinor <= 0 ||

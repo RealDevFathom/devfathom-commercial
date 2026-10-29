@@ -95,9 +95,11 @@ for (const mode of [
   'legacy-public-root',
   'restart-failure',
   'health-failure',
+  'role-failure',
   'migration-failure',
   'sync-failure',
   'replace-inactive',
+  'replace-role-failure',
   'replace-migration-failure',
   'replace-sync-failure',
   'replace-restart-failure',
@@ -134,7 +136,7 @@ for (const mode of [
       put(
         root,
         'develop.env',
-        'MIGRATION_DATABASE_URL=postgresql://migration:migration@127.0.0.1:5432/local\n' +
+        'MIGRATION_DATABASE_URL=postgresql://migration:migration@127.0.0.1:5432/local\nAPP_DATABASE_URL=postgresql://devfathom_app:local@127.0.0.1:5432/local\n' +
           (mode === 'migration-url-only'
             ? 'unset DATABASE_URL\n'
             : 'DATABASE_URL=postgresql://runtime:runtime@127.0.0.1:5432/local\n')
@@ -163,7 +165,12 @@ if [[ "$1" == install ]]; then
 fi
 [[ "$PWD" == "$TEST_ROOT/releases/.staging/"* ]]
 [[ ! -e "$TEST_ROOT/releases/$TEST_SHA" || -f "$TEST_ROOT/releases/$TEST_SHA/original" ]]
-if [[ "$*" == 'node_modules/.bin/prisma migrate deploy' ]]; then
+if [[ "$*" == 'prisma/prepare-runtime-role.ts' ]]; then
+  [[ "\${DATABASE_URL:-}" == "$MIGRATION_DATABASE_URL" ]]
+  [[ "\${APP_DATABASE_URL:-}" == postgresql://devfathom_app:* ]]
+  [[ "$(readlink "$TEST_ROOT/releases/current")" == "$TEST_ROOT/releases/previous" ]]
+  [[ "$TEST_MODE" != *role-failure ]]
+elif [[ "$*" == 'node_modules/.bin/prisma migrate deploy' ]]; then
   [[ "$TEST_MODE" != *migration-failure ]]
 elif [[ "$*" == 'prisma/sync-catalog.ts' ]]; then
   [[ "$(readlink "$TEST_ROOT/releases/current")" == "$TEST_ROOT/releases/previous" ]]
@@ -267,7 +274,7 @@ echo "$*" >> "$TEST_ROOT/restarts"\nif [[ "$TEST_MODE" == *restart-failure && ! 
             readFileSync(join(current, '.next/standalone/.next/cache/runtime-data'), 'utf8')
           ).toBe('keep cache');
           expect(readFileSync(join(root, 'downloads'), 'utf8').trim().split('\n')).toHaveLength(1);
-          expect(readFileSync(join(root, 'bun-calls'), 'utf8').trim().split('\n')).toHaveLength(3);
+          expect(readFileSync(join(root, 'bun-calls'), 'utf8').trim().split('\n')).toHaveLength(4);
         }
         for (const path of [
           'public/uploads',
@@ -284,17 +291,29 @@ echo "$*" >> "$TEST_ROOT/restarts"\nif [[ "$TEST_MODE" == *restart-failure && ! 
       } else {
         expect(current).toBe(join(root, 'releases/previous'));
       }
-      if (replacing && (mode.endsWith('migration-failure') || mode.endsWith('sync-failure')))
+      if (
+        replacing &&
+        (mode.endsWith('role-failure') ||
+          mode.endsWith('migration-failure') ||
+          mode.endsWith('sync-failure'))
+      )
         expect(readFileSync(join(root, `releases/${sha}/original`), 'utf8')).toBe(
           'existing release'
         );
       expect(readdirSync(join(root, 'releases/.staging'))).toEqual([]);
       expect(readFileSync(join(root, 'bun-calls'), 'utf8').trim().split('\n')).toEqual([
         'install --frozen-lockfile --production',
-        'node_modules/.bin/prisma migrate deploy',
-        ...(mode.endsWith('migration-failure') ? [] : ['prisma/sync-catalog.ts']),
+        'prisma/prepare-runtime-role.ts',
+        ...(mode.endsWith('role-failure') ? [] : ['node_modules/.bin/prisma migrate deploy']),
+        ...(mode.endsWith('role-failure') || mode.endsWith('migration-failure')
+          ? []
+          : ['prisma/sync-catalog.ts']),
       ]);
-      if (mode.endsWith('migration-failure') || mode.endsWith('sync-failure'))
+      if (
+        mode.endsWith('role-failure') ||
+        mode.endsWith('migration-failure') ||
+        mode.endsWith('sync-failure')
+      )
         expect(existsSync(join(root, 'restarts'))).toBe(false);
       else {
         const restarts = readFileSync(join(root, 'restarts'), 'utf8').trim().split('\n');
@@ -529,3 +548,13 @@ model CatalogFixture {
     rmSync(root, { recursive: true, force: true });
   }
 }, 30_000);
+
+it.each(['qa.yml', 'image-build.yml'])('pins every action in the non-Azure %s workflow', (file) => {
+  const source = readFileSync(resolve('.github/workflows', file), 'utf8');
+  const actions = [...source.matchAll(/uses: ([^\s]+)([^\n]*)/g)];
+  expect(actions.length).toBeGreaterThan(0);
+  for (const [, reference, comment] of actions) {
+    expect(reference).toMatch(/^[\w-]+\/[\w-]+@[0-9a-f]{40}$/);
+    expect(comment).toMatch(/^ # v\d+/);
+  }
+});

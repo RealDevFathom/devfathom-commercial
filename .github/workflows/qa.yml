@@ -151,11 +151,11 @@ jobs:
       DEVFATHOM_PRODUCTION_PLATFORM_ADMIN_PASSWORD: gate-compile-only-platform-admin
       DEVFATHOM_MEETINGS_SSH_PUBLIC_KEY: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGF0ZWNvbXBpbGVvbmx5a2V5MDAwMDAwMDAw gate@ci
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
           fetch-depth: 0
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
@@ -279,9 +279,12 @@ jobs:
           CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55678/postgres run vitest-boundary-setup bunx tsx scripts/ci-reserved-tests.ts
           run growth-acceptance-db-start docker run -d --name growth-acceptance-postgres --network host -e POSTGRES_PASSWORD=gate-reserved-ci-only postgres:16 -p 55683 -c listen_addresses=127.0.0.1
           CI_RESERVED_ADMIN_DATABASE_URL=postgresql://postgres:gate-reserved-ci-only@127.0.0.1:55683/postgres run vitest-growth-setup bunx tsx scripts/ci-reserved-tests.ts
-          RESTAURANT_DEMO_RESET_DB=1 run vitest bunx vitest run --exclude=tests/platform-login-accessibility.browser.test.ts --exclude=src/lib/pharmacy/counter-evidence.db.test.ts --exclude=tests/restaurant-growth-ready.db.test.ts --exclude=tests/restaurant-growth-sandbox.db.test.ts --exclude=src/app/api/trpc/transaction-boundary.real-http.test.ts --exclude=src/lib/restaurant/growth-concurrency.db.test.ts --exclude=tests/platform-sensitive-concurrency.db.test.ts --exclude=tests/pharmacy-price-intelligence.integration.test.ts --exclude=src/lib/pharmacy/settlement.returns.db.test.ts --exclude=src/lib/pharmacy/repeat-purchasing.db.test.ts --exclude=src/lib/pharmacy/receipt-identity.db.test.ts --exclude=src/lib/restaurant/catering-money.db.test.ts --exclude=src/lib/restaurant/catering-runtime.db.test.ts --exclude=src/lib/restaurant/catering-endpoints.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
+          RESTAURANT_DEMO_RESET_DB=1 run vitest bunx vitest run --exclude=src/lib/pharmacy/wallet-reporting.db.test.ts --exclude=src/lib/pharmacy/stored-value-finance.db.test.ts --exclude=tests/platform-login-accessibility.browser.test.ts --exclude=src/lib/pharmacy/counter-evidence.db.test.ts --exclude=tests/restaurant-growth-ready.db.test.ts --exclude=tests/restaurant-growth-sandbox.db.test.ts --exclude=src/app/api/trpc/transaction-boundary.real-http.test.ts --exclude=src/lib/restaurant/growth-concurrency.db.test.ts --exclude=tests/platform-sensitive-concurrency.db.test.ts --exclude=tests/pharmacy-price-intelligence.integration.test.ts --exclude=src/lib/pharmacy/settlement.returns.db.test.ts --exclude=src/lib/pharmacy/repeat-purchasing.db.test.ts --exclude=src/lib/pharmacy/receipt-identity.db.test.ts --exclude=src/lib/restaurant/catering-money.db.test.ts --exclude=src/lib/restaurant/catering-runtime.db.test.ts --exclude=src/lib/restaurant/catering-endpoints.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
           # test:rls creates its own NOLOGIN role and does not start the app.
           DATABASE_URL="$SUPERUSER_URL" TEST_DATABASE_URL="$SUPERUSER_URL" run test-rls bun run test:rls
+          # Private socket isolation is mandatory for the destructive wallet opt-ins.
+          run wallet-postgres-install sudo apt-get install -y postgresql-16
+          PHARMACY_WALLET_EVIDENCE_DIR=gate/pharmacy-wallet-db run vitest-wallet-db node scripts/verify-pharmacy-wallet-db.cjs
           run lint bun run lint
 
           git diff --name-only -z b20b577f..HEAD -- '*.ts' '*.tsx' '*.css' '*.md' '*.json' '*.mjs' > gate/prettier-files.zlist
@@ -309,7 +312,7 @@ jobs:
           done
       - name: Upload automated-gate evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: automated-gate
           path: gate/
@@ -395,10 +398,10 @@ jobs:
       PHARMACY_E2E_ADMIN_EMAIL: pharmacy-admin@pharmacy-e2e.test
       PHARMACY_E2E_ADMIN_PASSWORD: gate-pharmacy-admin-ci-only
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
@@ -587,7 +590,7 @@ jobs:
           cp gate/browser/exit-codes.txt gate/browser/21-run-all-lanes.txt
       - name: Upload browser evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: browser-gate
           path: |

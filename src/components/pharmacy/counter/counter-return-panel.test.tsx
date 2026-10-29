@@ -5,12 +5,14 @@ const mocks = vi.hoisted(() => ({
   returnLine: vi.fn(),
   refund: vi.fn(),
   refetch: vi.fn(),
+  approvers: {} as Record<string, unknown>,
   history: {} as Record<string, unknown>,
   lookup: {} as Record<string, unknown>,
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     pharmacySales: {
+      rxApprovers: { useQuery: () => mocks.approvers },
       lookupReceiptByNumber: { useQuery: () => mocks.lookup },
       returnHistory: { useQuery: () => mocks.history },
       counterReceipt: { useQuery: () => ({}) },
@@ -28,9 +30,11 @@ const props = {
 };
 function chooseReceipt() {
   fireEvent.click(screen.getByRole('button', { name: /Receipt 12/ }));
+  fireEvent.change(screen.getByLabelText('Owner PIN'), { target: { value: '4729' } });
 }
 beforeEach(() => {
   localStorage.clear();
+  mocks.approvers = { data: { mode: 'SOLO', users: [] } };
   vi.clearAllMocks();
   mocks.refetch.mockResolvedValue({});
   mocks.returnLine.mockResolvedValue({});
@@ -160,6 +164,7 @@ describe('counter returns', () => {
       }
       view.unmount();
       render(<ReturnForm {...props} />);
+      fireEvent.change(screen.getByLabelText('Owner PIN'), { target: { value: '4729' } });
       fireEvent.click(await screen.findByRole('button', { name: 'Retry saved refund' }));
       await waitFor(() => expect(mocks.refund).toHaveBeenCalledTimes(2));
       expect(mocks.refund.mock.calls[1][0]).toEqual(first);
@@ -203,3 +208,49 @@ it('offers sold lots, prevents unsafe restock and caps the selected lot', async 
     )
   );
 });
+
+it.each(['SOLO', 'STAFFED'] as const)(
+  'requires fresh %s refund approval and never saves the PIN',
+  async (mode) => {
+    mocks.approvers = { data: { mode, users: [{ id: 'checker', name: 'Independent manager' }] } };
+    mocks.refund.mockRejectedValueOnce(new Error('Disconnected'));
+    render(<ReturnForm {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: /Receipt 12/ }));
+    fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+    fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
+    const submit = screen.getByRole('button', { name: 'Confirm refund' });
+    expect(submit).toBeDisabled();
+    const pin = screen.getByLabelText(mode === 'SOLO' ? 'Owner PIN' : 'Checker PIN');
+    expect(pin).toHaveAttribute('type', 'password');
+    fireEvent.change(pin, { target: { value: '4729' } });
+    if (mode === 'STAFFED') {
+      expect(submit).toBeDisabled();
+      fireEvent.change(screen.getByLabelText('Independent owner or manager'), {
+        target: { value: 'checker' },
+      });
+      // Changing identity invalidates the prior credential.
+      expect(pin).toHaveValue('');
+      fireEvent.change(pin, { target: { value: '4729' } });
+    }
+    fireEvent.click(submit);
+    await waitFor(() => expect(mocks.refund).toHaveBeenCalledOnce());
+    expect(mocks.refund).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalPin: '4729',
+        approvedByUserId: mode === 'STAFFED' ? 'checker' : undefined,
+      })
+    );
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Disconnected'));
+    expect(pin).toHaveValue('');
+    expect(localStorage.getItem('pharmacy-return:o:a:b')).not.toContain('4729');
+    const retry = screen.getByRole('button', { name: 'Retry saved refund' });
+    expect(retry).toBeDisabled();
+    fireEvent.change(pin, { target: { value: '5830' } });
+    fireEvent.click(retry);
+    await waitFor(() => expect(mocks.refund).toHaveBeenCalledTimes(2));
+    expect(mocks.refund.mock.calls[1][0]).toMatchObject({
+      approvalPin: '5830',
+      idempotencyKey: mocks.refund.mock.calls[0][0].idempotencyKey,
+    });
+  }
+);
