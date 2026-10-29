@@ -223,8 +223,8 @@ export const teamRouter = router({
 
       const inviteUrl = `${appUrl()}/invite/${token}`;
 
-      // Best-effort send — never fail the mutation on an email hiccup; the admin
-      // still gets the inviteUrl back to share manually if delivery is unverified.
+      // Preserve the invitation when delivery fails so the administrator can
+      // still copy the link, but report the failure rather than claiming success.
       const mail = templates.inviteMember({
         name: user.name,
         inviterName: ctx.session.user.name ?? undefined,
@@ -233,6 +233,7 @@ export const teamRouter = router({
         acceptUrl: inviteUrl,
         expiresLabel: 'in 7 days',
       });
+      let emailDelivery: 'SENT' | 'FAILED' = 'SENT';
       try {
         await sendEmail({
           to: { email, name: user.name },
@@ -241,10 +242,11 @@ export const teamRouter = router({
           text: mail.text,
         });
       } catch (err) {
+        emailDelivery = 'FAILED';
         console.error('[inviteMember] invite email failed for', email, err);
       }
 
-      return { id: user.id, inviteUrl };
+      return { id: user.id, inviteUrl, emailDelivery };
     }),
 
   getById: protectedProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {

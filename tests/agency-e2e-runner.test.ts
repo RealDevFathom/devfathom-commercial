@@ -12,6 +12,10 @@ const credentials = {
   AGENCY_E2E: '1',
   AGENCY_E2E_ADMIN_EMAIL: 'admin@agency-e2e.test',
   AGENCY_E2E_ADMIN_PASSWORD: 'test-only-password',
+  NEXT_PUBLIC_APP_URL: 'https://agency-e2e.example.test',
+  EMAIL_DELIVERY_MODE: 'send',
+  BREVO_API_KEY: 'test-api-key',
+  BREVO_SENDER_EMAIL: 'invites@example.test',
 };
 
 describe('Agency E2E fail-closed runner', () => {
@@ -25,6 +29,22 @@ describe('Agency E2E fail-closed runner', () => {
     const env = agencyE2eEnvironment({ AGENCY_E2E_DATABASE_URL: target, ...credentials });
     expect(env.DATABASE_URL).toBe(new URL(target).href);
     expect(env.TEST_DATABASE_URL).toBe(env.DATABASE_URL);
+  });
+
+  test('requires an HTTPS public URL and real invite email delivery settings', () => {
+    const base = { AGENCY_E2E_DATABASE_URL: target, ...credentials };
+    expect(() => agencyE2eEnvironment({ ...base, NEXT_PUBLIC_APP_URL: undefined })).toThrow(
+      'NEXT_PUBLIC_APP_URL is required'
+    );
+    expect(() =>
+      agencyE2eEnvironment({ ...base, NEXT_PUBLIC_APP_URL: 'http://example.test' })
+    ).toThrow('must use HTTPS');
+    expect(() => agencyE2eEnvironment({ ...base, EMAIL_DELIVERY_MODE: 'capture' })).toThrow(
+      'EMAIL_DELIVERY_MODE=send'
+    );
+    expect(() => agencyE2eEnvironment({ ...base, BREVO_API_KEY: undefined })).toThrow(
+      'BREVO_API_KEY is required'
+    );
   });
 
   test.each([

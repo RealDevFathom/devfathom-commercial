@@ -69,6 +69,35 @@ function fill() {
 
 describe('tenant department invitation', () => {
   it.each([
+    ['SENT', 'Invitation sent to second@e2e.invalid'],
+    ['FAILED', 'Invitation created, but email delivery failed'],
+  ] as const)(
+    'renders the %s delivery result without losing the fallback link',
+    (status, heading) => {
+      render(<AddMemberModal onClose={vi.fn()} />);
+      fill();
+      fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+      act(() =>
+        state.invite.mutate.mock.calls[0][1].onSuccess({
+          id: 'user_2',
+          inviteUrl: 'https://app.example/invite/token',
+          emailDelivery: status,
+        })
+      );
+      expect(screen.getByText(heading)).toBeVisible();
+      expect(screen.getByText('https://app.example/invite/token')).toBeVisible();
+      expect(screen.getByRole('button', { name: 'Copy invite link' })).toBeVisible();
+      if (status === 'FAILED') {
+        fireEvent.click(screen.getByRole('button', { name: 'Retry email' }));
+        expect(state.invite.mutate).toHaveBeenCalledTimes(2);
+      } else {
+        expect(screen.queryByRole('button', { name: 'Retry email' })).toBeNull();
+      }
+    }
+  );
+
+  it.each([
     ['General Manager', 'role_gm'],
     ['Branch Manager', 'role_branch'],
     ['Bar / Barista', 'role_bar'],

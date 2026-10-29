@@ -115,6 +115,37 @@ describe('team.inviteMember duplicate guard', () => {
     );
   });
 
+  it('reports successful email delivery', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+    mocks.sendEmail.mockResolvedValue({ messageId: 'message_1' });
+
+    await expect(
+      caller().inviteMember({ ...invite, email: 'new.person@company.com' })
+    ).resolves.toMatchObject({ id: 'user_2', emailDelivery: 'SENT' });
+  });
+
+  it('preserves the invite link and reports failed email delivery', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+    mocks.sendEmail.mockRejectedValue(new Error('provider unavailable'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const result = await caller().inviteMember({ ...invite, email: 'new.person@company.com' });
+
+    expect(result).toMatchObject({ id: 'user_2', emailDelivery: 'FAILED' });
+    expect(result.inviteUrl).toMatch(/^https:\/\/www\.devfathom\.com\/invite\//);
+    expect(mocks.invitationUpsert).toHaveBeenCalledOnce();
+    expect(consoleError).toHaveBeenCalledWith(
+      '[inviteMember] invite email failed for',
+      'new.person@company.com',
+      expect.any(Error)
+    );
+    consoleError.mockRestore();
+  });
+
   it('stores a restaurant role template on the invited member', async () => {
     mocks.findFirst.mockResolvedValue(null);
     mocks.roleFindFirst.mockResolvedValue({ id: 'role_gm', name: 'General Manager' });
