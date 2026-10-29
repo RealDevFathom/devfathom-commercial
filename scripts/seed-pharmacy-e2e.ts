@@ -64,6 +64,8 @@ const RECEIVED_AT = new Date('2026-08-01T00:00:00.000Z');
 const EXPIRES_AT = new Date('2028-06-30T00:00:00.000Z');
 
 const MODULES = [
+  'hr',
+  'pharmacy-procurement',
   'pharmacy-core',
   'pharmacy-counter',
   'pharmacy-inventory',

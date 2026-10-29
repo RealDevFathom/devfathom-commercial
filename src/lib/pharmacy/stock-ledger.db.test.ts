@@ -459,7 +459,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
 
   it('dispatches into transit, records a batch receipt discrepancy, and enforces destination branch scope', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-workflow');
-    const destinationBranch = 'branch_transfer_destination';
+    const destinationBranch = `branch_transfer_destination_${suffix}`;
     const setup = await inOrg(ORG_A, async (db) => {
       await ensureBranch(db, ORG_A, destinationBranch);
       const destination = await db.pharmacyStockLocation.create({
@@ -536,11 +536,11 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
   it('serializes competing dispatches so the same units cannot leave twice', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-race');
     const ids = await inOrg(ORG_A, async (db) => {
-      await ensureBranch(db, ORG_A, 'branch_race_destination');
+      await ensureBranch(db, ORG_A, `branch_race_destination_${suffix}`);
       const destination = await db.pharmacyStockLocation.create({
         data: {
           organizationId: ORG_A,
-          branchId: 'branch_race_destination',
+          branchId: `branch_race_destination_${suffix}`,
           code: `RACE-${tag('destination')}`,
           name: 'Race destination',
           kind: 'STORE',
@@ -590,7 +590,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
 
   it('globally recalls a batch, traces branch holdings, acknowledges, and reconciles closure', async () => {
     const a = await scenario(ORG_A, BRANCH_A, 'recall-a');
-    const otherBranch = 'branch_recall_b';
+    const otherBranch = `branch_recall_b_${suffix}`;
     const setup = await inOrg(ORG_A, async (db) => {
       await ensureBranch(db, ORG_A, otherBranch);
       const destination = await db.pharmacyStockLocation.create({
@@ -706,7 +706,11 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
   it('does not sell units a concurrent claim reserved while the sale waited (#355, claim-first)', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'claim-first');
     const lotId = await inOrg(ORG_A, async (db) => {
-      const { lot } = await stockLot(db, fixture, { expiresAt: LATER, units: 10, label: 'claim-first' });
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'claim-first',
+      });
       return lot.id;
     });
     let releaseClaim: () => void = () => {};
@@ -745,7 +749,11 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
   it('serializes a supplier claim against a concurrent sale of the same units (#355)', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'claim-race');
     const lotId = await inOrg(ORG_A, async (db) => {
-      const { lot } = await stockLot(db, fixture, { expiresAt: LATER, units: 10, label: 'claim-race' });
+      const { lot } = await stockLot(db, fixture, {
+        expiresAt: LATER,
+        units: 10,
+        label: 'claim-race',
+      });
       return lot.id;
     });
     let releaseSale: () => void = () => {};

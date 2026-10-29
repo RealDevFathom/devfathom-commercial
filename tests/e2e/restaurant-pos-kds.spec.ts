@@ -161,7 +161,7 @@ test.describe('restaurant POS and KDS core flow', () => {
     expect(await branchADetail.json()).toMatchObject({ id: opened.orderId });
 
     await page.getByRole('button', { name: new RegExp(fixture.menuItem.name) }).click();
-    await page.getByLabel('Quantity').fill('2');
+    await page.getByRole('spinbutton', { name: 'Quantity', exact: true }).fill('2');
     await page.getByLabel('Seat').fill('1');
     await page.getByLabel(new RegExp(fixture.modifier.name)).check();
     await page.getByRole('button', { name: 'Add to order' }).click();
