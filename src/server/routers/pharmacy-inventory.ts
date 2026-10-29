@@ -37,6 +37,7 @@ import {
   reserveSupplierClaim,
   writeOff,
 } from '@/lib/pharmacy/inventory-operations';
+import { postWriteOffEntry } from '@/lib/pharmacy/finance-postings';
 import {
   allocateForSale,
   breakPack,
@@ -1035,9 +1036,16 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction(async (tx) =>
-          writeOff(txDb(tx), await scopeFor(ctx, input.branchId), input)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = await scopeFor(ctx, input.branchId);
+          const written = await writeOff(db, scope, input);
+          await postWriteOffEntry(db, scope, {
+            stockMovementId: written.movement.id,
+            at: written.movement.occurredAt,
+          });
+          return written;
+        });
       } catch (error) {
         domainError(error);
       }
