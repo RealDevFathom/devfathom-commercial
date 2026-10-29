@@ -40,8 +40,19 @@ import {
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { deliveryRadiusProfitabilityReport } from '@/lib/pharmacy/delivery-radius-profitability';
 
 const reports = capabilityProcedure('reports:operational');
+const financialReports = capabilityProcedure('reports:financial');
+const deliveryProfitabilityInput = z
+  .object({
+    estimatedOrderRevenueMinor: z.number().int().nonnegative(),
+    estimatedOrderCogsMinor: z.number().int().nonnegative(),
+    baseDeliveryCostMinor: z.number().int().nonnegative(),
+    deliveryCostPerKmMinor: z.number().int().nonnegative(),
+    radiiKm: z.array(z.number().positive().max(1_000)).min(1).max(50),
+  })
+  .strict();
 const widget = z
   .object({
     key: z.enum(PHARMACY_WIDGET_KEYS),
@@ -162,6 +173,14 @@ async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
 }
 
 export const pharmacyReportsRouter = router({
+  deliveryRadiusProfitability: financialReports
+    .input(deliveryProfitabilityInput)
+    .query(({ input }) => ({
+      basis: 'CONFIGURED_ESTIMATE' as const,
+      disclaimer:
+        'Planning estimate from configured inputs; excludes taxes, returns, failed delivery, and overhead.',
+      rows: deliveryRadiusProfitabilityReport(input),
+    })),
   marketing: reports
     .input(filters.pick({ branchId: true, from: true, to: true }))
     .query(async ({ ctx, input }) => {

@@ -451,7 +451,14 @@ describe('PH-A3 prescription OCR prefill', () => {
     mocks.patient.mockResolvedValue({ id: 'patient-a' });
     mocks.find.mockResolvedValue(null);
     mocks.medicines.mockResolvedValue([
-      { id: 'medicine-rx', productName: 'Fathomcillin E2E', brandName: null },
+      {
+        id: 'medicine-rx',
+        productName: 'Fathomcillin E2E',
+        brandName: null,
+        strengths: [
+          { value: { toString: () => '250' }, unit: 'mg', ingredient: { name: 'Fathomcillin' } },
+        ],
+      },
     ]);
     mocks.putUpload.mockImplementation(async (org, name, bytes) => {
       mocks.objects.set(`${org}/${name}`, bytes);
@@ -488,6 +495,22 @@ describe('PH-A3 prescription OCR prefill', () => {
           medicineCandidates: [{ medicineId: 'medicine-rx', label: 'Fathomcillin E2E' }],
         },
       ],
+      draftCart: {
+        status: 'AWAITING_PHARMACIST_CONFIRMATION',
+        canTender: false,
+        lines: [
+          {
+            candidates: [
+              {
+                medicineId: 'medicine-rx',
+                match: 'SALT_AND_STRENGTH',
+                matchedSalt: 'Fathomcillin',
+                matchedStrength: '250 mg',
+              },
+            ],
+          },
+        ],
+      },
     });
     expect(mocks.medicines).toHaveBeenCalledWith(
       expect.objectContaining({ where: { organizationId: 'org-a', saleable: true } })
