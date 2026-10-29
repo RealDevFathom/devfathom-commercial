@@ -157,6 +157,18 @@ export const COUNTER_RECEIPT_DIRECTION: Readonly<Record<CounterReceiptLocale, 'l
   ur: 'rtl',
 };
 
+function numberLocale(locale: CounterReceiptLocale): string {
+  return locale === 'ur' ? 'ur-PK-u-nu-arabext' : 'en-PK';
+}
+
+/** Locale-aware whole numbers for every customer-visible receipt identifier and quantity. */
+export function formatReceiptInteger(value: number, locale: CounterReceiptLocale = 'en'): string {
+  return new Intl.NumberFormat(numberLocale(locale), {
+    useGrouping: false,
+    maximumFractionDigits: 0,
+  }).format(Number.isSafeInteger(value) ? value : 0);
+}
+
 /**
  * Minor units as a fixed two-decimal string, computed on integers.
  *
@@ -169,36 +181,46 @@ export function formatMinor(amountMinor: number, locale: CounterReceiptLocale = 
   const absolute = Math.abs(amountMinor);
   const major = Math.floor(absolute / 100);
   const fraction = absolute % 100;
-  const numberLocale = locale === 'ur' ? 'ur-PK-u-nu-arabext' : 'en-PK';
-  const integerFormatter = new Intl.NumberFormat(numberLocale, { useGrouping: false });
-  const fractionFormatter = new Intl.NumberFormat(numberLocale, {
+  const localeName = numberLocale(locale);
+  const integerFormatter = new Intl.NumberFormat(localeName, { useGrouping: false });
+  const fractionFormatter = new Intl.NumberFormat(localeName, {
     useGrouping: false,
     minimumIntegerDigits: 2,
   });
   const decimal =
-    new Intl.NumberFormat(numberLocale, {
+    new Intl.NumberFormat(localeName, {
       minimumFractionDigits: 1,
     })
       .formatToParts(0.1)
       .find((part) => part.type === 'decimal')?.value ?? '.';
   const minusSign =
-    new Intl.NumberFormat(numberLocale).formatToParts(-1).find((part) => part.type === 'minusSign')
+    new Intl.NumberFormat(localeName).formatToParts(-1).find((part) => part.type === 'minusSign')
       ?.value ?? '-';
   return `${negative ? minusSign : ''}${integerFormatter.format(major)}${decimal}${fractionFormatter.format(fraction)}`;
 }
 
 /** ISO timestamp reduced to the date a receipt prints. */
-export function formatReceiptDate(value: string | null): string {
+export function formatReceiptDate(
+  value: string | null,
+  locale: CounterReceiptLocale = 'en'
+): string {
   if (!value) return '—';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '—' : date.toISOString().slice(0, 10);
+  if (Number.isNaN(date.getTime())) return '—';
+  if (locale === 'en') return date.toISOString().slice(0, 10);
+  return new Intl.DateTimeFormat(numberLocale(locale), {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: 'UTC',
+  }).format(date);
 }
 
 export function receiptTitle(receipt: CounterReceipt, locale: CounterReceiptLocale): string {
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   return receipt.receiptNumber === null
     ? strings.unissued
-    : `${strings.receipt} ${receipt.receiptNumber}`;
+    : `${strings.receipt} ${formatReceiptInteger(receipt.receiptNumber, locale)}`;
 }
 
 /**
@@ -214,8 +236,8 @@ export function receiptLineLabel(line: CounterReceiptLine, locale: CounterReceip
   const identity = [line.medicineName, line.strength].filter(Boolean).join(' ');
   const tail = [
     `${strings.batch} ${line.batchNumber}`,
-    `${strings.expiry} ${formatReceiptDate(line.expiresAt)}`,
-    `${line.quantity} ${strings.saleUnit[line.saleUnit]}`,
+    `${strings.expiry} ${formatReceiptDate(line.expiresAt, locale)}`,
+    `${formatReceiptInteger(line.quantity, locale)} ${strings.saleUnit[line.saleUnit]}`,
     formatMinor(line.lineTotalMinor, locale),
   ].join(' · ');
 

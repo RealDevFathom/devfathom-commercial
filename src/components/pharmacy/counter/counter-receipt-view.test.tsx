@@ -145,10 +145,10 @@ it.each(['UNAVAILABLE', undefined] as const)(
       ],
     };
     render(<CounterReceiptView {...input} />);
-    const region = within(screen.getByRole('region', { name: 'رسید 12' }));
+    const region = within(screen.getByRole('region', { name: 'رسید ۱۲' }));
     expect(region.getByText('تاریخی شناخت دستیاب نہیں')).toBeTruthy();
     expect(
-      region.getByText('بیچ: دستیاب نہیں · میعاد: دستیاب نہیں · بنیادی اکائیاں: 7')
+      region.getByText('بیچ: دستیاب نہیں · میعاد: دستیاب نہیں · بنیادی اکائیاں: ۷')
     ).toBeTruthy();
     expect(screen.queryByText(/LIVE_CATALOG/)).toBeNull();
   }
@@ -160,11 +160,13 @@ it('formats Urdu receipt amounts with Urdu digits', () => {
     { tenderId: 'tender-1', type: 'CASH', amountMinor: 100, changeGivenMinor: null },
   ];
   render(<CounterReceiptView {...input} />);
-  const region = within(screen.getByRole('region', { name: 'رسید 12' }));
+  const region = within(screen.getByRole('region', { name: 'رسید ۱۲' }));
+  expect(region.getByText(/تاریخ: ۰۵\/۰۹\/۲۰۲۶/)).toBeTruthy();
+  expect(region.getByText(/۱ یونٹ/)).toBeTruthy();
   expect(region.getAllByText('۱٫۰۰').length).toBeGreaterThan(0);
   expect(region.queryByText('1.00')).toBeNull();
-  expect(region.getByText(/CASH: ۱٫۰۰/)).toBeTruthy();
-  expect(region.getByText(/کل رقم: ۱٫۰۰/)).toBeTruthy();
+  expect(region.getByText('CASH').parentElement).toHaveTextContent('CASH۱٫۰۰');
+  expect(region.getByText('کل رقم').parentElement).toHaveTextContent('کل رقم۱٫۰۰');
 });
 
 it('disables printing when shared semantic validation rejects the receipt', () => {

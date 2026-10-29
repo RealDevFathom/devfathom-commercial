@@ -5,6 +5,8 @@ import {
   COUNTER_RECEIPT_STRINGS,
   counterReceiptTotals,
   formatMinor,
+  formatReceiptDate,
+  formatReceiptInteger,
   PharmacyCounterReceiptError,
   receiptLineLabel,
   receiptTitle,
@@ -73,6 +75,15 @@ describe('formatMinor', () => {
     expect(formatMinor(100, 'ur')).toBe('۱٫۰۰');
     expect(formatMinor(123_456, 'ur')).toBe('۱۲۳۴٫۵۶');
     expect(formatMinor(-250, 'ur')).toBe('-۲٫۵۰');
+  });
+});
+
+describe('receipt locale formatters', () => {
+  it('localizes Urdu identifiers, quantities, and dates without changing English output', () => {
+    expect(formatReceiptInteger(12, 'en')).toBe('12');
+    expect(formatReceiptInteger(12, 'ur')).toBe('۱۲');
+    expect(formatReceiptDate('2026-09-02', 'en')).toBe('2026-09-02');
+    expect(formatReceiptDate('2026-09-02', 'ur')).toBe('۰۲/۰۹/۲۰۲۶');
   });
 });
 
@@ -177,8 +188,11 @@ describe('buildCounterReceiptDocument (printing seam)', () => {
     expect(document.footer).not.toContain('50.00');
   });
 
-  it('localizes every monetary value in the Urdu browser preview', () => {
+  it('localizes numbers and dates throughout the Urdu browser preview', () => {
     const preview = buildCounterReceiptPreview(receipt(), 'ur', 58);
+    expect(preview).toContain('رسید ۱۲');
+    expect(preview).toContain('۰۲/۰۹/۲۰۲۶');
+    expect(preview).toContain('۲ پتّا');
     expect(preview).toContain('۲۵٫۰۰');
     expect(preview).toContain('۵۰٫۰۰');
     expect(preview).not.toContain('25.00');

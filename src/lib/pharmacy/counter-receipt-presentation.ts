@@ -5,6 +5,7 @@ import {
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
   formatReceiptDate,
+  formatReceiptInteger,
   receiptTitle,
   type CounterReceipt,
   type CounterReceiptLine,
@@ -40,7 +41,7 @@ export function counterLinePresentation(line: CounterReceiptLine, locale: Counte
     allocations: (line.allocations ?? []).map((allocation) => {
       const batch = issued ? allocation.batchNumber : null;
       const expiry = issued ? allocation.expiresAt : null;
-      return `${strings.batch}: ${batch ?? text.unknown} · ${strings.expiry}: ${expiry ? formatReceiptDate(expiry) : text.unknown} · ${text.units}: ${allocation.canonicalUnits}`;
+      return `${strings.batch}: ${batch ?? text.unknown} · ${strings.expiry}: ${expiry ? formatReceiptDate(expiry, locale) : text.unknown} · ${text.units}: ${formatReceiptInteger(allocation.canonicalUnits, locale)}`;
     }),
   };
 }
@@ -64,12 +65,12 @@ export function buildCounterReceiptPreview(
     {
       businessName: receipt.branchName,
       invoiceNumber: receiptTitle(receipt, locale),
-      issuedAt: `${strings.date}: ${receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}`,
+      issuedAt: `${strings.date}: ${formatReceiptDate(receipt.businessDate ?? receipt.completedAt, locale)}`,
       lines: receipt.lines.map((line) => {
         const presentation = counterLinePresentation(line, locale);
         return [
           presentation.identity,
-          `${line.quantity} ${strings.saleUnit[line.saleUnit]} × ${formatMinor(line.unitPriceMinor, locale)}`,
+          `${formatReceiptInteger(line.quantity, locale)} ${strings.saleUnit[line.saleUnit]} × ${formatMinor(line.unitPriceMinor, locale)}`,
           ...presentation.allocations,
           `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor, locale)}`,
         ].join('\n');

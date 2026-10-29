@@ -18,6 +18,7 @@ import {
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
   formatReceiptDate,
+  formatReceiptInteger,
   receiptTitle,
   type CounterReceipt,
   type CounterReceiptLocale,
@@ -477,7 +478,7 @@ export function CounterReceiptView({
             {strings.branch}: {receipt.branchName}
           </p>
           <p className="text-text-muted">
-            {strings.date}: {receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}
+            {strings.date}: {formatReceiptDate(receipt.businessDate ?? receipt.completedAt, locale)}
           </p>
           {receipt.receiptNumber === null ? (
             <p className="text-warning">{strings.noReceiptNumber}</p>
@@ -508,7 +509,7 @@ export function CounterReceiptView({
                   </span>
                 </div>
                 <p className="text-text-muted">
-                  {line.quantity} {strings.saleUnit[line.saleUnit]} ×{' '}
+                  {formatReceiptInteger(line.quantity, locale)} {strings.saleUnit[line.saleUnit]} ×{' '}
                   {formatMinor(line.unitPriceMinor, locale)}
                 </p>
                 {counterLinePresentation(line, locale).allocations.map((allocation, index) => (

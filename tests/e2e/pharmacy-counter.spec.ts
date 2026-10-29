@@ -231,11 +231,13 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   const localeSelect = page.getByLabel('Language');
   await localeSelect.focus();
   await localeSelect.selectOption('ur');
-  const urduReceipt = page.getByRole('region', { name: /رسید/ });
+  const urduReceipt = page.getByRole('region', { name: /رسید [۰-۹]+/ });
   await expect(urduReceipt).toBeVisible();
   await expect(urduReceipt).toHaveAttribute('dir', 'rtl');
   await expect(urduReceipt).toContainText('بیچ');
   await expect(urduReceipt).toContainText(otc.batchNumber);
+  await expect(urduReceipt).toContainText('۳۰/۰۶/۲۰۲۸');
+  await expect(urduReceipt).toContainText('۲ پتّا');
 });
 
 test('bill 2 — name search and a loose unit on a medicine with no strip level', async ({

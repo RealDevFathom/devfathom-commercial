@@ -990,6 +990,8 @@ function ScopedPharmacyCounterConsole({
     const row = found[0]!;
     const nextUnit = row.saleUnits[0]?.kind ?? null;
     if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
+      // The scanner result is an external async event; synchronize its selected row before sale.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       stageRow(row);
       return;
     }
