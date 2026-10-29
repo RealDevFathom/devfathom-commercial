@@ -16,6 +16,7 @@ import { createTRPCContext } from '@/server/trpc';
 import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
 import { MarketingSummary } from './marketing-summary';
 import { ObservedDemand } from './observed-demand';
+import { StaffingFootfall } from './staffing-footfall';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
 
@@ -31,7 +32,9 @@ type SearchParams = Promise<
       | 'digest'
       | 'anomaly'
       | 'advisor'
-      | 'authentication',
+      | 'authentication'
+      | 'receiptsPerStaffHour'
+      | 'minimumSuggestedStaff',
       string | string[] | undefined
     >
   >
@@ -115,6 +118,8 @@ export default async function PharmacyReportsPage({
   let authenticationFlags: Awaited<ReturnType<typeof caller.packAuthenticationFlags>> | null = null;
   let reportError = false;
   let marketing: Awaited<ReturnType<typeof caller.marketing>> | null = null;
+  let staffing: Awaited<ReturnType<typeof caller.staffingFootfall>> | null = null;
+  let staffingError = false;
   let demand: Awaited<
     ReturnType<ReturnType<typeof pharmacySalesRouter.createCaller>['demandAggregate']>
   > | null = null;
@@ -167,6 +172,28 @@ export default async function PharmacyReportsPage({
       });
     } catch {
       demandError = true;
+    }
+  }
+  const positiveInteger = (input: string | undefined, fallback: number, allowZero = false) => {
+    const parsed = Number(input);
+    return Number.isInteger(parsed) && parsed >= (allowZero ? 0 : 1) && parsed <= 1_000
+      ? parsed
+      : fallback;
+  };
+  // Defaults are visible planning assumptions and remain configurable in the report form.
+  const receiptsPerStaffHour = positiveInteger(value(query.receiptsPerStaffHour), 6);
+  const minimumSuggestedStaff = positiveInteger(value(query.minimumSuggestedStaff), 1, true);
+  if (demandScopeValid && branch && branchResult.branches.some((item) => item.id === branch)) {
+    try {
+      staffing = await caller.staffingFootfall({
+        branchId: branch,
+        from,
+        to,
+        receiptsPerStaffHour,
+        minimumSuggestedStaff,
+      });
+    } catch {
+      staffingError = true;
     }
   }
   const digestMessage = value(query.digest);
@@ -377,6 +404,28 @@ export default async function PharmacyReportsPage({
               aria-describedby={invalidRange ? 'report-date-error' : undefined}
             />
           </label>
+          <label className="text-sm text-text-body">
+            Receipts per staff hour (assumption)
+            <Input
+              className="mt-1 min-h-11"
+              defaultValue={receiptsPerStaffHour}
+              min="1"
+              max="1000"
+              name="receiptsPerStaffHour"
+              type="number"
+            />
+          </label>
+          <label className="text-sm text-text-body">
+            Minimum suggested staff
+            <Input
+              className="mt-1 min-h-11"
+              defaultValue={minimumSuggestedStaff}
+              min="0"
+              max="1000"
+              name="minimumSuggestedStaff"
+              type="number"
+            />
+          </label>
           <Button className="min-h-11 self-end" type="submit">
             Apply filters
           </Button>
@@ -394,6 +443,7 @@ export default async function PharmacyReportsPage({
         selected={!!branch}
         financial={catalog.permissions.financial}
       />
+      <StaffingFootfall report={staffing} failed={staffingError} />
       {workPackScopeValid ? (
         <Suspense key={returnQuery.toString()} fallback={<DailyWorkPackLoading />}>
           <DailyWorkPack
