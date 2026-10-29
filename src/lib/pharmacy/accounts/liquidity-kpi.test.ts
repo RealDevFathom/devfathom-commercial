@@ -43,6 +43,17 @@ describe('posted cash coverage', () => {
     expect(row?.ratio).toEqual({ numerator: '900719925474099312345', denominator: '3' });
   });
 
+  it('rounds display ratios half away from zero without changing the exact ratio', () => {
+    const [positive] = postedCashCoverage([
+      { accountCode: 'CASH', currency: 'PKR', closingMinor: '469' },
+      { accountCode: 'ACCOUNTS_PAYABLE', currency: 'PKR', closingMinor: '-200' },
+    ]);
+    const negative = { ...positive!, ratio: { numerator: '-469', denominator: '200' } };
+    expect(formatCoverageRatio(positive!)).toBe('2.35×');
+    expect(formatCoverageRatio(negative)).toBe('-2.35×');
+    expect(positive?.ratio).toEqual({ numerator: '469', denominator: '200' });
+  });
+
   it.each([
     { name: 'missing', balances: [{ accountCode: 'CASH', currency: 'PKR', closingMinor: '1' }] },
     {

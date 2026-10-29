@@ -353,6 +353,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   // separately and a catch-all would gate them all on `pharmacy-core`.
   ['/pharmacy/purchasing', 'pharmacy-procurement'],
   ['/pharmacy/inventory', 'pharmacy-inventory'],
+  ['/pharmacy/accounts/liquidity-kpi', 'pharmacy-finance'],
   ['/pharmacy/finance', 'pharmacy-finance'],
   ['/pharmacy/reports', 'pharmacy-reports'],
   ['/pharmacy/medicines', 'pharmacy-core'],

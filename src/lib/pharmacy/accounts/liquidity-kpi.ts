@@ -119,6 +119,7 @@ export function postedCashCoverageCsv(rows: readonly PostedCashCoverage[]) {
   return `\uFEFF${[header.map(csvCell).join(','), ...body].join('\r\n')}\r\n`;
 }
 
+/** Display the exact ratio rounded half away from zero to the requested decimal places. */
 export function formatCoverageRatio(row: PostedCashCoverage, decimals = 2) {
   if (!row.ratio) return 'Unavailable';
   const numerator = BigInt(row.ratio.numerator);
@@ -126,6 +127,6 @@ export function formatCoverageRatio(row: PostedCashCoverage, decimals = 2) {
   const negative = numerator < BigInt(0);
   const absolute = negative ? -numerator : numerator;
   const scale = BigInt(10) ** BigInt(decimals);
-  const scaled = (absolute * scale) / denominator;
+  const scaled = (absolute * scale * BigInt(2) + denominator) / (denominator * BigInt(2));
   return `${negative ? '-' : ''}${scaled / scale}.${String(scaled % scale).padStart(decimals, '0')}×`;
 }

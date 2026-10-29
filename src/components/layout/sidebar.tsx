@@ -331,6 +331,14 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
   },
   {
+    label: 'Posted cash coverage',
+    href: '/pharmacy/accounts/liquidity-kpi',
+    icon: DollarSign,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-finance',
+  },
+  {
     label: 'Purchasing',
     href: '/pharmacy/purchasing',
     icon: ShoppingCart,

@@ -46,6 +46,7 @@ const legacy: Record<string, string[]> = {
     await client.query('BEGIN');
     await client.query(`SELECT set_config('app.is_platform_admin','true',true)`);
     await client.query(`CREATE ROLE "${runtimeRole}" NOSUPERUSER NOBYPASSRLS`);
+    await client.query(`GRANT "${runtimeRole}" TO CURRENT_USER`);
     await client.query(`GRANT USAGE ON SCHEMA public TO "${runtimeRole}"`);
     await client.query(
       `GRANT SELECT ON organization_roles, organization_role_permissions, user_permission_overrides, users TO "${runtimeRole}"`
