@@ -1484,6 +1484,8 @@ model PharmacySaleLine {
   returnLines               PharmacySaleReturnLine[]
   unidentifiedReturnHolds   PharmacyUnidentifiedReturnHold[]
 
+  pharmacistReviewItem PharmacyPharmacistReviewItem?
+
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
   @@unique([organizationId, idempotencyKey])
@@ -12374,6 +12376,7 @@ model PharmacyPharmacistReviewItem {
   requestedByUserId  String
   requestedAt        DateTime                           @default(now())
   line               PrescriptionLine                   @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict)
+  saleLine           PharmacySaleLine @relation(fields: [organizationId, saleLineId], references: [organizationId, id], onDelete: Restrict)
   decisions          PharmacyPharmacistReviewDecision[]
 
   @@unique([organizationId, id])

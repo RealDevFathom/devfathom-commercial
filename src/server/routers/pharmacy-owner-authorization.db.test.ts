@@ -187,6 +187,90 @@ beforeAll(async () => {
 }, 60_000);
 
 suite('owner provisioning, branch access and PIN maker/checker in Postgres', () => {
+  it('keeps both review queries branch scoped with 40,000 historical sale lines', async () => {
+    await tenant(
+      org,
+      async (db) => {
+        const template = await db.pharmacySaleLine.findFirstOrThrow({ where: { branchId } });
+        const data = { ...template, id: undefined };
+        // Real rows and the real Prisma adapter reproduce P2029 in the old IN query.
+        const inserted = await db.$executeRaw`
+        INSERT INTO pharmacy_sale_lines
+        SELECT (jsonb_populate_record(NULL::pharmacy_sale_lines,
+          to_jsonb(template) || jsonb_build_object(
+            'id', ${`volume-${suffix}-`} || n,
+            'idempotencyKey', ${`volume-${suffix}-`} || n
+          ))).*
+        FROM pharmacy_sale_lines template CROSS JOIN generate_series(1, 40000) n
+        WHERE template.id = ${template.id} AND template."organizationId" = ${org}
+      `;
+        expect(inserted).toBe(40_000);
+        const sibling = await db.pharmacyBranch.create({
+          data: {
+            code: 'VOLUME',
+            name: 'Volume sibling',
+            addressLine: 'Test',
+            city: 'Test',
+            provinceCode: 'PB',
+          },
+        });
+        const sale = await db.pharmacySale.create({
+          data: { branchId: sibling.id, createdByUserId: owner, businessDate: new Date() },
+        });
+        const siblingLine = await db.pharmacySaleLine.create({
+          data: {
+            ...data,
+            branchId: sibling.id,
+            saleId: sale.id,
+            idempotencyKey: `sibling-${suffix}`,
+          },
+        });
+        await db.pharmacyPharmacistReviewItem.create({
+          data: {
+            prescriptionLineId: data.prescriptionLineId!,
+            saleLineId: siblingLine.id,
+            requestedByUserId: owner,
+          },
+        });
+        // A staff reader can only see A, even though another tenant branch has reviews.
+        const reader = `volume-reader-${suffix}`;
+        const role = await db.organizationRole.create({
+          data: {
+            key: 'volume-reader',
+            name: 'Reader',
+            permissions: { create: { capability: 'pharmacy:dispense' } },
+          },
+        });
+        await db.user.create({
+          data: {
+            id: reader,
+            name: 'Reader',
+            email: `${reader}@example.test`,
+            title: 'Reader',
+            department: 'LEADERSHIP',
+            organizationRoleId: role.id,
+          },
+        });
+        await db.pharmacyBranchAssignment.create({ data: { userId: reader, branchId } });
+        const caller = dispensing.createCaller(context(db, reader, 'EMPLOYEE'));
+        expect((await caller.reviewQueue()).items.map((item) => item.id)).toEqual([reviewId]);
+        expect((await caller.substitutionWorkspace()).lines.map((item) => item.id)).toEqual([
+          reviewId,
+        ]);
+        await db.pharmacyBranchAssignment.updateMany({
+          where: { userId: reader },
+          data: { active: false },
+        });
+        await expect(caller.reviewQueue()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(caller.substitutionWorkspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        // Leave subsequent solo-owner tests with the original active membership.
+        await db.user.update({ where: { id: reader }, data: { status: 'INACTIVE' } });
+        await db.pharmacyBranch.update({ where: { id: sibling.id }, data: { active: false } });
+      },
+      { timeout: 120_000 }
+    );
+  }, 120_000);
+
   it('backfills every capability and autoassigns existing and newly created branches', async () => {
     await tenant(org, async (db) => {
       const { ALL_ACTIONS } = await import('@/lib/abac/policies');

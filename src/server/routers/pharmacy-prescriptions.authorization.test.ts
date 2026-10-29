@@ -142,14 +142,13 @@ describe('alternate clinical read paths', () => {
     async (path) => {
       const f = fixture();
       await f.queue[path]();
-      expect(f.db.pharmacySaleLine.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { organizationId: 'org', branchId: { in: ['branch-a'] } },
-        })
-      );
+      expect(f.db.pharmacySaleLine.findMany).not.toHaveBeenCalled();
       expect(f.db.pharmacyPharmacistReviewItem.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { organizationId: 'org', saleLineId: { in: ['line-a'] } },
+          where: {
+            organizationId: 'org',
+            saleLine: { organizationId: 'org', branchId: { in: ['branch-a'] } },
+          },
         })
       );
     }

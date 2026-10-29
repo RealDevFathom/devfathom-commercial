@@ -8,16 +8,14 @@ const dispense = capabilityProcedure('pharmacy:dispense');
 
 async function reviewScope(ctx: TRPCContext) {
   const { branches } = await requirePharmacyReadBranch(ctx);
-  const lines = await ctx.db.pharmacySaleLine.findMany({
-    where: {
+  // Keep historical sale-line IDs in the database: expanding them into an IN
+  // list can exceed PostgreSQL's bind parameter limit on busy branches.
+  return {
+    organizationId: ctx.entitlements!.organizationId,
+    saleLine: {
       organizationId: ctx.entitlements!.organizationId,
       branchId: { in: branches.map((branch) => branch.id) },
     },
-    select: { id: true },
-  });
-  return {
-    organizationId: ctx.entitlements!.organizationId,
-    saleLineId: { in: lines.map((line) => line.id) },
   };
 }
 
