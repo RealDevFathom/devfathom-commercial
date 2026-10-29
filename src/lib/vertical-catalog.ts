@@ -791,6 +791,8 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'manager',
     name: 'Manager',
     isSystem: true,
+    // Managers retain the purchasing and Goods-in access that predates the
+    // explicit pharmacy capability model (#375).
     capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
   },
   {
