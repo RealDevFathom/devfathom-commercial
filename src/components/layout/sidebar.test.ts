@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { navigation, visibleNavigation } from './sidebar';
+import { currentPharmacyCapabilities, navigation, visibleNavigation } from './sidebar';
 
 const restaurantRoutes = [
   '/pos',
@@ -103,6 +103,28 @@ describe('pharmacy navigation', () => {
     ['/pharmacy/finance', 'pharmacy-finance', undefined],
     ['/pharmacy/reports', 'pharmacy-reports', 'reports:operational'],
   ] as const;
+
+  it('fails closed during loading, refetch, errors, and identity or tenant switches', () => {
+    const current = {
+      enabled: true,
+      isError: false,
+      isFetching: false,
+      userId: 'cashier',
+      organizationId: 'org-a',
+      data: {
+        userId: 'cashier',
+        organizationId: 'org-a',
+        capabilities: ['pharmacy:counter'] as const,
+      },
+    };
+
+    expect(currentPharmacyCapabilities(current)).toEqual(['pharmacy:counter']);
+    expect(currentPharmacyCapabilities({ ...current, isFetching: true })).toEqual([]);
+    expect(currentPharmacyCapabilities({ ...current, isError: true })).toEqual([]);
+    expect(currentPharmacyCapabilities({ ...current, userId: 'pharmacist' })).toEqual([]);
+    expect(currentPharmacyCapabilities({ ...current, organizationId: 'org-b' })).toEqual([]);
+    expect(currentPharmacyCapabilities({ ...current, enabled: false })).toEqual([]);
+  });
 
   it.each(operations)(
     'shows %s only with its own license, independently of Chat',

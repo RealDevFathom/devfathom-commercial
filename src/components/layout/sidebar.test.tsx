@@ -6,7 +6,17 @@ import type { EntitlementView } from '@/lib/module-catalog';
 import { Sidebar, TopNavigation } from './sidebar';
 
 const useSessionMock = vi.hoisted(() =>
-  vi.fn(() => ({ data: { user: { role: 'ADMIN', name: 'Test operator' } } }))
+  vi.fn(() => ({
+    data: {
+      user: {
+        id: 'operator-1',
+        organizationId: 'pharmacy-1',
+        status: 'ACTIVE',
+        role: 'ADMIN',
+        name: 'Test operator',
+      },
+    },
+  }))
 );
 const usePathnameMock = vi.hoisted(() => vi.fn(() => '/dashboard'));
 // The hospitality rail's one read; unanswered unless a hospitality case sets it.
@@ -65,7 +75,26 @@ vi.mock('@/lib/trpc', () => ({
       },
     },
     pharmacySafety: {
-      access: { useQuery: () => ({ data: { allowed: false } }) },
+      access: {
+        useQuery: () => ({
+          data: {
+            userId: 'operator-1',
+            organizationId: 'pharmacy-1',
+            capabilities: [
+              'pharmacy:counter',
+              'pharmacy:inventory',
+              'pharmacy:procurement',
+              'pharmacy:dispense',
+              'pharmacy:safety',
+              'reports:operational',
+              'reports:financial',
+            ],
+          },
+          isError: false,
+          isFetching: false,
+          refetch: vi.fn(),
+        }),
+      },
     },
   },
 }));
@@ -87,7 +116,17 @@ const enabledModules = [
 ];
 
 function restaurantLinks(role = 'ADMIN') {
-  vi.mocked(useSessionMock).mockReturnValue({ data: { user: { role, name: 'Test operator' } } });
+  vi.mocked(useSessionMock).mockReturnValue({
+    data: {
+      user: {
+        id: 'operator-1',
+        organizationId: 'org-1',
+        status: 'ACTIVE',
+        role,
+        name: 'Test operator',
+      },
+    },
+  });
   render(
     <EntitlementsProvider
       value={{
@@ -127,7 +166,17 @@ function links(vertical?: EntitlementView['vertical'], granted: string[] = enabl
 
 describe('TopNavigation vertical visibility', () => {
   beforeEach(() => {
-    useSessionMock.mockReturnValue({ data: { user: { role: 'ADMIN', name: 'Test operator' } } });
+    useSessionMock.mockReturnValue({
+      data: {
+        user: {
+          id: 'operator-1',
+          organizationId: 'org-1',
+          status: 'ACTIVE',
+          role: 'ADMIN',
+          name: 'Test operator',
+        },
+      },
+    });
     usePathnameMock.mockReturnValue('/dashboard');
   });
 
@@ -200,7 +249,17 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     granted?: string[];
     pathname?: string;
   } = {}) {
-    useSessionMock.mockReturnValue({ data: { user: { role, name: 'Test operator' } } });
+    useSessionMock.mockReturnValue({
+      data: {
+        user: {
+          id: 'operator-1',
+          organizationId: 'pharmacy-1',
+          status: 'ACTIVE',
+          role,
+          name: 'Test operator',
+        },
+      },
+    });
     usePathnameMock.mockReturnValue(pathname);
     const onNavigate = vi.fn();
     render(

@@ -536,6 +536,41 @@ const HOTEL_RAIL_CAPABILITIES: HotelCapability[] = [
 const NO_HOTEL_CAPABILITIES: readonly HotelCapability[] = [];
 const NO_PHARMACY_CAPABILITIES: readonly Action[] = [];
 
+type PharmacyAccessState = {
+  enabled: boolean;
+  isError: boolean;
+  isFetching: boolean;
+  userId?: string;
+  organizationId?: string;
+  data?: {
+    userId: string;
+    organizationId?: string | null;
+    capabilities: readonly Action[];
+  };
+};
+
+/** Fail closed while access is loading, failed, or belongs to an old identity. */
+export function currentPharmacyCapabilities({
+  enabled,
+  isError,
+  isFetching,
+  userId,
+  organizationId,
+  data,
+}: PharmacyAccessState): readonly Action[] {
+  if (
+    !enabled ||
+    isError ||
+    isFetching ||
+    !data ||
+    data.userId !== userId ||
+    data.organizationId !== organizationId
+  ) {
+    return NO_PHARMACY_CAPABILITIES;
+  }
+  return data.capabilities;
+}
+
 /**
  * `hotelCapabilities` are the property capabilities the member holds at one or
  * more of their assigned properties (none by default). A Hospitality entry
@@ -624,17 +659,26 @@ function useVisibleNavigation() {
   const pharmacyAccess = trpc.pharmacySafety.access.useQuery(undefined, {
     enabled: pharmacyAccessEnabled,
     retry: false,
-    staleTime: 30_000,
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
-  const pharmacyAccessCurrent = Boolean(
-    pharmacyAccessEnabled &&
-    !pharmacyAccess.isError &&
-    pharmacyAccess.data?.userId === session?.user.id &&
-    pharmacyAccess.data?.organizationId === session?.user.organizationId
-  );
-  const pharmacyCapabilities = pharmacyAccessCurrent
-    ? (pharmacyAccess.data?.capabilities ?? NO_PHARMACY_CAPABILITIES)
-    : NO_PHARMACY_CAPABILITIES;
+  const refetchPharmacyAccess = pharmacyAccess.refetch;
+  useEffect(() => {
+    if (pharmacyAccessEnabled) void refetchPharmacyAccess();
+  }, [
+    pharmacyAccessEnabled,
+    session?.user.id,
+    session?.user.organizationId,
+    refetchPharmacyAccess,
+  ]);
+  const pharmacyCapabilities = currentPharmacyCapabilities({
+    enabled: pharmacyAccessEnabled,
+    isError: pharmacyAccess.isError,
+    isFetching: pharmacyAccess.isFetching,
+    userId: session?.user.id,
+    organizationId: session?.user.organizationId,
+    data: pharmacyAccess.data,
+  });
   const filteredNav = visibleNavigation(
     entitlements,
     session?.user?.role,
