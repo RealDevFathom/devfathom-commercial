@@ -291,6 +291,16 @@ describe('counter Khata ledger gate', () => {
   });
   it('records the freshly reauthenticated owner and raised limit', async () => {
     const db = fixture();
+    db.pharmacyKhataEvent.findMany.mockResolvedValue([
+      {
+        id: 'charge-1',
+        kind: 'CHARGE',
+        amountMinor: 800,
+        occurredAt: new Date(),
+        dueAt: null,
+        settlesChargeId: null,
+      },
+    ]);
     await authorizeKhataCharge(
       db as never,
       scope,
@@ -300,12 +310,31 @@ describe('counter Khata ledger gate', () => {
     expect(db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         appliedLimitMinor: 1100,
+        score: 100,
+        suggestedLimitMinor: 1000,
         ownerActorId: scope.actorId,
         reasons: expect.objectContaining({
+          reasons: expect.arrayContaining(['1 charge(s) in the stated window']),
           ownerAuthorizedByUserId: scope.actorId,
           ownerAuthorizedAt: expect.any(String),
         }),
       }),
+    });
+    expect(db.pharmacyKhataEvent.findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        familyAccountId: 'family-a',
+        occurredAt: { gte: expect.any(Date), lte: expect.any(Date) },
+      },
+      select: {
+        id: true,
+        kind: true,
+        amountMinor: true,
+        occurredAt: true,
+        dueAt: true,
+        settlesChargeId: true,
+      },
     });
   });
   it('denies an account outside the sale customer membership and does not expose its statement', async () => {
