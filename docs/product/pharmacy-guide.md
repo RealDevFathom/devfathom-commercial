@@ -1,6 +1,6 @@
 # Pharmacy guide
 
-*For pharmacy owners, managers, pharmacists and counter staff.*
+_For pharmacy owners, managers, pharmacists and counter staff._
 
 This guide explains what each part of DevFathom does for your pharmacy and who is allowed to use it. It does not yet give click-by-click steps or screenshots. Those will be added once the demo pharmacy is ready to photograph. TODO(confirm): add screenshots from the demo pharmacy only.
 
@@ -29,20 +29,23 @@ New to a word? Check the [glossary](glossary.md).
 ## 1. Getting started
 
 ### Setting up your pharmacy
+
 When you join, your business is set up in DevFathom with one or more **branches**. Each branch is one shop location.
 
 TODO(confirm): who does the first setup (DevFathom's team or the owner) and what the owner needs to provide.
 
 ### Moving from your old system
+
 DevFathom helps you move over in stages:
 
 1. **Bring in your opening stock** and other records from your old system.
-2. **Run both systems side by side** (a *parallel run*) so you can check that they match.
-3. **Switch over** (*cutover*) on a chosen day, after which you use only DevFathom.
+2. **Run both systems side by side** (a _parallel run_) so you can check that they match.
+3. **Switch over** (_cutover_) on a chosen day, after which you use only DevFathom.
 
 TODO(confirm): which old systems or file formats can be imported, and how long a parallel run usually lasts.
 
 ### Adding your staff
+
 Owners invite staff and give each person a **role**. You can then add or remove permissions for individual people, and limit staff to the branches they work in. See [Roles: who can do what](#12-roles-who-can-do-what).
 
 **Never share your login with staff.** Each person should have their own account so the activity log shows who did what.
@@ -51,25 +54,30 @@ Owners invite staff and give each person a **role**. You can then add or remove 
 
 ## 2. Counter sales and daily close
 
-*For counter staff and managers.*
+_For counter staff and managers._
 
 ### Making a sale
+
 Find the medicine (for example by scanning its barcode), choose the pack size, and take payment. A customer can pay with more than one method, such as part cash and part card.
 
 TODO(confirm): which payment methods are supported.
 
 ### Refunds
+
 You can refund items a customer returns. TODO(confirm): who is allowed to give refunds, and whether a manager must approve.
 
 ### The cash drawer
+
 DevFathom keeps track of the cash in your drawer during the day.
 
 ### Closing the day
+
 At the end of the day or shift, you **close the day**. This checks the sales and the cash in the drawer, and records the result.
 
 TODO(confirm): what happens if the cash does not match, and who can approve a close.
 
 ### Receipts and tax documents
+
 The system can produce fiscal (tax) documents for sales. TODO(confirm): what printed or digital receipts look like and which tax rules apply.
 
 ---
@@ -93,6 +101,7 @@ Your **medicine list** holds each medicine with:
 - its **barcodes**
 
 ### Regulated changes are reviewed before they go live
+
 When a connected source proposes a regulated change to the medicine list, the change waits for review. A person with the **catalogue review** job confirms or rejects it. Confirmed changes are then published to the list. TODO(confirm): which kinds of edits made directly by staff also go through review.
 
 Catalogue review is one of the [three protected jobs](#the-three-protected-jobs).
@@ -127,15 +136,18 @@ TODO(confirm): who can approve a purchase order.
 
 ## 7. Prescriptions and the pharmacist queue
 
-*For pharmacists and counter staff.*
+_For pharmacists and counter staff._
 
 ### Recording a prescription
+
 Record the prescription, the **patient** and the **prescriber** (the doctor who wrote it).
 
 ### The pharmacist queue
+
 Prescriptions wait in the **pharmacist queue** until a pharmacist checks them.
 
 ### Pharmacist decisions and dispensing
+
 The **dispensing** protected job covers the pharmacist's decisions on a prescription, including any substitution and the evidence for it, and handing the medicine over. See [The three protected jobs](#the-three-protected-jobs).
 
 TODO(confirm): the exact order of steps on screen and what the pharmacist sees when reviewing a prescription.
@@ -147,11 +159,13 @@ TODO(confirm): the exact order of steps on screen and what the pharmacist sees w
 > **DRAFT – pending legal review.** This section has not yet been checked by a pharmacist or legal reviewer. Do not rely on it for legal advice. Follow DRAP's official guidance and your own legal duties.
 
 ### Controlled-drugs register
+
 DevFathom keeps a **controlled-drugs register** for medicines that the law says must be recorded closely. Working on the register (viewing it, recording corrections, approving register incidents, preparing inspection packs and placing records on legal hold) needs the **safety** protected job.
 
 TODO(confirm): which medicines are covered, what is recorded for each entry, who can make entries, and how long records are kept.
 
 ### Recalls
+
 When a medicine or batch is **recalled**, it must be taken off sale. DevFathom can bring in recall information from **DRAP** and helps you act on it.
 
 TODO(confirm): how recall information reaches the system, how staff are told, and whether recalled batches are blocked at the counter.
@@ -187,6 +201,7 @@ TODO(confirm): which tasks work offline, how long a device can stay offline, and
 ## 12. Roles: who can do what
 
 ### Roles
+
 Every staff member has a **role**. A role is a ready-made set of permissions. The basic roles are:
 
 - **Admin:** wide control over the business's settings and staff.
@@ -195,28 +210,33 @@ Every staff member has a **role**. A role is a ready-made set of permissions. Th
 
 On top of that, there are ready-made **pharmacy roles** that owners can pick:
 
-| Pharmacy role | What it includes |
-|---|---|
-| Owner | All everyday pharmacy permissions and reports, but **not** the three protected jobs |
+| Pharmacy role    | What it includes                                                                       |
+| ---------------- | -------------------------------------------------------------------------------------- |
+| Owner            | All everyday pharmacy permissions and reports, but **not** the three protected jobs    |
 | Owner / Operator | Optional, given on purpose: reports, customer orders, and **all three protected jobs** |
-| Pharmacist | Dispensing and catalogue review |
-| Manager | Pharmacy management and customer orders |
-| Cashier | The counter and customer orders |
-| Procurement | Buying from suppliers |
-| Inventory | Stock |
-| Finance | Financial reports |
-| Auditor | Operational reports |
+| Pharmacist       | Dispensing and catalogue review                                                        |
+| Manager          | Pharmacy management and customer orders                                                |
+| Cashier          | The counter and customer orders                                                        |
+| Procurement      | Buying from suppliers                                                                  |
+| Inventory        | Stock                                                                                  |
+| Finance          | Financial reports                                                                      |
+| Auditor          | Operational reports                                                                    |
 
 These ready-made roles are still provisional and may change.
 
 ### Changing one person's permissions
+
 On top of their role, you can give or remove a specific permission for one person. This lets you fit permissions to how your shop really works.
 
 ### Limiting staff to branches
+
 Staff can be limited to the branches they work in, so they only see those branches.
 
-### Everything is recorded
-Actions are written to an activity log, so you can later see who did what. TODO(confirm): who can see the activity log.
+### Audit trail
+
+Protected workflows and other audited actions write activity records so an authorized reviewer can
+later check who did what. The Owner / Operator role and PIN checks do not remove or replace that
+audit trail. TODO(confirm): the complete list of audited actions and who can view each record.
 
 ---
 
@@ -224,11 +244,11 @@ Actions are written to an activity log, so you can later see who did what. TODO(
 
 Three pharmacy jobs carry extra risk, so DevFathom treats them differently from everything else:
 
-| Job | What it means | Where it happens |
-|---|---|---|
-| **Dispensing** | Handing over medicines against a prescription | Prescriptions and pharmacist queue |
-| **Safety** | Working on the controlled-drugs register: corrections, register incidents, inspection packs, record holds | Controlled-drugs register |
-| **Catalogue review** | Confirming or rejecting regulated medicine-list changes before they go live | Medicine list |
+| Job                  | What it means                                                                                                                                                          | Where it happens                                                   |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| **Dispensing**       | Handing over medicines against a prescription                                                                                                                          | Prescriptions and pharmacist queue                                 |
+| **Safety**           | Working on the controlled-drugs register: corrections, register incidents, inspection packs, record holds; some controlled actions also require an independent witness | Controlled-drugs register and protected controlled-stock workflows |
+| **Catalogue review** | Confirming or rejecting regulated medicine-list changes before they go live                                                                                            | Medicine list                                                      |
 
 ### The rules in plain words
 
@@ -236,7 +256,8 @@ Three pharmacy jobs carry extra risk, so DevFathom treats them differently from 
 2. **"Give them everything" does not include these jobs.** If you give someone all permissions, or all pharmacy permissions, they still will **not** be able to dispense, work on the controlled-drugs register or review the catalogue. You must give each of the three by name.
 3. **Each job is checked on its own.** Having one of them does not give you the others.
 4. **One person may hold all three.** In a shop with a single pharmacist, that pharmacist can be given all three jobs.
-5. **Taking permissions away.** DevFathom checks permissions in this order and stops at the first match:
+5. **Capability is not the same as independent approval.** The Owner / Operator role lets one person start any of the three protected jobs, but it does not let that person witness their own controlled purchase or controlled-stock restoration. Those actions require a different qualified user to enter an active, fresh PIN. DevFathom records both the actor and witness in the audit trail.
+6. **Taking permissions away.** DevFathom checks permissions in this order and stops at the first match:
    1. a block set for that person
    2. an allow set for that person
    3. a block on their role
@@ -245,9 +266,11 @@ Three pharmacy jobs carry extra risk, so DevFathom treats them differently from 
    So a block set on the person always removes the job. A block on their role does **not** remove it if the person also has their own allow. To take a job away from one person for certain, block it on that person. A block on "all permissions" also removes all three jobs. TODO(confirm): this order may change when the technical team's planned fix lands (`fix/abac-deny-precedence`).
 
 ### Why it works this way
+
 Keeping these jobs separate means a mistake or misuse in one place is less likely to go unnoticed. It also means owners always decide, on purpose, who can hand over medicines and who can change the medicine list.
 
 ### Which ready-made roles include them
+
 - **Pharmacist** includes dispensing and catalogue review. Safety must be given separately.
 - **Owner / Operator** includes all three. It is optional and is only given on purpose, for example to an owner who is also the pharmacist.
 - No other ready-made role includes any of the three, including **Owner**.
@@ -255,8 +278,9 @@ Keeping these jobs separate means a mistake or misuse in one place is less likel
 These ready-made roles are still provisional and may change.
 
 ### Setting it up in your shop
+
 - **Several pharmacists:** give dispensing to each pharmacist, and safety to those who keep the controlled-drugs register. Consider giving catalogue review to only one or two trusted people.
-- **One pharmacist:** give that pharmacist all three jobs (for example with the Owner / Operator role).
+- **One pharmacist:** that pharmacist may hold all three jobs (for example with the Owner / Operator role) and can complete workflows that do not require an independent witness. Controlled purchasing and controlled-stock restoration still need a different qualified user's active, fresh PIN; the owner cannot witness their own action. Arrange qualified cover for those steps rather than sharing a PIN or bypassing the audit trail.
 - **Counter staff who are not pharmacists:** usually give none of the three. TODO(confirm): what counter staff can do with a prescription without these jobs.
 
 TODO(confirm): where in the app owners give these jobs to staff.

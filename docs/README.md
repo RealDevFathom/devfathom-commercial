@@ -4,13 +4,13 @@ This is the starting point for all DevFathom documentation. Find the row that de
 
 ## Start here
 
-| You are… | Start with | Then read |
-|---|---|---|
-| A pharmacy owner or manager | [Product overview](product/overview.md) | [Pharmacy guide](product/pharmacy-guide.md) |
-| A pharmacist or counter staff member | [Pharmacy guide](product/pharmacy-guide.md) | [Glossary](product/glossary.md) |
-| In sales, or running a pilot with a customer | [Product overview](product/overview.md) | [Pharmacy guide](product/pharmacy-guide.md) |
-| New to the words we use | [Glossary](product/glossary.md) | |
-| An engineer or coding agent | Coming soon: developer onboarding guide | For now, use [LOCAL_SETUP.md](LOCAL_SETUP.md) and [technical-overview.md](technical-overview.md) |
+| You are…                                     | Start with                                  | Then read                                                                                        |
+| -------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| A pharmacy owner or manager                  | [Product overview](product/overview.md)     | [Pharmacy guide](product/pharmacy-guide.md)                                                      |
+| A pharmacist or counter staff member         | [Pharmacy guide](product/pharmacy-guide.md) | [Glossary](product/glossary.md)                                                                  |
+| In sales, or running a pilot with a customer | [Product overview](product/overview.md)     | [Pharmacy guide](product/pharmacy-guide.md)                                                      |
+| New to the words we use                      | [Glossary](product/glossary.md)             |                                                                                                  |
+| An engineer or coding agent                  | Coming soon: developer onboarding guide     | For now, use [LOCAL_SETUP.md](LOCAL_SETUP.md) and [technical-overview.md](technical-overview.md) |
 
 ## What is in this folder today
 
@@ -36,6 +36,10 @@ Some older files in this folder (for example `azure-deployment.md`) describe a p
 ## Rules for people writing these docs
 
 - **Never put usernames, passwords or other login details in any doc.**
+- Use the status vocabulary from the [living status ledger](status-ledger.md) (for example,
+  **IMPLEMENTED**, **IN PROGRESS**, **PARTIAL**, **PLANNED**, **BLOCKED** and **FUTURE**) when making
+  feature-status claims. "Complete" in an older document is not enough evidence; if another document
+  disagrees, the current status ledger wins until the documents are reconciled.
 - Take screenshots only from the demo pharmacy and the demo admin account on the test system, never from a real customer's account.
 - If you are not sure something is true, write `TODO(confirm)` next to it rather than guessing.
 - Content about DRAP rules and the controlled-drugs register stays marked **DRAFT – pending legal review** until a pharmacist or legal reviewer has checked it.
