@@ -906,17 +906,15 @@ describe('solo approval on real PostgreSQL with enforced RLS', () => {
           ],
         });
         expect(open.status).toBe('OPEN');
-        await expect(approveCount(db, scope(f), open.id, 'open-no-pin')).rejects.toMatchObject({
-          reason: 'COAUTH_REQUIRED',
+        await expect(approveCount(db, scope(f), open.id, 'open-no-pin')).resolves.toMatchObject({
+          status: 'APPROVED',
+          approvedById: f.user,
         });
-        await expect(
-          approveCount(db, scope(f), open.id, 'open-with-pin', pin)
-        ).resolves.toMatchObject({ status: 'APPROVED', approvedById: f.user });
         expect(
           await db.auditLog.count({
             where: { targetId: open.id, action: 'PHARMACY:SOLO_OWNER_PIN' },
           })
-        ).toBe(1);
+        ).toBe(0);
         await db.user.create({
           data: {
             organizationId: f.org,

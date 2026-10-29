@@ -86,6 +86,39 @@ it('fails closed when an Rx pharmacist has an explicit capability denial', async
     })
   ).rejects.toMatchObject({ code: 'FORBIDDEN' });
 });
+it('fails closed when an owner or manager has an explicit capability denial', async () => {
+  mocks.can.mockResolvedValue(false);
+  await expect(
+    enforceOperatingMode(fixture('STAFFED', 'manager') as never, scope, {
+      kind: 'ADJUSTMENT',
+      makerIds: ['maker'],
+      targetType: 'WriteOff',
+      targetId: 'write-off',
+    })
+  ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(mocks.can).toHaveBeenCalledWith(
+    expect.objectContaining({ id: 'actor' }),
+    'pharmacy:inventory',
+    undefined,
+    expect.objectContaining({ db: expect.anything() })
+  );
+});
+
+it('allows an organization-wide approval without inventing a branch', async () => {
+  await expect(
+    enforceOperatingMode(
+      fixture('STAFFED', 'manager') as never,
+      { ...scope, branchId: null },
+      {
+        kind: 'OVERRIDE',
+        makerIds: ['maker'],
+        targetType: 'PharmacyPackPrice',
+        targetId: 'pack',
+      }
+    )
+  ).resolves.toHaveProperty('policy', 'PHARMACY:STAFFED:OVERRIDE');
+  expect(mocks.branch).not.toHaveBeenCalled();
+});
 it('fails closed when approval evidence cannot be persisted', async () => {
   const db = fixture('STAFFED');
   db.auditLog.create.mockRejectedValue(new Error('audit unavailable') as never);

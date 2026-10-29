@@ -314,6 +314,8 @@ function ScopedPharmacyCounterConsole({
   const [submittedPatientQuery, setSubmittedPatientQuery] = useState('');
   const [rxApprovalPin, setRxApprovalPin] = useState('');
   const [rxCheckerId, setRxCheckerId] = useState('');
+  const [overrideApprovalPin, setOverrideApprovalPin] = useState('');
+  const [overrideCheckerId, setOverrideCheckerId] = useState('');
   const [controlledAuth, setControlledAuth] = useState({
     prescriptionLineId: '',
     staffProfileId: '',
@@ -369,6 +371,10 @@ function ScopedPharmacyCounterConsole({
   const rxApproversQuery = trpc.pharmacySales.rxApprovers.useQuery(
     { branchId },
     { enabled: Boolean(branchId) }
+  );
+  const approvalCheckersQuery = trpc.pharmacySales.approvalCheckers.useQuery(
+    { branchId },
+    { enabled: Boolean(branchId && lotOverride) }
   );
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(
     branchId ? { branchId } : undefined,
@@ -958,6 +964,8 @@ function ScopedPharmacyCounterConsole({
           idempotencyKey: `counter:${activeSaleId}:${row.medicineId}:${option.packLevelId}:${option.kind}:${units}${overrideLotId ? `:${overrideLotId}` : ''}`,
           ...(overrideLotId && batchOverride
             ? {
+                approvalPin: overrideApprovalPin || undefined,
+                approvedByUserId: overrideCheckerId || undefined,
                 override: {
                   inventoryLotId: overrideLotId,
                   reason: batchOverride.reason.trim(),
@@ -975,6 +983,8 @@ function ScopedPharmacyCounterConsole({
         await utils.pharmacySafety.controlledRegister.invalidate();
         await utils.pharmacySales.counterSearch.invalidate();
         setLotOverride(null);
+        setOverrideApprovalPin('');
+        setOverrideCheckerId('');
         setNotice({
           tone: 'success',
           message: `${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
@@ -1009,6 +1019,8 @@ function ScopedPharmacyCounterConsole({
       ensureSale,
       focusSearch,
       lotOverride,
+      overrideApprovalPin,
+      overrideCheckerId,
       preview,
       quantity,
       refreshCart,
@@ -2063,6 +2075,51 @@ function ScopedPharmacyCounterConsole({
                   onChange={setLotOverride}
                   onRetry={() => void lotOptionsQuery.refetch()}
                 />
+                {lotOverride ? (
+                  <div className="space-y-3 rounded-[var(--radius-sm)] border border-border-subtle bg-surface-sunken p-3">
+                    {approvalCheckersQuery.data?.mode !== 'SOLO' ? (
+                      <div>
+                        <Label htmlFor="batch-override-checker">Independent approver</Label>
+                        <select
+                          id="batch-override-checker"
+                          className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm"
+                          value={overrideCheckerId}
+                          onChange={(event) => setOverrideCheckerId(event.target.value)}
+                          disabled={
+                            busy || approvalCheckersQuery.isLoading || approvalCheckersQuery.isError
+                          }
+                        >
+                          <option value="">Select owner or manager</option>
+                          {approvalCheckersQuery.data?.users.map((checker) => (
+                            <option key={checker.id} value={checker.id}>
+                              {checker.name || 'Unnamed approver'}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : null}
+                    <Label htmlFor="batch-override-pin">
+                      {approvalCheckersQuery.data?.mode === 'SOLO' ? 'Owner PIN' : 'Approver PIN'}
+                    </Label>
+                    <Input
+                      id="batch-override-pin"
+                      type="password"
+                      autoComplete="off"
+                      inputMode="numeric"
+                      pattern="[0-9]{4,8}"
+                      minLength={4}
+                      maxLength={8}
+                      value={overrideApprovalPin}
+                      onChange={(event) => setOverrideApprovalPin(event.target.value)}
+                      disabled={busy}
+                    />
+                    {approvalCheckersQuery.isError ? (
+                      <p role="alert" className="text-sm text-destructive">
+                        Unable to load batch override approvers. Retry this page.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             ) : (
               <p className="text-sm text-text-muted">

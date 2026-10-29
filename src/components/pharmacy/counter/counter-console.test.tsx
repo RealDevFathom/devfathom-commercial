@@ -106,6 +106,7 @@ vi.mock('@/lib/trpc', () => {
         'drawerStatus',
         'create',
         'rxApprovers',
+        'approvalCheckers',
         'addLine',
         'transition',
         'tender',
@@ -246,6 +247,7 @@ beforeEach(() => {
     'counterPatientPanel',
     'controlledPharmacists',
     'rxApprovers',
+    'approvalCheckers',
   ])
     mocks.queries[name] = query();
   mocks.queries.drawerStatus = query({ openDrawer: null });

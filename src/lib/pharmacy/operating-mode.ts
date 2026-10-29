@@ -7,6 +7,14 @@ import { authorizeSoloApproval, verifyPharmacyUserPin } from './solo-approval';
 
 export type PharmacyApprovalKind =
   'RX' | 'OVERRIDE' | 'REFUND' | 'RETURN' | 'DISCOUNT' | 'ADJUSTMENT' | 'PURCHASE';
+
+const NON_CLINICAL_APPROVAL_CAPABILITY = {
+  OVERRIDE: 'pharmacy:counter',
+  REFUND: 'pharmacy:counter',
+  RETURN: 'pharmacy:counter',
+  DISCOUNT: 'pharmacy:counter',
+  ADJUSTMENT: 'pharmacy:inventory',
+} as const satisfies Record<Exclude<PharmacyApprovalKind, 'RX' | 'PURCHASE'>, string>;
 /** Call inside the document transaction. Identity and roles always come from storage. */
 export async function enforceOperatingMode(
   db: ScopedDb,
@@ -41,9 +49,10 @@ export async function enforceOperatingMode(
       return { actorId: scope.actorId, policy: 'PHARMACY:SOLO_OWNER_PIN' };
   } else {
     const checkerId = input.checkerId ?? scope.actorId;
-    if (!scope.branchId)
-      throw new TRPCError({ code: 'FORBIDDEN', message: 'Approval branch is required.' });
-    await assertBranchAssignment(db, { ...scope, branchId: scope.branchId, actorId: checkerId });
+    // Organization-wide documents (for example the default pack price) have no
+    // branch. Branch-scoped documents still require a live assignment.
+    if (scope.branchId)
+      await assertBranchAssignment(db, { ...scope, branchId: scope.branchId, actorId: checkerId });
     const actor = await db.user.findFirst({
       where: { id: checkerId, organizationId: scope.organizationId, status: 'ACTIVE' },
       select: { organizationRole: { select: { key: true } } },
@@ -62,7 +71,13 @@ export async function enforceOperatingMode(
           ))
         : input.kind === 'PURCHASE'
           ? await actorCanProcure(db, checkerId)
-          : role === 'owner' || role === 'manager';
+          : (role === 'owner' || role === 'manager') &&
+            (await can(
+              { id: checkerId, role: 'EMPLOYEE', organizationId: scope.organizationId },
+              NON_CLINICAL_APPROVAL_CAPABILITY[input.kind],
+              undefined,
+              { db }
+            ));
     if (eligible && !input.makerIds.includes(checkerId)) {
       if (
         checkerId !== scope.actorId &&
