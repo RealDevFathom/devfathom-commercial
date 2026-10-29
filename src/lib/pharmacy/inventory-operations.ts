@@ -165,6 +165,15 @@ export async function writeOff(
 ) {
   assertPositive(input.units);
   if (input.witnessId === scope.actorId) throw new PharmacyInventoryError('COAUTH_REQUIRED');
+  const witness = await db.user.findFirst({
+    where: {
+      id: input.witnessId,
+      organizationId: scope.organizationId,
+      status: 'ACTIVE',
+    },
+    select: { id: true },
+  });
+  if (!witness) throw new PharmacyInventoryError('COAUTH_REQUIRED');
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: {
       id: input.inventoryLotId,
