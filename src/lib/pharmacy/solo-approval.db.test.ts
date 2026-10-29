@@ -1150,6 +1150,62 @@ it('runs catalogue, dispensing, PV and a controlled prescription sale as the rea
       expect(
         await db.prescriptionFill.count({ where: { prescriptionLineId: rx.lines[0].id } })
       ).toBe(0);
+      const assertRefusedWithoutEvidence = async (request: typeof input) => {
+        expect(await api.addLine(request)).toHaveProperty('blocked');
+        expect(
+          await db.auditLog.count({
+            where: { targetId: sale.id, action: 'PHARMACY:SOLO_OWNER_PIN' },
+          })
+        ).toBe(0);
+        expect(await db.pharmacySaleLine.count({ where: { saleId: sale.id } })).toBe(0);
+        expect(
+          await db.prescriptionFill.count({ where: { prescriptionLineId: rx.lines[0].id } })
+        ).toBe(0);
+        expect(
+          await db.pharmacyControlledRegisterEntry.count({
+            where: { prescriptionLineId: rx.lines[0].id, entryKind: 'SALE' },
+          })
+        ).toBe(0);
+      };
+      // A valid owner PIN must not certify a later quantity, reference or consent refusal.
+      await assertRefusedWithoutEvidence({ ...input, quantity: 2 });
+      await assertRefusedWithoutEvidence({
+        ...input,
+        controlledAuthorization: {
+          ...input.controlledAuthorization,
+          prescriptionLineId: 'missing',
+        },
+      });
+      await db.patientConsent.create({
+        data: {
+          patientId: patient.id,
+          purpose: 'DISPENSING',
+          channel: 'IN_PERSON',
+          version: 2,
+          granted: false,
+          revokedAt: new Date(),
+          recordedByUserId: f.user,
+        },
+      });
+      await assertRefusedWithoutEvidence(input);
+      await assertRefusedWithoutEvidence({
+        ...input,
+        controlledAuthorization: {
+          ...input.controlledAuthorization,
+          emergency: true,
+          prescriberName: 'Emergency prescriber',
+        },
+      } as typeof input);
+      await db.patientConsent.create({
+        data: {
+          patientId: patient.id,
+          purpose: 'DISPENSING',
+          channel: 'IN_PERSON',
+          version: 3,
+          granted: true,
+          recordedByUserId: f.user,
+        },
+      });
       const result = await api.addLine(input);
       expect(result).toHaveProperty('line');
       const entry = await db.pharmacyControlledRegisterEntry.findFirstOrThrow({
@@ -2098,4 +2154,150 @@ it('serializes concurrent enrollment through the request-scoped database facade'
     },
     { skipDrain: true }
   );
+});
+
+it.each(['owner', 'ADMIN'] as const)(
+  'resets and rotates pharmacy-only PINs for a fresh %s, with scoped audit and revoked old secrets',
+  async (kind) => {
+    const f = await fixture(kind);
+    const { verifyOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+    await withTenantDb(
+      f.org,
+      async (db) => {
+        const context = {
+          db,
+          entitlements: { organizationId: f.org, enabledModules: ['pharmacy-core'], modules: [] },
+          session: {
+            user: {
+              id: f.user,
+              organizationId: f.org,
+              role: kind === 'ADMIN' ? 'ADMIN' : 'EMPLOYEE',
+              status: 'ACTIVE',
+              passwordAuthenticatedAt: Date.now(),
+            },
+          },
+          organization: { id: f.org, vertical: 'PHARMACY' },
+          support: null,
+          requestMeta: { ip: null, userAgent: null },
+          audit: { detail: {}, db },
+        };
+        const api = pharmacyPinRouter.createCaller(context as never);
+        const request = { branchId: f.branch, userId: f.user, pin: '739251' };
+        for (const stamp of [undefined, Date.now() - 301000, Date.now() + 60000]) {
+          await expect(
+            pharmacyPinRouter
+              .createCaller({
+                ...context,
+                session: { user: { ...context.session.user, passwordAuthenticatedAt: stamp } },
+              } as never)
+              .reset(request)
+          ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        }
+        await expect(api.reset({ ...request, branchId: 'foreign' })).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+        });
+        await expect(api.reset({ ...request, userId: 'foreign' })).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+        });
+        await expect(
+          pharmacyPinRouter
+            .createCaller({ ...context, organization: { id: f.org, vertical: 'AGENCY' } } as never)
+            .reset(request)
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(
+          pharmacyPinRouter
+            .createCaller({
+              ...context,
+              entitlements: { organizationId: f.org, enabledModules: [], modules: [] },
+            } as never)
+            .reset(request)
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(
+          api.reset({ ...request, passwordAuthenticatedAt: Date.now() } as never)
+        ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        const employee = await db.user.create({
+          data: {
+            name: 'Branch staff',
+            email: `${randomUUID()}@example.invalid`,
+            department: 'PHARMACY',
+            title: 'Staff',
+            role: 'EMPLOYEE',
+            status: 'ACTIVE',
+          },
+        });
+        await db.pharmacyBranchAssignment.create({
+          data: { branchId: f.branch, userId: employee.id, active: true },
+        });
+        const employeeApi = pharmacyPinRouter.createCaller({
+          ...context,
+          session: { user: { ...context.session.user, id: employee.id, role: 'EMPLOYEE' } },
+        } as never);
+        await expect(employeeApi.reset(request)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(await api.reset({ ...request, userId: employee.id })).toEqual({ enrolled: true });
+        await db.user.update({ where: { id: employee.id }, data: { status: 'INACTIVE' } });
+        await expect(api.reset({ ...request, userId: employee.id })).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+        });
+        for (const nextPin of ['739251', '682914']) {
+          expect(await api.reset({ ...request, pin: nextPin })).toEqual({ enrolled: true });
+          const live = await db.restaurantOperatorCredential.findMany({
+            where: { staffProfileId: f.profile, type: 'PIN', revokedAt: null },
+          });
+          expect(live).toHaveLength(1);
+          expect(await verifyOperatorCredential('PIN', nextPin, live[0].credentialHash)).toBe(true);
+          expect(await verifyOperatorCredential('PIN', pin, live[0].credentialHash)).toBe(false);
+        }
+        const logs = await db.auditLog.findMany({
+          where: { actorId: f.user, action: 'PHARMACY:PIN_RESET' },
+        });
+        expect(logs).toHaveLength(3);
+        expect(
+          logs.find((log) => (log.metadata as { userId?: string })?.userId === f.user)?.metadata
+        ).toMatchObject({
+          branchId: f.branch,
+          userId: f.user,
+          reauthentication: 'PASSWORD',
+        });
+        expect(JSON.stringify(logs)).not.toMatch(/739251|682914|credentialHash/);
+      },
+      { skipDrain: true }
+    );
+  }
+);
+
+it('bootstrap migration promotes only an ACTIVE sole admin and leaves inactive/on-leave admins unchanged', async () => {
+  const { readFileSync } = await import('node:fs');
+  const fixtures = await Promise.all([fixture(), fixture(), fixture()]);
+  await owner.query('BEGIN');
+  try {
+    const statuses = ['ACTIVE', 'INACTIVE', 'ON_LEAVE'];
+    const adminRoles: string[] = [];
+    for (const [index, f] of fixtures.entries()) {
+      const roleId = randomUUID();
+      adminRoles.push(roleId);
+      await owner.query(
+        `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,'admin','Admin',true,now())`,
+        [roleId, f.org]
+      );
+      await owner.query(
+        `UPDATE users SET "organizationRoleId"=$1,status=$2::"UserStatus" WHERE id=$3`,
+        [roleId, statuses[index], f.user]
+      );
+    }
+    const sql = readFileSync(
+      'prisma/migrations/20261029106000_pharmacy_bootstrap_and_pv_guard/migration.sql',
+      'utf8'
+    ).replace(/^BEGIN;|COMMIT;/gm, '');
+    await owner.query(sql);
+    for (const [index, f] of fixtures.entries()) {
+      const { rows } = await owner.query(
+        `SELECT r.key,u."organizationRoleId" FROM users u JOIN organization_roles r ON r.id=u."organizationRoleId" WHERE u.id=$1`,
+        [f.user]
+      );
+      expect(rows[0].key).toBe(index === 0 ? 'owner' : 'admin');
+      if (index > 0) expect(rows[0].organizationRoleId).toBe(adminRoles[index]);
+    }
+  } finally {
+    await owner.query('ROLLBACK');
+  }
 });

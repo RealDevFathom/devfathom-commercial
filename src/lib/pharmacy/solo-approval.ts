@@ -96,6 +96,16 @@ export async function authorizeSoloApproval(
   pin?: string
 ): Promise<boolean> {
   if (!(await verifySoloOwnerPin(db, scope, pin))) return false;
+  await recordSoloApproval(db, scope, target);
+  return true;
+}
+
+/** Call only after PIN verification and all refusal checks, within the same transaction. */
+export async function recordSoloApproval(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string | null; actorId: string },
+  target: { type: string; id: string }
+): Promise<void> {
   const { organizationId, branchId, actorId } = scope;
   const audit = await db.auditLog.create({
     data: {
@@ -115,5 +125,4 @@ export async function authorizeSoloApproval(
     },
   });
   await db.$queryRaw`SELECT set_config('app.pharmacy_solo_audit_id', ${audit.id}, true)`;
-  return true;
 }

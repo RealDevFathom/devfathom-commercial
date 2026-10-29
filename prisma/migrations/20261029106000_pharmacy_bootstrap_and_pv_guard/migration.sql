@@ -7,7 +7,7 @@ CREATE TEMP TABLE pharmacy_bootstrap_owners ON COMMIT DROP AS
 SELECT u.id FROM users u
 JOIN organizations o ON o.id=u."organizationId" AND o.vertical='PHARMACY'
 JOIN organization_roles r ON r.id=u."organizationRoleId" AND r."organizationId"=o.id
-WHERE u.role='ADMIN' AND r.key='admin' AND r."isSystem"
+WHERE u.role='ADMIN' AND u.status='ACTIVE' AND r.key='admin' AND r."isSystem"
 AND NOT EXISTS (SELECT 1 FROM users other WHERE other."organizationId"=o.id AND other.id<>u.id AND other.status='ACTIVE');
 -- Preserve explicit DENYs when binding that bootstrap identity to the owner role.
 INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt")

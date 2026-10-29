@@ -1,6 +1,10 @@
 import { isPharmacyOwner } from '@/lib/pharmacy/owner';
 import { assertBranchAssignment } from '@/lib/pharmacy/branch-assignment';
-import { authorizeSoloApproval, pinProfileBelongsToActor } from '@/lib/pharmacy/solo-approval';
+import {
+  verifySoloOwnerPin,
+  recordSoloApproval,
+  pinProfileBelongsToActor,
+} from '@/lib/pharmacy/solo-approval';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import {
@@ -1075,15 +1079,7 @@ export const pharmacySalesRouter = router({
           // Serialize credential attempts; returning a denial commits durable lockout counters.
 
           const solo = await pinProfileBelongsToActor(db, scope, authorization.staffProfileId);
-          if (
-            solo &&
-            !(await authorizeSoloApproval(
-              db,
-              scope,
-              { type: 'ControlledSale', id: input.saleId },
-              authorization.pin
-            ))
-          ) {
+          if (solo && !(await verifySoloOwnerPin(db, scope, authorization.pin))) {
             return blocked;
           }
           if (!solo) {
@@ -1174,6 +1170,8 @@ export const pharmacySalesRouter = router({
               return { blocked: 'Patient dispensing consent is required.' };
             }
             await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
+            if (solo)
+              await recordSoloApproval(db, scope, { type: 'ControlledSale', id: input.saleId });
             const result = await addSaleLine(db, scope, input);
             await appendControlledSaleEntries(db, {
               organizationId: scope.organizationId,
@@ -1265,6 +1263,8 @@ export const pharmacySalesRouter = router({
           });
           if (!consent?.granted || consent.revokedAt)
             return { blocked: 'Patient dispensing consent is required.' };
+          if (solo)
+            await recordSoloApproval(db, scope, { type: 'ControlledSale', id: input.saleId });
           const result = await addSaleLine(db, scope, input);
           await db.prescriptionFill.create({
             data: {
