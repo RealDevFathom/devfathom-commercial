@@ -2,7 +2,7 @@ name: QA gate
 
 on:
   push:
-    branches: [restaurantv2]
+    branches: [restaurantv2, develop]
   pull_request:
     types: [opened, synchronize, reopened, labeled]
     branches:
