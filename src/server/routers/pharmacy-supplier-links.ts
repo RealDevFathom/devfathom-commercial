@@ -13,6 +13,7 @@ import {
   uploadSupplierDocument,
 } from '@/lib/pharmacy/supplier-action-links';
 import { recordAudit } from '@/server/audit';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const id = z.string().trim().min(1).max(200);
 const kind = z.enum([
@@ -152,8 +153,11 @@ export const pharmacySupplierLinksRouter = router({
       let result;
       try {
         result = await ctx.db.$transaction(async (tx) => {
-          const submission = await submitSupplierEvidence(tx, input);
-          await auditSupplierLinkAction(ctx, tx, target, 'submit', 'SUCCESS', input.kind);
+          // ScopedDb deliberately exposes the application-facing Prisma shape;
+          // an interactive client has the same delegates but omits lifecycle APIs.
+          const scopedTx = tx as ScopedDb;
+          const submission = await submitSupplierEvidence(scopedTx, input);
+          await auditSupplierLinkAction(ctx, scopedTx, target, 'submit', 'SUCCESS', input.kind);
           return submission;
         });
       } catch (error) {
@@ -183,7 +187,8 @@ export const pharmacySupplierLinksRouter = router({
       let upload: Awaited<ReturnType<typeof uploadSupplierDocument>> | undefined;
       try {
         upload = await ctx.db.$transaction(async (tx) => {
-          const stored = await uploadSupplierDocument(tx, {
+          const scopedTx = tx as ScopedDb;
+          const stored = await uploadSupplierDocument(scopedTx, {
             ...input,
             content: Buffer.from(input.contentBase64, 'base64'),
           });
@@ -192,7 +197,7 @@ export const pharmacySupplierLinksRouter = router({
           upload = stored;
           await auditSupplierLinkAction(
             ctx,
-            tx,
+            scopedTx,
             target,
             'uploadDocument',
             'SUCCESS',

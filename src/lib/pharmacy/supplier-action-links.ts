@@ -303,9 +303,10 @@ export async function uploadSupplierDocument(
   });
   if (existing) return { document: existing, storedObjectCreated: false };
 
-  // Include the submission in the key so compensation can never remove an
-  // object referenced by an earlier submission with identical contents.
-  const objectName = `supplier-po/${link.id}/${submission.id}/${file.sha256}`;
+  // Every attempt owns a distinct object. Concurrent idempotent requests can
+  // both pass the preflight lookup before one wins the document unique key;
+  // the loser must only compensate its own upload, never the winner's object.
+  const objectName = `supplier-po/${link.id}/${submission.id}/${file.sha256}/${randomUUID()}`;
   await putUpload(link.organizationId, objectName, input.content, file.mimeType);
   let document;
   try {
