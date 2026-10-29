@@ -77,7 +77,13 @@ import {
 } from '@/lib/pharmacy/counter-browser-print';
 import { workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import type { LostSaleOutcome } from '@/lib/pharmacy/lost-sales';
 
 type Notice = {
@@ -1373,78 +1379,75 @@ function ScopedPharmacyCounterConsole({
   const [outcomeSheetOpen, setOutcomeSheetOpen] = useState(false);
   const [notifyWhenBack, setNotifyWhenBack] = useState(false);
   const [notifyPhone, setNotifyPhone] = useState('');
-  const captureShortfall = useCallback(async (outcome: LostSaleOutcome = 'UNKNOWN') => {
-    if (busy || !branchAuthorized) return;
-    const requested = activeRow?.displayName ?? query.trim();
-    if (!requested) {
-      setNotice({ tone: 'warning', message: 'Search for the medicine first, then capture it.' });
-      return;
-    }
-    const capturedUnits = activeRow ? shortfallUnits : quantity;
-    if (!Number.isSafeInteger(capturedUnits) || capturedUnits <= 0) {
-      setNotice({ tone: 'warning', message: 'There is no stock shortfall to capture.' });
-      return;
-    }
-    setPending('captureDemand');
-    setNotice(null);
-    try {
-      await captureDemand.mutateAsync({
-        branchId,
-        ...(saleId ? { saleId } : {}),
-        ...(activeRow ? { requestedMedicineId: activeRow.medicineId } : {}),
-        requestedText: requested,
-        saleUnit: 'UNIT',
-        quantity: capturedUnits,
-        reason: activeRow ? 'STOCKOUT' : 'NOT_CARRIED',
-        inventoryRuleSnapshot: {
-          query: query.trim(),
-          requestedQuantity: quantity,
-          requestedSaleUnit: saleUnit ?? 'UNIT',
-          canonicalUnitsPerSaleUnit: selectedOption?.canonicalUnitsPerSaleUnit ?? 1,
-          requestedCanonicalUnits: requestedCanonicalUnits ?? quantity,
-          shortfallCanonicalUnits: capturedUnits,
-          onHandUnits: activeRow?.onHandUnits ?? 0,
-          blocked: activeRow?.blocked ?? [],
-          capturedAt: new Date().toISOString(),
-        },
-        outcome,
-        notifyOptIn: notifyWhenBack && notifyPhone.trim().length >= 7,
-        ...(notifyWhenBack && notifyPhone.trim().length >= 7 ? { notifyPhone } : {}),
-      });
-      setOutcomeSheetOpen(false);
-      setNotice({
-        tone: 'success',
-        message: `Captured ${capturedUnits} canonical units of unfulfilled demand for ${requested}.`,
-      });
-      focusSearch();
-    } catch (error) {
-      setNotice({ tone: 'danger', message: messageFrom(error) });
-    } finally {
-      setPending(null);
-    }
-  }, [
-    activeRow,
-    branchAuthorized,
-    branchId,
-    busy,
-    captureDemand,
-    focusSearch,
-    query,
-    quantity,
-    notifyPhone,
-    notifyWhenBack,
-    saleId,
-    saleUnit,
-    selectedOption,
-    requestedCanonicalUnits,
-    shortfallUnits,
-  ]);
-
-  useEffect(() => {
-    if (!outcomeSheetOpen) return;
-    const timer = window.setTimeout(() => void captureShortfall('UNKNOWN'), 5_000);
-    return () => window.clearTimeout(timer);
-  }, [captureShortfall, outcomeSheetOpen]);
+  const captureShortfall = useCallback(
+    async (outcome: LostSaleOutcome = 'UNKNOWN') => {
+      if (busy || !branchAuthorized) return;
+      const requested = activeRow?.displayName ?? query.trim();
+      if (!requested) {
+        setNotice({ tone: 'warning', message: 'Search for the medicine first, then capture it.' });
+        return;
+      }
+      const capturedUnits = activeRow ? shortfallUnits : quantity;
+      if (!Number.isSafeInteger(capturedUnits) || capturedUnits <= 0) {
+        setNotice({ tone: 'warning', message: 'There is no stock shortfall to capture.' });
+        return;
+      }
+      setPending('captureDemand');
+      setNotice(null);
+      try {
+        await captureDemand.mutateAsync({
+          branchId,
+          ...(saleId ? { saleId } : {}),
+          ...(activeRow ? { requestedMedicineId: activeRow.medicineId } : {}),
+          requestedText: requested,
+          saleUnit: 'UNIT',
+          quantity: capturedUnits,
+          reason: activeRow ? 'STOCKOUT' : 'NOT_CARRIED',
+          inventoryRuleSnapshot: {
+            query: query.trim(),
+            requestedQuantity: quantity,
+            requestedSaleUnit: saleUnit ?? 'UNIT',
+            canonicalUnitsPerSaleUnit: selectedOption?.canonicalUnitsPerSaleUnit ?? 1,
+            requestedCanonicalUnits: requestedCanonicalUnits ?? quantity,
+            shortfallCanonicalUnits: capturedUnits,
+            onHandUnits: activeRow?.onHandUnits ?? 0,
+            blocked: activeRow?.blocked ?? [],
+            capturedAt: new Date().toISOString(),
+          },
+          outcome,
+          notifyOptIn: notifyWhenBack,
+          ...(notifyWhenBack ? { notifyPhone, notifyConsentRecorded: true as const } : {}),
+        });
+        setOutcomeSheetOpen(false);
+        setNotice({
+          tone: 'success',
+          message: `Captured ${capturedUnits} canonical units of unfulfilled demand for ${requested}.`,
+        });
+        focusSearch();
+      } catch (error) {
+        setNotice({ tone: 'danger', message: messageFrom(error) });
+      } finally {
+        setPending(null);
+      }
+    },
+    [
+      activeRow,
+      branchAuthorized,
+      branchId,
+      busy,
+      captureDemand,
+      focusSearch,
+      query,
+      quantity,
+      notifyPhone,
+      notifyWhenBack,
+      saleId,
+      saleUnit,
+      selectedOption,
+      requestedCanonicalUnits,
+      shortfallUnits,
+    ]
+  );
 
   const declineVisibleSubstitutes = useCallback(async () => {
     if (!activeRow || busy) return;
@@ -2047,23 +2050,36 @@ function ScopedPharmacyCounterConsole({
                   </Button>
                 ) : null}
                 <Sheet open={outcomeSheetOpen} onOpenChange={setOutcomeSheetOpen} modal={false}>
-                  <SheetContent side="bottom" className="p-4" showCloseButton={false}>
+                  <SheetContent side="bottom" className="p-4" showCloseButton>
                     <SheetHeader className="p-0">
                       <SheetTitle>What happened at the counter?</SheetTitle>
                       <SheetDescription>
-                        Optional. Choose once; Unknown is saved after 5 seconds. Tender stays available.
+                        Choose an outcome when ready, or close this sheet without saving. Tender
+                        stays available.
                       </SheetDescription>
                     </SheetHeader>
-                    <div className="flex flex-wrap gap-2" role="group" aria-label="Unfulfilled demand outcome">
-                      {([
-                        ['SUBSTITUTE_TAKEN', 'Substitute taken'],
-                        ['WILL_RETURN', 'Will return'],
-                        ['WENT_ELSEWHERE', 'Went elsewhere'],
-                        ['ORDERED_FOR_CUSTOMER', 'Ordered for customer'],
-                        ['UNKNOWN', 'Unknown'],
-                      ] as const).map(([outcome, label]) => (
-                        <Button key={outcome} type="button" variant="outline" disabled={busy} onClick={() => void captureShortfall(outcome)}>
-                          {label}
+                    <div
+                      className="flex flex-wrap gap-2"
+                      role="group"
+                      aria-label="Unfulfilled demand outcome"
+                    >
+                      {(
+                        [
+                          ['SUBSTITUTE_TAKEN', 'Substitute taken'],
+                          ['WILL_RETURN', 'Will return'],
+                          ['WENT_ELSEWHERE', 'Went elsewhere'],
+                          ['ORDERED_FOR_CUSTOMER', 'Ordered for customer'],
+                          ['UNKNOWN', 'Unknown'],
+                        ] as const
+                      ).map(([outcome, label]) => (
+                        <Button
+                          key={outcome}
+                          type="button"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() => void captureShortfall(outcome)}
+                        >
+                          {outcome === 'UNKNOWN' ? 'Save as unknown' : label}
                         </Button>
                       ))}
                     </div>
@@ -2082,6 +2098,9 @@ function ScopedPharmacyCounterConsole({
                         placeholder="Phone number"
                         value={notifyPhone}
                         onChange={(event) => setNotifyPhone(event.target.value)}
+                        aria-invalid={
+                          notifyPhone.trim().length > 0 && notifyPhone.trim().length < 7
+                        }
                       />
                     ) : null}
                   </SheetContent>

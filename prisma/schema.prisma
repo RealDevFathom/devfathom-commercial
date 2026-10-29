@@ -1644,10 +1644,10 @@ model UnfulfilledDemandEvent {
   closedAt              DateTime?
   capturedByUserId      String
   createdAt             DateTime                  @default(now())
-  visitId               String
-  visitType             PharmacyDemandVisitType
+  visitId               String?
+  visitType             PharmacyDemandVisitType?
   outcome               PharmacyDemandOutcome     @default(UNKNOWN)
-  requestedQty          Int
+  requestedQty          Int?
   unitPricePkr          Decimal                   @db.Decimal(12, 2)
   estLossPkr            Decimal                   @db.Decimal(12, 2)
   lossProbability       Decimal                   @db.Decimal(5, 4)
@@ -1659,7 +1659,7 @@ model UnfulfilledDemandEvent {
   freeText              String?
   matchedProductId      String?
   matchConfidence       Decimal?                  @db.Decimal(5, 4)
-  terminalId            String
+  terminalId            String?
   sale                  PharmacySale?             @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
   medicine              Medicine?                 @relation(fields: [requestedMedicineId], references: [id], onDelete: Restrict)
   customer              PharmacyPatient?          @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)

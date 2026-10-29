@@ -1386,7 +1386,7 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  captureDemand: protectedProcedure
+  captureDemand: auditedProtectedProcedure
     .input(
       z
         .object({
@@ -1418,11 +1418,20 @@ export const pharmacySalesRouter = router({
           substituteProductId: z.string().min(1).optional(),
           notifyOptIn: z.boolean().optional(),
           notifyPhone: z.string().trim().min(7).max(32).optional(),
+          notifyConsentRecorded: z.literal(true).optional(),
           freeText: z.string().trim().max(500).optional(),
           matchedProductId: z.string().min(1).optional(),
           matchConfidence: z.number().min(0).max(1).optional(),
         })
         .strict()
+        .superRefine((value, issue) => {
+          if (value.notifyOptIn && value.notifyConsentRecorded !== true)
+            issue.addIssue({
+              code: 'custom',
+              path: ['notifyConsentRecorded'],
+              message: 'Notification consent must be recorded.',
+            });
+        })
     )
     .mutation(async ({ ctx, input }) => {
       try {

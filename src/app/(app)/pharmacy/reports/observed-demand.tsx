@@ -17,6 +17,8 @@ export function ObservedDemand({
 }) {
   const events = report?.rows.reduce((total, row) => total + row._count._all, 0) ?? 0;
   const stockouts = report?.rows.filter((row) => row.reason === 'STOCKOUT') ?? [];
+  const estimatedLossPkr =
+    report?.rows.reduce((total, row) => total + Number(row._sum.estLossPkr ?? 0), 0) ?? 0;
   return (
     <SectionCard title="Observed unmet demand" titleLevel={2}>
       {!report ? (
@@ -36,12 +38,15 @@ export function ObservedDemand({
             batch filters do not apply. Events may subsequently be recovered; this is not an open
             backlog.
           </p>
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-3">
             <Stat label="Recorded demand events" value={events} />
             <Stat
               label="Stockout events"
               value={stockouts.reduce((n, row) => n + row._count._all, 0)}
             />
+            {financial ? (
+              <Stat label="Estimated lost sales (PKR)" value={estimatedLossPkr.toFixed(2)} />
+            ) : null}
           </div>
           {!events ? (
             <p className="mt-3 text-sm text-text-muted">
@@ -52,7 +57,10 @@ export function ObservedDemand({
             {report.rows.slice(0, 10).map((row, index) => (
               <li key={index}>
                 {row.requestedMedicineId ?? 'Unresolved item'} · {row.reason} · {row._count._all}{' '}
-                events · {row._sum.quantity ?? 'Unknown'} requested units
+                events · {row._sum.quantity ?? 'Unknown'} requested units ·{' '}
+                {row.visitType ?? 'Legacy'}
+                {' / '}
+                {row.outcome}
                 {financial ? (
                   <>
                     {' '}
@@ -60,6 +68,8 @@ export function ObservedDemand({
                     {row._sum.estimatedValueMinor == null
                       ? 'unavailable'
                       : `${(row._sum.estimatedValueMinor / 100).toFixed(2)} (currency unknown)`}
+                    {' · estimated loss PKR '}
+                    {Number(row._sum.estLossPkr ?? 0).toFixed(2)}
                   </>
                 ) : null}
               </li>

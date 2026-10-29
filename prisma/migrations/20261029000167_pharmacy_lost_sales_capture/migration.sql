@@ -25,19 +25,23 @@ ALTER TABLE "pharmacy_unfulfilled_demand_events"
   ADD COLUMN "matchConfidence" DECIMAL(5,4),
   ADD COLUMN "terminalId" TEXT;
 
-UPDATE "pharmacy_unfulfilled_demand_events"
-SET "visitId" = id, "visitType" = 'WALK_OUT', "requestedQty" = quantity,
-    "terminalId" = 'legacy:' || "capturedByUserId";
-
+-- Do not rewrite or exclusively lock the historical table during deploy.  The
+-- application supplies these fields for every new row; NOT VALID checks enforce
+-- that invariant immediately for new writes while allowing a later online,
+-- resumable backfill of legacy rows.
 ALTER TABLE "pharmacy_unfulfilled_demand_events"
-  ALTER COLUMN "visitId" SET NOT NULL,
-  ALTER COLUMN "visitType" SET NOT NULL,
-  ALTER COLUMN "requestedQty" SET NOT NULL,
-  ALTER COLUMN "terminalId" SET NOT NULL,
-  ADD CONSTRAINT "pharmacy_demand_requested_qty_check" CHECK ("requestedQty" > 0),
-  ADD CONSTRAINT "pharmacy_demand_loss_probability_check" CHECK ("lossProbability" BETWEEN 0 AND 1),
-  ADD CONSTRAINT "pharmacy_demand_match_confidence_check" CHECK ("matchConfidence" IS NULL OR "matchConfidence" BETWEEN 0 AND 1),
-  ADD CONSTRAINT "pharmacy_demand_notify_phone_check" CHECK (NOT "notifyOptIn" OR "notifyPhone" IS NOT NULL);
+  ADD CONSTRAINT "pharmacy_demand_capture_fields_check"
+    CHECK ("visitId" IS NOT NULL AND "visitType" IS NOT NULL AND "requestedQty" IS NOT NULL AND "terminalId" IS NOT NULL) NOT VALID,
+  ADD CONSTRAINT "pharmacy_demand_requested_qty_check" CHECK ("requestedQty" > 0) NOT VALID,
+  ADD CONSTRAINT "pharmacy_demand_loss_probability_check" CHECK ("lossProbability" BETWEEN 0 AND 1) NOT VALID,
+  ADD CONSTRAINT "pharmacy_demand_match_confidence_check" CHECK ("matchConfidence" IS NULL OR "matchConfidence" BETWEEN 0 AND 1) NOT VALID,
+  ADD CONSTRAINT "pharmacy_demand_notify_phone_check" CHECK (NOT "notifyOptIn" OR "notifyPhone" IS NOT NULL) NOT VALID,
+  ADD CONSTRAINT "pharmacy_demand_substitute_product_fk"
+    FOREIGN KEY ("organizationId", "substituteProductId") REFERENCES medicines("organizationId", id) ON DELETE RESTRICT NOT VALID,
+  ADD CONSTRAINT "pharmacy_demand_matched_product_fk"
+    FOREIGN KEY ("organizationId", "matchedProductId") REFERENCES medicines("organizationId", id) ON DELETE RESTRICT NOT VALID,
+  ADD CONSTRAINT "pharmacy_demand_resolved_sale_fk"
+    FOREIGN KEY ("organizationId", "branchId", "resolvedBySaleId") REFERENCES pharmacy_sales("organizationId", "branchId", id) ON DELETE RESTRICT NOT VALID;
 
 CREATE INDEX "ph_demand_visit_idx"
   ON "pharmacy_unfulfilled_demand_events"("organizationId", "branchId", "visitId");

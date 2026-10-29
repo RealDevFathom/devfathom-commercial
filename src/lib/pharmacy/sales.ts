@@ -354,6 +354,34 @@ async function addSaleLineWithAllocation(
       idempotencyKey: input.idempotencyKey,
     },
   });
+  // A promised return is recovered by a later purchase of the requested medicine.
+  // Match only inside the same tenant/branch and either the originating sale,
+  // identified customer, or registered receipt terminal; anonymous operator
+  // fallbacks are deliberately not used as customer identity.
+  const recoveryIdentity: Prisma.UnfulfilledDemandEventWhereInput[] = [
+    { saleId: sale.id },
+    ...(sale.customerId ? [{ customerId: sale.customerId }] : []),
+    ...(sale.receiptDeviceId ? [{ terminalId: sale.receiptDeviceId }] : []),
+  ];
+  if (recoveryIdentity.length) {
+    await db.unfulfilledDemandEvent.updateMany({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        requestedMedicineId: input.medicineId,
+        outcome: 'WILL_RETURN',
+        resolvedBySaleId: null,
+        createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+        OR: recoveryIdentity,
+      },
+      data: {
+        resolvedBySaleId: sale.id,
+        resolvedAt: new Date(),
+        lossProbability: 0,
+        estLossPkr: 0,
+      },
+    });
+  }
   await Promise.all(
     allocation.allocations.map((part, index) =>
       db.pharmacySaleLineAllocation.create({
@@ -904,6 +932,7 @@ export async function captureDemand(
     substituteProductId?: string;
     notifyOptIn?: boolean;
     notifyPhone?: string;
+    notifyConsentRecorded?: true;
     freeText?: string;
     matchedProductId?: string;
     matchConfidence?: number;
@@ -914,6 +943,8 @@ export async function captureDemand(
   if (input.customerId && !input.consentRecorded) throw new PharmacySaleError('CONSENT_REQUIRED');
   if (input.notifyOptIn && !input.notifyPhone?.trim())
     throw new PharmacySaleError('CONSENT_REQUIRED');
+  if (input.notifyOptIn && input.notifyConsentRecorded !== true)
+    throw new PharmacySaleError('CONSENT_REQUIRED');
 
   const now = new Date();
   const sale = input.saleId
@@ -923,6 +954,28 @@ export async function captureDemand(
       })
     : null;
   const terminalId = input.terminalId ?? sale?.receiptDeviceId ?? `operator:${scope.actorId}`;
+  if (input.terminalId) {
+    const terminal = await db.pharmacyRegisteredDevice.findFirst({
+      where: {
+        id: input.terminalId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        status: 'ACTIVE',
+      },
+      select: { id: true },
+    });
+    if (!terminal) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  }
+  const productIds = [input.substituteProductId, input.matchedProductId].filter(
+    (id): id is string => Boolean(id)
+  );
+  if (productIds.length) {
+    const validProducts = await db.medicine.count({
+      where: { id: { in: [...new Set(productIds)] }, organizationId: scope.organizationId },
+    });
+    if (validProducts !== new Set(productIds).size)
+      throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  }
   const customerId = input.customerId ?? sale?.customerId ?? undefined;
   const previous = await db.unfulfilledDemandEvent.findFirst({
     where: {
@@ -987,6 +1040,7 @@ export async function captureDemand(
   const legacyInput = { ...input };
   delete legacyInput.outcome;
   delete legacyInput.terminalId;
+  delete legacyInput.notifyConsentRecorded;
   const { notifyPhone } = input;
   return db.unfulfilledDemandEvent.create({
     data: {
@@ -1054,14 +1108,21 @@ export async function demandAggregate(
       AND "lossProbability" = 0
   `);
   const rows = await db.unfulfilledDemandEvent.groupBy({
-    by: ['requestedMedicineId', 'requestedText', 'reason'],
+    by: ['visitId', 'visitType', 'outcome', 'requestedMedicineId', 'requestedText', 'reason'],
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       createdAt: { gte: from, lt: to },
     },
     _count: { _all: true },
-    _sum: { quantity: true, estimatedValueMinor: true, estimatedMarginMinor: true },
+    _sum: {
+      quantity: true,
+      requestedQty: true,
+      estimatedValueMinor: true,
+      estimatedMarginMinor: true,
+      estLossPkr: true,
+      lossProbability: true,
+    },
     orderBy: { _count: { requestedMedicineId: 'desc' } },
   });
   return {
