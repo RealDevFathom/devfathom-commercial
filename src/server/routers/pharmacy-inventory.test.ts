@@ -51,6 +51,7 @@ function makeDb() {
         organizationRole: { permissions: [] },
         permissionOverrides: [],
       }),
+      findFirst: vi.fn().mockResolvedValue(null),
     },
     medicine: model(),
     packLevel: model(),
@@ -65,6 +66,7 @@ function makeDb() {
     pharmacyRecallNotice: model(),
     pharmacyInventoryLot: model(),
     pharmacyStockMovement: model(),
+    pharmacyCustodyRecord: model(),
     pharmacyStockBalance: model(),
     pharmacyAllocationOverride: model(),
     pharmacyStockDiscrepancy: model(),
@@ -228,6 +230,68 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       caller().setBatchState({ manufacturingBatchId: 'batch_1', state: 'RECALLED' })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a write-off witness who is not an active member assigned to the branch', async () => {
+    grant([allow('pharmacy:inventory')]);
+
+    await expect(
+      caller().writeOff({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        witnessId: 'untrusted_string',
+        reason: 'Damaged package',
+        evidenceRef: 'PHOTO-1',
+        idempotencyKey: 'write-off-1',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'COAUTH_REQUIRED' });
+
+    expect(db.user.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'untrusted_string',
+        organizationId: 'org_a',
+        status: 'ACTIVE',
+        pharmacyBranchAssignments: {
+          some: { organizationId: 'org_a', branchId: 'branch_a', active: true },
+        },
+      },
+      select: { id: true },
+    });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts an active same-tenant witness assigned to the write-off branch', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.user.findFirst.mockResolvedValue({ id: 'witness_a' });
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({ id: 'lot_1', unitsPerPack: 1 });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({
+      onHandUnits: 5,
+      sealedPacks: 5,
+      looseUnits: 0,
+    });
+
+    await caller().writeOff({
+      branchId: 'branch_a',
+      inventoryLotId: 'lot_1',
+      stockLocationId: 'location_1',
+      units: 1,
+      witnessId: 'witness_a',
+      reason: 'Damaged package',
+      evidenceRef: 'PHOTO-1',
+      idempotencyKey: 'write-off-1',
+    });
+
+    expect(db.pharmacyCustodyRecord.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        actorId: 'user_a',
+        witnessId: 'witness_a',
+      }),
+    });
   });
 
   it.each([
