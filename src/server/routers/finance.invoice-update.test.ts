@@ -24,7 +24,7 @@ vi.mock('../audit', () => ({
 }));
 
 import type { TRPCContext } from '../trpc';
-import { financeRouter } from './finance';
+import { financeRouter, paymentCommandFingerprint } from './finance';
 
 const testDb = {
   $transaction: mocks.transaction,
@@ -164,6 +164,7 @@ describe('finance.updateInvoice', () => {
       id: 'payment-1',
       invoiceId: 'invoice-1',
       amount: 25,
+      requestFingerprint: paymentCommandFingerprint({ invoiceId: 'invoice-1', amount: 25 }),
       invoice: { status: 'SENT', total: 100 },
     });
     mocks.aggregate.mockResolvedValue({ _sum: { amount: 25 } });
@@ -175,6 +176,34 @@ describe('finance.updateInvoice', () => {
     });
 
     expect(result).toMatchObject({ amountPaid: 25, balance: 75, status: 'SENT' });
+    expect(mocks.createPayment).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['amount', { amount: 50 }],
+    ['method', { method: 'card' }],
+    ['note', { note: 'second attempt' }],
+    ['paidAt', { paidAt: new Date('2026-10-29T12:00:00.000Z') }],
+  ])('rejects idempotency-key reuse with a different %s', async (_field, override) => {
+    mocks.findPayment.mockResolvedValue({
+      id: 'payment-1',
+      invoiceId: 'invoice-1',
+      amount: 25,
+      requestFingerprint: paymentCommandFingerprint({ invoiceId: 'invoice-1', amount: 25 }),
+      invoice: { status: 'SENT', total: 100 },
+    });
+
+    await expect(
+      caller().addPayment({
+        invoiceId: 'invoice-1',
+        idempotencyKey: 'payment-request-1',
+        amount: 25,
+        ...override,
+      })
+    ).rejects.toThrow('idempotency key was already used for a different payment');
+
+    expect(mocks.aggregate).not.toHaveBeenCalled();
     expect(mocks.createPayment).not.toHaveBeenCalled();
     expect(mocks.update).not.toHaveBeenCalled();
   });

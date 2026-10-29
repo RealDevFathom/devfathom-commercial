@@ -3420,9 +3420,10 @@ model Invoice {
 // the sum of payments covers the total; OVERDUE automation is in the finance router.
 model Payment {
   id             String   @id @default(cuid())
-  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  idempotencyKey String
-  invoiceId      String
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  idempotencyKey     String
+  requestFingerprint String
+  invoiceId          String
   amount         Decimal  @db.Decimal(12, 2)
   currency       Currency @default(USD)
   method         String?

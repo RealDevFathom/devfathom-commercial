@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { format } from 'date-fns';
 import { router, adminProcedure } from '../trpc';
 import { logActivity } from '../activity';
@@ -35,6 +36,26 @@ const MAX_INVOICE_ITEMS = 100;
 const MONEY_MAX_MESSAGE = 'Amount must be 9,999,999,999.99 or less';
 const positiveMoney = () => z.number().positive().max(MAX_MONEY, MONEY_MAX_MESSAGE);
 const nonNegativeMoney = () => z.number().nonnegative().max(MAX_MONEY, MONEY_MAX_MESSAGE);
+
+type PaymentCommand = {
+  invoiceId: string;
+  amount: number;
+  method?: string;
+  note?: string;
+  paidAt?: Date;
+};
+
+/** A stable identity for every value whose meaning is captured by an idempotent payment command. */
+export function paymentCommandFingerprint(input: PaymentCommand) {
+  const canonical = JSON.stringify({
+    invoiceId: input.invoiceId,
+    amountCents: moneyCents(input.amount).toString(),
+    method: input.method?.trim() || null,
+    note: input.note?.trim() || null,
+    paidAt: input.paidAt?.toISOString() ?? null,
+  });
+  return createHash('sha256').update(canonical).digest('hex');
+}
 
 export const createInvoiceInputSchema = z.object({
   clientId: z.string(),
@@ -75,8 +96,11 @@ export function calculateInvoiceTotals(
   taxInput = 0,
   discountInput = 0
 ) {
-  const { amountCents, subtotalCents, taxCents, discountCents, totalCents } =
-    calculateInvoiceMoney(items, taxInput, discountInput);
+  const { amountCents, subtotalCents, taxCents, discountCents, totalCents } = calculateInvoiceMoney(
+    items,
+    taxInput,
+    discountInput
+  );
   amountCents.forEach(assertMoneyRange);
   assertMoneyRange(subtotalCents);
   assertMoneyRange(taxCents);
@@ -593,6 +617,7 @@ export const financeRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const orgId = workspaceId(ctx);
+      const requestFingerprint = paymentCommandFingerprint(input);
       // IMP-REST-03: captured inside the tx, fired only AFTER it commits.
       let paidEvent: {
         invoiceId: string;
@@ -620,10 +645,10 @@ export const financeRouter = router({
           include: { invoice: { select: { status: true, total: true } } },
         });
         if (replay) {
-          if (replay.invoiceId !== input.invoiceId) {
+          if (replay.requestFingerprint !== requestFingerprint) {
             throw new TRPCError({
               code: 'CONFLICT',
-              message: 'This payment idempotency key was already used for another invoice.',
+              message: 'This payment idempotency key was already used for a different payment.',
             });
           }
           const paid = await tx.payment.aggregate({
@@ -697,6 +722,7 @@ export const financeRouter = router({
           data: {
             organizationId: orgId,
             idempotencyKey: input.idempotencyKey,
+            requestFingerprint,
             invoiceId: invoice.id,
             amount: input.amount,
             currency: invoice.currency,

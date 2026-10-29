@@ -1,8 +1,14 @@
--- Existing payments predate idempotent commands, so derive a stable, unique key
--- from their immutable primary key before making the command key required.
+-- Expand only: historical rows do not represent idempotent commands and therefore
+-- intentionally retain NULLs. New application writes always supply both values.
+-- Adding nullable columns is metadata-only, avoiding a table rewrite and prolonged
+-- ACCESS EXCLUSIVE lock on a populated payments table.
 ALTER TABLE "payments" ADD COLUMN "idempotencyKey" TEXT;
-UPDATE "payments" SET "idempotencyKey" = 'legacy:' || "id";
-ALTER TABLE "payments" ALTER COLUMN "idempotencyKey" SET NOT NULL;
+ALTER TABLE "payments" ADD COLUMN "requestFingerprint" TEXT;
 
-CREATE UNIQUE INDEX "payments_organizationId_idempotencyKey_key"
-  ON "payments"("organizationId", "idempotencyKey");
+-- PostgreSQL permits multiple historical NULLs. CONCURRENTLY keeps payment writes
+-- available while the unique index scans a non-empty production table. This
+-- migration must remain non-transactional (Prisma runs PostgreSQL migration files
+-- without an implicit transaction).
+CREATE UNIQUE INDEX CONCURRENTLY "payments_organizationId_idempotencyKey_key"
+  ON "payments"("organizationId", "idempotencyKey")
+  WHERE "idempotencyKey" IS NOT NULL;
