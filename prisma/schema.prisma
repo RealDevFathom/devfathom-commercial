@@ -15327,6 +15327,39 @@ model PharmacyPackPrice {
   @@map("pharmacy_pack_prices")
 }
 
+/// Owner-recorded competitor price/demand evidence used by the advisory smart-discount model.
+/// It contains no customer or prescription data; RLS and foreign keys are migration enforced.
+model PharmacyCompetitorDiscountObservation {
+  id                  String   @id
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  medicineId           String
+  packLevelId          String
+  competitor           String
+  competitorPriceMinor Int
+  observedDemandUnits  Int
+  observedAt           DateTime
+  actorId              String
+  createdAt            DateTime @default(now())
+
+  @@index([organizationId, branchId, medicineId, packLevelId, observedAt])
+  @@map("pharmacy_competitor_discount_observations")
+}
+
+/// Configurable guardrails for estimates and suggestions; deliberately has no seeded defaults.
+model PharmacySmartDiscountPolicy {
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  minimumMarginBps     Int
+  minimumObservations  Int
+  targetDemandLiftBps  Int
+  updatedById          String
+  updatedAt            DateTime @default(now())
+
+  @@id([organizationId, branchId])
+  @@map("pharmacy_smart_discount_policies")
+}
+
 /// Cross-instance fixed-window counters. Not tenant data and not under RLS:
 /// a limit is taken before a tenant scope exists. Startup still refuses a
 /// SUPERUSER or BYPASSRLS application role.
