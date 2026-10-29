@@ -302,6 +302,51 @@ async function record(
   });
 }
 
+async function finalizeOrderClose(
+  tx: ScopedDb,
+  order: LoadedOrder,
+  actor: CommandActor,
+  closedAt: Date
+): Promise<void> {
+  const itemStatuses = order.items.map((item) => item.status);
+  assertOrderStatusChange('PAYMENT_PENDING', 'CLOSED', itemStatuses);
+  await tx.restaurantOrder.update({
+    where: { id: order.id },
+    data: { status: 'CLOSED', closedAt },
+  });
+  await tx.restaurantOrderTable.updateMany({
+    where: { orderId: order.id, active: true },
+    data: { active: false, unlinkedAt: closedAt },
+  });
+  await record(tx, order, actor, 'order.closed', {});
+  await earnLoyaltyForClosedOrder(tx, order.id, closedAt);
+  await postOrderRecipeConsumption(
+    tx,
+    order.id,
+    order.branchId,
+    order.items,
+    { staffProfileId: actor.staffProfileId, deviceId: actor.deviceId },
+    closedAt
+  );
+}
+
+/** Close a payment-pending order once all of its bills are settled. The caller must
+ * hold the order row lock; tender settlement uses this seam so the final tender and
+ * the order transition commit atomically. */
+export async function closeOrderAfterSettlement(
+  tx: ScopedDb,
+  orderId: string,
+  actor: CommandActor,
+  closedAt: Date
+): Promise<boolean> {
+  const order = await loadOrder(tx, orderId);
+  if (order.status !== 'PAYMENT_PENDING') return false;
+  const settlement = await evaluateOrderSettlement(tx, order.id);
+  if (!settlement.settled) return false;
+  await finalizeOrderClose(tx, order, actor, closedAt);
+  return true;
+}
+
 /**
  * Re-derive the kitchen aggregate from the current item facts and persist it onto
  * the order when it legally changes (C3). The aggregate is never set directly by a
@@ -1363,26 +1408,7 @@ export async function closeOrder(
         'NOT_SETTLED'
       );
     }
-    assertOrderStatusChange(status, 'CLOSED', itemStatuses);
-    await tx.restaurantOrder.update({
-      where: { id: order.id },
-      data: { status: 'CLOSED', closedAt },
-    });
-    await tx.restaurantOrderTable.updateMany({
-      where: { orderId: order.id, active: true },
-      data: { active: false, unlinkedAt: closedAt },
-    });
-    await record(tx, order, input.actor, 'order.closed', {});
-    await earnLoyaltyForClosedOrder(tx, order.id, closedAt);
-    // M6-L2: recipe consumption at order close (C6 disposition applied per item).
-    await postOrderRecipeConsumption(
-      tx,
-      order.id,
-      order.branchId,
-      order.items,
-      { staffProfileId: input.actor.staffProfileId, deviceId: input.actor.deviceId },
-      closedAt
-    );
+    await finalizeOrderClose(tx, order, input.actor, closedAt);
     await recordIdempotentResult(tx, input.actor, order.id);
     return { orderId: order.id, replayed: false };
   });
