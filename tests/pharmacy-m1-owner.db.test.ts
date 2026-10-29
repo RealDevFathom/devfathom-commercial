@@ -167,7 +167,58 @@ it('migrates real bootstrap admin identities, preserves DENYs and manual assignm
       `INSERT INTO pharmacy_branch_assignments (id,"organizationId","branchId","userId",active,"ownerManaged","updatedAt") VALUES ($1,$2,$3,$4,true,false,now())`,
       [`${org}_manual`, org, branch, user]
     );
+    // A second tenant already has a proprietor: its ordinary system admin
+    // must retain the admin role, DENYs and manually assigned branch scope.
+    const staffed = `${org}_staffed`;
+    await db.query(
+      `INSERT INTO organizations (id,slug,"legalName","displayName",vertical,"updatedAt") VALUES ($1,$1,$1,$1,'PHARMACY',now())`,
+      [staffed]
+    );
+    await db.query(
+      `INSERT INTO organization_departments (id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,'PHARMACY','Pharmacy',now())`,
+      [`${staffed}_dept`, staffed]
+    );
+    await db.query(
+      `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$3,'admin','Admin',true,now()),($2,$3,'owner','Owner',true,now())`,
+      [`${staffed}_admin`, `${staffed}_owner`, staffed]
+    );
+    await db.query(
+      `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,role,department,title,"updatedAt") VALUES ($1,$3,$4,$1,$1,'ADMIN','PHARMACY','Admin',now()),($2,$3,$5,$2,$2,'EMPLOYEE','PHARMACY','Proprietor',now())`,
+      [
+        `${staffed}_admin_user`,
+        `${staffed}_owner_user`,
+        staffed,
+        `${staffed}_admin`,
+        `${staffed}_owner`,
+      ]
+    );
+    await db.query(
+      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy:safety','DENY')`,
+      [`${staffed}_deny`, staffed, `${staffed}_admin`]
+    );
     await db.query(await migration('20261029106000_pharmacy_bootstrap_and_pv_guard'));
+    expect(
+      (
+        await db.query(`SELECT "organizationRoleId" FROM users WHERE id=$1`, [
+          `${staffed}_admin_user`,
+        ])
+      ).rows
+    ).toEqual([{ organizationRoleId: `${staffed}_admin` }]);
+    expect(
+      (
+        await db.query(`SELECT count(*)::int n FROM user_permission_overrides WHERE "userId"=$1`, [
+          `${staffed}_admin_user`,
+        ])
+      ).rows[0].n
+    ).toBe(0);
+    expect(
+      (
+        await db.query(`SELECT "organizationRoleId" FROM users WHERE id=$1`, [
+          `${staffed}_owner_user`,
+        ])
+      ).rows
+    ).toEqual([{ organizationRoleId: `${staffed}_owner` }]);
+
     expect(
       (
         await db.query(
