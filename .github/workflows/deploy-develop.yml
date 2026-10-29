@@ -23,7 +23,7 @@ jobs:
        github.event.workflow_run.event == 'push' &&
        github.event.workflow_run.conclusion == 'success') ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/develop')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, aws]
     timeout-minutes: 90
     environment: develop
     env:

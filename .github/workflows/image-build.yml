@@ -21,7 +21,7 @@ jobs:
   build:
     name: Build the image on native amd64
     if: contains(github.event.pull_request.labels.*.name, 'ci-ready') || github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, aws]
     steps:
       # The point of this job is the architecture. If `ubuntu-latest` ever moves
       # to arm64, a passing build would stop meaning what it says here.
