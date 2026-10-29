@@ -38,13 +38,19 @@ async function loadPendingInvitation(db: PrismaClient, token: string) {
           title: true,
           department: true,
           role: true,
+          status: true,
           organization: { select: { isDemo: true } },
         },
       },
     },
   });
 
-  if (!invitation || invitation.acceptedAt || invitation.user.organization.isDemo) {
+  if (
+    !invitation ||
+    invitation.acceptedAt ||
+    invitation.user.status !== 'INVITED' ||
+    invitation.user.organization.isDemo
+  ) {
     throw invalidInvitation();
   }
   if (invitation.expiresAt.getTime() < Date.now()) throw invalidInvitation();
@@ -112,8 +118,12 @@ export const invitationsRouter = router({
         });
         if (claimed.count !== 1) throw invalidInvitation();
 
-        await tx.user.update({
-          where: { id: invitation.userId },
+        // The invitee must still be awaiting onboarding at the instant we
+        // activate them. An administrator may have deactivated the account
+        // after the public read above; a conditional write prevents that stale
+        // request from undoing the administrator's decision.
+        const activated = await tx.user.updateMany({
+          where: { id: invitation.userId, status: 'INVITED' },
           data: {
             password: hashed,
             status: 'ACTIVE',
@@ -122,6 +132,7 @@ export const invitationsRouter = router({
             ...(input.skills ? { skills: input.skills } : {}),
           },
         });
+        if (activated.count !== 1) throw invalidInvitation();
 
         return { email: invitation.user.email };
       });

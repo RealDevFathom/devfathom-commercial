@@ -183,6 +183,43 @@ describeIfDatabase('token single use, against PostgreSQL', () => {
     expect(result.email).toBe(`invitee.${suffix}@example.test`);
   });
 
+  it('rejects an unexpired invitation when the invitee has been deactivated', async () => {
+    await deps.withTenantDb(organizationId, (db) =>
+      db.user.update({
+        where: { id: id('user_invitee') },
+        data: { status: 'INACTIVE' },
+      })
+    );
+
+    await expect(
+      deps.withTenantDb(organizationId, (db) =>
+        caller(deps.invitationsRouter, db).get({ token: inviteToken })
+      )
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: deps.INVITATION_GENERIC_MESSAGE });
+    await expect(
+      deps.withTenantDb(organizationId, (db) =>
+        caller(deps.invitationsRouter, db).accept({
+          token: inviteToken,
+          password: 'Str0ng!Passw0rd',
+          phone: '+15550123',
+        })
+      )
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: deps.INVITATION_GENERIC_MESSAGE });
+
+    const invitation = await deps.withTenantDb(organizationId, (db) =>
+      db.invitation.findUnique({ where: { id: id('inv') } })
+    );
+    expect(invitation?.acceptedAt).toBeNull();
+
+    // Restore the shared fixture for the concurrency and replay assertions.
+    await deps.withTenantDb(organizationId, (db) =>
+      db.user.update({
+        where: { id: id('user_invitee') },
+        data: { status: 'INVITED' },
+      })
+    );
+  });
+
   it('reports a valid reset token as usable', async () => {
     const result = await deps.withTenantDb(organizationId, (db) =>
       caller(deps.passwordResetRouter, db).validate({ token: resetToken })
