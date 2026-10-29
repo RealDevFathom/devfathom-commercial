@@ -48,6 +48,7 @@ import {
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { PharmacyStockSignalError } from '@/lib/pharmacy/stock-signals';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
+import { maySuggestExpiryMarkdown, supplierReturnDates } from '@/lib/pharmacy/expiry-growth';
 import { createPurchaseReturn } from '@/lib/pharmacy/supplier-returns-operations';
 import {
   acknowledgeSignal,
@@ -239,7 +240,23 @@ async function lockExpiringLot(db: ScopedDb, scope: LedgerScope, inventoryLotId:
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: { id: inventoryLotId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: {
-      batch: { select: { batchNumber: true, expiresAt: true, state: true, medicineId: true } },
+      batch: {
+        select: {
+          batchNumber: true,
+          expiresAt: true,
+          state: true,
+          medicineId: true,
+          medicine: {
+            select: {
+              rx: true,
+              otc: true,
+              restricted: true,
+              controlled: true,
+              productFamily: true,
+            },
+          },
+        },
+      },
     },
   });
   if (!lot) throw new TRPCError({ code: 'FORBIDDEN', message: 'Lot is outside this branch.' });
@@ -1532,7 +1549,17 @@ export const pharmacyInventoryRouter = router({
                     batchNumber: true,
                     expiresAt: true,
                     state: true,
-                    medicine: { select: { productName: true, brandName: true } },
+                    medicine: {
+                      select: {
+                        productName: true,
+                        brandName: true,
+                        rx: true,
+                        otc: true,
+                        restricted: true,
+                        controlled: true,
+                        productFamily: true,
+                      },
+                    },
                   },
                 },
                 receiptLines: {
@@ -1547,7 +1574,15 @@ export const pharmacyInventoryRouter = router({
         ctx.db.pharmacySupplier.findMany({
           where: { organizationId: scope.organizationId, active: true },
           orderBy: { name: 'asc' },
-          select: { id: true, name: true },
+          select: {
+            id: true,
+            name: true,
+            relationships: {
+              where: { branchId: scope.branchId, active: true },
+              select: { expiryReturnWindowDays: true },
+              take: 1,
+            },
+          },
         }),
       ]);
       const lotIds = [...new Set(balances.map((row) => row.inventoryLotId))];
@@ -1623,12 +1658,27 @@ export const pharmacyInventoryRouter = router({
       const supplierByName = new Map(
         suppliers.map((supplier) => [supplier.name.trim().toLowerCase(), supplier.id])
       );
+      const relationshipBySupplier = new Map(
+        suppliers.map((supplier) => [
+          supplier.id,
+          supplier.relationships[0]?.expiryReturnWindowDays ?? null,
+        ])
+      );
 
       const rows = balances
         .map((row) => {
           const { lot } = row;
           const expiresAt = lot.batch.expiresAt;
           const receiptSupplier = lot.receiptLines[0]?.goodsReceipt.supplierId ?? null;
+          const suggestedSupplierId =
+            receiptSupplier && supplierIds.has(receiptSupplier)
+              ? receiptSupplier
+              : (supplierByName.get(lot.supplierName.trim().toLowerCase()) ?? null);
+          const returnDates = supplierReturnDates(
+            expiresAt,
+            suggestedSupplierId ? (relationshipBySupplier.get(suggestedSupplierId) ?? null) : null
+          );
+          const markdownEligible = maySuggestExpiryMarkdown(lot.batch.medicine);
           return {
             key: `${row.inventoryLotId}:${row.stockLocationId}`,
             inventoryLotId: row.inventoryLotId,
@@ -1648,10 +1698,10 @@ export const pharmacyInventoryRouter = router({
             printedMrpMinor: lot.printedMrpMinor,
             valueAtRiskMinor: row.onHandUnits * lot.unitCostMinor,
             supplierName: lot.supplierName,
-            suggestedSupplierId:
-              receiptSupplier && supplierIds.has(receiptSupplier)
-                ? receiptSupplier
-                : (supplierByName.get(lot.supplierName.trim().toLowerCase()) ?? null),
+            suggestedSupplierId,
+            markdownEligible,
+            returnWindowOpensAt: returnDates?.opensAt ?? null,
+            returnDeadlineAt: returnDates?.deadlineAt ?? null,
             markdown:
               markdownByPosition.get(`${row.inventoryLotId}:${row.stockLocationId}`) ?? null,
             returnDraft: returnByLot.get(row.inventoryLotId) ?? null,
@@ -1696,6 +1746,12 @@ export const pharmacyInventoryRouter = router({
             });
           }
           if (lot.batch.state !== 'ACTIVE') throw new PharmacyInventoryError('BLOCKED_STOCK');
+          if (!maySuggestExpiryMarkdown(lot.batch.medicine)) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Mark-down suggestions are limited to OTC and non-drug stock.',
+            });
+          }
           assertOnBoard(lot.batch.expiresAt, at);
           const onHandUnits = await availableAt(
             tx,

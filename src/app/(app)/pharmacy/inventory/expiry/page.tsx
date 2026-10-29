@@ -119,6 +119,8 @@ export default async function PharmacyExpiryBoardPage({
   const rows: ExpiryBoardRow[] = board.rows.map((row) => ({
     ...row,
     expiresAt: row.expiresAt.toISOString(),
+    returnWindowOpensAt: row.returnWindowOpensAt?.toISOString() ?? null,
+    returnDeadlineAt: row.returnDeadlineAt?.toISOString() ?? null,
     markdown: row.markdown
       ? {
           markdownPercent: row.markdown.markdownPercent,

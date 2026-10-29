@@ -43,6 +43,9 @@ export type ExpiryBoardRow = {
   valueAtRiskMinor: number;
   supplierName: string;
   suggestedSupplierId: string | null;
+  markdownEligible: boolean;
+  returnWindowOpensAt: string | null;
+  returnDeadlineAt: string | null;
   markdown: {
     markdownPercent: number;
     printedMrpMinor: number;
@@ -236,7 +239,7 @@ function Hidden({
 
 function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps }) {
   const returnable = Math.max(0, Math.min(row.onHandUnits, row.onHandUnits - row.reservedUnits));
-  const canMarkDown = !row.expired && row.batchState === 'ACTIVE';
+  const canMarkDown = row.markdownEligible && !row.expired && row.batchState === 'ACTIVE';
   const heading = `${row.medicineName} · batch ${row.batchNumber} · ${row.locationName}`;
   return (
     <article
@@ -257,6 +260,14 @@ function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps 
               ? ` · ${row.quarantinedUnits} units of this lot in quarantine`
               : ''}
           </p>
+          {row.returnDeadlineAt ? (
+            <p className="mt-1 text-xs text-text-muted">
+              Distributor return calendar: opens {day(row.returnWindowOpensAt!)} · deadline{' '}
+              {day(row.returnDeadlineAt)}
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-text-muted">No distributor return window recorded.</p>
+          )}
         </div>
         <StatusPill
           status={expiryText(row)}
@@ -308,9 +319,11 @@ function LotCard({ row, props }: { row: ExpiryBoardRow; props: ExpiryBoardProps 
             </form>
           ) : (
             <p className="mt-1 text-xs text-text-muted">
-              {row.expired
-                ? 'Expired stock cannot be sold at any price. Quarantine it.'
-                : 'This batch is blocked, so it cannot be marked down.'}
+              {!row.markdownEligible
+                ? 'No mark-down suggestion: prescription/restricted stock is excluded; only OTC and non-drug stock is eligible.'
+                : row.expired
+                  ? 'Expired stock cannot be sold at any price. Quarantine it.'
+                  : 'This batch is blocked, so it cannot be marked down.'}
             </p>
           )}
         </div>
