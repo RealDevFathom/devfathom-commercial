@@ -10,6 +10,10 @@ const sql = readFileSync(
   ),
   'utf8'
 );
+const voucherSql = readFileSync(
+  join(process.cwd(), 'prisma/migrations/20261029000182_pharmacy_voucher_scoping/migration.sql'),
+  'utf8'
+);
 
 describe('pharmacy permissioned marketing migration', () => {
   it('stores segment definitions as auditable data and rejects clinical keys in the database', () => {
@@ -38,5 +42,22 @@ describe('pharmacy permissioned marketing migration', () => {
     expect(sql).toContain(
       'CHECK (NOT "promotesRegulatedItem" OR "status" IN (\'DRAFT\', \'REFUSED\'))'
     );
+  });
+});
+
+describe('pharmacy voucher migration', () => {
+  it('keeps populated campaign tables compatible and validates constraints in stages', () => {
+    expect(voucherSql).toContain('ADD COLUMN "voucherEnabled" BOOLEAN DEFAULT false');
+    expect(voucherSql).toContain('NOT VALID');
+    expect(voucherSql).toContain('VALIDATE CONSTRAINT "pharmacy_campaign_voucher_columns_nn_ck"');
+    expect(voucherSql.indexOf('NOT VALID')).toBeLessThan(voucherSql.indexOf('SET NOT NULL'));
+  });
+
+  it('persists a tenant-isolated, single-use capture-to-sale-line redemption', () => {
+    expect(voucherSql).toContain('CREATE TABLE "pharmacy_voucher_redemptions"');
+    expect(voucherSql).toContain('UNIQUE ("organizationId", "captureId")');
+    expect(voucherSql).toContain('REFERENCES "pharmacy_sale_lines"');
+    expect(voucherSql).toContain('FORCE ROW LEVEL SECURITY');
+    expect(voucherSql).toContain('app.current_branch_id');
   });
 });

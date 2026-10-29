@@ -32,6 +32,7 @@ const campaign = () => ({
   quietHours: { startHour: 22, endHour: 8 },
   frequencyCap: { max: 1, windowDays: 7 },
   voucherEnabled: false,
+  voucherDiscountMinor: null,
   eligibleCategoryAllowlist: ['FRONT_SHOP'],
 });
 let row: ReturnType<typeof campaign>;
@@ -136,6 +137,7 @@ describe('persisted capture workflow', () => {
       frequencyCap: row.frequencyCap,
       promotesRegulatedItem: false as const,
       voucherEnabled: false,
+      voucherDiscountMinor: null,
       eligibleCategoryAllowlist: ['FRONT_SHOP' as const],
     };
     expect(await createMarketingDraft(db, scope, input)).toMatchObject({

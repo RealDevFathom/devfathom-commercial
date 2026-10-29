@@ -44,9 +44,19 @@ export const marketingDraftInput = marketingScopeInput
     frequencyCap,
     promotesRegulatedItem: z.literal(false),
     voucherEnabled: z.boolean().default(false),
+    voucherDiscountMinor: z.number().int().positive().max(10_000_000).nullable().default(null),
     eligibleCategoryAllowlist,
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.voucherEnabled !== (value.voucherDiscountMinor !== null))
+      ctx.addIssue({
+        code: 'custom',
+        path: ['voucherDiscountMinor'],
+        message:
+          'Voucher campaigns require one fixed positive discount; other campaigns cannot set it.',
+      });
+  });
 export const marketingTemplateInput = marketingScopeInput
   .extend({
     name: z.string().trim().min(1).max(100),
@@ -135,6 +145,7 @@ export async function createMarketingDraft(
       frequencyCap: input.frequencyCap,
       promotesRegulatedItem: false,
       voucherEnabled: input.voucherEnabled,
+      voucherDiscountMinor: input.voucherDiscountMinor,
       eligibleCategoryAllowlist: input.eligibleCategoryAllowlist,
       status: 'DRAFT',
     },

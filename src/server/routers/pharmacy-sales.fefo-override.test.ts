@@ -25,7 +25,7 @@ vi.mock('@/lib/pharmacy/stock-ledger', async (importOriginal) => ({
 }));
 
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
-import { addSaleLine } from '@/lib/pharmacy/sales';
+import { addSaleLine, PharmacySaleError } from '@/lib/pharmacy/sales';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
 import { recordTrpcAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
@@ -91,6 +91,56 @@ beforeEach(() => {
 });
 
 describe('pharmacySales.addLine batch override (PH-A4)', () => {
+  it('audits a successful voucher redemption without exposing the redacted input', async () => {
+    const f = fixture();
+    vi.mocked(addSaleLine).mockResolvedValue({
+      line: { id: 'line-voucher' },
+      allocation: { overrideId: null, recommendedLotId: 'lot-fefo' },
+    } as never);
+
+    await f.caller.addLine({
+      ...line,
+      discountKind: 'PROMOTION',
+      discountMinor: 250,
+      voucherCampaignId: 'campaign-1',
+    });
+
+    expect(lastAudit().detail).toMatchObject({
+      skipInput: true,
+      category: 'PHARMACY_GROWTH',
+      action: 'voucher_redemption',
+      targetId: 'sale-1',
+      metadata: {
+        voucherCampaignId: 'campaign-1',
+        voucherSaleLineId: 'line-voucher',
+        outcome: 'REDEEMED',
+      },
+    });
+  });
+
+  it('retains the campaign identifier and refusal reason when redemption rolls back', async () => {
+    const f = fixture();
+    vi.mocked(addSaleLine).mockRejectedValue(new PharmacySaleError('VOUCHER_ALREADY_REDEEMED'));
+
+    await expect(
+      f.caller.addLine({
+        ...line,
+        discountKind: 'PROMOTION',
+        discountMinor: 250,
+        voucherCampaignId: 'campaign-1',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(lastAudit().detail).toMatchObject({
+      skipInput: true,
+      metadata: {
+        voucherCampaignId: 'campaign-1',
+        outcome: 'REFUSED',
+        refusalReason: 'VOUCHER_ALREADY_REDEEMED',
+      },
+    });
+  });
+
   it('passes the override to the domain and labels the audit row with the override id', async () => {
     const f = fixture();
     vi.mocked(addSaleLine).mockResolvedValue({

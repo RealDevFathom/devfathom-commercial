@@ -1121,6 +1121,7 @@ model PharmacySale {
 /// CRM-L01 retail identity. Clinical identity remains in PharmacyPatient and is
 /// joined only server-side after a current LOYALTY consent check.
 model PharmacyCustomer {
+  voucherRedemptions PharmacyVoucherRedemption[]
   whatsappMessages PharmacyMessageLog[]
   id               String               @id @default(cuid())
   organizationId   String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -1480,6 +1481,7 @@ model PharmacySaleLine {
   allocations               PharmacySaleLineAllocation[]
   returnLines               PharmacySaleReturnLine[]
   unidentifiedReturnHolds   PharmacyUnidentifiedReturnHold[]
+  voucherRedemption         PharmacyVoucherRedemption?
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
@@ -13770,11 +13772,14 @@ model PharmacyCampaign {
   /// The only currently classified non-drug family is FRONT_SHOP.
   voucherEnabled        Boolean                @default(false)
   eligibleCategoryAllowlist Json               @default("[\"FRONT_SHOP\"]")
+  /// Fixed, owner-approved value applied by the server; counter callers cannot choose it.
+  voucherDiscountMinor  Int?
   status                PharmacyCampaignStatus @default(DRAFT)
   ownerApprovedByUserId String?
   ownerApprovedAt       DateTime?
   refusalReason         String?
   createdAt             DateTime               @default(now())
+  voucherRedemptions    PharmacyVoucherRedemption[]
 
   @@unique([organizationId, id])
   @@index([organizationId, branchId, scheduledAt])
@@ -13792,11 +13797,36 @@ model PharmacyCampaignCapture {
   channel          PharmacyMarketingChannel
   idempotencyKey   String
   capturedAt       DateTime                          @default(now())
+  voucherRedemption PharmacyVoucherRedemption?
 
   @@unique([organizationId, id])
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId, branchId, campaignId, capturedAt])
   @@map("pharmacy_campaign_captures")
+}
+
+/// Durable, single-use evidence that an issued campaign voucher funded a sale line.
+model PharmacyVoucherRedemption {
+  id               String                  @id @default(cuid())
+  organizationId   String                  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  campaignId       String
+  captureId        String
+  customerId       String
+  saleLineId       String
+  discountMinor    Int
+  redeemedByUserId String
+  redeemedAt       DateTime                @default(now())
+  campaign         PharmacyCampaign        @relation(fields: [organizationId, campaignId], references: [organizationId, id], onDelete: Restrict)
+  capture          PharmacyCampaignCapture @relation(fields: [organizationId, captureId], references: [organizationId, id], onDelete: Restrict)
+  customer         PharmacyCustomer        @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  saleLine         PharmacySaleLine        @relation(fields: [organizationId, branchId, saleLineId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, captureId])
+  @@unique([organizationId, branchId, saleLineId])
+  @@index([organizationId, branchId, campaignId, redeemedAt])
+  @@map("pharmacy_voucher_redemptions")
 }
 
 model PharmacyCampaignExclusion {
