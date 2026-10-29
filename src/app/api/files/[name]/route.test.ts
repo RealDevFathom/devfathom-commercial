@@ -107,7 +107,9 @@ describe('private attachment delivery', () => {
       },
       select: { id: true },
     });
-    expect(mocks.tenantDb).toHaveBeenCalledExactlyOnceWith('org_a', expect.any(Function));
+    expect(mocks.tenantDb).toHaveBeenCalledTimes(2);
+    expect(mocks.tenantDb).toHaveBeenNthCalledWith(1, 'org_a', expect.any(Function));
+    expect(mocks.tenantDb).toHaveBeenNthCalledWith(2, 'org_a', expect.any(Function));
     expect(mocks.getUpload).not.toHaveBeenCalled();
     expect(db.messageAttachment.findFirst).not.toHaveBeenCalled();
   });
@@ -121,7 +123,7 @@ describe('private attachment delivery', () => {
     expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'pharmacy-licence.pdf');
   });
 
-  it('does not apply another tenant\'s licence evidence restriction', async () => {
+  it("does not apply another tenant's licence evidence restriction", async () => {
     db.branchRegulatoryProfile.findFirst.mockImplementation(async ({ where }) =>
       where.organizationId === 'org_a' ? null : { id: 'foreign_profile' }
     );
@@ -165,13 +167,16 @@ describe('private attachment delivery', () => {
     expect((await read('chat.png')).status).toBe(200);
   });
 
-  it.each(['disabled', 'invalid_configuration'] as const)('preserves accepted %s storage 503 without leaking provider details', async (reason) => {
-    mocks.getUpload.mockRejectedValueOnce(new StorageUnavailableError(reason));
-    const response = await read('ordinary.png');
-    expect(response.status).toBe(503);
-    expect(await response.text()).toBe('Files are unavailable.');
-    expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'ordinary.png');
-  });
+  it.each(['disabled', 'invalid_configuration'] as const)(
+    'preserves accepted %s storage 503 without leaking provider details',
+    async (reason) => {
+      mocks.getUpload.mockRejectedValueOnce(new StorageUnavailableError(reason));
+      const response = await read('ordinary.png');
+      expect(response.status).toBe(503);
+      expect(await response.text()).toBe('Files are unavailable.');
+      expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'ordinary.png');
+    }
+  );
 
   it('retains storage 404 behavior and database error propagation', async () => {
     mocks.getUpload.mockRejectedValueOnce(new Error('storage unavailable'));

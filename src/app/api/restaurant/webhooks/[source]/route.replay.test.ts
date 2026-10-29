@@ -18,8 +18,8 @@ vi.mock('@/lib/tenancy/host', () => ({
   resolveExplicitOrganizationByHost: mocks.resolveOrganization,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: mocks.createTenantDb }));
-vi.mock('@/lib/restaurant/webhook-inbox', () => {
-  const { z } = require('zod') as typeof import('zod');
+vi.mock('@/lib/restaurant/webhook-inbox', async () => {
+  const { z } = await vi.importActual<typeof import('zod')>('zod');
   return {
     recordInboundWebhook: mocks.recordInboundWebhook,
     webhookEnvelopeSchema: z

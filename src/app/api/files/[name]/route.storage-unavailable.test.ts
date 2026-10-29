@@ -64,7 +64,9 @@ test.each(['EMPLOYEE', 'HR'])(
     });
     m.licence.mockResolvedValue({ id: 'regulatory-profile' });
     expect((await read()).status).toBe(404);
-    expect(m.tenant).toHaveBeenCalledExactlyOnceWith('org-a', expect.any(Function));
+    expect(m.tenant).toHaveBeenCalledTimes(2);
+    expect(m.tenant).toHaveBeenNthCalledWith(1, 'org-a', expect.any(Function));
+    expect(m.tenant).toHaveBeenNthCalledWith(2, 'org-a', expect.any(Function));
     expect(m.licence).toHaveBeenCalledExactlyOnceWith({
       where: {
         organizationId: 'org-a',
