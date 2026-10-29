@@ -39,6 +39,7 @@ import {
   acknowledgePackAuthenticationFlag,
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
+import { readPharmacyBranchComparison } from '@/lib/pharmacy/branch-comparison';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
@@ -404,11 +405,30 @@ export const pharmacyReportsRouter = router({
     metrics: PHARMACY_METRIC_CONTRACT,
     permissions: {
       operational: true,
+      owner: ctx.session!.user.role === 'ADMIN',
       financial: await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
         db: ctx.db,
       }),
     },
   })),
+  branchComparison: reports
+    .input(filters.pick({ from: true, to: true }).strict())
+    .query(async ({ ctx, input }) => {
+      const scoped = await ownerFilters(ctx, input);
+      const available = await scope(ctx);
+      try {
+        return await readPharmacyBranchComparison(ctx.db, {
+          branches: available.branches.filter((branch) => scoped.branchIds.includes(branch.id)),
+          from: input.from,
+          to: input.to,
+        });
+      } catch (error) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: error instanceof Error ? error.message : 'Invalid comparison filters.',
+        });
+      }
+    }),
   repeatPurchasing: reports
     .input(
       filters

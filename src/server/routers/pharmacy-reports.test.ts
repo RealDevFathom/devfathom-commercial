@@ -17,6 +17,10 @@ const mocks = vi.hoisted(() => ({
   creditsRead: vi.fn(),
   refresh: vi.fn(),
   createDraft: vi.fn(),
+  comparisonRead: vi.fn(),
+}));
+vi.mock('@/lib/pharmacy/branch-comparison', () => ({
+  readPharmacyBranchComparison: mocks.comparisonRead,
 }));
 
 vi.mock('@/lib/pharmacy/stock-signals-operations', () => ({
@@ -212,6 +216,14 @@ beforeEach(() => {
 });
 
 describe('pharmacy owner digest capability boundary', () => {
+  it('denies branch comparison to a non-owner even with financial capability', async () => {
+    mocks.can.mockResolvedValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    await expect(
+      caller('EMPLOYEE').branchComparison({ from: '2026-10-01', to: '2026-10-07' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.comparisonRead).not.toHaveBeenCalled();
+  });
   it('denies digest reads without reports:financial before tenant data access', async () => {
     mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     await expect(caller().digestOverview()).rejects.toMatchObject({ code: 'FORBIDDEN' });
