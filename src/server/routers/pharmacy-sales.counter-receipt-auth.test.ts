@@ -66,6 +66,7 @@ import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { readReturnHistory } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
@@ -294,7 +295,6 @@ describe('counter receipt authorization', () => {
   it('lets an assigned cashier use the receipt, the cart, return history, and cash tender', async () => {
     const f = fixture([
       { capability: 'pharmacy.counter', effect: 'ALLOW' },
-      { capability: 'pharmacy:counter', effect: 'ALLOW' },
       { capability: 'pharmacy:orders', effect: 'ALLOW' },
     ]);
     assign(f, ['branch-a']);
@@ -322,12 +322,12 @@ describe('counter receipt authorization', () => {
     expect(applyPharmacyTender).toHaveBeenCalled();
   });
 
-  it('lets an assigned cashier holding the canonical pharmacy:counter do the same (#163)', async () => {
-    // #163 migrates pharmacy.counter grants to pharmacy:counter, and the Cashier template grants it.
-    const f = fixture([
-      { capability: 'pharmacy:counter', effect: 'ALLOW' },
-      { capability: 'pharmacy:orders', effect: 'ALLOW' },
-    ]);
+  it('accepts the canonical Cashier template across every counter workflow (#390)', async () => {
+    const cashier = PHARMACY_ROLE_TEMPLATES.find((template) => template.key === 'cashier');
+    expect(cashier).toBeDefined();
+    const f = fixture(
+      cashier!.capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }))
+    );
     assign(f, ['branch-a']);
     await expect(
       f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
