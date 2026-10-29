@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
-import { moneyLabel } from '@/lib/finance/currency';
+import { invoiceTotalLabel, type InvoiceTotal } from '@/lib/finance/invoice-display';
 import { format } from 'date-fns';
 
 type InvoiceStatus = 'DRAFT' | 'SENT' | 'PAID' | 'OVERDUE' | 'CANCELLED';
@@ -23,12 +23,10 @@ const statusConfig: Record<string, { bg: string; label: string }> = {
   CANCELLED: { bg: 'bg-muted text-muted-foreground line-through', label: 'Cancelled' },
 };
 
-type InvoiceRowData = {
+type InvoiceRowData = InvoiceTotal & {
   id: string;
   invoiceNumber: string;
   status: string;
-  currency: string;
-  total: unknown;
   dueDate: Date | string;
   client: { name: string };
   project: { name: string } | null;
@@ -223,7 +221,7 @@ const InvoiceRow = memo(function InvoiceRow({
       </div>
       <div className="col-span-1 text-right">
         <p className="text-sm font-semibold text-foreground tabular-nums">
-          {moneyLabel(Number(inv.total), inv.currency)}
+          {invoiceTotalLabel(inv)}
         </p>
       </div>
       <div className="col-span-2 flex justify-center">
