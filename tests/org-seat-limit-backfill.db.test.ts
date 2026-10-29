@@ -4,7 +4,9 @@ import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 
-const databaseUrl = process.env.TEST_DATABASE_URL;
+// This migration harness creates and drops an isolated schema, so it intentionally
+// uses the disposable database owner rather than the restricted application role.
+const databaseUrl = process.env.ORG_SEAT_LIMIT_BACKFILL_TEST_DATABASE_URL;
 const sql = readFileSync(
   'prisma/migrations/20261021141526_org_seat_limit_backfill/migration.sql',
   'utf8'
