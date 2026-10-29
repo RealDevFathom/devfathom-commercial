@@ -1691,10 +1691,18 @@ export const pharmacySalesRouter = router({
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
         const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
+        const [dispensingLabelSources, taxIdentity] = await Promise.all([
+          readDispensingLabelSources(ctx.db, scope, receipt),
+          receipt.completedAt
+            ? readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt))
+            : Promise.resolve({ ntn: null, strn: null }),
+        ]);
         // F8: sourced Rx label payloads come only from this authorized receipt read.
         return {
           ...receipt,
-          dispensingLabelSources: await readDispensingLabelSources(ctx.db, scope, receipt),
+          dispensingLabelSources,
+          // Completion-time identity keeps browser, A4, and Urdu copies aligned with ESC/POS.
+          taxIdentity,
         };
       } catch (error) {
         fail(error);
