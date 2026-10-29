@@ -3388,7 +3388,7 @@ model TimeEntry {
 model Invoice {
   id             String        @id @default(cuid())
   organizationId String        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  invoiceNumber  String        @unique
+  invoiceNumber  String
   clientId       String
   projectId      String?
   items          Json // [{description, quantity, rate, amount}]
@@ -3412,7 +3412,20 @@ model Invoice {
   @@index([clientId])
   @@index([projectId])
   @@index([organizationId])
+  @@unique([organizationId, invoiceNumber])
   @@map("invoices")
+}
+
+// Atomic, tenant-scoped allocator for the human-readable annual invoice number.
+model InvoiceNumberSequence {
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  year           Int
+  lastNumber     Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@id([organizationId, year])
+  @@map("invoice_number_sequences")
 }
 
 // IMP-FIN-04: a (partial) payment against an invoice. Invoice flips to PAID when

@@ -35,7 +35,16 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
   }
   const password = await hash(seedPassword, 12);
 
-  if (await tx.invoice.findUnique({ where: { invoiceNumber: 'INV-2026-001' } })) {
+  if (
+    await tx.invoice.findUnique({
+      where: {
+        organizationId_invoiceNumber: {
+          organizationId: 'org_devfathom',
+          invoiceNumber: 'INV-2026-001',
+        },
+      },
+    })
+  ) {
     await tx.user.updateMany({
       where: {
         organizationId: 'org_devfathom',
@@ -939,6 +948,19 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         paidAt: inv.paidDate ? new Date(inv.paidDate) : null,
         sentAt: inv.status !== 'DRAFT' ? new Date(inv.date) : null,
       },
+    });
+  }
+
+  // Direct seed inserts must advance the same allocator used by application
+  // creates, otherwise the first real invoice could reuse a seeded number.
+  for (const [year, lastNumber] of [
+    [2025, 8],
+    [2026, 5],
+  ] as const) {
+    await tx.invoiceNumberSequence.upsert({
+      where: { organizationId_year: { organizationId: 'org_devfathom', year } },
+      create: { organizationId: 'org_devfathom', year, lastNumber },
+      update: { lastNumber: { set: lastNumber } },
     });
   }
 

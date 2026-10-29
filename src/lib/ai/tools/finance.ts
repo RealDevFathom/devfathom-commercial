@@ -17,6 +17,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
+import { reserveInvoiceNumber } from '@/lib/finance/invoice-number';
 import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
 import {
   invoiceStatusTransitionError,
@@ -503,29 +504,25 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       const total = round2(subtotal + taxAmount);
       const invCurrency = currency ?? 'USD';
 
-      // Invoice number: INV-<year>-<sequence>. Mirrors the tRPC mutation.
-      // FIN-09: per-year sequence so it resets to -001 each January.
       const invYear = new Date().getFullYear();
-      const count = await db.invoice.count({
-        where: { invoiceNumber: { startsWith: `INV-${invYear}-` } },
-      });
-      const invoiceNumber = `INV-${invYear}-${String(count + 1).padStart(3, '0')}`;
-
-      const invoice = await db.invoice.create({
-        data: {
-          invoiceNumber,
-          clientId: rc.value.id,
-          projectId,
-          items: lineItems,
-          subtotal,
-          tax: taxAmount,
-          total,
-          currency: invCurrency,
-          status: 'DRAFT',
-          dueDate: new Date(dueDate),
-          notes: notes ?? null,
-        },
-        include: { client: { select: { name: true } } },
+      const invoice = await db.$transaction(async (tx) => {
+        const invoiceNumber = await reserveInvoiceNumber(tx, h.organizationId, invYear);
+        return tx.invoice.create({
+          data: {
+            invoiceNumber,
+            clientId: rc.value.id,
+            projectId,
+            items: lineItems,
+            subtotal,
+            tax: taxAmount,
+            total,
+            currency: invCurrency,
+            status: 'DRAFT',
+            dueDate: new Date(dueDate),
+            notes: notes ?? null,
+          },
+          include: { client: { select: { name: true } } },
+        });
       });
 
       h.activity({
