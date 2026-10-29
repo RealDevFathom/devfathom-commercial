@@ -19,6 +19,8 @@ vi.mock('@/lib/tenancy/host', () => ({
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: mocks.createTenantDb }));
 vi.mock('@/lib/restaurant/webhook-inbox', () => {
+  // Vitest hoists this factory, so a synchronous local load keeps the schema available.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { z } = require('zod') as typeof import('zod');
   return {
     recordInboundWebhook: mocks.recordInboundWebhook,

@@ -74,11 +74,10 @@ describe('PH-RPT metric contract', () => {
     const sql = khataQuery.strings.join('?');
     expect(sql).toContain('charge."amountMinor"::bigint-COALESCE(settlements.paid,0)');
     expect(sql).toContain(`CASE WHEN "kind"='PAYMENT' THEN "amountMinor" ELSE -"amountMinor" END`);
+    expect(sql).toContain('GREATEST(SUM(CASE');
     expect(sql).toContain(`"kind" IN ('PAYMENT','DISHONOURED_CHEQUE')`);
-    expect(sql).toContain(
-      `"kind"='DISHONOURED_CHEQUE' AND "settlesChargeId" IS NULL`
-    );
-    expect(sql).toContain('+(SELECT value FROM unlinked_dishonours)');
+    expect(sql).toContain(`FILTER (WHERE "kind"='DISHONOURED_CHEQUE')`);
+    expect(sql).toContain('+(SELECT dishonoured FROM unlinked_events)');
     expect(sql).toContain(')::bigint AS value');
     expect(sql).toContain(`charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`);
     expect(khataQuery.values).toEqual(['branch_1', 'branch_1', 'branch_1']);

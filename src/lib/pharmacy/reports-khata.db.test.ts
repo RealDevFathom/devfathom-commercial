@@ -21,7 +21,7 @@ async function createFixture(
   amounts: {
     overdue: number[];
     partial?: { amount: number; paid: number; dishonoured?: number };
-    unlinkedDishonoured?: number;
+    unlinked?: { paid: number; dishonoured: number };
     future?: number;
   }
 ): Promise<KhataFixture> {
@@ -116,14 +116,24 @@ async function createFixture(
         });
       }
     }
-    if (amounts.unlinkedDishonoured) {
+    if (amounts.unlinked) {
+      await db.pharmacyKhataEvent.create({
+        data: {
+          organizationId,
+          branchId: branch.id,
+          familyAccountId: family.id,
+          kind: 'PAYMENT',
+          amountMinor: amounts.unlinked.paid,
+          actorId: 'owner',
+        },
+      });
       await db.pharmacyKhataEvent.create({
         data: {
           organizationId,
           branchId: branch.id,
           familyAccountId: family.id,
           kind: 'DISHONOURED_CHEQUE',
-          amountMinor: amounts.unlinkedDishonoured,
+          amountMinor: amounts.unlinked.dishonoured,
           actorId: 'owner',
         },
       });
@@ -149,7 +159,7 @@ suite('owner command centre Khata aging under forced PostgreSQL RLS', () => {
     const second = await createFixture(orgA, `report-a2-${suffix}`, {
       overdue: [100],
       partial: { amount: 400, paid: 400, dishonoured: 400 },
-      unlinkedDishonoured: 300,
+      unlinked: { paid: 300, dishonoured: 300 },
     });
     const third = await createFixture(orgA, `report-a3-${suffix}`, {
       overdue: [],
@@ -158,6 +168,11 @@ suite('owner command centre Khata aging under forced PostgreSQL RLS', () => {
     const fullyBounced = await createFixture(orgA, `report-a4-${suffix}`, {
       overdue: [],
       partial: { amount: 100, paid: 100, dishonoured: 100 },
+    });
+    const overDishonoured = await createFixture(orgA, `report-a5-${suffix}`, {
+      overdue: [],
+      partial: { amount: 100, paid: 50, dishonoured: 500 },
+      unlinked: { paid: 40, dishonoured: 400 },
     });
     const foreign = await createFixture(orgB, `report-b-${suffix}`, {
       overdue: [2_000_000_000],
@@ -191,6 +206,13 @@ suite('owner command centre Khata aging under forced PostgreSQL RLS', () => {
         to: '2026-01-01',
       })
     );
+    const overDishonouredResult = await withTenantDb(orgA, (db) =>
+      readCommandCentre(db, {
+        branchIds: [overDishonoured.branchId],
+        from: '2026-01-01',
+        to: '2026-01-01',
+      })
+    );
 
     // Includes unpaid + partially paid overdue charges and adds full and partial bounced-cheque
     // debt back in.
@@ -199,5 +221,7 @@ suite('owner command centre Khata aging under forced PostgreSQL RLS', () => {
     expect(result.metrics.khataAgingMinor).toBe(2_750_001_100);
     expect(fullyBouncedResult.metrics.khataAgingMinor).toBe(100);
     expect(partiallyBounced.metrics.khataAgingMinor).toBe(200);
+    // Malformed legacy/imported rows cannot reinstate more than the associated prior payment.
+    expect(overDishonouredResult.metrics.khataAgingMinor).toBe(140);
   });
 });
