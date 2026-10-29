@@ -178,19 +178,19 @@ describe('prescription capture and private delivery', () => {
     });
     expect(mocks.can).toHaveBeenCalledWith(
       expect.anything(),
-      'pharmacy:dispense',
+      'pharmacy:prescriptions',
       undefined,
       expect.objectContaining({ source: 'TRPC' })
     );
   });
 
   it('allows pharmacists with dispensing capability', async () => {
-    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:dispense');
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:prescriptions');
     await expect(upload()).resolves.toHaveProperty('url');
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
-  it('allows tenant administrators only when central ABAC finds an explicit dispense grant', async () => {
+  it('allows tenant administrators through the narrow central prescription policy', async () => {
     mocks.can.mockResolvedValue(true);
     const admin = context();
     admin.session!.user.role = 'ADMIN';
@@ -207,13 +207,13 @@ describe('prescription capture and private delivery', () => {
     ).resolves.toHaveProperty('url');
     expect(mocks.can).toHaveBeenCalledWith(
       expect.objectContaining({ role: 'ADMIN' }),
-      'pharmacy:dispense',
+      'pharmacy:prescriptions',
       undefined,
       expect.objectContaining({ source: 'TRPC' })
     );
   });
 
-  it('refuses a tenant administrator when central ABAC finds no exact dispense grant', async () => {
+  it('refuses a tenant administrator when central ABAC finds an explicit veto', async () => {
     mocks.can.mockResolvedValue(false);
     const admin = context();
     admin.session!.user.role = 'ADMIN';
@@ -221,7 +221,7 @@ describe('prescription capture and private delivery', () => {
     await expect(caller(admin).workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.can).toHaveBeenCalledWith(
       expect.objectContaining({ role: 'ADMIN' }),
-      'pharmacy:dispense',
+      'pharmacy:prescriptions',
       undefined,
       expect.objectContaining({ source: 'TRPC' })
     );

@@ -132,6 +132,29 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     ).resolves.toBe(false);
   });
 
+  it('limits the admin fallback to prescription capture and preserves dispense DENYs', async () => {
+    await expect(
+      can(proprietor, 'pharmacy:prescriptions', undefined, { db: authorizationDb({}) })
+    ).resolves.toBe(true);
+    await expect(
+      can(employee, 'pharmacy:prescriptions', undefined, { db: authorizationDb({}) })
+    ).resolves.toBe(false);
+    await expect(
+      can(employee, 'pharmacy:prescriptions', undefined, {
+        db: authorizationDb({
+          rolePermissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+        }),
+      })
+    ).resolves.toBe(true);
+    await expect(
+      can(proprietor, 'pharmacy:prescriptions', undefined, {
+        db: authorizationDb({
+          overrides: [{ capability: 'pharmacy:dispense', effect: 'DENY' }],
+        }),
+      })
+    ).resolves.toBe(false);
+  });
+
   it('does not grant unrelated capabilities through wildcard or platform authority', async () => {
     const db = authorizationDb({ rolePermissions: permissionsFor('owner-operator') });
     expect(proprietor.role).toBe('ADMIN');
@@ -262,7 +285,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);

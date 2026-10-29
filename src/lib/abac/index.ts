@@ -45,11 +45,18 @@ async function customDecision(
     },
   });
   if (!user) return false;
+  // Prescription capture is narrower than dispensing. Existing pharmacist
+  // grants remain authoritative for it, including DENYs, without granting
+  // tenant administrators the wider dispensing capability.
+  const matchingActions =
+    action === 'pharmacy:prescriptions' ? [action, 'pharmacy:dispense'] : [action];
   const matchingRules = [
     ...user.permissionOverrides,
     ...(user.organizationRole?.permissions ?? []),
   ].filter((rule) =>
-    capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
+    matchingActions.some((candidate) =>
+      capabilityMatches(rule.capability, candidate, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
+    )
   );
   if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
   if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
