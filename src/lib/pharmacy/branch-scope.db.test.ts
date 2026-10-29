@@ -47,6 +47,7 @@ type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
   ledger: typeof import('./stock-ledger');
   branchScope: typeof import('./branch-scope');
+  substituteFinder: typeof import('./substitute-finder');
 };
 let deps: Deps;
 
@@ -58,6 +59,7 @@ type BranchFixture = {
   organizationId: string;
   branchId: string;
   medicineId: string;
+  presentationId: string;
   locationId: string;
   purchaseOrderId: string;
 };
@@ -171,6 +173,7 @@ async function branchFixture(
       organizationId,
       branchId,
       medicineId: medicine.id,
+      presentationId: medicine.presentations[0]!.id,
       locationId: location.id,
       purchaseOrderId: purchaseOrder.id,
     };
@@ -183,6 +186,7 @@ beforeAll(async () => {
     withTenantDb: (await import('@/lib/tenancy/scoped-db')).withTenantDb,
     ledger: await import('./stock-ledger'),
     branchScope: await import('./branch-scope'),
+    substituteFinder: await import('./substitute-finder'),
   };
   one = await branchFixture(ORG_A, BRANCH_ONE, `one-${suffix}`);
   two = await branchFixture(ORG_A, BRANCH_TWO, `two-${suffix}`);
@@ -227,6 +231,27 @@ describeIfDatabase('PLAT-04 ledger read — cross-branch id substitution', () =>
       )
     );
     expect(rows).toEqual([]);
+  });
+});
+
+describeIfDatabase('margin optimizer cost isolation under restricted PostgreSQL', () => {
+  it('returns only costs from the requested tenant and branch', async () => {
+    const rows = await inOrg(ORG_A, (db) =>
+      deps.substituteFinder.findMarginOptimizedBrandProposals(
+        db,
+        { organizationId: ORG_A, branchId: BRANCH_ONE },
+        {
+          medicineId: one.medicineId,
+          presentationId: one.presentationId,
+          quantityCanonicalUnits: 10,
+          at: NOW,
+        }
+      )
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ medicineId: one.medicineId, costMinor: 12_000 });
+    expect(rows.map((row) => row.medicineId)).not.toContain(two.medicineId);
+    expect(rows.map((row) => row.medicineId)).not.toContain(foreign.medicineId);
   });
 });
 

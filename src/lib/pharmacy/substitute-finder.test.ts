@@ -24,7 +24,7 @@ function lot(overrides: Record<string, unknown> = {}) {
     unitsPerPack: 10,
     printedMrpMinor: 800,
     unitCostMinor: 40,
-    balances: [{ onHandUnits: 20 }],
+    balances: [{ organizationId: 'org-a', branchId: 'branch-a', onHandUnits: 20 }],
     batch: {
       medicine: { id: 'alternate', productName: 'Lower Cost Generic', strengths: strength() },
     },
@@ -144,6 +144,75 @@ describe('AI-05 deterministic substitute finder', () => {
       ['best-margin', 500, 5_555],
       ['high-price-low-margin', 100, 1_000],
     ]);
+  });
+
+  it('defines margin optimization as contribution, with rate only breaking ties', async () => {
+    const rows = await findMarginOptimizedBrandProposals(
+      dbWith([
+        lot({ id: 'higher-rate', printedMrpMinor: 500, unitCostMinor: 10 }),
+        lot({ id: 'higher-contribution', printedMrpMinor: 1_000, unitCostMinor: 40 }),
+      ]) as never,
+      scope,
+      {
+        medicineId: 'requested',
+        presentationId: 'presentation-requested',
+        quantityCanonicalUnits: 10,
+      }
+    );
+    expect(rows.map((row) => [row.inventoryLotId, row.marginMinor, row.marginBps])).toEqual([
+      ['higher-contribution', 600, 6_000],
+      ['higher-rate', 400, 8_000],
+    ]);
+  });
+
+  it('does not count foreign tenant or branch balances as available stock', async () => {
+    let query: { where: unknown; include: unknown } | undefined;
+    const db = {
+      medicine: { findFirst: async () => requested },
+      pharmacyInventoryLot: {
+        findMany: async (args: { where: unknown; include: unknown }) => {
+          query = args;
+          return [
+            lot({
+              balances: [
+                { organizationId: 'org-b', branchId: 'branch-a', onHandUnits: 100 },
+                { organizationId: 'org-a', branchId: 'branch-b', onHandUnits: 100 },
+                { organizationId: 'org-a', branchId: 'branch-a', onHandUnits: 2 },
+              ],
+            }),
+          ];
+        },
+      },
+    };
+    expect(
+      await findMarginOptimizedBrandProposals(db as never, scope, {
+        medicineId: 'requested',
+        presentationId: 'presentation-requested',
+        quantityCanonicalUnits: 10,
+      })
+    ).toEqual([]);
+    expect(query).toMatchObject({
+      where: {
+        balances: {
+          some: {
+            organizationId: 'org-a',
+            branchId: 'branch-a',
+            disposition: 'AVAILABLE',
+            onHandUnits: { gt: 0 },
+          },
+        },
+      },
+      include: {
+        balances: {
+          where: {
+            organizationId: 'org-a',
+            branchId: 'branch-a',
+            disposition: 'AVAILABLE',
+            onHandUnits: { gt: 0 },
+          },
+        },
+      },
+    });
   });
 
   it('never margin-ranks a different ingredient, strength, form, or route', async () => {

@@ -8,15 +8,23 @@ export class PharmacySubstituteError extends Error {
   }
 }
 
-const candidateArgs = {
-  include: {
-    balances: { where: { disposition: 'AVAILABLE' as const, onHandUnits: { gt: 0 } } },
-    batch: { include: { medicine: { include: { strengths: true } } } },
-    packLevel: { include: { presentation: true } },
-  },
-} satisfies Prisma.PharmacyInventoryLotDefaultArgs;
+const candidateArgs = (scope: { organizationId: string; branchId: string }) =>
+  ({
+    include: {
+      balances: {
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          disposition: 'AVAILABLE' as const,
+          onHandUnits: { gt: 0 },
+        },
+      },
+      batch: { include: { medicine: { include: { strengths: true } } } },
+      packLevel: { include: { presentation: true } },
+    },
+  }) satisfies Prisma.PharmacyInventoryLotDefaultArgs;
 
-type CandidateLot = Prisma.PharmacyInventoryLotGetPayload<typeof candidateArgs>;
+type CandidateLot = Prisma.PharmacyInventoryLotGetPayload<ReturnType<typeof candidateArgs>>;
 
 export type SubstituteProposal = {
   medicineId: string;
@@ -115,9 +123,16 @@ export async function findSubstituteProposals(
         expiresAt: { gt: at },
         medicine: { saleable: true },
       },
-      balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
+      balances: {
+        some: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          disposition: 'AVAILABLE',
+          onHandUnits: { gt: 0 },
+        },
+      },
     },
-    ...candidateArgs,
+    ...candidateArgs(scope),
   });
 
   const requestedStrength = strengthKey(requested.strengths);
@@ -202,19 +217,30 @@ export async function findMarginOptimizedBrandProposals(
         expiresAt: { gt: at },
         medicine: { saleable: true },
       },
-      balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
+      balances: {
+        some: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          disposition: 'AVAILABLE',
+          onHandUnits: { gt: 0 },
+        },
+      },
     },
-    ...candidateArgs,
+    ...candidateArgs(scope),
   });
 
   const requestedStrength = strengthKey(requested.strengths);
   const proposals = lots.flatMap((lot): MarginOptimizedBrandProposal[] => {
     const medicine = lot.batch.medicine;
     const presentation = lot.packLevel.presentation;
-    const availableCanonicalUnits = lot.balances.reduce(
-      (total, balance) => total + balance.onHandUnits,
-      0
-    );
+    // Do not rely on relation integrity or RLS alone: legacy/mocked rows must
+    // still be incapable of inflating this branch's saleable quantity.
+    const availableCanonicalUnits = lot.balances
+      .filter(
+        (balance) =>
+          balance.organizationId === scope.organizationId && balance.branchId === scope.branchId
+      )
+      .reduce((total, balance) => total + balance.onHandUnits, 0);
     if (
       strengthKey(medicine.strengths) !== requestedStrength ||
       normalized(presentation.dosageForm) !== normalized(requestedPresentation.dosageForm) ||
@@ -249,6 +275,9 @@ export async function findMarginOptimizedBrandProposals(
     ];
   });
 
+  // "Margin optimiser" means contribution for the requested quantity. Rate is
+  // only a deterministic tie-breaker; purchasing decisions optimize cash
+  // contribution rather than silently changing semantics when pack prices vary.
   return proposals.sort(
     (left, right) =>
       right.marginMinor - left.marginMinor ||

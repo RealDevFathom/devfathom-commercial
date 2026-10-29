@@ -1438,7 +1438,7 @@ export const pharmacySalesRouter = router({
         throw error;
       }
     }),
-  marginOptimizedBrandProposals: capabilityProcedure('pharmacy:dispense')
+  marginOptimizedBrandProposals: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
