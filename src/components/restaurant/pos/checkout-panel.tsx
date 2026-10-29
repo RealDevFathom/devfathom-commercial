@@ -97,8 +97,11 @@ function CompControl({
   const [managerId, setManagerId] = useState('');
   const [managerPin, setManagerPin] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [reversing, setReversing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const eligibleLines = lines.filter((line) => Number(line.compAmount) === 0);
+  const eligibleLines = lines.filter((line) =>
+    reversing ? Number(line.compAmount) !== 0 : Number(line.compAmount) === 0
+  );
   const managers = operators.filter(
     (operator) => operator.id !== actingOperatorId || operator.canSelfApprove
   );
@@ -109,6 +112,7 @@ function CompControl({
     setManagerId('');
     setManagerPin('');
     setError(null);
+    setReversing(false);
   }
 
   async function submit(event: FormEvent) {
@@ -129,17 +133,20 @@ function CompControl({
     setSubmitting(true);
     setError(null);
     try {
-      await request('/api/restaurant/checkout/comp', {
-        method: 'POST',
-        body,
-        // Never retain a manager credential in the idempotency intent cache.
-        intent: `checkout-comp:${JSON.stringify({
-          billId,
-          billLineId: lineId,
-          reason: trimmedReason,
-          approvingStaffProfileId: managerId,
-        })}`,
-      });
+      await request(
+        reversing ? '/api/restaurant/checkout/comp/reverse' : '/api/restaurant/checkout/comp',
+        {
+          method: 'POST',
+          body,
+          // Never retain a manager credential in the idempotency intent cache.
+          intent: `${reversing ? 'checkout-comp-reverse' : 'checkout-comp'}:${JSON.stringify({
+            billId,
+            billLineId: lineId,
+            reason: trimmedReason,
+            approvingStaffProfileId: managerId,
+          })}`,
+        }
+      );
       setManagerPin('');
       setOpen(false);
       reset();
@@ -161,22 +168,47 @@ function CompControl({
         if (!next) reset();
       }}
     >
-      <Button
-        type="button"
-        variant="outline"
-        className="mb-4 h-11"
-        disabled={disabled || eligibleLines.length === 0 || managers.length === 0}
-        onClick={() => setOpen(true)}
-      >
-        Comp item
-      </Button>
+      <div className="mb-4 flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          className="h-11"
+          disabled={
+            disabled ||
+            !lines.some((line) => Number(line.compAmount) === 0) ||
+            managers.length === 0
+          }
+          onClick={() => {
+            setReversing(false);
+            setOpen(true);
+          }}
+        >
+          Comp item
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className="h-11"
+          disabled={
+            disabled ||
+            !lines.some((line) => Number(line.compAmount) !== 0) ||
+            managers.length === 0
+          }
+          onClick={() => {
+            setReversing(true);
+            setOpen(true);
+          }}
+        >
+          Reverse comp
+        </Button>
+      </div>
       <DialogContent showCloseButton={false} className="sm:max-w-lg">
         <form onSubmit={submit}>
           <DialogHeader>
-            <DialogTitle>Comp bill item</DialogTitle>
+            <DialogTitle>{reversing ? 'Reverse item comp' : 'Comp bill item'}</DialogTitle>
             <DialogDescription>
-              Select an item and verify the approving manager PIN. The original price remains in the
-              audit record.
+              Select an item and verify the approving manager PIN. Both the comp and any reversal
+              remain in the audit record.
             </DialogDescription>
           </DialogHeader>
           <div className="my-4 space-y-3">
@@ -198,7 +230,9 @@ function CompControl({
               </select>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor={`comp-reason-${billId}`}>Comp reason</Label>
+              <Label htmlFor={`comp-reason-${billId}`}>
+                {reversing ? 'Reversal reason' : 'Comp reason'}
+              </Label>
               <Textarea
                 id={`comp-reason-${billId}`}
                 required
@@ -258,7 +292,13 @@ function CompControl({
                 !/^\d{4,8}$/.test(managerPin)
               }
             >
-              {submitting ? 'Comping…' : 'Confirm comp'}
+              {submitting
+                ? reversing
+                  ? 'Reversing…'
+                  : 'Comping…'
+                : reversing
+                  ? 'Confirm reversal'
+                  : 'Confirm comp'}
             </Button>
           </DialogFooter>
         </form>

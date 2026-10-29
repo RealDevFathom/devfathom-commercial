@@ -1061,9 +1061,37 @@ describeIfDatabase('bills command layer (real DB)', () => {
         actor: actor(),
       })
     ).rejects.toMatchObject({ reason: 'ALREADY_COMPED' });
+
+    await deps.bills.reverseCompLine(db, {
+      billId: billIds[0]!,
+      branchId: ids.branch,
+      billLineId: line!.id,
+      reason: 'comp entered by mistake',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+    const restored = await read((tx) =>
+      tx.restaurantBillLine.findUnique({
+        where: { id: line!.id },
+        select: { compAmount: true, lineTotal: true, compReason: true },
+      })
+    );
+    expect(restored).toMatchObject({ compReason: null });
+    expect(restored?.compAmount.toString()).toBe('0');
+    expect(restored?.lineTotal.toString()).toBe(line!.lineSubtotal.toString());
+    const reversalAudit = await read((tx) =>
+      tx.restaurantCoAuthorization.findFirst({
+        where: { targetType: 'RestaurantBillLineCompReversal', targetId: line!.id },
+        select: { reason: true, capability: true },
+      })
+    );
+    expect(reversalAudit).toEqual({
+      reason: 'comp entered by mistake',
+      capability: 'orders:complimentary',
+    });
   });
 
-  it('clears pinned service-charge evidence after the last service-bearing line is comped', async () => {
+  it('retains pinned service-charge evidence after the last service-bearing line is comped', async () => {
     const { orderId, itemIds, db } = await openWithItems([{}, {}]);
     await read((tx) =>
       tx.restaurantServiceChargePolicyVersion.updateMany({
@@ -1451,7 +1479,7 @@ describeIfDatabase('bills command layer (real DB)', () => {
       service: after.serviceChargeTotal.toFixed(2),
       policy: after.serviceChargePolicyVersionId,
       grand: after.grandTotal.toFixed(2),
-    }).toEqual({ basis: '0.00', service: '0.00', policy: null, grand: '0.00' });
+    }).toEqual({ basis: '0.00', service: '0.00', policy: expect.any(String), grand: '0.00' });
   });
 
   it('re-split guard: blocks without recut, voids-and-recuts with co-auth, locks after tender/settle', async () => {

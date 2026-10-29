@@ -74,6 +74,7 @@ export type BillCommandErrorReason =
   | 'BILL_NOT_OPEN'
   | 'LINE_NOT_FOUND'
   | 'ALREADY_COMPED'
+  | 'NOT_COMPED'
   | 'COMP_EXCEEDS_BILL'
   | 'INVALID_SPLIT'
   | 'PARTITION_INCOMPLETE'
@@ -1073,7 +1074,6 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         },
       });
     }
-    const clearedServiceCharge = participatesInServiceCharge && serviceChargeBasis.isZero();
     await tx.restaurantBill.update({
       where: { id: bill.id },
       data: {
@@ -1082,18 +1082,129 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         grandTotal,
         serviceChargeTotal,
         serviceChargeBasis,
-        ...(clearedServiceCharge
-          ? {
-              serviceChargePolicyVersionId: null,
-              serviceChargeRate: null,
-              serviceChargeTaxTreatment: null,
-            }
-          : {}),
       },
     });
 
     await recordMoneyIdempotentResult(tx, input.actor, encodeCompResult(line.id, releasedDiscount));
     return { billLineId: line.id, billId: bill.id, releasedDiscount, replayed: false };
+  });
+}
+
+export type ReverseCompLineInput = CompLineInput;
+export type ReverseCompLineResult = Omit<CompLineResult, 'releasedDiscount'>;
+
+/**
+ * Reverse a mistaken line comp while preserving both authorization events in the
+ * co-authorization audit trail. Partial tenders do not lock this correction: restoring
+ * the charge increases the open bill balance and leaves every posted tender untouched.
+ */
+export async function reverseCompLine(
+  db: ScopedDb,
+  input: ReverseCompLineInput
+): Promise<ReverseCompLineResult> {
+  return runInTransaction(db, async (tx) => {
+    await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} AND "branchId" = ${input.branchId} FOR UPDATE`;
+    const bill = await tx.restaurantBill.findFirst({
+      where: { id: input.billId, branchId: input.branchId },
+      select: {
+        id: true,
+        status: true,
+        compTotal: true,
+        grandTotal: true,
+        serviceChargeTotal: true,
+        serviceChargeBasis: true,
+        serviceChargePolicyVersionId: true,
+        serviceChargeRate: true,
+      },
+    });
+    if (!bill) throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
+
+    const idem = await beginMoneyIdempotent(tx, input.actor, 'bill.comp.reverse');
+    if (idem.replay) {
+      return { billLineId: idem.resultRef || input.billLineId, billId: bill.id, replayed: true };
+    }
+    const reason = requireReason(input.reason);
+    if (bill.status !== 'OPEN') {
+      throw new BillCommandError('Only an OPEN bill can have a comp reversed.', 'BILL_NOT_OPEN');
+    }
+    const line = await tx.restaurantBillLine.findFirst({
+      where: { id: input.billLineId, billId: bill.id },
+      select: { id: true, lineSubtotal: true, compAmount: true },
+    });
+    if (!line)
+      throw new BillCommandError('The bill line does not belong to this bill.', 'LINE_NOT_FOUND');
+    if (line.compAmount.isZero()) {
+      throw new BillCommandError('The line is not comped.', 'NOT_COMPED');
+    }
+
+    await persistCoAuth(tx, {
+      actingStaffProfileId: input.actor.staffProfileId,
+      approvingStaffProfileId: input.approvingStaffProfileId,
+      capability: 'orders:complimentary',
+      reason,
+      targetType: 'RestaurantBillLineCompReversal',
+      targetId: line.id,
+      deviceId: input.actor.deviceId,
+      terminalSessionId: input.terminalSessionId,
+    });
+
+    const participates =
+      bill.serviceChargePolicyVersionId !== null && bill.serviceChargeRate !== null;
+    const serviceChargeBasis = participates
+      ? add(bill.serviceChargeBasis, line.lineSubtotal)
+      : bill.serviceChargeBasis;
+    const serviceChargeTotal = participates
+      ? roundMoney(multiply(serviceChargeBasis, bill.serviceChargeRate!))
+      : bill.serviceChargeTotal;
+    const serviceAdded = sub(serviceChargeTotal, bill.serviceChargeTotal);
+    const activeLines = participates
+      ? await tx.restaurantBillLine.findMany({
+          where: { billId: bill.id, OR: [{ id: line.id }, { compAmount: ZERO }] },
+          select: { id: true, lineSubtotal: true },
+          orderBy: { id: 'asc' },
+        })
+      : [];
+    const allocations = participates
+      ? allocate(
+          serviceChargeTotal,
+          activeLines.map((active) => active.lineSubtotal.mul(100).toNumber())
+        )
+      : [];
+    for (const [index, active] of activeLines.entries()) {
+      const serviceChargeAmount = allocations[index]!;
+      await tx.restaurantBillLine.update({
+        where: { id: active.id },
+        data: {
+          serviceChargeAmount,
+          lineTotal: add(active.lineSubtotal, serviceChargeAmount),
+          ...(active.id === line.id
+            ? { compAmount: ZERO, compReason: null, compCoAuthorizationId: null }
+            : {}),
+        },
+      });
+    }
+    if (!participates) {
+      await tx.restaurantBillLine.update({
+        where: { id: line.id },
+        data: {
+          compAmount: ZERO,
+          lineTotal: line.lineSubtotal,
+          compReason: null,
+          compCoAuthorizationId: null,
+        },
+      });
+    }
+    await tx.restaurantBill.update({
+      where: { id: bill.id },
+      data: {
+        compTotal: sub(bill.compTotal, line.compAmount),
+        grandTotal: add(bill.grandTotal, add(line.lineSubtotal, serviceAdded)),
+        serviceChargeTotal,
+        serviceChargeBasis,
+      },
+    });
+    await recordMoneyIdempotentResult(tx, input.actor, line.id);
+    return { billLineId: line.id, billId: bill.id, replayed: false };
   });
 }
 
@@ -1663,7 +1774,10 @@ export async function finalizeBillSettlement(
 
 /** Why an order is not yet fully settled (the first failing condition). */
 export type OrderSettlementBlocker =
-  'NO_BILLS' | 'ITEMS_UNBILLED' | 'BILLS_OPEN' | 'TOTAL_MISMATCH';
+  | 'NO_BILLS'
+  | 'ITEMS_UNBILLED'
+  | 'BILLS_OPEN'
+  | 'TOTAL_MISMATCH';
 
 export type OrderSettlement = {
   orderId: string;
