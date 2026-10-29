@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildReceiptMessage,
+  createReceiptOtpCode,
+  createReceiptOtpProofFromCode,
   createReceiptOtpProof,
   hasValidReceiptOtp,
   issueHostedReceipt,
@@ -11,6 +13,12 @@ const secret = 'a-production-length-secret-that-is-not-real';
 const now = new Date('2026-10-29T00:00:00.000Z');
 const input = {
   consent: 'CUSTOMER_REQUEST' as const,
+  consentedAt: now.toISOString(),
+  organizationId: 'org-1',
+  branchId: 'branch-1',
+  saleId: 'sale-1',
+  actorId: 'owner-1',
+  version: 1 as const,
   branch: 'Gulberg',
   receiptNumber: 'R-42',
   total: 'PKR 1,250.00',
@@ -48,6 +56,17 @@ describe('neutral hosted pharmacy receipt', () => {
     expect(hasValidReceiptOtp(token, proof, secret, new Date(now.getTime() + 16 * 60_000))).toBe(
       false
     );
+    const code = createReceiptOtpCode(token, secret, now);
+    expect(code).toMatch(/^\d{6}$/);
+    expect(
+      hasValidReceiptOtp(
+        token,
+        createReceiptOtpProofFromCode(token, code, secret, now),
+        secret,
+        now
+      )
+    ).toBe(true);
+    expect(() => createReceiptOtpProofFromCode(token, '00000x', secret, now)).toThrow('invalid');
   });
   it('builds only the five neutral utility fields and lints catalog terms', () => {
     const text = buildReceiptMessage({ ...input, link: 'https://example.test/r/token' });
@@ -67,5 +86,14 @@ describe('neutral hosted pharmacy receipt', () => {
       fbrInvoiceNumber: 'FBR-9',
       fbrQrUrl: 'https://fbr.example/qr/9',
     });
+  });
+  it('rejects malformed timestamps and oversized bearer tokens', () => {
+    expect(() => readHostedReceipt('x'.repeat(16_385), secret, now)).toThrow('Invalid');
+    expect(() => issueHostedReceipt({ ...input, consentedAt: 'not-a-date', now }, secret)).toThrow(
+      'consent time'
+    );
+    expect(() =>
+      issueHostedReceipt({ ...input, consent: undefined as never, now }, secret)
+    ).toThrow('consent');
   });
 });

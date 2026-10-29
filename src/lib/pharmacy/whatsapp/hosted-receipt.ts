@@ -10,9 +10,18 @@ const MIN_DAYS = 30;
 const MAX_DAYS = 90;
 const PURPOSE = 'pharmacy-hosted-receipt-v1';
 const OTP_PURPOSE = 'pharmacy-hosted-receipt-otp-v1';
+const OTP_CODE_PURPOSE = 'pharmacy-hosted-receipt-code-v1';
+const MAX_TOKEN_LENGTH = 16_384;
 
 export type ReceiptConsent = 'CUSTOMER_REQUEST' | 'COUNTER_OPT_IN';
 export type HostedReceipt = {
+  organizationId: string;
+  branchId: string;
+  saleId: string;
+  actorId: string;
+  consent: ReceiptConsent;
+  consentedAt: string;
+  version: number;
   branch: string;
   receiptNumber: string;
   total: string;
@@ -33,6 +42,17 @@ function parseClaims(value: unknown): Claims {
     c.purpose !== PURPOSE ||
     typeof c.nonce !== 'string' ||
     c.nonce.length < 32 ||
+    typeof c.organizationId !== 'string' ||
+    !c.organizationId ||
+    typeof c.branchId !== 'string' ||
+    !c.branchId ||
+    typeof c.saleId !== 'string' ||
+    !c.saleId ||
+    typeof c.actorId !== 'string' ||
+    !c.actorId ||
+    (c.consent !== 'CUSTOMER_REQUEST' && c.consent !== 'COUNTER_OPT_IN') ||
+    typeof c.consentedAt !== 'string' ||
+    c.version !== 1 ||
     typeof c.branch !== 'string' ||
     typeof c.receiptNumber !== 'string' ||
     typeof c.total !== 'string' ||
@@ -65,7 +85,6 @@ export function phoneBinding(secret: string, e164Phone: string) {
 
 export function issueHostedReceipt(
   input: Omit<HostedReceipt, 'issuedAt' | 'expiresAt' | 'phoneBinding'> & {
-    consent: ReceiptConsent;
     phone?: string;
     expiryDays: number;
     now?: Date;
@@ -80,8 +99,21 @@ export function issueHostedReceipt(
     throw new Error('Hosted receipt expiry must be between 30 and 90 days.');
   if (input.rx && !input.phone) throw new Error('An Rx receipt requires a phone for OTP binding.');
   const now = input.now ?? new Date();
+  if (!Number.isFinite(now.getTime())) throw new Error('Hosted receipt issue time is invalid.');
+  if (input.consent !== 'CUSTOMER_REQUEST' && input.consent !== 'COUNTER_OPT_IN')
+    throw new Error('Explicit customer consent is required.');
+  const consentedAt = new Date(input.consentedAt);
+  if (!Number.isFinite(consentedAt.getTime()) || consentedAt.getTime() > now.getTime())
+    throw new Error('Hosted receipt consent time is invalid.');
   const receipt: HostedReceipt = {
     branch: input.branch,
+    organizationId: input.organizationId,
+    branchId: input.branchId,
+    saleId: input.saleId,
+    actorId: input.actorId,
+    consent: input.consent,
+    consentedAt: consentedAt.toISOString(),
+    version: 1,
     receiptNumber: input.receiptNumber,
     total: input.total,
     paymentMethod: input.paymentMethod,
@@ -102,6 +134,7 @@ export function issueHostedReceipt(
 }
 
 export function readHostedReceipt(token: string, secret: string, now = new Date()): HostedReceipt {
+  if (token.length > MAX_TOKEN_LENGTH) throw new Error('Invalid receipt link.');
   const parts = token.split('.');
   if (parts.length !== 3) throw new Error('Invalid receipt link.');
   try {
@@ -112,10 +145,41 @@ export function readHostedReceipt(token: string, secret: string, now = new Date(
         Buffer.concat([decipher.update(unb64(parts[1])), decipher.final()]).toString('utf8')
       )
     );
-    if (new Date(claims.expiresAt).getTime() <= now.getTime())
-      throw new Error('Receipt link has expired.');
-    const { purpose: _purpose, nonce: _nonce, ...receipt } = claims;
-    return receipt;
+    const issuedAt = Date.parse(claims.issuedAt);
+    const expiresAt = Date.parse(claims.expiresAt);
+    const consentedAt = Date.parse(claims.consentedAt);
+    const nowMs = now.getTime();
+    if (
+      !Number.isFinite(nowMs) ||
+      !Number.isFinite(issuedAt) ||
+      !Number.isFinite(expiresAt) ||
+      !Number.isFinite(consentedAt) ||
+      consentedAt > issuedAt ||
+      issuedAt > nowMs + 5 * 60_000 ||
+      expiresAt - issuedAt < MIN_DAYS * 86_400_000 ||
+      expiresAt - issuedAt > MAX_DAYS * 86_400_000
+    )
+      throw new Error('Invalid receipt link.');
+    if (expiresAt <= nowMs) throw new Error('Receipt link has expired.');
+    return {
+      organizationId: claims.organizationId,
+      branchId: claims.branchId,
+      saleId: claims.saleId,
+      actorId: claims.actorId,
+      consent: claims.consent,
+      consentedAt: claims.consentedAt,
+      version: claims.version,
+      branch: claims.branch,
+      receiptNumber: claims.receiptNumber,
+      total: claims.total,
+      paymentMethod: claims.paymentMethod,
+      issuedAt: claims.issuedAt,
+      expiresAt: claims.expiresAt,
+      rx: claims.rx,
+      phoneBinding: claims.phoneBinding,
+      ...(claims.fbrInvoiceNumber ? { fbrInvoiceNumber: claims.fbrInvoiceNumber } : {}),
+      ...(claims.fbrQrUrl ? { fbrQrUrl: claims.fbrQrUrl } : {}),
+    };
   } catch (error) {
     if (error instanceof Error && error.message === 'Receipt link has expired.') throw error;
     throw new Error('Invalid receipt link.');
@@ -131,11 +195,57 @@ export function createReceiptOtpProof(
   const receipt = readHostedReceipt(token, secret, verifiedAt);
   if (!receipt.rx || !receipt.phoneBinding || receipt.phoneBinding !== phoneBinding(secret, phone))
     throw new Error('OTP verification does not match this receipt.');
+  return signReceiptOtpProof(token, receipt.phoneBinding, secret, verifiedAt);
+}
+function signReceiptOtpProof(token: string, binding: string, secret: string, verifiedAt: Date) {
   const timestamp = String(verifiedAt.getTime());
   const signature = createHmac('sha256', key(secret))
-    .update(`${OTP_PURPOSE}.${token}.${timestamp}.${receipt.phoneBinding}`)
+    .update(`${OTP_PURPOSE}.${token}.${timestamp}.${binding}`)
     .digest();
   return `${timestamp}.${b64(signature)}`;
+}
+
+/** Six-digit code delivered separately to the consented WhatsApp number. */
+export function createReceiptOtpCode(token: string, secret: string, now = new Date()): string {
+  const receipt = readHostedReceipt(token, secret, now);
+  if (!receipt.rx || !receipt.phoneBinding) throw new Error('This receipt does not require OTP.');
+  const window = Math.floor(now.getTime() / (5 * 60_000));
+  const value = createHmac('sha256', key(secret))
+    .update(`${OTP_CODE_PURPOSE}.${token}.${window}.${receipt.phoneBinding}`)
+    .digest()
+    .readUInt32BE(0);
+  return String(value % 1_000_000).padStart(6, '0');
+}
+
+export function verifyReceiptOtpCode(
+  token: string,
+  code: string,
+  secret: string,
+  now = new Date()
+): boolean {
+  if (!/^\d{6}$/.test(code)) return false;
+  for (const offset of [0, -1]) {
+    const candidate = createReceiptOtpCode(
+      token,
+      secret,
+      new Date(now.getTime() + offset * 5 * 60_000)
+    );
+    if (timingSafeEqual(Buffer.from(candidate), Buffer.from(code))) return true;
+  }
+  return false;
+}
+
+export function createReceiptOtpProofFromCode(
+  token: string,
+  code: string,
+  secret: string,
+  now = new Date()
+): string {
+  if (!verifyReceiptOtpCode(token, code, secret, now))
+    throw new Error('The verification code is invalid or expired.');
+  const receipt = readHostedReceipt(token, secret, now);
+  if (!receipt.phoneBinding) throw new Error('This receipt does not require OTP.');
+  return signReceiptOtpProof(token, receipt.phoneBinding, secret, now);
 }
 export function hasValidReceiptOtp(
   token: string,

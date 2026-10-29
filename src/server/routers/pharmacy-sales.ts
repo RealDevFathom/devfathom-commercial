@@ -94,6 +94,16 @@ import {
 } from '@/lib/pharmacy/sales';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import {
+  buildReceiptMessage,
+  createReceiptOtpCode,
+  issueHostedReceipt,
+} from '@/lib/pharmacy/whatsapp/hosted-receipt';
+import { persistHostedReceipt } from '@/lib/pharmacy/whatsapp/hosted-receipt-store';
+import { normalizeWhatsAppNumber, phoneLast4 } from '@/lib/pharmacy/whatsapp/messages';
+import { createWhatsAppProvider } from '@/lib/pharmacy/whatsapp/provider';
+import { sendAndLog } from '@/lib/pharmacy/whatsapp/message-log';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import {
   applyPharmacyTender,
@@ -1699,6 +1709,119 @@ export const pharmacySalesRouter = router({
       } catch (error) {
         fail(error);
       }
+    }),
+
+  sendHostedReceipt: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          phone: z.string().trim().min(8).max(32),
+          consent: z.enum(['CUSTOMER_REQUEST', 'COUNTER_OPT_IN']),
+          expiryDays: z.number().int().min(30).max(90).default(30),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+      const secret = process.env.PHARMACY_HOSTED_RECEIPT_SECRET;
+      const publicOrigin = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '');
+      const phone = normalizeWhatsAppNumber(input.phone);
+      if (!secret || !publicOrigin || !phone)
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Hosted receipt delivery is not configured.',
+        });
+      const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
+      if (receipt.receiptNumber === null || !receipt.completedAt)
+        throw new TRPCError({ code: 'CONFLICT', message: 'Only a settled receipt can be sent.' });
+      const rx =
+        receipt.lines.some((line) => line.saleLineId.length > 0) &&
+        Boolean(
+          await ctx.db.pharmacySaleLine.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              saleId: input.saleId,
+              prescriptionLineId: { not: null },
+            },
+            select: { id: true },
+          })
+        );
+      const now = new Date();
+      const issued = issueHostedReceipt(
+        {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          saleId: input.saleId,
+          actorId: scope.actorId,
+          consent: input.consent,
+          consentedAt: now.toISOString(),
+          version: 1,
+          branch: receipt.branchName,
+          receiptNumber: String(receipt.receiptNumber),
+          total: `${receipt.currency} ${formatMinor(receipt.totals.netMinor)}`,
+          paymentMethod: receipt.tenders.map((tender) => tender.type).join(', '),
+          expiryDays: input.expiryDays,
+          rx,
+          phone,
+          now,
+        },
+        secret
+      );
+      const link = `${publicOrigin}/r/pharmacy/${issued.token}`;
+      const message = buildReceiptMessage({
+        branch: issued.receipt.branch,
+        receiptNumber: issued.receipt.receiptNumber,
+        total: issued.receipt.total,
+        paymentMethod: issued.receipt.paymentMethod,
+        link,
+      });
+      const recordId = await ctx.db.$transaction((tx) =>
+        persistHostedReceipt(txDb(tx), issued.token, issued.receipt)
+      );
+      const provider = createWhatsAppProvider();
+      const outcome = await sendAndLog(
+        {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          kind: 'HOSTED_RECEIPT',
+          dedupeKey: `hosted-receipt:${recordId}`,
+          phoneLast4: phoneLast4(phone),
+          orderId: input.saleId,
+        },
+        async () => {
+          const delivery = await provider.sendText({ to: phone, body: message });
+          if (rx)
+            await provider.sendText({
+              to: phone,
+              body: `Your receipt verification code is ${createReceiptOtpCode(issued.token, secret, now)}. It expires in 5 minutes.`,
+            });
+          return delivery;
+        }
+      );
+      if (outcome === 'SENT')
+        await ctx.db.pharmacyHostedReceipt.update({
+          where: { id: recordId },
+          data: { deliveredAt: new Date() },
+        });
+      annotateAudit(ctx, {
+        category: 'PHARMACY',
+        operation: 'CREATE',
+        action: 'pharmacySales.sendHostedReceipt',
+        targetType: 'PharmacySale',
+        targetId: input.saleId,
+        skipInput: true,
+        metadata: {
+          branchId: scope.branchId,
+          consent: input.consent,
+          consentedAt: now.toISOString(),
+          deliveryOutcome: outcome,
+          rx,
+        },
+      });
+      return { outcome, expiresAt: issued.receipt.expiresAt };
     }),
 
   /**
