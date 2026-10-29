@@ -212,11 +212,12 @@ export const projectsRouter = router({
       }
       await assertInOrganization(ctx.db.user, workspaceId(ctx), [input.userId]);
 
-      // Idempotent — if already a member, just update the role
+      // Adding a member is idempotent. Role changes for existing memberships must
+      // go through setMemberRole, which enforces the last-lead invariant.
       const membership = await ctx.db.projectMember.upsert({
         where: { projectId_userId: { projectId: input.projectId, userId: input.userId } },
         create: { projectId: input.projectId, userId: input.userId, role: input.role },
-        update: { role: input.role },
+        update: {},
       });
       const [project, targetUser] = await Promise.all([
         ctx.db.project.findUnique({ where: { id: input.projectId }, select: { name: true } }),
