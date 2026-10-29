@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { logActivity } from '@/server/activity';
 import { readJson } from '@/lib/api-json';
+import { multiplyMoney, roundMoney } from '@/lib/finance/money';
 
 export const GET = withApiAuth('finance:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -33,7 +34,6 @@ export const GET = withApiAuth('finance:read', async (ctx, request) => {
 // Bound + non-negative so an oversized/negative input is a clean 400, not a raw
 // DB 500 (FIN-07) and not a paid/outstanding-corrupting negative (FIN-01).
 const MAX_MONEY = 9_999_999_999.99;
-const round2 = (n: number) => Math.round(n * 100) / 100;
 
 const lineItemSchema = z.object({
   description: z.string().min(1),
@@ -72,11 +72,11 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
     description: it.description,
     quantity: it.quantity,
     rate: it.rate,
-    amount: round2(it.quantity * it.rate),
+    amount: multiplyMoney(it.quantity, it.rate),
   }));
-  const subtotal = round2(items.reduce((s, it) => s + it.amount, 0));
-  const tax = round2(parsed.data.tax);
-  const total = round2(subtotal + tax);
+  const subtotal = roundMoney(items.reduce((s, it) => s + it.amount, 0));
+  const tax = roundMoney(parsed.data.tax);
+  const total = roundMoney(subtotal + tax);
 
   // FIN-09: per-year sequence — scope the count to this year so it resets to -001.
   const year = new Date().getFullYear();
