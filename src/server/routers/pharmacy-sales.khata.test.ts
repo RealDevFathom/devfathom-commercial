@@ -7,6 +7,7 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(),
 }));
 vi.mock('@/server/audit', () => ({
+  annotateAudit: vi.fn(),
   ipFromHeaders: vi.fn(),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
