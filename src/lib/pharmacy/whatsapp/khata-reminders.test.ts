@@ -82,6 +82,7 @@ const config = readWhatsAppConfig({
   PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER: 'khata_due_v1',
   PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
   PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sandbox-owner',
+  PHARMACY_WHATSAPP_KHATA_PAYMENT_LINK: 'https://pay.example.test/raast',
 });
 
 function account(id = 'family-1') {
@@ -121,7 +122,7 @@ describe('planKhataReminder', () => {
       NOW
     );
     expect(plan).toMatchObject({ due: true, dueDate: '2026-10-21' });
-    expect(plan.dedupeKey).toMatch(/^khata:family-1:w\d+$/);
+    expect(plan.dedupeKey).toMatch(/^khata:family-1:d7:p\d+$/);
   });
 
   it('is not due without an overdue charge, below the floor, or in the future', () => {
@@ -145,7 +146,7 @@ describe('planKhataReminder', () => {
     ).toBe(false);
   });
 
-  it('buckets the dedupe key by account x week', () => {
+  it('buckets the dedupe key by account and owner-configured interval', () => {
     const base = planKhataReminder(
       { familyAccountId: 'family-1', balanceMinor: 50_000, oldestOverdueAt: NOW },
       NOW
@@ -160,6 +161,22 @@ describe('planKhataReminder', () => {
     );
     expect(sameInstant.dedupeKey).toBe(base.dedupeKey);
     expect(nextWeek.dedupeKey).not.toBe(base.dedupeKey);
+    const intervalStart = new Date(14 * 2_000 * 86_400_000 + 86_400_000);
+    expect(
+      planKhataReminder(
+        { familyAccountId: 'family-1', balanceMinor: 50_000, oldestOverdueAt: NOW },
+        new Date(intervalStart.getTime() + 7 * 86_400_000),
+        10_000,
+        14
+      ).dedupeKey
+    ).toBe(
+      planKhataReminder(
+        { familyAccountId: 'family-1', balanceMinor: 50_000, oldestOverdueAt: NOW },
+        intervalStart,
+        10_000,
+        14
+      ).dedupeKey
+    );
   });
 });
 
@@ -187,7 +204,7 @@ describe('processDueWhatsAppKhataReminders', () => {
         to: '923001234567',
         template: 'khataReminder',
         templateName: 'khata_due_v1',
-        parameters: ['Khan household', '500.00'],
+        parameters: ['500.00', '2026-10-10', 'https://pay.example.test/raast'],
       },
     ]);
     expect(store.logs).toHaveLength(1);
@@ -198,6 +215,19 @@ describe('processDueWhatsAppKhataReminders', () => {
       phoneLast4: '4567',
       dueDate: '2026-10-10',
     });
+  });
+
+  it('allows the configured Meta provider path rather than limiting collection to sandbox', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const metaConfig = { ...config, provider: 'meta' as const };
+    const provider = new MockWhatsAppProvider(metaConfig);
+
+    await expect(
+      processDueWhatsAppKhataReminders({ now: NOW, config: metaConfig, provider })
+    ).resolves.toMatchObject({ configured: true, prepared: 1 });
+    expect(provider.calls).toHaveLength(1);
   });
 
   it.each([
@@ -219,8 +249,8 @@ describe('processDueWhatsAppKhataReminders', () => {
     expect(store.logs).toEqual([]);
   });
 
-  it('reads the send window and the day in UTC for a stored zone Intl refuses, instead of failing the run', async () => {
-    // NOW is 08:00 UTC, inside the 08:00-22:00 window in UTC.
+  it('uses fixed PKT quiet hours even when a stored workspace zone is invalid', async () => {
+    // NOW is 13:00 PKT, inside the permitted 09:00-22:00 window.
     store.timezone = 'PKT';
     store.accounts = [account()];
     store.customers = [customer(true)];
@@ -243,6 +273,33 @@ describe('processDueWhatsAppKhataReminders', () => {
       provider,
     });
     expect(result).toMatchObject({ configured: false, scanned: 0 });
+    expect(provider.calls).toEqual([]);
+  });
+
+  it('does nothing without an owner-configured HTTPS Raast or wallet link', async () => {
+    const noLink = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER: 'khata_due_v1',
+      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org_a',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'sandbox-owner',
+    });
+    const provider = new MockWhatsAppProvider(noLink);
+    await expect(
+      processDueWhatsAppKhataReminders({ now: NOW, config: noLink, provider })
+    ).resolves.toMatchObject({ configured: false, scanned: 0 });
+  });
+
+  it('enforces quiet hours through 08:59 in the pharmacy timezone', async () => {
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+    // 03:59 UTC is 08:59 PKT.
+    const result = await processDueWhatsAppKhataReminders({
+      now: new Date('2026-10-21T03:59:00Z'),
+      config,
+      provider,
+    });
+    expect(result).toMatchObject({ scanned: 1, sent: 0, skippedNoConsent: 1 });
     expect(provider.calls).toEqual([]);
   });
 });
@@ -279,6 +336,8 @@ describe('reminder text and daily customer dedupe', () => {
     store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
     const provider = new MockWhatsAppProvider(config);
     await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
-    expect(provider.calls[0]).toMatchObject({ parameters: ['Khan', '500.00'] });
+    expect(provider.calls[0]).toMatchObject({
+      parameters: ['500.00', '2026-10-10', 'https://pay.example.test/raast'],
+    });
   });
 });

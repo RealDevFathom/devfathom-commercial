@@ -47,7 +47,31 @@ describe('readWhatsAppConfig', () => {
     expect(config.templates.refillReminder).toBeNull();
     expect(config.appSecret).toBeNull();
     expect(config.reminderLeadDays).toBe(3);
+    expect(config.khataReminderIntervalDays).toBe(7);
+    expect(config.khataReminderMinBalanceMinor).toBe(10_000);
+    expect(config.khataPaymentLink).toBeNull();
     expect(createWhatsAppProvider(config)).toBeInstanceOf(MockWhatsAppProvider);
+  });
+
+  it('validates owner-configured khata cadence, balance floor, and HTTPS payment link', () => {
+    const configured = readWhatsAppConfig({
+      PHARMACY_WHATSAPP_KHATA_REMINDER_INTERVAL_DAYS: '14',
+      PHARMACY_WHATSAPP_KHATA_MIN_BALANCE_MINOR: '25000',
+      PHARMACY_WHATSAPP_KHATA_PAYMENT_LINK: 'https://pay.example.test/raast',
+    });
+    expect(configured).toMatchObject({
+      khataReminderIntervalDays: 14,
+      khataReminderMinBalanceMinor: 25_000,
+      khataPaymentLink: 'https://pay.example.test/raast',
+    });
+    expect(
+      readWhatsAppConfig({ PHARMACY_WHATSAPP_KHATA_PAYMENT_LINK: 'http://pay.example.test' })
+        .khataPaymentLink
+    ).toBeNull();
+    expect(
+      readWhatsAppConfig({ PHARMACY_WHATSAPP_KHATA_REMINDER_INTERVAL_DAYS: '0' })
+        .khataReminderIntervalDays
+    ).toBe(7);
   });
 
   it('selects meta only when explicitly configured', () => {
