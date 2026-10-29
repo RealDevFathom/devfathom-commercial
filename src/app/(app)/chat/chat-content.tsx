@@ -118,11 +118,7 @@ export function ChatContent() {
             ⌘K
           </kbd>
         </button>
-        <button
-          type="button"
-          onClick={() => setSavedOpen(true)}
-          className={cn(topBtn, 'shrink-0')}
-        >
+        <button type="button" onClick={() => setSavedOpen(true)} className={cn(topBtn, 'shrink-0')}>
           <Bookmark className="h-3.5 w-3.5" />
           <span className="hidden sm:inline">Saved</span>
         </button>

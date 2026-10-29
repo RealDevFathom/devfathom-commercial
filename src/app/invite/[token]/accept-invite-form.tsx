@@ -104,14 +104,14 @@ export function AcceptInviteForm({ token }: { token: string }) {
         redirect: false,
       });
 
-      if (result?.error) {
+      if (!result || result.error) {
         // Account is activated but auto sign-in failed — send them to login.
         router.push('/login');
         router.refresh();
         return;
       }
 
-      router.push('/dashboard');
+      router.push('/dashboard?landing=1');
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');

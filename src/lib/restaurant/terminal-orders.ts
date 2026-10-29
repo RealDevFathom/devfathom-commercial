@@ -1,4 +1,5 @@
 import 'server-only';
+import { recordOwnerPinReauthentication } from './owner-reauthentication';
 
 import { createHash } from 'node:crypto';
 
@@ -274,6 +275,9 @@ export async function authenticateApprover(
       };
     }
     return { ok: false, response: json({ error: 'Invalid approving credential.' }, 401) };
+  }
+  if (approving.type === 'PIN') {
+    await recordOwnerPinReauthentication(db, auth.staffProfileId, branchId);
   }
   return { ok: true, staffProfileId: auth.staffProfileId };
 }

@@ -48,9 +48,13 @@ export default async function LoginPage(props: LoginPageProps) {
   const notice = typeof reason === 'string' ? SIGN_OUT_NOTICES[reason] : undefined;
   // D15: the callback URL is validated on the SERVER before it reaches any
   // client component, so no consumer ever holds the caller's raw string.
-  const callbackUrl = safeCallbackUrl(
+  const requestedCallback = safeCallbackUrl(
     typeof searchParams.callbackUrl === 'string' ? searchParams.callbackUrl : null
   );
+  const callbackUrl =
+    requestedCallback === '/dashboard' && !searchParams.callbackUrl
+      ? '/dashboard?landing=1'
+      : requestedCallback;
   // WHA-1623: a closed set of keys from /login/submit, never free text.
   const initialError = loginErrorKey(searchParams[LOGIN_ERROR_PARAM]);
   const requestHeaders = await headers();

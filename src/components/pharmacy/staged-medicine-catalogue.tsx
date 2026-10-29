@@ -192,12 +192,16 @@ export async function StagedMedicineCatalogue({
       {result && (
         <SectionCard title="Candidates and source quantities" titleLevel={2}>
           <p className="mb-4 text-sm">
-            {result.candidateCount.toLocaleString('en-US')} staged product candidates available for review. {result.total.toLocaleString('en-US')}{' '}
-            match this search. Source quantities are references, not physical stock.
+            {result.candidateCount.toLocaleString('en-US')} staged product candidates available for
+            review. {result.total.toLocaleString('en-US')} match this search. Source quantities are
+            references, not physical stock.
           </p>
-          {result.batch && <p className="mb-4 break-all font-mono text-xs text-text-muted">
-            {result.batch.source.fileName} · SHA256 {result.batch.source.contentHash} · {result.batch.profilerVersion}
-          </p>}
+          {result.batch && (
+            <p className="mb-4 break-all font-mono text-xs text-text-muted">
+              {result.batch.source.fileName} · SHA256 {result.batch.source.contentHash} ·{' '}
+              {result.batch.profilerVersion}
+            </p>
+          )}
           <form action={route} className="mb-4 flex flex-wrap items-end gap-3">
             {Object.entries(selected).map(([key, value]) => (
               <input key={key} type="hidden" name={key} value={value} />
@@ -240,13 +244,19 @@ export async function StagedMedicineCatalogue({
               </caption>
               <thead className="font-mono text-xs uppercase">
                 <tr>
-                  {['Medicine', 'Source QTY', 'Source saleprice', 'Source purprice', 'Source UnitPrice', 'Source PackUnits', 'Review'].map(
-                    (label) => (
-                      <th className="px-3 py-3 text-left" key={label} scope="col">
-                        {label}
-                      </th>
-                    )
-                  )}
+                  {[
+                    'Medicine',
+                    'Source QTY',
+                    'Source saleprice',
+                    'Source purprice',
+                    'Source UnitPrice',
+                    'Source PackUnits',
+                    'Review',
+                  ].map((label) => (
+                    <th className="px-3 py-3 text-left" key={label} scope="col">
+                      {label}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -264,11 +274,13 @@ export async function StagedMedicineCatalogue({
                         {row.collision ? ' · Name collision — keep separate' : ''}
                       </p>
                     </td>
-                    {(['QTY', 'saleprice', 'purprice', 'UnitPrice', 'PackUnits'] as const).map((key) => (
-                      <td key={key} className="px-3 py-3 text-right font-mono tabular-nums">
-                        {row.references[key] ?? 'Not supplied as text'}
-                      </td>
-                    ))}
+                    {(['QTY', 'saleprice', 'purprice', 'UnitPrice', 'PackUnits'] as const).map(
+                      (key) => (
+                        <td key={key} className="px-3 py-3 text-right font-mono tabular-nums">
+                          {row.references[key] ?? 'Not supplied as text'}
+                        </td>
+                      )
+                    )}
                     <td className="px-3 py-3">
                       <StatusPill status="pending" label={row.status} />
                     </td>
