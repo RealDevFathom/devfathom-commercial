@@ -65,7 +65,12 @@ function makeDb() {
     medicineBarcode: model(),
   };
   return Object.assign(db, {
-    $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
+    $transaction: vi.fn(
+      async (fn: (tx: typeof db) => unknown, options?: { isolationLevel?: string }) => {
+        void options;
+        return fn(db);
+      }
+    ),
   });
 }
 
@@ -698,6 +703,52 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
 
     const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
     expect(line.unitCostMinor).toBe(1_000);
+  });
+
+  it('allocates only the residual rounded PO charge after a prior partial receipt', async () => {
+    db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'po_a',
+      supplierId: 'supplier_a',
+      freightMinor: 1,
+      otherChargesMinor: 0,
+      lines: [
+        {
+          id: 'poline_a',
+          lineNumber: 1,
+          orderedPacks: 2,
+          bonusPacks: 0,
+          canonicalUnitsPerPack: 10,
+          listPricePerPackMinor: 0,
+          discountBps: 0,
+          rebateBps: 0,
+          taxBps: 0,
+          taxCreditable: false,
+        },
+      ],
+    });
+    db.pharmacyGoodsReceiptLine.findMany.mockResolvedValue([
+      { purchaseOrderLineId: 'poline_a', receivedPacks: 1 },
+    ]);
+
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [
+        {
+          ...RECEIPT_LINE,
+          receivedPacks: 1,
+          bonusPacks: 2,
+          invoicedPricePerPackMinor: 0,
+        },
+      ],
+    });
+
+    const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
+    expect(line.unitCostMinor).toBe(0);
+    expect(db.pharmacyGoodsReceiptLine.findMany).toHaveBeenCalledWith({
+      where: { purchaseOrderLineId: { in: ['poline_a'] } },
+      select: { purchaseOrderLineId: true, receivedPacks: true },
+    });
+    expect(db.$transaction.mock.calls[0]![1]).toEqual({ isolationLevel: 'Serializable' });
   });
 
   it('takes the receiver from the session, never from the payload', async () => {

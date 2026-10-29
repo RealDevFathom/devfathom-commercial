@@ -1,5 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import type { Prisma } from '@/generated/prisma/client';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import {
@@ -59,6 +60,7 @@ import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
 import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import {
   assertDirectPurchaseAuthorized,
+  cumulativeAllocatedChargeMinor,
   PharmacyReceivingError,
   receiptLineQuantities,
   receiptLineUnitCostMinor,
@@ -993,13 +995,13 @@ const purchasingRouter = router({
           ? landedCost({
               lines: orderLines.map((line) => ({
                 orderedPacks: line.orderedPacks,
-                bonusPacks: line.bonusPacks,
+                bonusPacks: line.bonusPacks ?? 0,
                 canonicalUnitsPerPack: line.canonicalUnitsPerPack,
                 listPricePerPackMinor: line.listPricePerPackMinor,
-                discountBps: line.discountBps,
+                discountBps: line.discountBps ?? 0,
                 rebateBps: line.rebateBps,
-                taxBps: line.taxBps,
-                taxCreditable: line.taxCreditable,
+                taxBps: line.taxBps ?? 0,
+                taxCreditable: line.taxCreditable ?? false,
               })),
               freightMinor: purchaseOrder.freightMinor,
               otherChargesMinor: purchaseOrder.otherChargesMinor,
@@ -1009,7 +1011,7 @@ const purchasingRouter = router({
           orderLines.map((line, index) => [line.id, orderLandedCosts[index]!])
         );
 
-        const lines = [];
+        const lines: Prisma.PharmacyGoodsReceiptLineUncheckedCreateWithoutGoodsReceiptInput[] = [];
         const seenSerials = new Set<string>();
         for (const [index, line] of input.lines.entries()) {
           if (
@@ -1027,10 +1029,6 @@ const purchasingRouter = router({
           const orderLine = line.purchaseOrderLineId
             ? ownOrderLines.get(line.purchaseOrderLineId)
             : undefined;
-          const orderLineCost = line.purchaseOrderLineId
-            ? landedCostByOrderLine.get(line.purchaseOrderLineId)
-            : undefined;
-
           const quantities = receiptLineQuantities({
             receivedPacks: line.receivedPacks,
             bonusPacks: line.bonusPacks,
@@ -1099,16 +1097,9 @@ const purchasingRouter = router({
               rebateBps: orderLine?.rebateBps ?? 0,
               taxBps: line.taxBps,
               taxCreditable: line.taxCreditable,
-              // Apply only the paid packs' proportional share when an order
-              // line is received in parts, rather than all of its PO charges.
-              allocatedChargeMinor:
-                orderLine && orderLineCost
-                  ? Math.floor(
-                      (orderLineCost.allocatedChargeMinor * line.receivedPacks +
-                        Math.floor(orderLine.orderedPacks / 2)) /
-                        orderLine.orderedPacks
-                    )
-                  : 0,
+              // Replaced with the cumulative residual inside the serializable
+              // write transaction below, after prior receipts are known.
+              allocatedChargeMinor: 0,
             }),
             stockLocationId: line.stockLocationId,
             quarantineLocationId: line.quarantineLocationId ?? null,
@@ -1119,28 +1110,84 @@ const purchasingRouter = router({
           });
         }
 
-        return await ctx.db.pharmacyGoodsReceipt.create({
-          data: {
-            organizationId: scope.organizationId,
-            branchId: scope.branchId,
-            reference: input.reference,
-            supplierId: input.supplierId,
-            purchaseOrderId: input.purchaseOrderId ?? null,
-            supplierInvoiceRef: input.supplierInvoiceRef,
-            supplierInvoiceDate: input.supplierInvoiceDate,
-            warrantyEvidenceRef: input.warrantyEvidenceRef,
-            receivedByUserId: scope.actorId,
-            receivedAt: input.receivedAt,
-            directPurchase: Boolean(input.directPurchase),
-            bypassReason: input.directPurchase?.reason ?? null,
-            bypassApprovedByUserId: input.directPurchase?.approvedByUserId ?? null,
-            bypassApprovedAt: input.directPurchase ? new Date() : null,
-            note: input.note,
-            qualifiedPersonUserId: input.qualifiedPersonUserId ?? null,
-            lines: { create: lines },
+        return await ctx.db.$transaction(
+          async (tx) => {
+            const orderLineIds = [
+              ...new Set(
+                lines.flatMap((line) =>
+                  line.purchaseOrderLineId ? [line.purchaseOrderLineId] : []
+                )
+              ),
+            ];
+            const priorLines = orderLineIds.length
+              ? await tx.pharmacyGoodsReceiptLine.findMany({
+                  where: { purchaseOrderLineId: { in: orderLineIds } },
+                  select: { purchaseOrderLineId: true, receivedPacks: true },
+                })
+              : [];
+            const cumulativePacks = new Map<string, number>();
+            for (const prior of priorLines) {
+              if (!prior.purchaseOrderLineId) continue;
+              const total =
+                (cumulativePacks.get(prior.purchaseOrderLineId) ?? 0) + prior.receivedPacks;
+              if (!Number.isSafeInteger(total))
+                throw new PharmacyReceivingError('INVALID_QUANTITY');
+              cumulativePacks.set(prior.purchaseOrderLineId, total);
+            }
+            for (const line of lines) {
+              if (!line.purchaseOrderLineId) continue;
+              const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
+              const orderLineCost = landedCostByOrderLine.get(line.purchaseOrderLineId);
+              if (!orderLine || !orderLineCost) continue;
+              const previouslyReceivedPacks = cumulativePacks.get(line.purchaseOrderLineId) ?? 0;
+              const allocatedChargeMinor = cumulativeAllocatedChargeMinor({
+                allocatedChargeMinor: orderLineCost.allocatedChargeMinor,
+                orderedPacks: orderLine.orderedPacks,
+                previouslyReceivedPacks,
+                receivedPacks: line.receivedPacks,
+              });
+              line.unitCostMinor = receiptLineUnitCostMinor({
+                receivedPacks: line.receivedPacks,
+                bonusPacks: line.bonusPacks ?? 0,
+                canonicalUnitsPerPack: line.canonicalUnitsPerPack,
+                invoicedPricePerPackMinor: line.invoicedPricePerPackMinor,
+                discountBps: line.discountBps ?? 0,
+                rebateBps: orderLine.rebateBps,
+                taxBps: line.taxBps ?? 0,
+                taxCreditable: line.taxCreditable ?? false,
+                allocatedChargeMinor,
+              });
+              const totalReceivedPacks = previouslyReceivedPacks + line.receivedPacks;
+              if (!Number.isSafeInteger(totalReceivedPacks))
+                throw new PharmacyReceivingError('INVALID_QUANTITY');
+              cumulativePacks.set(line.purchaseOrderLineId, totalReceivedPacks);
+            }
+
+            return tx.pharmacyGoodsReceipt.create({
+              data: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                reference: input.reference,
+                supplierId: input.supplierId,
+                purchaseOrderId: input.purchaseOrderId ?? null,
+                supplierInvoiceRef: input.supplierInvoiceRef,
+                supplierInvoiceDate: input.supplierInvoiceDate,
+                warrantyEvidenceRef: input.warrantyEvidenceRef,
+                receivedByUserId: scope.actorId,
+                receivedAt: input.receivedAt,
+                directPurchase: Boolean(input.directPurchase),
+                bypassReason: input.directPurchase?.reason ?? null,
+                bypassApprovedByUserId: input.directPurchase?.approvedByUserId ?? null,
+                bypassApprovedAt: input.directPurchase ? new Date() : null,
+                note: input.note,
+                qualifiedPersonUserId: input.qualifiedPersonUserId ?? null,
+                lines: { create: lines },
+              },
+              include: { lines: { orderBy: { lineNumber: 'asc' } } },
+            });
           },
-          include: { lines: { orderBy: { lineNumber: 'asc' } } },
-        });
+          { isolationLevel: 'Serializable' }
+        );
       } catch (error) {
         domainError(error);
       }

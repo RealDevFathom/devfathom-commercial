@@ -4,7 +4,10 @@ import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 
-const databaseUrl = process.env.TEST_DATABASE_URL;
+// This migration-level fixture creates an isolated schema. Keep it on the
+// ephemeral owner connection rather than asking the restricted app role for
+// database CREATE privileges.
+const databaseUrl = process.env.ORG_SEAT_LIMIT_TEST_OWNER_DATABASE_URL;
 const sql = readFileSync(
   'prisma/migrations/20261021141526_org_seat_limit_backfill/migration.sql',
   'utf8'

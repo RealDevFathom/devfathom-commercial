@@ -304,6 +304,42 @@ export function receiptLineUnitCostMinor(input: ReceiptLineCostInput): number {
   );
 }
 
+/**
+ * Allocate the next receipt's residual share of an order-line charge.
+ *
+ * Computing the rounded cumulative entitlement before and after this receipt
+ * makes the total invariant to receipt partitioning. BigInt is intentional:
+ * two individually safe integer operands can have an unsafe product in JS.
+ * Over-receipts are capped at the ordered quantity, so they cannot duplicate
+ * freight or other order-level charges.
+ */
+export function cumulativeAllocatedChargeMinor(input: {
+  allocatedChargeMinor: number;
+  orderedPacks: number;
+  previouslyReceivedPacks: number;
+  receivedPacks: number;
+}): number {
+  const { allocatedChargeMinor, orderedPacks, previouslyReceivedPacks, receivedPacks } = input;
+  assertMoney(allocatedChargeMinor);
+  assertUnits(orderedPacks);
+  assertUnits(previouslyReceivedPacks);
+  assertUnits(receivedPacks);
+  if (orderedPacks === 0) throw new PharmacyReceivingError('INVALID_QUANTITY');
+
+  const ordered = BigInt(orderedPacks);
+  const charge = BigInt(allocatedChargeMinor);
+  const previous = BigInt(previouslyReceivedPacks);
+  const received = BigInt(receivedPacks);
+  const cappedBefore = previous < ordered ? previous : ordered;
+  const after = previous + received;
+  const cappedAfter = after < ordered ? after : ordered;
+  const rounded = (packs: bigint) => (charge * packs + ordered / BigInt(2)) / ordered;
+  const residual = rounded(cappedAfter) - rounded(cappedBefore);
+  const value = Number(residual);
+  assertMoney(value);
+  return value;
+}
+
 // ---------------------------------------------------------------------------
 // PUR-04 — the three-way match
 // ---------------------------------------------------------------------------

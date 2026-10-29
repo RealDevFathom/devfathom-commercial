@@ -12,6 +12,7 @@ import {
   assertDirectPurchaseAuthorized,
   assertGoodsReceiptTransition,
   assertSaleableOnReceipt,
+  cumulativeAllocatedChargeMinor,
   matchReceiptLine,
   PharmacyReceivingError,
   receiptLineQuantities,
@@ -266,6 +267,45 @@ describe('PUR-02/PUR-03 — canonical units and landed unit cost', () => {
         bonusPacks: 5,
         canonicalUnitsPerPack: 10,
         invoicedPricePerPackMinor: 10_000,
+      })
+    ).toBe(0);
+  });
+});
+
+describe('cumulative PO charge allocation', () => {
+  it('assigns a rounding residual only once across partial receipts', () => {
+    const first = cumulativeAllocatedChargeMinor({
+      allocatedChargeMinor: 1,
+      orderedPacks: 2,
+      previouslyReceivedPacks: 0,
+      receivedPacks: 1,
+    });
+    const second = cumulativeAllocatedChargeMinor({
+      allocatedChargeMinor: 1,
+      orderedPacks: 2,
+      previouslyReceivedPacks: 1,
+      receivedPacks: 1,
+    });
+    expect([first, second]).toEqual([1, 0]);
+    expect(first + second).toBe(1);
+  });
+
+  it('uses exact integer arithmetic and caps over-receipts', () => {
+    const charge = Number.MAX_SAFE_INTEGER;
+    expect(
+      cumulativeAllocatedChargeMinor({
+        allocatedChargeMinor: charge,
+        orderedPacks: Number.MAX_SAFE_INTEGER,
+        previouslyReceivedPacks: Number.MAX_SAFE_INTEGER - 1,
+        receivedPacks: 1,
+      })
+    ).toBe(1);
+    expect(
+      cumulativeAllocatedChargeMinor({
+        allocatedChargeMinor: charge,
+        orderedPacks: 2,
+        previouslyReceivedPacks: 2,
+        receivedPacks: 10,
       })
     ).toBe(0);
   });
