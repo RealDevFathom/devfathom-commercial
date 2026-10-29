@@ -140,7 +140,7 @@ export function RestaurantTaxConsole() {
     activation.mutate({
       branchId: String(data.get('branchId') ?? ''),
       profileId: selected.id,
-      effectiveFrom: new Date(`${String(data.get('effectiveFrom'))}T00:00:00.000Z`).toISOString(),
+      effectiveFrom: String(data.get('effectiveFrom') ?? ''),
       approvalReference: String(data.get('approvalReference') ?? '').trim(),
       accountantConfirmation: data.get('accountantConfirmation') === 'on',
       eligibilityConfirmations: selected.eligibilityControls
