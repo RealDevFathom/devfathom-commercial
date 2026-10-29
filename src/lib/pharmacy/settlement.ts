@@ -304,7 +304,7 @@ export async function applyPharmacyTender(
     scope,
     sale.lines.map((line) => line.medicine)
   );
-  // #633: before any lease, provider charge, tender or posting. A batch recalled,
+  // #659: before any lease, provider charge, tender or posting. A batch recalled,
   // quarantined or expired since add-to-cart refuses the payment.
   await assertSaleBatchesSellable(db, scope, sale.id);
   const totalMinor = saleTotalMinor(sale.lines);

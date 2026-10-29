@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
-// #633: the batch re-check has its own PostgreSQL suite (sale-batch-safety.db.test.ts).
-vi.mock('./sale-batch-safety', () => ({ assertSaleBatchesSellable: vi.fn(async () => new Map()) }));
+// #659: the batch re-check has its own PostgreSQL suite (sale-batch-safety.db.test.ts).
+const batchSafety = vi.hoisted(() => ({ assert: vi.fn(async () => new Map()) }));
+vi.mock('./sale-batch-safety', () => ({ assertSaleBatchesSellable: batchSafety.assert }));
 const postings = vi.hoisted(() => ({ postTenderEntry: vi.fn(), postSaleLineEntry: vi.fn() }));
 // Keep settlement, receipt identity, idempotency and evidence logic real.
 vi.mock('./finance-postings', async () => ({
@@ -89,6 +90,7 @@ describe('pharmacy settlement invariants', () => {
   });
 
   it('replays one idempotency result without duplicating tender or receipt', async () => {
+    batchSafety.assert.mockClear();
     let idempotency: Record<string, unknown> | null = null;
     postings.postTenderEntry.mockClear();
     postings.postSaleLineEntry.mockClear();
@@ -212,6 +214,13 @@ describe('pharmacy settlement invariants', () => {
     expect(first).toMatchObject({ tenderId: 'tender-1', receiptNumber: 41, replayed: false });
     expect(replay).toMatchObject({ tenderId: 'tender-1', receiptNumber: 41, replayed: true });
     expect(tenderCreate).toHaveBeenCalledTimes(1);
+    // An idempotent replay returns the recorded result, while the original payment must
+    // re-check the allocated batch after locking and loading the still-open sale.
+    expect(batchSafety.assert).toHaveBeenCalledExactlyOnceWith(
+      db,
+      { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' },
+      'sale-1'
+    );
     expect(saleUpdate).toHaveBeenCalledTimes(1);
     expect(db.pharmacySaleEvent.create).toHaveBeenCalledTimes(1);
     const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' };

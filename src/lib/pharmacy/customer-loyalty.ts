@@ -174,7 +174,7 @@ export async function redeemSalePoints(
     scope,
     sale.lines.map((line) => line.medicine)
   );
-  // #633: a points tender is a tender: refuse it while any batch on the bill is unsafe.
+  // #659: a points tender is a tender: refuse it while any batch on the bill is unsafe.
   await assertSaleBatchesSellable(db, scope, sale.id);
   await lockCustomerConsent(db, scope.organizationId, sale.customerId);
   const customer = await db.pharmacyCustomer.findFirst({

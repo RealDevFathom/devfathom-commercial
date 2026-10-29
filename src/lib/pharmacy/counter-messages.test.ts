@@ -77,7 +77,7 @@ describe('counterErrorMessage', () => {
     }
   });
 
-  /** #633: a batch that became unsafe after add-to-cart refuses the payment mid-bill. */
+  /** #659: a batch that became unsafe after add-to-cart refuses the payment mid-bill. */
   it('has a sentence for every reason PharmacySaleBatchError can raise', () => {
     const reasons = [
       ['SALE_BATCH_RECALLED', 'RECALLED', 'recalled'],
