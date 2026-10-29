@@ -98,7 +98,7 @@ sudo chown root:app /home/app
 sudo chmod 0750 /home/app
 sudo install -d -o deploy -g app -m 2750 /home/app/releases
 sudo install -d -o root -g app -m 0750 /home/app/shared
-sudo install -d -o app -g app -m 2770 /home/app/shared/uploads
+sudo install -d -o app -g app -m 2770 /home/app/shared/private-uploads
 sudo install -d -o root -g deploy -m 0750 /etc/devfathom
 # Provision the environment securely, then set its ownership/mode. Never echo its contents.
 sudo chown root:deploy /etc/devfathom/develop.env
@@ -118,17 +118,55 @@ identity; the app database role stays NOSUPERUSER NOBYPASSRLS. Systemd reads the
 file before changing user. The migration URL is elevated only as far as required for the develop
 schema. Never reuse production environment files. Keep application logs free of credentials.
 
+For this `NODE_ENV=production` service, explicitly configure the supported S3 adapter in
+`develop-runtime.env` (use the actual private upload bucket and its region):
+
+```ini
+STORAGE_ADAPTER=s3
+S3_UPLOADS_BUCKET=your-develop-private-uploads-bucket
+AWS_REGION=us-east-1
+```
+
+The runtime instance role needs narrowly scoped upload-bucket `s3:GetObject`, `s3:PutObject`, and
+`s3:DeleteObject` permissions, separately from its artifact download permissions. Block public bucket
+access. The app stores objects at `<organizationId>/<filename>` and serves authorized requests via
+`/api/files/[name]`. `LOCAL_UPLOADS_DIR` does not enable local storage in production.
+
 Before first activation, use this packager to stage a known healthy develop release (including
 `.assets-staged`) at `/home/app/releases/<bootstrap-sha>`, owned deploy:app with group read/traverse
 permissions. Install its frozen production dependencies as deploy, then apply the same recursive
 `chgrp -hR -P app` and `chmod -R g+rX` preparation as activation, before adding uploads links.
 Create `.next/standalone/.next/cache` with group app and mode 2770, including group-write access to
 any existing cache files. Never recursively follow uploads symlinks when adjusting permissions.
-Copy existing develop uploads into shared storage once, preserving files and setting group
-app, directories 2770 and files 0660; use a maintenance window so uploads cannot change during copying.
-Link both `<bootstrap-sha>/.next/standalone/public/uploads` and `<bootstrap-sha>/public/uploads`
-to shared storage.
-Remove only the old empty uploads directories after verifying the copy. Then create:
+Inventory existing uploads in a maintenance window, including old `public/uploads` and
+`/home/app/shared/uploads` data. Before importing a legacy flat filename, establish its authoritative
+tenant provenance from scoped database attachment/evidence records and verify the associated access
+policy. Import only verified files into the correct `<organizationId>/<filename>` key in the
+configured private S3 bucket (or the equivalent local directory layout in permitted local modes).
+Never blindly copy flat filenames into an organization-prefixed store or infer tenant ownership from
+a filename. Quarantine ambiguous, conflicting, or unreferenced files outside all public directories
+for operator review. Verify integrity and authorized tenant reads before removing legacy data.
+
+For `NODE_ENV=development` or `test` only, a local process can explicitly use shared persistence:
+
+```ini
+STORAGE_ADAPTER=local
+LOCAL_UPLOADS_DIR=/home/app/shared/private-uploads
+```
+
+`LOCAL_UPLOADS_DIR` must be absolute and outside public directories; public paths and symlinks into
+them are rejected. With the variable unset, the default remains `<process.cwd()>/private-uploads`.
+For that default, link both `<bootstrap-sha>/.next/standalone/private-uploads` and
+`<bootstrap-sha>/private-uploads` to `/home/app/shared/private-uploads`, outside `public`.
+Only verified tenant-prefixed data belongs there; set group app, directories 2770 and files 0660.
+These compatibility links do not make the local adapter available to the production-mode service.
+
+After verifying migration, remove obsolete `public/uploads` and `public/private-uploads` paths
+from the release root and standalone tree, including aliases under other names; unlink symlinks
+without following them. Packaging excludes these directories and all public symlinks; unstaged
+startup applies the same filter. Never expose persisted uploads through public assets. `/uploads`
+and `/private-uploads`, including encoded variants, return 404; authorized reads continue through
+`/api/files/[name]`. Then create:
 
 ```bash
 # Set INITIAL_SHA to the verified 40-character bootstrap commit, not a secret.
@@ -236,7 +274,9 @@ This deployment does not modify Azure infrastructure or contact a host through S
 With a local-only DATABASE_URL set without printing it:
 
 ```bash
-bunx vitest run tests/deploy-develop.test.ts tests/start-standalone.test.ts tests/production-deployment-contract.test.ts
+bunx vitest run tests/deploy-develop.test.ts tests/start-standalone.test.ts tests/production-deployment-contract.test.ts tests/proxy.test.ts src/lib/storage.test.ts 'src/app/api/files/[name]/route.test.ts' 'src/app/api/files/[name]/route.storage-unavailable.test.ts'
+# Optional per-stage timings for the real Prisma generation/catalog bundle check:
+DEPLOY_TEST_PROFILE=1 bunx vitest run tests/deploy-develop.test.ts
 shellcheck scripts/deploy/*.sh
 actionlint .github/workflows/deploy-develop.yml .github/workflows/qa.yml
 scripts/deploy/package-develop.sh . /tmp/develop-dry-run.tar.gz

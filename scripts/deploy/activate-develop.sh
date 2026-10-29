@@ -72,15 +72,24 @@ mkdir -p .next/standalone/.next/cache
 chgrp -hR -P app .next/standalone/.next/cache
 chmod -R g+rwX .next/standalone/.next/cache
 chmod 2770 .next/standalone/.next/cache
-# Existing uploads must be migrated to shared storage during one-time setup.
-test -d "$base/shared/uploads"
-test -w "$base/shared/uploads"
-rm -rf .next/standalone/public/uploads
-ln -s "$base/shared/uploads" .next/standalone/public/uploads
-mkdir -p public
-chgrp app public
-chmod g+rX public
-ln -s "$base/shared/uploads" public/uploads
+# Persist local test/development uploads outside every public asset directory.
+# Production continues to require a configured object-store adapter.
+test -d "$base/shared/private-uploads"
+test -w "$base/shared/private-uploads"
+# Older artifacts may contain public aliases under unrelated names.
+for public_dir in public .next/standalone/public; do
+  if [[ -L "$public_dir" ]]; then
+    rm -f -- "$public_dir"
+  elif [[ -d "$public_dir" ]]; then
+    find "$public_dir" -type l -delete
+  fi
+done
+# Remove root aliases before addressing children, so rm cannot traverse them.
+rm -rf public/uploads public/private-uploads \
+  .next/standalone/public/uploads .next/standalone/public/private-uploads
+rm -rf private-uploads .next/standalone/private-uploads
+ln -s "$base/shared/private-uploads" private-uploads
+ln -s "$base/shared/private-uploads" .next/standalone/private-uploads
 # Preparation is complete. The current predecessor is a different path and is
 # preserved for rollback. Replace only an inactive exact-SHA directory under lock.
 if [[ -e "$target" ]]; then rm -rf -- "$target"; fi

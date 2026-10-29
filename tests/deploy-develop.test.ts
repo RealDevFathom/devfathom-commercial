@@ -18,7 +18,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it } from 'vitest';
 
 const packageScript = resolve('scripts/deploy/package-develop.sh');
 const activateScript = resolve('scripts/deploy/activate-develop.sh');
@@ -36,6 +36,9 @@ function fixture(root: string) {
     '.next/static/chunk.js': 'chunk',
     'public/font.txt': 'font',
     'public/uploads/old.txt': 'must not ship',
+    'public/private-uploads/private.txt': 'must not ship',
+    'public/nested/uploads/private.txt': 'must not ship',
+    '.next/standalone/private-uploads/private.txt': 'must not ship',
     'node_modules/root-secret/index.js': 'must not ship',
     '.env.local': 'must not ship',
     'package.json': '{"dependencies":{"prisma":"7","dotenv":"17"}}',
@@ -54,6 +57,8 @@ it('packages staged assets and nested traced dependencies, excluding checkout se
   const root = mkdtempSync(join(tmpdir(), 'develop-package-'));
   try {
     fixture(root);
+    put(root, 'private-uploads/keep.txt', 'persistent');
+    symlinkSync(join(root, 'private-uploads'), join(root, 'public/innocent-alias'));
     // Standalone may omit its .next directory; packaging must create it.
     expect(existsSync(join(root, '.next/standalone/.next'))).toBe(false);
     const archive = join(root, 'release.tar.gz');
@@ -64,15 +69,30 @@ it('packages staged assets and nested traced dependencies, excluding checkout se
     expect(entries).toContain('./.next/standalone/public/font.txt');
     expect(entries).toContain('./.next/standalone/.assets-staged');
     expect(entries).toContain('./prisma/migrations/001/migration.sql');
-    expect(entries).not.toMatch(/\.env|root-secret|uploads|^\.\/node_modules\//m);
+    expect(entries).not.toMatch(/\.env|root-secret|uploads|innocent-alias|^\.\/node_modules\//m);
+    expect(readFileSync(join(root, 'private-uploads/keep.txt'), 'utf8')).toBe('persistent');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
+// All activation cases consume the same immutable tiny artifact. Packaging itself
+// has its own independent archive assertions above.
+let activationFixture: string;
+beforeAll(() => {
+  activationFixture = mkdtempSync(join(tmpdir(), 'develop-activation-artifact-'));
+  fixture(join(activationFixture, 'source'));
+  execFileSync(packageScript, [
+    join(activationFixture, 'source'),
+    join(activationFixture, 'release.tar.gz'),
+  ]);
+});
+afterAll(() => rmSync(activationFixture, { recursive: true, force: true }));
+
 for (const mode of [
   'success',
   'migration-url-only',
+  'legacy-public-root',
   'restart-failure',
   'health-failure',
   'migration-failure',
@@ -87,17 +107,19 @@ for (const mode of [
   it(`activates safely with mocked AWS/systemctl: ${mode}`, () => {
     const root = mkdtempSync(join(tmpdir(), 'develop-activate-'));
     try {
-      fixture(join(root, 'source'));
-      execFileSync(packageScript, [join(root, 'source'), join(root, 'release.tar.gz')]);
+      const repeat = mode.startsWith('same-sha');
+      if (!repeat) {
+        cpSync(join(activationFixture, 'release.tar.gz'), join(root, 'release.tar.gz'));
+      }
       mkdirSync(join(root, 'releases/previous'), { recursive: true });
-      mkdirSync(join(root, 'shared/uploads'), { recursive: true });
-      put(root, 'shared/uploads/untouched', 'persistent');
-      chmodSync(join(root, 'shared/uploads/untouched'), 0o600);
-      const uploadBefore = statSync(join(root, 'shared/uploads/untouched'));
+      mkdirSync(join(root, 'shared/private-uploads'), { recursive: true });
+      put(root, 'shared/private-uploads/untouched', 'persistent');
+      put(root, 'shared/private-uploads/uploads/keep.txt', 'private child');
+      chmodSync(join(root, 'shared/private-uploads/untouched'), 0o600);
+      const uploadBefore = statSync(join(root, 'shared/private-uploads/untouched'));
       // Use a real local supplementary group for chgrp, without OS account changes.
       const appGid =
         process.getgroups!().find((gid) => gid !== process.getgid!()) ?? process.getgid!();
-      const repeat = mode.startsWith('same-sha');
       const replacing = mode.startsWith('replace-');
       if (repeat || replacing) {
         put(root, `releases/${sha}/original`, 'existing release');
@@ -127,7 +149,16 @@ if [[ "$1" == install ]]; then
   chmod +x node_modules/.bin/prisma
   chmod 700 node_modules/restricted
   chmod 600 node_modules/restricted/data
-  ln -s "$TEST_ROOT/shared/uploads" node_modules/external
+  ln -s "$TEST_ROOT/shared/private-uploads" node_modules/external
+  # Simulate an older artifact's public links, without touching their targets.
+  mkdir -p public .next/standalone/public
+  ln -s "$TEST_ROOT/shared/private-uploads" public/uploads
+  ln -s "$TEST_ROOT/shared/private-uploads" .next/standalone/public/innocent-alias
+  ln -s "$TEST_ROOT/shared/private-uploads" .next/standalone/public/private-uploads
+  if [[ "$TEST_MODE" == legacy-public-root ]]; then
+    rm -rf .next/standalone/public
+    ln -s "$TEST_ROOT/shared/private-uploads" .next/standalone/public
+  fi
   exit
 fi
 [[ "$PWD" == "$TEST_ROOT/releases/.staging/"* ]]
@@ -167,12 +198,19 @@ echo "$*" >> "$TEST_ROOT/restarts"\nif [[ "$TEST_MODE" == *restart-failure && ! 
         },
         encoding: 'utf8',
       });
-      const success = ['success', 'migration-url-only', 'replace-inactive', 'same-sha'].includes(
-        mode
-      );
+      const success = [
+        'success',
+        'migration-url-only',
+        'legacy-public-root',
+        'replace-inactive',
+        'same-sha',
+      ].includes(mode);
       expect(result.status, result.stderr).toBe(success ? 0 : 1);
       expect(() => lstatSync(join(root, 'releases/.current-next'))).toThrow();
-      const uploadAfter = statSync(join(root, 'shared/uploads/untouched'));
+      expect(readFileSync(join(root, 'shared/private-uploads/uploads/keep.txt'), 'utf8')).toBe(
+        'private child'
+      );
+      const uploadAfter = statSync(join(root, 'shared/private-uploads/untouched'));
       expect([uploadAfter.mode, uploadAfter.gid, uploadAfter.uid]).toEqual([
         uploadBefore.mode,
         uploadBefore.gid,
@@ -231,8 +269,17 @@ echo "$*" >> "$TEST_ROOT/restarts"\nif [[ "$TEST_MODE" == *restart-failure && ! 
           expect(readFileSync(join(root, 'downloads'), 'utf8').trim().split('\n')).toHaveLength(1);
           expect(readFileSync(join(root, 'bun-calls'), 'utf8').trim().split('\n')).toHaveLength(3);
         }
-        for (const path of ['public/uploads', '.next/standalone/public/uploads']) {
-          expect(readlinkSync(join(current, path))).toBe(join(root, 'shared/uploads'));
+        for (const path of [
+          'public/uploads',
+          'public/private-uploads',
+          '.next/standalone/public/uploads',
+          '.next/standalone/public/private-uploads',
+          '.next/standalone/public/innocent-alias',
+        ]) {
+          expect(() => lstatSync(join(current, path))).toThrow();
+        }
+        for (const path of ['private-uploads', '.next/standalone/private-uploads']) {
+          expect(readlinkSync(join(current, path))).toBe(join(root, 'shared/private-uploads'));
         }
       } else {
         expect(current).toBe(join(root, 'releases/previous'));
@@ -259,7 +306,7 @@ echo "$*" >> "$TEST_ROOT/restarts"\nif [[ "$TEST_MODE" == *restart-failure && ! 
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 }
 
 const workflow = readFileSync(resolve('.github/workflows/deploy-develop.yml'), 'utf8');
@@ -414,19 +461,54 @@ it('pins every workflow action to a full commit with a version comment', () => {
 it('packages the complete catalog source graph and generates Prisma through postinstall', () => {
   const root = mkdtempSync(join(tmpdir(), 'develop-catalog-source-'));
   try {
+    let phaseStart = performance.now();
+    const profile = (phase: string) => {
+      if (process.env.DEPLOY_TEST_PROFILE)
+        console.info(`catalog ${phase}: ${(performance.now() - phaseStart).toFixed(0)}ms`);
+      phaseStart = performance.now();
+    };
     const source = join(root, 'source');
     fixture(source);
-    for (const path of ['prisma', 'prisma.config.ts', 'package.json', 'tsconfig.json'])
+    for (const path of [
+      'prisma/sync-catalog.ts',
+      'prisma/catalog-sync.ts',
+      'prisma.config.ts',
+      'package.json',
+      'tsconfig.json',
+    ])
       cpSync(resolve(path), join(source, path), { recursive: true });
+    // The schema's size is unrelated to catalog source closure. Keep the real
+    // generator contract, but generate only one model; app typecheck covers the
+    // real schema independently.
+    put(
+      source,
+      'prisma/schema.prisma',
+      `
+generator client {
+  provider = "prisma-client"
+  output = "../src/generated/prisma"
+}
+datasource db {
+  provider = "postgresql"
+}
+model CatalogFixture {
+  id String @id
+}
+`
+    );
+    profile('fixture');
     const archive = join(root, 'release.tar.gz');
     execFileSync(packageScript, [source, archive]);
+    profile('package');
     const extracted = join(root, 'extracted');
     mkdirSync(extracted);
     execFileSync('tar', ['-xzf', archive, '-C', extracted]);
+    profile('extract');
     expect(existsSync(join(extracted, 'src/generated/prisma/client.ts'))).toBe(false);
     // Use installed dependencies without fetching packages or contacting a DB.
     symlinkSync(resolve('node_modules'), join(extracted, 'node_modules'));
     execFileSync('bun', ['run', 'postinstall'], { cwd: extracted, stdio: 'pipe' });
+    profile('generate');
     expect(existsSync(join(extracted, 'src/generated/prisma/client.ts'))).toBe(true);
     // Externalize packages only: every transitive local import must resolve
     // inside the extracted artifact, including the catalogs' @/ alias.
@@ -441,6 +523,7 @@ it('packages the complete catalog source graph and generates Prisma through post
       ],
       { cwd: extracted, stdio: 'pipe' }
     );
+    profile('build');
     expect(existsSync(join(extracted, 'catalog-sync.js'))).toBe(true);
   } finally {
     rmSync(root, { recursive: true, force: true });
