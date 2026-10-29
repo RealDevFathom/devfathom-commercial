@@ -230,18 +230,32 @@ export const financeRouter = router({
   getInvoiceById: adminProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
-      const invoice = await ctx.db.invoice.findUnique({
-        where: { id: input.id },
-        include: {
-          client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
-          project: { select: { id: true, name: true } },
-          // IMP-FIN-04: payments + computed paid/balance for the invoice detail view.
-          payments: { orderBy: { paidAt: 'desc' } },
-        },
-      });
+      const organizationId = workspaceId(ctx);
+      const [invoice, issuer] = await Promise.all([
+        ctx.db.invoice.findUnique({
+          where: { id: input.id },
+          include: {
+            client: { include: { contacts: { where: { isPrimary: true }, take: 1 } } },
+            project: { select: { id: true, name: true } },
+            // IMP-FIN-04: payments + computed paid/balance for the invoice detail view.
+            payments: { orderBy: { paidAt: 'desc' } },
+          },
+        }),
+        // The seller identity must come from the authenticated workspace, never a
+        // platform brand or client-controlled invoice data.
+        ctx.db.organization.findUnique({
+          where: { id: organizationId },
+          select: { legalName: true, invoiceAddress: true, taxId: true },
+        }),
+      ]);
       if (!invoice) return null;
       const amountPaid = round2(invoice.payments.reduce((s, p) => s + Number(p.amount), 0));
-      return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
+      return {
+        ...invoice,
+        issuer,
+        amountPaid,
+        balance: round2(Number(invoice.total) - amountPaid),
+      };
     }),
 
   createInvoice: adminProcedure.input(createInvoiceInputSchema).mutation(async ({ ctx, input }) => {
