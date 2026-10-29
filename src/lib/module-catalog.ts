@@ -271,7 +271,7 @@ export function moduleForProcedure(path: string): string | null {
   if (path === 'team.inviteMember') return 'admin';
   if (ACCOUNT_PROCEDURES.has(path)) return null;
   if (
-    /^pharmacyFinance\.(perpetualValuation|grossMargin|leakageReport|marginComparison|financialStatements)$/.test(
+    /^pharmacyFinance\.(perpetualValuation|grossMargin|landedProfit|leakageReport|marginComparison|financialStatements)$/.test(
       path
     )
   ) {

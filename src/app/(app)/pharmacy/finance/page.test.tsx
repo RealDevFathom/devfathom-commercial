@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PharmacyFinancePage from './page';
 import { MarginComparisonSection } from './margin-comparison';
-import { LedgerReportsSection } from './ledger-reports';
+import { LandedProfitLedger, LedgerReportsSection } from './ledger-reports';
 import { FinancialStatements } from './financial-statements';
 
 const mocks = vi.hoisted(() => ({
@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   marginComparison: vi.fn(),
   perpetualValuation: vi.fn(),
   grossMargin: vi.fn(),
+  landedProfit: vi.fn(),
   leakageReport: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({
@@ -81,11 +82,47 @@ beforeEach(() => {
     mocks.marginComparison,
     mocks.perpetualValuation,
     mocks.grossMargin,
+    mocks.landedProfit,
     mocks.leakageReport,
   ])
     reader.mockRejectedValue({ code: 'FORBIDDEN' });
 });
 afterEach(() => vi.useRealTimers());
+
+it('renders the usable landed-profit totals, grouping, and exact-cost explanation', () => {
+  const html = renderToStaticMarkup(
+    <LandedProfitLedger
+      report={{
+        scope: { organizationId: 'organization_1', branchId: 'branch_1' },
+        timezone: 'UTC',
+        currency: 'PKR',
+        definition: 'Posted revenue less discount and exact landed cost.',
+        source: 'finance_journal_lines',
+        coverage: { completeness: 'posted_only', costCoverage: 'unknown' },
+        freshness: { retrievedAt: new Date('2026-09-12T12:00:00Z'), latestPostingAt: null },
+        period: {
+          from: new Date('2026-09-01T00:00:00Z'),
+          to: new Date('2026-09-02T00:00:00Z'),
+          bounds: '[from,to)',
+        },
+        by: 'item',
+        rows: [
+          {
+            key: 'medicine_a',
+            revenueMinor: 5000,
+            discountMinor: 500,
+            landedCostMinor: 2000,
+            profitMinor: 2500,
+          },
+        ],
+      }}
+    />
+  );
+  expect(html).toContain('Landed profit grouped by item in UTC');
+  expect(html).toContain('PKR 25.00');
+  expect(html).toContain('apportioned freight, non-recoverable tax, and bonus units');
+  expect(html).toContain('medicine_a');
+});
 
 describe('finance parent GET filter round-trip', () => {
   const ledger = {
@@ -93,6 +130,7 @@ describe('finance parent GET filter round-trip', () => {
     ledgerTo: '2026-08-22',
     ledgerAt: '2026-09-05',
     ledgerBy: 'product',
+    profitBy: 'category',
   };
 
   it.each([
@@ -141,9 +179,12 @@ describe('finance parent GET filter round-trip', () => {
     });
     const ledgerBefore = sectionProps(initial, LedgerReportsSection);
     const beforeHtml = renderToStaticMarkup(await LedgerReportsSection(ledgerBefore));
-    const readerCalls = [mocks.perpetualValuation, mocks.grossMargin, mocks.leakageReport].map(
-      (reader) => [...reader.mock.calls]
-    );
+    const readerCalls = [
+      mocks.perpetualValuation,
+      mocks.grossMargin,
+      mocks.landedProfit,
+      mocks.leakageReport,
+    ].map((reader) => [...reader.mock.calls]);
     const form = getForm(
       await MarginComparisonSection(sectionProps(initial, MarginComparisonSection))
     );
@@ -172,16 +213,23 @@ describe('finance parent GET filter round-trip', () => {
       marginFrom: ledgerBefore.marginFrom,
       marginTo: ledgerBefore.marginTo,
     }).toEqual(ledgerBefore);
-    for (const reader of [mocks.perpetualValuation, mocks.grossMargin, mocks.leakageReport])
+    for (const reader of [
+      mocks.perpetualValuation,
+      mocks.grossMargin,
+      mocks.landedProfit,
+      mocks.leakageReport,
+    ])
       reader.mockClear();
     const afterElement = await LedgerReportsSection(ledgerAfter);
     const afterHtml = renderToStaticMarkup(afterElement);
     expect(afterHtml.includes('id="ledger-filter-error"')).toBe(invalid);
     expect(beforeHtml.includes('id="ledger-filter-error"')).toBe(invalid);
-    [mocks.perpetualValuation, mocks.grossMargin, mocks.leakageReport].forEach((reader, index) => {
-      expect(reader.mock.calls).toEqual(readerCalls[index]);
-      expect(reader).toHaveBeenCalledTimes(invalid ? 0 : 1);
-    });
+    [mocks.perpetualValuation, mocks.grossMargin, mocks.landedProfit, mocks.leakageReport].forEach(
+      (reader, index) => {
+        expect(reader.mock.calls).toEqual(readerCalls[index]);
+        expect(reader).toHaveBeenCalledTimes(invalid ? 0 : 1);
+      }
+    );
     if (!invalid) {
       expect(mocks.grossMargin).toHaveBeenCalledWith({
         branchId: expectedBranch,
@@ -192,6 +240,12 @@ describe('finance parent GET filter round-trip', () => {
       expect(mocks.perpetualValuation).toHaveBeenCalledWith({
         branchId: expectedBranch,
         at: `${submitted.ledgerAt ?? '2026-09-12'}T00:00:00.000Z`,
+      });
+      expect(mocks.landedProfit).toHaveBeenCalledWith({
+        branchId: expectedBranch,
+        from: `${submitted.ledgerFrom ?? '2026-08-13'}T00:00:00.000Z`,
+        to: `${submitted.ledgerTo ?? '2026-09-13'}T00:00:00.000Z`,
+        by: submitted.profitBy ?? 'item',
       });
     }
     await MarginComparisonSection(sectionProps(next, MarginComparisonSection));

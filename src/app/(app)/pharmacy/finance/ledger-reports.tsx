@@ -17,15 +17,18 @@ import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 
 type Caller = Pick<
   ReturnType<typeof pharmacyFinanceRouter.createCaller>,
-  'perpetualValuation' | 'grossMargin' | 'leakageReport'
+  'perpetualValuation' | 'grossMargin' | 'landedProfit' | 'leakageReport'
 >;
 type Valuation = Awaited<ReturnType<Caller['perpetualValuation']>>;
 type Margin = Awaited<ReturnType<Caller['grossMargin']>>;
 type Leakage = Awaited<ReturnType<Caller['leakageReport']>>;
-type Report = Valuation | Margin | Leakage;
+type LandedProfit = Awaited<ReturnType<Caller['landedProfit']>>;
+type Report = Valuation | Margin | LandedProfit | Leakage;
 type Group = Margin['by'];
 const day = 86_400_000;
 const groups: Group[] = ['line', 'batch', 'product', 'branch'];
+type ProfitGroup = LandedProfit['by'];
+const profitGroups: ProfitGroup[] = ['item', 'category', 'hour', 'staff'];
 const unknown = 'Not recorded';
 
 // Guard the receipt formatter's invalid-number fallback: missing/unsafe money is never zero.
@@ -222,6 +225,58 @@ export function MarginLedger({ report }: { report: Margin }) {
   );
 }
 
+export function LandedProfitLedger({ report }: { report: LandedProfit }) {
+  return (
+    <div className="min-w-0 space-y-4">
+      <Metadata report={report} />
+      {report.rows.length > 0 && (
+        <div className="grid min-w-0 gap-5 md:grid-cols-3">
+          <Stat
+            label="Net sale revenue"
+            value={money(
+              total(report.rows.flatMap((row) => [row.revenueMinor, -row.discountMinor])),
+              report.currency
+            )}
+            valueClassName="break-words text-xl"
+            sub="Posted revenue less posted discounts; tax excluded."
+          />
+          <Stat
+            label="Exact landed cost"
+            value={money(total(report.rows.map((row) => row.landedCostMinor)), report.currency)}
+            valueClassName="break-words text-xl"
+            sub="Allocated-lot cost including apportioned freight, non-recoverable tax, and bonus units."
+          />
+          <Stat
+            label="Landed profit"
+            value={money(total(report.rows.map((row) => row.profitMinor)), report.currency)}
+            valueClassName="break-words text-xl"
+            sub="Net sale revenue less exact landed cost; excludes overhead and unposted costs."
+          />
+        </div>
+      )}
+      <LedgerTable
+        caption={`Landed profit grouped by ${report.by} in UTC`}
+        columns={[
+          { label: report.by },
+          { label: 'Gross revenue', numeric: true },
+          { label: 'Discounts', numeric: true },
+          { label: 'Net revenue', numeric: true },
+          { label: 'Landed cost', numeric: true },
+          { label: 'Landed profit', numeric: true },
+        ]}
+        rows={report.rows.map((row) => [
+          row.key ?? unknown,
+          money(row.revenueMinor, report.currency),
+          money(row.discountMinor, report.currency),
+          money(total([row.revenueMinor, -row.discountMinor]), report.currency),
+          money(row.landedCostMinor, report.currency),
+          money(row.profitMinor, report.currency),
+        ])}
+      />
+    </div>
+  );
+}
+
 export function LeakageLedger({ report }: { report: Leakage }) {
   return (
     <div className="min-w-0 space-y-4">
@@ -295,6 +350,7 @@ export async function LedgerReportsSection({
   to,
   at,
   by,
+  profitBy,
   marginFrom,
   marginTo,
 }: {
@@ -304,6 +360,7 @@ export async function LedgerReportsSection({
   to?: string;
   at?: string;
   by?: string;
+  profitBy?: string;
   marginFrom?: string;
   marginTo?: string;
 }) {
@@ -315,6 +372,7 @@ export async function LedgerReportsSection({
     new Date(new Date(`${today}T00:00:00Z`).getTime() - 30 * day).toISOString().slice(0, 10);
   const cutoff = at ?? today;
   const group = by ?? 'batch';
+  const profitGroup = profitBy ?? 'item';
   const fromDate = dateOnly(start),
     toDate = dateOnly(end),
     atDate = dateOnly(cutoff);
@@ -325,18 +383,25 @@ export async function LedgerReportsSection({
     toDate.getTime() - fromDate.getTime() <= 92 * day;
   const atValid = !!atDate && atDate.getTime() <= now.getTime();
   const groupValid = groups.includes(group as Group);
+  const profitGroupValid = profitGroups.includes(profitGroup as ProfitGroup);
   let results:
-    | [PromiseSettledResult<Valuation>, PromiseSettledResult<Margin>, PromiseSettledResult<Leakage>]
+    | [
+        PromiseSettledResult<Valuation>,
+        PromiseSettledResult<Margin>,
+        PromiseSettledResult<LandedProfit>,
+        PromiseSettledResult<Leakage>,
+      ]
     | undefined;
-  if (periodValid && atValid && groupValid) {
+  if (periodValid && atValid && groupValid && profitGroupValid) {
     const period = { branchId: branch.id, from: fromDate.toISOString(), to: toDate.toISOString() };
     results = await Promise.allSettled([
       caller.perpetualValuation({ branchId: branch.id, at: atDate.toISOString() }),
       caller.grossMargin({ ...period, by: group as Group }),
+      caller.landedProfit({ ...period, by: profitGroup as ProfitGroup }),
       caller.leakageReport(period),
     ]);
   }
-  const invalid = !periodValid || !atValid || !groupValid;
+  const invalid = !periodValid || !atValid || !groupValid || !profitGroupValid;
   return (
     <section aria-label="Pharmacy ledger reports" className="min-w-0 space-y-6">
       <SectionCard title="Ledger reports" titleLevel={2} eyebrow="Valuation · margin · leakage">
@@ -347,7 +412,7 @@ export async function LedgerReportsSection({
         <form
           action="/pharmacy/finance"
           method="get"
-          className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-5"
+          className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-6"
         >
           <input type="hidden" name="branch" value={branch.id} />
           {marginFrom && <input type="hidden" name="marginFrom" value={marginFrom} />}
@@ -403,6 +468,23 @@ export async function LedgerReportsSection({
               ))}
             </select>
           </label>
+          <label className="min-w-0 text-sm text-text-body">
+            Landed profit grouping
+            <select
+              name="profitBy"
+              defaultValue={profitGroup}
+              aria-invalid={!profitGroupValid || undefined}
+              aria-describedby={!profitGroupValid ? 'ledger-filter-error' : undefined}
+              className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {!profitGroupValid && <option value={profitGroup}>Invalid grouping</option>}
+              {profitGroups.map((value) => (
+                <option key={value} value={value}>
+                  {value[0].toUpperCase() + value.slice(1)}
+                </option>
+              ))}
+            </select>
+          </label>
           <Button type="submit" variant="secondary" className="min-h-11 self-end">
             Apply ledger filters
           </Button>
@@ -410,8 +492,9 @@ export async function LedgerReportsSection({
         {invalid && (
           <p id="ledger-filter-error" role="alert" className="mt-4 text-sm text-destructive">
             Choose real calendar dates with a period of 1–92 days, a valuation cutoff no later than
-            today, and a listed margin grouping. No ledger queries ran. Submitted filters: {start}{' '}
-            to {end}; cutoff {cutoff}; grouping {group}.
+            today, and listed margin and landed-profit groupings. No ledger queries ran. Submitted
+            filters: {start} to {end}; cutoff {cutoff}; margin grouping {group}; landed-profit
+            grouping {profitGroup}.
           </p>
         )}
       </SectionCard>
@@ -431,11 +514,18 @@ export async function LedgerReportsSection({
               <Failure error={results[1].reason} />
             )}
           </SectionCard>
-          <SectionCard title="Recorded leakage" titleLevel={2}>
+          <SectionCard title="Landed profit" titleLevel={2}>
             {results[2].status === 'fulfilled' ? (
-              <LeakageLedger report={results[2].value} />
+              <LandedProfitLedger report={results[2].value} />
             ) : (
               <Failure error={results[2].reason} />
+            )}
+          </SectionCard>
+          <SectionCard title="Recorded leakage" titleLevel={2}>
+            {results[3].status === 'fulfilled' ? (
+              <LeakageLedger report={results[3].value} />
+            ) : (
+              <Failure error={results[3].reason} />
             )}
           </SectionCard>
         </>
