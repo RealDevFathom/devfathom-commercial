@@ -163,12 +163,20 @@ async function khataScope(ctx: TRPCContext, branch: string) {
     ctx.organization?.vertical !== 'PHARMACY' ||
     ctx.organization.id !== scope.organizationId ||
     ctx.session!.user.organizationId !== scope.organizationId ||
-    !hasModule(ctx.entitlements, 'pharmacy-counter') ||
-    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+    !hasModule(ctx.entitlements, 'pharmacy-counter')
+  )
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
+  const subject = subjectFromSession(ctx.session!.user);
+  const canUseKhata =
+    (await can(subject, 'pharmacy:counter', undefined, {
       db: ctx.db,
       source: 'TRPC',
-    }))
-  )
+    })) ||
+    (await can(subject, 'reports:financial', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }));
+  if (!canUseKhata)
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
   const available = await ctx.db.pharmacyBranch.findFirst({
     where: { organizationId: scope.organizationId, id: branch, active: true },
