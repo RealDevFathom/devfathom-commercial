@@ -110,7 +110,12 @@ type Fixture = {
  * trigger and the PUR-02 status machine all apply to the fixture too — a
  * fixture that had to bypass them would not be evidence about the product.
  */
-async function fixture(organizationId: string, branchId: string, label: string): Promise<Fixture> {
+async function fixture(
+  organizationId: string,
+  branchId: string,
+  label: string,
+  orderBonusPacks = 2
+): Promise<Fixture> {
   return inOrg(organizationId, async (db) => {
     await ensureBranch(db, organizationId, branchId);
     const medicine = await db.medicine.create({
@@ -185,10 +190,10 @@ async function fixture(organizationId: string, branchId: string, label: string):
             medicineId: medicine.id,
             packLevelId: packLevel.id,
             orderedPacks: 10,
-            bonusPacks: 2,
+            bonusPacks: orderBonusPacks,
             canonicalUnitsPerPack: 10,
             orderedCanonicalUnits: 100,
-            bonusCanonicalUnits: 20,
+            bonusCanonicalUnits: orderBonusPacks * 10,
             listPricePerPackMinor: 10_000,
           },
         },
@@ -871,6 +876,45 @@ describeIfDatabase('PUR-02 — posting a receipt into the batch ledger', () => {
 // ── PUR-04 — rejected goods, exceptions, reversal ───────────────────────────
 
 describeIfDatabase('PUR-04 — rejected goods never enter available stock', () => {
+  it('records 110 delivered against 100 ordered with 100 accepted and 10 rejected', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'rejected-overage', 0);
+    const result = await inOrg(ORG_A, async (db) => {
+      const drafted = await draftReceipt(db, f, 'rejected-overage', {
+        line: { receivedPacks: 11, bonusPacks: 0, rejectedCanonicalUnits: 10 },
+      });
+      const posted = await deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: drafted.id,
+        at: RECEIVED_AT,
+      });
+      return {
+        balances: await balancesFor(db, ORG_A, posted.lines[0]!.inventoryLotId),
+        exceptions: await deps.receipts.listReceivingExceptions(db, f, {
+          goodsReceiptId: drafted.id,
+        }),
+        receipt: await db.pharmacyGoodsReceipt.findUnique({ where: { id: drafted.id } }),
+      };
+    });
+    expect(result.receipt?.status).toBe('POSTED');
+    expect(result.balances).toEqual({ AVAILABLE: 100, QUARANTINE: 10 });
+    expect(result.exceptions).toHaveLength(2);
+    expect(result.exceptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'OVERAGE',
+          status: 'OPEN',
+          expectedUnits: 100,
+          observedUnits: 110,
+        }),
+        expect.objectContaining({
+          kind: 'DAMAGE',
+          status: 'OPEN',
+          expectedUnits: 110,
+          observedUnits: 10,
+        }),
+      ])
+    );
+  });
+
   it('posts rejected units to QUARANTINE and only the rest to AVAILABLE', async () => {
     const f = await fixture(ORG_A, BRANCH_A, 'reject');
     const result = await inOrg(ORG_A, async (db) => {

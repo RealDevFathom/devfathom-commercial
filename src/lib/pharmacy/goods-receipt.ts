@@ -254,21 +254,26 @@ export async function postGoodsReceipt(
       WHERE id = ${receipt.purchaseOrderId} AND "organizationId" = ${scope.organizationId}
       FOR UPDATE`;
   }
-  const arrivingByOrderLine = new Map<string, number>();
+  // Only accepted stock consumes the remainder; rejected surplus still posts
+  // to quarantine and produces receiving exceptions.
+  const acceptedByOrderLine = new Map<string, number>();
   for (const line of receipt.lines) {
     if (!line.purchaseOrderLineId) continue;
-    const arriving =
-      (arrivingByOrderLine.get(line.purchaseOrderLineId) ?? 0) +
-      line.receivedCanonicalUnits +
-      line.bonusCanonicalUnits;
-    arrivingByOrderLine.set(line.purchaseOrderLineId, arriving);
+    const accepted =
+      (acceptedByOrderLine.get(line.purchaseOrderLineId) ?? 0) + line.acceptedCanonicalUnits;
+    acceptedByOrderLine.set(line.purchaseOrderLineId, accepted);
   }
-  for (const [orderLineId, arriving] of arrivingByOrderLine) {
+  for (const [orderLineId, accepted] of acceptedByOrderLine) {
     const ordered = await orderedTermsFor(db, scope, orderLineId, receipt.id);
     if (
       ordered &&
-      arriving + ordered.previouslyReceivedUnits >
-        ordered.orderedCanonicalUnits + ordered.bonusCanonicalUnits
+      accepted >
+        Math.max(
+          0,
+          ordered.orderedCanonicalUnits +
+            ordered.bonusCanonicalUnits -
+            ordered.previouslyReceivedUnits
+        )
     ) {
       throw new PharmacyReceivingError('INVALID_QUANTITY');
     }
