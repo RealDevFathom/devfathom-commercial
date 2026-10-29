@@ -182,6 +182,7 @@ export const pharmacyPrescriptionsRouter = router({
           channel,
           version: z.number().int().positive().optional(),
           granted: z.boolean(),
+          source: z.enum(['COUNTER_TABLET', 'QR']).default('COUNTER_TABLET'),
           supersedesId: z.string().optional(),
         })
         .strict()

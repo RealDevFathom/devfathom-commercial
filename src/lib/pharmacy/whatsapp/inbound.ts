@@ -1,5 +1,5 @@
 import 'server-only';
-import { lockCustomerConsent } from '../consent-writer';
+import { lockCustomerConsent, writePatientConsent } from '../consent-writer';
 
 import {
   listStorefrontCatalog,
@@ -39,6 +39,7 @@ export type InboundOutcome =
 type KnownCustomer = {
   id: string;
   userId: string | null;
+  patientId: string;
   active: boolean;
   whatsappOptIn: boolean | null;
 };
@@ -59,6 +60,7 @@ export async function findCustomerByWhatsApp(
     select: {
       id: true,
       userId: true,
+      patientId: true,
       active: true,
       whatsappOptIn: true,
       patient: { select: { phone: true } },
@@ -73,6 +75,7 @@ export async function findCustomerByWhatsApp(
   return {
     id: match.id,
     userId: match.userId,
+    patientId: match.patientId,
     active: match.active,
     whatsappOptIn: match.whatsappOptIn,
   };
@@ -186,6 +189,21 @@ export async function handleInboundWhatsAppMessage(
         data: { whatsappOptIn: optIn, whatsappOptInChangedAt: message.receivedAt },
       });
       staleConsent = changed.count === 0;
+      if (!staleConsent) {
+        await writePatientConsent(
+          db,
+          organizationId,
+          customer.userId ?? `whatsapp:${last4}`,
+          {
+            patientId: customer.patientId,
+            purpose: 'MARKETING',
+            channel: 'WHATSAPP',
+            granted: optIn,
+            source: 'REPLY',
+          },
+          message.receivedAt
+        );
+      }
       if (staleConsent)
         await db.pharmacyMessageLog.update({
           where: { id: inboundId },
@@ -257,7 +275,6 @@ export async function handleInboundWhatsAppMessage(
     WHATSAPP_REPLIES.confirmation({
       reference: placed.orderId.slice(-6).toUpperCase(),
       quantity: parsed.quantity,
-      medicine: placed.medicine,
       branch: placed.branch.name,
     }),
     { orderId: placed.orderId, branchId: placed.branch.id }

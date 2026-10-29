@@ -5,6 +5,7 @@ type Row = Record<string, unknown> & { id: string };
 const store = vi.hoisted(() => ({
   customers: [] as Row[],
   logs: [] as Row[],
+  consents: [] as Row[],
   catalog: [] as Row[],
   placed: [] as unknown[],
   failConsent: false,
@@ -17,7 +18,11 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     pharmacyCustomer: {
       findFirst: async () => ({ patientId: 'patient-a' }),
       findMany: async () =>
-        store.customers.map((customer) => ({ ...customer, patient: { phone: customer.phone } })),
+        store.customers.map((customer) => ({
+          ...customer,
+          patientId: 'patient-a',
+          patient: { phone: customer.phone },
+        })),
       updateMany: async ({
         where,
         data,
@@ -47,6 +52,14 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         return { count: Number(eligible) };
       },
     },
+    patientConsent: {
+      findFirst: async () => store.consents.at(-1) ?? null,
+      create: async ({ data }: { data: Record<string, unknown> }) => {
+        const row = { id: `consent-${store.consents.length + 1}`, ...data } as Row;
+        store.consents.push(row);
+        return row;
+      },
+    },
     pharmacyCustomerOrder: { findFirst: async () => null },
     pharmacyBranch: { findMany: async () => [{ id: 'branch-1', name: 'Gulberg' }] },
     pharmacyMessageLog: {
@@ -68,6 +81,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
     withTenantDb: async (_organizationId: string, run: (tx: unknown) => unknown) => {
       const customers = store.customers.map((row) => ({ ...row }));
       const logs = store.logs.map((row) => ({ ...row }));
+      const consents = store.consents.map((row) => ({ ...row }));
       try {
         const result = await run(db);
         if (store.failCommit) throw new Error('transaction commit failed');
@@ -75,6 +89,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       } catch (error) {
         store.customers = customers;
         store.logs = logs;
+        store.consents = consents;
         throw error;
       }
     },
@@ -128,6 +143,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date('2026-10-06T13:00:00Z'));
   store.customers = [];
   store.logs = [];
+  store.consents = [];
   store.placed = [];
   store.catalog = [
     {
@@ -160,6 +176,13 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     const old = { ...message('STOP'), receivedAt: new Date('2026-10-04T13:00:00Z') };
     await expect(handleInboundWhatsAppMessage('org_a', provider, old)).resolves.toBe('OPTED_OUT');
     expect(store.customers[0].whatsappOptIn).toBe(false);
+    expect(store.consents.at(-1)).toMatchObject({
+      purpose: 'MARKETING',
+      channel: 'WHATSAPP',
+      granted: false,
+      source: 'REPLY',
+      staffId: null,
+    });
     expect(provider.calls).toEqual([]);
   });
   it('rejects future consent without consuming its claim', async () => {
@@ -318,4 +341,15 @@ describe('handleInboundWhatsAppMessage consent gate', () => {
     expect(store.customers[0].whatsappOptIn).toBe(true);
     expect(provider.calls).toHaveLength(2);
   });
+});
+
+it('never echoes a medicine name in outbound WhatsApp confirmation text', async () => {
+  const { WHATSAPP_REPLIES } = await import('./messages');
+  const body = WHATSAPP_REPLIES.confirmation({
+    reference: 'ABC123',
+    quantity: 2,
+    branch: 'Main counter',
+  });
+  expect(body).not.toMatch(/panadol|medicine|drug|tablet|salt/i);
+  expect(body).toContain('ABC123');
 });

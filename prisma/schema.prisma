@@ -12127,6 +12127,13 @@ enum PrescriptionCustodyState {
   TRANSFERRED
 }
 
+enum PatientConsentSource {
+  COUNTER_TABLET
+  QR
+  REPLY
+  LEGACY
+}
+
 enum PharmacyPharmacovigilanceKind {
   ADVERSE_DRUG_REACTION
   MEDICATION_ERROR
@@ -12180,6 +12187,8 @@ model PatientConsent {
   version          Int
   granted          Boolean
   recordedByUserId String
+  source           PatientConsentSource              @default(LEGACY)
+  staffId          String?
   recordedAt       DateTime                        @default(now())
   revokedAt        DateTime?
   supersedesId     String?

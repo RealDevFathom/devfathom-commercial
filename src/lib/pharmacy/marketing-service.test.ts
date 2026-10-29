@@ -35,6 +35,7 @@ let captures: Array<Record<string, unknown>>;
 let exclusions: Array<Record<string, unknown>>;
 let optIn: boolean | null;
 let revokedAt: Date | null;
+let dateOfBirth: Date | null;
 let db: ScopedDb;
 let mock: ReturnType<typeof database>;
 function database() {
@@ -78,6 +79,7 @@ function database() {
         id: 'customer-a',
         active: true,
         patientId: 'patient-a',
+        patient: { dateOfBirth },
         whatsappOptIn: optIn,
       })),
     },
@@ -113,6 +115,7 @@ beforeEach(() => {
   exclusions = [];
   optIn = true;
   revokedAt = null;
+  dateOfBirth = null;
   mock = database();
   db = mock as unknown as ScopedDb;
 });
@@ -286,5 +289,13 @@ describe('persisted capture workflow', () => {
     );
     await expect(captureMarketingCampaign(db, scope, row.id, now)).rejects.toThrow('500-customer');
     expect(captures).toEqual([]);
+  });
+});
+
+describe('marketing age eligibility', () => {
+  it('excludes a customer known to be under 18 before reading consent', async () => {
+    dateOfBirth = new Date('2010-01-01');
+    expect(await marketingConsent(db, scope, 'customer-a', now)).toBe('UNDER_18');
+    expect(mock.patientConsent.findFirst).not.toHaveBeenCalled();
   });
 });

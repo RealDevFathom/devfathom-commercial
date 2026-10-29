@@ -208,9 +208,19 @@ export async function marketingConsent(
 ) {
   const customer = await db.pharmacyCustomer.findFirst({
     where: { organizationId: scope.organizationId, id: customerId },
-    select: { id: true, active: true, patientId: true, whatsappOptIn: true },
+    select: {
+      id: true,
+      active: true,
+      patientId: true,
+      whatsappOptIn: true,
+      patient: { select: { dateOfBirth: true } },
+    },
   });
   if (!customer?.active) return 'INACTIVE';
+  const adultCutoff = new Date(
+    Date.UTC(now.getUTCFullYear() - 18, now.getUTCMonth(), now.getUTCDate())
+  );
+  if (customer.patient.dateOfBirth && customer.patient.dateOfBirth > adultCutoff) return 'UNDER_18';
   if (customer.whatsappOptIn === false) return 'OPTED_OUT';
   if (customer.whatsappOptIn !== true) return 'NO_CONSENT';
   const consent = await db.patientConsent.findFirst({
