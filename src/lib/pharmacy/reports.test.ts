@@ -158,6 +158,51 @@ describe('PH-RPT aggregate corrections', () => {
     });
   }
 
+  it('applies supplier, ingredient, and batch filters to every dimension-aware KPI', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const recallCount = vi.fn().mockResolvedValue(0);
+    const claimCount = vi.fn().mockResolvedValue(0);
+    const receivingCount = vi.fn().mockResolvedValue(0);
+    const coverageCount = vi.fn().mockResolvedValue(0);
+    await readPharmacyOwnerCommandCentre(
+      {
+        $queryRaw: queryRaw,
+        pharmacyRecallNotice: { count: recallCount },
+        pharmacySupplierClaim: { count: claimCount },
+        pharmacyReceivingException: { count: receivingCount },
+        branchRegulatoryProfile: { count: coverageCount },
+      } as never,
+      {
+        branchIds: ['branch_1'],
+        from: '2026-09-04',
+        to: '2026-09-04',
+        supplierId: 'supplier_1',
+        ingredientId: 'ingredient_1',
+        batchId: 'batch_1',
+      }
+    );
+
+    const sql = queryRaw.mock.calls
+      .map(([query]) => (query as { strings: readonly string[] }).strings.join('?'))
+      .join('\n');
+    expect(sql).toContain('FROM "pharmacy_sale_line_allocations" allocation');
+    expect(sql).toContain('FROM "pharmacy_medicine_strength_components" component');
+    expect(sql).toContain('filter_lot."manufacturingBatchId"=?');
+    expect(sql).toContain('filter_receipt."supplierId"=?');
+    expect(sql).toContain('FROM "pharmacy_recall_notices" recall');
+    expect(recallCount).not.toHaveBeenCalled();
+    expect(claimCount).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        lot: expect.objectContaining({ manufacturingBatchId: 'batch_1' }),
+      }),
+    });
+    expect(receivingCount).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        goodsReceipt: { supplierId: 'supplier_1' },
+      }),
+    });
+  });
+
   it('counts each open signal once and only signals with a linked requisition as recommended', async () => {
     const queries = await captureQueries();
     const { sql, values } = queries.find(({ sql }) =>

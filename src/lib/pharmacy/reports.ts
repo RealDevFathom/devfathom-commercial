@@ -310,28 +310,91 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
     {
       organizationId: Prisma.sql`current_setting('app.current_organization_id', true)`,
       branchIds: filters.branchIds,
+      supplierId: filters.supplierId,
+      ingredientId: filters.ingredientId,
+      batchId: filters.batchId,
     },
     { from: parsed.from, to: parsed.to, by: 'branch' }
   );
+  const ingredientForMedicine = (medicine: Prisma.Sql) =>
+    filters.ingredientId
+      ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_medicine_strength_components" component WHERE component."organizationId"=current_setting('app.current_organization_id',true) AND component."medicineId"=${medicine} AND component."ingredientId"=${filters.ingredientId})`
+      : Prisma.empty;
+  const lotDimensions = (lot: Prisma.Sql) => Prisma.sql`
+    ${filters.batchId ? Prisma.sql`AND ${lot}."manufacturingBatchId"=${filters.batchId}` : Prisma.empty}
+    ${filters.ingredientId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_manufacturing_batches" filter_batch JOIN "pharmacy_medicine_strength_components" component ON component."organizationId"=filter_batch."organizationId" AND component."medicineId"=filter_batch."medicineId" WHERE filter_batch."organizationId"=${lot}."organizationId" AND filter_batch."id"=${lot}."manufacturingBatchId" AND component."ingredientId"=${filters.ingredientId})` : Prisma.empty}
+    ${filters.supplierId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_goods_receipt_lines" filter_line JOIN "pharmacy_goods_receipts" filter_receipt ON filter_receipt."organizationId"=filter_line."organizationId" AND filter_receipt."branchId"=filter_line."branchId" AND filter_receipt."id"=filter_line."goodsReceiptId" WHERE filter_line."organizationId"=${lot}."organizationId" AND filter_line."branchId"=${lot}."branchId" AND filter_line."inventoryLotId"=${lot}."id" AND filter_receipt."supplierId"=${filters.supplierId})` : Prisma.empty}`;
+  const saleDimensions = Prisma.sql`
+    ${ingredientForMedicine(Prisma.sql`l."medicineId"`)}
+    ${filters.batchId || filters.supplierId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_sale_line_allocations" allocation JOIN "pharmacy_inventory_lots" filter_lot ON filter_lot."organizationId"=allocation."organizationId" AND filter_lot."branchId"=allocation."branchId" AND filter_lot."id"=allocation."inventoryLotId" WHERE allocation."organizationId"=l."organizationId" AND allocation."saleLineId"=l."id" ${lotDimensions(Prisma.sql`filter_lot`)})` : Prisma.empty}`;
+  const stockDimensions = Prisma.sql`
+    ${ingredientForMedicine(Prisma.sql`s."medicineId"`)}
+    ${filters.batchId || filters.supplierId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_inventory_lots" filter_lot WHERE filter_lot."organizationId"=s."organizationId" AND filter_lot."branchId"=s."branchId" AND filter_lot."id"=s."inventoryLotId" ${lotDimensions(Prisma.sql`filter_lot`)})` : Prisma.empty}`;
+
   const [money, stock, expiry, recalls, claims, receiving, coverage, safety, fiscal] =
     await Promise.all([
       db.$queryRaw<MoneyCounts[]>(
-        Prisma.sql`SELECT COALESCE((SELECT SUM(l."quantity" * l."unitPriceMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "salesMinor", (SELECT SUM("grossMarginMinor")::int FROM (${marginQuery}) journal_margin) AS "marginMinor", COALESCE((SELECT SUM(t."amountMinor") FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", COALESCE((SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to} AND c."isFinal"=true AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")),0)::int AS "cashVarianceMinor"`
+        Prisma.sql`SELECT COALESCE((SELECT SUM(l."quantity" * l."unitPriceMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' ${saleDimensions} AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "salesMinor", (SELECT SUM("grossMarginMinor")::int FROM (${marginQuery}) journal_margin) AS "marginMinor", COALESCE((SELECT SUM(t."amountMinor") FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", COALESCE((SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to} AND c."isFinal"=true AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")),0)::int AS "cashVarianceMinor"`
       ),
       db.$queryRaw<Array<{ open: number; recommended: number }>>(
-        Prisma.sql`SELECT COUNT(*)::int AS "open", COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "pharmacy_stock_signal_actions" a WHERE a."organizationId"=s."organizationId" AND a."branchId"=s."branchId" AND a."signalId"=s."id" AND a."kind"='DRAFT_REQUISITION' AND a."requisitionId" IS NOT NULL))::int AS "recommended" FROM "pharmacy_stock_signals" s WHERE s."branchId" IN (${branches}) AND s."status" IN ('OPEN','ACKNOWLEDGED','SNOOZED')`
+        Prisma.sql`SELECT COUNT(*)::int AS "open", COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "pharmacy_stock_signal_actions" a WHERE a."organizationId"=s."organizationId" AND a."branchId"=s."branchId" AND a."signalId"=s."id" AND a."kind"='DRAFT_REQUISITION' AND a."requisitionId" IS NOT NULL))::int AS "recommended" FROM "pharmacy_stock_signals" s WHERE s."branchId" IN (${branches}) AND s."status" IN ('OPEN','ACKNOWLEDGED','SNOOZED') ${stockDimensions}`
       ),
       db.$queryRaw<
         Array<{ d30: number; d60: number; d90: number; d180: number; quarantine: number }>
       >(
-        Prisma.sql`SELECT COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '30 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d30", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '60 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d60", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '90 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d90", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '180 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d180", COALESCE(SUM(CASE WHEN bal."disposition"='QUARANTINE' OR b."state"='QUARANTINED' THEN bal."onHandUnits" ELSE 0 END),0)::int AS "quarantine" FROM "pharmacy_stock_balances" bal JOIN "pharmacy_inventory_lots" lot ON lot."organizationId"=bal."organizationId" AND lot."branchId"=bal."branchId" AND lot."id"=bal."inventoryLotId" JOIN "pharmacy_manufacturing_batches" b ON b."organizationId"=lot."organizationId" AND b."id"=lot."manufacturingBatchId" WHERE bal."branchId" IN (${branches}) AND bal."onHandUnits">0 AND (bal."disposition"='AVAILABLE' OR bal."disposition"='QUARANTINE')`
+        Prisma.sql`SELECT COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '30 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d30", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '60 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d60", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '90 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d90", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '180 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d180", COALESCE(SUM(CASE WHEN bal."disposition"='QUARANTINE' OR b."state"='QUARANTINED' THEN bal."onHandUnits" ELSE 0 END),0)::int AS "quarantine" FROM "pharmacy_stock_balances" bal JOIN "pharmacy_inventory_lots" lot ON lot."organizationId"=bal."organizationId" AND lot."branchId"=bal."branchId" AND lot."id"=bal."inventoryLotId" JOIN "pharmacy_manufacturing_batches" b ON b."organizationId"=lot."organizationId" AND b."id"=lot."manufacturingBatchId" WHERE bal."branchId" IN (${branches}) AND bal."onHandUnits">0 AND (bal."disposition"='AVAILABLE' OR bal."disposition"='QUARANTINE') ${lotDimensions(Prisma.sql`lot`)}`
       ),
-      db.pharmacyRecallNotice.count({ where: { status: 'OPEN' } }),
+      filters.supplierId || filters.ingredientId || filters.batchId
+        ? db
+            .$queryRaw<Array<{ value: number }>>(
+              Prisma.sql`SELECT COUNT(*)::int AS value FROM "pharmacy_recall_notices" recall WHERE recall."status"='OPEN'
+                ${filters.batchId ? Prisma.sql`AND recall."batchId"=${filters.batchId}` : Prisma.empty}
+                ${ingredientForMedicine(Prisma.sql`recall."medicineId"`)}
+                ${filters.supplierId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_inventory_lots" filter_lot JOIN "pharmacy_goods_receipt_lines" filter_line ON filter_line."organizationId"=filter_lot."organizationId" AND filter_line."branchId"=filter_lot."branchId" AND filter_line."inventoryLotId"=filter_lot."id" JOIN "pharmacy_goods_receipts" filter_receipt ON filter_receipt."organizationId"=filter_line."organizationId" AND filter_receipt."branchId"=filter_line."branchId" AND filter_receipt."id"=filter_line."goodsReceiptId" WHERE filter_lot."organizationId"=recall."organizationId" AND (filter_lot."manufacturingBatchId"=recall."batchId" OR EXISTS (SELECT 1 FROM "pharmacy_manufacturing_batches" filter_batch WHERE filter_batch."organizationId"=filter_lot."organizationId" AND filter_batch."id"=filter_lot."manufacturingBatchId" AND filter_batch."medicineId"=recall."medicineId")) AND filter_receipt."supplierId"=${filters.supplierId})` : Prisma.empty}`
+            )
+            .then((rows) => rows[0]?.value ?? 0)
+        : db.pharmacyRecallNotice.count({ where: { status: 'OPEN' } }),
       db.pharmacySupplierClaim.count({
-        where: { branchId: { in: filters.branchIds }, status: 'RESERVED' },
+        where: {
+          branchId: { in: filters.branchIds },
+          status: 'RESERVED',
+          lot: {
+            ...(filters.batchId ? { manufacturingBatchId: filters.batchId } : {}),
+            ...(filters.ingredientId
+              ? {
+                  batch: {
+                    medicine: { strengths: { some: { ingredientId: filters.ingredientId } } },
+                  },
+                }
+              : {}),
+            ...(filters.supplierId
+              ? { receiptLines: { some: { goodsReceipt: { supplierId: filters.supplierId } } } }
+              : {}),
+          },
+        },
       }),
       db.pharmacyReceivingException.count({
-        where: { branchId: { in: filters.branchIds }, status: 'OPEN' },
+        where: {
+          branchId: { in: filters.branchIds },
+          status: 'OPEN',
+          ...(filters.supplierId ? { goodsReceipt: { supplierId: filters.supplierId } } : {}),
+          ...(filters.ingredientId || filters.batchId
+            ? {
+                goodsReceiptLine: {
+                  ...(filters.ingredientId
+                    ? {
+                        medicine: {
+                          strengths: { some: { ingredientId: filters.ingredientId } },
+                        },
+                      }
+                    : {}),
+                  ...(filters.batchId
+                    ? { inventoryLot: { manufacturingBatchId: filters.batchId } }
+                    : {}),
+                },
+              }
+            : {}),
+        },
       }),
       db.branchRegulatoryProfile.count({
         where: {
