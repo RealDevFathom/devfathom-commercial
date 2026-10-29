@@ -151,6 +151,7 @@ async function run<T>(work: () => Promise<T>): Promise<T> {
 
 const readProcedure = capabilityProcedure('orders:read');
 const manageProcedure = capabilityProcedure('orders:manage');
+const voidProcedure = capabilityProcedure('orders:void');
 
 export const restaurantOrdersRouter = router({
   // ── Read model (C10) ─────────────────────────────────────────────────────────
@@ -461,7 +462,7 @@ export const restaurantOrdersRouter = router({
       return result;
     }),
 
-  cancel: manageProcedure
+  cancel: voidProcedure
     .input(
       z
         .object({
