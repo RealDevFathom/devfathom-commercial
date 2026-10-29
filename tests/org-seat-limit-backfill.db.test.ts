@@ -4,7 +4,10 @@ import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 
-const databaseUrl = process.env.TEST_DATABASE_URL;
+// This migration test creates a transaction-scoped schema. Run it through the
+// restricted database owner rather than the application runtime role, which
+// deliberately has no CREATE privilege on the database.
+const databaseUrl = process.env.OWNER_DATABASE_URL;
 const sql = readFileSync(
   'prisma/migrations/20261021141526_org_seat_limit_backfill/migration.sql',
   'utf8'

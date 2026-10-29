@@ -990,12 +990,15 @@ function ScopedPharmacyCounterConsole({
     const row = found[0]!;
     const nextUnit = row.saleUnits[0]?.kind ?? null;
     if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
-      stageRow(row);
-      return;
+      // The search result is external query state. Defer the local selection to
+      // the next task so this synchronization effect does not cascade a render.
+      const timer = window.setTimeout(() => stageRow(row), 0);
+      return () => window.clearTimeout(timer);
     }
     barcodeAdd.current = null;
     if (!preview?.sufficient || busy) return;
-    void addToCart();
+    const timer = window.setTimeout(() => void addToCart(), 0);
+    return () => window.clearTimeout(timer);
   }, [
     activeRow,
     addToCart,

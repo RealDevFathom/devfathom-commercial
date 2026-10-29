@@ -15,7 +15,10 @@ async function signIn(page: Page) {
   await page.getByRole('button', { name: /sign in/i }).click();
   await expect(page.getByText('Choose a workspace', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: /Northstar Agency E2E/i }).click();
-  await expect(page).toHaveURL(/\/dashboard(?:\?|$)/);
+  // Auth.js has to persist the selected-workspace session before the App Router
+  // navigation completes. Keep this aligned with the other browser sign-in
+  // helpers instead of using Playwright's five-second assertion default.
+  await expect(page).toHaveURL(/\/dashboard(?:\?|$)/, { timeout: 30_000 });
   await expect(page.getByText('Northstar Agency E2E', { exact: true })).toBeVisible();
 }
 
