@@ -476,7 +476,7 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
     expect(await stale.hydrate()).toBe('ready');
     expect(await stale.enqueue(cashSale(1), MATRIX)).toMatchObject({ ok: true });
 
-    expect(await revoking.revoke()).toEqual({ commands: 0 });
+    expect(await revoking.revoke()).toEqual({ commands: 1 });
     expect(await stale.hydrate()).toBe('ready');
 
     expect(stale.snapshot().queue?.commands).toEqual([]);
@@ -704,8 +704,19 @@ describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
     expect(counter.snapshot().queue?.commands).toEqual([]);
     // A revoked counter must not keep printing from a block it no longer owns.
     expect(counter.snapshot().queue?.leases).toEqual([]);
-    expect(await driver.read('org_a::branch_a::counter_1')).toMatchObject({
-      queue: { replay: 'STOPPED_REVOKED' },
+    expect(await driver.read('org_a::branch_a::counter_1')).toEqual({
+      schemaVersion: 2,
+      scope: { organizationId: 'org_a', branchId: 'branch_a', deviceId: 'counter_1' },
+      catalog: { snapshotPublicKey: '', snapshots: [] },
+      queue: {
+        deviceId: 'counter_1',
+        nextSequence: 1,
+        replay: 'STOPPED_REVOKED',
+        commands: [],
+        leases: [],
+        quotas: [],
+        safetyLeaseEvents: [],
+      },
     });
   });
 

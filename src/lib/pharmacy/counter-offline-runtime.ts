@@ -596,7 +596,7 @@ export class PharmacyCounterRuntime {
 
       if (applied.snapshot.replay === 'STOPPED_REVOKED') {
         await this.commit(
-          { ...nextState, catalog: { ...this.cache(), snapshots: [] } },
+          { ...nextState, catalog: { snapshotPublicKey: '', snapshots: [] } },
           this.persistedState
         );
         return { state: 'STOPPED', discarded: applied.discarded };
@@ -620,12 +620,10 @@ export class PharmacyCounterRuntime {
         return null;
       }
       const source = durable.status === 'ok' ? durable.state : this.state;
-      const purged = purgeCounterQueue(
-        source.queue ?? createCounterQueue(this.scope.deviceId)
-      );
+      const purged = purgeCounterQueue(source.queue ?? createCounterQueue(this.scope.deviceId));
       const tombstone: CounterRuntimeState = {
         ...source,
-        catalog: { snapshotPublicKey: this.cache().snapshotPublicKey, snapshots: [] },
+        catalog: { snapshotPublicKey: '', snapshots: [] },
         queue: purged.snapshot,
       };
       try {
@@ -652,7 +650,10 @@ export class PharmacyCounterRuntime {
   private adoptRevokedState(state: CounterRuntimeState): void {
     this.state = {
       ...state,
-      catalog: state.catalog ?? { snapshotPublicKey: this.cache().snapshotPublicKey, snapshots: [] },
+      catalog: state.catalog ?? {
+        snapshotPublicKey: this.cache().snapshotPublicKey,
+        snapshots: [],
+      },
       queue: state.queue ?? purgeCounterQueue(createCounterQueue(this.scope.deviceId)).snapshot,
     };
     this.persistedState = state;

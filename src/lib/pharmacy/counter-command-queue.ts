@@ -491,19 +491,16 @@ export function resumeCounterAfterReauth(snapshot: CounterQueueSnapshot): Counte
 /**
  * Confirmed device revocation. Queued device-bound work is discarded — it can
  * never be replayed by this counter and must not be rebound to another — and the
- * snapshot is left in a state where `nextCounterReplay` sends nothing at all.
- * The leases are dropped with it: a revoked counter must not keep printing from
- * a block it no longer owns.
+ * snapshot is reduced to a minimal revocation marker where `nextCounterReplay`
+ * sends nothing at all. All device data, including receipt/stock allocations
+ * and the local safety audit projection, is removed with it.
  */
 export function purgeCounterQueue(snapshot: CounterQueueSnapshot): ApplyCounterReplayResult {
   const discarded = { commands: unsettledCommands(snapshot).length };
   return {
     snapshot: {
-      ...snapshot,
+      ...createCounterQueue(snapshot.deviceId),
       replay: 'STOPPED_REVOKED',
-      commands: [],
-      leases: [],
-      quotas: [],
     },
     discarded,
   };

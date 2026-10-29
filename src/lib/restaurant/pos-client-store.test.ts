@@ -465,6 +465,7 @@ describe('versioned catalog cache (criterion 2)', () => {
         throw new Error('QuotaExceededError');
       },
       write: async () => undefined,
+      compareAndSwap: async () => false,
       remove: async () => undefined,
       close: () => undefined,
     };
