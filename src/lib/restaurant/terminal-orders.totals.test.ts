@@ -12,7 +12,11 @@ const D = (value: string) => new Prisma.Decimal(value);
 
 function dbFor(
   channel: 'DINE_IN' | 'TAKEAWAY',
-  options: { serviceChargeRate?: string; billedServiceCharges?: string[] } = {}
+  options: {
+    serviceChargeRate?: string;
+    billedServiceCharges?: string[];
+    linePrices?: string[];
+  } = {}
 ) {
   const tax = {
     findMany: vi.fn(async () => [
@@ -85,33 +89,34 @@ function dbFor(
         openedAt: at,
         closedAt: null,
         cancelledAt: null,
-        items: [
-          {
-            id: 'coffee',
-            course: 1,
-            seatNumber: null,
-            productId: 'product-1',
-            variantId: null,
-            name: 'Coffee',
-            unitPrice: D('4.00'),
-            quantity: 1,
-            taxAmount: D('99.00'),
-            serviceChargeAmount: D('99.00'),
-            status: 'SENT',
-            remakeOfItemId: null,
-            voidedPostPrep: false,
-            wastageDisposition: null,
-            voidReason: null,
-            modifiers: [
-              {
-                id: 'mod-1',
-                modifierOptionId: 'oat',
-                name: 'Oat',
-                priceDelta: D('0.50'),
-              },
-            ],
-          },
-        ],
+        items: (options.linePrices ?? ['4.00']).map((unitPrice, index) => ({
+          id: `item-${index + 1}`,
+          course: 1,
+          seatNumber: null,
+          productId: 'product-1',
+          variantId: null,
+          name: 'Coffee',
+          unitPrice: D(unitPrice),
+          quantity: 1,
+          taxAmount: D('99.00'),
+          serviceChargeAmount: D('99.00'),
+          status: 'SENT',
+          remakeOfItemId: null,
+          voidedPostPrep: false,
+          wastageDisposition: null,
+          voidReason: null,
+          modifiers:
+            index === 0 && options.linePrices === undefined
+              ? [
+                  {
+                    id: 'mod-1',
+                    modifierOptionId: 'oat',
+                    name: 'Oat',
+                    priceDelta: D('0.50'),
+                  },
+                ]
+              : [],
+        })),
         orderTables: [],
         kitchenTickets: [],
         bills: (options.billedServiceCharges ?? []).map((serviceChargeTotal) => ({
@@ -158,7 +163,10 @@ describe('order totals ignore stored tax and service', () => {
 
   it('shows the live bills pinned service after a line comp instead of gross draft service', async () => {
     const detail = await getOrderForBranch(
-      dbFor('DINE_IN', { billedServiceCharges: ['6.00'] }) as unknown as ScopedDb,
+      dbFor('DINE_IN', {
+        linePrices: ['40.00', '60.00'],
+        billedServiceCharges: ['6.00'],
+      }) as unknown as ScopedDb,
       'order-1',
       'branch-1'
     );
@@ -169,8 +177,23 @@ describe('order totals ignore stored tax and service', () => {
   it('shows the bill pinned service when the published rate changes after bill cut', async () => {
     const detail = await getOrderForBranch(
       dbFor('DINE_IN', {
+        linePrices: ['100.00'],
         serviceChargeRate: '0.200000',
         billedServiceCharges: ['10.00'],
+      }) as unknown as ScopedDb,
+      'order-1',
+      'branch-1'
+    );
+
+    expect(detail?.totals.serviceCharge).toBe('10');
+  });
+
+  it('sums pinned service across the order live bills', async () => {
+    const detail = await getOrderForBranch(
+      dbFor('DINE_IN', {
+        linePrices: ['100.00'],
+        serviceChargeRate: '0.200000',
+        billedServiceCharges: ['4.00', '6.00'],
       }) as unknown as ScopedDb,
       'order-1',
       'branch-1'

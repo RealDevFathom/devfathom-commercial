@@ -566,6 +566,10 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     (total, bill) => total.plus(bill.serviceChargeTotal),
     new Prisma.Decimal(0)
   );
+  // A live bill is the monetary authority for the ticket. Its service charge is
+  // frozen at bill cut and may subsequently be reduced by bill-level comps.
+  const ticketServiceCharge =
+    order.bills.length > 0 ? money(billedServiceCharge) : quoted.serviceCharge;
   return {
     id: order.id,
     branchId: order.branchId,
@@ -616,7 +620,7 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     totals: {
       subtotal: money(deriveSubtotal(activeItems)),
       tax: quoted.tax,
-      serviceCharge: order.bills.length > 0 ? money(billedServiceCharge) : quoted.serviceCharge,
+      serviceCharge: ticketServiceCharge,
       deliveryFee: money(order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)),
     },
   };
