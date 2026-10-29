@@ -339,3 +339,89 @@ test('CRM reviewers can retrieve saved setup details and private licence evidenc
     await db.end();
   }
 });
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`long populated passwords reserve reveal space at 375px in ${theme}`, async ({ page }) => {
+    await mkdir('/tmp/login-shots', { recursive: true });
+    await page.setViewportSize({ width: 375, height: 960 });
+    await page.addInitScript((theme) => localStorage.setItem('theme', theme), theme);
+    // Valid recovery fixtures expose the actual forms without creating or consuming tokens.
+    await page.route('**/api/trpc/passwordReset.validate*', (route) =>
+      route.fulfill({
+        json: [{ result: { data: { json: { valid: true } } } }],
+      })
+    );
+    await page.route('**/api/trpc/invitations.get*', (route) =>
+      route.fulfill({
+        json: [
+          {
+            result: {
+              data: {
+                json: {
+                  name: 'QA Owner',
+                  email: 'owner@example.test',
+                  role: 'OWNER',
+                  organizationName: 'QA',
+                  title: 'Owner',
+                  department: 'OPERATIONS',
+                },
+              },
+            },
+          },
+        ],
+      })
+    );
+    const routes = [
+      ...screens.filter(([name]) => name.endsWith('sign-in')),
+      ['reset-password', '/reset-password/qa-valid-token'],
+      ['accept-invite', '/invite/qa-valid-token'],
+    ];
+    const password = 'Long-Password92!'.repeat(12);
+    for (const [name, route] of routes) {
+      await page.goto(route);
+      if (name.endsWith('sign-in')) {
+        const vertical = new URL(route, 'http://localhost').searchParams.get('vertical');
+        await expect(page.getByRole('main')).toContainText(
+          !vertical
+            ? 'Secure workspace access'
+            : `${vertical === 'studio' ? 'agency' : vertical} workspace`
+        );
+      }
+      const input = page.locator('input[data-password-reveal]');
+      await expect(input).toBeVisible();
+      await input.fill(password);
+      for (const revealed of [false, true]) {
+        await expect(input).toHaveAttribute('type', revealed ? 'text' : 'password');
+        await expect(input).toHaveValue(password);
+        await input.focus();
+        await page.keyboard.press('End');
+        const geometry = await input.evaluate((el) => {
+          const rect = el.getBoundingClientRect();
+          const button = el.parentElement!.querySelector('button')!.getBoundingClientRect();
+          const style = getComputedStyle(el);
+          return {
+            contentEnd:
+              rect.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight),
+            buttonStart: button.left,
+          };
+        });
+        expect(
+          geometry.contentEnd,
+          `${name} ${revealed ? 'revealed' : 'masked'}`
+        ).toBeLessThanOrEqual(geometry.buttonStart);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+          true
+        );
+        await page.screenshot({
+          path: `/tmp/login-shots/${name}-long-password-${revealed ? 'revealed' : 'masked'}-375-${theme}.png`,
+          fullPage: true,
+          style: 'nextjs-portal { visibility: hidden !important; }',
+        });
+        await page
+          .getByRole('button', { name: revealed ? 'Hide password' : 'Show password' })
+          .click();
+      }
+      await expect(input).toHaveAttribute('type', 'password');
+    }
+  });
+}

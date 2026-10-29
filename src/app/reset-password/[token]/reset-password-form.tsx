@@ -1,9 +1,10 @@
 'use client';
 
 import { useState } from 'react';
+import { PasswordInput } from '@/components/ui/password-input';
 import { Button } from '@/components/ui/button';
 import { useRouter } from 'next/navigation';
-import { Eye, EyeOff, Loader2, Check, CheckCircle2 } from 'lucide-react';
+import { Loader2, Check, CheckCircle2 } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
 import { passwordRules, passwordMeetsPolicy } from '@/lib/password-policy';
 import { cn } from '@/lib/utils';
@@ -131,30 +132,21 @@ export function ResetPasswordForm({ token }: { token: string }) {
           <label htmlFor="password" className="block text-sm font-medium text-text-body">
             New Password
           </label>
-          <div className="relative">
-            <input
-              id="password"
-              aria-invalid={Boolean(error)}
-              aria-describedby={
-                error ? 'account-error password-requirements' : 'password-requirements'
-              }
-              type={showPassword ? 'text' : 'password'}
-              placeholder="Create a password"
-              autoComplete="new-password"
-              autoFocus
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className={`${inputClass} pr-10`}
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-1 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center text-text-muted transition-colors hover:text-text-strong"
-              aria-label={showPassword ? 'Hide password' : 'Show password'}
-            >
-              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
-          </div>
+          <PasswordInput
+            id="password"
+            aria-invalid={Boolean(error)}
+            aria-describedby={
+              error ? 'account-error password-requirements' : 'password-requirements'
+            }
+            revealed={showPassword}
+            onReveal={() => setShowPassword((visible) => !visible)}
+            placeholder="Create a password"
+            autoComplete="new-password"
+            autoFocus
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className={inputClass}
+          />
 
           {/* Live password requirements checklist */}
           <ul id="password-requirements" className="mt-2 space-y-1.5">

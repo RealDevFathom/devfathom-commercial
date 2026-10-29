@@ -1633,6 +1633,10 @@
   padding-inline: 16px;
   font-size: 14px;
 }
+/* Keep reveal space in both masked and revealed states, independent of input type. */
+.studio-auth input[data-password-reveal] {
+  padding-inline-end: 3rem;
+}
 .studio-auth input[type='file'] {
   padding-block: 12px;
 }

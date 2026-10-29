@@ -3,9 +3,10 @@
 import { useId, useState, type FormEvent } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { Building2, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { Building2, Loader2 } from 'lucide-react';
 import { LOGIN_ERROR_MESSAGES, type LoginErrorKey } from './login-errors';
 import { useHydrated } from './use-hydrated';
+import { PasswordInput } from '@/components/ui/password-input';
 import { Button } from '@/components/ui/button';
 import type { LoginVertical } from './vertical';
 
@@ -171,27 +172,18 @@ export function LoginForm({
                 Password
               </label>
             </div>
-            <div className="relative">
-              <input
-                id="password"
-                type={showPassword ? 'text' : 'password'}
-                placeholder="Enter your password"
-                autoComplete="current-password"
-                name="password"
-                required
-                aria-invalid={Boolean(error)}
-                aria-describedby={error ? errorId : undefined}
-                className={`${inputClass} pe-12`}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword((visible) => !visible)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-                className="absolute end-1 top-1/2 flex h-11 w-11 items-center justify-center -translate-y-1/2 text-text-muted transition-colors hover:text-foreground"
-              >
-                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
-            </div>
+            <PasswordInput
+              id="password"
+              revealed={showPassword}
+              onReveal={() => setShowPassword((visible) => !visible)}
+              placeholder="Enter your password"
+              autoComplete="current-password"
+              name="password"
+              required
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? errorId : undefined}
+              className={inputClass}
+            />
             <div className="text-end">
               <a
                 href="/forgot-password"
