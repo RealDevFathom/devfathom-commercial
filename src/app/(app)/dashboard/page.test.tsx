@@ -11,7 +11,11 @@ const mocks = vi.hoisted(() => ({
   db: {},
 }));
 vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
-vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
+vi.mock('@/lib/abac', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/abac')>()),
+  can: mocks.can,
+  subjectFromSession: (user: unknown) => user,
+}));
 vi.mock('@/lib/onboarding/setup-evaluator', () => ({
   loadSetupChecklist: mocks.loadSetupChecklist,
 }));
@@ -42,6 +46,7 @@ import DashboardPage from './page';
 import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
 import { HotelDashboardContent } from './hotel-dashboard-content';
 import { RestaurantDashboardContent } from './restaurant-dashboard-content';
+import { ALL_ACTIONS, POLICIES } from '@/lib/abac/policies';
 
 function helpers() {
   return {
@@ -59,6 +64,11 @@ function helpers() {
 }
 
 describe('DashboardPage vertical dispatch', () => {
+  it('registers the POS landing capability in the production ABAC catalogue', () => {
+    expect(ALL_ACTIONS).toContain('orders:take');
+    expect(POLICIES['orders:take']).toEqual([]);
+  });
+
   it.each([
     ['owner', ['admin:access'], '/restaurant'],
     ['owner with order-taking access', ['admin:access', 'orders:take'], '/restaurant'],

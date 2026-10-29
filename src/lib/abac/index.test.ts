@@ -247,6 +247,9 @@ describe('custom ABAC decisions', () => {
       'restaurant:configure',
       'catering:read',
       'catering:manage',
+      // POS landing and terminal order creation share this exact-grant-only
+      // capability; agency roles must not inherit it implicitly.
+      'orders:take',
       // R-lane (WHA-194): OCR menu import. Default deny like the M8 five above —
       // it is granted only through an organization role, never by an agency role.
       'menu:import',
@@ -262,7 +265,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);

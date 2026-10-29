@@ -19,6 +19,9 @@ vi.mock('@/lib/tenancy/host', () => ({
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: mocks.createTenantDb }));
 vi.mock('@/lib/restaurant/webhook-inbox', () => {
+  // The factory is hoisted above ESM imports, so load Zod here rather than
+  // closing over an import that has not been initialized yet.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { z } = require('zod') as typeof import('zod');
   return {
     recordInboundWebhook: mocks.recordInboundWebhook,
