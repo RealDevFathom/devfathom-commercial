@@ -10,7 +10,13 @@ type MutationOptions = {
 
 const mocks = vi.hoisted(() => ({
   session: {
-    user: { id: 'user_1', organizationId: 'org_1', name: 'Admin', role: 'ADMIN', email: 'admin@example.com' },
+    user: {
+      id: 'user_1',
+      organizationId: 'org_1',
+      name: 'Admin',
+      role: 'ADMIN',
+      email: 'admin@example.com',
+    },
   },
   printingClient: { restaurantDevices: { listPrinters: { query: vi.fn().mockResolvedValue([]) } } },
   apiList: { data: [] as unknown[], error: null as unknown },
@@ -361,7 +367,11 @@ describe('Print routing settings', () => {
     fireEvent.click(button);
     expect(await screen.findByText(/Paper output is not confirmed/)).toBeVisible();
     fireEvent.click(button);
-    await waitFor(() => expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(2));
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(
+        2
+      )
+    );
     const posts = fetchMock.mock.calls.filter(([, options]) => options?.method === 'POST');
     const first = JSON.parse(posts[0][1]!.body as string);
     expect(first).toMatchObject({
