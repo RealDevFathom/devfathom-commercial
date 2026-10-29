@@ -202,7 +202,8 @@ export function EmailContent() {
             </button>
             <button
               onClick={() => {
-                if (confirm(`Disconnect ${mb.emailAddress}?`)) disconnect.mutate({ mailboxId: mb.id });
+                if (confirm(`Disconnect ${mb.emailAddress}?`))
+                  disconnect.mutate({ mailboxId: mb.id });
               }}
               className="rounded-full p-0.5 opacity-50 hover:bg-destructive/10 hover:text-destructive hover:opacity-100"
               title="Disconnect"
@@ -462,7 +463,12 @@ function MessageList({
               {formatWhen(m.sentAt)}
             </span>
           </div>
-          <span className={cn('truncate text-xs', m.isRead ? 'text-muted-foreground' : 'text-foreground')}>
+          <span
+            className={cn(
+              'truncate text-xs',
+              m.isRead ? 'text-muted-foreground' : 'text-foreground'
+            )}
+          >
             {m.subject || '(no subject)'}
           </span>
           {m.snippet && (
@@ -598,9 +604,17 @@ function ComposeDialog({
               ))}
             </select>
           </div>
-          <Input placeholder="To (comma separated)" value={to} onChange={(e) => setTo(e.target.value)} />
+          <Input
+            placeholder="To (comma separated)"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+          />
           <Input placeholder="Cc (optional)" value={cc} onChange={(e) => setCc(e.target.value)} />
-          <Input placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
+          <Input
+            placeholder="Subject"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+          />
           <Textarea
             rows={8}
             placeholder="Write your message…"
@@ -621,7 +635,11 @@ function ComposeDialog({
               })
             }
           >
-            {send.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            {send.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
             {send.isPending ? 'Sending…' : 'Send'}
           </Button>
         </DialogFooter>

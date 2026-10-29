@@ -1,0 +1,752 @@
+{
+  "captured_on": "2026-10-29",
+  "server": "standalone production build",
+  "source_commit": "0fb1c96d",
+  "browser_cases": "13 passed in full run; interrupted light 1440 case passed in isolated retry",
+  "screenshots": [
+    {
+      "file": "agency-sign-in-1024-dark.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "44df83fc260dc59180b683f11bdea74695d65cea30d70cf8e3665e01d591ba47"
+    },
+    {
+      "file": "agency-sign-in-1024-light.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "81f8d1539d969b9803318124241de6988543b36155de785890ca8b4b168a332b"
+    },
+    {
+      "file": "agency-sign-in-1440-dark.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "7d0fcdde2b95e68dbf8c091fc6ed1ea8a3f84e37a78f94fd88ef6b8c48f4e5ad"
+    },
+    {
+      "file": "agency-sign-in-1440-light.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "f44d9781185670c42a3796955a24122358288ca3749e28ef64e284e89152b434"
+    },
+    {
+      "file": "agency-sign-in-375-dark.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "d1432eb9e466330eb675d9d2124287be35169d9d0f7de65307b66ece6d15be8c"
+    },
+    {
+      "file": "agency-sign-in-375-light.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "1e2acdfa786be0758715aede17f71694e6d3984b075849d95811815f53838069"
+    },
+    {
+      "file": "agency-sign-in-768-dark.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "3275797ff08c3f1b7cdae02bcf611e1ea7ff0d55cb329f05c414944e6204c56c"
+    },
+    {
+      "file": "agency-sign-in-768-light.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "b3671a8f972d3aaa5df04290f7ae65b9af18805c6a4e7bbf34dec3e97c5ef3ce"
+    },
+    {
+      "file": "crm-review-1440.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "39fe0fda125c1ce3de5dc4302b9e13e3d10657dd7ed9e434a11e63297e46583a"
+    },
+    {
+      "file": "crm-review-375.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "a117b126a41f62d0d3bcb6b3d8732ffc371dec6ba3339c821155e08ac95d7789"
+    },
+    {
+      "file": "forgot-password-1024-dark.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "ef8d7bb7d7da6603e76c37fc9a0693b1facbd3df675c5e050acf69d921e9d914"
+    },
+    {
+      "file": "forgot-password-1024-light.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "f51746177b507b171e5ff1c89d47dda382a21d811da1088ad58b81b1584dbd38"
+    },
+    {
+      "file": "forgot-password-1440-dark.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "ad4b3a59965c672356dfc341ccce42e760870109f3af9f04ee88a0693036ed49"
+    },
+    {
+      "file": "forgot-password-1440-light.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "3bf80f6e17318469a5e07eb8189546d73c2e024f9fa6032a1f6a8e087e206a3f"
+    },
+    {
+      "file": "forgot-password-375-dark.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "837e93dc5fa1c1cad63bde16eeb67f9bbaefd869b8f67391e8ef24b921b0ee96"
+    },
+    {
+      "file": "forgot-password-375-light.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "c6d68113c13ae37ffa01b323c5bbb796b389a44a6c837f4670a2300404310fc7"
+    },
+    {
+      "file": "forgot-password-768-dark.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "b3da76b8c84c9b8b9f808d78891f3904cd60d18df95843800adce64cf7249269"
+    },
+    {
+      "file": "forgot-password-768-light.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "d0f4b4d69d9b22006b3ba34e9e7d2f4b2b1347166b9d1b340cb468ae56fc8aaf"
+    },
+    {
+      "file": "hotel-register-1024-dark.png",
+      "width": 1024,
+      "height": 1447,
+      "sha256": "752261fcca44a544aa16080809c5a1c2ba6574475ad1645d4074d96b315abbb0"
+    },
+    {
+      "file": "hotel-register-1024-light.png",
+      "width": 1024,
+      "height": 1447,
+      "sha256": "981326be7fe0d30ae7aa434b57d0898968ca9c92ee8ddd8e58e46ec72be26044"
+    },
+    {
+      "file": "hotel-register-1440-dark.png",
+      "width": 1440,
+      "height": 1457,
+      "sha256": "3b2acc50aca89dcdb7c2d2cfa8ff1219ffe027f290f078e29148fc543ac1c2a1"
+    },
+    {
+      "file": "hotel-register-1440-light.png",
+      "width": 1440,
+      "height": 1457,
+      "sha256": "e6e12632abbd7ac5392279a0d7289c3a4c585b507e94b6fe409744db9902af28"
+    },
+    {
+      "file": "hotel-register-375-dark.png",
+      "width": 375,
+      "height": 1863,
+      "sha256": "86771286395520187b952c53d8569caf272f2cabf30fc8ba7e9246d7f0f8ce37"
+    },
+    {
+      "file": "hotel-register-375-light.png",
+      "width": 375,
+      "height": 1863,
+      "sha256": "5ae4d2513bffd127da2478015145f0f81f80e29bd3ca55aaf958130ffb13b902"
+    },
+    {
+      "file": "hotel-register-768-dark.png",
+      "width": 768,
+      "height": 1455,
+      "sha256": "77f593cf6e8f2009e63995f4965af6834e6bc8168f815539744ebd66a48865f9"
+    },
+    {
+      "file": "hotel-register-768-light.png",
+      "width": 768,
+      "height": 1455,
+      "sha256": "295eabdece12b301b284f574572adf7ea95b23cf688626824180f22f43f3a6e8"
+    },
+    {
+      "file": "hotel-request-pending-1440.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "5eaa148537d843f75fd01ac5c29460ba1fac69acefc6053bfe6264a86f066ed6"
+    },
+    {
+      "file": "hotel-request-pending-375.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "bc097384adc622b6dc850a201d79b0929fce1912b38608bc0a82f98a4cc1788c"
+    },
+    {
+      "file": "hotel-sign-in-1024-dark.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "b9d771210eb5f9dcb2f70f9f58edca6eafa4a68df0a5584f3b7fa5db53a6efd6"
+    },
+    {
+      "file": "hotel-sign-in-1024-light.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "6106acbd9c35f4da1895d69f37d625e161df9f48708e9dd945d4f9f3c93217c7"
+    },
+    {
+      "file": "hotel-sign-in-1440-dark.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "7e3f4417d6734d8c157919472e1d50aceb20d51f3779c845807a1c843f7efc38"
+    },
+    {
+      "file": "hotel-sign-in-1440-light.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "4111615b53acf0807cdac60a7ae9b5a2cbb93a5e15845129e1efad082b1bbb67"
+    },
+    {
+      "file": "hotel-sign-in-375-dark.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "4a38300d0afd8eb4a3f51c3f79525ce769d7422f8e046122d93409af97194cbe"
+    },
+    {
+      "file": "hotel-sign-in-375-light.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "f92f3940db92c706d146bcd51c4e7c3932c834e20ee81ebf87b1c0d81724e915"
+    },
+    {
+      "file": "hotel-sign-in-768-dark.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "e8e4a38dd17a9a927ecd0478dd314018c059ccee02071c8dc4cb348ca7383015"
+    },
+    {
+      "file": "hotel-sign-in-768-light.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "ffb1efb80f28843cc8fbeca8f4333f2d050f476970bdb1188efe035d07d520cc"
+    },
+    {
+      "file": "invite-unavailable-1024-dark.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "b1f8016367f9ffe69005c079eef93bc30a1338d42d0ab457e9c6aac671b6d314"
+    },
+    {
+      "file": "invite-unavailable-1024-light.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "6238cffac4341da6d08bccc745dde03b91938191bef853ffc61b0ca1c381db56"
+    },
+    {
+      "file": "invite-unavailable-1440-dark.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "c4bd1feb88bca7a86ed4100de35fd6e73d9bcf9f91910d336e22f622fd9e5ac5"
+    },
+    {
+      "file": "invite-unavailable-1440-light.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "882313fa0d399173c71079b1f4001d978a7d6abde92657078c1e8bfe4d484f0a"
+    },
+    {
+      "file": "invite-unavailable-375-dark.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "502f9285ed4a8818e9b95e66d931e36187707f36f3499a64ce02c453a832f183"
+    },
+    {
+      "file": "invite-unavailable-375-light.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "5166eca177dc7aef2ef628172d49e57bbf04be1f4861faf5ec04569f15ff3311"
+    },
+    {
+      "file": "invite-unavailable-768-dark.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "d7144f58d04acabf7311f95b6d60cee6f4972badbba1ead0a83a43edda090faf"
+    },
+    {
+      "file": "invite-unavailable-768-light.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "1a9a78684c01c6f532c43aa5049c199316523fc094a8885ef496421d5230501f"
+    },
+    {
+      "file": "neutral-sign-in-1024-dark.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "2d52690883f159d1b6ef188983d9532d494d509aacbc2fe1e0da7f63fa12dc76"
+    },
+    {
+      "file": "neutral-sign-in-1024-light.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "99ec5cf03131b2ace6c07014157d339a5b35d4d72255c551fd65709976ee44dc"
+    },
+    {
+      "file": "neutral-sign-in-1440-dark.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "6ebbb8aa19210d1df58f6dcc24fddbc70a6655289ae4a093127056a667ae240f"
+    },
+    {
+      "file": "neutral-sign-in-1440-light.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "0d5e5be12994b720b23fcc8a52cdd0aecdb6a42b4542575af8df62c9c1184eb8"
+    },
+    {
+      "file": "neutral-sign-in-375-dark.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "cf628ffbeb4bb65a3da7a094f8573ad1eec84320bac8ead2269926641989a146"
+    },
+    {
+      "file": "neutral-sign-in-375-light.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "788e61e7a40de171e8f0cfeb224ff966e032797160b42e350f0e5feb4e37e8d4"
+    },
+    {
+      "file": "neutral-sign-in-768-dark.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "963153173a02e83524d023ef0470948098e10180c346d6df43104954af037a31"
+    },
+    {
+      "file": "neutral-sign-in-768-light.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "6af11103181ed83be708fe18c7037acfb39a3eb076072875150861b3f079e734"
+    },
+    {
+      "file": "pharmacy-register-1024-dark.png",
+      "width": 1024,
+      "height": 2126,
+      "sha256": "ff9fdc8fc6349423f909eb31fcf4aed6aca6c843d84296a3a590166e9cfde463"
+    },
+    {
+      "file": "pharmacy-register-1024-light.png",
+      "width": 1024,
+      "height": 2126,
+      "sha256": "6c8b3b16c39a17353e2fbdd81474a1fbdc0cbb5ebbbf8717408e86c3872fba28"
+    },
+    {
+      "file": "pharmacy-register-1440-dark.png",
+      "width": 1440,
+      "height": 2116,
+      "sha256": "eeec484157c016eeb0667c2758f28a5b12e4359f6813c301dc59386af6e9a96e"
+    },
+    {
+      "file": "pharmacy-register-1440-light.png",
+      "width": 1440,
+      "height": 2116,
+      "sha256": "1b02e61590359be810caa0e4b85f43fd6bd68173cc4808f3bdefd3ba4ee16402"
+    },
+    {
+      "file": "pharmacy-register-375-dark.png",
+      "width": 375,
+      "height": 2772,
+      "sha256": "72bc30f6f29638a398250bd114f5d7231bfbb842b7d020af913a1463a58cf9d7"
+    },
+    {
+      "file": "pharmacy-register-375-light.png",
+      "width": 375,
+      "height": 2772,
+      "sha256": "2ed58b4b5dd1b8bab7791b9253f9a5f6896be27125424eb09f14de51ca8e1ac1"
+    },
+    {
+      "file": "pharmacy-register-768-dark.png",
+      "width": 768,
+      "height": 2114,
+      "sha256": "9b03547a86683d3fbd6fd0cc2e785f15f0fe595099e68404bf19161923e74700"
+    },
+    {
+      "file": "pharmacy-register-768-light.png",
+      "width": 768,
+      "height": 2114,
+      "sha256": "ade4d2ef527fae74a646583131be5a5339ee8019b759d97ed42a498a01a244f1"
+    },
+    {
+      "file": "pharmacy-request-pending-1440.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "86fa2a0242c043183d7ef4401b697ca6e435f1b06415fdd6a4333024a0084ec2"
+    },
+    {
+      "file": "pharmacy-request-pending-375.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "502266478d43f1eee0bf49da87e161e694a934d45f7485f576f8cbef16535d63"
+    },
+    {
+      "file": "pharmacy-sign-in-1024-dark.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "936b464e929360772862fe1da048de570cde5ee62ff01311800855ff61c525e3"
+    },
+    {
+      "file": "pharmacy-sign-in-1024-light.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "469bae5ea85cce9dc371e39bd00152d9f84dc72b38bd17af5f916001868bb75a"
+    },
+    {
+      "file": "pharmacy-sign-in-1440-dark.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "66f6007021a9aff6829115a5be6d9cc1f4c3d86a85b406cc4e6e39b301e47cdb"
+    },
+    {
+      "file": "pharmacy-sign-in-1440-light.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "963b2d27ac836525efd583c459a7eff3801d79f60c81224d95b31b5578ccd1fc"
+    },
+    {
+      "file": "pharmacy-sign-in-375-dark.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "b444bc909cb4394cc0d6cdf8ef275bb28bbcb07379b4c68ceda71540b233cfeb"
+    },
+    {
+      "file": "pharmacy-sign-in-375-light.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "2187471f51cde177f408897a98f5ade4a16f9311774418a5891c4dbf03c04ec0"
+    },
+    {
+      "file": "pharmacy-sign-in-768-dark.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "caf29585ba48a285e0d921be226a14216c29e2dccda6cd37ffd1a23c93784d7b"
+    },
+    {
+      "file": "pharmacy-sign-in-768-light.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "cbdb7de6099ee706a66136ed549897caac15991c2eb8e1269daf868ea8eb6fcf"
+    },
+    {
+      "file": "reset-unavailable-1024-dark.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "7e3d17246d5ee4e6ba41ddf5f4bcbc5d9d50fc82ea83c66e63f01182faaba4f6"
+    },
+    {
+      "file": "reset-unavailable-1024-light.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "82d848d31fe73cb863f4a4a78075385b87d1b70d6e7df09b110fdb1b45a4c29e"
+    },
+    {
+      "file": "reset-unavailable-1440-dark.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "fec5e584e07c0583d8498d3565e3eacaa014a7123a497426de7029ec85c3983b"
+    },
+    {
+      "file": "reset-unavailable-1440-light.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "b8a5edd13785b76bb07dec4c67e43cb74e78bf6d0f34d4cc28da297590f9b6b1"
+    },
+    {
+      "file": "reset-unavailable-375-dark.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "8b2a8712111dd9a1f42503a129886c92397ebad8b0be0793f231c4907a61ab23"
+    },
+    {
+      "file": "reset-unavailable-375-light.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "b38de85f6e48384c2c6b482dfa9977500cb36652d9b4b1a47339cc7cb5ea5f21"
+    },
+    {
+      "file": "reset-unavailable-768-dark.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "b6ab715093a5d78b0e57b97a1abe22287896213d9ea8524ddd8b81e7170c6699"
+    },
+    {
+      "file": "reset-unavailable-768-light.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "45eef6bd7afda8432e5e7eb0cf4219b28b3d44a0c050240594076df073216176"
+    },
+    {
+      "file": "restaurant-register-1024-dark.png",
+      "width": 1024,
+      "height": 1689,
+      "sha256": "ad53a07f7fce155b30522cdb8fdd9c00c7e9c080d61397c5a72a81af0bf079bb"
+    },
+    {
+      "file": "restaurant-register-1024-light.png",
+      "width": 1024,
+      "height": 1689,
+      "sha256": "b14700fff105d81baa84fe6b693383700742a72c801ecb6dd3ae9bb48c3e9abb"
+    },
+    {
+      "file": "restaurant-register-1440-dark.png",
+      "width": 1440,
+      "height": 1699,
+      "sha256": "bee2633cc819023079a5cf3ea8ab1a6276d061b590f38410309c77ff1e5910d8"
+    },
+    {
+      "file": "restaurant-register-1440-light.png",
+      "width": 1440,
+      "height": 1699,
+      "sha256": "b43ce83ee69527ad18969dd770a9571c6fdae8fd9002b96a7c28499b65fceaf6"
+    },
+    {
+      "file": "restaurant-register-375-dark.png",
+      "width": 375,
+      "height": 1915,
+      "sha256": "e58967d87a5db5b0419cbd1f7133f5f8925e5bc3628bb91ec474548b04361f81"
+    },
+    {
+      "file": "restaurant-register-375-light.png",
+      "width": 375,
+      "height": 1915,
+      "sha256": "67bd7b52a687c22b4e737b9644e8cc46a209ed3b123cd520248c507550a3806a"
+    },
+    {
+      "file": "restaurant-register-768-dark.png",
+      "width": 768,
+      "height": 1697,
+      "sha256": "e3c170c7dc5f89a2d52d00027d0acc95026dfbba32a9e6b52771a99771057fa5"
+    },
+    {
+      "file": "restaurant-register-768-light.png",
+      "width": 768,
+      "height": 1697,
+      "sha256": "f03e14a408a8a0cef89aa0275b6d1c7d14f891807fc725aa0f5c40cc254c2f96"
+    },
+    {
+      "file": "restaurant-request-error-1440.png",
+      "width": 1440,
+      "height": 1785,
+      "sha256": "ed709d19a686d127e6597ab4d08a9b7bd008f5e7e4293b06c06e11ce20684eef"
+    },
+    {
+      "file": "restaurant-request-error-375.png",
+      "width": 375,
+      "height": 2021,
+      "sha256": "65d7c2d664241f6d8de0177d1cdf38598026c1441220506404d9759180547086"
+    },
+    {
+      "file": "restaurant-request-pending-1440.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "e41c2fc2f2f35ed7a91b08dab6940c9fb54c57e078affc13d6bea0ebf42aa0e8"
+    },
+    {
+      "file": "restaurant-request-pending-375.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "950c2ba4be35fd72ef41f220a6b4f7408357bc75e7f7b167eb60a02d97d44c2b"
+    },
+    {
+      "file": "restaurant-sign-in-1024-dark.png",
+      "width": 1024,
+      "height": 979,
+      "sha256": "9b3668d806dce559cf4cfc7fa369f46c31c0093e9f9d59c3937d3e4ad218631b"
+    },
+    {
+      "file": "restaurant-sign-in-1024-light.png",
+      "width": 1024,
+      "height": 979,
+      "sha256": "92b0706f0ee07415cbdb4053f20f663bb8dc8e29df2ec131b4f88a9aff2c554e"
+    },
+    {
+      "file": "restaurant-sign-in-1440-dark.png",
+      "width": 1440,
+      "height": 982,
+      "sha256": "fb16fba0bfe6ccefde8d92fa6a27105eea447eef393ddf3fa687431680263aa8"
+    },
+    {
+      "file": "restaurant-sign-in-1440-light.png",
+      "width": 1440,
+      "height": 982,
+      "sha256": "e26b32b2a297a4fbb22884ed610ad7ad337ed7b9ba63e23f6e8e1186c83b6b59"
+    },
+    {
+      "file": "restaurant-sign-in-375-dark.png",
+      "width": 375,
+      "height": 985,
+      "sha256": "8fd91e0edd1ce52873f8c97a82ae2c9a77a312030aeecf0a3d4e11a19f06a63c"
+    },
+    {
+      "file": "restaurant-sign-in-375-light.png",
+      "width": 375,
+      "height": 985,
+      "sha256": "4c15b039873f257c7450700b240a9008ed90598d8fba4334ef52a30a17cc79c2"
+    },
+    {
+      "file": "restaurant-sign-in-768-dark.png",
+      "width": 768,
+      "height": 985,
+      "sha256": "9c2d81cf4f95856df0cc5776a854b3d9950410b2f984f57f759e283de66a8839"
+    },
+    {
+      "file": "restaurant-sign-in-768-light.png",
+      "width": 768,
+      "height": 985,
+      "sha256": "245c1afe5b312bd7dbf31f0541c3a7a46c5f11415afd8aff3f2b2cbfb9edd904"
+    },
+    {
+      "file": "sign-in-error-1440.png",
+      "width": 1440,
+      "height": 1048,
+      "sha256": "c83303b0f8d81cad37fbfaa517d028bd9ee3f7d05ed53dd826c4fb7d69e4068d"
+    },
+    {
+      "file": "sign-in-error-375.png",
+      "width": 375,
+      "height": 1051,
+      "sha256": "038a0a02a7916d56992b8f8db367104ff424828780d129ae53c7bb86aae5628d"
+    },
+    {
+      "file": "studio-sign-in-1024-dark.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "44df83fc260dc59180b683f11bdea74695d65cea30d70cf8e3665e01d591ba47"
+    },
+    {
+      "file": "studio-sign-in-1024-light.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "81f8d1539d969b9803318124241de6988543b36155de785890ca8b4b168a332b"
+    },
+    {
+      "file": "studio-sign-in-1440-dark.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "c5ad6bf2f9b66c1718698d22d27aa3305ed4a67e179a5071e9bd240d4ce5a2e4"
+    },
+    {
+      "file": "studio-sign-in-1440-light.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "f44d9781185670c42a3796955a24122358288ca3749e28ef64e284e89152b434"
+    },
+    {
+      "file": "studio-sign-in-375-dark.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "d1432eb9e466330eb675d9d2124287be35169d9d0f7de65307b66ece6d15be8c"
+    },
+    {
+      "file": "studio-sign-in-375-light.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "1e2acdfa786be0758715aede17f71694e6d3984b075849d95811815f53838069"
+    },
+    {
+      "file": "studio-sign-in-768-dark.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "4b456dcf49fc4dfc7e5340d3b177fc0971f855c8df0872a76a8d78a8ede57b76"
+    },
+    {
+      "file": "studio-sign-in-768-light.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "266fa005e5b76266ce30ae32923f497ae29ee3b621b95a0ae4049b6eb6feb47b"
+    },
+    {
+      "file": "till-unlock-1024-dark.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "9712944999c1276e91941c37f6707ea031b74f78807b7f35028aef7d0e6f4b2e"
+    },
+    {
+      "file": "till-unlock-1024-light.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "1f02a9e30f895d984399d3558909c7b475e70f1ea45a395971f008341d6b207f"
+    },
+    {
+      "file": "till-unlock-1440-dark.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "755834f88417bb80309ff94538728b11635878c35adf36f105eb40836607223d"
+    },
+    {
+      "file": "till-unlock-1440-light.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "f69338a1250625b6e6607fca411dc2af5679e96e723dd42872cc9104091f9b88"
+    },
+    {
+      "file": "till-unlock-375-dark.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "3242eaf52920a32124566943d3cd4267bf78da97e62157edca5b93b36f6a1597"
+    },
+    {
+      "file": "till-unlock-375-light.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "43342cbbf164f60f0668ee62aa215fab746e02d1c6e46a7615d283379b60d525"
+    },
+    {
+      "file": "till-unlock-768-dark.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "d3985e2551dc5de949ad82306f527e8226b52d1c445521a64be762d58c991eae"
+    },
+    {
+      "file": "till-unlock-768-light.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "b38023df594469473c259a1b8631a10d2298fb10d55b0f68dae424e165f3fe96"
+    },
+    {
+      "file": "workspace-type-1024-dark.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "39a4411954eb43cc8c0d6a21d2db5dd7189168b1b742200f14f1025e9a6aca03"
+    },
+    {
+      "file": "workspace-type-1024-light.png",
+      "width": 1024,
+      "height": 960,
+      "sha256": "183c5b6e6684091ac0510fa5eb5fbacdf2f35cdd9b6df9d675a1f090dd13ed15"
+    },
+    {
+      "file": "workspace-type-1440-dark.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "9d1e93ea230c9a0b4813f341e12de3fa4a79daa345f7a65f97aa975ecab0c467"
+    },
+    {
+      "file": "workspace-type-1440-light.png",
+      "width": 1440,
+      "height": 960,
+      "sha256": "b84f948374a77142b665be9d57c30a11cb48a3929eba8475325303fb0b1447f1"
+    },
+    {
+      "file": "workspace-type-375-dark.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "f36576cd448539b26772fa0340df9f3bcce3955f596e782a3baad04ccca404f5"
+    },
+    {
+      "file": "workspace-type-375-light.png",
+      "width": 375,
+      "height": 960,
+      "sha256": "24b64fb0ad1d5b1bb3ad1719071b1de6df90f452d3e6544f280f7e76b65b374d"
+    },
+    {
+      "file": "workspace-type-768-dark.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "417f9b2bbdb77182f25643ab2198fc661fa096efe2c6d7da85ec6de249c0e6f7"
+    },
+    {
+      "file": "workspace-type-768-light.png",
+      "width": 768,
+      "height": 960,
+      "sha256": "780ccae46ffdce39d7314c2dddb1f1d31b739bddfed3f125069f37ad4bc57315"
+    }
+  ]
+}
