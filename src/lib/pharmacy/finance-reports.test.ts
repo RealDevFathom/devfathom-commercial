@@ -3,6 +3,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   explainGrossMargin,
   grossMarginComparison,
+  landedProfit,
   marginComparisonPeriods,
 } from './finance-reports';
 const row = (revenueMinor: number, discountMinor: number, cogsMinor: number) => ({
@@ -11,6 +12,33 @@ const row = (revenueMinor: number, discountMinor: number, cogsMinor: number) => 
   discountMinor,
   cogsMinor,
   grossMarginMinor: revenueMinor - discountMinor - cogsMinor,
+});
+
+describe('landed profit growth report', () => {
+  it.each([
+    ['item', 'line."productId"::text'],
+    ['category', 'medicine."productFamily"::text'],
+    ['hour', "date_trunc('hour'"],
+    ['staff', 'entry."actorId"::text'],
+  ] as const)('groups by %s while reusing posted landed COGS', async (by, dimensionSql) => {
+    const query = vi.fn().mockResolvedValue([]);
+    await landedProfit(
+      { $queryRaw: query } as unknown as ScopedDb,
+      { organizationId: 'org_1', branchId: 'branch_1' },
+      { from: new Date('2026-10-01Z'), to: new Date('2026-10-02Z'), by }
+    );
+    const sql = query.mock.calls[0][0];
+    expect(sql.sql).toContain(dimensionSql);
+    expect(sql.sql).toContain("'SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD'");
+    expect(sql.sql).toContain('AS "landedCostMinor"');
+    expect(sql.sql).toContain('AS "profitMinor"');
+    expect(sql.values).toEqual([
+      'org_1',
+      new Date('2026-10-01Z'),
+      new Date('2026-10-02Z'),
+      'branch_1',
+    ]);
+  });
 });
 
 describe('gross-margin accounting comparison', () => {

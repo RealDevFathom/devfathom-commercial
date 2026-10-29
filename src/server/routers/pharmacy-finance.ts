@@ -6,6 +6,7 @@ import { financialStatements } from '@/lib/pharmacy/financial-statements';
 import {
   grossMargin,
   grossMarginComparison,
+  landedProfit,
   leakageReport,
   marginComparisonPeriods,
   perpetualValuation,
@@ -189,6 +190,22 @@ export const pharmacyFinanceRouter = router({
         ...ledgerMetadata(
           ctx.reportScope,
           'Posted gross revenue minus discounts minus posted lot COGS; reversals net against postings. Gross margin is neither net profit nor cash flow; unposted costs are unknown.'
+        ),
+        period: { ...period, bounds: '[from,to)' as const },
+        by: input.by,
+        rows,
+      };
+    }),
+
+  landedProfit: ledgerReportProcedure
+    .input(reportPeriod.safeExtend({ by: z.enum(['item', 'category', 'hour', 'staff']) }))
+    .query(async ({ ctx, input }) => {
+      const period = { from: new Date(input.from), to: new Date(input.to) };
+      const rows = await landedProfit(ctx.db, ctx.reportScope, { ...period, by: input.by });
+      return {
+        ...ledgerMetadata(
+          ctx.reportScope,
+          'Posted sale revenue minus discounts and exact allocated-lot landed COGS, grouped in UTC. Landed COGS already spreads paid value, freight and non-recoverable tax over paid and bonus received units. Profit excludes overhead and unposted costs and is not net profit or cash flow.'
         ),
         period: { ...period, bounds: '[from,to)' as const },
         by: input.by,
