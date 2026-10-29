@@ -39,6 +39,7 @@ const SNAPSHOT_KINDS: PharmacyOfflineSnapshotKind[] = [
   'CUSTOMER_CREDIT',
 ];
 const verifier: SnapshotVerifier = { verify: () => true };
+const replaySigner = () => ({ command: 'command-signature', receipt: 'receipt-signature' });
 
 function runtime(driver: TerminalStorageDriver, deviceId = SCOPE.deviceId) {
   return new PharmacyCounterRuntime({ ...SCOPE, deviceId }, driver, verifier, PUBLIC_KEY);
@@ -103,7 +104,11 @@ function sale(deviceId = SCOPE.deviceId, clientOriginAt = new Date().toISOString
   return {
     deviceId,
     action: 'CASH_OTC_SALE' as const,
-    payload: { lines: [{ inventoryLotId: 'last_lot', units: 1 }] },
+    payload: {
+      leasedReceipt: { leaseId: `lease_${deviceId}` },
+      lines: [{ inventoryLotId: 'last_lot', units: 1 }],
+      clientOriginAt,
+    },
     clientOriginAt,
     bucket: { inventoryLotId: 'last_lot', stockLocationId: 'dispensary' },
     requestedUnits: 1,
@@ -187,7 +192,7 @@ describe('PH-OFF OFF-05 — offline verification gate', () => {
     const accepted = await counter.enqueue(sale(), matrix());
     if (!accepted.ok) throw new Error(accepted.reason);
     const crash = new Promise<never>(() => undefined);
-    void counter.replay(() => crash);
+    void counter.replay(() => crash, replaySigner);
     await vi.waitFor(() => expect(counter.snapshot().queue?.commands[0]?.status).toBe('IN_FLIGHT'));
 
     const restarted = runtime(driver);
@@ -197,7 +202,7 @@ describe('PH-OFF OFF-05 — offline verification gate', () => {
       await restarted.replay(async (request) => {
         requests.push(request);
         return { status: 201, serverRef: 'sale_1' };
-      })
+      }, replaySigner)
     ).toMatchObject({ state: 'IDLE' });
     expect(requests[0]?.headers['Idempotency-Key']).toBe(accepted.command.commandId);
   });
@@ -217,8 +222,8 @@ describe('PH-OFF OFF-05 — offline verification gate', () => {
       return { status: 200, serverRef };
     };
 
-    expect(await counter.replay(server)).toMatchObject({ state: 'PAUSED' });
-    expect(await counter.replay(server)).toMatchObject({ state: 'IDLE' });
+    expect(await counter.replay(server, replaySigner)).toMatchObject({ state: 'PAUSED' });
+    expect(await counter.replay(server, replaySigner)).toMatchObject({ state: 'IDLE' });
     expect(new Set(seen).size).toBe(1);
     expect(effects.size).toBe(1);
   });
@@ -250,7 +255,7 @@ describe('PH-OFF OFF-05 — offline verification gate', () => {
     await counter.replay(async (request) => {
       origins.push(request.body.clientOriginAt);
       return { status: 201 };
-    });
+    }, replaySigner);
     expect(origins).toEqual(['2099-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z']);
   });
 

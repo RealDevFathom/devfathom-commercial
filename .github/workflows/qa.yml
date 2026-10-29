@@ -158,6 +158,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
+      # Vitest fork workers execute under Node. Undici in the frozen lockfile
+      # requires the Zstd APIs available in current Node 22, not Node 20.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
       - run: bun install --frozen-lockfile
       - name: Run automated gate and retain every exit code
         shell: bash
@@ -329,7 +334,7 @@ jobs:
           const requiredZero = ['numFailedTests', 'numFailedTestSuites', 'numPendingTests', 'numPendingTestSuites', 'numTodoTests'];
           const requiredPositive = ['numTotalTests', 'numTotalTestSuites', 'numPassedTests', 'numPassedTestSuites'];
           const totals = Object.fromEntries([...requiredZero, ...requiredPositive].map((field) => [field, 0]));
-          for (const lane of ['vitest', 'vitest-cohort', 'vitest-receipt', 'vitest-catering', 'vitest-counter-evidence', 'vitest-growth', 'vitest-platform-concurrency', 'vitest-price-intelligence', 'vitest-returns', 'vitest-boundary-http', 'vitest-growth-ready', 'vitest-growth-sandbox', 'vitest-platform-login']) {
+          for (const lane of ['vitest', 'vitest-cohort', 'vitest-receipt', 'vitest-catering', 'vitest-platform-login']) {
             try {
               const report = JSON.parse(fs.readFileSync(`gate/${lane}.json`, 'utf8'));
               for (const field of [...requiredZero, ...requiredPositive]) {

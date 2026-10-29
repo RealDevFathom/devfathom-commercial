@@ -57,8 +57,6 @@ export type CounterQueuedCommand = {
   sequence: number;
   action: PharmacyOfflineAction;
   payload: Record<string, unknown>;
-  /** Device-authentication material computed for the immutable replay body. */
-  replaySignatures: CounterReplaySignatures | null;
   /** Client-origin UTC instant, metadata only. */
   clientOriginAt: string;
   /** The lease number ALREADY PRINTED for this command, or null when it printed none. */
@@ -186,8 +184,6 @@ export type CounterCommandInput = {
   deviceId: string;
   action: PharmacyOfflineAction;
   payload: Record<string, unknown>;
-  /** Required by the pharmacy counter replay route for a deliverable sale. */
-  replaySignatures?: CounterReplaySignatures;
   /** Client-origin UTC instant, metadata only. */
   clientOriginAt: string;
   /** The bucket this command draws stock from, and how much. */
@@ -314,7 +310,6 @@ export function enqueueCounterCommand(
     sequence: snapshot.nextSequence,
     action: input.action,
     payload: input.payload,
-    replaySignatures: input.replaySignatures ?? null,
     clientOriginAt: input.clientOriginAt,
     receiptNumber,
     status: 'PENDING',
@@ -370,6 +365,16 @@ export type CounterReplaySignatures = {
   receipt: string;
 };
 
+/**
+ * Signs the final, server-validated replay objects after the queue has assigned
+ * its receipt number, sequence and idempotency key. The device credential stays
+ * in the live enrollment/session adapter and is never persisted in the outbox.
+ */
+export type CounterReplaySigner = (
+  body: Record<string, unknown>,
+  leasedReceipt: Record<string, unknown>
+) => Promise<CounterReplaySignatures> | CounterReplaySignatures;
+
 export type CounterReplayRequest = {
   path: string;
   method: 'POST';
@@ -381,13 +386,11 @@ export type CounterReplayRequest = {
   body: Record<string, unknown>;
 };
 
-export function buildCounterReplayRequest(
+export async function buildCounterReplayRequest(
   _snapshot: CounterQueueSnapshot,
-  command: CounterQueuedCommand
-): CounterReplayRequest {
-  if (!command.replaySignatures) {
-    throw new Error('A queued pharmacy sale cannot replay without command and receipt signatures.');
-  }
+  command: CounterQueuedCommand,
+  sign: CounterReplaySigner
+): Promise<CounterReplayRequest> {
   const leasedReceipt = command.payload.leasedReceipt;
   const payload =
     leasedReceipt && typeof leasedReceipt === 'object' && !Array.isArray(leasedReceipt)
@@ -396,20 +399,26 @@ export function buildCounterReplayRequest(
           leasedReceipt: { ...leasedReceipt, receiptNumber: command.receiptNumber },
         }
       : command.payload;
+  const body: Record<string, unknown> = {
+    ...payload,
+    sequence: command.sequence,
+    idempotencyKey: command.idempotencyKey,
+    action: command.action,
+  };
+  const finalReceipt = body.leasedReceipt;
+  if (!finalReceipt || typeof finalReceipt !== 'object' || Array.isArray(finalReceipt)) {
+    throw new Error('A queued pharmacy sale cannot replay without its leased receipt.');
+  }
+  const signatures = await sign(body, finalReceipt as Record<string, unknown>);
   return {
     path: '/api/pharmacy/counter/replay',
     method: 'POST',
     headers: {
       'Idempotency-Key': command.idempotencyKey,
-      'X-Command-Signature': command.replaySignatures.command,
-      'X-Receipt-Signature': command.replaySignatures.receipt,
+      'X-Command-Signature': signatures.command,
+      'X-Receipt-Signature': signatures.receipt,
     },
-    body: {
-      ...payload,
-      sequence: command.sequence,
-      idempotencyKey: command.idempotencyKey,
-      action: command.action,
-    },
+    body,
   };
 }
 

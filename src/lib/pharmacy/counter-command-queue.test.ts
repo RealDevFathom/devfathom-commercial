@@ -1,5 +1,9 @@
-import { webcrypto } from 'node:crypto';
+import { randomBytes, webcrypto } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
+
+import { authenticatePharmacyCommand, signPharmacyCommand } from './sales';
+import { hashDeviceSecret } from '@/lib/retail-terminal/device-secret';
+import { counterReplaySchema } from '@/server/routers/pharmacy-offline';
 
 import {
   applyCounterReplayOutcome,
@@ -10,7 +14,7 @@ import {
 
 afterEach(() => vi.unstubAllGlobals());
 
-it('composes on HTTP LAN and preserves the command key across persisted replay and retry', () => {
+it('composes on HTTP LAN and signs the final route-valid body across retry', async () => {
   vi.stubGlobal('crypto', { getRandomValues: webcrypto.getRandomValues.bind(webcrypto) });
   const queue = createCounterQueue('counter-test');
   queue.leases = [{ leaseId: 'lease-1', blockStart: 1, blockEnd: 1, nextNumber: 1 }];
@@ -28,15 +32,47 @@ it('composes on HTTP LAN and preserves the command key across persisted replay a
       deviceId: 'counter-test',
       action: 'CASH_OTC_SALE',
       payload: {
-        leasedReceipt: { leaseId: 'lease-1' },
+        leasedReceipt: {
+          leaseId: 'lease-1',
+          originalSaleAt: '2026-09-08T00:00:00.000Z',
+          envelope: {
+            organizationId: 'org-1',
+            branchId: 'branch-1',
+            deviceId: 'counter-test',
+            kind: 'RULES',
+            version: 1,
+            payloadHash: 'a'.repeat(64),
+            issuedAt: '2026-09-07T00:00:00.000Z',
+            expiresAt: '2026-09-09T00:00:00.000Z',
+            safetyLease: {
+              issuedAt: '2026-09-07T00:00:00.000Z',
+              expiresAt: '2026-09-09T00:00:00.000Z',
+              recallVersion: 0,
+              licenceVersion: 1,
+              ruleVersion: 1,
+            },
+            signingKeyId: 'key-1',
+          },
+          signature: 'snapshot-signature',
+        },
         sequence: 999,
         idempotencyKey: 'untrusted-payload-key',
         snapshots: [],
-        lines: [{ medicineId: 'med-1' }],
+        lines: [
+          {
+            medicineId: 'med-1',
+            presentationId: 'presentation-1',
+            packLevelId: 'pack-1',
+            saleUnit: 'UNIT',
+            quantity: 1,
+            canonicalUnitsPerSaleUnit: 1,
+            inventoryLotId: 'lot-1',
+            stockLocationId: 'location-1',
+          },
+        ],
         amountMinor: 100,
         cashReceivedMinor: 100,
       },
-      replaySignatures: { command: 'command-signature', receipt: 'receipt-signature' },
       clientOriginAt: '2026-09-08T00:00:00.000Z',
       bucket: { inventoryLotId: 'lot-1', stockLocationId: 'location-1' },
       requestedUnits: 1,
@@ -57,13 +93,30 @@ it('composes on HTTP LAN and preserves the command key across persisted replay a
   );
   expect(result.ok).toBe(true);
   if (!result.ok) throw new Error(result.reason);
-  const first = buildCounterReplayRequest(result.snapshot, result.command);
+  const deviceSecret = `pcd_${randomBytes(32).toString('base64url')}`;
+  const signer = (body: Record<string, unknown>, receipt: Record<string, unknown>) => ({
+    command: signPharmacyCommand(
+      { organizationId: 'org-1', branchId: 'branch-1' },
+      'counter-test',
+      body,
+      deviceSecret
+    ),
+    receipt: signPharmacyCommand(
+      { organizationId: 'org-1', branchId: 'branch-1' },
+      'counter-test',
+      receipt,
+      deviceSecret
+    ),
+  });
+  const first = await buildCounterReplayRequest(result.snapshot, result.command, signer);
   expect(first).toMatchObject({
     path: '/api/pharmacy/counter/replay',
     method: 'POST',
     headers: {
-      'X-Command-Signature': 'command-signature',
-      'X-Receipt-Signature': 'receipt-signature',
+      'X-Command-Signature': signer(first.body, first.body.leasedReceipt as Record<string, unknown>)
+        .command,
+      'X-Receipt-Signature': signer(first.body, first.body.leasedReceipt as Record<string, unknown>)
+        .receipt,
     },
     body: {
       sequence: 1,
@@ -74,6 +127,28 @@ it('composes on HTTP LAN and preserves the command key across persisted replay a
       cashReceivedMinor: 100,
     },
   });
+  expect(counterReplaySchema.parse(first.body)).toEqual(first.body);
+  const authenticationDb = {
+    $queryRaw: async () => [{ deviceSecretHash: hashDeviceSecret(deviceSecret) }],
+  };
+  await expect(
+    authenticatePharmacyCommand(
+      authenticationDb as never,
+      { organizationId: 'org-1', branchId: 'branch-1' },
+      'counter-test',
+      first.body,
+      { deviceSecret, signature: first.headers['X-Command-Signature'] }
+    )
+  ).resolves.toBeUndefined();
+  await expect(
+    authenticatePharmacyCommand(
+      authenticationDb as never,
+      { organizationId: 'org-1', branchId: 'branch-1' },
+      'counter-test',
+      first.body.leasedReceipt,
+      { deviceSecret, signature: first.headers['X-Receipt-Signature'] }
+    )
+  ).resolves.toBeUndefined();
   expect(first.body).not.toHaveProperty('deviceId');
   expect(first.body).not.toHaveProperty('payload');
   expect(first.body).not.toHaveProperty('clientOriginAt');
@@ -85,5 +160,7 @@ it('composes on HTTP LAN and preserves the command key across persisted replay a
     commandId: result.command.commandId,
     outcome: { action: 'RETRY', reason: 'NETWORK', retryAfterMs: null },
   });
-  expect(buildCounterReplayRequest(retry.snapshot, retry.snapshot.commands[0]!)).toEqual(first);
+  expect(
+    await buildCounterReplayRequest(retry.snapshot, retry.snapshot.commands[0]!, signer)
+  ).toEqual(first);
 });
