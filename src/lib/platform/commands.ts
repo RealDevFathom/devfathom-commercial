@@ -617,7 +617,6 @@ async function syncContractEntitlements(
     organizationId: string;
     number: string;
     status: string;
-    seatLimit: number;
     endDate: Date;
     graceUntil: Date | null;
     moduleIds: string[];
@@ -655,10 +654,6 @@ async function syncContractEntitlements(
       },
     });
   }
-  await db.organization.update({
-    where: { id: input.organizationId },
-    data: { seatLimit: input.seatLimit },
-  });
 }
 
 const organizationInput = z
@@ -3233,7 +3228,6 @@ async function runCommand(
         organizationId: before.organizationId,
         number: before.number,
         status: input.status,
-        seatLimit: before.seatLimit,
         endDate: before.endDate,
         graceUntil: before.graceUntil,
         moduleIds: before.modules.map((module) => module.moduleId),
