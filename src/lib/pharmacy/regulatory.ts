@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@/generated/prisma/client';
+import { workspaceDateUtc, workspaceTimezone } from '@/lib/timezone';
 import { recordAudit } from '@/server/audit';
 
 export type BranchOperationDenialReason =
@@ -62,9 +63,11 @@ function permits(values: readonly string[], value: string): boolean {
  */
 export function assertBranchMayOperate(
   branch: BranchRegulatoryState,
-  action: BranchOperationAction
+  action: BranchOperationAction,
+  timeZone = 'UTC'
 ): void {
   const at = action.at ?? new Date();
+  const calendarDate = workspaceDateUtc(timeZone, at);
   const deny = (reason: BranchOperationDenialReason): never => {
     branch.auditDenied(reason, action);
     throw new BranchOperationDeniedError(reason);
@@ -83,7 +86,7 @@ export function assertBranchMayOperate(
     !branch.licenceCategory.trim() ||
     !branch.licenceEvidenceFileRef.trim() ||
     !permits(stringValues(branch.ruleSet.licenceCategories), branch.licenceCategory) ||
-    at < branch.licenceValidFrom ||
+    calendarDate < branch.licenceValidFrom ||
     at >= branch.licenceValidTo
   ) {
     deny('LICENCE_INVALID');
@@ -93,7 +96,7 @@ export function assertBranchMayOperate(
     action.requiresQualifiedPerson !== false &&
     (!branch.qualifiedPersonRegistration.trim() ||
       !branch.qualifiedPersonCoverageRosterRef.trim() ||
-      at < branch.qualifiedPersonValidFrom ||
+      calendarDate < branch.qualifiedPersonValidFrom ||
       at >= branch.qualifiedPersonValidTo)
   ) {
     deny('QUALIFIED_PERSON_COVERAGE_MISSING');
@@ -115,12 +118,18 @@ export async function assertStoredBranchMayOperate(
   action: BranchOperationAction
 ): Promise<void> {
   const at = action.at ?? new Date();
+  const organization = await db.organization.findFirst({
+    where: { id: organizationId },
+    select: { timezone: true },
+  });
+  const timeZone = workspaceTimezone(organization?.timezone);
+  const calendarDate = workspaceDateUtc(timeZone, at);
   const profile = await db.branchRegulatoryProfile.findFirst({
     where: {
       organizationId,
       branchId,
-      effectiveFrom: { lte: at },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+      effectiveFrom: { lte: calendarDate },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: calendarDate } }],
     },
     include: { jurisdictionRuleSet: true },
     orderBy: { effectiveFrom: 'desc' },
@@ -152,6 +161,7 @@ export async function assertStoredBranchMayOperate(
       ruleSet: profile.jurisdictionRuleSet,
       auditDenied,
     },
-    { ...action, at }
+    { ...action, at },
+    timeZone
   );
 }

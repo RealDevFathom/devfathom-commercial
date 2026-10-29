@@ -45,3 +45,12 @@ export function workspaceToday(timeZone: string | null | undefined, now = new Da
     day: '2-digit',
   }).format(now);
 }
+
+/**
+ * The workspace's current calendar day encoded in the repository's date-only
+ * representation (UTC midnight). This is not the instant at which that day
+ * starts; it is suitable only for comparing date-only database fields.
+ */
+export function workspaceDateUtc(timeZone: string | null | undefined, now = new Date()): Date {
+  return new Date(`${workspaceToday(timeZone, now)}T00:00:00.000Z`);
+}
