@@ -180,7 +180,7 @@ export async function settleFamilyKhata(
   )
     throw new FamilyKhataError('INVALID_AMOUNT');
 
-  let drawer: { id: string; deviceId: string } | null = null;
+  let drawer: { id: string; deviceId: string; status: string } | null = null;
   let prior: { payloadHash: string; commandType: string; resultPayload: unknown } | null = null;
   if (cashCollection) {
     // Resolve the tenant and branch resources before consulting replay state. This
@@ -191,9 +191,8 @@ export async function settleFamilyKhata(
         organizationId: scope.organizationId,
         branchId: scope.branchId,
         deviceId: input.deviceId!,
-        status: 'OPEN',
       },
-      select: { id: true, deviceId: true },
+      select: { id: true, deviceId: true, status: true },
     });
     if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
 
@@ -228,6 +227,9 @@ export async function settleFamilyKhata(
     if (!prior || prior.commandType !== 'khata_collection' || prior.payloadHash !== payloadHash)
       throw new PharmacySettlementError('IDEMPOTENCY_CONFLICT');
     if (prior.resultPayload) return prior.resultPayload;
+    // A committed collection remains replayable after close. Only new writes
+    // require an open drawer; the movement helper rechecks under the day lock.
+    if (drawer.status !== 'OPEN') throw new PharmacySettlementError('DRAWER_NOT_OPEN');
   }
   const events = await db.pharmacyKhataEvent.findMany({
     where: {

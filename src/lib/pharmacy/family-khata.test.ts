@@ -15,6 +15,58 @@ import {
 
 const scope = { organizationId: 'org_family', branchId: 'branch_main', actorId: 'owner_1' };
 
+const cashCollection = {
+  familyAccountId: 'family_1',
+  amountMinor: 250,
+  occurredAt: new Date('2026-10-29T09:00:00.000Z'),
+  drawerSessionId: 'drawer_1',
+  deviceId: 'counter_1',
+  idempotencyKey: 'collection_1',
+};
+
+function cashFixture() {
+  const drawer = {
+    id: 'drawer_1',
+    deviceId: 'counter_1',
+    status: 'OPEN',
+    businessDate: new Date('2026-10-29T00:00:00.000Z'),
+  };
+  let prior: {
+    commandType: string;
+    payloadHash: string;
+    resultPayload: unknown;
+  } | null = null;
+  const db = {
+    $queryRaw: vi.fn().mockResolvedValue([{ id: 'family_1' }]),
+    $executeRaw: vi.fn(async (query: { values: unknown[] }) => {
+      prior ??= {
+        commandType: 'khata_collection',
+        payloadHash: String(query.values.at(-1)),
+        resultPayload: null,
+      };
+      return 1;
+    }),
+    pharmacyDrawerSession: {
+      findFirst: vi.fn(async ({ where }: { where: { status?: string } }) =>
+        !where.status || where.status === drawer.status ? drawer : null
+      ),
+    },
+    pharmacyMoneyIdempotencyKey: {
+      findUnique: vi.fn(async () => prior),
+      update: vi.fn(async ({ data }: { data: { resultPayload: unknown } }) => {
+        prior!.resultPayload = data.resultPayload;
+      }),
+    },
+    pharmacyKhataEvent: {
+      findMany: vi.fn().mockResolvedValue([{ id: 'charge_1', kind: 'CHARGE', amountMinor: 250 }]),
+      create: vi.fn(async ({ data }) => ({ id: 'payment_1', ...data })),
+    },
+    pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({ id: 'movement_1' }) },
+    pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
+  };
+  return { db, drawer };
+}
+
 describe('CRM-L02 family privacy and khata settlement', () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -81,61 +133,83 @@ describe('CRM-L02 family privacy and khata settlement', () => {
   });
 
   it('adds a cash Khata collection to the same-branch device drawer exactly once', async () => {
-    const payment = { id: 'payment_1', kind: 'PAYMENT', amountMinor: 250 };
-    const db = {
-      $queryRaw: vi.fn().mockResolvedValue([{ id: 'family_1' }]),
-      $executeRaw: vi.fn().mockResolvedValue(1),
-      pharmacyDrawerSession: {
-        findFirst: vi.fn().mockResolvedValue({ id: 'drawer_1', deviceId: 'counter_1' }),
-      },
-      pharmacyMoneyIdempotencyKey: {
-        findUnique: vi.fn().mockResolvedValue({
-          commandType: 'khata_collection',
-          payloadHash: '',
-          resultPayload: null,
-        }),
-        update: vi.fn(),
-      },
-      pharmacyKhataEvent: {
-        findMany: vi.fn().mockResolvedValue([{ id: 'charge_1', kind: 'CHARGE', amountMinor: 250 }]),
-        create: vi.fn().mockResolvedValue(payment),
-      },
-      pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({ id: 'movement_1' }) },
-      pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
-    };
-    // The generated digest is deliberately opaque to this unit; return it from
-    // the bound row, as the database does after INSERT ... ON CONFLICT.
-    db.pharmacyMoneyIdempotencyKey.findUnique.mockImplementation(async () => ({
-      commandType: 'khata_collection',
-      payloadHash: String(
-        (db.$executeRaw.mock.calls[0]?.[0] as { values?: unknown[] } | undefined)?.values?.at(-1)
-      ),
-      resultPayload: null,
-    }));
-
-    const result = await settleFamilyKhata(db as never, scope, {
-      familyAccountId: 'family_1',
-      amountMinor: 250,
-      occurredAt: new Date('2026-10-29T09:00:00.000Z'),
-      drawerSessionId: 'drawer_1',
-      deviceId: 'counter_1',
-      idempotencyKey: 'collection_1',
-    });
+    const { db } = cashFixture();
+    const result = await settleFamilyKhata(db as never, scope, cashCollection);
+    const replay = await settleFamilyKhata(db as never, scope, cashCollection);
 
     expect(result).toMatchObject({ paidMinor: 250, remainingBalanceMinor: 0 });
+    expect(replay).toEqual(JSON.parse(JSON.stringify(result)));
     expect(db.pharmacyDrawerSession.findFirst).toHaveBeenCalledWith({
       where: expect.objectContaining({
         id: 'drawer_1',
         organizationId: scope.organizationId,
         branchId: scope.branchId,
         deviceId: 'counter_1',
-        status: 'OPEN',
       }),
-      select: { id: true, deviceId: true },
+      select: { id: true, deviceId: true, status: true },
     });
-    expect(db.pharmacyDrawerMovement.create).toHaveBeenCalledWith({
+    expect(db.pharmacyKhataEvent.create).toHaveBeenCalledTimes(1);
+    expect(db.pharmacyDrawerMovement.create).toHaveBeenCalledExactlyOnceWith({
       data: expect.objectContaining({ kind: 'PAID_IN', amountMinor: 250 }),
     });
+    expect(db.pharmacyDailyClose.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        businessDate: new Date('2026-10-29T00:00:00.000Z'),
+      },
+      select: { id: true },
+    });
+  });
+
+  it('replays a committed collection after drawer and day close without writing again', async () => {
+    const { db, drawer } = cashFixture();
+    const result = await settleFamilyKhata(db as never, scope, cashCollection);
+    drawer.status = 'CLOSED';
+    db.pharmacyDailyClose.findFirst.mockResolvedValue({ id: 'close_1' });
+    db.pharmacyDailyClose.findFirst.mockClear();
+
+    await expect(settleFamilyKhata(db as never, scope, cashCollection)).resolves.toEqual(
+      JSON.parse(JSON.stringify(result))
+    );
+    expect(db.pharmacyDailyClose.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyKhataEvent.create).toHaveBeenCalledTimes(1);
+    expect(db.pharmacyDrawerMovement.create).toHaveBeenCalledTimes(1);
+    expect(db.pharmacyMoneyIdempotencyKey.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a new collection on a closed drawer before appending payments', async () => {
+    const { db, drawer } = cashFixture();
+    drawer.status = 'CLOSED';
+    await expect(settleFamilyKhata(db as never, scope, cashCollection)).rejects.toMatchObject({
+      reason: 'DRAWER_NOT_OPEN',
+    });
+    expect(db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+    expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects changed collection details under a saved key', async () => {
+    const { db, drawer } = cashFixture();
+    await settleFamilyKhata(db as never, scope, cashCollection);
+    drawer.status = 'CLOSED';
+    await expect(
+      settleFamilyKhata(db as never, scope, { ...cashCollection, amountMinor: 200 })
+    ).rejects.toMatchObject({ reason: 'IDEMPOTENCY_CONFLICT' });
+    expect(db.pharmacyKhataEvent.create).toHaveBeenCalledTimes(1);
+    expect(db.pharmacyDrawerMovement.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('validates drawer branch and device before returning a saved collection result', async () => {
+    const { db } = cashFixture();
+    await settleFamilyKhata(db as never, scope, cashCollection);
+    db.pharmacyDrawerSession.findFirst.mockResolvedValue(null);
+    db.pharmacyMoneyIdempotencyKey.findUnique.mockClear();
+
+    await expect(settleFamilyKhata(db as never, scope, cashCollection)).rejects.toMatchObject({
+      reason: 'DRAWER_NOT_OPEN',
+    });
+    expect(db.pharmacyMoneyIdempotencyKey.findUnique).not.toHaveBeenCalled();
+    expect(db.pharmacyDrawerMovement.create).toHaveBeenCalledTimes(1);
   });
 
   it('validates branch resources before returning a saved collection result', async () => {

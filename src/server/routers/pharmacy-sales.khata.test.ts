@@ -21,8 +21,14 @@ vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   applyPharmacyTender: vi.fn(),
   readPharmacyTenderOutcome: vi.fn(),
 }));
+vi.mock('@/lib/pharmacy/family-khata', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/family-khata')>()),
+  settleFamilyKhata: vi.fn(),
+}));
+import { settleFamilyKhata } from '@/lib/pharmacy/family-khata';
 import {
   applyPharmacyTender,
+  PharmacySettlementError,
   readPharmacyTenderOutcome,
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
@@ -111,6 +117,70 @@ beforeEach(() => {
   });
 });
 describe('Khata router trust and recovery boundary', () => {
+  const collection = {
+    branchId: 'branch-a',
+    familyAccountId: 'family-a',
+    amountMinor: 250,
+    occurredAt: new Date('2026-10-29T09:00:00.000Z'),
+    drawerSessionId: 'drawer-a',
+    deviceId: 'device-a',
+    idempotencyKey: 'collection-a',
+  };
+
+  it('collects cash using the authorized tenant and branch in one transaction', async () => {
+    const f = fixture();
+    const result = { paidMinor: 250, remainingBalanceMinor: 0, allocations: [] };
+    vi.mocked(settleFamilyKhata).mockResolvedValue(result);
+    await expect(f.caller().settleFamilyKhata(collection)).resolves.toEqual(result);
+    expect(f.db.$transaction).toHaveBeenCalledTimes(1);
+    expect(f.db.$queryRaw.mock.calls[0][0].values).toEqual(['branch-a']);
+    expect(settleFamilyKhata).toHaveBeenCalledExactlyOnceWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' },
+      collection
+    );
+  });
+
+  it('refuses inactive branches, missing capability and a different vertical before collection', async () => {
+    const f = fixture();
+    f.db.pharmacyBranch.findFirst.mockResolvedValue(null as never);
+    await expect(f.caller().settleFamilyKhata(collection)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    f.db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch-a' });
+    vi.mocked(can).mockResolvedValue(false);
+    await expect(f.caller().settleFamilyKhata(collection)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    vi.mocked(can).mockResolvedValue(true);
+    f.context.organization.vertical = 'RESTAURANT';
+    await expect(f.caller().settleFamilyKhata(collection)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(settleFamilyKhata).not.toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(['drawerSessionId', 'deviceId', 'idempotencyKey'] as const)(
+    'requires %s to collect cash',
+    async (field) => {
+      const f = fixture();
+      await expect(
+        f.caller().settleFamilyKhata({ ...collection, [field]: undefined } as never)
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(settleFamilyKhata).not.toHaveBeenCalled();
+    }
+  );
+
+  it('returns typed collection refusals to the counter', async () => {
+    const f = fixture();
+    vi.mocked(settleFamilyKhata).mockRejectedValue(new PharmacySettlementError('DRAWER_NOT_OPEN'));
+    await expect(f.caller().settleFamilyKhata(collection)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'DRAWER_NOT_OPEN',
+    });
+  });
+
   it('uses server tenant, CREDIT settlement and an atomic member charge', async () => {
     const f = fixture();
     await f.caller().tender(input);
