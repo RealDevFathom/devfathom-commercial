@@ -50,7 +50,9 @@ function SectionCard({
       {...props}
     >
       {hasHeader ? (
-        <div className={cn('flex items-start justify-between', compact ? 'mb-2 gap-2' : 'mb-4 gap-4')}>
+        <div
+          className={cn('flex items-start justify-between', compact ? 'mb-2 gap-2' : 'mb-4 gap-4')}
+        >
           <div className="min-w-0 space-y-1">
             {eyebrow != null ? <Eyebrow accent={eyebrowAccent}>{eyebrow}</Eyebrow> : null}
             {title != null ? (

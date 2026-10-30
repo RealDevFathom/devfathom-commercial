@@ -4,6 +4,7 @@ import {
   controlPlaneEnvironmentAvailable,
   ensureControlPlaneCatalog,
   loginPlatformRequest,
+  signInProvisionedTenant,
   platformMutationHeaders,
   resetOrganization,
   withAdminDatabase,
@@ -329,11 +330,7 @@ test('the administrator SuperAdmin creates is provisioned a staff profile and is
     }
   });
 
-  await page.goto(`${sharedBaseUrl}/login`);
-  await page.getByLabel('Email').fill(tenant.email);
-  await page.locator('input[name="password"]').fill(tenant.password);
-  await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page).toHaveURL(/\/dashboard(?:\?|$)/);
+  await signInProvisionedTenant(page, sharedBaseUrl!, tenant, /\/restaurant\/orders(?:[/?]|$)/);
 
   // The topbar bell is what issues the poll. Poll the responses the listener
   // above already collected rather than `waitForResponse`: the query fires on

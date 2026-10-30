@@ -111,7 +111,9 @@ export function PnlReport() {
               onClick={() => setCurrency(c)}
               className={cn(
                 'rounded-md px-2.5 py-1 text-xs font-semibold transition-colors',
-                selected === c ? 'bg-primary text-white' : 'text-muted-foreground hover:text-foreground'
+                selected === c
+                  ? 'bg-primary text-white'
+                  : 'text-muted-foreground hover:text-foreground'
               )}
             >
               {c}
