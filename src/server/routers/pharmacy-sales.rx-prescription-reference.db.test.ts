@@ -159,6 +159,17 @@ async function expectRefused(
   expect(cart.lines).toEqual([]);
 }
 
+async function assertRuntimeRole() {
+  const [role] = await withPlatformDb((tx) =>
+    tx.$queryRawUnsafe<Array<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }>>(
+      `SELECT rolcanlogin, rolsuper, rolbypassrls
+         FROM pg_roles
+        WHERE rolname = current_user`
+    )
+  );
+  expect(role).toEqual({ rolcanlogin: true, rolsuper: false, rolbypassrls: false });
+}
+
 beforeAll(async () => {
   if (!databaseUrl) return;
   const scoped = await import('@/lib/tenancy/scoped-db');
@@ -170,6 +181,9 @@ beforeAll(async () => {
   withPlatformDb = scoped.withPlatformDb;
   pharmacySalesRouter = sales.pharmacySalesRouter;
   disconnect = () => db.$disconnect();
+  // Keep this precondition outside individual tests so filtered runs cannot skip it,
+  // and reject a role that bypasses RLS before writing any fixture data.
+  await assertRuntimeRole();
   for (const org of [ids.org, ids.otherOrg])
     await withPlatformDb((tx) =>
       tx.$executeRawUnsafe(
@@ -412,14 +426,7 @@ afterAll(async () => {
 
 describeIfDatabase('prescription references on counter sale lines (#518)', () => {
   it('runs the fixture as the provisioned runtime role with tenant context (#389)', async () => {
-    const [role] = await withPlatformDb((tx) =>
-      tx.$queryRawUnsafe<Array<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }>>(
-        `SELECT rolcanlogin, rolsuper, rolbypassrls
-           FROM pg_roles
-          WHERE rolname = current_user`
-      )
-    );
-    expect(role).toEqual({ rolcanlogin: true, rolsuper: false, rolbypassrls: false });
+    await assertRuntimeRole();
 
     const [scope] = await withTenantDb(ids.org, (tx) =>
       tx.$queryRawUnsafe<Array<{ organization_id: string; is_platform_admin: string }>>(
@@ -653,6 +660,11 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
     ]);
     expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
     expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
+    const rejected = outcomes.find((outcome) => outcome.status === 'rejected');
+    expect(rejected?.reason).toMatchObject({
+      name: 'PharmacyRxReferenceError',
+      reason: 'PRESCRIPTION_EXHAUSTED',
+    });
 
     const winningLineId = outcomes[0].status === 'fulfilled' ? first.saleLineId : second.saleLineId;
     const fills = await withTenantDb(ids.org, (tx) =>
