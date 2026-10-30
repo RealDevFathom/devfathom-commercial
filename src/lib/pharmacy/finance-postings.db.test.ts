@@ -711,13 +711,13 @@ describeIfDatabase('FIN-01 — expiry/damage write-off', () => {
       const { lot } = await stockLot(db, f, {
         label: 'writeoff',
         units: 20,
-        unitCostMinor: 1_000,
+        unitCostMinor: 1_250,
         expiresAt: EXPIRY_SOON,
       });
       const written = await deps.operations.writeOff(db, scopeOf(f), {
         inventoryLotId: lot.id,
         stockLocationId: f.storeId,
-        units: 5,
+        units: 10,
         witnessId: WITNESS,
         reason: 'Expired stock destroyed',
         evidenceRef: `DEST-${tag('writeoff')}`,
@@ -738,8 +738,62 @@ describeIfDatabase('FIN-01 — expiry/damage write-off', () => {
 
     expectBalanced(entry);
     expect(entry.sourceId).toBe(movementId);
-    expect(totalFor(entry, 'INVENTORY_WRITE_OFF', 'DEBIT')).toBe(5_000);
-    expect(totalFor(entry, 'INVENTORY', 'CREDIT')).toBe(5_000);
+    expect(totalFor(entry, 'INVENTORY_WRITE_OFF', 'DEBIT')).toBe(12_500);
+    expect(totalFor(entry, 'INVENTORY', 'CREDIT')).toBe(12_500);
+  });
+
+  it('commits a zero-cost write-off and custody evidence without a journal entry', async () => {
+    const f = await fixture(ORG_A, branch('writeoff-zero'), 'writeoff-zero');
+    const { lot, written } = await inOrg(ORG_A, async (db) => {
+      const { lot } = await stockLot(db, f, {
+        label: 'writeoff-zero',
+        units: 20,
+        unitCostMinor: 0,
+        expiresAt: EXPIRY_SOON,
+      });
+      const written = await deps.operations.writeOff(db, scopeOf(f), {
+        inventoryLotId: lot.id,
+        stockLocationId: f.storeId,
+        units: 10,
+        witnessId: WITNESS,
+        reason: 'Damaged free stock destroyed',
+        evidenceRef: `DEST-${tag('writeoff-zero')}`,
+        idempotencyKey: `writeoff-${tag('writeoff-zero')}`,
+      });
+      return { lot, written };
+    });
+
+    // Read after commit: stock and custody survive even though no value was lost.
+    await inOrg(ORG_A, async (db) => {
+      const balance = await db.pharmacyStockBalance.findFirstOrThrow({
+        where: { inventoryLotId: lot.id, stockLocationId: f.storeId, disposition: 'AVAILABLE' },
+      });
+      expect(balance).toMatchObject({ onHandUnits: 10, sealedPacks: 1, looseUnits: 0 });
+      const movement = await db.pharmacyStockMovement.findFirstOrThrow({
+        where: { id: written.movement.id },
+      });
+      expect(movement).toMatchObject({ kind: 'WRITE_OFF', quantityUnits: -10 });
+      const custody = await db.pharmacyCustodyRecord.findFirstOrThrow({
+        where: { movementId: movement.id },
+      });
+      expect(custody).toMatchObject({
+        actorId: ACTOR,
+        witnessId: WITNESS,
+        reason: written.custody.reason,
+        evidenceRef: written.custody.evidenceRef,
+      });
+      expect(
+        await deps.postings.postWriteOffEntry(db, scopeOf(f), {
+          stockMovementId: movement.id,
+          at: LATER,
+        })
+      ).toBeNull();
+      expect(
+        await db.financeJournalEntry.count({
+          where: { sourceKind: 'PHARMACY_STOCK_WRITE_OFF', sourceId: movement.id },
+        })
+      ).toBe(0);
+    });
   });
 });
 
@@ -1348,10 +1402,6 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
         evidenceRef: `DEST-${tag('leakage')}`,
         idempotencyKey: `writeoff-${tag('leakage')}`,
       });
-      await deps.postings.postWriteOffEntry(db, scopeOf(f), {
-        stockMovementId: written.movement.id,
-        at: LATER,
-      });
       const count = await deps.operations.createCount(db, scopeOf(f), {
         varianceThreshold: 100,
         readings: [
@@ -1372,7 +1422,11 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
       return deps.reports.leakageReport(
         db,
         { organizationId: ORG_A, branchId: f.branchId },
-        WINDOW
+        // writeOff posts at movement creation time; include that automatic entry.
+        {
+          from: WINDOW.from,
+          to: new Date(Math.max(WINDOW.to.getTime(), written.movement.createdAt.getTime() + 1)),
+        }
       );
     });
 
