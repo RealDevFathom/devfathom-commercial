@@ -199,7 +199,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     );
   });
 
-  it('normalises a MONTH-precision expiry to the first instant after the month', async () => {
+  it('normalises a MONTH-precision expiry to Karachi midnight after the month', async () => {
     grant([allow('pharmacy:inventory')]);
     db.medicine.findFirst.mockResolvedValue({ id: 'medicine_1' });
     await caller().registerBatch({
@@ -211,7 +211,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     });
     expect(db.pharmacyManufacturingBatch.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ expiresAt: new Date('2027-07-01T00:00:00.000Z') }),
+        data: expect.objectContaining({ expiresAt: new Date('2027-06-30T19:00:00.000Z') }),
       })
     );
   });
