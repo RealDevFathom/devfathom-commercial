@@ -70,6 +70,7 @@ export const ALL_ACTIONS = [
   'restaurant:configure', // restaurant M8: loyalty configuration and consolidated access — org-role driven
   'menu:import', // R-lane WHA-194: OCR menu import — upload, review queue, confirmed catalog import
   'pharmacy:counter',
+  'pharmacy:close',
   'pharmacy:manage',
   'pharmacy:procurement',
   'pharmacy:inventory',
@@ -231,9 +232,16 @@ export const POLICIES: Record<Action, Policy[]> = {
   // grants it explicitly (or holds `*`, e.g. the restaurant Owner template).
   'menu:import': [],
   'pharmacy:counter': [],
+  'pharmacy:close': [],
   'pharmacy:manage': [],
-  'pharmacy:procurement': [],
+  // Tenant administrators retain the operational purchasing access they had
+  // before pharmacy capabilities became explicit. A matching custom DENY is
+  // still resolved first by `can()` and therefore takes precedence.
+  'pharmacy:procurement': [isAdmin],
   'pharmacy:inventory': [],
+  // Dispensing is an exact-grant-only action: tenant administration alone is
+  // insufficient, and wildcard ALLOW rules cannot opt a user in. Wildcard DENY
+  // rules are still resolved by `can()` before this default-deny policy.
   'pharmacy:dispense': [],
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],

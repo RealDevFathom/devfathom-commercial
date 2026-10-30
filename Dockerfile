@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.2-slim AS dependencies
+FROM oven/bun:1.4.3-slim AS dependencies
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --ignore-scripts
@@ -38,9 +38,13 @@ ENV NEXT_BUILD_SKIP_TYPECHECK=1 \
 # Invoked through `node` and a real path, not `next build` and not `bun run build`.
 # A `.bin` shim picks its interpreter back up from a shebang and `PATH`, and
 # `oven/bun` ships a `node` that is a symlink to `bun` — being explicit is the point.
+# NEXT_PUBLIC_* values are inlined into client bundles at build time. Pass per environment,
+# e.g. --build-arg NEXT_PUBLIC_APP_URL=https://staging.devfathom.com. Empty keeps the fallback.
+ARG NEXT_PUBLIC_APP_URL=
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 RUN AUTH_SECRET=container-build-only node node_modules/next/dist/bin/next build
 
-FROM oven/bun:1.4.2-slim AS runner
+FROM oven/bun:1.4.3-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \

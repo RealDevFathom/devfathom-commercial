@@ -21,6 +21,7 @@ import {
 import { hasModule } from '@/lib/entitlements';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
+import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
@@ -382,11 +383,10 @@ export default async function PharmacyInventoryPage({
       else throw new Error('Choose a supported inventory action.');
       destination = url(branchId, 'Inventory action completed.');
     } catch (error) {
-      destination = url(
-        branchId,
-        error instanceof Error ? error.message : 'The inventory action could not be completed.',
-        'error'
-      );
+      // Keep the thrown value out of the URL entirely: it can contain database, provider,
+      // authorization, or validation details that are not safe to return to the browser.
+      void error;
+      destination = url(branchId, pharmacyActionErrorMessage('inventory'), 'error');
     }
     redirect(destination);
   }
@@ -466,7 +466,12 @@ export default async function PharmacyInventoryPage({
             </span>
           </Empty>
         ) : (
-          <div className="overflow-x-auto">
+          <div
+            role="region"
+            aria-label="Pharmacy inventory batches"
+            tabIndex={0}
+            className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
             <Table>
               <TableHeader>
                 <TableRow>

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   createSSRHelpers: vi.fn(),
+  redirect: vi.fn(),
   can: vi.fn(),
   loadSetupChecklist: vi.fn(),
   loadHotelLanding: vi.fn(),
@@ -9,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   withTenantDb: vi.fn(),
   db: {},
 }));
+vi.mock('next/navigation', () => ({ redirect: mocks.redirect }));
 vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('@/lib/onboarding/setup-evaluator', () => ({
   loadSetupChecklist: mocks.loadSetupChecklist,
@@ -23,6 +25,9 @@ vi.mock('@/server/routers/hotel-property', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.redirect.mockImplementation(() => {
+    throw new Error('redirect');
+  });
   mocks.withTenantDb.mockImplementation((_id, callback) => callback(mocks.db));
 });
 
@@ -36,6 +41,7 @@ vi.mock('./restaurant-dashboard-content', () => ({ RestaurantDashboardContent: (
 import DashboardPage from './page';
 import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
 import { HotelDashboardContent } from './hotel-dashboard-content';
+import { RestaurantDashboardContent } from './restaurant-dashboard-content';
 
 function helpers() {
   return {
@@ -53,18 +59,48 @@ function helpers() {
 }
 
 describe('DashboardPage vertical dispatch', () => {
-  it('does not run Agency prefetches for Restaurant organizations', async () => {
-    const agencyHelpers = helpers();
-    mocks.createSSRHelpers.mockResolvedValue({
-      helpers: agencyHelpers,
-      entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
-    });
+  it.each([
+    ['owner', 'ADMIN', '/restaurant'],
+    ['waiter', 'EMPLOYEE', '/pos'],
+  ])(
+    'redirects a Restaurant %s (%s) to %s before loading dashboard data',
+    async (_persona, role, target) => {
+      const agencyHelpers = helpers();
+      mocks.createSSRHelpers.mockResolvedValue({
+        helpers: agencyHelpers,
+        session: { user: { id: 'restaurant-user', role, status: 'ACTIVE' } },
+        entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
+      });
 
-    await DashboardPage();
+      await expect(
+        DashboardPage({ searchParams: Promise.resolve({ landing: '1' }) })
+      ).rejects.toThrow('redirect');
 
-    expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
-    expect(agencyHelpers.meetings.getUpcoming.prefetch).not.toHaveBeenCalled();
-  });
+      expect(mocks.redirect).toHaveBeenCalledWith(target);
+      expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
+      expect(agencyHelpers.meetings.getUpcoming.prefetch).not.toHaveBeenCalled();
+      expect(mocks.withTenantDb).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['ADMIN', 'EMPLOYEE'])(
+    'retains the Restaurant dashboard on explicit navigation for %s',
+    async (role) => {
+      const agencyHelpers = helpers();
+      mocks.can.mockResolvedValue(false);
+      mocks.createSSRHelpers.mockResolvedValue({
+        helpers: agencyHelpers,
+        organization: { id: 'restaurant-org' },
+        session: { user: { id: 'restaurant-user', role, status: 'ACTIVE' } },
+        entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
+      });
+      const page = await DashboardPage({});
+      expect(mocks.redirect).not.toHaveBeenCalled();
+      expect(page.props.children.type).toBe(RestaurantDashboardContent);
+      expect(page.props.children.props.enabledModules).toEqual(['restaurant-core']);
+      expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
+    }
+  );
 
   it('lands a Hospitality organization on the property setup page, without Agency prefetches', async () => {
     const agencyHelpers = helpers();
@@ -81,7 +117,7 @@ describe('DashboardPage vertical dispatch', () => {
       entitlements: { vertical: 'HOSPITALITY', enabledModules: ['hotel-core'] },
     });
 
-    const page = await DashboardPage();
+    const page = await DashboardPage({});
 
     expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
     expect(agencyHelpers.team.getAll.prefetch).not.toHaveBeenCalled();
@@ -103,14 +139,15 @@ describe('DashboardPage vertical dispatch', () => {
       entitlements: { vertical: 'AGENCY', enabledModules: ['dashboard'] },
     });
 
-    await DashboardPage();
+    await DashboardPage({});
 
     expect(agencyHelpers.dashboard.getStats.prefetch).toHaveBeenCalledOnce();
     expect(agencyHelpers.meetings.getUpcoming.prefetch).toHaveBeenCalledOnce();
   });
 });
 
-describe.each(['RESTAURANT', 'PHARMACY'] as const)('%s first-run capability gate', (vertical) => {
+describe('PHARMACY first-run capability gate', () => {
+  const vertical = 'PHARMACY' as const;
   it.each([
     ['EMPLOYEE', true, true],
     ['EMPLOYEE', false, false],
@@ -126,15 +163,13 @@ describe.each(['RESTAURANT', 'PHARMACY'] as const)('%s first-run capability gate
     });
     mocks.can.mockResolvedValue(allowed);
     mocks.loadSetupChecklist.mockResolvedValue({ complete: false, items: [] });
-    const page = await DashboardPage();
+    const page = await DashboardPage({});
     expect(mocks.withTenantDb).toHaveBeenCalledWith('tenant', expect.any(Function));
     expect(mocks.can).toHaveBeenCalledWith(user, 'admin:access', undefined, { db: mocks.db });
     expect(mocks.loadSetupChecklist).toHaveBeenCalledTimes(loads ? 1 : 0);
     if (loads) expect(mocks.loadSetupChecklist).toHaveBeenCalledWith(mocks.db, 'tenant', vertical);
-    if (vertical === 'PHARMACY') {
-      expect(page.props.children.type).toBe(PharmacyDashboardContent);
-      expect(page.props.children.props).toEqual({ role });
-    }
+    expect(page.props.children.type).toBe(PharmacyDashboardContent);
+    expect(page.props.children.props).toEqual({ role });
   });
 
   it('does not query setup evidence without a session', async () => {
@@ -143,7 +178,7 @@ describe.each(['RESTAURANT', 'PHARMACY'] as const)('%s first-run capability gate
       organization: { id: 'tenant' },
       entitlements: { vertical, enabledModules: [] },
     });
-    await DashboardPage();
+    await DashboardPage({});
     expect(mocks.withTenantDb).not.toHaveBeenCalled();
   });
 });

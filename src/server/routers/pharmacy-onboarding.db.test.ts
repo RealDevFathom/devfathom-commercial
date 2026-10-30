@@ -240,6 +240,17 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     });
   });
 
+  it('refuses literal PLACEHOLDER licence text when the platform override is not active', async () => {
+    await withTenantDb(organizationId, async (db) => {
+      await expect(
+        caller(db).saveRegulatoryProfile({ ...profile, licenceNumber: 'PLACEHOLDER' })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'PLACEHOLDER text is reserved for the active platform placeholder rule set.',
+      });
+    });
+  });
+
   it('saves version 1 and leaves the licences step outstanding while the rules are provisional', async () => {
     await withTenantDb(organizationId, async (db) => {
       const saved = await caller(db).saveRegulatoryProfile(profile);
@@ -255,7 +266,8 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       expect(listed.versions).toHaveLength(1);
       expect(listed.versions[0]).toMatchObject({
         version: 1,
-        inForce: true,
+        effective: true,
+        inForce: false,
         provinceName: 'Punjab',
         licenceNumber: 'LIC-4471',
       });
@@ -274,8 +286,10 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
 
       const listed = await caller(db).regulatory({ branchId });
       expect(listed.versions.map((version) => version.version)).toEqual([2, 1]);
-      // Exactly one version is in force, and version 1's history survives.
-      expect(listed.versions.filter((version) => version.inForce)).toHaveLength(1);
+      // Exactly one version is effective, but provisional rules keep it from
+      // being labelled in force; version 1's history still survives.
+      expect(listed.versions.filter((version) => version.effective)).toHaveLength(1);
+      expect(listed.versions.filter((version) => version.inForce)).toHaveLength(0);
       expect(listed.versions[1]?.licenceNumber).toBe('LIC-4471');
       expect(listed.versions[1]?.effectiveTo).not.toBeNull();
     });
@@ -290,11 +304,11 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
         message: expect.stringContaining('must start after the version already on file'),
       });
       // The refusal left the record exactly as it was: still two versions, one
-      // in force. A partial write here would close the history with nothing
+      // effective. A partial write here would close the history with nothing
       // succeeding it.
       const listed = await caller(db).regulatory({ branchId });
       expect(listed.versions).toHaveLength(2);
-      expect(listed.versions.filter((version) => version.inForce)).toHaveLength(1);
+      expect(listed.versions.filter((version) => version.effective)).toHaveLength(1);
     });
   });
 

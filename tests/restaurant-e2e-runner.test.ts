@@ -160,8 +160,12 @@ describe('Restaurant integrated E2E safety', () => {
     );
     expect(env.RESTAURANT_ACTOR_AGENCY_EMAIL).toBe(credentials.RESTAURANT_ACTOR_AGENCY_EMAIL);
     expect(env.RESTAURANT_ACTOR_AGENCY_PASSWORD).toBe(credentials.RESTAURANT_ACTOR_AGENCY_PASSWORD);
-    expect(env.RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL).toBe(credentials.RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL);
-    expect(env.RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD).toBe(credentials.RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD);
+    expect(env.RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL).toBe(
+      credentials.RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL
+    );
+    expect(env.RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD).toBe(
+      credentials.RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD
+    );
     expect(env.RESTAURANT_ACTOR_FUTURE_EMAIL).toBeUndefined();
     expect(env.RESTAURANT_ACTOR_FUTURE_PASSWORD).toBeUndefined();
   });
@@ -174,9 +178,13 @@ describe('Restaurant integrated E2E safety', () => {
     'PLATFORM_ADMIN_EMAIL',
     'PLATFORM_ADMIN_PASSWORD',
   ])('rejects missing actor seed input %s', (name) => {
-    expect(() => restaurantE2eEnvironment({
-      RESTAURANT_E2E_DATABASE_URL: target, ...credentials, [name]: undefined,
-    })).toThrow();
+    expect(() =>
+      restaurantE2eEnvironment({
+        RESTAURANT_E2E_DATABASE_URL: target,
+        ...credentials,
+        [name]: undefined,
+      })
+    ).toThrow();
   });
 
   test.each([
@@ -185,9 +193,13 @@ describe('Restaurant integrated E2E safety', () => {
     ['RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL', 'unseeded@example.test'],
     ['RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD', 'wrong-password'],
   ])('rejects mismatched actor seed input %s', (name, value) => {
-    expect(() => restaurantE2eEnvironment({
-      RESTAURANT_E2E_DATABASE_URL: target, ...credentials, [name]: value,
-    })).toThrow();
+    expect(() =>
+      restaurantE2eEnvironment({
+        RESTAURANT_E2E_DATABASE_URL: target,
+        ...credentials,
+        [name]: value,
+      })
+    ).toThrow();
   });
 
   test('has one desktop project, one worker, and no parallel fan-out', () => {

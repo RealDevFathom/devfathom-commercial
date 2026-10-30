@@ -34,6 +34,8 @@ import { PHARMACY_E2E } from '../tests/e2e/pharmacy-counter-fixture.js';
 import { resolvePharmacyE2eDatabaseUrl } from './pharmacy-e2e-environment.js';
 
 const PHARMACY_E2E_ADMIN_CAPABILITIES = [
+  // #518: POS-09 adds a prescription-only line, which now needs the exact dispense grant.
+  'pharmacy:dispense',
   'pharmacy:counter',
   'pharmacy:manage',
   'pharmacy:procurement',
@@ -43,6 +45,18 @@ const PHARMACY_E2E_ADMIN_CAPABILITIES = [
   'reports:financial',
 ] as const;
 
+/**
+ * Staging demo only: the sensitive pharmacy capabilities that wildcards no longer confer
+ * (capabilityMatches('*' | 'pharmacy:*', these) === false). The demo Owner/Admin needs them to
+ * dispense, run safety actions, review the catalogue and (at the khataScope gate, which asks for
+ * pharmacy:dispense until #300 lands) use Khata at the counter. Never granted to the cashier.
+ */
+const STAGING_DEMO_ADMIN_SENSITIVE_CAPABILITIES = [
+  'pharmacy:dispense',
+  'pharmacy:safety',
+  'pharmacy:catalogue-review',
+] as const;
+
 const FIXED_AT = new Date('2026-09-01T00:00:00.000Z');
 /** Received well in the past, so nothing is blocked as UNRECEIVED. */
 const RECEIVED_AT = new Date('2026-08-01T00:00:00.000Z');
@@ -50,6 +64,8 @@ const RECEIVED_AT = new Date('2026-08-01T00:00:00.000Z');
 const EXPIRES_AT = new Date('2028-06-30T00:00:00.000Z');
 
 const MODULES = [
+  'hr',
+  'pharmacy-procurement',
   'pharmacy-core',
   'pharmacy-counter',
   'pharmacy-inventory',
@@ -204,8 +220,9 @@ async function seedWorkspace(email: string, passwordHash: string) {
     // The administrator role gets explicit, non-sensitive grants only (never `*`). The counter's
     // receipt guard asks the organization role for a capability before it honours a session
     // ADMIN, so without pharmacy:counter the admin the spec signs in as cannot read the bill it
-    // is selling. pharmacy:dispense, pharmacy:safety and pharmacy:catalogue-review are
-    // deliberately absent: the counter spec exercises none of them.
+    // is selling. pharmacy:dispense is granted because POS-09 adds a prescription-only line,
+    // which #518 restricts to the exact grant; pharmacy:safety and pharmacy:catalogue-review are
+    // deliberately absent: the counter spec exercises neither.
     for (const capability of PHARMACY_E2E_ADMIN_CAPABILITIES) {
       await tx.organizationRolePermission.upsert({
         where: {
@@ -296,6 +313,123 @@ async function seedBranch() {
 }
 
 /** Demo cashier for the counter. Assigned to the seeded branch so receipt reads are not empty-set denies. */
+/** Idempotent ALLOW top-up for the demo administrator role. Staging demo only. */
+async function seedStagingDemoSensitiveGrants() {
+  await asTenant(async (tx) => {
+    const role = await tx.organizationRole.findFirst({
+      where: { id: PHARMACY_E2E.roleId, organizationId: PHARMACY_E2E.organizationId },
+      select: { id: true },
+    });
+    if (!role)
+      throw new Error('Demo pharmacy administrator role not found; run the full seed first.');
+    for (const capability of STAGING_DEMO_ADMIN_SENSITIVE_CAPABILITIES) {
+      await tx.organizationRolePermission.upsert({
+        where: { organizationRoleId_capability: { organizationRoleId: role.id, capability } },
+        update: { effect: 'ALLOW' },
+        create: {
+          organizationId: PHARMACY_E2E.organizationId,
+          organizationRoleId: role.id,
+          capability,
+          effect: 'ALLOW',
+        },
+      });
+    }
+  });
+  console.log(
+    `Staging demo admin grants ensured: ${STAGING_DEMO_ADMIN_SENSITIVE_CAPABILITIES.join(', ')}.`
+  );
+}
+
+/** Staging demo only: a Pharmacist (dispense + catalogue review, explicit grants; never `*`). */
+const STAGING_DEMO_PHARMACIST = {
+  roleId: 'role_pharmacy_counter_e2e_pharmacist',
+  userId: 'user_pharmacy_counter_e2e_pharmacist',
+  email: 'pharmacist.counter@pharmacy-counter-e2e.devfathom.invalid',
+  assignmentId: 'pba_pharmacy_counter_e2e_pharmacist',
+  capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'] as const,
+};
+
+async function seedStagingDemoPharmacist(
+  passwordHash: string,
+  opts: { keepExistingPassword?: boolean } = {}
+) {
+  await asTenant(async (tx) => {
+    const role = await tx.organizationRole.upsert({
+      where: {
+        organizationId_key: { organizationId: PHARMACY_E2E.organizationId, key: 'pharmacist' },
+      },
+      update: { name: 'Pharmacist', isSystem: true },
+      create: {
+        id: STAGING_DEMO_PHARMACIST.roleId,
+        organizationId: PHARMACY_E2E.organizationId,
+        key: 'pharmacist',
+        name: 'Pharmacist',
+        isSystem: true,
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+    for (const capability of STAGING_DEMO_PHARMACIST.capabilities) {
+      await tx.organizationRolePermission.upsert({
+        where: { organizationRoleId_capability: { organizationRoleId: role.id, capability } },
+        update: { effect: 'ALLOW' },
+        create: {
+          organizationId: PHARMACY_E2E.organizationId,
+          organizationRoleId: role.id,
+          capability,
+          effect: 'ALLOW',
+        },
+      });
+    }
+    // Never a wildcard on the pharmacist role.
+    await tx.organizationRolePermission.deleteMany({
+      where: { organizationRoleId: role.id, capability: { in: ['*', 'pharmacy:*'] } },
+    });
+    const user = {
+      organizationId: PHARMACY_E2E.organizationId,
+      organizationRoleId: role.id,
+      name: 'Demo Pharmacist',
+      email: STAGING_DEMO_PHARMACIST.email,
+      password: passwordHash,
+      role: 'EMPLOYEE' as const,
+      department: 'LEADERSHIP',
+      title: 'Pharmacist',
+      status: 'ACTIVE' as const,
+    };
+    await tx.user.upsert({
+      where: { id: STAGING_DEMO_PHARMACIST.userId },
+      // Grants-only top-ups never rotate an existing login's password.
+      update: opts.keepExistingPassword ? (({ password: _password, ...rest }) => rest)(user) : user,
+      create: {
+        id: STAGING_DEMO_PHARMACIST.userId,
+        ...user,
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+    await tx.pharmacyBranchAssignment.upsert({
+      where: {
+        organizationId_branchId_userId: {
+          organizationId: PHARMACY_E2E.organizationId,
+          branchId: PHARMACY_E2E.branchId,
+          userId: STAGING_DEMO_PHARMACIST.userId,
+        },
+      },
+      update: { active: true },
+      create: {
+        id: STAGING_DEMO_PHARMACIST.assignmentId,
+        organizationId: PHARMACY_E2E.organizationId,
+        branchId: PHARMACY_E2E.branchId,
+        userId: STAGING_DEMO_PHARMACIST.userId,
+        active: true,
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+  });
+  console.log(`Staging demo pharmacist ensured: ${STAGING_DEMO_PHARMACIST.email}.`);
+}
+
 async function seedCashier(passwordHash: string) {
   await asTenant(async (tx) => {
     const role = await tx.organizationRole.upsert({
@@ -831,6 +965,16 @@ async function main() {
       throw new Error('Pharmacy E2E seed requires LOGIN NOSUPERUSER NOBYPASSRLS.');
     }
 
+    const stagingDemo = process.env.STAGING_DEMO_SEED === '1';
+    if (process.env.PHARMACY_E2E_GRANTS_ONLY === '1') {
+      if (!stagingDemo) throw new Error('PHARMACY_E2E_GRANTS_ONLY is staging-demo only.');
+      await seedStagingDemoSensitiveGrants();
+      const pw = process.env.PHARMACY_E2E_ADMIN_PASSWORD?.trim();
+      if (!pw) throw new Error('PHARMACY_E2E_ADMIN_PASSWORD is required for the demo pharmacist.');
+      await seedStagingDemoPharmacist(hashSync(pw, 10), { keepExistingPassword: true });
+      return;
+    }
+
     const email = process.env.PHARMACY_E2E_ADMIN_EMAIL!.trim().toLowerCase();
     const passwordHash = hashSync(process.env.PHARMACY_E2E_ADMIN_PASSWORD!, 10);
 
@@ -841,6 +985,10 @@ async function main() {
     await seedMedicines();
     await seedStock();
     await seedPrescription();
+    if (stagingDemo) {
+      await seedStagingDemoSensitiveGrants();
+      await seedStagingDemoPharmacist(passwordHash);
+    }
 
     console.log('Pharmacy counter E2E seed complete.');
   } finally {

@@ -576,7 +576,14 @@ it.each(['settled_sales', 'financial_breakdown'])(
     });
     const totals = computeCloseAggregate({
       bills: [bill('SETTLED', 100), bill('OPEN', 10000)],
-      refunds: [{ amount: decimal(20), deliveryFeeRefundAmount: decimal(0) }],
+      refunds: [
+        {
+          amount: decimal(20),
+          taxRefundAmount: decimal(0),
+          serviceChargeRefundAmount: decimal(0),
+          deliveryFeeRefundAmount: decimal(0),
+        },
+      ],
       drawers: [{ status: 'CLOSED', expectedCash: decimal(40), countedCash: decimal(39.5) }],
       tenders: [
         { type: 'CASH', amount: decimal(40), tipAmount: decimal(3.75) },

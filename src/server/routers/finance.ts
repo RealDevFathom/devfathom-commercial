@@ -14,6 +14,7 @@ import {
   moneyLabel,
   type CurrencyAmount,
 } from '@/lib/finance/currency';
+import { invoiceStatusTransitionError, invoiceStatusUpdate } from '@/lib/finance/invoice-status';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -30,6 +31,27 @@ const MAX_MONEY = 9_999_999_999.99;
 const MONEY_MAX_MESSAGE = 'Amount must be 9,999,999,999.99 or less';
 const positiveMoney = () => z.number().positive().max(MAX_MONEY, MONEY_MAX_MESSAGE);
 const nonNegativeMoney = () => z.number().nonnegative().max(MAX_MONEY, MONEY_MAX_MESSAGE);
+
+export const createInvoiceInputSchema = z.object({
+  clientId: z.string(),
+  projectId: z.string().optional(),
+  items: z
+    .array(
+      z.object({
+        description: z.string(),
+        quantity: z.number().positive(),
+        rate: positiveMoney(),
+        amount: nonNegativeMoney(),
+      })
+    )
+    .min(1, 'Invoice must have at least one line item'),
+  subtotal: nonNegativeMoney(),
+  tax: nonNegativeMoney().default(0),
+  total: nonNegativeMoney(),
+  currency: z.enum(['USD', 'PKR']).default('USD'),
+  dueDate: z.date(),
+  notes: z.string().optional(),
+});
 
 // Round to 2 decimal places (cents). Used to derive invoice money server-side so
 // caller-supplied subtotal/total are never trusted (FIN-01).
@@ -222,80 +244,59 @@ export const financeRouter = router({
       return { ...invoice, amountPaid, balance: round2(Number(invoice.total) - amountPaid) };
     }),
 
-  createInvoice: adminProcedure
-    .input(
-      z.object({
-        clientId: z.string(),
-        projectId: z.string().optional(),
-        items: z.array(
-          z.object({
-            description: z.string(),
-            quantity: z.number().positive(),
-            rate: positiveMoney(),
-            amount: nonNegativeMoney(),
-          })
-        ),
-        subtotal: nonNegativeMoney(),
-        tax: nonNegativeMoney().default(0),
-        total: nonNegativeMoney(),
-        currency: z.enum(['USD', 'PKR']).default('USD'),
-        dueDate: z.date(),
-        notes: z.string().optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const orgId = workspaceId(ctx);
-      await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
-      await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
-      // FIN-01: never trust client-sent money. Derive every line `amount`, the
-      // `subtotal` and the `total` from quantity × rate (+ tax) on the server, so
-      // a request claiming subtotal/total = 0 (or a negative) cannot corrupt the
-      // stored figure or the paid/outstanding aggregates. Mirrors the AI tool.
-      const lineItems = input.items.map((it) => ({
-        description: it.description,
-        quantity: it.quantity,
-        rate: it.rate,
-        amount: round2(it.quantity * it.rate),
-      }));
-      const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
-      const tax = round2(input.tax ?? 0);
-      const total = round2(subtotal + tax);
+  createInvoice: adminProcedure.input(createInvoiceInputSchema).mutation(async ({ ctx, input }) => {
+    const orgId = workspaceId(ctx);
+    await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
+    await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
+    // FIN-01: never trust client-sent money. Derive every line `amount`, the
+    // `subtotal` and the `total` from quantity × rate (+ tax) on the server, so
+    // a request claiming subtotal/total = 0 (or a negative) cannot corrupt the
+    // stored figure or the paid/outstanding aggregates. Mirrors the AI tool.
+    const lineItems = input.items.map((it) => ({
+      description: it.description,
+      quantity: it.quantity,
+      rate: it.rate,
+      amount: round2(it.quantity * it.rate),
+    }));
+    const subtotal = round2(lineItems.reduce((s, it) => s + it.amount, 0));
+    const tax = round2(input.tax ?? 0);
+    const total = round2(subtotal + tax);
 
-      // Generate invoice number. FIN-09: scope the count to THIS year's invoices
-      // so the sequence resets to -001 each January (was a global count that never
-      // reset across years).
-      const year = new Date().getFullYear();
-      const count = await ctx.db.invoice.count({
-        where: { invoiceNumber: { startsWith: `INV-${year}-` } },
-      });
-      const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
+    // Generate invoice number. FIN-09: scope the count to THIS year's invoices
+    // so the sequence resets to -001 each January (was a global count that never
+    // reset across years).
+    const year = new Date().getFullYear();
+    const count = await ctx.db.invoice.count({
+      where: { invoiceNumber: { startsWith: `INV-${year}-` } },
+    });
+    const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
 
-      const invoice = await ctx.db.invoice.create({
-        data: {
-          invoiceNumber,
-          clientId: input.clientId,
-          projectId: input.projectId || null,
-          items: lineItems,
-          subtotal,
-          tax,
-          total,
-          currency: input.currency,
-          status: 'DRAFT',
-          dueDate: input.dueDate,
-          notes: input.notes,
-        },
-        include: { client: { select: { name: true } } },
-      });
+    const invoice = await ctx.db.invoice.create({
+      data: {
+        invoiceNumber,
+        clientId: input.clientId,
+        projectId: input.projectId || null,
+        items: lineItems,
+        subtotal,
+        tax,
+        total,
+        currency: input.currency,
+        status: 'DRAFT',
+        dueDate: input.dueDate,
+        notes: input.notes,
+      },
+      include: { client: { select: { name: true } } },
+    });
 
-      logActivity(ctx.db, ctx.session.user.id, {
-        type: 'invoice_created',
-        message: `created invoice ${invoice.invoiceNumber} for ${invoice.client.name} ($${Number(invoice.total).toLocaleString()})`,
-        entityType: 'Invoice',
-        entityId: invoice.id,
-      });
+    logActivity(ctx.db, ctx.session.user.id, {
+      type: 'invoice_created',
+      message: `created invoice ${invoice.invoiceNumber} for ${invoice.client.name} ($${Number(invoice.total).toLocaleString()})`,
+      entityType: 'Invoice',
+      entityId: invoice.id,
+    });
 
-      return invoice;
-    }),
+    return invoice;
+  }),
 
   // IMP-FIN-01: full line-item edit of an unsettled invoice. Like createInvoice,
   // every line `amount`, the `subtotal` and the `total` are recomputed SERVER-SIDE
@@ -452,7 +453,7 @@ export const financeRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       // FIN-06: enforce a status state-machine, never re-fire side-effects on a
-      // no-op, and clear paidAt/sentAt when the invoice leaves PAID/SENT.
+      // no-op, and reset payment/issue timestamps only when the transition requires it.
       const current = await ctx.db.invoice.findUnique({
         where: { id: input.id },
         select: { status: true },
@@ -462,6 +463,14 @@ export const financeRouter = router({
       const prior = current.status;
       const next = input.status;
 
+      const transitionError = invoiceStatusTransitionError(prior, next);
+      if (transitionError) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: transitionError,
+        });
+      }
+
       // No-op: don't overwrite paidAt/sentAt or re-emit activity/notifications.
       if (prior === next) {
         return ctx.db.invoice.findUniqueOrThrow({
@@ -470,33 +479,18 @@ export const financeRouter = router({
         });
       }
 
-      const ALLOWED: Record<string, string[]> = {
-        DRAFT: ['SENT', 'CANCELLED'],
-        SENT: ['PAID', 'OVERDUE', 'CANCELLED', 'DRAFT'],
-        OVERDUE: ['PAID', 'CANCELLED', 'SENT'],
-        PAID: ['CANCELLED'],
-        CANCELLED: ['DRAFT'],
-      };
-      if (!ALLOWED[prior]?.includes(next)) {
+      const changed = await ctx.db.invoice.updateMany({
+        where: { id: input.id, status: prior },
+        data: invoiceStatusUpdate(prior, next, new Date()),
+      });
+      if (changed.count !== 1) {
         throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `Cannot change an invoice from ${prior} to ${next}.`,
+          code: 'CONFLICT',
+          message: 'Invoice status changed concurrently. Refresh and try again.',
         });
       }
-
-      const data: Record<string, unknown> = { status: next };
-      if (next === 'PAID') data.paidAt = new Date();
-      if (next === 'SENT') data.sentAt = new Date();
-      // Clear stamps when the invoice leaves the corresponding state.
-      if (prior === 'PAID' && next !== 'PAID') data.paidAt = null;
-      if (next === 'DRAFT') {
-        data.sentAt = null;
-        data.paidAt = null;
-      }
-
-      const invoice = await ctx.db.invoice.update({
+      const invoice = await ctx.db.invoice.findUniqueOrThrow({
         where: { id: input.id },
-        data,
         include: { client: { select: { name: true } } },
       });
 
@@ -504,13 +498,6 @@ export const financeRouter = router({
         logActivity(ctx.db, ctx.session.user.id, {
           type: 'invoice_sent',
           message: `sent invoice ${invoice.invoiceNumber} to ${invoice.client.name} ($${Number(invoice.total).toLocaleString()})`,
-          entityType: 'Invoice',
-          entityId: invoice.id,
-        });
-      } else if (next === 'PAID') {
-        logActivity(ctx.db, ctx.session.user.id, {
-          type: 'invoice_paid',
-          message: `marked invoice ${invoice.invoiceNumber} as paid ($${Number(invoice.total).toLocaleString()})`,
           entityType: 'Invoice',
           entityId: invoice.id,
         });
@@ -676,7 +663,7 @@ export const financeRouter = router({
   markOverdueInvoices: adminProcedure.mutation(async ({ ctx }) => {
     const result = await ctx.db.invoice.updateMany({
       where: { status: 'SENT', dueDate: { lt: new Date() } },
-      data: { status: 'OVERDUE' },
+      data: invoiceStatusUpdate('SENT', 'OVERDUE', new Date()),
     });
     return { count: result.count };
   }),

@@ -63,7 +63,14 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
         { type: 'CARD', amount: D('30.00'), tipAmount: D('10.00') },
         { type: 'CASH', amount: D('20.00'), tipAmount: D('0') },
       ],
-      refunds: [{ amount: D('15.00'), deliveryFeeRefundAmount: D('3.00') }],
+      refunds: [
+        {
+          amount: D('15.00'),
+          taxRefundAmount: D('0'),
+          serviceChargeRefundAmount: D('0'),
+          deliveryFeeRefundAmount: D('3.00'),
+        },
+      ],
       drawers: [{ status: 'CLOSED', expectedCash: D('180.00'), countedCash: D('178.00') }],
     });
     expect(aggregate.grossSales.toString()).toBe('100'); // OPEN bill excluded
@@ -71,10 +78,10 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
     expect(aggregate.deliveryFeeRefunds.toString()).toBe('3');
     expect(aggregate.compTotal.toString()).toBe('20');
     expect(aggregate.discountTotal.toString()).toBe('5');
-    expect(aggregate.netSales.toString()).toBe('60'); // 100 - 20 - 5 - 15 refunds
+    expect(aggregate.netSales.toString()).toBe('63'); // delivery is not sales principal
     expect(aggregate.voidTotal.toString()).toBe('12.5');
     expect(aggregate.tipTotal.toString()).toBe('15');
-    expect(aggregate.refundTotal.toString()).toBe('15');
+    expect(aggregate.refundTotal.toString()).toBe('12');
     expect(aggregate.cashExpected.toString()).toBe('180');
     expect(aggregate.cashCounted.toString()).toBe('178');
     expect(aggregate.cashVariance.toString()).toBe('-2');
@@ -89,7 +96,62 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
 });
 
 describe('resolveChainTip (pure)', () => {
-  it('deducts refunds from netSales and still reports them separately (WHA-1621 Q1)', () => {
+  it('reconciles a tax-and-service-inclusive cash refund with the drawer', () => {
+    const aggregate = computeCloseAggregate({
+      bills: [
+        {
+          status: 'SETTLED',
+          subtotal: D('100.00'),
+          deliveryFeeTotal: D('0'),
+          taxTotal: D('10.00'),
+          serviceChargeTotal: D('10.00'),
+          compTotal: D('0'),
+          discountTotal: D('0'),
+          grandTotal: D('120.00'),
+        },
+      ],
+      tenders: [{ type: 'CASH', amount: D('120.00'), tipAmount: D('0') }],
+      refunds: [
+        {
+          amount: D('60.00'),
+          taxRefundAmount: D('5.00'),
+          serviceChargeRefundAmount: D('5.00'),
+          deliveryFeeRefundAmount: D('0'),
+        },
+      ],
+      drawers: [{ status: 'CLOSED', expectedCash: D('60.00'), countedCash: D('60.00') }],
+    });
+
+    expect(aggregate.netSales.toFixed(2)).toBe('50.00');
+    expect(aggregate.taxTotal.toFixed(2)).toBe('5.00');
+    expect(aggregate.serviceChargeTotal.toFixed(2)).toBe('5.00');
+    expect(aggregate.refundTotal.toFixed(2)).toBe('60.00');
+    expect(
+      aggregate.netSales.plus(aggregate.taxTotal).plus(aggregate.serviceChargeTotal).toFixed(2)
+    ).toBe(aggregate.cashExpected.toFixed(2));
+  });
+
+  it('reports a delivery-fee-only refund separately without reducing sales or refundTotal', () => {
+    const aggregate = computeCloseAggregate({
+      bills: [],
+      tenders: [],
+      refunds: [
+        {
+          amount: D('12.00'),
+          taxRefundAmount: D('0'),
+          serviceChargeRefundAmount: D('0'),
+          deliveryFeeRefundAmount: D('12.00'),
+        },
+      ],
+      drawers: [],
+    });
+
+    expect(aggregate.netSales.toFixed(2)).toBe('0.00');
+    expect(aggregate.refundTotal.toFixed(2)).toBe('0.00');
+    expect(aggregate.deliveryFeeRefunds.toFixed(2)).toBe('12.00');
+  });
+
+  it('deducts a zero-tax refund from netSales and still reports it separately', () => {
     const bill = {
       status: 'SETTLED' as const,
       subtotal: D('14.00'),
@@ -103,7 +165,14 @@ describe('resolveChainTip (pure)', () => {
     const aggregate = computeCloseAggregate({
       bills: [bill, bill],
       tenders: [],
-      refunds: [{ amount: D('14.00'), deliveryFeeRefundAmount: D('0') }],
+      refunds: [
+        {
+          amount: D('14.00'),
+          taxRefundAmount: D('0'),
+          serviceChargeRefundAmount: D('0'),
+          deliveryFeeRefundAmount: D('0'),
+        },
+      ],
       drawers: [],
     });
     expect(aggregate.grossSales.toFixed(2)).toBe('28.00');
@@ -244,6 +313,8 @@ async function seedRefund(input: {
   originalTenderId: string;
   businessDate: string;
   amount: string;
+  taxRefundAmount?: string;
+  serviceChargeRefundAmount?: string;
   deliveryFeeRefundAmount?: string;
 }): Promise<string> {
   return deps.withTenantDb(orgId, async (tx) => {
@@ -261,6 +332,8 @@ async function seedRefund(input: {
         originalTenderId: input.originalTenderId,
         billId: input.billId,
         amount: input.amount,
+        taxRefundAmount: input.taxRefundAmount ?? '0',
+        serviceChargeRefundAmount: input.serviceChargeRefundAmount ?? '0',
         deliveryFeeRefundAmount: input.deliveryFeeRefundAmount ?? '0',
         kind: 'REFUND',
         businessDate: utcDate(input.businessDate),
@@ -709,7 +782,7 @@ describeIfDatabase('daily close (real DB)', () => {
         select: { refundTotal: true, deliveryFeeRefunds: true, grossSales: true },
       })
     );
-    expect(d2?.refundTotal.toString()).toBe('15');
+    expect(d2?.refundTotal.toString()).toBe('12');
     expect(d2?.deliveryFeeRefunds.toString()).toBe('3');
     expect(d2?.grossSales.toString()).toBe('0');
 

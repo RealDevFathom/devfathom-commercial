@@ -135,6 +135,7 @@ model JurisdictionRuleSet {
   pharmacistCoverageRule    Json
   recordRetentionByClass    Json
   createdAt                 DateTime  @default(now())
+  isPlaceholder             Boolean   @default(false)
 
   regulatoryProfiles BranchRegulatoryProfile[]
 
@@ -158,8 +159,10 @@ model BranchRegulatoryProfile {
   premises                         Json
   licenceCategory                  String
   licenceNumber                    String
+  licenceIssuingAuthority          String?
   licenceValidFrom                 DateTime
   licenceValidTo                   DateTime
+  licenceExpiryLabel               String?
   licenceEvidenceFileRef           String
   permittedSchedules               String[]
   qualifiedPersonRegistration      String
@@ -171,6 +174,7 @@ model BranchRegulatoryProfile {
   fiscalStatus                     String
   retentionPolicy                  Json
   createdAt                        DateTime  @default(now())
+  isPlaceholder                    Boolean   @default(false)
 
   jurisdictionRuleSet JurisdictionRuleSet @relation(fields: [jurisdictionRuleSetId], references: [id], onDelete: Restrict)
   branch              PharmacyBranch      @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
@@ -1464,12 +1468,15 @@ model PharmacySaleLine {
   discountMinor             Int                          @default(0)
   approvalPolicy            String?
   approvedByUserId          String?
+  prescriptionLineId        String?
+  prescriptionPatientId     String?
   idempotencyKey            String
   createdAt                 DateTime                     @default(now())
   sale                      PharmacySale                 @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
   medicine                  Medicine                     @relation(fields: [medicineId], references: [id], onDelete: Restrict)
   presentation              Presentation                 @relation(fields: [presentationId], references: [id], onDelete: Restrict)
   packLevel                 PackLevel                    @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
+  prescriptionLine          PrescriptionLine?            @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict)
   allocations               PharmacySaleLineAllocation[]
   returnLines               PharmacySaleReturnLine[]
   unidentifiedReturnHolds   PharmacyUnidentifiedReturnHold[]
@@ -2376,6 +2383,7 @@ enum FinanceSourceKind {
   PHARMACY_GOODS_RECEIPT
   PHARMACY_SALE_LINE
   PHARMACY_SALE_RETURN_LINE
+  PHARMACY_UNIDENTIFIED_RETURN_HOLD
   PHARMACY_STOCK_WRITE_OFF
   PHARMACY_SUPPLIER_CLAIM
   PHARMACY_INTERBRANCH_TRANSFER_LINE
@@ -6880,7 +6888,8 @@ model RestaurantOrderItemModifier {
 /// `linkReason` records why it was made (seated, moved, merged). Merge = several
 /// active table links under one order; combining two OPEN orders into one is
 /// deferred (BUILD-ASSUMPTIONS). At most one active link per (order, table) is
-/// enforced by a partial unique index in the migration.
+/// enforced by a partial unique index in the migration, and a second partial
+/// unique index permits only one active MOVE link per order.
 model RestaurantOrderTable {
   id             String                         @id @default(cuid())
   organizationId String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -12274,6 +12283,7 @@ model PrescriptionLine {
   medicine                  Medicine                          @relation(fields: [medicineId], references: [id], onDelete: Restrict)
   presentation              Presentation                      @relation(fields: [presentationId], references: [id], onDelete: Restrict)
   fills                     PrescriptionFill[]
+  saleLines                 PharmacySaleLine[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, prescriptionId, lineNumber])
@@ -12540,6 +12550,10 @@ model PharmacyGoodsReceipt {
   /// are not saleable. Required on the row, not only at the router.
   supplierInvoiceRef     String
   supplierInvoiceDate    DateTime
+  /// Tax identity printed on this bill. These are snapshots: changing a
+  /// supplier later must not make an earlier input-tax claim look compliant.
+  distributorNtn         String?
+  distributorStrn        String?
   warrantyEvidenceRef    String
   receivedByUserId       String
   receivedAt             DateTime

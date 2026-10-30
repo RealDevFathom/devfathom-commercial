@@ -22,6 +22,10 @@ const migration = readFileSync(
 )
   .replace(/^BEGIN;$/m, '')
   .replace(/^COMMIT;$/m, '');
+const managerProcurementMigration = readFileSync(
+  'prisma/migrations/20261022100000_pharmacy_manager_procurement/migration.sql',
+  'utf8'
+);
 const expiry = new Date('2035-01-02T00:00:00.000Z');
 const expired = new Date('2020-01-02T00:00:00.000Z');
 const legacy: Record<string, string[]> = {
@@ -42,6 +46,9 @@ const legacy: Record<string, string[]> = {
     await client.query('BEGIN');
     await client.query(`SELECT set_config('app.is_platform_admin','true',true)`);
     await client.query(`CREATE ROLE "${runtimeRole}" NOSUPERUSER NOBYPASSRLS`);
+    // PostgreSQL 16 no longer gives a CREATEROLE user an implicit right to SET ROLE
+    // to roles it creates. Make the test owner an explicit member before exercising RLS.
+    await client.query(`GRANT "${runtimeRole}" TO CURRENT_USER`);
     await client.query(`GRANT USAGE ON SCHEMA public TO "${runtimeRole}"`);
     await client.query(
       `GRANT SELECT ON organization_roles, organization_role_permissions, user_permission_overrides, users TO "${runtimeRole}"`
@@ -130,6 +137,7 @@ const legacy: Record<string, string[]> = {
       [id('other_owner_deny'), other, id('other_owner')]
     );
     await client.query(migration);
+    await client.query(managerProcurementMigration);
   }, 60_000);
   afterAll(async () => {
     await client.query('ROLLBACK');
@@ -219,6 +227,7 @@ const legacy: Record<string, string[]> = {
     expect(ownerOverride.rows).toHaveLength(7);
     await client.query('DROP TABLE pharmacy_capability_aliases');
     await client.query(migration);
+    await client.query(managerProcurementMigration);
     expect(
       (
         await client.query(
@@ -274,6 +283,7 @@ const legacy: Record<string, string[]> = {
     expect(await can(subject('pharmacist'), 'pharmacy:dispense', undefined, { db })).toBe(true);
     expect(await can(subject('pharmacist'), 'pharmacy:safety', undefined, { db })).toBe(false);
     expect(await can(subject('owner'), 'reports:financial', undefined, { db })).toBe(true);
+    expect(await can(subject('manager'), 'pharmacy:procurement', undefined, { db })).toBe(true);
     expect(await can(subject('cashier'), 'pharmacy:orders', undefined, { db })).toBe(true);
     expect(await can(subject('cashier'), 'pharmacy:procurement', undefined, { db })).toBe(false);
     expect(await can(subject('auditor'), 'pharmacy:dispense', undefined, { db })).toBe(false);

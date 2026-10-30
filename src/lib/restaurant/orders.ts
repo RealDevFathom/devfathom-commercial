@@ -84,6 +84,7 @@ export type OrderCommandErrorReason =
   | 'TABLE_LINK_NOT_FOUND'
   | 'CHANNEL_UNAVAILABLE'
   | 'CHANNEL_TABLE'
+  | 'BILL_ALREADY_CUT'
   | 'NOT_CLOSABLE'
   | 'NOT_SETTLED'
   | 'LIMIT_REACHED'
@@ -299,6 +300,51 @@ async function record(
     actorDeviceId: actor.deviceId,
     payload,
   });
+}
+
+async function finalizeOrderClose(
+  tx: ScopedDb,
+  order: LoadedOrder,
+  actor: CommandActor,
+  closedAt: Date
+): Promise<void> {
+  const itemStatuses = order.items.map((item) => item.status);
+  assertOrderStatusChange('PAYMENT_PENDING', 'CLOSED', itemStatuses);
+  await tx.restaurantOrder.update({
+    where: { id: order.id },
+    data: { status: 'CLOSED', closedAt },
+  });
+  await tx.restaurantOrderTable.updateMany({
+    where: { orderId: order.id, active: true },
+    data: { active: false, unlinkedAt: closedAt },
+  });
+  await record(tx, order, actor, 'order.closed', {});
+  await earnLoyaltyForClosedOrder(tx, order.id, closedAt);
+  await postOrderRecipeConsumption(
+    tx,
+    order.id,
+    order.branchId,
+    order.items,
+    { staffProfileId: actor.staffProfileId, deviceId: actor.deviceId },
+    closedAt
+  );
+}
+
+/** Close a payment-pending order once all of its bills are settled. The caller must
+ * hold the order row lock; tender settlement uses this seam so the final tender and
+ * the order transition commit atomically. */
+export async function closeOrderAfterSettlement(
+  tx: ScopedDb,
+  orderId: string,
+  actor: CommandActor,
+  closedAt: Date
+): Promise<boolean> {
+  const order = await loadOrder(tx, orderId);
+  if (order.status !== 'PAYMENT_PENDING') return false;
+  const settlement = await evaluateOrderSettlement(tx, order.id);
+  if (!settlement.settled) return false;
+  await finalizeOrderClose(tx, order, actor, closedAt);
+  return true;
 }
 
 /**
@@ -1083,11 +1129,26 @@ export async function voidItem(db: ScopedDb, input: VoidItemInput): Promise<Item
     if (idem.replay) return { itemId: idem.resultRef ?? input.itemId, replayed: true };
 
     const reason = requireReason(input.reason);
+    // A bill is an immutable snapshot of the active order items. Serialize with
+    // bill cutting on the parent row, then reject a void that would otherwise
+    // leave the kitchen aggregate and the amount payable disagreeing. The guest
+    // must void-and-recut the open bill before changing the item set.
+    await lockRestaurantOrder(tx, input.orderId);
     const order = await loadOrder(tx, input.orderId);
     assertMutable(order);
-
     const item = findItem(order, input.itemId);
     assertItemTransition(item.status, 'VOIDED');
+
+    const liveBill = await tx.restaurantBill.findFirst({
+      where: { orderId: order.id, status: { not: 'VOID' } },
+      select: { id: true },
+    });
+    if (liveBill) {
+      throw new OrderCommandError(
+        'An item cannot be voided after a bill is cut; void and recut the bill first.',
+        'BILL_ALREADY_CUT'
+      );
+    }
 
     const postPrep = isPostPrep(item.status);
     let voidCoAuthorizationId: string | null = null;
@@ -1347,26 +1408,7 @@ export async function closeOrder(
         'NOT_SETTLED'
       );
     }
-    assertOrderStatusChange(status, 'CLOSED', itemStatuses);
-    await tx.restaurantOrder.update({
-      where: { id: order.id },
-      data: { status: 'CLOSED', closedAt },
-    });
-    await tx.restaurantOrderTable.updateMany({
-      where: { orderId: order.id, active: true },
-      data: { active: false, unlinkedAt: closedAt },
-    });
-    await record(tx, order, input.actor, 'order.closed', {});
-    await earnLoyaltyForClosedOrder(tx, order.id, closedAt);
-    // M6-L2: recipe consumption at order close (C6 disposition applied per item).
-    await postOrderRecipeConsumption(
-      tx,
-      order.id,
-      order.branchId,
-      order.items,
-      { staffProfileId: input.actor.staffProfileId, deviceId: input.actor.deviceId },
-      closedAt
-    );
+    await finalizeOrderClose(tx, order, input.actor, closedAt);
     await recordIdempotentResult(tx, input.actor, order.id);
     return { orderId: order.id, replayed: false };
   });
@@ -1389,6 +1431,10 @@ export async function moveTable(
     const idem = await beginIdempotent(tx, input.actor, 'table.move');
     if (idem.replay) return { orderId: input.orderId, replayed: true };
 
+    // The active table links are a child-row set whose validity is owned by the
+    // order. Lock the parent before reading that set so concurrent moves cannot
+    // both consume the same active source link and create different destinations.
+    await lockRestaurantOrder(tx, input.orderId);
     const order = await loadOrder(tx, input.orderId);
     assertMutable(order);
     await assertTablesInBranch(tx, order.branchId, [input.toTableId]);

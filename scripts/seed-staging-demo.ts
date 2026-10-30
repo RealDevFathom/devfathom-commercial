@@ -52,7 +52,7 @@ const logins = {
     email: env.STAGING_DEMO_PHARMACY_EMAIL?.trim() || `pharmacy.admin@${baseDomain}`,
     password: secret('pharmacy', env.STAGING_DEMO_PHARMACY_PASSWORD),
     url: `https://pharmacy-counter-e2e.${baseDomain}/login`,
-    note: 'Same password for cashier.counter@pharmacy-counter-e2e.devfathom.invalid',
+    note: 'Same password for cashier.counter@ and pharmacist.counter@pharmacy-counter-e2e.devfathom.invalid',
   },
   restaurant: {
     accessCode: secret('restaurant-demo-access', env.DEMO_ACCESS_CODE),
@@ -90,7 +90,8 @@ function run(label: string, cmd: string[], extra: Record<string, string>): void 
 }
 
 async function main(): Promise<void> {
-  writeLogins();
+  // --grants-only must not rewrite the logins file (passwords may be random without SEED_PASSWORD).
+  if (!args.has('--grants-only')) writeLogins();
   if (args.has('--logins-only')) return;
 
   const adminUrl = env.MIGRATION_DATABASE_URL?.trim() || env.DATABASE_URL;
@@ -99,6 +100,25 @@ async function main(): Promise<void> {
   // Fail closed before touching anything unless both URLs are the staging database.
   assertStagingDemoTarget(adminUrl, env);
   assertStagingDemoTarget(appUrl, env);
+
+  if (args.has('--grants-only')) {
+    // Never fall back to a random password: a new demo pharmacist must get a known one,
+    // and existing logins keep theirs (the seed does not rewrite passwords in this mode).
+    if (!env.SEED_PASSWORD?.trim() && !env.STAGING_DEMO_PHARMACY_PASSWORD?.trim()) {
+      throw new Error('--grants-only requires SEED_PASSWORD (or STAGING_DEMO_PHARMACY_PASSWORD).');
+    }
+    // Idempotent top-up of the demo pharmacy admin's explicit ALLOW grants for capabilities
+    // wildcards no longer confer. Touches nothing else; still behind assertStagingDemoTarget.
+    run('Pharmacy demo admin grants (top-up)', ['bun', 'scripts/seed-pharmacy-e2e.ts'], {
+      STAGING_DEMO_SEED: '1',
+      STAGING_DEMO_DATABASE_URL: appUrl,
+      DATABASE_URL: appUrl,
+      PHARMACY_E2E_GRANTS_ONLY: '1',
+      PHARMACY_E2E_ADMIN_PASSWORD: logins.pharmacy.password,
+    });
+    console.log('\n✓ Staging demo grants top-up complete.');
+    return;
+  }
 
   if (!args.has('--skip-base')) {
     // SuperAdmin + agency (org_devfathom) + the full platform catalog, which

@@ -18,6 +18,14 @@ export function growthReceiptMoney(cutoff: Date) {
               AND e."sourceKind"='PHARMACY_SALE_RETURN_LINE' AND e."sourceId"=r.id AND e."occurredAt" < ${cutoff}
           )
       )
+      AND NOT EXISTS (
+        SELECT 1 FROM pharmacy_unidentified_return_holds h
+        WHERE h."organizationId"=l."organizationId" AND h."branchId"=l."branchId" AND h."saleLineId"=l.id
+          AND h."createdAt" < ${cutoff} AND NOT EXISTS (
+            SELECT 1 FROM finance_journal_entries e WHERE e."organizationId"=h."organizationId"
+              AND e."sourceKind"='PHARMACY_UNIDENTIFIED_RETURN_HOLD' AND e."sourceId"=h.id AND e."occurredAt" < ${cutoff}
+          )
+      )
     ,false)) AS complete, COALESCE(SUM(posted.sales),0) AS sales, COALESCE(SUM(posted.margin),0) AS margin
     FROM pharmacy_sale_lines l
     LEFT JOIN LATERAL (
@@ -37,7 +45,9 @@ export function growthReceiptMoney(cutoff: Date) {
       WHERE j."organizationId"=l."organizationId" AND j."branchId"=l."branchId" AND j."sourceLineId"=l.id
         AND e."occurredAt" < ${cutoff} AND j."accountCode" IN ('SALES_REVENUE','SALES_DISCOUNT','COST_OF_GOODS_SOLD')
         AND (e."sourceKind"='PHARMACY_SALE_LINE' AND e."sourceId"=l.id OR e."sourceKind"='PHARMACY_SALE_RETURN_LINE' AND EXISTS (
-          SELECT 1 FROM pharmacy_sale_return_lines r WHERE r."organizationId"=l."organizationId" AND r."branchId"=l."branchId" AND r."saleLineId"=l.id AND r.id=e."sourceId" AND r."createdAt" < ${cutoff}))
+          SELECT 1 FROM pharmacy_sale_return_lines r WHERE r."organizationId"=l."organizationId" AND r."branchId"=l."branchId" AND r."saleLineId"=l.id AND r.id=e."sourceId" AND r."createdAt" < ${cutoff})
+          OR e."sourceKind"='PHARMACY_UNIDENTIFIED_RETURN_HOLD' AND EXISTS (
+          SELECT 1 FROM pharmacy_unidentified_return_holds h WHERE h."organizationId"=l."organizationId" AND h."branchId"=l."branchId" AND h."saleLineId"=l.id AND h.id=e."sourceId" AND h."createdAt" < ${cutoff}))
     ) posted ON true
     WHERE l."organizationId"=s."organizationId" AND l."branchId"=s."branchId" AND l."saleId"=s.id
   `;

@@ -2,6 +2,13 @@ import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
+// #633: the batch re-check has its own PostgreSQL suite (sale-batch-safety.db.test.ts).
+const batchSafety = vi.hoisted(() => ({
+  assertSaleBatchesSellable: vi.fn(async () => new Map()),
+}));
+vi.mock('./sale-batch-safety', () => ({
+  assertSaleBatchesSellable: batchSafety.assertSaleBatchesSellable,
+}));
 const postings = vi.hoisted(() => ({ postTenderEntry: vi.fn(), postSaleLineEntry: vi.fn() }));
 // Keep settlement, receipt identity, idempotency and evidence logic real.
 vi.mock('./finance-postings', async () => ({
@@ -88,6 +95,7 @@ describe('pharmacy settlement invariants', () => {
 
   it('replays one idempotency result without duplicating tender or receipt', async () => {
     let idempotency: Record<string, unknown> | null = null;
+    batchSafety.assertSaleBatchesSellable.mockReset().mockResolvedValue(new Map());
     postings.postTenderEntry.mockClear();
     postings.postSaleLineEntry.mockClear();
     const tenderCreatedAt = new Date('2026-09-02T10:00:00Z');
@@ -178,6 +186,30 @@ describe('pharmacy settlement invariants', () => {
       idempotencyKey: 'retry-1',
     };
 
+    const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' };
+    // These phase checks fail even if an absent tender guard is replaced by an
+    // extra completion/replay call: no payment or posting may precede guard 1.
+    batchSafety.assertSaleBatchesSellable
+      .mockImplementationOnce(async () => {
+        expect(tenderCreate).not.toHaveBeenCalled();
+        expect(postings.postTenderEntry).not.toHaveBeenCalled();
+        expect(saleUpdate).not.toHaveBeenCalled();
+        expect(postings.postSaleLineEntry).not.toHaveBeenCalled();
+        expect(db.pharmacySaleEvent.create).not.toHaveBeenCalled();
+        expect(db.$queryRaw).toHaveBeenCalledTimes(2);
+        return new Map();
+      })
+      .mockImplementationOnce(async () => {
+        expect(tenderCreate).toHaveBeenCalledTimes(1);
+        expect(postings.postTenderEntry).toHaveBeenCalledTimes(1);
+        expect(saleUpdate).not.toHaveBeenCalled();
+        expect(postings.postSaleLineEntry).not.toHaveBeenCalled();
+        expect(db.pharmacySaleEvent.create).not.toHaveBeenCalled();
+        // The two existing reads are the day and sale locks, not a receipt draw.
+        expect(db.$queryRaw).toHaveBeenCalledTimes(2);
+        return new Map();
+      });
+
     // Capture the canonical hash inserted by the first command in this narrow fake.
     db.$executeRaw.mockImplementationOnce(async (query: { values: unknown[] }) => {
       idempotency = {
@@ -197,6 +229,11 @@ describe('pharmacy settlement invariants', () => {
       },
       input
     );
+    // Both exact-scope guards belong to the FIRST fully paid command.
+    expect(batchSafety.assertSaleBatchesSellable).toHaveBeenCalledTimes(2);
+    expect(batchSafety.assertSaleBatchesSellable).toHaveBeenNthCalledWith(1, db, scope, 'sale-1');
+    expect(batchSafety.assertSaleBatchesSellable).toHaveBeenNthCalledWith(2, db, scope, 'sale-1');
+
     const replay = await applyPharmacyTender(
       db as never,
       {
@@ -212,7 +249,8 @@ describe('pharmacy settlement invariants', () => {
     expect(tenderCreate).toHaveBeenCalledTimes(1);
     expect(saleUpdate).toHaveBeenCalledTimes(1);
     expect(db.pharmacySaleEvent.create).toHaveBeenCalledTimes(1);
-    const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' };
+    // Replaying the bound result cannot re-enter either guard or consume a receipt.
+    expect(batchSafety.assertSaleBatchesSellable).toHaveBeenCalledTimes(2);
     expect(postings.postTenderEntry).toHaveBeenCalledExactlyOnceWith(db, scope, {
       tenderId: 'tender-1',
       at: tenderCreatedAt,
@@ -238,6 +276,99 @@ describe('pharmacy settlement invariants', () => {
     });
     expect(db.$queryRaw).toHaveBeenCalledTimes(3);
   });
+
+  it.each(['CARD', 'WALLET'] as const)(
+    'rejects a failed tender-time batch guard before %s payment or sale/ledger writes',
+    async (type) => {
+      const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' };
+      const batchRefusal = new Error('batch became unsellable after add-to-cart');
+      batchSafety.assertSaleBatchesSellable
+        .mockReset()
+        .mockResolvedValue(new Map())
+        .mockRejectedValueOnce(batchRefusal);
+      postings.postTenderEntry.mockClear();
+      postings.postSaleLineEntry.mockClear();
+      const adapter = {
+        name: 'CERTIFIED_TEST_PROVIDER',
+        certified: true,
+        execute: vi.fn().mockResolvedValue({ approved: true, providerRef: 'provider-1' }),
+      };
+      const input = {
+        saleId: 'sale-1',
+        deviceId: 'device-1',
+        businessDate: new Date('2026-09-02T00:00:00.000Z'),
+        type,
+        amountMinor: 100,
+        idempotencyKey: 'refused-batch-1',
+        adapter,
+      };
+      const db = {
+        $executeRaw: vi.fn().mockResolvedValue(1),
+        $queryRaw: vi.fn().mockResolvedValue([]),
+        pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
+        pharmacyMoneyIdempotencyKey: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: 'idem-refused',
+            commandType: 'tender',
+            payloadHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'),
+            resultPayload: null,
+          }),
+          update: vi.fn(),
+        },
+        pharmacySale: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'sale-1',
+            status: 'OPEN',
+            lines: [
+              {
+                id: 'line-1',
+                quantity: 1,
+                unitPriceMinor: 100,
+                discountMinor: 0,
+                medicine: { organizationId: 'org-1', productName: 'Issued medicine', strengths: [] },
+              },
+            ],
+            tenders: [],
+          }),
+          update: vi.fn(),
+        },
+        pharmacyTender: {
+          create: vi.fn().mockResolvedValue({
+            id: 'forbidden-tender',
+            createdAt: new Date('2026-09-02T10:00:00Z'),
+          }),
+        },
+        pharmacySaleEvent: { create: vi.fn() },
+        pharmacyDrawerMovement: { create: vi.fn() },
+        camera: { findFirst: vi.fn() },
+      };
+
+      // This exact rejection also detects a missing await on the tender guard.
+      // Removing ONLY settlement's guard reaches the provider and tender before
+      // completion sees the same refusal, so the no-side-effect checks fail.
+      await expect(applyPharmacyTender(db as never, scope, input)).rejects.toBe(batchRefusal);
+      expect(batchSafety.assertSaleBatchesSellable).toHaveBeenCalledExactlyOnceWith(
+        db,
+        scope,
+        'sale-1'
+      );
+      expect(db.pharmacySale.findFirst).toHaveBeenCalledWith({
+        where: { id: 'sale-1', organizationId: 'org-1', branchId: 'branch-1' },
+        include: expect.any(Object),
+      });
+      expect(adapter.execute).not.toHaveBeenCalled();
+      expect(db.pharmacyTender.create).not.toHaveBeenCalled();
+      expect(postings.postTenderEntry).not.toHaveBeenCalled();
+      expect(postings.postSaleLineEntry).not.toHaveBeenCalled();
+      expect(db.pharmacySale.update).not.toHaveBeenCalled();
+      expect(db.pharmacySaleEvent.create).not.toHaveBeenCalled();
+      expect(db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+      expect(db.pharmacyMoneyIdempotencyKey.update).not.toHaveBeenCalled();
+      expect(db.camera.findFirst).not.toHaveBeenCalled();
+      // No receipt-sequence query: just the original day and scoped-sale locks.
+      expect(db.$queryRaw).toHaveBeenCalledTimes(2);
+    }
+  );
 });
 
 describe('readPharmacyTenderOutcome', () => {

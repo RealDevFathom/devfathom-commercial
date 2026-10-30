@@ -12,7 +12,9 @@ import { accrueSalePoints, restoreRefundedLoyaltyPoints } from './customer-loyal
 import { returnedLineValue } from './sales';
 import { postTenderEntry, postTenderRefundEntry } from './finance-postings';
 import { firstCloseIsFinal } from './migration/first-close';
+import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
+import { assertRxSaleAllowed } from './rx-sale-gate';
 import type { LedgerScope } from './stock-ledger';
 import { paymentSandboxAdmitted } from './payment-sandbox-admission';
 import { authenticatePharmacyCommand, validateLeasedReceiptReplay } from './sales';
@@ -296,6 +298,15 @@ export async function applyPharmacyTender(
     include: completionSaleInclude,
   });
   if (!sale || sale.status !== 'OPEN') throw new PharmacySettlementError('SALE_NOT_OPEN');
+  // #518: a line added earlier cannot be paid for by someone who may not sell it.
+  await assertRxSaleAllowed(
+    db,
+    scope,
+    sale.lines.map((line) => line.medicine)
+  );
+  // #633: before any lease, provider charge, tender or posting. A batch recalled,
+  // quarantined or expired since add-to-cart refuses the payment.
+  await assertSaleBatchesSellable(db, scope, sale.id);
   const totalMinor = saleTotalMinor(sale.lines);
   const tenderedMinor = sale.tenders.reduce((sum, tender) => sum + tender.amountMinor, 0);
   if (input.amountMinor > totalMinor - tenderedMinor)

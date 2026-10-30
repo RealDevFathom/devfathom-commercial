@@ -137,6 +137,7 @@ export const teamRouter = router({
         // alex@company.com without the guard ever firing.
         email: emailSchema,
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).default('EMPLOYEE'),
+        organizationRoleId: z.string().trim().min(1).max(128).nullable().default(null),
         department: z
           .string()
           .trim()
@@ -156,6 +157,15 @@ export const teamRouter = router({
         select: { id: true },
       });
       if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
+      const organizationRole = input.organizationRoleId
+        ? await ctx.db.organizationRole.findFirst({
+            where: { id: input.organizationRoleId, organizationId: workspaceId(ctx) },
+            select: { id: true, name: true },
+          })
+        : null;
+      if (input.organizationRoleId && !organizationRole) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid role template.' });
+      }
       const existing = await ctx.db.user.findFirst({
         where: { email },
         select: { id: true, status: true },
@@ -176,6 +186,7 @@ export const teamRouter = router({
       const profile = {
         name: input.name,
         role: input.role,
+        organizationRoleId: organizationRole?.id ?? null,
         department: input.department,
         title: input.title,
         phone: input.phone ?? null,
@@ -217,7 +228,7 @@ export const teamRouter = router({
       const mail = templates.inviteMember({
         name: user.name,
         inviterName: ctx.session.user.name ?? undefined,
-        role: `${titleCase(input.role)} · ${titleCase(input.department)}`,
+        role: organizationRole?.name ?? `${titleCase(input.role)} · ${titleCase(input.department)}`,
         workspace: 'DevFathom',
         acceptUrl: inviteUrl,
         expiresLabel: 'in 7 days',

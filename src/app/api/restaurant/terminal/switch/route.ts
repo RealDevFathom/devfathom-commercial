@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { readJson } from '@/lib/api-json';
 import { rateLimit } from '@/lib/rate-limit';
+import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
 import { recordTerminalOperatorAudit } from '@/lib/restaurant/terminal-audit';
 import { describeShiftDenial } from '@/lib/restaurant/shifts';
 import { authenticateOperator, withTerminalAuth } from '@/lib/restaurant/terminal-auth';
@@ -80,6 +81,25 @@ export const POST = withTerminalAuth(async (ctx, request) => {
       );
     }
     return NextResponse.json({ error: 'Invalid operator credential.' }, { status: 401 });
+  }
+
+  // A handoff must enforce the same KDS authorization as the initial unlock;
+  // otherwise an authorized operator could unlock first and then switch the
+  // session to an operator who cannot operate a kitchen display.
+  if (
+    ctx.device.kind === 'KDS' &&
+    !(await operatorHasCapability(
+      ctx.db,
+      staffProfileId,
+      'kitchen:operate',
+      now,
+      ctx.device.branchId
+    ))
+  ) {
+    return NextResponse.json(
+      { error: 'This operator lacks the "kitchen:operate" capability.' },
+      { status: 403 }
+    );
   }
 
   const previousStaffProfileId = ctx.session.activeStaffProfileId;

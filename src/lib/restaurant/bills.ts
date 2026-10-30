@@ -37,11 +37,11 @@ import { consumeReservations } from './promotion-caps';
  * (`restaurant_money_idempotency_keys`, C11).
  *
  * The four split kinds (C4 / §11.2):
- *   - NONE       one bill for the whole order, every non-voided item on it.
+ *   - NONE       one bill for the whole order, every billable purchased item on it.
  *   - BY_ITEM    an explicit item→bill assignment; the union is asserted to be a
- *                complete partition of the non-voided items (every item on exactly
+ *                complete partition of the billable purchased items (every item on exactly
  *                one bill, no unknown/voided/duplicated item).
- *   - BY_SEAT    group the non-voided items by the M4 `seatNumber` seam; items with
+ *   - BY_SEAT    group the billable purchased items by the M4 `seatNumber` seam; items with
  *                no seat form one designated bill.
  *   - FRACTIONAL divide the ORDER TOTAL across integer fraction weights via the
  *                pinned `money.allocate` largest-remainder rule; each bill records
@@ -173,6 +173,8 @@ async function persistCoAuth(
 type LoadedBillItem = {
   id: string;
   status: string;
+  /** Linked preparation replacement; the original item remains the purchased line. */
+  remakeOfItemId: string | null;
   seatNumber: number | null;
   name: string;
   unitPrice: Prisma.Decimal;
@@ -203,7 +205,7 @@ function itemLineSubtotal(item: LoadedBillItem): Prisma.Decimal {
 
 /**
  * The DERIVED order total: Σ (unitPrice + Σ modifier deltas) × quantity over the
- * non-voided items. There is no stored order total (C3) — this recomputes it from
+ * billable items. There is no stored order total (C3) — this recomputes it from
  * the frozen snapshots, matching `restaurant-orders.ts` `deriveSubtotal` exactly so
  * governance can reconcile bills ↔ order from durable rows. Tax/service-charge are
  * structurally zero in M5, so the subtotal IS the order total.
@@ -232,6 +234,7 @@ async function loadBillOrder(
         select: {
           id: true,
           status: true,
+          remakeOfItemId: true,
           seatNumber: true,
           name: true,
           unitPrice: true,
@@ -247,8 +250,10 @@ async function loadBillOrder(
   return order as LoadedBillOrder;
 }
 
-function nonVoidedItems(order: LoadedBillOrder): LoadedBillItem[] {
-  return order.items.filter((i) => i.status !== 'VOIDED');
+function billableItems(order: LoadedBillOrder): LoadedBillItem[] {
+  // A remake is operational kitchen history, not a second purchase. The original
+  // line retains the frozen consideration and remains billable unless it is voided.
+  return order.items.filter((i) => i.status !== 'VOIDED' && i.remakeOfItemId === null);
 }
 
 // ── Split planning (pure) ────────────────────────────────────────────────────
@@ -327,9 +332,9 @@ function itemBill(
  * cents across runs (a named check).
  */
 export function planBills(order: LoadedBillOrder, split: SplitSpec): PlannedBill[] {
-  const items = nonVoidedItems(order);
+  const items = billableItems(order);
   if (items.length === 0) {
-    throw new BillCommandError('The order has no non-voided items to bill.', 'NO_ITEMS');
+    throw new BillCommandError('The order has no billable purchased items.', 'NO_ITEMS');
   }
 
   if (split.kind === 'FRACTIONAL' && order.serviceChargePolicyVersion) {
@@ -410,7 +415,7 @@ function planByItem(
       const item = byId.get(itemId);
       if (!item) {
         throw new BillCommandError(
-          `Item ${itemId} is not a billable (non-voided) item on this order.`,
+          `Item ${itemId} is not a billable purchased item on this order.`,
           'PARTITION_INCOMPLETE'
         );
       }
@@ -429,7 +434,7 @@ function planByItem(
   if (seen.size !== items.length) {
     const missing = items.filter((i) => !seen.has(i.id)).map((i) => i.id);
     throw new BillCommandError(
-      `Every non-voided item must be assigned to exactly one bill; unassigned: ${missing.join(', ')}.`,
+      `Every billable purchased item must be assigned to exactly one bill; unassigned: ${missing.join(', ')}.`,
       'PARTITION_INCOMPLETE'
     );
   }
@@ -850,6 +855,8 @@ export type CompLineInput = {
   billLineId: string;
   reason: string;
   approvingStaffProfileId: string;
+  /** Trusted active terminal session, when the command originates at a terminal. */
+  terminalSessionId?: string;
   actor: MoneyCommandActor;
 };
 
@@ -923,7 +930,17 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
     await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} AND "branchId" = ${input.branchId} FOR UPDATE`;
     const bill = await tx.restaurantBill.findFirst({
       where: { id: input.billId, branchId: input.branchId },
-      select: { id: true, status: true, compTotal: true, discountTotal: true, grandTotal: true },
+      select: {
+        id: true,
+        status: true,
+        compTotal: true,
+        discountTotal: true,
+        grandTotal: true,
+        serviceChargeTotal: true,
+        serviceChargeBasis: true,
+        serviceChargePolicyVersionId: true,
+        serviceChargeRate: true,
+      },
     });
     if (!bill) {
       throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
@@ -953,7 +970,13 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
 
     const line = await tx.restaurantBillLine.findUnique({
       where: { id: input.billLineId },
-      select: { id: true, billId: true, lineSubtotal: true, compAmount: true },
+      select: {
+        id: true,
+        billId: true,
+        lineSubtotal: true,
+        compAmount: true,
+        serviceChargeAmount: true,
+      },
     });
     if (!line || line.billId !== bill.id) {
       throw new BillCommandError('The bill line does not belong to this bill.', 'LINE_NOT_FOUND');
@@ -962,8 +985,43 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       throw new BillCommandError('The line is already comped.', 'ALREADY_COMPED');
     }
 
+    // Policy membership is recorded by the bill's pinned policy and basis, not by a
+    // line's rounded allocation. A participating low-value line can legitimately
+    // have a 0.00 allocation. Re-price the remaining basis at the pinned rate,
+    // capped at this bill's current allocation: cutBills allocates rounding cents
+    // across the order, so independent bill rounding must never add a cent when
+    // comping a line. Reallocate the capped amount over the remaining lines.
+    const participatesInServiceCharge = bill.serviceChargePolicyVersionId !== null;
+    const remainingLines = participatesInServiceCharge
+      ? await tx.restaurantBillLine.findMany({
+          where: { billId: bill.id, id: { not: line.id }, compAmount: ZERO },
+          select: { id: true, lineSubtotal: true },
+          orderBy: { id: 'asc' },
+        })
+      : [];
+    const serviceChargeBasis = participatesInServiceCharge
+      ? sub(bill.serviceChargeBasis, line.lineSubtotal)
+      : bill.serviceChargeBasis;
+    const serviceChargeTotal = participatesInServiceCharge
+      ? serviceChargeBasis.isZero()
+        ? ZERO
+        : Prisma.Decimal.min(
+            bill.serviceChargeTotal,
+            roundMoney(multiply(serviceChargeBasis, bill.serviceChargeRate!))
+          )
+      : bill.serviceChargeTotal;
+    const remainingServiceCharges =
+      participatesInServiceCharge && remainingLines.length > 0
+        ? allocate(
+            serviceChargeTotal,
+            remainingLines.map((remaining) => remaining.lineSubtotal.mul(100).toNumber())
+          )
+        : [];
+    const removedServiceCharge = sub(bill.serviceChargeTotal, serviceChargeTotal);
+
     // What the comp cannot absorb out of the bill's own balance (B3).
-    const shortfall = sub(line.lineSubtotal, bill.grandTotal);
+    const compedPayable = add(line.lineSubtotal, removedServiceCharge);
+    const shortfall = sub(compedPayable, bill.grandTotal);
     let releasedDiscount = ZERO;
     if (compare(shortfall, ZERO) > 0 && compare(bill.discountTotal, ZERO) > 0) {
       const release = await releaseLoyaltyRedemption(tx, {
@@ -979,7 +1037,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       // it — so this call applies no further delta.
       releasedDiscount = release.replayed ? ZERO : release.value;
     }
-    const grandTotal = sub(add(bill.grandTotal, releasedDiscount), line.lineSubtotal);
+    const grandTotal = sub(add(bill.grandTotal, releasedDiscount), compedPayable);
     if (compare(grandTotal, ZERO) < 0) {
       // The bill carries a deduction this lane cannot release, so the comp would
       // leave a negative grand total. Refuse rather than record an untrue total.
@@ -992,11 +1050,12 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
     const coAuthorizationId = await persistCoAuth(tx, {
       actingStaffProfileId: input.actor.staffProfileId,
       approvingStaffProfileId: input.approvingStaffProfileId,
-      capability: 'orders:comp',
+      capability: 'orders:complimentary',
       reason,
       targetType: 'RestaurantBillLine',
       targetId: line.id,
       deviceId: input.actor.deviceId,
+      terminalSessionId: input.terminalSessionId,
     });
 
     await tx.restaurantBillLine.update({
@@ -1004,16 +1063,37 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       data: {
         compAmount: line.lineSubtotal,
         lineTotal: ZERO,
+        serviceChargeAmount: ZERO,
         compReason: reason,
         compCoAuthorizationId: coAuthorizationId,
       },
     });
+    for (const [index, remaining] of remainingLines.entries()) {
+      const serviceChargeAmount = remainingServiceCharges[index]!;
+      await tx.restaurantBillLine.update({
+        where: { id: remaining.id },
+        data: {
+          serviceChargeAmount,
+          lineTotal: add(remaining.lineSubtotal, serviceChargeAmount),
+        },
+      });
+    }
+    const clearedServiceCharge = participatesInServiceCharge && serviceChargeBasis.isZero();
     await tx.restaurantBill.update({
       where: { id: bill.id },
       data: {
         compTotal: add(bill.compTotal, line.lineSubtotal),
         discountTotal: sub(bill.discountTotal, releasedDiscount),
         grandTotal,
+        serviceChargeTotal,
+        serviceChargeBasis,
+        ...(clearedServiceCharge
+          ? {
+              serviceChargePolicyVersionId: null,
+              serviceChargeRate: null,
+              serviceChargeTaxTreatment: null,
+            }
+          : {}),
       },
     });
 
@@ -1621,7 +1701,7 @@ export type OrderSettlement = {
  * Evaluate whether an order is fully settled (C12). The predicate — consumed by the
  * order close guard (`orders.ts`) and the `getOrderSettlement` read — holds when:
  *   1. the order has at least one live (non-void) bill;
- *   2. for item-carrying splits, every non-voided item is on exactly one live bill
+ *   2. for item-carrying splits, every billable purchased item is on exactly one live bill
  *      line (FRACTIONAL bills own fractions, not items, so item coverage is proven
  *      by the money identity instead);
  *   3. every live bill is SETTLED (VOID bills are excluded);
@@ -1749,17 +1829,7 @@ export async function evaluateOrderSettlement(
   orderId: string
 ): Promise<OrderSettlement> {
   const order = await loadBillOrder(tx, orderId);
-  const items = nonVoidedItems(order);
-  const derivedOrderTotal = add(
-    add(
-      deriveOrderTotal(items),
-      order.serviceChargePolicyVersion
-        ? roundMoney(multiply(deriveOrderTotal(items), order.serviceChargePolicyVersion.rate))
-        : ZERO
-    ),
-    order.deliveryFulfillment?.deliveryFeeSnapshot ?? ZERO
-  );
-
+  const items = billableItems(order);
   const allBills = await tx.restaurantBill.findMany({
     where: { orderId },
     orderBy: { createdAt: 'asc' },
@@ -1768,6 +1838,7 @@ export async function evaluateOrderSettlement(
       status: true,
       splitKind: true,
       grandTotal: true,
+      serviceChargeTotal: true,
       deliveryFeeTotal: true,
       compTotal: true,
       discountTotal: true,
@@ -1778,6 +1849,13 @@ export async function evaluateOrderSettlement(
     },
   });
   const liveBills = allBills.filter((b) => b.status !== 'VOID');
+  // Service is frozen on each bill from its payable (post-comp) basis. Recomputing
+  // it from the order's gross merchandise would restore the service removed by a
+  // comp and make an otherwise balanced settlement fail by that removed amount.
+  const derivedOrderTotal = add(
+    add(deriveOrderTotal(items), sum(liveBills.map((bill) => bill.serviceChargeTotal))),
+    order.deliveryFulfillment?.deliveryFeeSnapshot ?? ZERO
+  );
   const exclusiveTaxByBill = await exclusiveTaxByLiveBill(
     tx,
     liveBills.map((bill) => bill.id)

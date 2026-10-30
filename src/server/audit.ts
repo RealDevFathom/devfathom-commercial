@@ -373,8 +373,14 @@ export function recordAudit(row: AuditRowInput, db?: ScopedDb): void | Promise<v
   if (db && !row.organizationId) {
     throw new Error('Transactional audit writes require a tenant organization.');
   }
-  const writeTenant = (tenantDb: ScopedDb) =>
-    tenantDb.auditLog.create({
+  const writeTenant = async (tenantDb: ScopedDb) => {
+    const placeholder = tenantDb.branchRegulatoryProfile
+      ? await tenantDb.branchRegulatoryProfile.findFirst({
+          where: { organizationId: row.organizationId!, isPlaceholder: true, effectiveTo: null },
+          select: { id: true },
+        })
+      : null;
+    return tenantDb.auditLog.create({
       data: {
         organizationId: row.organizationId!,
         actorType: row.actorType ?? 'USER',
@@ -396,7 +402,10 @@ export function recordAudit(row: AuditRowInput, db?: ScopedDb): void | Promise<v
         input: (row.input ?? undefined) as never,
         changes: (row.changes ?? undefined) as never,
         result: (row.result ?? undefined) as never,
-        metadata: (row.metadata ?? undefined) as never,
+        metadata: {
+          ...((row.metadata && typeof row.metadata === 'object' ? row.metadata : {}) as object),
+          ...(placeholder ? { placeholder: true } : {}),
+        } as never,
         ip: row.ip ?? null,
         userAgent: row.userAgent ?? null,
         httpMethod: row.httpMethod ?? null,
@@ -408,6 +417,7 @@ export function recordAudit(row: AuditRowInput, db?: ScopedDb): void | Promise<v
         durationMs: row.durationMs ?? null,
       },
     });
+  };
   if (db) return writeTenant(db).then(() => undefined);
   afterTenantTransaction(() => {
     const write = row.organizationId

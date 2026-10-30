@@ -232,7 +232,12 @@ export const VERTICALS: Record<OrganizationVertical, VerticalDefinition> = {
   },
 };
 
-export const ALL_VERTICALS: readonly OrganizationVertical[] = ['AGENCY', 'RESTAURANT', 'PHARMACY', 'HOSPITALITY'];
+export const ALL_VERTICALS: readonly OrganizationVertical[] = [
+  'AGENCY',
+  'RESTAURANT',
+  'PHARMACY',
+  'HOSPITALITY',
+];
 
 export type DepartmentDefinition = {
   key: string;
@@ -730,6 +735,7 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:catalogue-review',
   'pharmacy:manage',
   'pharmacy:counter',
+  'pharmacy:close',
   'pharmacy:procurement',
   'pharmacy:inventory',
   'pharmacy:orders',
@@ -741,6 +747,7 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
 /** Canonical actions checked by pharmacy workflows, including shared report gates. */
 export const PHARMACY_CHECKED_CAPABILITIES = [
   'pharmacy:counter',
+  'pharmacy:close',
   'pharmacy:manage',
   'pharmacy:procurement',
   'pharmacy:inventory',
@@ -780,13 +787,13 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
+    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
   },
   {
     key: 'manager',
     name: 'Manager',
     isSystem: true,
-    capabilities: ['pharmacy:manage', 'pharmacy:orders'],
+    capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
   },
   {
     key: 'cashier',
@@ -1024,6 +1031,7 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'sop:complete',
       'sop:verify',
       'sop:manage',
+      'staff:manage',
       'customers:read',
       'customers:manage',
       'loyalty:redeem',
@@ -1065,6 +1073,7 @@ export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'purchasing:create',
       'sop:complete',
       'sop:verify',
+      'staff:manage',
       'customers:read',
       'customers:manage',
       'loyalty:redeem',
@@ -1601,11 +1610,15 @@ export function isRestaurantModuleKey(key: string): boolean {
 /** Commercial packages offered for a vertical (§2.3 onboarding filter). Agency
  * packages are not modeled here; only their compatibility rule is. */
 export function packagesForVertical(vertical: OrganizationVertical): readonly PackageDefinition[] {
-  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].filter((pkg) => pkg.vertical === vertical);
+  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].filter(
+    (pkg) => pkg.vertical === vertical
+  );
 }
 
 export function packageByKey(key: string): PackageDefinition | undefined {
-  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].find((pkg) => pkg.key === key);
+  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].find(
+    (pkg) => pkg.key === key
+  );
 }
 
 /** The §7 limit key that caps a vertical's licensed users. The `defaultSeats`

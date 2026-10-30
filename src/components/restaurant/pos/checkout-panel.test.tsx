@@ -31,11 +31,28 @@ const billed = {
       deliveryFeeTotal: '4.00',
       compTotal: '0.00',
       receiptNumber: null,
+      lines: [
+        {
+          id: 'line-1',
+          name: 'Lunch special',
+          quantity: 1,
+          lineSubtotal: '20.00',
+          compAmount: '0.00',
+        },
+      ],
     },
   ],
 };
 
 describe('CheckoutPanel', () => {
+  it("labels an unsplit bill as 'Whole order' instead of exposing the NONE sentinel", async () => {
+    const request: TerminalRequest = async <T,>() => billed as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByRole('heading', { name: 'Whole order' })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'NONE' })).not.toBeInTheDocument();
+  });
+
   it.each(['3860.00', '2860.25', '0.00'])(
     'prefills the authoritative initial balance %s, including partial and zero balances',
     async (remainingDue) => {
@@ -136,6 +153,69 @@ describe('CheckoutPanel', () => {
       },
     });
     expect(calls[2]?.path).toContain('/api/restaurant/checkout/summary?orderId=order-1');
+  });
+
+  it('submits a comp with distinct manager approval without retaining the PIN in its intent', async () => {
+    const calls: { path: string; options?: TerminalRequestOptions }[] = [];
+    const request: TerminalRequest = async <T,>(path: string, options?: TerminalRequestOptions) => {
+      calls.push({ path, options });
+      return billed as T;
+    };
+    render(
+      <CheckoutPanel
+        open
+        orderId="order-1"
+        request={request}
+        actingOperatorId="cashier-1"
+        operators={[{ id: 'manager-1', displayName: 'Mina Manager', role: 'Manager' }]}
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Comp item' }));
+    fireEvent.change(screen.getByLabelText('Bill item'), { target: { value: 'line-1' } });
+    fireEvent.change(screen.getByLabelText('Comp reason'), {
+      target: { value: ' Guest recovery ' },
+    });
+    fireEvent.change(screen.getByLabelText('Approving manager'), {
+      target: { value: 'manager-1' },
+    });
+    fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '5678' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm comp' }));
+
+    await waitFor(() =>
+      expect(calls).toContainEqual({
+        path: '/api/restaurant/checkout/comp',
+        options: {
+          method: 'POST',
+          body: {
+            billId: 'bill-1',
+            billLineId: 'line-1',
+            reason: 'Guest recovery',
+            approving: { staffProfileId: 'manager-1', type: 'PIN', secret: '5678' },
+          },
+          intent:
+            'checkout-comp:{"billId":"bill-1","billLineId":"line-1","reason":"Guest recovery","approvingStaffProfileId":"manager-1"}',
+        },
+      })
+    );
+    expect(calls.find((call) => call.options?.intent)?.options?.intent).not.toContain('5678');
+  });
+
+  it('does not offer comp when no distinct approving manager is available', async () => {
+    const request: TerminalRequest = async <T,>() => billed as T;
+    render(
+      <CheckoutPanel
+        open
+        orderId="order-1"
+        request={request}
+        actingOperatorId="manager-1"
+        operators={[{ id: 'manager-1', displayName: 'Mina Manager', role: 'Manager' }]}
+        onClose={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByRole('button', { name: 'Comp item' })).toBeDisabled();
   });
 
   it('renders permission denial with a retry action', async () => {

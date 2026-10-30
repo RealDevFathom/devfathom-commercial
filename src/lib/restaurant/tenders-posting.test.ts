@@ -14,10 +14,12 @@ vi.mock('./bills', async (original) => ({
   ...(await original<typeof import('./bills')>()),
   finalizeBillSettlement: vi.fn(),
 }));
-vi.mock('./loyalty', async (original) => ({
-  ...(await original<typeof import('./loyalty')>()),
+vi.mock('./loyalty', () => ({
   reverseLoyaltyForRefund: vi.fn(),
+  earnLoyaltyForClosedOrder: vi.fn(),
 }));
+vi.mock('./inventory', () => ({ postOrderRecipeConsumption: vi.fn() }));
+vi.mock('./outbox', () => ({ appendOrderEvent: vi.fn() }));
 
 const D = (value: string) => new Prisma.Decimal(value);
 const D1 = new Date('2026-09-10T00:00:00Z');
@@ -76,9 +78,12 @@ function fixture() {
   // lines resolve from id-keyed registries; unregistered ids fall back to the base bill.
   const defaultLine = {
     id: 'line',
+    billId: 'bill',
     orderItemId: 'item',
+    name: 'Item',
     quantity: 1,
     unitPrice: D('4000'),
+    lineSubtotal: D('4000'),
     compAmount: D('140'),
     orderItem: { modifiers: [] },
   };
@@ -149,6 +154,17 @@ function fixture() {
       ),
     },
     restaurantOrder: {
+      findUnique: vi.fn(async ({ where }: { where: Where }) =>
+        where.id === 'order'
+          ? {
+              id: 'order',
+              branchId: 'branch',
+              status: 'PAYMENT_PENDING',
+              channel: 'DINE_IN',
+              items: [{ id: 'item', status: 'SERVED' }],
+            }
+          : null
+      ),
       findFirst: vi.fn(async ({ where }: { where: Where }) =>
         matches({ id: 'order', branchId: 'branch' }, where)
           ? {
@@ -162,7 +178,9 @@ function fixture() {
             }
           : null
       ),
+      update: vi.fn(async () => undefined),
     },
+    restaurantOrderTable: { updateMany: vi.fn(async () => ({ count: 1 })) },
     restaurantBill: {
       findUnique: vi.fn(async ({ where }: { where: Where }) => billsById.get(where.id!) ?? bill),
       findMany: vi.fn(async ({ where }: { where: Where }) => (matches(bill, where) ? [bill] : [])),
@@ -243,10 +261,14 @@ function fixture() {
       ]),
     },
     restaurantBillLine: {
-      findMany: vi.fn(
-        async ({ where }: { where: { billId: string } }) =>
-          linesByBill.get(where.billId) ?? [defaultLine]
-      ),
+      findMany: vi.fn(async ({ where }: { where: { billId: string | { in: string[] } } }) => {
+        if (typeof where.billId === 'string') {
+          return linesByBill.get(where.billId) ?? [defaultLine];
+        }
+        return where.billId.in.flatMap((billId) =>
+          (linesByBill.get(billId) ?? []).map((line) => ({ ...line, billId }))
+        );
+      }),
     },
     restaurantPromotionBillApplicationSnapshot: { findMany: vi.fn(async () => []) },
     restaurantRefund: {
@@ -294,6 +316,32 @@ function fixture() {
 beforeEach(() => vi.clearAllMocks());
 
 describe('collection posting and authoritative recorded balances (no DB)', () => {
+  it('closes the order and releases its table as part of the final tender transaction', async () => {
+    const f = fixture();
+
+    await expect(f.collect()).resolves.toMatchObject({ settled: true });
+
+    expect(f.raw.restaurantOrder.update).toHaveBeenCalledWith({
+      where: { id: 'order' },
+      data: { status: 'CLOSED', closedAt: NOW },
+    });
+    expect(f.raw.restaurantOrderTable.updateMany).toHaveBeenCalledWith({
+      where: { orderId: 'order', active: true },
+      data: { active: false, unlinkedAt: NOW },
+    });
+  });
+
+  it('does not close or release the table for a partial tender', async () => {
+    const f = fixture();
+
+    await expect(
+      f.collect({ tender: { type: 'CASH', amount: '1000', cashReceived: '1000' } })
+    ).resolves.toMatchObject({ settled: false });
+
+    expect(f.raw.restaurantOrder.update).not.toHaveBeenCalled();
+    expect(f.raw.restaurantOrderTable.updateMany).not.toHaveBeenCalled();
+  });
+
   it('collects a prior-day bill on the drawer date; reconciles sales and collections on their own days', async () => {
     const f = fixture();
     const result = await f.collect();
@@ -360,7 +408,12 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
     // Two live OPEN bills: one partially paid (0.01 of 3860), one fully comped (nets 0).
     // Each is re-quoted by id, so register its own bill row, lines and tenders (QA-143).
     f.billsById.set('partial', { ...f.bill, id: 'partial' });
-    f.billsById.set('comped', { ...f.bill, id: 'comped', compTotal: D('4000'), grandTotal: D('0') });
+    f.billsById.set('comped', {
+      ...f.bill,
+      id: 'comped',
+      compTotal: D('4000'),
+      grandTotal: D('0'),
+    });
     f.linesByBill.set('partial', [f.defaultLine]);
     f.linesByBill.set('comped', [{ ...f.defaultLine, compAmount: D('4000') }]);
     f.tenders.push(partialTender);

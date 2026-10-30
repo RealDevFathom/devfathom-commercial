@@ -285,6 +285,14 @@ describe('role templates and capabilities (§8)', () => {
     }
   });
 
+  it('grants staff management explicitly only to General Manager and Branch Manager', () => {
+    const grants = RESTAURANT_ROLE_TEMPLATES.filter((role) =>
+      role.capabilities.includes('staff:manage')
+    ).map((role) => role.key);
+
+    expect(grants).toEqual(['general-manager', 'branch-manager']);
+  });
+
   it('roleTemplatesForVertical returns each vertical template catalog', () => {
     expect(roleTemplatesForVertical('RESTAURANT')).toEqual(RESTAURANT_ROLE_TEMPLATES);
     expect(roleTemplatesForVertical('AGENCY')).toEqual(AGENCY_ROLE_TEMPLATES);
@@ -495,7 +503,7 @@ describe('optional pharmacy Owner / Operator', () => {
     }
   });
 
-  it('preserves all eight standard roles and their existing grants', () => {
+  it('preserves all eight standard roles and their intended grants', () => {
     expect(
       PHARMACY_ROLE_TEMPLATES.filter((role) => role.key !== 'owner-operator').map((role) => ({
         key: role.key,
@@ -505,9 +513,12 @@ describe('optional pharmacy Owner / Operator', () => {
       { key: 'owner', capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'] },
       {
         key: 'pharmacist',
-        capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
+        capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:close'],
       },
-      { key: 'manager', capabilities: ['pharmacy:manage', 'pharmacy:orders'] },
+      {
+        key: 'manager',
+        capabilities: ['pharmacy:manage', 'pharmacy:orders', 'pharmacy:procurement'],
+      },
       { key: 'cashier', capabilities: ['pharmacy:counter', 'pharmacy:orders'] },
       { key: 'procurement', capabilities: ['pharmacy:procurement'] },
       { key: 'inventory', capabilities: ['pharmacy:inventory'] },

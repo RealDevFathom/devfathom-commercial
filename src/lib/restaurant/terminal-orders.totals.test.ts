@@ -10,7 +10,14 @@ import { getOrderForBranch } from './terminal-orders';
 const at = new Date('2026-10-21T00:00:00.000Z');
 const D = (value: string) => new Prisma.Decimal(value);
 
-function dbFor(channel: 'DINE_IN' | 'TAKEAWAY') {
+function dbFor(
+  channel: 'DINE_IN' | 'TAKEAWAY',
+  options: {
+    serviceChargeRate?: string;
+    billedServiceCharges?: string[];
+    includeChainedRemakes?: boolean;
+  } = {}
+) {
   const tax = {
     findMany: vi.fn(async () => [
       {
@@ -108,15 +115,60 @@ function dbFor(channel: 'DINE_IN' | 'TAKEAWAY') {
               },
             ],
           },
+          ...(options.includeChainedRemakes
+            ? [
+                {
+                  id: 'coffee-remake-1',
+                  course: 1,
+                  seatNumber: null,
+                  productId: 'product-1',
+                  variantId: null,
+                  name: 'Coffee remake',
+                  unitPrice: D('40.00'),
+                  quantity: 1,
+                  taxAmount: D('0'),
+                  serviceChargeAmount: D('0'),
+                  status: 'SENT',
+                  remakeOfItemId: 'coffee',
+                  voidedPostPrep: false,
+                  wastageDisposition: null,
+                  voidReason: null,
+                  modifiers: [],
+                },
+                {
+                  id: 'coffee-remake-2',
+                  course: 1,
+                  seatNumber: null,
+                  productId: 'product-1',
+                  variantId: null,
+                  name: 'Coffee second remake',
+                  unitPrice: D('400.00'),
+                  quantity: 1,
+                  taxAmount: D('0'),
+                  serviceChargeAmount: D('0'),
+                  status: 'SENT',
+                  remakeOfItemId: 'coffee-remake-1',
+                  voidedPostPrep: false,
+                  wastageDisposition: null,
+                  voidReason: null,
+                  modifiers: [],
+                },
+              ]
+            : []),
         ],
         orderTables: [],
         kitchenTickets: [],
+        bills: (options.billedServiceCharges ?? []).map((serviceChargeTotal) => ({
+          serviceChargeTotal: D(serviceChargeTotal),
+        })),
         deliveryFulfillment: null,
       })),
     },
     restaurantTaxProfileVersion: tax,
     restaurantServiceChargePolicyVersion: {
-      findFirst: vi.fn(async () => ({ rate: { toString: () => '0.100000' } })),
+      findFirst: vi.fn(async () => ({
+        rate: { toString: () => options.serviceChargeRate ?? '0.100000' },
+      })),
     },
   };
 }
@@ -147,4 +199,56 @@ describe('order totals ignore stored tax and service', () => {
     expect(detail?.totals.tax).toBe('0.23');
     expect(detail?.totals.serviceCharge).toBe('0.00');
   });
+
+  it('shows the live bills pinned service after a line comp instead of gross draft service', async () => {
+    const detail = await getOrderForBranch(
+      dbFor('DINE_IN', { billedServiceCharges: ['6.00'] }) as unknown as ScopedDb,
+      'order-1',
+      'branch-1'
+    );
+
+    expect(detail?.totals.serviceCharge).toBe('6');
+  });
+
+  it('shows the bill pinned service when the published rate changes after bill cut', async () => {
+    const detail = await getOrderForBranch(
+      dbFor('DINE_IN', {
+        serviceChargeRate: '0.200000',
+        billedServiceCharges: ['10.00'],
+      }) as unknown as ScopedDb,
+      'order-1',
+      'branch-1'
+    );
+
+    expect(detail?.totals.serviceCharge).toBe('10');
+  });
+
+  it.each([
+    { state: 'before bill cut', bills: [] as string[], service: '0.45' },
+    { state: 'after bill cut', bills: ['0.45'], service: '0.45' },
+  ])(
+    'excludes chained remakes from totals $state while retaining their history',
+    async ({ bills, service }) => {
+      const detail = await getOrderForBranch(
+        dbFor('DINE_IN', {
+          billedServiceCharges: bills,
+          includeChainedRemakes: true,
+        }) as unknown as ScopedDb,
+        'order-1',
+        'branch-1'
+      );
+
+      expect(detail?.items.map(({ id, remakeOfItemId }) => ({ id, remakeOfItemId }))).toEqual([
+        { id: 'coffee', remakeOfItemId: null },
+        { id: 'coffee-remake-1', remakeOfItemId: 'coffee' },
+        { id: 'coffee-remake-2', remakeOfItemId: 'coffee-remake-1' },
+      ]);
+      expect(detail?.totals).toEqual({
+        subtotal: '4.5',
+        tax: '0.23',
+        serviceCharge: service,
+        deliveryFee: '0',
+      });
+    }
+  );
 });

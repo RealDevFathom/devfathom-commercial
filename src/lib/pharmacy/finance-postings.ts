@@ -305,7 +305,11 @@ export async function postSaleReturnEntry(
     where: { organizationId: scope.organizationId, saleLineId: saleLine.id },
     _sum: { canonicalUnits: true },
   });
-  const through = cumulative._sum.canonicalUnits ?? 0;
+  const unidentified = await db.pharmacyUnidentifiedReturnHold.aggregate({
+    where: { organizationId: scope.organizationId, saleLineId: saleLine.id },
+    _sum: { canonicalUnits: true },
+  });
+  const through = (cumulative._sum.canonicalUnits ?? 0) + (unidentified._sum.canonicalUnits ?? 0);
   const before = through - returned;
   if (before < 0 || through > sold) throw new PharmacyFinanceError('INVALID_STATE');
   const delta = (amount: number) =>
@@ -347,6 +351,103 @@ export async function postSaleReturnEntry(
           amountMinor: cost,
         },
       ]),
+    }
+  );
+}
+
+/** Reverse sale revenue when the returned pack cannot yet be tied to a lot.
+ * Inventory and COGS remain untouched until that physical identity is known. */
+export async function postUnidentifiedSaleReturnEntry(
+  db: ScopedDb,
+  scope: PostingScope,
+  input: { holdingId: string; at: Date }
+) {
+  const holding = await db.pharmacyUnidentifiedReturnHold.findFirst({
+    where: { id: input.holdingId, organizationId: scope.organizationId },
+    include: {
+      saleLine: { include: { returnLines: true, unidentifiedReturnHolds: true } },
+    },
+  });
+  if (!holding) throw new PharmacyFinanceError('NOT_FOUND');
+  if (holding.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
+
+  const sourceKind: FinanceSourceKind = 'PHARMACY_UNIDENTIFIED_RETURN_HOLD';
+  const existing = await db.financeJournalEntry.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      idempotencyKey: postingKey(sourceKind, holding.id),
+    },
+    include: { lines: true },
+  });
+  if (existing) return existing;
+
+  const saleLine = holding.saleLine;
+  const through =
+    saleLine.returnLines.reduce((sum, row) => sum + row.canonicalUnits, 0) +
+    saleLine.unidentifiedReturnHolds.reduce((sum, row) => sum + row.canonicalUnits, 0);
+  const before = through - holding.canonicalUnits;
+  if (before < 0 || through > saleLine.canonicalUnits)
+    throw new PharmacyFinanceError('INVALID_STATE');
+  const delta = (amount: number) =>
+    Math.floor((amount * through) / saleLine.canonicalUnits) -
+    Math.floor((amount * before) / saleLine.canonicalUnits);
+  const discount = delta(saleLine.discountMinor);
+  const gross =
+    delta(saleLine.unitPriceMinor * saleLine.quantity - saleLine.discountMinor) + discount;
+  const dimensions = {
+    branchId: holding.branchId,
+    productId: saleLine.medicineId,
+    locationId: holding.quarantineLocationId,
+    sourceLineId: saleLine.id,
+  };
+  const monetaryLines = nonZero([
+    {
+      ...dimensions,
+      accountCode: 'SALES_REVENUE' as const,
+      side: 'DEBIT' as const,
+      amountMinor: gross,
+    },
+    {
+      ...dimensions,
+      accountCode: 'SALES_CLEARING' as const,
+      side: 'CREDIT' as const,
+      amountMinor: gross,
+    },
+    {
+      ...dimensions,
+      accountCode: 'SALES_CLEARING' as const,
+      side: 'DEBIT' as const,
+      amountMinor: discount,
+    },
+    {
+      ...dimensions,
+      accountCode: 'SALES_DISCOUNT' as const,
+      side: 'CREDIT' as const,
+      amountMinor: discount,
+    },
+  ]);
+
+  return postJournalEntry(
+    db,
+    { organizationId: scope.organizationId, actorId: scope.actorId },
+    {
+      sourceKind,
+      sourceId: holding.id,
+      description: `Unidentified return of sale line ${saleLine.id}`,
+      occurredAt: input.at,
+      idempotencyKey: postingKey(sourceKind, holding.id),
+      branchId: holding.branchId,
+      // Canonical units can be finer than a minor currency unit. Keep a
+      // balanced, net-zero clearing marker for those slices: the journal row
+      // remains the durable idempotency/completeness receipt without inventing
+      // revenue, discount, inventory, or COGS.
+      lines:
+        monetaryLines.length > 0
+          ? monetaryLines
+          : [
+              { ...dimensions, accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: 1 },
+              { ...dimensions, accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 1 },
+            ],
     }
   );
 }
