@@ -23,20 +23,20 @@ One closed day, one branch, 1,201 closed drawer sessions. Sequential backend rea
 measurements in milliseconds; most other report sources are empty. These numbers
 are regression fixture timings, not production-scale or HTTP latency claims.
 
-| Read | Milliseconds |
-| --- | ---: |
-| payments | 47.27 |
-| readOverviewReport | 8.27 |
-| readInventoryReport | 12.23 |
-| readWastageReport | 10.63 |
-| readCateringReport | 6.51 |
-| readSopReport | 4.65 |
-| readFoodCostReport | 11.88 |
-| readDishProfitabilityReport | 3.36 |
-| readStockMovementReport | 4.54 |
-| readPurchasingReport | 9.86 |
-| workforceFinancial | 5.95 |
-| batch | 125.32 |
+| Read                        | Milliseconds |
+| --------------------------- | -----------: |
+| payments                    |        47.27 |
+| readOverviewReport          |         8.27 |
+| readInventoryReport         |        12.23 |
+| readWastageReport           |        10.63 |
+| readCateringReport          |         6.51 |
+| readSopReport               |         4.65 |
+| readFoodCostReport          |        11.88 |
+| readDishProfitabilityReport |         3.36 |
+| readStockMovementReport     |         4.54 |
+| readPurchasingReport        |         9.86 |
+| workforceFinancial          |         5.95 |
+| batch                       |       125.32 |
 
 Payments retains all 1,201 drawer sessions in its coverage count while fetching
 pages of 500. The batch assertion is below 5 seconds. Other report sources were

@@ -215,6 +215,7 @@ describe('§9 contract item 2 — RESTAURANT organization.create: branch + assig
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
       active: true,
+      defaultSeats: 50,
       vertical: 'RESTAURANT',
       moduleLinks: [{ moduleId: 'restaurant-core' }],
     });
@@ -284,6 +285,7 @@ describe('§2.3 contract item 3 — mismatched package rejected', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_a',
       active: true,
+      defaultSeats: 25,
       vertical: 'AGENCY',
       moduleLinks: [],
     });
@@ -301,6 +303,7 @@ describe('§2.3 contract item 3 — mismatched package rejected', () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_r',
       active: true,
+      defaultSeats: 25,
       vertical: 'RESTAURANT',
       moduleLinks: [],
     });

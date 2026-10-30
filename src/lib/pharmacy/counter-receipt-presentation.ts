@@ -60,6 +60,8 @@ export function buildCounterReceiptPreview(
   ];
   if (!amounts.every(Number.isSafeInteger)) throw new Error('Receipt amounts are invalid.');
   const strings = COUNTER_RECEIPT_STRINGS[locale];
+  const ntn = receipt.taxIdentity?.ntn?.trim();
+  const strn = receipt.taxIdentity?.strn?.trim();
   return buildReceiptPreview(
     { ...DEFAULT_RECEIPT_LAYOUT, paperWidth, footerText: reprint ? strings.reprint : '' },
     {
@@ -75,8 +77,12 @@ export function buildCounterReceiptPreview(
           `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor, locale)}`,
         ].join('\n');
       }),
-      // The Pharmacy model supplies no tax breakdown. Never invent zero tax.
-      taxLines: [labels[locale].tax],
+      // Identity is historical receipt data; the model supplies no tax breakdown.
+      taxLines: [
+        ...(ntn ? [`NTN: ${ntn}`] : []),
+        ...(strn ? [`STRN: ${strn}`] : []),
+        labels[locale].tax,
+      ],
       totals: [
         receipt.currency,
         `${strings.gross}: ${formatMinor(receipt.totals.grossMinor, locale)}`,
