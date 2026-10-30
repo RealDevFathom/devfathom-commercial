@@ -5,6 +5,9 @@ import AxeBuilder from '@axe-core/playwright';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const baseURL = process.env.PLATFORM_QA_BASE_URL;
+const platformLoginURL = baseURL
+  ? new URL('/platform/login', baseURL.replace('://127.0.0.1', '://admin.localhost'))
+  : null;
 let browser: Browser;
 
 function luminance(color: string) {
@@ -39,6 +42,9 @@ describe.runIf(Boolean(baseURL))('platform login Studio accessibility', () => {
           const context = await browser.newContext({
             viewport: { width, height: 900 },
             reducedMotion,
+            // Next.js derives x-forwarded-host from its listening address in
+            // this local lane. Model the admin-facing proxy authority explicitly.
+            extraHTTPHeaders: { 'x-forwarded-host': platformLoginURL!.host },
           });
           try {
             await context.addInitScript((value) => localStorage.setItem('theme', value), theme);
@@ -48,8 +54,12 @@ describe.runIf(Boolean(baseURL))('platform login Studio accessibility', () => {
             page.on('console', (message) => {
               if (message.type() === 'error') errors.push(message.text());
             });
-            await page.route('**/api/platform/mfa', (route) => route.fulfill({ json: {} }));
-            await page.goto(`${baseURL}/platform/login`);
+            const mfaProbes: string[] = [];
+            page.on('request', (request) => {
+              if (new URL(request.url()).pathname === '/api/platform/mfa')
+                mfaProbes.push(request.method());
+            });
+            await page.goto(platformLoginURL!.href);
             await page.getByLabel('Work email').waitFor();
             await page.waitForFunction(() =>
               document
@@ -86,6 +96,7 @@ describe.runIf(Boolean(baseURL))('platform login Studio accessibility', () => {
               fullPage: true,
             });
             expect(errors).toEqual([]);
+            expect(mfaProbes).toEqual([]);
           } finally {
             await context.close();
           }

@@ -261,6 +261,7 @@ function NotificationsView(props: NotificationsViewProps) {
       <div className="min-w-0 space-y-6">
         <PageHeader
           eyebrow="Restaurant operations"
+          eyebrowMuted
           heading="Notifications center"
           description="In-app alerts, read state, delivery records, and notification routing."
         />
@@ -301,6 +302,7 @@ function NotificationsView(props: NotificationsViewProps) {
     <div className="min-w-0 space-y-6">
       <PageHeader
         eyebrow="Restaurant operations"
+        eyebrowMuted
         heading="Notifications center"
         description="In-app alerts, read state, delivery records, and notification routing."
         actions={

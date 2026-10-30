@@ -240,25 +240,22 @@ describe('organization.create duplicate slug', () => {
 
   it('maps a pg adapter unique violation that omitted the constraint', async () => {
     platformDb.organization.create.mockRejectedValueOnce(
-      new Prisma.PrismaClientKnownRequestError(
-        'Unique constraint failed on the (not available)',
-        {
-          code: 'P2002',
-          clientVersion: '7.9.1',
-          meta: {
-            modelName: 'Organization',
-            driverAdapterError: {
-              name: 'DriverAdapterError',
-              cause: {
-                originalCode: '23505',
-                originalMessage:
-                  'duplicate key value violates unique constraint "organizations_slug_key"',
-                kind: 'UniqueConstraintViolation',
-              },
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the (not available)', {
+        code: 'P2002',
+        clientVersion: '7.9.1',
+        meta: {
+          modelName: 'Organization',
+          driverAdapterError: {
+            name: 'DriverAdapterError',
+            cause: {
+              originalCode: '23505',
+              originalMessage:
+                'duplicate key value violates unique constraint "organizations_slug_key"',
+              kind: 'UniqueConstraintViolation',
             },
           },
-        }
-      )
+        },
+      })
     );
 
     const error = await executePlatformCommand(
@@ -287,7 +284,8 @@ describe('organization.create duplicate slug', () => {
           driverAdapterError: {
             cause: {
               originalCode: '23505',
-              originalMessage: 'duplicate key value violates unique constraint "organizations_pkey"',
+              originalMessage:
+                'duplicate key value violates unique constraint "organizations_pkey"',
               kind: 'UniqueConstraintViolation',
             },
           },
@@ -351,31 +349,47 @@ describe('organization.create package seat fallback', () => {
     mocks.userCreate.mockResolvedValue({ id: 'user_new' });
   });
 
-  it.each([1, 25, 100000, 0, -1, 'invalid'])('ignores a submitted seat limit of %j', async (seatLimit) => {
+  it.each([1, 25, 100000, 0, -1, 'invalid'])(
+    'ignores a submitted seat limit of %j',
+    async (seatLimit) => {
+      await executePlatformCommand(
+        { id: 'op_sales', role: 'SALES' } as never,
+        'organization.create',
+        { ...payload('admin@acme.com'), seatLimit },
+        request
+      );
+      expect(platformDb.organization.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ seatLimit: 42 }) })
+      );
+    }
+  );
+
+  it.each([1, 25, 42])('accepts a super admin override of %j', async (seatLimit) => {
     await executePlatformCommand(
-      { id: 'op_sales', role: 'SALES' } as never,
+      actor,
       'organization.create',
       { ...payload('admin@acme.com'), seatLimit },
       request
     );
     expect(platformDb.organization.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ seatLimit: 42 }) })
-    );
-  });
-
-  it.each([1, 25, 42])('accepts a super admin override of %j', async (seatLimit) => {
-    await executePlatformCommand(actor, 'organization.create',
-      { ...payload('admin@acme.com'), seatLimit }, request);
-    expect(platformDb.organization.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ seatLimit }) })
     );
   });
 
-  it.each([0, -1, 43, 100000, 'invalid', 1.5])('rejects a super admin override of %j', async (seatLimit) => {
-    await expect(executePlatformCommand(actor, 'organization.create',
-      { ...payload('admin@acme.com'), seatLimit }, request)).rejects.toThrow();
-    expect(platformDb.organization.create).not.toHaveBeenCalled();
-  });
+  it.each([0, -1, 43, 100000, 'invalid', 1.5])(
+    'rejects a super admin override of %j',
+    async (seatLimit) => {
+      await expect(
+        executePlatformCommand(
+          actor,
+          'organization.create',
+          { ...payload('admin@acme.com'), seatLimit },
+          request
+        )
+      ).rejects.toThrow();
+      expect(platformDb.organization.create).not.toHaveBeenCalled();
+    }
+  );
 
   it('inherits package default seats when a legacy payload omits seatLimit', async () => {
     const { seatLimit: _omitted, ...legacyPayload } = payload('admin@acme.com');
