@@ -16,12 +16,13 @@ const PROFILE_ITEMS = [
 export function BusinessProfilePanel({ branchId }: { branchId: string }) {
   const storageKey = `pharmacy-business-profile-health:${branchId}`;
   const [storageLoaded, setStorageLoaded] = useState(false);
+  const [storageUnavailable, setStorageUnavailable] = useState(false);
   const [checkedItems, setCheckedItems] = useState<string[]>([]);
   const [photoAge, setPhotoAge] = useState('');
   const [photoTarget, setPhotoTarget] = useState('30');
   const age = Number(photoAge);
   const target = Number(photoTarget);
-  const hasPhotoValues = photoAge !== '' || photoTarget !== '';
+  const hasPhotoValues = photoAge !== '' || photoTarget !== '30';
   const photoValuesValid =
     photoAge !== '' &&
     photoTarget !== '' &&
@@ -33,8 +34,15 @@ export function BusinessProfilePanel({ branchId }: { branchId: string }) {
 
   useEffect(() => {
     queueMicrotask(() => {
+      let stored: string | null;
       try {
-        const saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null') as {
+        stored = localStorage.getItem(storageKey);
+      } catch {
+        setStorageUnavailable(true);
+        return;
+      }
+      try {
+        const saved = JSON.parse(stored ?? 'null') as {
           checkedItems?: unknown;
           photoAge?: unknown;
           photoTarget?: unknown;
@@ -55,7 +63,11 @@ export function BusinessProfilePanel({ branchId }: { branchId: string }) {
 
   useEffect(() => {
     if (!storageLoaded) return;
-    localStorage.setItem(storageKey, JSON.stringify({ checkedItems, photoAge, photoTarget }));
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({ checkedItems, photoAge, photoTarget }));
+    } catch {
+      queueMicrotask(() => setStorageUnavailable(true));
+    }
   }, [checkedItems, photoAge, photoTarget, storageKey, storageLoaded]);
 
   return (
@@ -68,8 +80,14 @@ export function BusinessProfilePanel({ branchId }: { branchId: string }) {
             </h3>
             <p className="mt-1 text-sm text-text-muted">
               Check the live profile manually. DevFathom does not change or publish profile data.
-              Your progress is saved on this device for this branch.
+              {!storageUnavailable && ' Your progress is saved on this device for this branch.'}
             </p>
+            {storageUnavailable && (
+              <p role="alert" className="mt-1 text-sm text-text-body">
+                Progress could not be saved on this device. Keep this page open or record your
+                checks manually.
+              </p>
+            )}
           </div>
           <fieldset className="space-y-2">
             <legend className="sr-only">Profile health checks</legend>

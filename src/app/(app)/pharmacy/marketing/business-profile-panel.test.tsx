@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./action-form', () => ({
   MarketingActionForm: ({
@@ -14,12 +14,32 @@ vi.mock('./action-form', () => ({
 import { BusinessProfilePanel } from './business-profile-panel';
 
 describe('BusinessProfilePanel', () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(['getItem', 'setItem'] as const)(
+    'keeps the checklist usable when device storage %s fails',
+    async (method) => {
+      vi.spyOn(Storage.prototype, method).mockImplementation(() => {
+        throw new DOMException('Device storage is unavailable', 'SecurityError');
+      });
+      render(<BusinessProfilePanel branchId="branch-blocked" />);
+      await waitFor(() =>
+        expect(screen.getByText(/Progress could not be saved on this device/)).toBeInTheDocument()
+      );
+      fireEvent.click(screen.getByLabelText('Business name matches storefront'));
+      expect(screen.getByLabelText('Business name matches storefront')).toBeChecked();
+      expect(document.querySelector('[data-operation="review-reply"]')).toBeInTheDocument();
+    }
+  );
+
   it('uses an owner-configured target and makes manual-only drafting explicit', async () => {
     render(<BusinessProfilePanel branchId="branch-1" />);
 
     expect(screen.getByText(/Nothing is auto-posted/i)).toBeInTheDocument();
     expect(screen.getByText(/does not change or publish profile data/i)).toBeInTheDocument();
     expect(screen.getByText('Business name matches storefront')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Days since latest photo'), { target: { value: '20' } });
     fireEvent.change(screen.getByLabelText('Your photo freshness target (days)'), {

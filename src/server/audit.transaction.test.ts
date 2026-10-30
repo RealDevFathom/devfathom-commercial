@@ -117,6 +117,28 @@ describe('transaction-bound seed audits', () => {
     });
   });
 
+  it.each(['draftReviewReply', 'pharmacyMarketing.draftReviewReply'])(
+    'never retains review input for rejected %s requests before resolver annotation',
+    async (path) => {
+      const ctx = await context({} as ScopedDb, false);
+      recordTrpcAudit({
+        ctx,
+        path,
+        type: 'mutation',
+        input: { branchId: 'branch-a', review: 'Private customer information', rating: 6 },
+        outcome: 'FAILURE',
+        error: { code: 'BAD_REQUEST', message: 'Invalid input' },
+      });
+      await flushAuditWritesForTest();
+      expect(mocks.outsideCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({ path, outcome: 'FAILURE', input: '[skipped]' }),
+      });
+      expect(JSON.stringify(mocks.outsideCreate.mock.calls)).not.toContain(
+        'Private customer information'
+      );
+    }
+  );
+
   it('defers normal audits until the owning transaction has settled', async () => {
     const ctx = await context({} as ScopedDb, false);
     await bindSideEffects(async (scope) => {

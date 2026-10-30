@@ -479,6 +479,12 @@ export function recordTrpcAudit(args: {
 }): void | Promise<void> {
   const user = args.ctx.session?.user ?? null;
   const detail = args.ctx.audit?.detail ?? {};
+  // Authentication and input validation can reject review drafting before its
+  // resolver sets skipInput. Cover both the app router and server-action caller.
+  const skipInput =
+    detail.skipInput ||
+    args.path === 'pharmacyMarketing.draftReviewReply' ||
+    args.path === 'draftReviewReply';
   const { code, message } = extractError(args.error);
 
   return recordAudit(
@@ -497,7 +503,7 @@ export function recordTrpcAudit(args: {
       targetType: detail.targetType ?? null,
       targetId: detail.targetId ?? null,
       targetLabel: detail.targetLabel ?? null,
-      input: detail.skipInput ? '[skipped]' : toAuditJson(args.input),
+      input: skipInput ? '[skipped]' : toAuditJson(args.input),
       changes: detail.changes ? toAuditJson(detail.changes) : undefined,
       result: detail.result !== undefined ? toAuditJson(detail.result) : undefined,
       metadata: toAuditJson({
