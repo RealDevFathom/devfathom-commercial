@@ -270,6 +270,9 @@ export function moduleForProcedure(path: string): string | null {
   // Inviting workspace users is baseline administration in every vertical.
   if (path === 'team.inviteMember') return 'admin';
   if (ACCOUNT_PROCEDURES.has(path)) return null;
+  // The pharmacy rail discovers capabilities for every licensed pharmacy surface.
+  // Only its discovery read belongs to Core; Safety operations keep their own licence.
+  if (path === 'pharmacySafety.access') return 'pharmacy-core';
   if (
     /^pharmacyFinance\.(perpetualValuation|grossMargin|leakageReport|marginComparison|financialStatements)$/.test(
       path

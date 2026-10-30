@@ -64,6 +64,10 @@ describe('module catalog routing', () => {
     ['restaurantDashboard.getPreferences', 'restaurant-core'],
     ['restaurantGrowth.read', 'restaurant-core'],
     ['restaurantGrowth.review', 'restaurant-core'],
+    ['pharmacySafety.access', 'pharmacy-core'],
+    ['pharmacySafety.branches', 'pharmacy-safety'],
+    ['pharmacySafety.controlledRegister', 'pharmacy-safety'],
+    ['pharmacySafety.recordCorrection', 'pharmacy-safety'],
     ['unknown.list', null],
   ])('maps tRPC procedure %s to %s', (procedure, expected) => {
     expect(moduleForProcedure(procedure)).toBe(expected);

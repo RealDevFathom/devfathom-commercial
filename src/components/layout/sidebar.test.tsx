@@ -29,6 +29,13 @@ const railQuery = vi.hoisted(() => ({
         properties: { branchId: string; name: string; capabilities: string[] }[];
       },
 }));
+const pharmacyQuery = vi.hoisted(() => ({
+  data: undefined as undefined | { userId: string; organizationId: string; capabilities: string[] },
+  isError: false,
+  isFetching: false,
+  refetch: vi.fn(),
+}));
+const pharmacyUseQuery = vi.hoisted(() => vi.fn(() => pharmacyQuery));
 
 vi.mock('next/link', () => ({
   default: ({ href, children, onClick, ...props }: React.ComponentProps<'a'>) => (
@@ -76,24 +83,7 @@ vi.mock('@/lib/trpc', () => ({
     },
     pharmacySafety: {
       access: {
-        useQuery: () => ({
-          data: {
-            userId: 'operator-1',
-            organizationId: 'pharmacy-1',
-            capabilities: [
-              'pharmacy:counter',
-              'pharmacy:inventory',
-              'pharmacy:procurement',
-              'pharmacy:dispense',
-              'pharmacy:safety',
-              'reports:operational',
-              'reports:financial',
-            ],
-          },
-          isError: false,
-          isFetching: false,
-          refetch: vi.fn(),
-        }),
+        useQuery: pharmacyUseQuery,
       },
     },
   },
@@ -230,6 +220,8 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     'pharmacy-procurement',
     'pharmacy-finance',
     'pharmacy-reports',
+    'pharmacy-dispensing',
+    'pharmacy-safety',
   ];
   const destinations = [
     ['Inventory', '/pharmacy/inventory', 'pharmacy-inventory'],
@@ -237,6 +229,26 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     ['Finance', '/pharmacy/finance', 'pharmacy-finance'],
     ['Reports & Insights', '/pharmacy/reports', 'pharmacy-reports'],
   ] as const;
+
+  beforeEach(() => {
+    pharmacyQuery.data = {
+      userId: 'operator-1',
+      organizationId: 'pharmacy-1',
+      capabilities: [
+        'pharmacy:counter',
+        'pharmacy:inventory',
+        'pharmacy:procurement',
+        'pharmacy:dispense',
+        'pharmacy:safety',
+        'reports:operational',
+        'reports:financial',
+      ],
+    };
+    pharmacyQuery.isError = false;
+    pharmacyQuery.isFetching = false;
+    pharmacyQuery.refetch.mockClear();
+    pharmacyUseQuery.mockClear();
+  });
 
   function renderNavigation({
     role = 'ADMIN',
@@ -262,10 +274,10 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     });
     usePathnameMock.mockReturnValue(pathname);
     const onNavigate = vi.fn();
-    render(
+    const navigation = (organizationId = 'pharmacy-1') => (
       <EntitlementsProvider
         value={{
-          organizationId: 'pharmacy-1',
+          organizationId,
           vertical,
           seatLimit: 10,
           activeSeats: 1,
@@ -281,11 +293,15 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
         )}
       </EntitlementsProvider>
     );
-    return onNavigate;
+    const view = render(navigation());
+    return {
+      onNavigate,
+      rerender: (organizationId?: string) => view.rerender(navigation(organizationId)),
+    };
   }
 
   it('renders named, focusable destinations with Chat disabled', () => {
-    const onNavigate = renderNavigation();
+    const { onNavigate } = renderNavigation();
     for (const [label, href] of destinations) {
       const link = screen.getByRole('link', { name: new RegExp(`${label}$`) });
       expect(link).toHaveAttribute('href', href);
@@ -297,6 +313,102 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     if (surface === 'mobile') expect(onNavigate).toHaveBeenCalledTimes(destinations.length);
     expect(screen.queryByRole('link', { name: /Chat$/ })).not.toBeInTheDocument();
   });
+
+  function pharmacyHrefs() {
+    return screen
+      .getAllByRole('link')
+      .map((link) => link.getAttribute('href'))
+      .filter((href) => href?.startsWith('/pharmacy'));
+  }
+
+  it('shows only the cashier counter after access finishes loading', () => {
+    pharmacyQuery.data = undefined;
+    pharmacyQuery.isFetching = true;
+    const { rerender } = renderNavigation({ role: 'EMPLOYEE', pathname: '/pharmacy/counter' });
+    expect(pharmacyHrefs()).toEqual([]);
+    expect(screen.getByRole('link', { name: /Dashboard$/ })).toBeInTheDocument();
+    expect(pharmacyUseQuery).toHaveBeenLastCalledWith(undefined, {
+      enabled: true,
+      retry: false,
+      staleTime: 0,
+      refetchOnMount: 'always',
+    });
+
+    pharmacyQuery.data = {
+      userId: 'operator-1',
+      organizationId: 'pharmacy-1',
+      capabilities: ['pharmacy:counter'],
+    };
+    pharmacyQuery.isFetching = false;
+    rerender();
+    expect(pharmacyHrefs()).toEqual(['/pharmacy/counter']);
+    expect(screen.getByRole('link', { name: /Counter$/ })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it.each(['refetch', 'error'] as const)(
+    'hides cached capabilities during %s and restores only refreshed grants',
+    (state) => {
+      const { rerender } = renderNavigation({ role: 'EMPLOYEE' });
+      expect(pharmacyHrefs()).toContain('/pharmacy/purchasing');
+
+      pharmacyQuery.isFetching = state === 'refetch';
+      pharmacyQuery.isError = state === 'error';
+      rerender();
+      expect(pharmacyHrefs()).toEqual([]);
+      expect(screen.getByRole('link', { name: /Dashboard$/ })).toBeInTheDocument();
+
+      pharmacyQuery.isFetching = false;
+      pharmacyQuery.isError = false;
+      pharmacyQuery.data!.capabilities = ['reports:operational'];
+      rerender();
+      expect(pharmacyHrefs()).toEqual(['/pharmacy/reports']);
+    }
+  );
+
+  it.each(['user', 'tenant'] as const)(
+    'refetches and rejects old access after a %s switch',
+    (identity) => {
+      const { rerender } = renderNavigation({ role: 'EMPLOYEE' });
+      expect(pharmacyHrefs()).toContain('/pharmacy/pharmacist-queue');
+      const refetchCount = pharmacyQuery.refetch.mock.calls.length;
+      const user = {
+        ...useSessionMock().data.user,
+        id: identity === 'user' ? 'cashier-2' : 'operator-1',
+        organizationId: identity === 'tenant' ? 'pharmacy-2' : 'pharmacy-1',
+      };
+      useSessionMock.mockReturnValue({ data: { user } });
+      rerender(user.organizationId);
+      expect(pharmacyHrefs()).toEqual([]);
+      expect(pharmacyQuery.refetch).toHaveBeenCalledTimes(refetchCount + 1);
+
+      pharmacyQuery.data = {
+        userId: user.id,
+        organizationId: user.organizationId,
+        capabilities: ['pharmacy:counter'],
+      };
+      rerender(user.organizationId);
+      expect(pharmacyHrefs()).toEqual(['/pharmacy/counter']);
+    }
+  );
+
+  it.each(['inactive', 'tenant-mismatch'] as const)(
+    'disables access discovery for %s sessions even with cached grants',
+    (state) => {
+      const { rerender } = renderNavigation({ role: 'EMPLOYEE' });
+      const user = { ...useSessionMock().data.user };
+      if (state === 'inactive') user.status = 'INACTIVE';
+      else user.organizationId = 'other-pharmacy';
+      useSessionMock.mockReturnValue({ data: { user } });
+      pharmacyQuery.refetch.mockClear();
+      rerender();
+      expect(pharmacyUseQuery).toHaveBeenLastCalledWith(
+        undefined,
+        expect.objectContaining({ enabled: false })
+      );
+      expect(pharmacyQuery.refetch).not.toHaveBeenCalled();
+      expect(pharmacyHrefs()).toEqual([]);
+    }
+  );
 
   it.each(destinations)(
     'hides disabled %s without hiding other licensed destinations',
