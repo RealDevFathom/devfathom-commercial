@@ -242,38 +242,54 @@ suite('actual sandbox SQL and adapters / TEST_DOUBLE authorization and freshness
     ).toEqual([{ status: 'DRAFT' }]);
   });
 
-  it('STOP adapter is replay-safe; current withdrawal and daily cap prevent new capture', async () => {
-    const s = await fixture(),
-      input = await draft(s);
-    const stop = {
-      branchId: s.branch,
-      customerId: s.customers[0]!,
-      eventId: randomUUID(),
-      text: ' STOP ',
-    };
-    await stopRestaurantGrowthSandbox(actor(s), stop, policy);
-    await stopRestaurantGrowthSandbox(actor(s), stop, policy);
-    await captureRestaurantGrowthDraft(actor(s), input, policy, binding);
-    expect((await attempts(s)).map((r) => r.customerId).sort()).toEqual(s.customers.slice(1));
-    expect(
-      await inScope(s, (tx) => tx.customerConsent.count({ where: { source: 'TEST_SANDBOX_STOP' } }))
-    ).toBe(1);
-    // A separate real insight/draft in this SAME tenant tests the recipient rolling-day cap.
-    const second = { ...s, insight: randomUUID() };
-    await inScope(s, (tx) =>
-      tx.$executeRawUnsafe(
-        `INSERT INTO growth_insights (id,"organizationId","branchId",vertical,"actorId","schemaVersion","inputHash",status,provider,model,snapshot,output) VALUES ($1,$2,$3,'RESTAURANT','TEST_DOUBLE',1,$4,'READY','TEST_DOUBLE','TEST_DOUBLE','{"actions":[{"ref":"a1","kind":"LOYALTY_REVIEW"}]}','{"recommendations":[{"actionRef":"a1"}]}')`,
-        second.insight,
-        s.org,
-        s.branch,
-        hash
-      )
-    );
-    expect(
-      (await captureRestaurantGrowthDraft(actor(second), await draft(second), policy, binding))
-        .attemptIds
-    ).toEqual([]);
-  });
+  it.each([' STOP ', 'بند', 'ＳＴＯＰ'])(
+    'STOP adapter for %j confirms in English and is replay-safe; withdrawal and daily cap prevent capture',
+    async (text) => {
+      const s = await fixture(),
+        input = await draft(s);
+      const stop = {
+        branchId: s.branch,
+        customerId: s.customers[0]!,
+        eventId: randomUUID(),
+        text,
+      };
+      const result = await stopRestaurantGrowthSandbox(actor(s), stop, policy);
+      expect(result).toMatchObject({
+        customerId: stop.customerId,
+        channel: 'WHATSAPP',
+        granted: false,
+        source: 'TEST_SANDBOX_STOP',
+        actorId: 'TEST_DOUBLE',
+        policyVersion: policy.policyVersion,
+        idempotencyKey: 'restaurant-growth-stop:' + stop.eventId,
+        confirmation:
+          'You will no longer receive WhatsApp growth messages. Reply START to opt back in.',
+      });
+      expect(await stopRestaurantGrowthSandbox(actor(s), stop, policy)).toEqual(result);
+      await captureRestaurantGrowthDraft(actor(s), input, policy, binding);
+      expect((await attempts(s)).map((r) => r.customerId).sort()).toEqual(s.customers.slice(1));
+      expect(
+        await inScope(s, (tx) =>
+          tx.customerConsent.count({ where: { source: 'TEST_SANDBOX_STOP' } })
+        )
+      ).toBe(1);
+      // A separate real insight/draft in this SAME tenant tests the recipient rolling-day cap.
+      const second = { ...s, insight: randomUUID() };
+      await inScope(s, (tx) =>
+        tx.$executeRawUnsafe(
+          `INSERT INTO growth_insights (id,"organizationId","branchId",vertical,"actorId","schemaVersion","inputHash",status,provider,model,snapshot,output) VALUES ($1,$2,$3,'RESTAURANT','TEST_DOUBLE',1,$4,'READY','TEST_DOUBLE','TEST_DOUBLE','{"actions":[{"ref":"a1","kind":"LOYALTY_REVIEW"}]}','{"recommendations":[{"actionRef":"a1"}]}')`,
+          second.insight,
+          s.org,
+          s.branch,
+          hash
+        )
+      );
+      expect(
+        (await captureRestaurantGrowthDraft(actor(second), await draft(second), policy, binding))
+          .attemptIds
+      ).toEqual([]);
+    }
+  );
 
   it('late injected fault rolls back actual inserts and retry commits exactly once', async () => {
     const s = await fixture(),

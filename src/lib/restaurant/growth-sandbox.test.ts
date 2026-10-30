@@ -221,6 +221,17 @@ it.each(['subscribe', 'بند کریں', '', '   '])(
     expect(mocks.consent).not.toHaveBeenCalled();
   }
 );
+it('rejects STOP when consent withdrawal cannot be persisted', async () => {
+  const failure = new Error('Consent write failed');
+  mocks.consent.mockRejectedValueOnce(failure);
+  await expect(
+    stopRestaurantGrowthSandbox(
+      h,
+      { branchId: 'b', customerId: 'c1', eventId: input.requestId, text: 'STOP' },
+      policy
+    )
+  ).rejects.toBe(failure);
+});
 it('diagnostic keeps costs and money unknown and predicates exact receipt lineage', async () => {
   const result = await diagnoseRestaurantGrowthSandbox(
     h,
