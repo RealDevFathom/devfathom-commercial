@@ -1,6 +1,6 @@
 # DevFathom documentation
 
-This directory is the source-backed documentation index for DevFathom Commercial. It describes the current web product, the seller-operated control plane, and the Azure operating model. It does not authorize deployment, commercial promises, or capability claims that are not evidenced in the repository.
+This directory is the source-backed documentation index for DevFathom Commercial. It describes the current web product, the seller-operated control plane, and the AWS staging operating model. It does not authorize deployment, commercial promises, or capability claims that are not evidenced in the repository.
 
 ## Status vocabulary
 
@@ -21,7 +21,7 @@ Use one status on every capability claim:
 | --- | --- | --- |
 | Everyone | [Technical overview](technical-overview.md) | Product boundaries, architecture, tenancy, and operating model |
 | Developers | [Local setup](LOCAL_SETUP.md) | Local environment and verification |
-| Operators | [Azure deployment](azure-deployment.md) | Staging, production gate, backups, and rollback |
+| Operators | [AWS staging](ops/aws-staging.md) and [staging runbook](ops/runbook.md) | Current staging operations, migrations, health checks, and rollback |
 | Platform team | [Admin platform handbook](admin-platform/README.md) | Control-plane architecture and runbooks |
 | Product and sales | [Product and commercial pack](product-pack.md) | ICP, positioning, feature status, packaging, and customer lifecycle |
 | Product and engineering | [POS & terminal module PRD](product/modules/pos-terminal.md) | Evidence-linked register, terminal, checkout, and branch-boundary scope |
@@ -34,6 +34,8 @@ Use one status on every capability claim:
 - [Kitchen Display System (KDS)](product/modules/kds.md) — station queue, ticket lifecycle, actions, permissions, and acceptance criteria
 
 ## Technical reference
+
+- Operations and security (AWS staging): [AWS staging](ops/aws-staging.md), [runbook](ops/runbook.md), [environment variables](ops/environment-variables.md), [security overview](ops/security-overview.md)
 
 - [Tenant/RLS architecture](admin-platform/architecture-tenancy.md)
 - [Identity and access](admin-platform/identity-access.md)
@@ -50,6 +52,6 @@ Use one status on every capability claim:
 
 ## Working rules
 
-Documentation changes should cite repository paths and line ranges where practical, distinguish current code from decisions, avoid secret values and customer data, and preserve the web-only boundary. Azure is the deployment platform; no Vercel deployment instructions belong in current operating guidance. Mobile apps are future work; responsive mobile web is part of the current web surface where implemented.
+Documentation changes should cite repository paths and line ranges where practical, distinguish current code from decisions, avoid secret values and customer data, and preserve the web-only boundary. AWS staging is the current deployment environment; Azure and Vercel material is historical and must not be used for deployment. No production environment exists yet. Mobile apps are future work; responsive mobile web is part of the current web surface where implemented.
 
 Last reconciled: 2026-08-08.
