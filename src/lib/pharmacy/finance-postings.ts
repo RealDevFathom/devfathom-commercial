@@ -87,6 +87,24 @@ function nonZero(lines: readonly JournalLineInput[]): JournalLineInput[] {
   return lines.filter((line) => line.amountMinor > 0);
 }
 
+/** Stock values can exceed a journal leg's PostgreSQL INTEGER column. */
+function splitStockLines(lines: readonly JournalLineInput[]): JournalLineInput[] {
+  return lines.flatMap((line) => {
+    // Leave invalid amounts to the shared journal validator, without looping.
+    if (!Number.isSafeInteger(line.amountMinor) || line.amountMinor <= 2_147_483_647) {
+      return [line];
+    }
+    const chunks: JournalLineInput[] = [];
+    let remaining = line.amountMinor;
+    while (remaining > 0) {
+      const amountMinor = Math.min(remaining, 2_147_483_647);
+      chunks.push({ ...line, amountMinor });
+      remaining -= amountMinor;
+    }
+    return chunks;
+  });
+}
+
 /**
  * FIN-01 (receipt, bonus): the goods receipt posting.
  *
@@ -166,7 +184,7 @@ export async function postGoodsReceiptEntry(
       occurredAt: input.at,
       idempotencyKey: postingKey('PHARMACY_GOODS_RECEIPT', receipt.id),
       branchId: receipt.branchId,
-      lines: nonZero(lines),
+      lines: splitStockLines(nonZero(lines)),
     }
   );
 }
@@ -597,28 +615,30 @@ export async function postInterbranchTransferEntry(
       occurredAt: input.at,
       idempotencyKey: postingKey('PHARMACY_INTERBRANCH_TRANSFER_LINE', line.id),
       branchId: line.sourceBranchId,
-      lines: nonZero([
-        {
-          accountCode: 'INVENTORY_IN_TRANSIT',
-          side: 'DEBIT',
-          amountMinor,
-          branchId: line.transfer.toBranchId,
-          productId: lot.medicineId,
-          lotId: line.sourceLotId,
-          locationId: line.destinationStockLocationId,
-          sourceLineId: line.id,
-        },
-        {
-          accountCode: 'INVENTORY',
-          side: 'CREDIT',
-          amountMinor,
-          branchId: line.sourceBranchId,
-          productId: lot.medicineId,
-          lotId: line.sourceLotId,
-          locationId: line.sourceStockLocationId,
-          sourceLineId: line.id,
-        },
-      ]),
+      lines: splitStockLines(
+        nonZero([
+          {
+            accountCode: 'INVENTORY_IN_TRANSIT',
+            side: 'DEBIT',
+            amountMinor,
+            branchId: line.transfer.toBranchId,
+            productId: lot.medicineId,
+            lotId: line.sourceLotId,
+            locationId: line.destinationStockLocationId,
+            sourceLineId: line.id,
+          },
+          {
+            accountCode: 'INVENTORY',
+            side: 'CREDIT',
+            amountMinor,
+            branchId: line.sourceBranchId,
+            productId: lot.medicineId,
+            lotId: line.sourceLotId,
+            locationId: line.sourceStockLocationId,
+            sourceLineId: line.id,
+          },
+        ])
+      ),
     }
   );
 }
@@ -675,7 +695,7 @@ export async function postCountAdjustmentEntry(
       occurredAt: input.at,
       idempotencyKey: postingKey('PHARMACY_INVENTORY_COUNT_LINE', line.id),
       branchId: line.branchId,
-      lines: [
+      lines: splitStockLines([
         {
           ...dimensions,
           accountCode: shortfall ? 'INVENTORY_SHRINKAGE' : 'INVENTORY',
@@ -688,7 +708,7 @@ export async function postCountAdjustmentEntry(
           side: 'CREDIT',
           amountMinor,
         },
-      ],
+      ]),
     }
   );
 }

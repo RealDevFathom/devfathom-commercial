@@ -3,7 +3,10 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   explainGrossMargin,
   grossMarginComparison,
+  leakageReport,
   marginComparisonPeriods,
+  perpetualValuation,
+  trialBalance,
 } from './finance-reports';
 const row = (revenueMinor: number, discountMinor: number, cogsMinor: number) => ({
   key: 'branch_1',
@@ -11,6 +14,45 @@ const row = (revenueMinor: number, discountMinor: number, cogsMinor: number) => 
   discountMinor,
   cogsMinor,
   grossMarginMinor: revenueMinor - discountMinor - cogsMinor,
+});
+
+describe('stock journal report totals', () => {
+  const scope = { organizationId: 'org_1', branchId: 'branch_1' };
+  const at = new Date('2026-09-01Z');
+  const period = { from: at, to: new Date('2026-09-03Z') };
+
+  it.each([
+    {
+      report: 'valuation',
+      fields: ['valueMinor'],
+      read: (db: ScopedDb) => perpetualValuation(db, scope, at),
+    },
+    {
+      report: 'leakage',
+      fields: ['discountMinor', 'writeOffMinor', 'shrinkageMinor', 'totalMinor'],
+      read: (db: ScopedDb) => leakageReport(db, scope, period),
+    },
+    {
+      report: 'trial balance',
+      fields: ['debitMinor', 'creditMinor'],
+      read: (db: ScopedDb) => trialBalance(db, scope, period),
+    },
+  ])('preserves wide $report totals and refuses unsafe money', async ({ fields, read }) => {
+    const value = 5_000_000_001;
+    const query = vi
+      .fn()
+      .mockResolvedValue([Object.fromEntries(fields.map((field) => [field, BigInt(value)]))]);
+    const db = { $queryRaw: query } as unknown as ScopedDb;
+    await expect(read(db)).resolves.toEqual([
+      Object.fromEntries(fields.map((field) => [field, value])),
+    ]);
+    query.mockResolvedValue([
+      Object.fromEntries(
+        fields.map((field) => [field, BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1)])
+      ),
+    ]);
+    await expect(read(db)).rejects.toThrow('safe integer-money bounds');
+  });
 });
 
 describe('gross-margin accounting comparison', () => {

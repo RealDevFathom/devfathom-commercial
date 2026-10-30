@@ -322,6 +322,20 @@ beforeAll(async () => {
   ]);
   deps = { withTenantDb: scopedDb.withTenantDb, receipts, ledger };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  // Receipt posting now writes a journal entry with an organization foreign key.
+  await scopedDb.withPlatformDb((db) =>
+    db.organization.createMany({
+      data: [ORG_A, ORG_B].map((id) => ({
+        id,
+        slug: id,
+        legalName: id,
+        displayName: id,
+        vertical: 'PHARMACY',
+        status: 'ACTIVE',
+        deploymentMode: 'SHARED',
+      })),
+    })
+  );
 }, 120_000);
 
 // ── Row level security ──────────────────────────────────────────────────────

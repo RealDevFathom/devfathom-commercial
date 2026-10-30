@@ -438,10 +438,13 @@ describeIfDatabase('FIN-01 — goods receipt', () => {
     });
   });
 
-  it('posts a balanced entry traceable to the receipt', async () => {
+  it.each([10_000, 500_000_000])('posts traceable receipts at %i per pack', async (price) => {
     const f = await fixture(ORG_A, branch('grn'), 'grn');
     const { entry, receiptId, line } = await inOrg(ORG_A, async (db) => {
-      const received = await postedReceipt(db, f, 'grn', { receivedPacks: 10 });
+      const received = await postedReceipt(db, f, 'grn', {
+        receivedPacks: 10,
+        invoicedPricePerPackMinor: price,
+      });
       return {
         receiptId: received.draft.id,
         line: received.line,
@@ -455,11 +458,36 @@ describeIfDatabase('FIN-01 — goods receipt', () => {
     expectBalanced(entry);
     expect(entry.sourceKind).toBe('PHARMACY_GOODS_RECEIPT');
     expect(entry.sourceId).toBe(receiptId);
-    // 100 units at 1_000 minor each — the invoiced 10 packs at 10_000.
-    expect(totalFor(entry, 'INVENTORY', 'DEBIT')).toBe(100_000);
-    expect(totalFor(entry, 'GOODS_RECEIVED_ACCRUAL', 'CREDIT')).toBe(100_000);
-    expect(entry.lines.every((leg) => leg.sourceLineId === null || leg.sourceLineId === line.id));
+    expect(totalFor(entry, 'INVENTORY', 'DEBIT')).toBe(10 * price);
+    expect(totalFor(entry, 'GOODS_RECEIVED_ACCRUAL', 'CREDIT')).toBe(10 * price);
+    expect(entry.lines.every((leg) => leg.amountMinor <= 2_147_483_647)).toBe(true);
+    expect(
+      entry.lines.every((leg) => leg.sourceLineId === null || leg.sourceLineId === line.id)
+    ).toBe(true);
     expect(entry.lines.some((leg) => leg.lotId !== null)).toBe(true);
+    const valuation = await inOrg(ORG_A, (db) =>
+      deps.reports.perpetualValuation(db, { organizationId: ORG_A, branchId: branch('grn') }, LATER)
+    );
+    const lotId = entry.lines.find((leg) => leg.sourceLineId === line.id)?.lotId;
+    expect(valuation.find((row) => row.lotId === lotId)?.valueMinor).toBe(10 * price);
+    await inOrg(ORG_A, async (db) => {
+      await deps.receipts.reverseGoodsReceipt(
+        db,
+        {
+          organizationId: ORG_A,
+          branchId: branch('grn'),
+          actorId: ACTOR,
+        },
+        { goodsReceiptId: receiptId, reason: 'Returned delivery', at: LATER }
+      );
+      const reversal = await db.financeJournalEntry.findFirstOrThrow({
+        where: { reversesEntryId: entry.id },
+        include: { lines: true },
+      });
+      expectBalanced(reversal);
+      expect(totalFor(reversal, 'INVENTORY', 'CREDIT')).toBe(10 * price);
+      expect(totalFor(reversal, 'GOODS_RECEIVED_ACCRUAL', 'DEBIT')).toBe(10 * price);
+    });
   });
 
   it('values quarantined units as inventory, at the location holding them', async () => {
@@ -800,7 +828,7 @@ describeIfDatabase('FIN-01 — supplier claim', () => {
 });
 
 describeIfDatabase('FIN-01 — inter-branch transfer', () => {
-  it('balances across two branches without creating or destroying value', async () => {
+  it.each([600, 150_000_000])('posts balanced transfers at cost %i', async (cost) => {
     const f = await fixture(ORG_A, branch('transfer'), 'transfer');
     const DESTINATION_BRANCH = branch('transfer-dest');
     const entry = await inOrg(ORG_A, async (db) => {
@@ -817,7 +845,7 @@ describeIfDatabase('FIN-01 — inter-branch transfer', () => {
       const { lot } = await stockLot(db, f, {
         label: 'transfer',
         units: 40,
-        unitCostMinor: 600,
+        unitCostMinor: cost,
         expiresAt: EXPIRY_LATER,
       });
       const transfer = await deps.operations.allocateTransfer(db, scopeOf(f), {
@@ -831,6 +859,16 @@ describeIfDatabase('FIN-01 — inter-branch transfer', () => {
           },
         ],
       });
+      await deps.operations.approveTransfer(db, { ...scopeOf(f), actorId: WITNESS }, transfer.id);
+      await deps.operations.dispatchTransfer(db, scopeOf(f), transfer.id, tag('dispatch'));
+      expect(
+        await db.financeJournalEntry.count({
+          where: {
+            sourceKind: 'PHARMACY_INTERBRANCH_TRANSFER_LINE',
+            sourceId: transfer.lines[0]!.id,
+          },
+        })
+      ).toBe(1);
       return deps.postings.postInterbranchTransferEntry(db, scopeOf(f), {
         transferLineId: transfer.lines[0]!.id,
         at: LATER,
@@ -838,8 +876,9 @@ describeIfDatabase('FIN-01 — inter-branch transfer', () => {
     });
 
     expectBalanced(entry);
-    expect(totalFor(entry, 'INVENTORY_IN_TRANSIT', 'DEBIT')).toBe(12_000);
-    expect(totalFor(entry, 'INVENTORY', 'CREDIT')).toBe(12_000);
+    expect(totalFor(entry, 'INVENTORY_IN_TRANSIT', 'DEBIT')).toBe(20 * cost);
+    expect(totalFor(entry, 'INVENTORY', 'CREDIT')).toBe(20 * cost);
+    expect(entry.lines.every((leg) => leg.amountMinor <= 2_147_483_647)).toBe(true);
     // Value leaves one branch and arrives at the other; nothing hits a revenue
     // or expense account, because moving one's own stock earns nothing.
     const out = entry.lines.find((leg) => leg.accountCode === 'INVENTORY')!;
@@ -850,7 +889,7 @@ describeIfDatabase('FIN-01 — inter-branch transfer', () => {
 });
 
 describeIfDatabase('FIN-01 — count adjustment', () => {
-  it('posts a shortfall as shrinkage and a surplus back into inventory', async () => {
+  it.each([700, 1_000_000_000])('posts both count variances at cost %i', async (cost) => {
     const short = await fixture(ORG_A, branch('count-short'), 'count-short');
     const over = await fixture(ORG_A, branch('count-over'), 'count-over');
 
@@ -858,7 +897,7 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
       const { lot } = await stockLot(db, short, {
         label: 'count-short',
         units: 30,
-        unitCostMinor: 700,
+        unitCostMinor: cost,
         expiresAt: EXPIRY_LATER,
       });
       const count = await deps.operations.createCount(db, scopeOf(short), {
@@ -881,14 +920,23 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
 
     expectBalanced(shortfall);
     // 30 expected, 25 counted: five units of value gone.
-    expect(totalFor(shortfall!, 'INVENTORY_SHRINKAGE', 'DEBIT')).toBe(3_500);
-    expect(totalFor(shortfall!, 'INVENTORY', 'CREDIT')).toBe(3_500);
+    expect(totalFor(shortfall!, 'INVENTORY_SHRINKAGE', 'DEBIT')).toBe(5 * cost);
+    expect(totalFor(shortfall!, 'INVENTORY', 'CREDIT')).toBe(5 * cost);
+    const leakage = await inOrg(ORG_A, (db) =>
+      deps.reports.leakageReport(db, scopeOf(short), {
+        ...WINDOW,
+        to: new Date(Date.now() + 1_000),
+      })
+    );
+    expect(leakage.find((row) => row.medicineId === short.medicineId)?.shrinkageMinor).toBe(
+      5 * cost
+    );
 
     const surplus = await inOrg(ORG_A, async (db) => {
       const { lot } = await stockLot(db, over, {
         label: 'count-over',
         units: 30,
-        unitCostMinor: 700,
+        unitCostMinor: cost,
         expiresAt: EXPIRY_LATER,
       });
       const count = await deps.operations.createCount(db, scopeOf(over), {
@@ -910,8 +958,8 @@ describeIfDatabase('FIN-01 — count adjustment', () => {
     });
 
     expectBalanced(surplus);
-    expect(totalFor(surplus!, 'INVENTORY', 'DEBIT')).toBe(2_800);
-    expect(totalFor(surplus!, 'INVENTORY_SHRINKAGE', 'CREDIT')).toBe(2_800);
+    expect(totalFor(surplus!, 'INVENTORY', 'DEBIT')).toBe(4 * cost);
+    expect(totalFor(surplus!, 'INVENTORY_SHRINKAGE', 'CREDIT')).toBe(4 * cost);
   });
 
   it('posts nothing at all when the count matched the book', async () => {

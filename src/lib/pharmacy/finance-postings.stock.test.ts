@@ -101,6 +101,142 @@ describe('zero-cost stock remains operational without empty journal entries', ()
   });
 });
 
+describe('stock values fit the journal integer columns', () => {
+  function expectPosting(total: number) {
+    const input = vi.mocked(postJournalEntry).mock.calls[0][2];
+    assertBalanced(input.lines);
+    expect(input.lines.every((line) => line.amountMinor <= 2_147_483_647)).toBe(true);
+    for (const side of ['DEBIT', 'CREDIT']) {
+      expect(
+        input.lines
+          .filter((line) => line.side === side)
+          .reduce((sum, line) => sum + line.amountMinor, 0)
+      ).toBe(total);
+    }
+    return input.lines;
+  }
+
+  it.each([1, 2])(
+    'splits receipt values across %i receipt lines, retaining dimensions',
+    async (lineCount) => {
+      const db = scoped({
+        pharmacyGoodsReceipt: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'receipt',
+            branchId: scope.branchId,
+            status: 'POSTED',
+            lines: Array.from({ length: lineCount }, (_, i) => ({
+              id: `line-${i}`,
+              medicineId: 'medicine',
+              inventoryLotId: `lot-${i}`,
+              stockLocationId: 'store',
+              quarantineLocationId: 'quarantine',
+              unitCostMinor: 500_000_000,
+              acceptedCanonicalUnits: 6 / lineCount,
+              rejectedCanonicalUnits: 2,
+            })),
+          }),
+        },
+      });
+      await postGoodsReceiptEntry(db, scope, { goodsReceiptId: 'receipt', at });
+      const lines = expectPosting((3 + lineCount) * 1_000_000_000);
+      for (let i = 0; i < lineCount; i++) {
+        const inventory = lines.filter((line) => line.sourceLineId === `line-${i}`);
+        expect(
+          inventory.every((line) => line.lotId === `lot-${i}` && line.productId === 'medicine')
+        ).toBe(true);
+        expect(
+          inventory
+            .filter((line) => line.locationId === 'store')
+            .reduce((sum, line) => sum + line.amountMinor, 0)
+        ).toBe(3_000_000_000 / lineCount);
+        expect(
+          inventory
+            .filter((line) => line.locationId === 'quarantine')
+            .reduce((sum, line) => sum + line.amountMinor, 0)
+        ).toBe(1_000_000_000);
+      }
+    }
+  );
+
+  it.each([-3, 3])(
+    'splits count variance %i without losing its sign or dimensions',
+    async (varianceUnits) => {
+      const db = scoped({
+        pharmacyInventoryCountLine: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'line',
+            branchId: scope.branchId,
+            inventoryLotId: 'lot',
+            stockLocationId: 'store',
+            varianceUnits,
+            count: { status: 'APPROVED' },
+          }),
+        },
+        pharmacyInventoryLot: {
+          findMany: vi
+            .fn()
+            .mockResolvedValue([
+              { id: 'lot', unitCostMinor: 1_000_000_000, batch: { medicineId: 'medicine' } },
+            ]),
+        },
+      });
+      await postCountAdjustmentEntry(db, scope, { countLineId: 'line', at });
+      const lines = expectPosting(3_000_000_000);
+      expect(
+        lines.every(
+          (line) =>
+            line.branchId === scope.branchId &&
+            line.lotId === 'lot' &&
+            line.locationId === 'store' &&
+            line.sourceLineId === 'line'
+        )
+      ).toBe(true);
+      expect(
+        lines
+          .filter((line) => line.accountCode === 'INVENTORY')
+          .every((line) => line.side === (varianceUnits > 0 ? 'DEBIT' : 'CREDIT'))
+      ).toBe(true);
+    }
+  );
+
+  it('splits a transfer value while retaining each branch and location', async () => {
+    const db = scoped({
+      pharmacyInterbranchTransferLine: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'line',
+          sourceBranchId: scope.branchId,
+          sourceLotId: 'lot',
+          quantityUnits: 3,
+          sourceStockLocationId: 'store',
+          destinationStockLocationId: 'destination',
+          transfer: { toBranchId: 'other' },
+        }),
+      },
+      pharmacyInventoryLot: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([
+            { id: 'lot', unitCostMinor: 1_000_000_000, batch: { medicineId: 'medicine' } },
+          ]),
+      },
+    });
+    await postInterbranchTransferEntry(db, scope, { transferLineId: 'line', at });
+    const lines = expectPosting(3_000_000_000);
+    expect(lines.every((line) => line.lotId === 'lot' && line.sourceLineId === 'line')).toBe(true);
+    expect(
+      lines
+        .filter((line) => line.side === 'CREDIT')
+        .every((line) => line.branchId === scope.branchId && line.locationId === 'store')
+    ).toBe(true);
+    expect(
+      lines
+        .filter((line) => line.side === 'DEBIT')
+        .every((line) => line.branchId === 'other' && line.locationId === 'destination')
+    ).toBe(true);
+  });
+});
+
 describe('opening balances fit the journal integer columns', () => {
   it.each([1, 2_147_483_647, 2_147_483_648, 5_000_000_001])(
     'posts an opening inventory value of %i exactly',
