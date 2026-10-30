@@ -519,9 +519,30 @@ describe('counter receipt authorization', () => {
     expect(path.write).not.toHaveBeenCalled();
   });
 
-  it('keeps Khata tender off the branch-assignment guard', async () => {
+  it.each(['*', 'pharmacy:*', 'pharmacy:counter'])(
+    'keeps Khata tender with %s off the branch-assignment guard',
+    async (capability) => {
+      const f = fixture([{ capability, effect: 'ALLOW' }]);
+      f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
+      await expect(
+        f.caller().tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type: 'KHATA',
+          amountMinor: 100,
+          familyAccountId: 'family-1',
+          idempotencyKey: 'khata-1',
+        })
+      ).rejects.toThrow('khata-reached');
+      expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
+
+  it('denies Khata tender with clinical dispense access alone', async () => {
     const f = fixture(dispense);
-    f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
     await expect(
       f.caller().tender({
         branchId: 'branch-a',
@@ -531,10 +552,10 @@ describe('counter receipt authorization', () => {
         type: 'KHATA',
         amountMinor: 100,
         familyAccountId: 'family-1',
-        idempotencyKey: 'khata-1',
+        idempotencyKey: 'khata-clinical-only',
       })
-    ).rejects.toThrow('khata-reached');
-    expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 
