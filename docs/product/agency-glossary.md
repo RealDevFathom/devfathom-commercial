@@ -1,8 +1,8 @@
 # Agency glossary
 
-Plain-language meanings of words used in the [agency guide](agency-guide.md). For words shared across DevFathom, see the [general glossary](glossary.md).
+Plain-language meanings of words used in the [agency guide](agency-guide.md), including terms shared across DevFathom.
 
-> Checked against the code on `origin/main` 6e425380. Items marked **TODO(confirm)** still need checking.
+> **Status: IMPLEMENTED (repository scope).** Checked against code at `6e425380`, the base of PR #58; see the guide's [repository evidence](agency-guide.md#repository-evidence). Availability depends on enabled modules and effective permissions. Items marked **TODO(confirm)** still need checking.
 
 | Word | What it means |
 |---|---|
@@ -21,7 +21,7 @@ Plain-language meanings of words used in the [agency guide](agency-guide.md). Fo
 | **Department** | The team a person belongs to, such as Engineering or Design. |
 | **Invoice** | A bill you send to a client. |
 | **Leave request** | An employee's request for time off. |
-| **Module** | A part of DevFathom that is switched on for your organization. For agencies: Agency Core, Projects, Clients and Finance. |
+| **Module** | A part of DevFathom enabled for your organization. Agency-specific modules are Agency Core, Projects, Clients and Finance; shared features such as Chat, HR and Email have separate controls. |
 | **Organization** | Your business inside DevFathom. Its data is kept separate from every other organization. |
 | **Payment** | Money received against an invoice. |
 | **Permission** | Permission to do one specific thing in DevFathom. |

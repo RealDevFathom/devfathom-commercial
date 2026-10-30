@@ -1,7 +1,7 @@
 # DevFathom for agencies: a plain-language guide
 
 > **Who this is for:** agency owners, managers and staff.
-> **Status:** checked against the code on `origin/main` 6e425380 (2026-10-22). Anything marked **TODO(confirm)** still needs checking in the running app.
+> **Status: IMPLEMENTED (repository scope).** Source-checked against code at `6e425380`, the base of PR #58; see [repository evidence](#repository-evidence). This is not a deployment or plan-availability claim. Anything marked **TODO(confirm)** still needs checking in the running app.
 > **TODO(confirm):** language. This guide is in English only. Do we also need Urdu or Roman Urdu? (Open question 6 in the docs survey.)
 
 Words in *italics* are explained in the [agency glossary](agency-glossary.md).
@@ -43,8 +43,8 @@ DevFathom also has products for pharmacies and restaurants. They run on the same
 | **Reviews** | Staff performance reviews | HR or Admins run review cycles; staff fill in the reviews they are given. These are not client reviews. |
 | **Organization** | Settings for the whole organization, roles and permissions | Usually for admins |
 | **Settings** | Your own profile and preferences, plus your organization's plan details | TODO(confirm): exactly which settings each role sees |
-| **Audit logs** | A record of who did what, and when | |
-| **API docs** | For technical staff who connect other tools | Uses *API tokens* and *webhooks* |
+| **Audit logs** | A record of who did what, and when | Admins only |
+| **API docs** | For technical staff who connect other tools | Admins manage *API tokens* and *webhooks* |
 
 ---
 
@@ -53,10 +53,10 @@ DevFathom also has products for pharmacies and restaurants. They run on the same
 ### Step 1: Get your organization created
 The DevFathom platform team creates organizations and decides which *modules* each organization has, and any limits that apply.
 - **TODO(confirm):** whether agencies can sign up on their own.
-- The agency product has four modules: **Agency Core** (always on), plus **Projects**, **Clients** and **Finance**, which can be switched on or off. Agency plans count users (seats) for the whole organization; there are no other agency limits. TODO(confirm): prices and seat numbers per package.
+- The agency-specific catalog has four modules: **Agency Core** (required), plus **Projects**, **Clients** and **Finance**, which can be switched on or off. Shared features such as Chat, Meetings, HR, Email, API access and Audit logs have separate module controls, so the areas below depend on your organization's enabled modules. Agency plans count users (seats) for the whole organization; the catalog defines no additional agency-specific numeric limits. TODO(confirm): prices and seat numbers per package.
 
 ### Step 2: The first admin signs in
-- **TODO(confirm):** how the first admin gets access (for example, an emailed *invitation*).
+- The platform team creates the first admin with a temporary password. The admin must change it on first sign-in. **TODO(confirm):** the approved way to deliver that temporary password.
 - Never share a login with anyone, and never write a password in a document or chat.
 
 ### Step 3: Turn on two-step sign-in
@@ -76,7 +76,7 @@ Larger agencies may be able to use *SSO* (sign in with your company account) and
 3. Already using Trello? Import your Trello boards instead of building them again.
 
 ### Step 6 (optional): Connect other tools
-Technical staff can create *API tokens* and *webhooks* so other systems can talk to DevFathom. The **API docs** area explains how.
+An Admin can create *API tokens* and *webhooks* so other systems can talk to DevFathom, when those modules are enabled. The **API docs** area explains how.
 
 ### Setup checklist
 - [ ] Organization created and modules switched on
@@ -124,7 +124,7 @@ Use **Chat** *channels* for team conversations. New messages appear live, with n
 Use **search** to find projects, tasks, clients and notes.
 
 ### Check what happened
-Open **Audit logs** to see who changed what, and when.
+An Admin can open **Audit logs**, when that module is enabled, to see who changed what, and when.
 
 ---
 
@@ -132,13 +132,15 @@ Open **Audit logs** to see who changed what, and when.
 
 Every user in your organization has one of three basic roles:
 
+The table describes baseline access when the relevant modules are enabled. Custom roles and permission overrides can change capability-based access; a person's basic role alone does not guarantee their effective permissions.
+
 | Role | What they can do |
 |---|---|
 | **Admin** | Everything in the organization: settings, inviting people and changing roles, clients and contracts, all of Finance, the team-wide statistics and the revenue figures on the dashboard. Also everything HR can do. |
 | **HR** | People matters: see and approve leave, set leave balances, run performance review cycles, see and review resignations, and lay off staff (but not an Admin). HR does **not** see Finance. |
 | **Employee** | Day-to-day work: projects, boards and tasks, time entries, chat, notes, meetings and their own email. Request leave, fill in their own reviews, hand in a resignation, and see their own statistics. |
 
-**Ready-made organization roles.** On top of the three basic roles, an agency starts with two ready-made roles for fine-grained permissions: **Administrator** (all permissions) and **Member** (no extra permissions). These are provisional and may change. There are no agency-specific job roles (such as "designer" or "account manager") in the product today.
+**Ready-made organization roles.** On top of the three basic roles, a newly provisioned agency starts with an **Organization administrator** role granting all agency capabilities. The catalog also defines **Administrator** and **Member** templates, but agency provisioning does not instantiate those templates or create a Member role. There are no agency-specific job roles (such as "designer" or "account manager") in the product today.
 
 **Fine-tuning access.** Your organization can also:
 - create **custom roles** with their own list of *permissions*, and
@@ -155,7 +157,7 @@ Every user in your organization has one of three basic roles:
 - **Dashboard**: projects, tasks, deadlines and pending leave; Admins also see income, expenses, unpaid invoices and a revenue chart.
 - **Team statistics** (Admins): per person, open and overdue tasks, tasks finished this week and last week, how long tasks take, meetings attended, notes, projects, comments and a daily activity trend. Each person can see their own figures.
 - **Finance** (Admins): invoices, payments, budget vs actual and a profit-and-loss report.
-- **Audit logs**: a record of changes.
+- **Audit logs** (Admins): a record of changes, when the module is enabled.
 
 **Still to confirm:**
 - **TODO(confirm):** whether reports can be exported (for example, to a spreadsheet).
@@ -175,7 +177,18 @@ Every user in your organization has one of three basic roles:
 ## Related docs
 
 - [Docs index](../README.md)
-- [DevFathom overview](overview.md) and [general glossary](glossary.md)
+- [DevFathom technical overview](../technical-overview.md)
 - [Agency glossary](agency-glossary.md)
-- [Pharmacy guide](pharmacy-guide.md) (the restaurant guide is coming in PR 3)
-- [Auth and roles](../dev/auth-and-roles.md) (technical, PR 2)
+- [Restaurant administrator guide](restaurant-administrator-guide.md)
+- [Identity, authentication and authorization](../admin-platform/identity-access.md) (technical)
+- [Modules, packages, contracts and limits](../admin-platform/entitlements.md) (technical)
+
+## Repository evidence
+
+These are code references for the implemented behavior described here, not evidence of a live customer deployment:
+
+- [Agency modules, departments, role templates and limit keys](../../src/lib/vertical-catalog.ts), [shared module controls](../../src/lib/module-catalog.ts) and [entitlement resolution](../../src/lib/entitlements.ts).
+- [Organization provisioning and first-admin access](../../src/lib/platform/commands.ts), with coverage in [agency onboarding regression tests](../../tests/agency-onboarding-regression.test.ts) and [organization creation tests](../../src/lib/platform/commands.organization-create.test.ts).
+- [Baseline role policies](../../src/lib/abac/policies.ts), [custom permissions and overrides](../../src/lib/abac/index.ts), [procedure access checks](../../src/server/trpc.ts), [audit-log access](../../src/server/routers/audit.ts), [API tokens](../../src/server/routers/api-tokens.ts) and [webhooks](../../src/server/routers/webhooks.ts).
+- [Team invitations](../../src/server/routers/team.ts), [invitation acceptance](../../src/server/routers/invitations.ts), [password resets](../../src/server/routers/password-reset.ts), [two-step sign-in](../../src/server/routers/two-factor.ts) and [support sessions](../../src/lib/tenancy/support-session.ts).
+- [Agency workflows](../../tests/agency-e2e/agency-acceptance.spec.ts), [clients and contracts](../../src/server/routers/clients.ts), [projects and time entries](../../src/server/routers/projects.ts), [finance](../../src/server/routers/finance.ts), [team statistics](../../src/server/routers/team-stats.ts) and [resignations](../../src/server/routers/resignations.ts).
