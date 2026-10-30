@@ -654,6 +654,31 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     permissionOverrides: [],
   };
 
+  it('lets a tenant admin without an organization role create a goods receipt (#375)', async () => {
+    db.user.findUnique.mockResolvedValue({
+      role: 'ADMIN',
+      organizationRole: null,
+      permissionOverrides: [],
+    });
+    await caller().createGoodsReceipt(RECEIPT);
+    expect(db.pharmacyGoodsReceipt.create).toHaveBeenCalledOnce();
+  });
+
+  it.each(['pharmacy:procurement', 'pharmacy:*', '*'])(
+    'keeps a %s DENY effective for a tenant admin without a role',
+    async (capability) => {
+      db.user.findUnique.mockResolvedValue({
+        role: 'ADMIN',
+        organizationRole: null,
+        permissionOverrides: [{ capability, effect: 'DENY' }],
+      });
+      await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    }
+  );
+
   it('derives canonical units and the landed unit cost instead of trusting the payload', async () => {
     await caller().createGoodsReceipt(RECEIPT);
     const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
