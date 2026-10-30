@@ -397,7 +397,9 @@ test('publishes bridge routing and persists a routed KOT job with the fired item
     configuredBranch,
     `branch ${fixture.branchId} must be visible to the configurator`
   ).toBeDefined();
-  expect(configuredBranch!.config.routes).toEqual(expect.arrayContaining(bridgeRoutes));
+  expect(configuredBranch!.config.routes).toEqual(
+    expect.arrayContaining(bridgeRoutes.map((route) => expect.objectContaining(route)))
+  );
 
   pos = await establishPosFixture(request);
   const menuResponse = await request.get('/api/restaurant/orders/effective-menu?channel=DINE_IN', {

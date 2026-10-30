@@ -4,6 +4,7 @@ import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
 import {
+  INVOICE_STATUS_VALUES,
   invoiceStatusTransitionError,
   invoiceStatusUpdate,
   type InvoiceStatusValue,
@@ -26,7 +27,10 @@ export const GET = withApiAuth(
 );
 
 const updateSchema = z.object({
-  status: z.enum(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED']).optional(),
+  // Parse the same status domain enforced by the shared transition machine below.
+  // Keeping one canonical list prevents this REST surface from accepting a new
+  // status before its transition rules (and the other API surfaces) are ready.
+  status: z.enum(INVOICE_STATUS_VALUES).optional(),
 });
 
 export const PATCH = withApiAuth(

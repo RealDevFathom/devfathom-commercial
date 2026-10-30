@@ -119,6 +119,5 @@ payment webhooks will receive **401** and payments will not be applied.
 
 Before deploying, configure the shared secret on senders and receiver, verify
 every sender uses the new header and signing string, and confirm clock sync.
-Missing/invalid timestamps, signatures, or timestamps outside the window return
-401. Failed deliveries are recorded for audit; only VERIFIED inbox rows may
+Missing/invalid timestamps, signatures, or timestamps outside the window return 401. Failed deliveries are recorded for audit; only VERIFIED inbox rows may
 process payments, and all other verification states are discarded.

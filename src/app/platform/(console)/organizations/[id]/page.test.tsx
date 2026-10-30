@@ -741,16 +741,24 @@ describe('destructive lifecycle reason', () => {
       fireEvent.submit(form);
       expect(fetchMock).not.toHaveBeenCalled();
       expect(confirm).not.toHaveBeenCalled();
-      fireEvent.change(reason, { target: { value: 'Retention reviewed and approved by the owner' } });
+      fireEvent.change(reason, {
+        target: { value: 'Retention reviewed and approved by the owner' },
+      });
       fireEvent.submit(form);
-      expect(confirm).toHaveBeenCalledWith('Schedule this organization for purge? This begins the retention countdown.');
+      expect(confirm).toHaveBeenCalledWith(
+        'Schedule this organization for purge? This begins the retention countdown.'
+      );
       expect(fetchMock).not.toHaveBeenCalled();
       confirm.mockReturnValue(true);
       fireEvent.submit(form);
       await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
       expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
         action: 'organization.transition',
-        payload: { id: 'org_1', status: 'PURGING', reason: 'Retention reviewed and approved by the owner' },
+        payload: {
+          id: 'org_1',
+          status: 'PURGING',
+          reason: 'Retention reviewed and approved by the owner',
+        },
       });
       await waitFor(() => expect(within(form).getByRole('button')).not.toBeDisabled());
     } finally {
