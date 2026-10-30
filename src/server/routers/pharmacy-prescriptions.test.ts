@@ -62,12 +62,12 @@ function context(userId = 'user-a', organizationId = 'org-a', status = 'ACTIVE')
 function caller(ctx = context()) {
   return pharmacyPrescriptionsRouter.createCaller(ctx);
 }
-async function upload() {
+async function upload(patientId = 'patient-a') {
   const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'white' } })
     .png()
     .toBuffer();
   return caller().uploadSource({
-    patientId: 'patient-a',
+    patientId,
     contentType: 'image/png',
     dataBase64: bytes.toString('base64'),
   });
@@ -185,7 +185,9 @@ describe('prescription capture and private delivery', () => {
   });
 
   it('rejects oversized prescription lines and directions before storage work', async () => {
-    const input = captureInput('/api/pharmacy/prescription-files/test.png');
+    const input = captureInput(
+      '/api/pharmacy/prescription-files?id=00000000-0000-4000-8000-000000000001'
+    );
 
     await expect(
       caller().capture({ ...input, lines: Array.from({ length: 31 }, () => input.lines[0]) })
@@ -203,7 +205,9 @@ describe('prescription capture and private delivery', () => {
   });
 
   it('accepts prescription lines, directions, and IDs at their limits', async () => {
-    const input = captureInput('/api/pharmacy/prescription-files/test.png');
+    const input = captureInput(
+      '/api/pharmacy/prescription-files?id=00000000-0000-4000-8000-000000000001'
+    );
 
     await expect(
       caller().capture({
@@ -221,10 +225,42 @@ describe('prescription capture and private delivery', () => {
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
 
     expect(mocks.getUpload).toHaveBeenCalledOnce();
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('persists the maximum prescription lines and directions after a valid upload', async () => {
+    const patientId = 'p'.repeat(128);
+    const receipt = await upload(patientId);
+    const input = {
+      ...captureInput(receipt.url),
+      patientId,
+      prescriberId: 'r'.repeat(200),
+      lines: Array.from({ length: 30 }, (_, index) => ({
+        lineNumber: index + 1,
+        medicineId: 'm'.repeat(200),
+        presentationId: 'x'.repeat(200),
+        authorizedCanonicalUnits: 2,
+        directions: 'd'.repeat(2_000),
+      })),
+    };
+
+    await expect(caller().capture(input)).resolves.toMatchObject({
+      id: expect.stringMatching(/^rx-/),
+    });
+    expect(mocks.create).toHaveBeenCalledWith({
+      data: {
+        ...input,
+        id: expect.stringMatching(/^rx-/),
+        capturedByUserId: 'user-a',
+        lines: { create: input.lines },
+      },
+    });
   });
 
   it('rejects oversized capture IDs before storage work', async () => {
-    const input = captureInput('/api/pharmacy/prescription-files/test.png');
+    const input = captureInput(
+      '/api/pharmacy/prescription-files?id=00000000-0000-4000-8000-000000000001'
+    );
     const oversizedId = 'x'.repeat(201);
 
     await expect(caller().capture({ ...input, patientId: oversizedId })).rejects.toMatchObject({

@@ -444,6 +444,7 @@ describe('PUR-02 tenant boundaries', () => {
 
   it('accepts requisitions and IDs at their limits', async () => {
     const medicineId = 'm'.repeat(200);
+    resolvableCatalog();
     await expect(
       caller().createRequisition({
         reference: 'REQ-AT-LIMIT',
@@ -455,9 +456,26 @@ describe('PUR-02 tenant boundaries', () => {
           canonicalUnitsPerPack: 1,
         })),
       })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    ).resolves.toMatchObject({ id: 'new' });
     expect(db.medicine.findFirst).toHaveBeenCalledWith({
       where: { id: medicineId, saleable: true },
+    });
+    expect(db.packLevel.findFirst).toHaveBeenCalledTimes(100);
+    expect(db.pharmacyRequisition.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        branchId: 'b'.repeat(200),
+        lines: {
+          create: Array.from({ length: 100 }, (_, index) => ({
+            medicineId,
+            packLevelId: 'p'.repeat(200),
+            quantityPacks: 1,
+            canonicalUnitsPerPack: 1,
+            canonicalUnits: 1,
+            lineNumber: index + 1,
+          })),
+        },
+      }),
+      include: { lines: true },
     });
   });
 

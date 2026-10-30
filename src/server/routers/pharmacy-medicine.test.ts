@@ -34,6 +34,9 @@ function model() {
 
 function makeDb() {
   const db = {
+    user: {
+      findUnique: vi.fn().mockResolvedValue({ organizationRole: null, permissionOverrides: [] }),
+    },
     ingredient: model(),
     medicine: model(),
     presentation: model(),
@@ -140,9 +143,58 @@ describe('pharmacy medicine tenant and entitlement boundaries', () => {
   });
 
   it.each([
+    ['string', 'x'.repeat(2_000)],
+    ['array', Array.from({ length: 20 }, () => 'value')],
+    [
+      'object and keys',
+      Object.fromEntries(
+        Array.from({ length: 20 }, (_, index) => [String(index).padStart(100, 'k'), index])
+      ),
+    ],
+    ['nesting', [[[['value']]]]],
+    [
+      'aggregate nodes',
+      Array.from({ length: 20 }, (_, row) =>
+        Array.from({ length: 20 }, (_, column) =>
+          Array.from({ length: row * 20 + column < 179 ? 2 : 1 }, () => null)
+        )
+      ),
+    ],
+    ['aggregate characters', Array.from({ length: 10 }, () => 'x'.repeat(2_000))],
+  ])('persists a provenance assertedValue at the %s limit', async (_, value) => {
+    await expect(
+      caller().createMedicine({
+        productName: 'Medicine',
+        productFamily: 'PHARMACEUTICAL',
+        provenance: [
+          {
+            field: 'productName',
+            source: 'manual',
+            sourceType: 'USER',
+            retrievedAt: new Date('2026-01-01'),
+            status: 'UNREVIEWED',
+            assertedValue: value,
+          },
+        ],
+      })
+    ).resolves.toMatchObject({ id: 'new' });
+
+    expect(db.medicine.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          provenance: { create: [expect.objectContaining({ assertedValue: value })] },
+        }),
+      })
+    );
+  });
+
+  it.each([
     ['string', 'x'.repeat(2_001)],
     ['array', Array.from({ length: 21 }, () => 'value')],
-    ['object', Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`key_${index}`, index]))],
+    [
+      'object',
+      Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`key_${index}`, index])),
+    ],
     ['nesting', [[[[['too deep']]]]]],
   ])('rejects an oversized provenance assertedValue %s before database work', async (_, value) => {
     await expect(
