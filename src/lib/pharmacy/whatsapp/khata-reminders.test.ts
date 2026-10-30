@@ -48,19 +48,22 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       }: {
         where: {
           organizationId: string;
-          kind: string;
-          dedupeKey: { in: string[] };
-          createdAt: { gte: Date; lt: Date };
+          kind?: string;
+          customerDayKey?: string;
+          dedupeKey?: { in: string[] };
+          createdAt?: { gte: Date; lt: Date };
         };
       }) =>
         store.logs.find(
           (log) =>
             log.organizationId === where.organizationId &&
-            log.kind === where.kind &&
-            where.dedupeKey.in.includes(log.dedupeKey) &&
-            log.createdAt instanceof Date &&
-            log.createdAt >= where.createdAt.gte &&
-            log.createdAt < where.createdAt.lt
+            (where.kind === undefined || log.kind === where.kind) &&
+            (where.customerDayKey === undefined || log.customerDayKey === where.customerDayKey) &&
+            (where.dedupeKey === undefined || where.dedupeKey.in.includes(log.dedupeKey)) &&
+            (where.createdAt === undefined ||
+              (log.createdAt instanceof Date &&
+                log.createdAt >= where.createdAt.gte &&
+                log.createdAt < where.createdAt.lt))
         ) ?? null,
       createManyAndReturn: async ({ data }: { data: Array<Omit<LogRow, 'id'>> }) => {
         const row = data[0]!;
@@ -365,8 +368,55 @@ describe('processDueWhatsAppKhataReminders', () => {
       'khata:family-1:w2026-45',
       'khata:family-1:w2026-46',
     ]);
-    expect(store.updates).toEqual([]);
+    expect(store.updates).toEqual([
+      {
+        where: { id: 'log-1' },
+        data: { status: 'IGNORED', error: 'MOCK_PREPARED', providerMessageId: 'mock-wamid-1' },
+      },
+      {
+        where: { id: 'log-2' },
+        data: { status: 'IGNORED', error: 'MOCK_PREPARED', providerMessageId: 'mock-wamid-2' },
+      },
+    ]);
   });
+
+  it.each(['2026-11-03T08:00:00.000Z', '2026-11-06T08:00:00.000Z'])(
+    'honors a legacy reminder in the same Karachi week after the cutoff at %s',
+    async (instant) => {
+      store.accounts = [account()];
+      store.customers = [customer(true)];
+      store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+      const legacySentAt = new Date('2026-11-02T08:00:00.000Z');
+      store.logs = [
+        {
+          id: 'legacy-log',
+          organizationId: 'org_a',
+          kind: 'KHATA_REMINDER',
+          dedupeKey: `khata:family-1:w${Math.floor(legacySentAt.getTime() / (7 * 86_400_000))}`,
+          createdAt: legacySentAt,
+        },
+      ];
+      const provider = new MockWhatsAppProvider(config);
+
+      const result = await processDueWhatsAppKhataReminders({
+        now: new Date(instant),
+        config,
+        provider,
+      });
+
+      expect(result).toMatchObject({ duplicate: 1, prepared: 0 });
+      expect(provider.calls).toEqual([]);
+      expect(store.logs).toHaveLength(1);
+
+      const nextWeek = await processDueWhatsAppKhataReminders({
+        now: new Date('2026-11-09T08:00:00.000Z'),
+        config,
+        provider,
+      });
+      expect(nextWeek).toMatchObject({ duplicate: 0, prepared: 1 });
+      expect(provider.calls).toHaveLength(1);
+    }
+  );
 
   it.each([
     ['never asked (null opt-in)', null, { granted: true, revokedAt: null }],
@@ -459,14 +509,25 @@ describe('reminder text and daily customer dedupe', () => {
     ]);
     expect(provider.calls).toHaveLength(1);
     expect(store.logs[1].customerDayKey).toBe('khata:customer-1:2026-10-21');
-    // The compatibility claims also reserve the old worker's weekly keys, so
-    // the losing account remains suppressed until both weekly schemes advance.
+    expect(store.logs.some((log) => log.dedupeKey.startsWith('khata:family-2:'))).toBe(false);
+    await processDueWhatsAppKhataReminders({
+      now: new Date('2026-10-22T08:00:00Z'),
+      config,
+      provider,
+    });
+    expect(provider.calls).toHaveLength(2);
+    expect(store.logs).toContainEqual(
+      expect.objectContaining({
+        dedupeKey: 'khata:family-2:w2026-43',
+        customerDayKey: 'khata:customer-1:2026-10-22',
+      })
+    );
     await processDueWhatsAppKhataReminders({
       now: new Date('2026-10-29T08:00:00Z'),
       config,
       provider,
     });
-    expect(provider.calls).toHaveLength(2);
+    expect(provider.calls).toHaveLength(3);
   });
   it('sends the sanitized name to the provider', async () => {
     store.accounts = [{ ...account(), displayName: 'Khan\nhttps://evil.test' }];

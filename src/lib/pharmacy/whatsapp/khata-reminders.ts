@@ -263,7 +263,24 @@ export async function processDueWhatsAppKhataReminders(
         month: '2-digit',
         day: '2-digit',
       }).format(now);
-      if (now.getTime() < LEGACY_WEEK_COMPATIBILITY_END) {
+      const customerDayKey = `khata:${customer.id}:${day}`;
+      const claimLegacyWeek = now.getTime() < LEGACY_WEEK_COMPATIBILITY_END;
+      if (claimLegacyWeek) {
+        // The patient lock serializes this payer's claims. A daily-limit skip
+        // must not reserve a legacy weekly key and prevent tomorrow's reminder.
+        const dailyClaim = await db.pharmacyMessageLog.findFirst({
+          where: { organizationId: account.organizationId, customerDayKey },
+          select: { id: true },
+        });
+        if (dailyClaim) {
+          return {
+            customerId: customer.id,
+            patientId: customer.patientId,
+            to,
+            logId: null,
+            skipReason: undefined,
+          };
+        }
         // Claim the exact key a pre-migration worker uses before claiming the
         // new key. The one-week rollout window serializes old/new workers
         // without permanently retaining the legacy Thursday boundary.
@@ -293,27 +310,31 @@ export async function processDueWhatsAppKhataReminders(
           where: { id: legacyClaimId, organizationId: account.organizationId },
           data: { status: 'IGNORED' },
         });
-        const overlap = overlappingLegacyWeek(account.familyAccountId, now);
-        const otherLegacyClaim = await db.pharmacyMessageLog.findFirst({
-          where: {
-            organizationId: account.organizationId,
-            kind: 'KHATA_REMINDER',
-            dedupeKey: {
-              in: overlap.keys.filter((key) => key !== legacyWeekKey(account.familyAccountId, now)),
-            },
-            createdAt: { gte: overlap.start, lt: overlap.end },
+      }
+      // Retain reads after legacy writes stop: an old reminder earlier in this
+      // Karachi week still consumes its weekly slot across the rollout cutoff.
+      const overlap = overlappingLegacyWeek(account.familyAccountId, now);
+      const otherLegacyClaim = await db.pharmacyMessageLog.findFirst({
+        where: {
+          organizationId: account.organizationId,
+          kind: 'KHATA_REMINDER',
+          dedupeKey: {
+            in: overlap.keys.filter(
+              (key) => !claimLegacyWeek || key !== legacyWeekKey(account.familyAccountId, now)
+            ),
           },
-          select: { id: true },
-        });
-        if (otherLegacyClaim) {
-          return {
-            customerId: customer.id,
-            patientId: customer.patientId,
-            to,
-            logId: null,
-            skipReason: undefined,
-          };
-        }
+          createdAt: { gte: overlap.start, lt: overlap.end },
+        },
+        select: { id: true },
+      });
+      if (otherLegacyClaim) {
+        return {
+          customerId: customer.id,
+          patientId: customer.patientId,
+          to,
+          logId: null,
+          skipReason: undefined,
+        };
       }
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: account.organizationId,
@@ -321,7 +342,7 @@ export async function processDueWhatsAppKhataReminders(
         status: 'PENDING',
         kind: 'KHATA_REMINDER',
         dedupeKey: plan.dedupeKey,
-        customerDayKey: `khata:${customer.id}:${day}`,
+        customerDayKey,
         branchId: account.branchId,
         customerId: customer.id,
         patientId: customer.patientId,
