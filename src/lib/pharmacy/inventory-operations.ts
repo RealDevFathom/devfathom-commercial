@@ -583,7 +583,6 @@ export async function acknowledgeRecall(db: ScopedDb, scope: LedgerScope, notice
       ...(notice.batchId
         ? { manufacturingBatchId: notice.batchId }
         : { batch: { medicineId: notice.medicineId! } }),
-      balances: { some: { onHandUnits: { gt: 0 } } },
     },
     select: { id: true },
   });
@@ -633,24 +632,34 @@ export async function closeRecall(
   });
   const acknowledgedBranches = new Set(notice.acknowledgements.map(({ branchId }) => branchId));
   if (
-    !affectedBranches.length ||
+    !acknowledgedBranches.size ||
     affectedBranches.some(({ branchId }) => !acknowledgedBranches.has(branchId))
   )
     throw new PharmacyInventoryError('INVALID_STATE');
-  const where = notice.batchId ? { id: notice.batchId } : { medicineId: notice.medicineId! };
   const batchIds = lockedBatches.map(({ id }) => id);
   const medicineIds = [...new Set(lockedBatches.map(({ medicineId }) => medicineId))];
-  const remaining = await db.pharmacyRecallNotice.count({
+  const remaining = await db.pharmacyRecallNotice.findMany({
     where: {
       organizationId: scope.organizationId,
       status: 'OPEN',
       id: { not: notice.id },
       OR: [{ batchId: { in: batchIds } }, { medicineId: { in: medicineIds } }],
     },
+    select: { batchId: true, medicineId: true },
   });
-  if (!remaining)
+  // Release only locked batches with no other open recall. A medicine-wide
+  // update could overwrite a newly inserted batch's independent recall, and
+  // one overlapping notice must not keep every other batch blocked.
+  const releasableIds = lockedBatches
+    .filter((batch) =>
+      remaining.every(
+        (other) => other.batchId !== batch.id && other.medicineId !== batch.medicineId
+      )
+    )
+    .map(({ id }) => id);
+  if (releasableIds.length)
     await db.pharmacyManufacturingBatch.updateMany({
-      where: { organizationId: scope.organizationId, ...where },
+      where: { organizationId: scope.organizationId, id: { in: releasableIds } },
       data: { state: 'ACTIVE', stateReason: null, stateChangedAt: null },
     });
   return db.pharmacyRecallNotice.update({
@@ -668,6 +677,8 @@ export async function reserveSupplierClaim(
   // Serialize against sales, transfers and purchase returns: lock EVERY AVAILABLE
   // balance row of the lot (the same rows sale allocation and purchase returns
   // lock) FOR UPDATE in key (stockLocationId) order, exactly like purchase returns, then measure availability from the locked rows.
+  // SHARE on the batch excludes recall updates while remaining compatible with
+  // checkout's batch safety check after it has already locked the balances.
   // The caller must keep this lock and the check/create below in one transaction.
   const locked = await db.$queryRaw<Array<{ onHandUnits: number; state: string }>>(Prisma.sql`
     SELECT b."onHandUnits", mb.state::text
@@ -682,7 +693,8 @@ export async function reserveSupplierClaim(
       AND b."inventoryLotId" = ${input.inventoryLotId}
       AND b."disposition" = 'AVAILABLE'
     ORDER BY mb.id, b."stockLocationId" ASC
-    FOR UPDATE OF mb, b
+    FOR SHARE OF mb
+    FOR UPDATE OF b
   `);
   if (locked.some((row) => row.state !== 'ACTIVE'))
     throw new PharmacyInventoryError('BLOCKED_STOCK');
