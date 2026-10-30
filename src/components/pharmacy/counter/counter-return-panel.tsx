@@ -185,6 +185,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     setBusy(true);
     setError('');
     setMessage('');
+    let witnessDenied = false;
+    let mutationSucceeded = false;
     try {
       // Write the idempotent operation before sending, but never persist a witness credential.
       const saved =
@@ -197,6 +199,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       if (next.kind === 'return') {
         const result = await returnLine.mutateAsync(next.input);
         if (result && 'blocked' in result) {
+          witnessDenied = true;
           throw Object.assign(new Error(result.blocked), { data: { code: 'BAD_REQUEST' } });
         }
       } else
@@ -204,6 +207,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
           ...next.input,
           businessDate: new Date(next.input.businessDate),
         });
+      mutationSucceeded = true;
       await history.refetch({ throwOnError: true });
       localStorage.removeItem(storageKey);
       setAttempt(null);
@@ -219,7 +223,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       const code = (cause as { data?: { code?: string } })?.data?.code;
       if (
         ['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '') &&
-        !(next.kind === 'return' && recoveryLine?.controlled)
+        !mutationSucceeded &&
+        // A witness denial happens before replay lookup and cannot resolve an earlier outcome.
+        !(witnessDenied && attempt?.kind === 'return')
       ) {
         try {
           localStorage.removeItem(storageKey);
