@@ -157,17 +157,37 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   return { organizationId, branchId: branch, actorId };
 }
 
-async function khataScope(ctx: TRPCContext, branch: string) {
-  // Khata moves money through the counter and shares its member/branch boundary.
-  const scope = await requireCounterReceiptAccess(ctx, branch, true);
+async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'write') {
+  const scope = await branchScopeOrForbidden(ctx, branch);
   if (
     ctx.organization?.vertical !== 'PHARMACY' ||
     ctx.organization.id !== scope.organizationId ||
     ctx.session!.user.organizationId !== scope.organizationId ||
     !hasModule(ctx.entitlements, 'pharmacy-counter')
   )
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
-  return scope;
+    throw new TRPCError({ code: 'FORBIDDEN' });
+  const subject = subjectFromSession(ctx.session!.user);
+  const hasCounterAccess = await can(subject, 'pharmacy:counter', undefined, {
+    db: ctx.db,
+    source: 'TRPC',
+  });
+  const financialReadAccess =
+    !hasCounterAccess &&
+    access === 'read' &&
+    (await can(subject, 'reports:financial', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }));
+  if (!hasCounterAccess && !financialReadAccess)
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message:
+        access === 'write'
+          ? 'Pharmacy counter permission required.'
+          : 'Pharmacy counter or financial reports permission required.',
+    });
+  // Finance reads and counter money operations share the active member/branch boundary.
+  return requireCounterReceiptAccess(ctx, branch, false, financialReadAccess);
 }
 
 async function bindKhataBranch(db: ScopedDb, scope: LedgerScope) {
@@ -343,7 +363,8 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
 async function requireCounterReceiptAccess(
   ctx: TRPCContext,
   branch: string,
-  requireCanonicalCounter = false
+  requireCanonicalCounter = false,
+  financialReadAccess = false
 ): Promise<LedgerScope> {
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
@@ -390,7 +411,8 @@ async function requireCounterReceiptAccess(
   // can accidentally outrun an explicit DENY on another alias.
   // Combine user overrides and role rules into ONE family decision so any
   // explicit DENY (user or role, on any alias) beats any ALLOW.
-  const capable = counterCapabilityDecision([...overrides, ...roleRules]) === 'ALLOW';
+  const decision = counterCapabilityDecision([...overrides, ...roleRules]);
+  const capable = decision === 'ALLOW' || (decision !== 'DENY' && financialReadAccess);
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -448,11 +470,19 @@ const closeDate = z
       date.getUTCMilliseconds() === 0,
     'Choose a date without a time.'
   );
-function requireCloseAccess(ctx: TRPCContext) {
-  if (ctx.session?.user.role !== 'ADMIN')
+async function requireCloseAccess(ctx: TRPCContext) {
+  const user = ctx.session?.user;
+  if (
+    !user ||
+    (user.role !== 'ADMIN' &&
+      !(await can(subjectFromSession(user), 'pharmacy:close', undefined, {
+        db: ctx.db,
+        source: 'TRPC',
+      })))
+  )
     throw new TRPCError({
       code: 'FORBIDDEN',
-      message: 'Administrator access is required to reconcile and close a day.',
+      message: 'Day-close permission is required to reconcile and close a day.',
     });
 }
 
@@ -506,7 +536,7 @@ export const pharmacySalesRouter = router({
   khataAccounts: protectedProcedure
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await khataScope(ctx, input.branchId);
+      const scope = await khataScope(ctx, input.branchId, 'read');
       return ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
         await bindKhataBranch(db, scope);
@@ -519,7 +549,7 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
-        const scope = await khataScope(ctx, input.branchId);
+        const scope = await khataScope(ctx, input.branchId, 'read');
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           await bindKhataBranch(db, scope);
@@ -535,7 +565,7 @@ export const pharmacySalesRouter = router({
   closePreview: protectedProcedure
     .input(z.object({ branchId, businessDate: closeDate }).strict())
     .query(async ({ ctx, input }) => {
-      requireCloseAccess(ctx);
+      await requireCloseAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
           readPharmacyClose(txDb(tx), await scopeFor(ctx, input.branchId), input.businessDate)
@@ -566,7 +596,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      requireCloseAccess(ctx);
+      await requireCloseAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
           closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
@@ -731,7 +761,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      requireCloseAccess(ctx);
+      await requireCloseAccess(ctx);
       try {
         return await ctx.db.$transaction(async (tx) =>
           cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)
@@ -743,7 +773,7 @@ export const pharmacySalesRouter = router({
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
     const scope =
       input.type === 'KHATA' || input.type === 'CREDIT' || input.familyAccountId
-        ? await khataScope(ctx, input.branchId)
+        ? await khataScope(ctx, input.branchId, 'read')
         : await scopeFor(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
   }),
@@ -760,7 +790,7 @@ export const pharmacySalesRouter = router({
           applyPharmacyTender(txDb(tx), scope, ledgerTender(input))
         );
       }
-      const scope = await khataScope(ctx, input.branchId);
+      const scope = await khataScope(ctx, input.branchId, 'write');
       if (!input.familyAccountId) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
       const normalized = ledgerTender(input);
       const ownerAuthorized =
@@ -830,9 +860,9 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
           const tender = await db.pharmacyTender.findFirst({
             where: {
               id: input.originalTenderId,
@@ -842,7 +872,7 @@ export const pharmacySalesRouter = router({
             select: { type: true },
           });
           if (tender?.type !== 'CREDIT') return refundPharmacyTender(db, scope, input);
-          await khataScope(ctx, input.branchId);
+          await khataScope(ctx, input.branchId, 'write');
           await bindKhataBranch(db, scope);
           const charge = await db.pharmacyKhataEvent.findFirst({
             where: {
@@ -1364,9 +1394,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => {
           try {
-            return await returnSaleLine(txDb(tx), await scopeFor(ctx, input.branchId), input);
+            return await returnSaleLine(txDb(tx), scope, input);
           } catch (error) {
             if (error instanceof ControlledRestorationDenied && !error.forbidden)
               return { blocked: error.message };
@@ -1682,10 +1713,17 @@ export const pharmacySalesRouter = router({
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
         const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
+        const [dispensingLabelSources, taxIdentity] = await Promise.all([
+          readDispensingLabelSources(ctx.db, scope, receipt),
+          receipt.completedAt
+            ? readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt))
+            : Promise.resolve({ ntn: null, strn: null }),
+        ]);
         // F8: sourced Rx label payloads come only from this authorized receipt read.
         return {
           ...receipt,
-          dispensingLabelSources: await readDispensingLabelSources(ctx.db, scope, receipt),
+          dispensingLabelSources,
+          taxIdentity,
         };
       } catch (error) {
         fail(error);
