@@ -989,13 +989,19 @@ function ScopedPharmacyCounterConsole({
     }
     const row = found[0]!;
     const nextUnit = row.saleUnits[0]?.kind ?? null;
-    if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
-      stageRow(row);
-      return;
-    }
-    barcodeAdd.current = null;
-    if (!preview?.sufficient || busy) return;
-    void addToCart();
+    // Search results arrive after the scan event. Resume on the next turn,
+    // cancelling if the query changes before then.
+    const timer = setTimeout(() => {
+      if (barcodeAdd.current !== token) return;
+      if (!activeRow || activeRow.medicineId !== row.medicineId || saleUnit !== nextUnit) {
+        stageRow(row);
+        return;
+      }
+      barcodeAdd.current = null;
+      if (!preview?.sufficient || busy) return;
+      void addToCart();
+    }, 0);
+    return () => clearTimeout(timer);
   }, [
     activeRow,
     addToCart,

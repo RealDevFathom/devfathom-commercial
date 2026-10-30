@@ -252,6 +252,24 @@ export async function replayCounterCommand(
       expiresAtMs: Date.parse(snapshot.envelope.expiresAt),
     };
   });
+  // An authenticated retry of an accepted command returns its stored outcome,
+  // even if a recall arrived after that sale committed. New/PENDING commands
+  // still pass the live batch check below; a refusal rolls back this log write.
+  const recorded = await recordOfflineCommand(db, scope, {
+    deviceId,
+    sequence: command.sequence,
+    idempotencyKey: command.idempotencyKey,
+    action: command.action,
+    payload: command as Prisma.InputJsonValue,
+    clientOriginAt: new Date(command.leasedReceipt.originalSaleAt),
+    receiptNumber: command.leasedReceipt.receiptNumber,
+  });
+  if (recorded.command.status === 'ACCEPTED')
+    return {
+      saleId: recorded.command.serverRef,
+      receiptNumber: recorded.command.receiptNumber,
+      replayed: true,
+    };
   const requestedUnits = command.lines.reduce(
     (n, line) => n + line.quantity * line.canonicalUnitsPerSaleUnit,
     0
@@ -267,6 +285,7 @@ export async function replayCounterCommand(
   const batchRecalled =
     replayLots.length !== requestedLotIds.length ||
     replayLots.some((lot) => lot.batchState !== 'ACTIVE');
+  if (batchRecalled) throw new CounterTransportError('BATCH_RECALLED', 409);
   authorizeReplayedCommand(command.action, {
     nowMs: originalMs,
     snapshots,
@@ -284,21 +303,6 @@ export async function replayCounterCommand(
     safetyLeaseOk: true,
     batchRecalled,
   });
-  const recorded = await recordOfflineCommand(db, scope, {
-    deviceId,
-    sequence: command.sequence,
-    idempotencyKey: command.idempotencyKey,
-    action: command.action,
-    payload: command as Prisma.InputJsonValue,
-    clientOriginAt: new Date(command.leasedReceipt.originalSaleAt),
-    receiptNumber: command.leasedReceipt.receiptNumber,
-  });
-  if (recorded.command.status === 'ACCEPTED')
-    return {
-      saleId: recorded.command.serverRef,
-      receiptNumber: recorded.command.receiptNumber,
-      replayed: true,
-    };
   if (recorded.command.status !== 'PENDING')
     throw new CounterTransportError('command_rejected', 409);
   const earlier = await db.pharmacyOfflineCommand.findFirst({
@@ -587,7 +591,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               unitsPerPack: true,
               printedMrpMinor: true,
               receivedExpiresAt: true,
-              manufacturingBatch: { select: { state: true } },
+              batch: { select: { state: true } },
             },
             orderBy: { id: 'asc' },
           });
@@ -620,7 +624,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           const expiry = new Date(now.getTime() + 8 * 60 * 60 * 1000);
           const payloads = {
             CATALOG: catalog,
-            PRICES: lots,
+            PRICES: lots.map(({ batch, ...lot }) => ({ ...lot, manufacturingBatch: batch })),
             TAX: taxes,
             RULES: { controlledMedicinesPermittedOffline: false, rxPermittedOffline: false },
             LOT_BALANCES: quotas,

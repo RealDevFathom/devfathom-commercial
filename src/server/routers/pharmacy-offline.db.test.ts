@@ -582,6 +582,40 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
     ).toBe(0);
   });
 
+  it('returns the accepted sale on an identical retry after a production recall', async () => {
+    const f = await setup();
+    const first = await f.replay();
+    expect(first.status).toBe(200);
+    const accepted = await first.json();
+    const before = await f.counts();
+    const { createRecall } = await import('@/lib/pharmacy/inventory-operations');
+    await inOrg(ORG_A, async (db) => {
+      const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+        where: { id: f.fixture.lotId },
+      });
+      await createRecall(db, scopeOf(f.fixture), {
+        batchId: lot.manufacturingBatchId,
+        reference: tag('accepted-recall'),
+        reason: 'Recall after the accepted sale',
+      });
+    });
+
+    const retry = await f.replay();
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ ...accepted, replayed: true });
+    const changed = await f.replay({ ...f.command, amountMinor: 99 });
+    expect(changed.status).toBe(409);
+    expect(await changed.json()).toEqual({ error: 'IDEMPOTENCY_CONFLICT' });
+    expect(await f.counts()).toEqual(before);
+    expect(
+      await inOrg(ORG_A, (db) =>
+        db.pharmacyStockMovement.count({
+          where: { inventoryLotId: f.fixture.lotId, kind: 'SALE' },
+        })
+      )
+    ).toBe(1);
+  });
+
   it('serializes a concurrent recall on the batch locked by replay', async () => {
     const f = await setup();
     const { lockReplayLotBatchStates } = await import('./pharmacy-offline');
@@ -622,6 +656,118 @@ describeIfDatabase('offline transport authorization and conflicts', () => {
     await recallTransaction;
     expect(recallCommitted).toBe(true);
   });
+
+  it('holds the recall lock from full replay authorization through sale settlement', async () => {
+    const f = await setup();
+    const { replayCounterCommand } = await import('./pharmacy-offline');
+    const { createRecall } = await import('@/lib/pharmacy/inventory-operations');
+    const { signPharmacyCommand } = await import('@/lib/pharmacy/sales');
+    const scope = scopeOf(f.fixture);
+    const lot = await inOrg(ORG_A, (db) =>
+      db.pharmacyInventoryLot.findFirstOrThrow({ where: { id: f.fixture.lotId } })
+    );
+    let releaseReplay!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseReplay = resolve;
+    });
+    let reachedSale = false;
+    let replayPid = 0;
+    let recallPid = 0;
+    let recallCommitted = false;
+
+    // Pause at the first write after authorization, before any sale or tender
+    // code can acquire its own batch locks. Every query still uses PostgreSQL.
+    const replay = inOrg(ORG_A, async (db) => {
+      [{ pid: replayPid }] = await db.$queryRawUnsafe<Array<{ pid: number }>>(
+        'SELECT pg_backend_pid() AS pid'
+      );
+      const saleDelegate = new Proxy(db.pharmacySale, {
+        get(target, key) {
+          if (key === 'create')
+            return async (...args: Parameters<typeof target.create>) => {
+              reachedSale = true;
+              await release;
+              return target.create(...args);
+            };
+          return Reflect.get(target, key);
+        },
+      });
+      const pausedDb = new Proxy(db, {
+        get(target, key) {
+          return key === 'pharmacySale' ? saleDelegate : Reflect.get(target, key);
+        },
+      });
+      return replayCounterCommand(
+        { db: pausedDb, scope, deviceId: f.fixture.deviceId, deviceSecret: f.fixture.deviceSecret },
+        f.command,
+        signPharmacyCommand(scope, f.fixture.deviceId, f.command, f.fixture.deviceSecret),
+        signPharmacyCommand(
+          scope,
+          f.fixture.deviceId,
+          f.command.leasedReceipt,
+          f.fixture.deviceSecret
+        )
+      );
+    });
+    let recall: Promise<unknown> | undefined;
+    try {
+      await Promise.race([
+        vi.waitFor(() => expect(reachedSale).toBe(true), { timeout: 5_000 }),
+        replay.then(() => {
+          throw new Error('Replay finished before the sale checkpoint');
+        }),
+      ]);
+      recall = inOrg(ORG_A, async (db) => {
+        [{ pid: recallPid }] = await db.$queryRawUnsafe<Array<{ pid: number }>>(
+          'SELECT pg_backend_pid() AS pid'
+        );
+        return createRecall(db, scope, {
+          batchId: lot.manufacturingBatchId,
+          reference: tag('concurrent-recall'),
+          reason: 'Concurrent production recall',
+        });
+      }).then((notice) => {
+        recallCommitted = true;
+        return notice;
+      });
+      // Observe the actual lock wait rather than assuming a timer means the
+      // recall has reached its UPDATE. Removing/moving replay's lock fails here.
+      await vi.waitFor(
+        async () => {
+          expect(recallPid).not.toBe(0);
+          const [row] = await inOrg(ORG_A, (db) =>
+            db.$queryRawUnsafe<Array<{ blockers: number[] }>>(
+              'SELECT pg_blocking_pids($1::int) AS blockers',
+              recallPid
+            )
+          );
+          expect(row.blockers).toContain(replayPid);
+          expect(recallCommitted).toBe(false);
+        },
+        { timeout: 5_000 }
+      );
+    } finally {
+      releaseReplay();
+      await Promise.all([replay, recall]);
+    }
+    expect(recallCommitted).toBe(true);
+    expect(await f.counts()).toEqual({
+      commands: 1,
+      sales: 1,
+      consumed: 1,
+      nextNumber: f.lease.blockStart + 1,
+    });
+    const state = await inOrg(ORG_A, async (db) => ({
+      batch: await db.pharmacyManufacturingBatch.findFirstOrThrow({
+        where: { id: lot.manufacturingBatchId },
+      }),
+      sales: await db.pharmacyStockMovement.count({
+        where: { inventoryLotId: f.fixture.lotId, kind: 'SALE' },
+      }),
+    }));
+    expect(state.batch.state).toBe('RECALLED');
+    expect(state.sales).toBe(1);
+  }, 20_000);
 
   it('includes a recalled quota-bearing lot without serializing unrelated branch lots', async () => {
     const f = await setup();
