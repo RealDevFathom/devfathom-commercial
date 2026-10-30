@@ -4,7 +4,7 @@
 > Items marked `TODO(confirm)` are not verified.
 
 **Audience:** security reviewers, the CTO, ops and engineers.
-**Related:** [AWS staging](aws-staging.md) · [Environment variables](environment-variables.md) · [Runbook](runbook.md) · [Auth and roles (developer)](../dev/auth-and-roles.md)
+**Related:** [AWS staging](aws-staging.md) · [Environment variables](environment-variables.md) · [Runbook](runbook.md) · [Identity and access](../admin-platform/identity-access.md)
 
 > **⚠️ Azure is DEPRECATED. Never deploy to Azure.**
 > `.github/workflows/deploy-staging.yml` is Azure-only and manual-dispatch. **Never start it.** `promote-production.yml`, `infra/*.bicep`, `docs/azure-deployment.md`, `infra/deploy-staging.sh` and `infra/configure-github-oidc.sh` are legacy Azure material. They are kept, not deleted, and must not be run. The only live environment is AWS staging in `ap-southeast-1`.
@@ -22,14 +22,14 @@ Tenant data is separated at three layers.
    - **Missing or bad tenant ID:** a malformed organization ID throws before any query. If the setting is empty or unset, `NULLIF` turns it into NULL, so **no tenant rows are visible and writes fail the policy check**. It fails closed.
    - **Platform access:** `withPlatformDb` clears the tenant ID and sets `app.is_platform_admin = 'true'` for authorized control-plane work.
 2. **A restricted runtime role.**
-   - The running app's `DATABASE_URL` is the app login set up by `prisma/prepare-runtime-role.ts`: no create-database or create-role rights; only connect, schema usage, and read/write on tables and sequences (including future ones).
-   - The script fails if the login has extra powers, if `APP_DATABASE_URL` is not that login, or if it targets a different server or database from `DATABASE_URL`.
-   - A production process refuses to start if the app role is `SUPERUSER` or `BYPASSRLS`, and `/api/ready` reports `runtime_role_privileged`.
+   - The running app's `DATABASE_URL` is the app login set up by `prisma/prepare-runtime-role.ts`: no create-database or create-role rights; grants cover connect, schema usage, read/write on tables and sequences (including future ones), and execution of the medicine-search similarity function.
+   - The script validates the app URL's username and target and checks the provisioned role attributes. It connects as the admin, so success does not prove app-login authentication; verify that through the web task's health checks (see the [runbook](runbook.md#3-migrations)).
+   - A production process refuses to start if the app role is `SUPERUSER`, `BYPASSRLS`, or a member of either kind of role. `/api/ready` checks the current role's two flags and reports `runtime_role_privileged`; it does not repeat the membership check.
 3. **Branch scoping** inside each organization, in the server layer (for example `src/server/restaurant-branch-scope.ts` and pharmacy branch assignments).
 
 **Tests:** RLS tests exist per milestone; `bun run test:rls` runs the tenant-isolation check on a disposable database; `qa.yml` runs RLS regressions against Postgres 16.
 
-**Tables outside RLS:** the only one is `rate_limit_buckets` (migration `20261021120000_rate_limit_buckets`). It is used without tenant context by `src/lib/rate-limit.ts`. This comes from reading the migrations. TODO(confirm): verify it with a `pg_class` check (`relrowsecurity`) on a migrated database.
+**Tables outside RLS:** `rate_limit_buckets` (migration `20261021120000_rate_limit_buckets`) deliberately has no RLS and is used without tenant context by `src/lib/rate-limit.ts`. Prisma's `_prisma_migrations` metadata table also has no tenant RLS. TODO(confirm): inventory all exceptions with a `pg_class` check (`relrowsecurity`) on a migrated database before claiming exhaustive RLS coverage.
 
 ## 2. Roles
 
@@ -114,7 +114,7 @@ Three capabilities are **exact-grant-only** (`EXACT_GRANT_ONLY_ACTIONS`, `src/li
 ## 7. Open items
 
 - `fix/abac-deny-precedence` is unmerged. Update sections 2 and 3 when it lands.
-- Confirm `rate_limit_buckets` is the only table outside RLS with a `pg_class` check on a migrated database (section 1).
+- Inventory tables outside RLS with a `pg_class` check on a migrated database, distinguishing application tables from migration metadata (section 1).
 - Policy question for Inky: should support sessions require tenant consent? Today they don't; admins are notified in the same transaction (section 2).
 - IAM review and access to secrets (sections 4 and 5).
 - `vercel.json` and the Vercel variables can probably be removed.

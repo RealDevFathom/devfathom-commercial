@@ -45,7 +45,7 @@ The web service is rolled only after this task exits 0. See [AWS staging § Depl
 - **Never use `db:push`.** It is disabled because RLS policies and composite constraints exist only in migrations.
 - New migrations come in through a normal code PR (CTO review plus QA).
 - RLS migrations to use as examples: `20260728092000_row_level_security`, `20260818160000_restaurant_brands_catalog_menus`.
-- **If `prepare-runtime-role` fails**, the runtime login is wrong. Check that `APP_DATABASE_URL` authenticates as the app login, is on the same server and database as `DATABASE_URL`, and that the login has no extra powers. Do not work around the failure by granting more privileges.
+- **If `prepare-runtime-role` fails**, check its failing step: URL validation, admin connectivity, role changes, grants or final role attributes. Check that `APP_DATABASE_URL` names the app login, is on the same server and database as `DATABASE_URL`, and that the login has no extra powers. The script does not test app-login authentication; verify that separately through the web task's health checks. Do not work around the failure by granting more privileges.
 - **One-off queries:** there is no database access from the internet. Run a task from the migration task definition with a command override (see `docs/deploy/aws.md`). TODO(confirm): who may do this.
 
 ## 4. Seeds and admin scripts
@@ -72,9 +72,10 @@ Rules:
 |---|---|---|---|
 | `GET /api/live` | Process is up. Reads nothing. **Used by the load balancer**, so ECS replaces tasks that fail it. | 200 `{"status":"ok"}` | no answer |
 | `GET /api/health` | A database connection opens (`SELECT 1`) | 200 `{"status":"ok"}` | 503 `{"status":"unhealthy","reason":"database_unavailable"}` |
-| `GET /api/ready` | Deploy-time readiness: runtime role is not privileged, no pending or half-applied migrations, the generated client matches the schema. Answers within 2 s. | 200 `{"status":"ok","schema":"current"}` | 503 `{"status":"unavailable","reason":…}` with `runtime_role_privileged`, `migrations_pending`, `schema_drift`, `timeout` or `database_unavailable` |
+| `GET /api/ready` | Deploy-time readiness: checks the current role's `SUPERUSER`/`BYPASSRLS` flags, unfinished migration records, and one generated-client query selecting `organizations.vertical`. Probe timeout is 2 s. | 200 `{"status":"ok","schema":"current"}` | 503 `{"status":"unavailable","reason":…}` with `runtime_role_privileged`, `migrations_pending`, `schema_drift`, `timeout` or `database_unavailable` |
 
 - Run `/api/health` and `/api/ready` after every wake and every deploy.
+- A 200 from `/api/ready` does not prove all migrations were applied or that the whole schema matches. A migration that never started has no unfinished record, and drift outside the sampled query can go undetected. Verify the migration task exited 0 before rolling the web service.
 - Platform staff also see platform health in `/platform` (the `platform-health` router).
 
 ## 6. Quick triage

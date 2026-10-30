@@ -58,9 +58,9 @@ flowchart LR
 4. **Roll.** A second stack update sets `ImageUri` to the new image (and clears `MigrateImageUri`). The ECS web service rolls. The deployment circuit breaker rolls back a task that will not start or fails `/api/live`.
 5. **Check.** `/api/ready` must return 200 with `{"status":"ok","schema":"current"}`.
 
-Nothing enforces "migrate before roll" except following these steps. See [`docs/deploy/aws.md` § Deploy an image](../deploy/aws.md#deploy-an-image) for the exact commands.
+Nothing enforces "migrate before roll" except following these steps. `/api/ready` detects unfinished migration records and drift in its sampled client query; it does not compare the image's migration files with the database or prove that every migration ran. Always verify the migration task exited 0 before rolling. See [`docs/deploy/aws.md` § Deploy an image](../deploy/aws.md#deploy-an-image) for the exact commands.
 
-TODO(confirm): who may run a staging deploy, and which branch or commit is deployed (`staging` and `develop` branches do not exist yet).
+TODO(confirm): who may run a staging deploy, and which branch or commit is deployed. Branch names alone do not establish what is running; verify the deployed image digest.
 
 ### What `prepare-runtime-role` does
 
@@ -68,8 +68,10 @@ In the migration task, `DATABASE_URL` is the admin connection and `APP_DATABASE_
 
 - creates the app login **without** create-database or create-role rights;
 - sets its password from `APP_DATABASE_URL` (on AWS that URL comes from Secrets Manager);
-- grants only connect, schema usage, and read/write on tables and sequences, including future ones;
-- **fails** if the login has extra powers, if `APP_DATABASE_URL` does not authenticate as that login, or if it targets a different server or database from `DATABASE_URL`.
+- grants connect, schema usage, read/write on tables and sequences (including future ones), and execution of the medicine-search similarity function;
+- **fails** if the login's checked role attributes remain incorrect, if `APP_DATABASE_URL` names a different login, or if it targets a different server or database from `DATABASE_URL`.
+
+The script connects through the admin URL; it does **not** test an app-login connection. It can continue after a password-change permission denial when the role attributes are correct. Confirm the web task can connect with the app secret using `/api/health` and `/api/ready` after the roll.
 
 The running web service then gets the **app** URL as its `DATABASE_URL`, so it cannot bypass RLS. See the [Security overview](security-overview.md#1-tenant-isolation).
 

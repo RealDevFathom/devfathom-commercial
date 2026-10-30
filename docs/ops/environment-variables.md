@@ -13,7 +13,7 @@
 | Name | Purpose |
 |---|---|
 | `DATABASE_URL` | The connection the **running app** uses. It must be the restricted app login (not `SUPERUSER`, not `BYPASSRLS`); a production process refuses to start otherwise. In the AWS **migration task** the same name holds the admin connection. |
-| `APP_DATABASE_URL` | Migration task only: the app login that `prisma/prepare-runtime-role.ts` creates and checks. Must be the same server and database as `DATABASE_URL`. |
+| `APP_DATABASE_URL` | Migration task only: names the app login that `prisma/prepare-runtime-role.ts` provisions and supplies its password. The script validates the URL's username and target, not app-login authentication. Must be the same server and database as `DATABASE_URL`. |
 | `MIGRATION_DATABASE_URL` | Local: the role Prisma CLI and the seed use for migrations. Falls back to `DATABASE_URL`. |
 | `SHADOW_DATABASE_URL` | Local: Prisma's shadow database for `migrate dev`. |
 | `EXTENSION_ADMIN_DATABASE_URL` | Used only by `prisma/prepare-extensions.ts`; must be a superuser or extension owner. |
@@ -30,7 +30,7 @@
 | `SHARED_APP_HOSTS` | Hosts that are not tenant subdomains |
 | `DEFAULT_ORGANIZATION_ID` | The default organization for local single-tenant use |
 | `PLATFORM_ENCRYPTION_KEY` | Encrypts stored secrets such as MFA and SSO data. **Losing it makes that data unrecoverable.** |
-| `RATE_LIMIT_HMAC_SECRET` | Keys the rate-limit buckets |
+| `RATE_LIMIT_HMAC_SECRET` | Keys the rate-limit buckets; falls back to `AUTH_SECRET`. Production refuses to start if both are unset. |
 | `CLIENT_IP_HEADER`, `TRUSTED_PROXY_CIDRS`, `TRUSTED_PROXY_HOPS` | How to find the real client address behind proxies. Production refuses to start unless one is set; AWS sets `TRUSTED_PROXY_HOPS`. |
 
 ## Initial accounts (seed and bootstrap only)
