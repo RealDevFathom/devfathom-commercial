@@ -1,7 +1,7 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { Prisma } from '@/generated/prisma/client';
-import { putUpload } from '@/lib/storage';
+import { deleteUpload, putUpload } from '@/lib/storage';
 import {
   structuralSupplierFileScanner,
   SupplierFileScanError,
@@ -36,6 +36,21 @@ export function supplierLinkId(token: string): string | null {
   const expected = Buffer.from(signature(`${id}.${secret}`));
   const candidate = Buffer.from(supplied);
   return expected.length === candidate.length && timingSafeEqual(expected, candidate) ? id : null;
+}
+
+/** Resolve the tenant-owned identifiers needed to audit a signed-link attempt. */
+export async function getSupplierLinkAuditTarget(
+  db: ScopedDb,
+  token: string,
+  organizationId: string
+) {
+  const id = supplierLinkId(token);
+  if (!id) return null;
+  const secret = token.split('.')[1]!;
+  return db.pharmacySupplierActionLink.findFirst({
+    where: { id, organizationId, tokenHash: digest(secret) },
+    select: { id: true, organizationId: true, branchId: true },
+  });
 }
 
 export async function issueSupplierActionLink(
@@ -277,8 +292,6 @@ export async function uploadSupplierDocument(
     payload,
     now: input.now,
   });
-  const objectName = `supplier-po/${link.id}/${file.sha256}`;
-  await putUpload(link.organizationId, objectName, input.content, file.mimeType);
   const existing = await db.pharmacySupplierDocument.findUnique({
     where: {
       organizationId_submissionId_sha256: {
@@ -288,17 +301,38 @@ export async function uploadSupplierDocument(
       },
     },
   });
-  if (existing) return existing;
-  return db.pharmacySupplierDocument.create({
-    data: {
-      organizationId: link.organizationId,
-      branchId: link.branchId,
-      submissionId: submission.id,
-      fileName: input.fileName,
-      ...file,
-      storageUri: objectName,
-      scanMode: file.mode,
-      malwareChecked: file.mode === 'MALWARE_SCANNED',
-    },
-  });
+  if (existing) return { document: existing, storedObjectCreated: false };
+
+  // Every attempt owns a distinct object. Concurrent idempotent requests can
+  // both pass the preflight lookup before one wins the document unique key;
+  // the loser must only compensate its own upload, never the winner's object.
+  const objectName = `supplier-po/${link.id}/${submission.id}/${file.sha256}/${randomUUID()}`;
+  await putUpload(link.organizationId, objectName, input.content, file.mimeType);
+  let document;
+  try {
+    document = await db.pharmacySupplierDocument.create({
+      data: {
+        organizationId: link.organizationId,
+        branchId: link.branchId,
+        submissionId: submission.id,
+        fileName: input.fileName,
+        ...file,
+        storageUri: objectName,
+        scanMode: file.mode,
+        malwareChecked: file.mode === 'MALWARE_SCANNED',
+      },
+    });
+  } catch (error) {
+    await deleteUpload(link.organizationId, objectName);
+    throw error;
+  }
+  return { document, storedObjectCreated: true };
+}
+
+/** Undo the non-transactional storage part of a failed document transaction. */
+export async function compensateSupplierDocumentUpload(
+  organizationId: string,
+  upload: Awaited<ReturnType<typeof uploadSupplierDocument>>
+): Promise<void> {
+  if (upload.storedObjectCreated) await deleteUpload(organizationId, upload.document.storageUri);
 }

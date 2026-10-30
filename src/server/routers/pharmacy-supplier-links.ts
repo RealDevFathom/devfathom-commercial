@@ -4,12 +4,16 @@ import { assertInOrganization } from '../org-refs';
 import { publicProcedure, protectedProcedure, router, type TRPCContext } from '../trpc';
 import {
   SupplierLinkError,
+  compensateSupplierDocumentUpload,
   getSupplierActionPage,
+  getSupplierLinkAuditTarget,
   issueSupplierActionLink,
   recordManualSupplierEvidence,
   submitSupplierEvidence,
   uploadSupplierDocument,
 } from '@/lib/pharmacy/supplier-action-links';
+import { recordAudit } from '@/server/audit';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const id = z.string().trim().min(1).max(200);
 const kind = z.enum([
@@ -39,6 +43,87 @@ function mapError(error: unknown): never {
   });
 }
 
+type SupplierAuditTarget = { id: string; organizationId: string; branchId: string };
+
+async function auditSupplierLinkAction(
+  ctx: TRPCContext,
+  db: TRPCContext['db'] | undefined,
+  target: SupplierAuditTarget | null,
+  action: 'submit' | 'uploadDocument',
+  outcome: 'SUCCESS' | 'FAILURE',
+  kind: string,
+  error?: unknown
+) {
+  if (!target) return;
+  const reason =
+    error instanceof SupplierLinkError
+      ? error.reason
+      : error instanceof TRPCError
+        ? error.code
+        : error
+          ? 'INTERNAL_ERROR'
+          : null;
+  const row = {
+    organizationId: target.organizationId,
+    actorType: 'ANONYMOUS' as const,
+    source: 'TRPC' as const,
+    category: 'PHARMACY',
+    operation: 'CREATE' as const,
+    action: `pharmacySupplierLinks.${action}`,
+    targetType: 'PharmacySupplierActionLink',
+    targetId: target.id,
+    metadata: { branchId: target.branchId, linkId: target.id, kind },
+    ip: ctx.requestMeta?.ip ?? null,
+    userAgent: ctx.requestMeta?.userAgent ?? null,
+    outcome,
+    errorCode: reason,
+    errorMessage: reason,
+  };
+
+  // Successful action + audit writes share the action transaction. Failure
+  // audits use recordAudit's post-transaction path so the request rollback
+  // cannot discard the evidence of the rejected attempt.
+  if (db) await recordAudit(row, db);
+  else recordAudit(row);
+}
+
+function auditedSupplierLinkProcedure(action: 'submit' | 'uploadDocument') {
+  return publicProcedure.use(async ({ ctx, getRawInput, next }) => {
+    const rawInput = await getRawInput();
+    const result = await next();
+
+    // Input parsers run before the resolver, so audit attributable validation
+    // failures here. Resolver and service failures are recorded in the mutation
+    // itself, where the parsed kind and domain error are available.
+    if (!result.ok && result.error.cause instanceof z.ZodError) {
+      const raw =
+        rawInput && typeof rawInput === 'object'
+          ? (rawInput as Record<string, unknown>)
+          : undefined;
+      const token = typeof raw?.token === 'string' ? raw.token : null;
+      if (token) {
+        const target = await getSupplierLinkAuditTarget(
+          ctx.db,
+          token,
+          ctx.entitlements.organizationId
+        );
+        const rawKind = typeof raw?.kind === 'string' ? raw.kind : null;
+        await auditSupplierLinkAction(
+          ctx,
+          undefined,
+          target,
+          action,
+          'FAILURE',
+          action === 'uploadDocument' ? 'DOCUMENT' : (rawKind ?? 'UNKNOWN'),
+          result.error
+        );
+      }
+    }
+
+    return result;
+  });
+}
+
 export const pharmacySupplierLinksRouter = router({
   get: publicProcedure.input(z.object({ token: id }).strict()).query(async ({ ctx, input }) => {
     try {
@@ -47,7 +132,7 @@ export const pharmacySupplierLinksRouter = router({
       mapError(error);
     }
   }),
-  submit: publicProcedure
+  submit: auditedSupplierLinkProcedure('submit')
     .input(
       z
         .object({
@@ -60,13 +145,28 @@ export const pharmacySupplierLinksRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const target = await getSupplierLinkAuditTarget(
+        ctx.db,
+        input.token,
+        ctx.entitlements.organizationId
+      );
+      let result;
       try {
-        return await submitSupplierEvidence(ctx.db, input);
+        result = await ctx.db.$transaction(async (tx) => {
+          // ScopedDb deliberately exposes the application-facing Prisma shape;
+          // an interactive client has the same delegates but omits lifecycle APIs.
+          const scopedTx = tx as ScopedDb;
+          const submission = await submitSupplierEvidence(scopedTx, input);
+          await auditSupplierLinkAction(ctx, scopedTx, target, 'submit', 'SUCCESS', input.kind);
+          return submission;
+        });
       } catch (error) {
+        await auditSupplierLinkAction(ctx, undefined, target, 'submit', 'FAILURE', input.kind, error);
         mapError(error);
       }
+      return result;
     }),
-  uploadDocument: publicProcedure
+  uploadDocument: auditedSupplierLinkProcedure('uploadDocument')
     .input(
       z
         .object({
@@ -79,14 +179,52 @@ export const pharmacySupplierLinksRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const target = await getSupplierLinkAuditTarget(
+        ctx.db,
+        input.token,
+        ctx.entitlements.organizationId
+      );
+      let upload: Awaited<ReturnType<typeof uploadSupplierDocument>> | undefined;
       try {
-        return await uploadSupplierDocument(ctx.db, {
-          ...input,
-          content: Buffer.from(input.contentBase64, 'base64'),
+        upload = await ctx.db.$transaction(async (tx) => {
+          const scopedTx = tx as ScopedDb;
+          const stored = await uploadSupplierDocument(scopedTx, {
+            ...input,
+            content: Buffer.from(input.contentBase64, 'base64'),
+          });
+          // Retain the storage receipt before the audit insert so the catch
+          // path can compensate when that insert aborts the DB transaction.
+          upload = stored;
+          await auditSupplierLinkAction(
+            ctx,
+            scopedTx,
+            target,
+            'uploadDocument',
+            'SUCCESS',
+            'DOCUMENT'
+          );
+          return stored;
         });
       } catch (error) {
+        if (upload && target) {
+          try {
+            await compensateSupplierDocumentUpload(target.organizationId, upload);
+          } catch (compensationError) {
+            console.error('[supplier-document] failed to compensate upload:', compensationError);
+          }
+        }
+        await auditSupplierLinkAction(
+          ctx,
+          undefined,
+          target,
+          'uploadDocument',
+          'FAILURE',
+          'DOCUMENT',
+          error
+        );
         mapError(error);
       }
+      return upload.document;
     }),
   createRelationship: protectedProcedure
     .input(z.object({ branchId: id, supplierId: id }).strict())

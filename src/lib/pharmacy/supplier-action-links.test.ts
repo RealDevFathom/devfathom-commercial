@@ -1,9 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const storage = vi.hoisted(() => ({ putUpload: vi.fn(), deleteUpload: vi.fn() }));
+vi.mock('@/lib/storage', () => storage);
+
 import {
   getSupplierActionPage,
   issueSupplierActionLink,
   submitSupplierEvidence,
   supplierLinkId,
+  uploadSupplierDocument,
 } from './supplier-action-links';
 import { structuralSupplierFileScanner } from './supplier-file-scanner';
 
@@ -74,6 +79,8 @@ async function issued() {
 describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
   beforeEach(() => {
     process.env.AUTH_SECRET = 'test-only-secret-at-least-32-characters';
+    storage.putUpload.mockReset();
+    storage.deleteUpload.mockReset();
   });
 
   it('24: rejects a relationship/PO supplier mismatch and exposes only the linked PO projection', async () => {
@@ -194,5 +201,68 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
     await expect(getSupplierActionPage(state.db, state.token)).rejects.toMatchObject({
       reason: 'INVALID_LINK',
     });
+  });
+
+  it('keeps the winning object when concurrent idempotent document uploads race', async () => {
+    const state = await issued();
+    const file = {
+      mimeType: 'application/pdf' as const,
+      byteSize: 8,
+      sha256: 'same-content-sha256',
+      mode: 'STRUCTURAL' as const,
+    };
+    const submission = {
+      id: 'submission_a',
+      kind: 'DOCUMENT',
+      payload: { fileName: 'invoice.pdf', ...file },
+    };
+    state.rawDb.pharmacySupplierSubmission.findUnique.mockResolvedValue(submission as never);
+
+    let lookups = 0;
+    let releaseLookups!: () => void;
+    const bothLookedUp = new Promise<void>((resolve) => {
+      releaseLookups = resolve;
+    });
+    const findUnique = vi.fn(async () => {
+      lookups += 1;
+      if (lookups === 2) releaseLookups();
+      await bothLookedUp;
+      return null;
+    });
+    let creates = 0;
+    const create = vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+      creates += 1;
+      if (creates === 2) throw new Error('document unique constraint');
+      return { id: 'document_winner', ...data };
+    });
+    const db = state.rawDb as typeof state.rawDb & {
+      pharmacySupplierDocument: { findUnique: typeof findUnique; create: typeof create };
+    };
+    db.pharmacySupplierDocument = { findUnique, create };
+
+    const scanner = { scan: vi.fn(async () => file) };
+    const input = {
+      token: state.token,
+      idempotencyKey: 'same-idempotency-key',
+      fileName: 'invoice.pdf',
+      declaredMimeType: 'application/pdf',
+      content: Buffer.from('%PDF-1.7'),
+      now: NOW,
+      scanner,
+    };
+    const attempts = await Promise.allSettled([
+      uploadSupplierDocument(state.db, input),
+      uploadSupplierDocument(state.db, input),
+    ]);
+
+    const winner = attempts.find((attempt) => attempt.status === 'fulfilled');
+    expect(winner?.status).toBe('fulfilled');
+    const winnerUri =
+      winner?.status === 'fulfilled' ? winner.value.document.storageUri : 'missing-winner';
+    const uploadedUris = storage.putUpload.mock.calls.map((call) => call[1]);
+    expect(new Set(uploadedUris).size).toBe(2);
+    expect(storage.deleteUpload).toHaveBeenCalledOnce();
+    expect(storage.deleteUpload).not.toHaveBeenCalledWith('org_a', winnerUri);
+    expect(uploadedUris).toContain(winnerUri);
   });
 });
