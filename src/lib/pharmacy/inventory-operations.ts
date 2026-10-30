@@ -18,6 +18,20 @@ async function removalArrangement(
   unitsPerPack: number,
   disposition: 'AVAILABLE' | 'QUARANTINE' = 'AVAILABLE'
 ) {
+  if (disposition === 'QUARANTINE') {
+    // Keep this lock through the caller's transaction. A concurrent DRAP ingest
+    // posts its hold and action together; inspect the action only after its
+    // balance update commits, so manual operations cannot consume that hold.
+    await db.$queryRaw(Prisma.sql`
+      SELECT 1 FROM "pharmacy_stock_balances"
+      WHERE "organizationId" = ${scope.organizationId}
+        AND "branchId" = ${scope.branchId}
+        AND "inventoryLotId" = ${inventoryLotId}
+        AND "stockLocationId" = ${stockLocationId}
+        AND "disposition" = 'QUARANTINE'
+      FOR UPDATE
+    `);
+  }
   const balance = await db.pharmacyStockBalance.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -29,10 +43,25 @@ async function removalArrangement(
   });
   if (!balance || balance.onHandUnits < units)
     throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
-  const looseUnits = Math.min(balance.looseUnits, units);
-  const sealedUnits = units - looseUnits;
-  if (sealedUnits % unitsPerPack !== 0) throw new PharmacyInventoryError('INVALID_ARRANGEMENT');
-  return { sealedPacks: sealedUnits / unitsPerPack, looseUnits };
+  if (disposition === 'QUARANTINE') {
+    const regulatoryHold = await db.pharmacyRecallQuarantineAction.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        inventoryLotId,
+        stockLocationId,
+        reversedAt: null,
+      },
+      select: { id: true },
+    });
+    if (regulatoryHold) throw new PharmacyInventoryError('BLOCKED_STOCK');
+  }
+  // Prefer loose units, but only in a combination with whole sealed packs.
+  const sealedPacks = Math.ceil(Math.max(0, units - balance.looseUnits) / unitsPerPack);
+  const looseUnits = units - sealedPacks * unitsPerPack;
+  if (looseUnits < 0 || sealedPacks > balance.sealedPacks)
+    throw new PharmacyInventoryError('INVALID_ARRANGEMENT');
+  return { sealedPacks, looseUnits };
 }
 
 export async function createCount(
