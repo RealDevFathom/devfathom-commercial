@@ -266,12 +266,17 @@ export class PharmacyCounterRuntime {
     const lease = leases.sort((a, b) => Date.parse(b.issuedAt) - Date.parse(a.issuedAt))[0] ?? null;
     // PRICES is a complete, signed view of every lot this counter may dispense.
     // Consequently a newer snapshot replaces (rather than unions with) the
-    // previous snapshot's recall set.  Bulletins issued after that snapshot are
-    // incremental until the next PRICES snapshot supersedes them.
+    // previous snapshot's recall set. Bulletins issued at or after that snapshot
+    // remain incremental even at the same recall version, until newer PRICES
+    // supersedes them.
     const prices = this.cache().snapshots.find((snapshot) => snapshot.envelope.kind === 'PRICES');
     const snapshotRecallVersion = prices?.envelope.safetyLease.recallVersion ?? 0;
     const bulletinEvents = this.queue().safetyLeaseEvents.filter(
-      (event) => event.type === 'RECALL_APPLIED' && event.recallVersion > snapshotRecallVersion
+      (event) =>
+        event.type === 'RECALL_APPLIED' &&
+        (event.recallVersion > snapshotRecallVersion ||
+          (event.recallVersion === snapshotRecallVersion &&
+            (!prices || Date.parse(event.occurredAt) >= Date.parse(prices.envelope.issuedAt))))
     );
     const snapshotRecalledIds = prices ? recalledLotIdsFromSnapshot('PRICES', prices.payload) : [];
     return {

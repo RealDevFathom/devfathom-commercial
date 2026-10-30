@@ -318,6 +318,55 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
 });
 
 describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
+  it.each([ISSUED_AT, '2026-09-02T11:00:00.000Z'])(
+    'blocks a same-version bulletin issued at %s, including after reload',
+    async (issuedAt) => {
+      const driver = createMemoryDriver();
+      const counter = await readyCounter(driver);
+      expect(
+        await counter.applyRecallBulletin({
+          issuedAt,
+          recallVersion: SAFETY_LEASE.recallVersion,
+          recalledBatchIds: ['lot_1'],
+        })
+      ).toBe(true);
+
+      const reloaded = runtime(driver);
+      expect(await reloaded.hydrate()).toBe('ready');
+      for (const current of [counter, reloaded]) {
+        expect(await current.enqueue(cashSale(), MATRIX)).toMatchObject({
+          ok: false,
+          reason: 'BATCH_RECALLED',
+        });
+        expect(current.snapshot().queue).toMatchObject({
+          commands: [],
+          leases: [{ nextNumber: 900 }],
+          quotas: [{ consumedUnits: 0 }],
+        });
+      }
+    }
+  );
+
+  it('replaces an older bulletin with a newer prices snapshot at the same recall version', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await counter.applyRecallBulletin({
+      issuedAt: '2026-09-02T10:00:00.000Z',
+      recallVersion: SAFETY_LEASE.recallVersion,
+      recalledBatchIds: ['lot_1'],
+    });
+    const issuedAt = '2026-09-02T11:00:00.000Z';
+    expect(
+      await install(counter, 'PRICES', [{ id: 'lot_1', manufacturingBatch: { state: 'ACTIVE' } }], {
+        version: 2,
+        issuedAt,
+        safetyLease: { ...SAFETY_LEASE, issuedAt },
+      })
+    ).toMatchObject({ ok: true });
+
+    expect(counter.safetyLeaseState().recalledBatchIds).toEqual([]);
+    expect((await counter.enqueue(cashSale(), MATRIX)).ok).toBe(true);
+  });
+
   it('blocks a lot marked recalled by the signed prices snapshot', async () => {
     const counter = await readyCounter(createMemoryDriver());
     await install(
