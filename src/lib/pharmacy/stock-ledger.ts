@@ -79,7 +79,7 @@ const CANDIDATE_COLUMNS = Prisma.sql`
   balance."disposition"::text AS "disposition",
   batch."expiresAt"           AS "expiresAt",
   lot."receivedAt"            AS "receivedAt",
-  (balance."onHandUnits" - COALESCE((
+  (balance."onHandUnits" - balance."offlineReservedUnits" - COALESCE((
     SELECT SUM(claim."reservedUnits") FROM "pharmacy_supplier_claims" claim
     WHERE claim."organizationId" = balance."organizationId"
       AND claim."branchId" = balance."branchId"
@@ -128,7 +128,7 @@ async function loadCandidates(
       AND balance."branchId" = ${scope.branchId}
       AND batch."medicineId" = ${medicineId}
       AND balance."onHandUnits" > 0
-      AND (balance."onHandUnits" - COALESCE((
+      AND (balance."onHandUnits" - balance."offlineReservedUnits" - COALESCE((
         SELECT SUM(claim."reservedUnits") FROM "pharmacy_supplier_claims" claim
         WHERE claim."organizationId" = balance."organizationId"
           AND claim."branchId" = balance."branchId"
@@ -181,7 +181,7 @@ function toCandidate(row: CandidateRow): AllocationCandidate {
   };
 }
 
-/** Read-only ledger evidence, net of supplier claims and customer restock reservations. */
+/** Read-only ledger evidence, net of offline quotas, supplier claims and restock reservations. */
 export async function loadStockCandidatesForRead(
   db: ScopedDb,
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,

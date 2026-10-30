@@ -247,6 +247,126 @@ vi.mock('@/lib/rate-limit', () => ({
 }));
 
 describeIfDatabase('offline quota stock reservation', () => {
+  it('projects only inserted quotas and the actual update arm of an upsert', async () => {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'duplicate-quota', { units: 10 });
+    const quota = await inOrg(ORG_A, (db) =>
+      deps.quotas.grantDeviceLotQuota(db, scopeOf(fixture), {
+        deviceId: fixture.deviceId,
+        ...bucketOf(fixture),
+        units: 3,
+      })
+    );
+    await inOrg(ORG_A, async (db) => {
+      const inserted = await db.pharmacyDeviceLotQuota.createMany({
+        data: [quota, quota],
+        skipDuplicates: true,
+      });
+      expect(inserted.count).toBe(0);
+      const balance = () =>
+        db.pharmacyStockBalance.findFirstOrThrow({
+          where: { organizationId: ORG_A, ...bucketOf(fixture), disposition: 'AVAILABLE' },
+        });
+      expect((await balance()).offlineReservedUnits).toBe(3);
+      await db.$executeRaw`
+        INSERT INTO pharmacy_device_lot_quotas
+        SELECT * FROM pharmacy_device_lot_quotas WHERE id = ${quota.id}
+        ON CONFLICT (id) DO UPDATE
+          SET "consumedUnits" = pharmacy_device_lot_quotas."consumedUnits" + 1`;
+      expect((await balance()).offlineReservedUnits).toBe(2);
+      expect(await deps.quotas.outstandingQuotaUnits(db, scopeOf(fixture), bucketOf(fixture))).toBe(
+        2
+      );
+    });
+  });
+
+  it.each([10, 6])(
+    'allocates FEFO using free units with %i units reserved on the first lot',
+    async (reserved) => {
+      const fixture = await scenario(ORG_A, BRANCH_A, 'reserved-fefo', { units: 10 });
+      const ledger = await import('@/lib/pharmacy/stock-ledger');
+      const laterLot = await inOrg(ORG_A, async (db) => {
+        const batch = await db.pharmacyManufacturingBatch.create({
+          data: {
+            organizationId: ORG_A,
+            medicineId: fixture.medicineId,
+            batchNumber: tag('later-batch'),
+            expiresAt: new Date('2027-11-01T00:00:00.000Z'),
+            expiryPrecision: 'DAY',
+          },
+        });
+        const received = await ledger.receiveLot(db, scopeOf(fixture), {
+          manufacturingBatchId: batch.id,
+          packLevelId: fixture.packLevelId,
+          stockLocationId: fixture.locationId,
+          unitsPerPack: 10,
+          supplierName: 'Supplier',
+          supplierInvoiceRef: tag('later-invoice'),
+          unitCostMinor: 50,
+          printedMrpMinor: 1_000,
+          receivedExpiresAt: batch.expiresAt,
+          receivedExpiryPrecision: 'DAY',
+          receivedAt: NOW,
+          quantityUnits: 10,
+          idempotencyKey: tag('later-receipt'),
+        });
+        await deps.quotas.grantDeviceLotQuota(db, scopeOf(fixture), {
+          deviceId: fixture.deviceId,
+          ...bucketOf(fixture),
+          units: reserved,
+        });
+        // Unit sales require explicit pack breaking, even for offline reservations.
+        for (const inventoryLotId of [fixture.lotId, received.lot.id]) {
+          await ledger.breakPack(db, scopeOf(fixture), {
+            inventoryLotId,
+            stockLocationId: fixture.locationId,
+            requiredLooseUnits: 10,
+            idempotencyKey: tag('fefo-break'),
+            at: NOW,
+          });
+        }
+        return received.lot;
+      });
+      const result = await inOrg(ORG_A, async (db) => {
+        const candidates = await ledger.loadStockCandidatesForRead(
+          db,
+          scopeOf(fixture),
+          fixture.medicineId
+        );
+        expect(
+          candidates.map((candidate) => [candidate.inventoryLotId, candidate.availableUnits])
+        ).toEqual(
+          reserved === 10
+            ? [[laterLot.id, 10]]
+            : [
+                [fixture.lotId, 4],
+                [laterLot.id, 10],
+              ]
+        );
+        return ledger.allocateForSale(db, scopeOf(fixture), {
+          medicineId: fixture.medicineId,
+          requiredUnits: 10,
+          idempotencyKeyPrefix: tag('fefo-sale'),
+          at: NOW,
+        });
+      });
+      expect(result.allocations).toEqual(
+        reserved === 10
+          ? [{ inventoryLotId: laterLot.id, stockLocationId: fixture.locationId, units: 10 }]
+          : [
+              { inventoryLotId: fixture.lotId, stockLocationId: fixture.locationId, units: 4 },
+              { inventoryLotId: laterLot.id, stockLocationId: fixture.locationId, units: 6 },
+            ]
+      );
+      const balance = await inOrg(ORG_A, (db) =>
+        db.pharmacyStockBalance.findFirstOrThrow({
+          where: { organizationId: ORG_A, ...bucketOf(fixture), disposition: 'AVAILABLE' },
+        })
+      );
+      expect(balance.onHandUnits).toBe(reserved);
+      expect(balance.offlineReservedUnits).toBe(reserved);
+    }
+  );
+
   it('preserves granted stock from online movements until the quota is consumed', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'reserved-stock', { units: 10 });
     await inOrg(ORG_A, (db) =>
@@ -404,7 +524,7 @@ describeIfDatabase('offline quota stock reservation', () => {
           branchId: BRANCH_A,
           ...bucketOf(fixture),
           kind: 'ADJUSTMENT',
-          disposition: 'QUARANTINED',
+          disposition: 'QUARANTINE',
           quantityUnits: 1,
           sealedPackDelta: 0,
           looseUnitDelta: 1,
@@ -419,7 +539,7 @@ describeIfDatabase('offline quota stock reservation', () => {
           branchId: BRANCH_A,
           ...bucketOf(fixture),
           kind: 'ADJUSTMENT',
-          disposition: 'QUARANTINED',
+          disposition: 'QUARANTINE',
           quantityUnits: -1,
           sealedPackDelta: 0,
           looseUnitDelta: -1,

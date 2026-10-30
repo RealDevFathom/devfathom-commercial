@@ -10,6 +10,11 @@
 -- reconcile the disconnected counter's promise; silently shrinking or
 -- releasing an auditable quota here could permit an already completed offline
 -- sale to be allocated twice.
+-- The migration owner is subject to FORCE RLS too. Use the existing platform
+-- policy for every tenant during reconciliation and backfill; this scope ends
+-- with the migration transaction.
+SELECT set_config('app.is_platform_admin', 'true', true);
+
 LOCK TABLE "pharmacy_stock_balances" IN ACCESS EXCLUSIVE MODE;
 LOCK TABLE "pharmacy_device_lot_quotas" IN SHARE ROW EXCLUSIVE MODE;
 
@@ -119,6 +124,14 @@ BEGIN
 END;
 $$;
 
+-- A BEFORE INSERT trigger also runs for ON CONFLICT DO NOTHING. Project only
+-- rows that were actually inserted/updated, after conflict arbitration and the
+-- existing BEFORE UPDATE immutability guard.
+DROP TRIGGER "pharmacy_device_lot_quotas_capacity_guard" ON "pharmacy_device_lot_quotas";
+CREATE TRIGGER "pharmacy_device_lot_quotas_capacity_guard"
+  AFTER INSERT OR UPDATE ON "pharmacy_device_lot_quotas"
+  FOR EACH ROW EXECUTE FUNCTION guard_pharmacy_device_lot_quota();
+
 -- Movement projection updates preserve offlineReservedUnits automatically.
 -- Check the proposed tuple directly, rather than consulting another table, so
 -- a movement that waited behind a grant necessarily observes its reservation.
@@ -126,6 +139,7 @@ CREATE FUNCTION guard_pharmacy_stock_balance_offline_quota() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW."disposition" = 'AVAILABLE'
+     AND NEW."offlineReservedUnits" > 0
      AND NEW."onHandUnits" < NEW."offlineReservedUnits" THEN
     RAISE EXCEPTION 'OFFLINE_QUOTA_RESERVES_STOCK' USING ERRCODE = '55000';
   END IF;
