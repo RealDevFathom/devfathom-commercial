@@ -7,6 +7,7 @@ import {
   readLoyaltyHistory,
   LOYALTY_HISTORY_MAX_PAGE,
   PharmacyLoyaltyError,
+  setCustomerPreferredLanguage,
 } from '@/lib/pharmacy/customer-loyalty';
 import { adminProcedure, router, type TRPCContext } from '@/server/trpc';
 
@@ -64,6 +65,25 @@ export const pharmacyLoyaltyRouter = router({
     .query(({ ctx, input }) =>
       historyRead(() =>
         readLoyaltyHistory(ctx.db, scopeFor(ctx, input.branchId), input.customerId, input.page)
+      )
+    ),
+  setPreferredLanguage: adminProcedure
+    .input(
+      branchInput
+        .extend({
+          customerId: z.string().trim().min(1).max(128),
+          preferredLanguage: z.enum(['en', 'ur']),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      historyRead(() =>
+        setCustomerPreferredLanguage(
+          ctx.db,
+          scopeFor(ctx, input.branchId),
+          input.customerId,
+          input.preferredLanguage
+        )
       )
     ),
 });

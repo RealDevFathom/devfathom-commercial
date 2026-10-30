@@ -7,7 +7,7 @@ import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import { workspaceTimezone } from '@/lib/timezone';
 
 import { formatMinor } from '../counter-receipt';
-import { lockPatientConsent } from '../consent-writer';
+import { lockCustomerConsent } from '../consent-writer';
 import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
@@ -100,7 +100,13 @@ export async function processDueWhatsAppKhataReminders(
   const provider = options.provider ?? createWhatsAppProvider(config);
   const minBalanceMinor = options.minBalanceMinor ?? DEFAULT_MIN_BALANCE_MINOR;
   const result: KhataReminderRunResult = {
-    configured: Boolean(config.templates.khataReminder),
+    configured: Boolean(
+      (config.templates.khataReminder || config.templates.khataReminderUrdu) &&
+      config.organizationId &&
+      config.phoneNumberId &&
+      // Live reminders require both webhook setup and signed STOP processing.
+      (config.provider === 'mock' || (config.accessToken && config.appSecret && config.verifyToken))
+    ),
     scanned: 0,
     sent: 0,
     prepared: 0,
@@ -111,8 +117,7 @@ export async function processDueWhatsAppKhataReminders(
     notDue: 0,
   };
   const organizationId = config.organizationId;
-  if (!result.configured || config.provider === 'meta' || !organizationId || !config.phoneNumberId)
-    return { ...result, configured: false };
+  if (!result.configured || !organizationId) return { ...result, configured: false };
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   const accounts = await withPlatformDb((db) =>
@@ -140,13 +145,14 @@ export async function processDueWhatsAppKhataReminders(
       if (config.organizationId !== account.organizationId || !config.phoneNumberId) return null;
       const organization = await db.organization.findUnique({
         where: { id: account.organizationId },
-        select: { vertical: true, status: true, timezone: true },
+        select: { vertical: true, status: true, timezone: true, isDemo: true },
       });
       const branch = await db.pharmacyBranch.findFirst({
         where: { organizationId: account.organizationId, id: account.branchId, active: true },
       });
       if (
         !organization ||
+        organization.isDemo ||
         organization.vertical !== 'PHARMACY' ||
         !isTenantLifecycleAccessible(organization.status) ||
         !branch
@@ -169,6 +175,9 @@ export async function processDueWhatsAppKhataReminders(
         }).format(now)
       );
       if (hour >= 22 || hour < 8) return null;
+      // STOP and consent writers take the same locks. Read eligibility only
+      // after acquiring them so a committed opt-out cannot leave a stale snapshot.
+      await lockCustomerConsent(db, account.organizationId, account.payerCustomerId);
       const customer = await db.pharmacyCustomer.findFirst({
         where: { organizationId: account.organizationId, id: account.payerCustomerId },
         select: {
@@ -176,11 +185,11 @@ export async function processDueWhatsAppKhataReminders(
           patientId: true,
           active: true,
           whatsappOptIn: true,
+          preferredLanguage: true,
           patient: { select: { phone: true } },
         },
       });
       if (!customer) return null;
-      await lockPatientConsent(db, account.organizationId, customer.patientId);
       const consent = await db.patientConsent.findFirst({
         where: {
           organizationId: account.organizationId,
@@ -206,6 +215,13 @@ export async function processDueWhatsAppKhataReminders(
         month: '2-digit',
         day: '2-digit',
       }).format(now);
+      const preferredLanguage =
+        customer.preferredLanguage === 'ur' ? ('ur' as const) : ('en' as const);
+      const templateName =
+        preferredLanguage === 'ur'
+          ? config.templates.khataReminderUrdu
+          : config.templates.khataReminder;
+      if (!templateName) return { missingTemplate: true as const };
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: account.organizationId,
         direction: 'OUTBOUND',
@@ -217,13 +233,24 @@ export async function processDueWhatsAppKhataReminders(
         customerId: customer.id,
         patientId: customer.patientId,
         phoneLast4: phoneLast4(to),
-        templateName: config.templates.khataReminder,
+        templateName,
         dueDate: plan.dueDate,
       });
-      return { customerId: customer.id, patientId: customer.patientId, to, logId };
+      return {
+        customerId: customer.id,
+        patientId: customer.patientId,
+        preferredLanguage,
+        templateName,
+        to,
+        logId,
+      };
     });
     if (!recipient) {
       result.skippedNoConsent += 1;
+      continue;
+    }
+    if ('missingTemplate' in recipient) {
+      result.failed += 1;
       continue;
     }
     if (!recipient.logId) {
@@ -240,14 +267,15 @@ export async function processDueWhatsAppKhataReminders(
         customerId: recipient.customerId,
         patientId: recipient.patientId,
         phoneLast4: phoneLast4(recipient.to),
-        templateName: config.templates.khataReminder,
+        templateName: recipient.templateName,
         dueDate: plan.dueDate,
       },
       recipient.logId,
       () =>
         provider.sendTemplate({
           to: recipient.to,
-          template: 'khataReminder',
+          template: recipient.preferredLanguage === 'ur' ? 'khataReminderUrdu' : 'khataReminder',
+          language: recipient.preferredLanguage,
           // Utility parameters only: who owes, and how much is outstanding.
           parameters: [sanitizeReminderDisplayName(account.displayName), formatMinor(balanceMinor)],
         })

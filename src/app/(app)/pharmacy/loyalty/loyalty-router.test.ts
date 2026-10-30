@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   branches: vi.fn(),
   customers: vi.fn(),
   history: vi.fn(),
+  setLanguage: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -27,6 +28,7 @@ vi.mock('@/lib/pharmacy/customer-loyalty', async () => ({
   )),
   listLoyaltyCustomers: mocks.customers,
   readLoyaltyHistory: mocks.history,
+  setCustomerPreferredLanguage: mocks.setLanguage,
 }));
 import type { TRPCContext } from '@/server/trpc';
 import { pharmacyLoyaltyRouter } from './loyalty-router';
@@ -55,6 +57,7 @@ beforeEach(() => {
   mocks.branches.mockResolvedValue([]);
   mocks.customers.mockResolvedValue({ customers: [], hasMore: false });
   mocks.history.mockResolvedValue({ entries: [] });
+  mocks.setLanguage.mockResolvedValue({ customerId: 'customer-a', preferredLanguage: 'ur' });
 });
 describe('ordinary loyalty router visibility', () => {
   it('hands trusted scope and requested page to history', async () => {
@@ -73,6 +76,19 @@ describe('ordinary loyalty router visibility', () => {
       select: { id: true, name: true },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
     });
+  });
+  it('sets a validated reminder language in trusted tenant scope', async () => {
+    await caller().setPreferredLanguage({
+      branchId: 'branch-a',
+      customerId: 'customer-a',
+      preferredLanguage: 'ur',
+    });
+    expect(mocks.setLanguage).toHaveBeenCalledWith(
+      expect.anything(),
+      { organizationId: 'org-a', actorId: 'owner-a', branchId: 'branch-a' },
+      'customer-a',
+      'ur'
+    );
   });
   it('denies missing capability before customer reads', async () => {
     mocks.can.mockResolvedValue(false);

@@ -16,6 +16,8 @@ const ENV = {
   PHARMACY_WHATSAPP_ACCESS_TOKEN: 'test-token',
   PHARMACY_WHATSAPP_PHONE_NUMBER_ID: '1234567890',
   PHARMACY_WHATSAPP_TEMPLATE_REFILL_REMINDER: 'refill_due_v1',
+  PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER: 'khata_due_en_v1',
+  PHARMACY_WHATSAPP_TEMPLATE_KHATA_REMINDER_UR: 'khata_due_ur_v1',
   PHARMACY_WHATSAPP_TEMPLATE_LANGUAGE: 'ur',
 };
 
@@ -195,12 +197,10 @@ describe('MetaWhatsAppProvider', () => {
   });
 });
 
-it('keeps configured Meta sending disabled in the production factory', async () => {
+it('enables configured Meta sending in the production factory', async () => {
   const { createWhatsAppProvider } = await import('./provider');
   const provider = createWhatsAppProvider(
     readWhatsAppConfig({ ...ENV, PHARMACY_WHATSAPP_PROVIDER: 'meta' })
   );
-  await expect(provider.sendText({ to: 'synthetic', body: 'synthetic' })).rejects.toMatchObject({
-    reason: 'NOT_CONFIGURED',
-  });
+  expect(provider).toBeInstanceOf(MetaWhatsAppProvider);
 });
