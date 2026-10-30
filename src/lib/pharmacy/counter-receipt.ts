@@ -56,6 +56,8 @@ export type CounterReceiptTender = {
   tenderId: string;
   type: string;
   amountMinor: number;
+  /** Cash handed over before change; absent on legacy/non-cash receipt models. */
+  cashReceivedMinor?: number | null;
   changeGivenMinor: number | null;
 };
 
@@ -293,14 +295,22 @@ export function buildCounterReceiptDocument(
  */
 export function counterReceiptTotals(input: {
   lines: readonly Pick<CounterReceiptLine, 'unitPriceMinor' | 'quantity' | 'discountMinor'>[];
-  tenders: readonly Pick<CounterReceiptTender, 'amountMinor' | 'changeGivenMinor'>[];
+  tenders: readonly Pick<
+    CounterReceiptTender,
+    'type' | 'amountMinor' | 'cashReceivedMinor' | 'changeGivenMinor'
+  >[];
 }): CounterReceipt['totals'] {
   const grossMinor = input.lines.reduce(
     (total, line) => total + line.unitPriceMinor * line.quantity,
     0
   );
   const discountMinor = input.lines.reduce((total, line) => total + line.discountMinor, 0);
-  const tenderedMinor = input.tenders.reduce((total, tender) => total + tender.amountMinor, 0);
+  const tenderedMinor = input.tenders.reduce(
+    (total, tender) =>
+      total +
+      (tender.type === 'CASH' ? (tender.cashReceivedMinor ?? tender.amountMinor) : tender.amountMinor),
+    0
+  );
   const changeMinor = input.tenders.reduce(
     (total, tender) => total + (tender.changeGivenMinor ?? 0),
     0
