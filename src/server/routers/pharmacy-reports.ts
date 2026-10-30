@@ -13,6 +13,7 @@ import {
 
 import { hasModule } from '@/lib/entitlements';
 import { can, subjectFromSession } from '@/lib/abac';
+import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
 import {
   readPharmacyDailyWorkPack,
   validateDailyWorkPackInput,
@@ -39,9 +40,10 @@ import {
   acknowledgePackAuthenticationFlag,
   readPackAuthenticationFlags,
 } from '@/lib/pharmacy/pack-authentication-operations';
-import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
+const safety = capabilityProcedure('pharmacy:safety');
 const widget = z
   .object({
     key: z.enum(PHARMACY_WIDGET_KEYS),
@@ -115,6 +117,9 @@ function reportChangedConflict(): TRPCError {
 
 async function requirePvBranch(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements.organizationId;
+  const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, ctx.session!.user.id);
+  if (!assigned.includes(branchId))
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   const branch = await ctx.db.pharmacyBranch.findFirst({
     where: { id: branchId, organizationId, active: true },
   });
@@ -196,7 +201,7 @@ export const pharmacyReportsRouter = router({
       }
       return readPharmacyMarketingReport(ctx.db, ctx.entitlements.organizationId, scoped);
     }),
-  createPharmacovigilanceReport: auditedProtectedProcedure
+  createPharmacovigilanceReport: safety
     .input(
       z
         .object({
@@ -242,7 +247,7 @@ export const pharmacyReportsRouter = router({
         data: { ...input, organizationId, createdByUserId: ctx.session.user.id },
       });
     }),
-  transitionPharmacovigilanceReport: auditedProtectedProcedure
+  transitionPharmacovigilanceReport: safety
     .input(
       z.object({ id: z.string().min(1), branchId: z.string().min(1), state: pvState }).strict()
     )
@@ -274,7 +279,7 @@ export const pharmacyReportsRouter = router({
         throw error;
       }
     }),
-  recordPharmacovigilanceSubmission: auditedProtectedProcedure
+  recordPharmacovigilanceSubmission: safety
     .input(
       z
         .object({
@@ -314,7 +319,12 @@ export const pharmacyReportsRouter = router({
         },
       });
       if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
-      if (!['READY', 'SUBMITTED'].includes(report.state))
+      // Closing internal review must not discard the outcome of an outstanding submission.
+      const closedPendingOutcome =
+        report.state === 'CLOSED' &&
+        report.externalSubmissionState === 'PENDING' &&
+        (input.state === 'SUBMITTED' || input.state === 'FAILED');
+      if (!['READY', 'SUBMITTED'].includes(report.state) && !closedPendingOutcome)
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'The report is not ready for external submission.',
@@ -349,7 +359,7 @@ export const pharmacyReportsRouter = router({
         throw error;
       }
     }),
-  exportPharmacovigilanceDrap: auditedProtectedProcedure
+  exportPharmacovigilanceDrap: safety
     .input(
       z
         .object({ branchId: z.string().min(1), from: z.date(), to: z.date() })
