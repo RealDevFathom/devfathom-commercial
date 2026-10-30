@@ -9,7 +9,11 @@ import { formatMoney as serverFormatMoney } from '@/lib/restaurant/money';
 
 describe('client-safe promotion money arithmetic', () => {
   it('preserves exact display rounding through both client and server entrypoints', () => {
-    for (const [input, expected] of [['28', '28.00'], ['-0.5', '-0.50'], ['1.005', '1.01']]) {
+    for (const [input, expected] of [
+      ['28', '28.00'],
+      ['-0.5', '-0.50'],
+      ['1.005', '1.01'],
+    ]) {
       expect(formatMoney(input)).toBe(expected);
       expect(serverFormatMoney(input)).toBe(expected);
     }

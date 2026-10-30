@@ -145,26 +145,48 @@ beforeEach(() => {
   h.resolveTenantActor.mockResolvedValue(null);
 });
 
-
 describe('print bridge device kind boundary', () => {
   it.each(['POS', 'KDS'])('retains default device access for %s', async (kind) => {
-    seedDevice({ kind }); const handler = vi.fn(() => new Response('ok'));
-    expect((await withDeviceAuth(handler)(req({ authorization: `Bearer ${deviceSecret}` }))).status).toBe(200);
+    seedDevice({ kind });
+    const handler = vi.fn(() => new Response('ok'));
+    expect(
+      (await withDeviceAuth(handler)(req({ authorization: `Bearer ${deviceSecret}` }))).status
+    ).toBe(200);
     expect(handler).toHaveBeenCalledOnce();
   });
   it('denies bridge terminal commands before check-in or handler', async () => {
-    seedDevice({ kind: 'PRINT_BRIDGE' }); const handler = vi.fn(() => new Response('ok'));
-    expect((await withDeviceAuth(handler)(req({ authorization: `Bearer ${deviceSecret}` }))).status).toBe(403);
-    expect(handler).not.toHaveBeenCalled(); expect(h.store.devices[0].lastSeenAt).toBeNull();
+    seedDevice({ kind: 'PRINT_BRIDGE' });
+    const handler = vi.fn(() => new Response('ok'));
+    expect(
+      (await withDeviceAuth(handler)(req({ authorization: `Bearer ${deviceSecret}` }))).status
+    ).toBe(403);
+    expect(handler).not.toHaveBeenCalled();
+    expect(h.store.devices[0].lastSeenAt).toBeNull();
   });
   it('admits the explicit bridge route opt-in', async () => {
-    seedDevice({ kind: 'PRINT_BRIDGE' }); const handler = vi.fn(() => new Response('ok'));
-    expect((await withDeviceAuth(handler, { allowedDeviceKinds: ['POS', 'KDS', 'PRINT_BRIDGE'] })(req({ authorization: `Bearer ${deviceSecret}` }))).status).toBe(200);
+    seedDevice({ kind: 'PRINT_BRIDGE' });
+    const handler = vi.fn(() => new Response('ok'));
+    expect(
+      (
+        await withDeviceAuth(handler, { allowedDeviceKinds: ['POS', 'KDS', 'PRINT_BRIDGE'] })(
+          req({ authorization: `Bearer ${deviceSecret}` })
+        )
+      ).status
+    ).toBe(200);
     expect(handler).toHaveBeenCalledOnce();
   });
   it('denies a bridge even with an otherwise live terminal session', async () => {
-    seedDevice({ kind: 'PRINT_BRIDGE' }); seedSession(); const handler = vi.fn(() => new Response('ok'));
-    expect((await withTerminalAuth(handler)(req({ authorization: `Bearer ${deviceSecret}`, 'x-terminal-session': sessionToken }))).status).toBe(403);
-    expect(handler).not.toHaveBeenCalled(); expect(h.store.devices[0].lastSeenAt).toBeNull();
+    seedDevice({ kind: 'PRINT_BRIDGE' });
+    seedSession();
+    const handler = vi.fn(() => new Response('ok'));
+    expect(
+      (
+        await withTerminalAuth(handler)(
+          req({ authorization: `Bearer ${deviceSecret}`, 'x-terminal-session': sessionToken })
+        )
+      ).status
+    ).toBe(403);
+    expect(handler).not.toHaveBeenCalled();
+    expect(h.store.devices[0].lastSeenAt).toBeNull();
   });
 });
