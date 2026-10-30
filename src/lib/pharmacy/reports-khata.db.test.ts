@@ -2,9 +2,8 @@ import { randomBytes } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-// CI supplies TEST_DATABASE_URL, while the focused acceptance command documents DATABASE_URL.
-// Either must opt in explicitly because this test writes fixture rows.
-const url = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+// Fixture writes require an explicit test database, never the ambient application database.
+const url = process.env.TEST_DATABASE_URL;
 if (url) process.env.DATABASE_URL = url;
 const suite = url ? describe : describe.skip;
 const suffix = randomBytes(5).toString('hex');
@@ -23,7 +22,8 @@ async function createFixture(
     partial?: { amount: number; paid: number; dishonoured?: number };
     unlinked?: { paid: number; dishonoured: number };
     future?: number;
-  }
+  },
+  existingBranchId?: string
 ): Promise<KhataFixture> {
   return withTenantDb(organizationId, async (db: ScopedDb) => {
     await db.organization.upsert({
@@ -39,16 +39,18 @@ async function createFixture(
         currency: 'PKR',
       },
     });
-    const branch = await db.pharmacyBranch.create({
-      data: {
-        organizationId,
-        code: label,
-        name: label,
-        addressLine: '1 Test Road',
-        city: 'Lahore',
-        provinceCode: 'PB',
-      },
-    });
+    const branch = existingBranchId
+      ? { id: existingBranchId }
+      : await db.pharmacyBranch.create({
+          data: {
+            organizationId,
+            code: label,
+            name: label,
+            addressLine: '1 Test Road',
+            city: 'Lahore',
+            provinceCode: 'PB',
+          },
+        });
     await db.$queryRawUnsafe("SELECT set_config('app.current_branch_id', $1, true)", branch.id);
     const patient = await db.pharmacyPatient.create({
       data: { organizationId, displayName: `${label} patient` },
@@ -116,7 +118,8 @@ async function createFixture(
         });
       }
     }
-    if (amounts.unlinked) {
+    if (amounts.unlinked?.paid) {
+      const item = await charge(amounts.unlinked.paid, overdue);
       await db.pharmacyKhataEvent.create({
         data: {
           organizationId,
@@ -124,9 +127,12 @@ async function createFixture(
           familyAccountId: family.id,
           kind: 'PAYMENT',
           amountMinor: amounts.unlinked.paid,
+          settlesChargeId: item.id,
           actorId: 'owner',
         },
       });
+    }
+    if (amounts.unlinked?.dishonoured) {
       await db.pharmacyKhataEvent.create({
         data: {
           organizationId,
@@ -150,6 +156,64 @@ beforeAll(async () => {
 });
 
 suite('owner command centre Khata aging under forced PostgreSQL RLS', () => {
+  it('uses a login role that cannot bypass forced tenant RLS', async () => {
+    const roles = await withTenantDb(orgA, (db) =>
+      db.$queryRawUnsafe<Array<{ rolsuper: boolean; rolbypassrls: boolean; rolcanlogin: boolean }>>(
+        'SELECT rolsuper, rolbypassrls, rolcanlogin FROM pg_roles WHERE rolname=current_user'
+      )
+    );
+    expect(roles).toEqual([{ rolsuper: false, rolbypassrls: false, rolcanlogin: true }]);
+  });
+
+  it('caps unlinked dishonours per family without borrowing another family payment', async () => {
+    const bounced = await createFixture(orgA, `report-cap-${suffix}`, {
+      overdue: [],
+      unlinked: { paid: 100, dishonoured: 400 },
+    });
+    await createFixture(
+      orgA,
+      `report-paid-${suffix}`,
+      {
+        overdue: [],
+        unlinked: { paid: 1000, dishonoured: 0 },
+      },
+      bounced.branchId
+    );
+    await createFixture(
+      orgA,
+      `report-no-payment-${suffix}`,
+      {
+        overdue: [],
+        unlinked: { paid: 0, dishonoured: 500 },
+      },
+      bounced.branchId
+    );
+    const result = await withTenantDb(orgA, (db) =>
+      readCommandCentre(db, {
+        branchIds: [bounced.branchId],
+        from: '2026-01-01',
+        to: '2026-01-01',
+      })
+    );
+    expect(result.metrics.khataAgingMinor).toBe(100);
+  });
+
+  it('does not reinstate the same payment through linked and unlinked dishonours', async () => {
+    const fixture = await createFixture(orgA, `report-mixed-${suffix}`, {
+      overdue: [],
+      partial: { amount: 500, paid: 500, dishonoured: 200 },
+      unlinked: { paid: 0, dishonoured: 1000 },
+    });
+    const result = await withTenantDb(orgA, (db) =>
+      readCommandCentre(db, {
+        branchIds: [fixture.branchId],
+        from: '2026-01-01',
+        to: '2026-01-01',
+      })
+    );
+    expect(result.metrics.khataAgingMinor).toBe(500);
+  });
+
   it('aggregates real open items across authorized branches without leaking a supplied foreign branch', async () => {
     const first = await createFixture(orgA, `report-a1-${suffix}`, {
       overdue: [1_500_000_000],

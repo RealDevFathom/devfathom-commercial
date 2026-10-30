@@ -8,7 +8,7 @@ import {
 
 describe('PH-RPT metric contract', () => {
   it('defines a source, scope, permission, and drill-through for every asserted metric', () => {
-    expect(PHARMACY_METRIC_CONTRACT).toHaveLength(23);
+    expect(PHARMACY_METRIC_CONTRACT).toHaveLength(24);
     for (const metric of PHARMACY_METRIC_CONTRACT) {
       expect(metric.key).toBeTruthy();
       expect(metric.definition).toBeTruthy();
@@ -76,8 +76,13 @@ describe('PH-RPT metric contract', () => {
     expect(sql).toContain(`CASE WHEN "kind"='PAYMENT' THEN "amountMinor" ELSE -"amountMinor" END`);
     expect(sql).toContain('GREATEST(SUM(CASE');
     expect(sql).toContain(`"kind" IN ('PAYMENT','DISHONOURED_CHEQUE')`);
-    expect(sql).toContain(`FILTER (WHERE "kind"='DISHONOURED_CHEQUE')`);
-    expect(sql).toContain('+(SELECT dishonoured FROM unlinked_events)');
+    expect(sql).toContain(
+      `unlinked."kind"='DISHONOURED_CHEQUE' AND unlinked."settlesChargeId" IS NULL`
+    );
+    expect(sql).toContain('settlements."familyAccountId"=unlinked."familyAccountId"');
+    expect(sql).toContain('settlements."familyAccountId"=charge."familyAccountId"');
+    expect(sql).toContain('LEAST(SUM(unlinked."amountMinor"),COALESCE((SELECT SUM(paid)');
+    expect(sql).toContain('+(SELECT COALESCE(SUM(dishonoured),0) FROM unlinked_events)');
     expect(sql).toContain(')::bigint AS value');
     expect(sql).toContain(`charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`);
     expect(khataQuery.values).toEqual(['branch_1', 'branch_1', 'branch_1']);
