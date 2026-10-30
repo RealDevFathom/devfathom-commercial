@@ -982,22 +982,26 @@ const purchasingRouter = router({
         if (
           input.purchaseOrderId &&
           !(await ctx.db.pharmacyPurchaseOrder.findFirst({
-            where: { id: input.purchaseOrderId, supplierId: input.supplierId },
+            where: {
+              id: input.purchaseOrderId,
+              supplierId: input.supplierId,
+              branchId: input.branchId,
+            },
           }))
         ) {
           throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
         }
 
-        const ownOrderLines = input.purchaseOrderId
-          ? new Set(
-              (
+        const ownOrderLines = new Map(
+          input.purchaseOrderId
+            ? (
                 await ctx.db.pharmacyPurchaseOrderLine.findMany({
                   where: { purchaseOrderId: input.purchaseOrderId },
-                  select: { id: true },
+                  select: { id: true, medicineId: true, packLevelId: true },
                 })
-              ).map((line) => line.id)
-            )
-          : new Set<string>();
+              ).map((line) => [line.id, line] as const)
+            : []
+        );
 
         const lines = [];
         const seenSerials = new Set<string>();
@@ -1011,8 +1015,19 @@ const purchasingRouter = router({
           // An ordered line borrowed from another order — or from another
           // tenant — would make the three-way match compare the goods against
           // something they were never ordered on.
-          if (line.purchaseOrderLineId && !ownOrderLines.has(line.purchaseOrderLineId))
-            throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+          if (line.purchaseOrderLineId) {
+            const orderLine = ownOrderLines.get(line.purchaseOrderLineId);
+            if (!orderLine) throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+            // The referenced order line is the authority for item identity. Without
+            // this check, unrelated goods could inherit its price and quantity terms,
+            // pass three-way matching, and close the wrong ordered line.
+            if (
+              orderLine.medicineId !== line.medicineId ||
+              orderLine.packLevelId !== line.packLevelId
+            ) {
+              throw new PharmacyReceivingError('PURCHASE_ORDER_LINE_ITEM_MISMATCH');
+            }
+          }
 
           const quantities = receiptLineQuantities({
             receivedPacks: line.receivedPacks,
@@ -1168,21 +1183,44 @@ const purchasingRouter = router({
       }
     }),
 
-  /** Qualified people who can enter a PIN when a controlled receipt is posted. */
-  controlledWitnesses: protectedProcedure.query(async ({ ctx }) => {
-    const actorId = ctx.session?.user?.id;
-    if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    const actor = subjectFromSession(ctx.session!.user);
-    if (
-      !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
-      !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
-    ) {
-      throw new TRPCError({ code: 'FORBIDDEN' });
-    }
-    const organizationId = ctx.entitlements?.organizationId;
-    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    return listControlledPinWitnesses(ctx.db, organizationId, actorId);
-  }),
+  /** The receipt's qualified person, when they can enter a PIN to witness posting. */
+  controlledWitnesses: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          goodsReceiptId: z.string().min(1),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const actorId = ctx.session?.user?.id;
+      if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const actor = subjectFromSession(ctx.session!.user);
+      if (
+        !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
+        !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
+      ) {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      const organizationId = ctx.entitlements?.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const receipt = await ctx.db.pharmacyGoodsReceipt.findFirst({
+        where: {
+          id: input.goodsReceiptId,
+          organizationId,
+          branchId: input.branchId,
+        },
+        select: { qualifiedPersonUserId: true },
+      });
+      if (!receipt?.qualifiedPersonUserId || receipt.qualifiedPersonUserId === actorId) return [];
+      return listControlledPinWitnesses(
+        ctx.db,
+        organizationId,
+        actorId,
+        receipt.qualifiedPersonUserId
+      );
+    }),
 
   /**
    * PUR-04: undo a posting with linked compensating movements. Nothing that was
@@ -1200,6 +1238,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
       try {
         return await ctx.db.$transaction((tx) =>

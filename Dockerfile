@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.2-slim AS dependencies
+FROM oven/bun:1.4.3-slim AS dependencies
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --ignore-scripts
@@ -44,7 +44,7 @@ ARG NEXT_PUBLIC_APP_URL=
 ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
 RUN AUTH_SECRET=container-build-only node node_modules/next/dist/bin/next build
 
-FROM oven/bun:1.4.2-slim AS runner
+FROM oven/bun:1.4.3-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \

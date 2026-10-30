@@ -71,6 +71,7 @@ import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settle
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
+  readPharmacyReceiptTaxIdentity,
   savePharmacyReceiptFormat,
 } from '@/lib/pharmacy/receipt-print';
 import { router, type TRPCContext } from '../trpc';
@@ -179,6 +180,7 @@ beforeEach(() => {
     layout: { paperWidth: 32 },
     revision: 1,
   } as never);
+  vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({ ntn: null, strn: null });
 });
 
 type Caller = ReturnType<ReturnType<typeof fixture>['caller']>;
@@ -219,6 +221,40 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it('supplies the completion-time regulatory identity to browser receipts', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({
+      ntn: 'NTN-HISTORICAL',
+      strn: 'STRN-HISTORICAL',
+    });
+
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({
+      taxIdentity: { ntn: 'NTN-HISTORICAL', strn: 'STRN-HISTORICAL' },
+    });
+    expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      new Date('2026-10-01T00:00:00.000Z')
+    );
+  });
+
+  it('does not fall back to the current regulatory identity for an unsettled receipt', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    vi.mocked(readCounterReceipt).mockResolvedValue({
+      receiptNumber: null,
+      completedAt: null,
+    } as never);
+
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({ taxIdentity: { ntn: null, strn: null } });
+    expect(readPharmacyReceiptTaxIdentity).not.toHaveBeenCalled();
+  });
+
   it('rejects status-only completion before opening a transaction', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
@@ -477,6 +513,14 @@ describe('counter receipt authorization', () => {
     expect(noCapability.db.$transaction).not.toHaveBeenCalled();
     expect(write).not.toHaveBeenCalled();
 
+    const unassigned = fixture(dispense);
+    await expect(run(unassigned.caller(), 'branch-a')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(unassigned.db.$transaction).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+
     const wrongBranch = fixture(dispense);
     assign(wrongBranch, ['branch-a']);
     await expect(run(wrongBranch.caller(), 'branch-b')).rejects.toMatchObject({
@@ -568,7 +612,7 @@ describe('counter receipt authorization', () => {
   });
 
   it('keeps Khata tender off the branch-assignment guard', async () => {
-    const f = fixture(dispense);
+    const f = fixture([...dispense, { capability: 'pharmacy:counter', effect: 'ALLOW' }]);
     f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
     await expect(
       f.caller().tender({
