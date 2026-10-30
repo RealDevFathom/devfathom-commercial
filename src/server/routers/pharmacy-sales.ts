@@ -742,7 +742,7 @@ export const pharmacySalesRouter = router({
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
     const scope =
-      input.type === 'KHATA' || input.familyAccountId
+      input.type === 'KHATA' || input.type === 'CREDIT' || input.familyAccountId
         ? await khataScope(ctx, input.branchId)
         : await scopeFor(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));

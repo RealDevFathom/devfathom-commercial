@@ -153,6 +153,11 @@ const khataPaths: { name: string; run: (caller: Caller, branchId: string) => Pro
       run: (c, branchId) => c.tenderOutcome({ ...input, branchId, type: 'CREDIT' }),
     },
     {
+      name: 'legacy credit outcome without a family account',
+      run: (c, branchId) =>
+        c.tenderOutcome({ ...input, branchId, type: 'CREDIT', familyAccountId: undefined }),
+    },
+    {
       name: 'credit refund',
       run: (c, branchId) =>
         c.refundTender({
@@ -212,6 +217,19 @@ describe.each(khataPaths)('Khata $name authorization', ({ run }) => {
     expect(applyPharmacyTender).not.toHaveBeenCalled();
     expect(refundPharmacyTender).not.toHaveBeenCalled();
   });
+
+  it.each(['pharmacy:dispense', 'pharmacy.counter'])(
+    'rejects %s without a canonical counter grant',
+    async (capability) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      f.member.organizationRole.permissions = [{ capability, effect: 'ALLOW' }];
+      await expect(run(f.caller(), 'branch-a')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(readPharmacyTenderOutcome).not.toHaveBeenCalled();
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+      expect(refundPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
 
   it.each(['session', 'database'])('rejects an inactive %s user', async (source) => {
     const f = fixture();
