@@ -132,6 +132,7 @@ function fixture(
         },
       ]),
     },
+    pharmacyTender: { findFirst: vi.fn(async () => ({ type: 'CASH' })) },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     $transaction: vi.fn(),
   };
@@ -476,9 +477,9 @@ describe('counter receipt authorization', () => {
   it.each([
     {
       name: 'refundTender',
-      run: (caller: Caller) =>
+      run: (caller: Caller, branchId: string) =>
         caller.refundTender({
-          branchId: 'branch-a',
+          branchId,
           originalTenderId: 'tender-1',
           deviceId: 'device-a',
           businessDate: new Date('2026-10-01T00:00:00.000Z'),
@@ -490,37 +491,128 @@ describe('counter receipt authorization', () => {
     },
     {
       name: 'returnLine',
-      run: (caller: Caller) =>
+      run: (caller: Caller, branchId: string) =>
         caller.returnLine({
-          branchId: 'branch-a',
+          branchId,
           saleLineId: 'line-1',
           canonicalUnits: 1,
+          disposition: 'QUARANTINE',
           reason: 'Returned medicine',
           integrityDecision: 'Sealed pack',
           idempotencyKey: 'return-1',
         }),
       write: returnSaleLine,
     },
-  ])('$name requires counter capability and assignment before writing (#578)', async (path) => {
+  ])('$name requires counter capability and assignment before writing', async ({ run, write }) => {
     const noCapability = fixture([]);
     assign(noCapability, ['branch-a']);
-    await expect(path.run(noCapability.caller())).rejects.toMatchObject({
+    await expect(run(noCapability.caller(), 'branch-a')).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
     });
     expect(noCapability.db.$transaction).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
 
     const unassigned = fixture(dispense);
-    await expect(path.run(unassigned.caller())).rejects.toMatchObject({
+    await expect(run(unassigned.caller(), 'branch-a')).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'Branch is outside your scope.',
     });
     expect(unassigned.db.$transaction).not.toHaveBeenCalled();
-    expect(path.write).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+
+    const wrongBranch = fixture(dispense);
+    assign(wrongBranch, ['branch-a']);
+    await expect(run(wrongBranch.caller(), 'branch-b')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(wrongBranch.db.$transaction).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: 'refundTender',
+      run: (caller: Caller) =>
+        caller.refundTender({
+          branchId: 'branch-a',
+          originalTenderId: 'tender-1',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          amountMinor: 100,
+          reason: 'Returned medicine',
+          idempotencyKey: 'refund-allowed',
+        }),
+      write: refundPharmacyTender,
+    },
+    {
+      name: 'returnLine',
+      run: (caller: Caller) =>
+        caller.returnLine({
+          branchId: 'branch-a',
+          saleLineId: 'line-1',
+          canonicalUnits: 1,
+          disposition: 'QUARANTINE',
+          reason: 'Returned medicine',
+          integrityDecision: 'Sealed pack',
+          idempotencyKey: 'return-allowed',
+        }),
+      write: returnSaleLine,
+    },
+  ])('$name remains available to an assigned counter user', async ({ run, write }) => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    await expect(run(f.caller())).resolves.toBeDefined();
+    expect(write).toHaveBeenCalledOnce();
+  });
+
+  it('keeps refund and witnessed return writes available to an unassigned organization admin', async () => {
+    const admin = fixture(dispense, 'ADMIN');
+    const controlledWitness = { staffProfileId: 'pharmacist-a', pin: '1234' };
+
+    await expect(
+      admin.caller().refundTender({
+        branchId: 'branch-a',
+        originalTenderId: 'tender-1',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        amountMinor: 100,
+        reason: 'Returned medicine',
+        idempotencyKey: 'admin-refund',
+      })
+    ).resolves.toBeDefined();
+    await expect(
+      admin.caller().returnLine({
+        branchId: 'branch-a',
+        saleLineId: 'line-1',
+        controlledWitness,
+        canonicalUnits: 1,
+        disposition: 'RESTOCK',
+        reason: 'Returned medicine',
+        integrityDecision: 'Sealed pack',
+        idempotencyKey: 'admin-return',
+      })
+    ).resolves.toBeDefined();
+
+    expect(refundPharmacyTender).toHaveBeenCalledOnce();
+    expect(returnSaleLine).toHaveBeenCalledWith(
+      admin.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      expect.objectContaining({ controlledWitness })
+    );
+    expect(admin.context.audit.detail).toMatchObject({
+      targetType: 'PharmacyBranch',
+      targetId: 'branch-a',
+      metadata: {
+        branchId: 'branch-a',
+        reason: 'org-admin-receipt-access-without-branch-assignment',
+      },
+    });
   });
 
   it('keeps Khata tender off the branch-assignment guard', async () => {
-    const f = fixture(dispense);
+    const f = fixture([...dispense, { capability: 'pharmacy:counter', effect: 'ALLOW' }]);
     f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
     await expect(
       f.caller().tender({

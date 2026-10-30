@@ -60,6 +60,7 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
+      findFirst: vi.fn().mockResolvedValue({ id: 'branch-1' }),
     },
     pharmacyBranchAssignment: {
       findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-1' }]),
