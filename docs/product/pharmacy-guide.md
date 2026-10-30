@@ -257,13 +257,7 @@ Three pharmacy jobs carry extra risk, so DevFathom treats them differently from 
 3. **Each job is checked on its own.** Having one of them does not give you the others.
 4. **One person may hold all three.** In a shop with a single pharmacist, that pharmacist can be given all three jobs.
 5. **Capability is not the same as independent approval.** The Owner / Operator role lets one person start any of the three protected jobs, but it does not let that person witness their own controlled purchase or controlled-stock restoration. Those actions require a different qualified user to enter an active, fresh PIN. DevFathom records both the actor and witness in the audit trail.
-6. **Taking permissions away.** DevFathom checks permissions in this order and stops at the first match:
-   1. a block set for that person
-   2. an allow set for that person
-   3. a block on their role
-   4. an allow on their role
-
-   So a block set on the person always removes the job. A block on their role does **not** remove it if the person also has their own allow. To take a job away from one person for certain, block it on that person. A block on "all permissions" also removes all three jobs. TODO(confirm): this order may change when the technical team's planned fix lands (`fix/abac-deny-precedence`).
+6. **Taking permissions away.** A matching block on either the person or their role wins over any allow. An allow set for a person cannot override a block on their role. To take a job away from one person, block it on that person. A block on "all permissions" or "all pharmacy permissions" also removes all three jobs.
 
 ### Why it works this way
 

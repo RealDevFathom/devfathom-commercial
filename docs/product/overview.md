@@ -40,7 +40,7 @@ Go from "we need this" to "it has arrived": make a request, get quotes, raise a 
 
 ### Keep a clean medicine list
 
-Keep a catalogue of medicines with their ingredients, forms, pack sizes, printed retail price (MRP) and barcodes. Changes to the list are reviewed before they go live.
+Keep a catalogue of medicines with their ingredients, forms, pack sizes, printed retail price (MRP) and barcodes. Regulated changes proposed by connected sources are reviewed before they go live. TODO(confirm): which kinds of edits made directly by staff also go through review.
 
 ### Handle prescriptions properly
 
