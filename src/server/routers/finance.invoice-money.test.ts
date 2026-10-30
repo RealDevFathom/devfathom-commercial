@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   paymentAggregate: vi.fn(),
   paymentCreate: vi.fn(),
   logActivity: vi.fn(),
+  emitEvent: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -20,6 +21,7 @@ vi.mock('@/lib/abac', async () => ({
 }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: vi.fn(() => true) }));
 vi.mock('../activity', () => ({ logActivity: mocks.logActivity }));
+vi.mock('@/lib/webhooks', () => ({ emitEvent: mocks.emitEvent }));
 vi.mock('../audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
@@ -262,5 +264,69 @@ describe('invoice payment settlement serialization', () => {
       where: { id: 'invoice-1' },
       data: { status: 'SENT', paidAt: null },
     });
+  });
+
+  it('settles using the same rounded cents that are persisted for the payment', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'invoice-1',
+      status: 'SENT',
+      total: 1.21,
+      currency: 'USD',
+      clientId: 'client-1',
+    });
+    mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 0.2 } });
+    mocks.paymentCreate.mockResolvedValue({ id: 'payment-1', amount: 1.01 });
+
+    const result = await caller().addPayment({ invoiceId: 'invoice-1', amount: 1.005 });
+
+    expect(mocks.paymentCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ amount: 1.01 }) })
+    );
+    expect(result).toMatchObject({ amountPaid: 1.21, balance: 0, status: 'PAID' });
+    expect(mocks.update).toHaveBeenCalledWith({
+      where: { id: 'invoice-1' },
+      data: { status: 'PAID', paidAt: expect.any(Date) },
+    });
+    expect(mocks.emitEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'invoice.paid',
+      { invoiceId: 'invoice-1', total: 1.21, currency: 'USD', clientId: 'client-1' }
+    );
+  });
+
+  it('rejects an overpayment when binary addition would hide its last cent', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'invoice-1',
+      status: 'SENT',
+      total: 1.2,
+      currency: 'USD',
+      clientId: 'client-1',
+    });
+    mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 0.2 } });
+
+    await expect(
+      caller().addPayment({ invoiceId: 'invoice-1', amount: 1.005 })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(mocks.paymentCreate).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a positive payment that rounds to zero cents', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'invoice-1',
+      status: 'SENT',
+      total: 10,
+      currency: 'USD',
+      clientId: 'client-1',
+    });
+    mocks.paymentAggregate.mockResolvedValue({ _sum: { amount: 0 } });
+
+    await expect(
+      caller().addPayment({ invoiceId: 'invoice-1', amount: 0.001 })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+
+    expect(mocks.paymentCreate).not.toHaveBeenCalled();
   });
 });

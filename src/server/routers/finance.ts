@@ -554,6 +554,12 @@ export const financeRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Settlement must use the same cent value as the Decimal(12,2) payment row.
+      const amount = round2(input.amount);
+      if (amount <= 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Payment must be at least 0.01.' });
+      }
+
       // IMP-REST-03: captured inside the tx, fired only AFTER it commits.
       let paidEvent: {
         invoiceId: string;
@@ -599,7 +605,7 @@ export const financeRouter = router({
           _sum: { amount: true },
         });
         const alreadyPaid = round2(Number(prior._sum.amount ?? 0));
-        const newPaid = round2(alreadyPaid + input.amount);
+        const newPaid = sumMoney([alreadyPaid, amount]);
 
         // Reject overpayment beyond a half-cent rounding tolerance.
         if (newPaid > total + PAYMENT_EPSILON) {
@@ -613,7 +619,7 @@ export const financeRouter = router({
         const payment = await tx.payment.create({
           data: {
             invoiceId: invoice.id,
-            amount: input.amount,
+            amount,
             currency: invoice.currency,
             method: input.method?.trim() || null,
             note: input.note?.trim() || null,

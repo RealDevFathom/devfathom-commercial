@@ -19,7 +19,9 @@ export function multiplyMoney(left: MoneyInput, right: MoneyInput): number {
 
 /** Add monetary values as decimals and round the result to cents. */
 export function sumMoney(values: MoneyInput[]): number {
-  return roundMoney(values.reduce((total, value) => total.plus(decimal(value)), decimal(0)));
+  return roundMoney(
+    values.reduce<Prisma.Decimal>((total, value) => total.plus(decimal(value)), decimal(0))
+  );
 }
 
 /** Whether a derived value can safely be persisted in a Decimal(12,2) money column. */
