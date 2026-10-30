@@ -418,9 +418,16 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     );
   });
 
-  it.each(['SUBMITTED', 'FAILED'] as const)(
-    'records a pending submission outcome %s after the internal report is closed',
-    async (state) => {
+  it.each([
+    ['CLOSED', 'SUBMITTED'],
+    ['CLOSED', 'FAILED'],
+    ['UNDER_REVIEW', 'SUBMITTED'],
+    ['UNDER_REVIEW', 'FAILED'],
+    ['DRAFT', 'SUBMITTED'],
+    ['DRAFT', 'FAILED'],
+  ] as const)(
+    'records a pending submission outcome %s/%s without changing the internal lifecycle',
+    async (internalState, state) => {
       let report = {
         id: 'pv_1',
         state: 'READY',
@@ -438,8 +445,15 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
       await api.transitionPharmacovigilanceReport({
         id: 'pv_1',
         branchId: 'branch_1',
-        state: 'CLOSED',
+        state: internalState === 'DRAFT' ? 'UNDER_REVIEW' : internalState,
       });
+      if (internalState === 'DRAFT') {
+        await api.transitionPharmacovigilanceReport({
+          id: 'pv_1',
+          branchId: 'branch_1',
+          state: 'DRAFT',
+        });
+      }
       const result = await api.recordPharmacovigilanceSubmission({
         id: 'pv_1',
         branchId: 'branch_1',
@@ -450,7 +464,7 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
       });
 
       expect(result).toMatchObject({
-        state: 'CLOSED',
+        state: internalState,
         externalSubmissionState: state,
         externalReference: state === 'SUBMITTED' ? 'DRAP-1' : null,
         externalFailureReason: state === 'FAILED' ? 'Endpoint unavailable' : null,
@@ -460,7 +474,7 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
           id: 'pv_1',
           organizationId: 'org_1',
           branchId: 'branch_1',
-          state: 'CLOSED',
+          state: internalState,
           externalSubmissionState: 'PENDING',
           externalReference: null,
           externalFailureReason: null,
@@ -475,12 +489,18 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
     }
   );
 
-  it.each(['NOT_SUBMITTED', 'FAILED', 'SUBMITTED'] as const)(
-    'does not start or retry a submission on a closed report with external state %s',
-    async (externalSubmissionState) => {
+  it.each(
+    (['CLOSED', 'UNDER_REVIEW', 'DRAFT'] as const).flatMap((state) =>
+      (['NOT_SUBMITTED', 'FAILED', 'SUBMITTED'] as const).map(
+        (externalSubmissionState) => [state, externalSubmissionState] as const
+      )
+    )
+  )(
+    'does not start or retry a submission on a %s report with external state %s',
+    async (state, externalSubmissionState) => {
       mocks.reportFindFirst.mockResolvedValue({
         id: 'pv_1',
-        state: 'CLOSED',
+        state,
         externalSubmissionState,
       });
       await expect(

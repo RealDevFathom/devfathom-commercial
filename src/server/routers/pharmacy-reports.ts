@@ -319,12 +319,11 @@ export const pharmacyReportsRouter = router({
         },
       });
       if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
-      // Closing internal review must not discard the outcome of an outstanding submission.
-      const closedPendingOutcome =
-        report.state === 'CLOSED' &&
+      // An outstanding submission can finish even if internal review resumes or closes.
+      const pendingOutcome =
         report.externalSubmissionState === 'PENDING' &&
         (input.state === 'SUBMITTED' || input.state === 'FAILED');
-      if (!['READY', 'SUBMITTED'].includes(report.state) && !closedPendingOutcome)
+      if (!['READY', 'SUBMITTED'].includes(report.state) && !pendingOutcome)
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'The report is not ready for external submission.',
