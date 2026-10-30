@@ -13,7 +13,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
-  return { hasModule };
+  const postWriteOffEntry = vi.fn();
+  return { hasModule, postWriteOffEntry };
 });
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -26,6 +27,9 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => true),
   recordTrpcAudit: vi.fn(),
+}));
+vi.mock('@/lib/pharmacy/finance-postings', () => ({
+  postWriteOffEntry: mocks.postWriteOffEntry,
 }));
 
 import { moduleForProcedure } from '@/lib/module-catalog';
@@ -51,6 +55,7 @@ function makeDb() {
         organizationRole: { permissions: [] },
         permissionOverrides: [],
       }),
+      findFirst: vi.fn().mockResolvedValue(null),
     },
     medicine: model(),
     packLevel: model(),
@@ -65,6 +70,7 @@ function makeDb() {
     pharmacyRecallNotice: model(),
     pharmacyInventoryLot: model(),
     pharmacyStockMovement: model(),
+    pharmacyCustodyRecord: model(),
     pharmacyStockBalance: model(),
     pharmacyAllocationOverride: model(),
     pharmacyStockDiscrepancy: model(),
@@ -142,6 +148,45 @@ const CAPABILITY_REFUSAL = {
 beforeEach(() => {
   db = makeDb();
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
+  mocks.postWriteOffEntry.mockReset();
+});
+
+describe('pharmacy write-off accounting', () => {
+  it('posts the write-off journal in the same transaction as the stock movement', async () => {
+    grant([allow('pharmacy:inventory')]);
+    const occurredAt = new Date('2026-10-29T00:02:07.000Z');
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+      id: 'lot_1',
+      unitsPerPack: 10,
+    });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({
+      onHandUnits: 20,
+      sealedPacks: 2,
+      looseUnits: 0,
+    });
+    db.pharmacyStockMovement.create.mockResolvedValue({
+      id: 'movement_1',
+      occurredAt,
+    });
+
+    await caller().writeOff({
+      branchId: 'branch_a',
+      inventoryLotId: 'lot_1',
+      stockLocationId: 'location_1',
+      units: 10,
+      witnessId: 'user_b',
+      reason: 'Expired stock destroyed',
+      evidenceRef: 'DEST-1',
+      idempotencyKey: 'writeoff-1',
+    });
+
+    expect(db.$transaction).toHaveBeenCalledOnce();
+    expect(mocks.postWriteOffEntry).toHaveBeenCalledWith(
+      db,
+      { organizationId: 'org_a', branchId: 'branch_a', actorId: 'user_a' },
+      { stockMovementId: 'movement_1', at: occurredAt }
+    );
+  });
 });
 
 describe('pharmacy inventory entitlement and tenant boundaries', () => {
@@ -228,6 +273,68 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       caller().setBatchState({ manufacturingBatchId: 'batch_1', state: 'RECALLED' })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a write-off witness who is not an active member assigned to the branch', async () => {
+    grant([allow('pharmacy:inventory')]);
+
+    await expect(
+      caller().writeOff({
+        branchId: 'branch_a',
+        inventoryLotId: 'lot_1',
+        stockLocationId: 'location_1',
+        units: 1,
+        witnessId: 'untrusted_string',
+        reason: 'Damaged package',
+        evidenceRef: 'PHOTO-1',
+        idempotencyKey: 'write-off-1',
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'COAUTH_REQUIRED' });
+
+    expect(db.user.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'untrusted_string',
+        organizationId: 'org_a',
+        status: 'ACTIVE',
+        pharmacyBranchAssignments: {
+          some: { organizationId: 'org_a', branchId: 'branch_a', active: true },
+        },
+      },
+      select: { id: true },
+    });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+    expect(db.pharmacyCustodyRecord.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts an active same-tenant witness assigned to the write-off branch', async () => {
+    grant([allow('pharmacy:inventory')]);
+    db.user.findFirst.mockResolvedValue({ id: 'witness_a' });
+    db.pharmacyInventoryLot.findFirst.mockResolvedValue({ id: 'lot_1', unitsPerPack: 1 });
+    db.pharmacyStockBalance.findFirst.mockResolvedValue({
+      onHandUnits: 5,
+      sealedPacks: 5,
+      looseUnits: 0,
+    });
+
+    await caller().writeOff({
+      branchId: 'branch_a',
+      inventoryLotId: 'lot_1',
+      stockLocationId: 'location_1',
+      units: 1,
+      witnessId: 'witness_a',
+      reason: 'Damaged package',
+      evidenceRef: 'PHOTO-1',
+      idempotencyKey: 'write-off-1',
+    });
+
+    expect(db.pharmacyCustodyRecord.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        actorId: 'user_a',
+        witnessId: 'witness_a',
+      }),
+    });
   });
 
   it.each([
@@ -554,6 +661,7 @@ describe('PUR-07 — the stock action centre transport', () => {
   });
 
   it('refuses a snooze or a dismissal with no reason (§8A invariant 29)', async () => {
+    grant([allow('pharmacy:inventory')]);
     for (const call of [
       () =>
         caller().snoozeSignal({

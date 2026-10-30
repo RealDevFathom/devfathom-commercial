@@ -99,7 +99,9 @@ function CompControl({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const eligibleLines = lines.filter((line) => Number(line.compAmount) === 0);
-  const managers = operators.filter((operator) => operator.id !== actingOperatorId);
+  const managers = operators.filter(
+    (operator) => operator.id !== actingOperatorId || operator.canSelfApprove
+  );
 
   function reset() {
     setLineId('');
@@ -114,7 +116,7 @@ function CompControl({
     const trimmedReason = reason.trim();
     if (!lineId || !trimmedReason || !managerId || !/^\d{4,8}$/.test(managerPin) || submitting) {
       setError(
-        'Select an item and a distinct manager, enter a reason, and enter the manager’s 4–8 digit PIN.'
+        'Select an item and an eligible approver, enter a reason, and enter their 4–8 digit PIN.'
       );
       return;
     }
@@ -173,7 +175,7 @@ function CompControl({
           <DialogHeader>
             <DialogTitle>Comp bill item</DialogTitle>
             <DialogDescription>
-              Select an item and record distinct manager approval. The original price remains in the
+              Select an item and verify the approving manager PIN. The original price remains in the
               audit record.
             </DialogDescription>
           </DialogHeader>
@@ -285,6 +287,10 @@ function billTone(status: string): StatusTone {
   if (status === 'OPEN') return 'warning';
   if (status === 'VOID') return 'danger';
   return 'neutral';
+}
+
+function billTitle(splitKind: string) {
+  return splitKind === 'NONE' ? 'Whole order' : splitKind.replaceAll('_', ' ');
 }
 
 const blockerLabels: Record<Exclude<CheckoutSummary['blocker'], null>, string> = {
@@ -926,7 +932,7 @@ export function CheckoutPanel({
                 title={
                   bill.receiptNumber !== null
                     ? `Receipt ${bill.receiptNumber}`
-                    : bill.splitKind.replaceAll('_', ' ')
+                    : billTitle(bill.splitKind)
                 }
                 actions={<StatusPill status={bill.status} tone={billTone(bill.status)} />}
               >

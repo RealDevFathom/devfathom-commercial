@@ -168,6 +168,17 @@ function assertionEnvelope(assertedValue: unknown) {
   };
 }
 
+function referenceProposalValues(payload: unknown): Record<string, string> {
+  if (!payload || typeof payload !== 'object' || !('values' in payload)) return {};
+  const values = payload.values;
+  if (!values || typeof values !== 'object' || Array.isArray(values)) return {};
+  return Object.fromEntries(
+    Object.entries(values).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string'
+    )
+  );
+}
+
 export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth[] }) {
   const [parsed, setParsed] = useState<ParsedFile | null>(null);
   const [mapping, setMapping] = useState<ManualMappingTemplate>({});
@@ -176,6 +187,16 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   const candidates = trpc.pharmacyMedicine.referenceCandidates.useQuery(undefined, {
     retry: false,
   });
+  const proposals = trpc.pharmacyMedicine.referenceConnectorProposals.useQuery(undefined, {
+    retry: false,
+  });
+  const decideProposal = trpc.pharmacyMedicine.decideReferenceConnectorProposal.useMutation({
+    onSuccess: async () => {
+      toast.success('Reference proposal confirmed. Review its assertions before publication.');
+      await Promise.all([proposals.refetch(), candidates.refetch()]);
+    },
+    onError: (error) => toast.error(error.message),
+  });
   const importBatch = trpc.pharmacyMedicine.runReferenceConnectorNow.useMutation({
     onSuccess: async (result) => {
       toast.success(
@@ -183,7 +204,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
           ? `${result.rowsSkipped} rows unchanged; identical input was a no-op.`
           : `${result.proposalRows} rows proposed; ${result.rowsApplied} rows had descriptive fields applied; ${result.rowsRejected} rejected.`
       );
-      await candidates.refetch();
+      await Promise.all([proposals.refetch(), candidates.refetch()]);
     },
     onError: (error) => toast.error(error.message),
   });
@@ -387,6 +408,76 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
             </table>
           </div>
         ) : null}
+      </SectionCard>
+
+      <SectionCard
+        title="Connector proposals"
+        titleLevel={2}
+        role="region"
+        aria-label="Connector proposals"
+      >
+        <p className="mb-4 text-sm text-text-muted">
+          Confirm the imported reference values to create a reviewable draft. Confirmation does not
+          make a medicine saleable.
+        </p>
+        {proposals.isPending ? (
+          <p role="status" className="text-sm text-text-muted">
+            Loading reference proposals…
+          </p>
+        ) : null}
+        {proposals.error ? (
+          <div role="alert" className="space-y-3 text-sm text-destructive">
+            <p>{proposals.error.message}</p>
+            <Button variant="outline" onClick={() => void proposals.refetch()}>
+              Retry proposals
+            </Button>
+          </div>
+        ) : null}
+        {!proposals.error && proposals.data?.length === 0 ? (
+          <p className="text-sm text-text-muted">No reference proposals await confirmation.</p>
+        ) : null}
+        {decideProposal.error ? (
+          <p role="alert" className="mb-3 text-sm text-destructive">
+            {decideProposal.error.message}
+          </p>
+        ) : null}
+        <div className="space-y-4">
+          {proposals.data?.map((proposal) => {
+            const values = referenceProposalValues(proposal.payload);
+            const name =
+              values.productName ?? proposal.targetMedicine?.productName ?? 'Reference update';
+            return (
+              <article
+                key={proposal.id}
+                className="min-w-0 space-y-4 rounded-md border border-border-subtle p-4"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <h3 className="font-semibold text-text-strong">{name}</h3>
+                  <StatusPill status="Pending confirmation" tone="warning" />
+                </div>
+                <dl className="grid min-w-0 gap-3 sm:grid-cols-2">
+                  {Object.entries(values).map(([field, value]) => (
+                    <div key={field} className="min-w-0 rounded-sm bg-surface-sunken p-3">
+                      <dt className="font-mono text-xs uppercase text-text-muted">
+                        {field.replace(/([a-z])([A-Z])/g, '$1 $2')}
+                      </dt>
+                      <dd className="mt-1 break-words text-sm text-text-body">{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+                <Button
+                  className="min-h-11"
+                  disabled={decideProposal.isPending}
+                  onClick={() =>
+                    decideProposal.mutate({ proposalId: proposal.id, decision: 'CONFIRM' })
+                  }
+                >
+                  {decideProposal.isPending ? 'Confirming…' : 'Confirm reference proposal'}
+                </Button>
+              </article>
+            );
+          })}
+        </div>
       </SectionCard>
 
       <SectionCard

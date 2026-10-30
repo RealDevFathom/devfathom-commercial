@@ -95,6 +95,7 @@ const payload = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.read.mockResolvedValue({ role: 'SUPER_ADMIN' });
   mocks.orgCreate.mockResolvedValue({ id: 'org_new', slug: 'example-hotel' });
   mocks.roleCreate.mockImplementation(async ({ data }: { data: { key: string } }) => ({
     id: 'role_' + data.key,

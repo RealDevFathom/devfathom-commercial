@@ -26,6 +26,7 @@ type OperatorOption = {
   displayName: string;
   role: string;
   canApprove: boolean;
+  canSelfApprove?: boolean;
 };
 export type PosNotice = { tone: 'success' | 'warning' | 'danger' | 'neutral'; message: string };
 type EstablishResponse = {
