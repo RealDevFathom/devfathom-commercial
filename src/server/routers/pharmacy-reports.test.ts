@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   repeatRead: vi.fn().mockResolvedValue({ horizons: [] }),
-  can: vi.fn(async () => false),
+  can: vi.fn<typeof import('@/lib/abac').can>(async () => false),
   branchFindMany: vi.fn(),
   settingUpsert: vi.fn(),
+  userFindUnique: vi.fn(),
   branchFindFirst: vi.fn(),
   reportFindFirst: vi.fn(),
   reportFindMany: vi.fn(),
@@ -78,6 +79,7 @@ function caller(role = 'ADMIN') {
         update: mocks.reportUpdate,
       },
       pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
+      user: { findUnique: mocks.userFindUnique },
     },
     entitlements: {
       organizationId: 'org_1',
@@ -209,6 +211,32 @@ describe('normal Reports daily work pack', () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('pharmacy administrator report bootstrap (#434)', () => {
+  beforeEach(() => {
+    mocks.can.mockResolvedValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.userFindUnique.mockResolvedValue({ preferences: null });
+  });
+
+  it('loads branches, catalog and preferences through the shared operational grant', async () => {
+    const api = caller();
+
+    await expect(api.branches()).resolves.toMatchObject({
+      organizationId: 'org_1',
+      branches: [{ id: 'branch_1', name: 'Main' }],
+    });
+    await expect(api.catalog()).resolves.toMatchObject({
+      permissions: { operational: true, financial: true },
+    });
+    await expect(api.getPreferences()).resolves.toMatchObject({ version: 1 });
+
+    expect(mocks.can).toHaveBeenCalledTimes(4);
+    expect(mocks.can.mock.calls.filter((call) => call[1] === 'reports:operational')).toHaveLength(
+      3
+    );
+  });
 });
 
 describe('pharmacy owner digest capability boundary', () => {
