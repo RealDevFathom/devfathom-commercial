@@ -14,6 +14,7 @@ import pg from 'pg';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
+import { ensureRestaurantTaxProfile } from '@/lib/test-support/restaurant-tax-profile';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -55,6 +56,7 @@ const tenant = {
 async function seedTenant(organizationId: string, ctx: (typeof tenant)['a' | 'b']) {
   await deps.withTenantDb(organizationId, async (tx) => {
     await tx.restaurantBranch.create({ data: { id: ctx.branchId, name: ctx.branchId } });
+    await ensureRestaurantTaxProfile(tx, organizationId, ctx.branchId);
     await tx.restaurantStaffProfile.create({
       data: {
         id: ctx.staffId,
@@ -83,15 +85,37 @@ async function seedTenant(organizationId: string, ctx: (typeof tenant)['a' | 'b'
         deviceId: ctx.deviceId,
       },
     });
+    const product = await tx.restaurantProduct.create({ data: { name: 'Replay test item' } });
+    const item = await tx.restaurantOrderItem.create({
+      data: {
+        orderId: ctx.orderId,
+        productId: product.id,
+        name: product.name,
+        unitPrice: '25.00',
+        quantity: 1,
+        status: 'SERVED',
+      },
+    });
     await tx.restaurantBill.create({
       data: {
         id: ctx.billId,
         orderId: ctx.orderId,
         branchId: ctx.branchId,
         businessDate,
+        subtotal: '25.00',
         grandTotal: '25.00',
         openerStaffProfileId: ctx.staffId,
         deviceId: ctx.deviceId,
+        lines: {
+          create: {
+            orderItemId: item.id,
+            name: item.name,
+            quantity: 1,
+            unitPrice: '25.00',
+            lineSubtotal: '25.00',
+            lineTotal: '25.00',
+          },
+        },
       },
     });
     await tx.restaurantTerminalProviderConfig.create({
@@ -158,8 +182,12 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
     };
 
     const blocker = new pg.Client({ connectionString: TEST_DATABASE_URL! });
+    const pending: Promise<unknown>[] = [];
     await blocker.connect();
     try {
+      const {
+        rows: [{ pid: blockerPid }],
+      } = await blocker.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
       await blocker.query('BEGIN');
       await blocker.query(
         `SELECT set_config('app.current_organization_id', $1, true),
@@ -172,6 +200,7 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
 
       const first = deps.processTerminalEvent(deps.createTenantDb(orgA), input);
       const second = deps.processTerminalEvent(deps.createTenantDb(orgA), input);
+      pending.push(first, second);
       let firstSettled = false;
       let secondSettled = false;
       void first.then(
@@ -190,12 +219,35 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
           secondSettled = true;
         }
       );
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Observe the actual blocking chain: one delivery waits for our bill
+      // lock, while the duplicate waits for that delivery's advisory lock.
+      // Unsettled promises alone could still be waiting to acquire connections.
+      await expect
+        .poll(
+          async () => {
+            const { rows } = await blocker.query<{ waiting: boolean }>(
+              `SELECT EXISTS (
+                 SELECT 1 FROM pg_locks applying
+                 JOIN pg_locks replay
+                   ON replay.locktype = applying.locktype
+                  AND replay.database = applying.database
+                  AND replay.classid = applying.classid
+                  AND replay.objid = applying.objid
+                  AND replay.objsubid = applying.objsubid
+                 WHERE applying.locktype = 'advisory' AND applying.granted
+                   AND NOT replay.granted
+                   AND $1::int = ANY(pg_blocking_pids(applying.pid))
+                   AND applying.pid = ANY(pg_blocking_pids(replay.pid))
+                   AND applying.pid <> replay.pid
+               ) AS waiting`,
+              [blockerPid]
+            );
+            return rows[0]?.waiting;
+          },
+          { timeout: 5_000, interval: 20 }
+        )
+        .toBe(true);
 
-      // The first delivery must still be waiting for the bill row and the
-      // duplicate must still be queued behind its event-scoped advisory lock.
-      // This makes the assertion below exercise overlap instead of allowing a
-      // pair of accidentally sequential deliveries to satisfy it.
       expect(firstSettled).toBe(false);
       expect(secondSettled).toBe(false);
       await blocker.query('COMMIT');
@@ -205,6 +257,7 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
       expect(results[0].reconciliation.id).toBe(results[1].reconciliation.id);
     } finally {
       await blocker.query('ROLLBACK').catch(() => undefined);
+      await Promise.allSettled(pending);
       await blocker.end();
     }
 
@@ -261,7 +314,7 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
     const sequential = await deps.processTerminalEvent(deps.createTenantDb(orgA), input);
     expect(sequential).toMatchObject({ replayed: true });
     expect(sequential.reconciliation.id).toBe(state.reconciliations[0]!.id);
-  });
+  }, 15_000);
 
   it('rejects an event whose bill and operator belong to another tenant', async () => {
     const externalEventId = `cross_tenant_${suffix}`;
