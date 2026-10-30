@@ -311,7 +311,12 @@ beforeAll(async () => {
         id: ctx.orderRoleA,
         key: `wha44_orders_a_${suffix}`,
         name: 'WHA-44 Order Taking A',
-        permissions: { create: [{ capability: 'orders:take', effect: 'ALLOW' }] },
+        permissions: {
+          create: [
+            { capability: 'orders:take', effect: 'ALLOW' },
+            { capability: 'kitchen:operate', effect: 'ALLOW' },
+          ],
+        },
       },
     });
     for (const [id, name, email] of [
@@ -378,7 +383,12 @@ beforeAll(async () => {
         id: ctx.orderRoleB,
         key: `wha44_orders_b_${suffix}`,
         name: 'WHA-44 Order Taking B',
-        permissions: { create: [{ capability: 'orders:take', effect: 'ALLOW' }] },
+        permissions: {
+          create: [
+            { capability: 'orders:take', effect: 'ALLOW' },
+            { capability: 'kitchen:operate', effect: 'ALLOW' },
+          ],
+        },
       },
     });
     await tx.user.create({

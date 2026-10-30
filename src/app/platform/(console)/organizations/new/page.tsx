@@ -298,9 +298,7 @@ export default async function NewOrganizationPage({
                 // rather than on UTC. A pharmacy launches in the same Pakistan
                 // market, so it defaults to Asia/Karachi too.
                 defaultValue:
-                  vertical === 'RESTAURANT' ||
-                  vertical === 'HOSPITALITY' ||
-                  vertical === 'PHARMACY'
+                  vertical === 'RESTAURANT' || vertical === 'HOSPITALITY' || vertical === 'PHARMACY'
                     ? 'Asia/Karachi'
                     : 'UTC',
                 help: 'Search by city or IANA name. Timezones are grouped by region.',
