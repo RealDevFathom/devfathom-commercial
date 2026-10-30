@@ -330,10 +330,13 @@ async function addSaleLineWithAllocation(
     // selecting the most expensive allocated lot would raise the charge after
     // the customer saw the preview.
     unitPriceMinor ??= price.unitPriceMinor;
-    ceiling ??= price.proRataCeilingMinor;
+    // That quote must also respect every fulfilled batch's printed MRP.
+    // Refuse an incompatible allocation rather than silently repricing it.
+    ceiling = Math.min(ceiling ?? price.proRataCeilingMinor, price.proRataCeilingMinor);
     costMinor += lot.unitCostMinor * part.units;
   }
   if (unitPriceMinor === null || ceiling === null) throw new PharmacySaleError('NOT_FOUND');
+  if (unitPriceMinor > ceiling) throw new PharmacySaleError('PRICE_ABOVE_MRP');
   const grossMinor = unitPriceMinor * input.quantity;
   const discountMinor = input.discountMinor ?? 0;
   validateDiscount({

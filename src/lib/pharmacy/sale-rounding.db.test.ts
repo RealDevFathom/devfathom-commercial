@@ -283,8 +283,8 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
     30_000
   );
 
-  it('keeps preview, persisted line, receipt and tender equal across differently priced lots', async () => {
-    const { medicine, lot: firstLot } = await catalog('split-lot', 5, true, 20);
+  async function checkSplitLotCheckout(laterMrpMinor: number) {
+    const { medicine, lot: firstLot } = await catalog(`split-lot-${laterMrpMinor}`, 5, true, 20);
     const secondLot = await tenant(async (db) => {
       const batch = await db.pharmacyManufacturingBatch.create({
         data: {
@@ -300,7 +300,7 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
           organizationId: scope.organizationId,
           packLevelId: firstLot.packLevelId,
           batchReference: batch.batchNumber,
-          printedMrpMinor: 1_030,
+          printedMrpMinor: laterMrpMinor,
           roundingIncrementMinor: 6,
         },
       });
@@ -312,7 +312,7 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
         supplierName: 'SEC643 split fixture',
         supplierInvoiceRef: randomUUID(),
         unitCostMinor: 1,
-        printedMrpMinor: 1_030,
+        printedMrpMinor: laterMrpMinor,
         receivedExpiresAt: batch.expiresAt,
         receivedExpiryPrecision: 'DAY',
         quantityUnits: 200,
@@ -335,20 +335,47 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
       availableUnits: row.onHandUnits,
     });
     expect(preview.grossMinor).toBe(1_500);
-    const { sale, line } = await tenant(async (db) => {
-      const sale = await sales.createSale(db, scope);
-      const result = await sales.addSaleLine(db, scope, {
-        saleId: sale.id,
-        medicineId: medicine.id,
-        presentationId: row.presentationId,
-        packLevelId: option.packLevelId,
-        saleUnit: 'STRIP',
-        quantity: 3,
-        canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
-        idempotencyKey: randomUUID(),
-      });
-      return { sale, line: result.line };
-    });
+    const sale = await tenant((db) => sales.createSale(db, scope));
+    const addLine = () =>
+      tenant((db) =>
+        sales.addSaleLine(db, scope, {
+          saleId: sale.id,
+          medicineId: medicine.id,
+          presentationId: row.presentationId,
+          packLevelId: option.packLevelId,
+          saleUnit: 'STRIP',
+          quantity: 3,
+          canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+          idempotencyKey: randomUUID(),
+        })
+      );
+    if (laterMrpMinor === 900) {
+      const stockState = () =>
+        tenant(async (db) => ({
+          balances: await db.pharmacyStockBalance.findMany({
+            where: { inventoryLotId: { in: [firstLot.id, secondLot.id] } },
+            orderBy: { inventoryLotId: 'asc' },
+          }),
+          movements: await db.pharmacyStockMovement.count({
+            where: { inventoryLotId: { in: [firstLot.id, secondLot.id] } },
+          }),
+        }));
+      const before = await stockState();
+      await expect(addLine()).rejects.toThrow('PRICE_ABOVE_MRP');
+      expect(await stockState()).toEqual(before);
+      expect(await tenant((db) => db.pharmacySaleLine.count({ where: { saleId: sale.id } }))).toBe(
+        0
+      );
+      expect(
+        await tenant((db) =>
+          db.pharmacySaleEvent.count({
+            where: { saleId: sale.id, kind: 'LINE_ADDED' },
+          })
+        )
+      ).toBe(0);
+      return;
+    }
+    const { line } = await addLine();
     const stored = await tenant((db) =>
       db.pharmacySaleLine.findFirstOrThrow({
         where: { id: line.id },
@@ -378,5 +405,17 @@ describeDatabase('SEC-643-01 persisted quote/charge parity on PostgreSQL', () =>
     );
     expect(receipt.totals.netMinor).toBe(preview.grossMinor);
     expect(receipt.totals.tenderedMinor).toBe(preview.grossMinor);
-  }, 30_000);
+  }
+
+  it(
+    'keeps preview, persisted line, receipt and tender equal across differently priced lots',
+    () => checkSplitLotCheckout(1_030),
+    30_000
+  );
+
+  it(
+    'rolls back stock allocation when the quoted price exceeds a later batch MRP',
+    () => checkSplitLotCheckout(900),
+    30_000
+  );
 });

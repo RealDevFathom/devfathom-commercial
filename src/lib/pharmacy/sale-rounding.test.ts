@@ -275,4 +275,68 @@ describe('SEC-643-01 counter quote to charged sale-unit rounding', () => {
     expect(line.unitPriceMinor).toBe(500);
     expect(line.proRataCeilingMinor).toBe(501);
   });
+
+  it.each(
+    (['counter', 'reserved'] as const).flatMap((checkout) => [
+      { checkout, printedMrpMinor: 900, refused: true },
+      { checkout, printedMrpMinor: 1_000, refused: false },
+    ])
+  )(
+    'checks every allocated batch ceiling in $checkout checkout (MRP $printedMrpMinor)',
+    async ({ checkout, printedMrpMinor, refused }) => {
+      const db = fixture();
+      const [first] = await db.pharmacyInventoryLot.findMany();
+      const second = {
+        ...first,
+        id: 'lot-b',
+        printedMrpMinor,
+        batch: { ...first.batch, batchNumber: 'batch-b' },
+      };
+      db.pharmacyInventoryLot.findMany.mockResolvedValue([first, second]);
+      db.$queryRaw.mockResolvedValue(
+        [first, second].map((lot) => ({
+          ...scope,
+          inventoryLotId: lot.id,
+          stockLocationId: 'shelf',
+          batchState: 'ACTIVE',
+          disposition: 'AVAILABLE',
+          expiresAt: lot.batch.expiresAt,
+          receivedAt: lot.receivedAt,
+          availableUnits: 10,
+          unitsPerPack: 20,
+          sealedPacks: 0,
+          looseUnits: 10,
+        }))
+      );
+      const input = { ...lineInput, quantity: 2 };
+      const result =
+        checkout === 'counter'
+          ? addSaleLine(db as never, scope, input)
+          : addReservedSaleLine(
+              db as never,
+              scope,
+              { ...input, packLevelId: 'box' },
+              {
+                expiresAt: new Date('2100-01-01'),
+                allocations: [first, second].map((lot) => ({
+                  inventoryLotId: lot.id,
+                  stockLocationId: 'shelf',
+                  units: 10,
+                })),
+              }
+            );
+      if (refused) {
+        // The quoted strip costs 500, but the later batch permits at most 450.
+        await expect(result).rejects.toThrow('PRICE_ABOVE_MRP');
+        expect(db.pharmacySaleLine.create).not.toHaveBeenCalled();
+        expect(db.pharmacySaleLineAllocation.create).not.toHaveBeenCalled();
+        expect(db.pharmacySaleEvent.create).not.toHaveBeenCalled();
+      } else {
+        // A tighter ceiling that still covers the quote must remain saleable.
+        const { line } = await result;
+        expect(line.unitPriceMinor).toBe(500);
+        expect(line.proRataCeilingMinor).toBe(500);
+      }
+    }
+  );
 });
