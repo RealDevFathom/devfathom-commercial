@@ -23,6 +23,43 @@ const TWO_LEVEL: PackLevelNode[] = [
 ];
 
 describe('saleUnitOptions (POS-03 toggle)', () => {
+  it('sells a standalone receiving pack using its frozen canonical conversion', () => {
+    const pack = { id: 'flat', level: 'STRIP', parentPackLevelId: null, unitsPerParent: 10 };
+    expect(
+      saleUnitOptions({ packLevels: [pack], rootPackLevelId: 'flat', unitsPerPack: 10 })
+    ).toEqual([
+      { kind: 'PACK', packLevelId: 'flat', levelLabel: 'STRIP', canonicalUnitsPerSaleUnit: 10 },
+    ]);
+    expect(() =>
+      saleUnitOptions({ packLevels: [pack], rootPackLevelId: 'flat', unitsPerPack: 20 })
+    ).toThrowError(PharmacyMedicineError);
+  });
+  it('sells a receipt at the hierarchy leaf as one canonical unit', () => {
+    const options = saleUnitOptions({
+      packLevels: THREE_LEVEL,
+      rootPackLevelId: 'unit',
+      unitsPerPack: 1,
+    });
+    expect(options).toEqual([
+      { kind: 'PACK', packLevelId: 'unit', levelLabel: 'UNIT', canonicalUnitsPerSaleUnit: 1 },
+    ]);
+    expect(
+      previewSaleLine({
+        option: options[0]!,
+        quantity: 3,
+        printedMrpMinor: 125,
+        unitsPerPack: 1,
+        availableUnits: 5,
+      })
+    ).toMatchObject({ canonicalUnits: 3, unitPriceMinor: 125, grossMinor: 375, sufficient: true });
+  });
+
+  it('rejects a leaf receipt that uses its parent conversion as units per pack', () => {
+    expect(() =>
+      saleUnitOptions({ packLevels: THREE_LEVEL, rootPackLevelId: 'unit', unitsPerPack: 10 })
+    ).toThrowError(PharmacyMedicineError);
+  });
+
   it('derives pack, strip and unit from the received pack hierarchy', () => {
     expect(
       saleUnitOptions({ packLevels: THREE_LEVEL, rootPackLevelId: 'box', unitsPerPack: 100 })
@@ -104,6 +141,28 @@ describe('previewSaleLine (exact quantity and price preview)', () => {
       expect(preview.unitPriceMinor).toBe(expected.unitPriceMinor);
       expect(preview.proRataCeilingMinor).toBe(expected.proRataCeilingMinor);
     }
+  });
+
+  it('quotes the printed MRP for a full pack when the MRP is not divisible by its units', () => {
+    const threeUnitOptions = saleUnitOptions({
+      packLevels: [
+        { id: 'pack-3', parentPackLevelId: null, level: 'BOX', unitsPerParent: 1 },
+        { id: 'unit-3', parentPackLevelId: 'pack-3', level: 'TABLET', unitsPerParent: 3 },
+      ],
+      rootPackLevelId: 'pack-3',
+      unitsPerPack: 3,
+    });
+    const preview = previewSaleLine({
+      option: threeUnitOptions[0]!,
+      quantity: 1,
+      printedMrpMinor: 1_000,
+      unitsPerPack: 3,
+      availableUnits: 3,
+    });
+
+    expect(preview.option.kind).toBe('PACK');
+    expect(preview.unitPriceMinor).toBe(1_000);
+    expect(preview.grossMinor).toBe(1_000);
   });
 
   it('multiplies canonical units and gross by the quantity', () => {

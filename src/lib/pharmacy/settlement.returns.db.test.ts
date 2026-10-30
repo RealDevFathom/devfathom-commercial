@@ -19,6 +19,112 @@ const day = new Date('2026-09-29');
 const inTenant = <T>(work: Parameters<typeof withTenantDb<T>>[1]) =>
   withTenantDb(scope.organizationId, work);
 
+async function ensureVisibilityParents() {
+  await inTenant(async (db) => {
+    await db.organization.upsert({
+      where: { id: scope.organizationId },
+      update: {},
+      create: {
+        id: scope.organizationId,
+        slug: `returns-${scope.organizationId}`,
+        legalName: 'Settlement returns fixture',
+        displayName: 'Settlement returns fixture',
+        vertical: 'PHARMACY',
+      },
+    });
+    await db.pharmacyBranch.upsert({
+      where: { id: scope.branchId },
+      update: {},
+      create: {
+        id: scope.branchId,
+        organizationId: scope.organizationId,
+        code: fixture.branchCode,
+        name: fixture.branchName,
+        addressLine: 'Synthetic settlement acceptance branch',
+        city: 'Lahore',
+        provinceCode: 'PB',
+      },
+    });
+    await db.medicine.upsert({
+      where: { id: fixture.medicines.otc.id },
+      update: {},
+      create: {
+        id: fixture.medicines.otc.id,
+        organizationId: scope.organizationId,
+        productName: fixture.medicines.otc.name,
+        productFamily: 'PHARMACEUTICAL',
+        otc: true,
+        saleable: true,
+      },
+    });
+    await db.presentation.upsert({
+      where: { id: fixture.medicines.otc.presentationId },
+      update: {},
+      create: {
+        id: fixture.medicines.otc.presentationId,
+        organizationId: scope.organizationId,
+        medicineId: fixture.medicines.otc.id,
+        presentation: fixture.medicines.otc.presentation,
+      },
+    });
+    await db.packLevel.upsert({
+      where: { id: fixture.medicines.otc.packLevelIds.strip },
+      update: {},
+      create: {
+        id: fixture.medicines.otc.packLevelIds.strip,
+        organizationId: scope.organizationId,
+        presentationId: fixture.medicines.otc.presentationId,
+        versionGroupId: `${fixture.medicines.otc.packLevelIds.strip}-returns`,
+        version: 1,
+        level: 'STRIP',
+        unitsPerParent: 10,
+        effectiveFrom: new Date('2026-01-01'),
+      },
+    });
+    await db.packLevel.upsert({
+      where: { id: fixture.medicines.otc.packLevelIds.unit },
+      update: {},
+      create: {
+        id: fixture.medicines.otc.packLevelIds.unit,
+        organizationId: scope.organizationId,
+        presentationId: fixture.medicines.otc.presentationId,
+        parentPackLevelId: fixture.medicines.otc.packLevelIds.strip,
+        versionGroupId: `${fixture.medicines.otc.packLevelIds.unit}-returns`,
+        version: 1,
+        level: 'UNIT',
+        unitsPerParent: 10,
+        effectiveFrom: new Date('2026-01-01'),
+      },
+    });
+    for (const [id, code, name, kind] of [
+      [fixture.stockLocationId, fixture.stockLocationCode, 'Store', 'STORE'],
+      [fixture.quarantineLocationId, 'QUARANTINE', 'Quarantine', 'QUARANTINE'],
+    ] as const) {
+      await db.pharmacyStockLocation.upsert({
+        where: { id },
+        update: {},
+        create: {
+          id,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          code,
+          name,
+          kind,
+        },
+      });
+    }
+    await db.pharmacyPatient.upsert({
+      where: { id: fixture.patientId },
+      update: {},
+      create: {
+        id: fixture.patientId,
+        organizationId: scope.organizationId,
+        displayName: fixture.patientName,
+      },
+    });
+  });
+}
+
 describe.skipIf(!enabled)('return/refund disposable database acceptance', () => {
   it('restores loyalty, splits refunds, audits cash fallback, and serializes cumulative caps', async () => {
     const url = new URL(process.env.PHARMACY_E2E_DATABASE_URL!);
@@ -27,6 +133,7 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
     expect(Number(url.port)).toBeLessThanOrEqual(55699);
     expect(url.pathname).toContain('disposable');
     const deviceId = `returns-${randomUUID()}`;
+    await ensureVisibilityParents();
     const key = () => randomUUID();
     await inTenant(async (db) => {
       const roles = await db.$queryRaw<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>(
@@ -50,6 +157,31 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
           },
         });
       }
+      const expiry = new Date('2027-12-31');
+      const batch = await db.pharmacyManufacturingBatch.create({
+        data: {
+          organizationId: scope.organizationId,
+          medicineId: fixture.medicines.otc.id,
+          batchNumber: `RETURNS-${key()}`,
+          expiresAt: expiry,
+          expiryPrecision: 'DAY',
+        },
+      });
+      await receiveLot(db, scope, {
+        manufacturingBatchId: batch.id,
+        packLevelId: fixture.medicines.otc.packLevelIds.unit,
+        stockLocationId: fixture.stockLocationId,
+        unitsPerPack: 1,
+        supplierName: 'Settlement returns fixture',
+        supplierInvoiceRef: key(),
+        unitCostMinor: 100,
+        printedMrpMinor: 250,
+        receivedExpiresAt: expiry,
+        receivedExpiryPrecision: 'DAY',
+        quantityUnits: 20,
+        idempotencyKey: key(),
+        receivedAt: new Date('2026-09-01'),
+      });
       await openPharmacyDrawer(db, scope, {
         deviceId,
         businessDate: day,
@@ -216,6 +348,7 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
   it('isolates partial A/B returns, refuses recalled B, and never credits A for unidentified stock', async () => {
     const key = () => randomUUID();
     const deviceId = `lots-${key()}`;
+    await ensureVisibilityParents();
     const prepared = await inTenant(async (db) => {
       await openPharmacyDrawer(db, scope, { deviceId, businessDate: day, openingFloatMinor: 5000 });
       const lots = [];
