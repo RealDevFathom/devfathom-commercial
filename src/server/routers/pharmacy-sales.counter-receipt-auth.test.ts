@@ -295,6 +295,8 @@ describe('counter receipt authorization', () => {
   it('lets an assigned cashier use the receipt, the cart, return history, and cash tender', async () => {
     const f = fixture([
       { capability: 'pharmacy.counter', effect: 'ALLOW' },
+      // Tender requires the canonical grant even while legacy receipt reads are supported.
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
       { capability: 'pharmacy:orders', effect: 'ALLOW' },
     ]);
     assign(f, ['branch-a']);
@@ -322,6 +324,35 @@ describe('counter receipt authorization', () => {
     expect(applyPharmacyTender).toHaveBeenCalled();
   });
 
+  it.each(['CASH', 'CARD'] as const)(
+    'keeps legacy-only cashier reads available without granting %s tender',
+    async (type) => {
+      const f = fixture([{ capability: 'pharmacy.counter', effect: 'ALLOW' }]);
+      assign(f, ['branch-a']);
+      for (const path of paths) {
+        await expect(path.run(f.caller())).resolves.toMatchObject(path.allowed);
+      }
+      await expect(
+        f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
+      ).resolves.toMatchObject({ saleId: 'sale-a' });
+      await expect(
+        f.caller().returnHistory({ branchId: 'branch-a', saleId: 'sale-a' })
+      ).resolves.toEqual([{ id: 'return-1' }]);
+      await expect(
+        f.caller().tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type,
+          amountMinor: 100,
+          idempotencyKey: `legacy-${type}`,
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(applyPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
+
   it('accepts the canonical Cashier template across every counter workflow (#390)', async () => {
     const cashier = PHARMACY_ROLE_TEMPLATES.find((template) => template.key === 'cashier');
     expect(cashier).toBeDefined();
@@ -329,9 +360,9 @@ describe('counter receipt authorization', () => {
       cashier!.capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }))
     );
     assign(f, ['branch-a']);
-    await expect(
-      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
-    ).resolves.toMatchObject({ receiptNumber: 7 });
+    for (const path of paths) {
+      await expect(path.run(f.caller())).resolves.toMatchObject(path.allowed);
+    }
     await expect(
       f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
     ).resolves.toMatchObject({ saleId: 'sale-a' });
