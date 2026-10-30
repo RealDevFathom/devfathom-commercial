@@ -41,7 +41,10 @@ function branchFilter(scope: JournalReportScope) {
     : Prisma.sql`AND TRUE`;
 }
 
-function marginDimensionFilter(scope: JournalReportScope) {
+/** Shared lot dimensions for journal margin and completed-sale revenue reads. */
+export function marginDimensionFilter(
+  scope: Pick<JournalReportScope, 'supplierId' | 'ingredientId' | 'batchId'>
+) {
   return Prisma.sql`
     ${scope.batchId ? Prisma.sql`AND lot."manufacturingBatchId" = ${scope.batchId}` : Prisma.empty}
     ${

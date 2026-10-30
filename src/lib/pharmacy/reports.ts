@@ -2,7 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { grossMarginQuery } from './finance-reports';
+import { grossMarginQuery, marginDimensionFilter } from './finance-reports';
 
 export const MAX_PHARMACY_REPORT_DAYS = 90;
 export const MAX_PHARMACY_REPORT_BRANCHES = 100;
@@ -329,9 +329,22 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
     ${filters.batchId || filters.supplierId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_inventory_lots" filter_lot WHERE filter_lot."organizationId"=s."organizationId" AND filter_lot."branchId"=s."branchId" AND filter_lot."id"=s."inventoryLotId" ${lotDimensions(Prisma.sql`filter_lot`)})` : Prisma.empty}`;
   const dimensionFiltered = Boolean(filters.supplierId || filters.ingredientId || filters.batchId);
   // A line can draw from several lots. The journal has revenue and discount apportioned onto
-  // those lot legs, so it is the only exact source for a dimension-filtered sales total.
+  // those lot legs. Keep the sales metric's completed-sale and business-date scope;
+  // returns and reversals belong to the separate posted margin metric.
   const salesMinor = dimensionFiltered
-    ? Prisma.sql`COALESCE((SELECT SUM("revenueMinor" - "discountMinor") FROM (${marginQuery}) journal_sales),0)::int`
+    ? Prisma.sql`COALESCE((
+        SELECT SUM(CASE WHEN line."side"='CREDIT' THEN line."amountMinor" ELSE -line."amountMinor" END)
+        FROM "finance_journal_lines" line
+        JOIN "finance_journal_entries" entry ON entry."organizationId"=line."organizationId" AND entry."id"=line."entryId"
+        JOIN "pharmacy_sale_lines" sale_line ON sale_line."organizationId"=line."organizationId" AND sale_line."branchId"=line."branchId" AND sale_line."id"=entry."sourceId"
+        JOIN "pharmacy_sales" sale ON sale."organizationId"=sale_line."organizationId" AND sale."branchId"=sale_line."branchId" AND sale."id"=sale_line."saleId"
+        LEFT JOIN "pharmacy_inventory_lots" lot ON lot."organizationId"=line."organizationId" AND lot."id"=line."lotId"
+        WHERE line."organizationId"=current_setting('app.current_organization_id',true)
+          AND line."branchId" IN (${branches}) AND entry."sourceKind"='PHARMACY_SALE_LINE' AND entry."reversesEntryId" IS NULL
+          AND line."accountCode" IN ('SALES_REVENUE','SALES_DISCOUNT')
+          AND sale."status"='COMPLETED' AND sale."businessDate">=${parsed.from} AND sale."businessDate"<${parsed.to}
+          ${marginDimensionFilter(filters)}
+      ),0)::int`
     : Prisma.sql`COALESCE((SELECT SUM(l."quantity" * l."unitPriceMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int`;
 
   const [money, stock, expiry, recalls, claims, receiving, coverage, safety, fiscal] =
@@ -351,9 +364,15 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
         ? db
             .$queryRaw<Array<{ value: number }>>(
               Prisma.sql`SELECT COUNT(*)::int AS value FROM "pharmacy_recall_notices" recall WHERE recall."status"='OPEN'
-                ${filters.batchId ? Prisma.sql`AND recall."batchId"=${filters.batchId}` : Prisma.empty}
-                ${ingredientForMedicine(Prisma.sql`recall."medicineId"`)}
-                ${filters.supplierId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_inventory_lots" filter_lot JOIN "pharmacy_goods_receipt_lines" filter_line ON filter_line."organizationId"=filter_lot."organizationId" AND filter_line."branchId"=filter_lot."branchId" AND filter_line."inventoryLotId"=filter_lot."id" JOIN "pharmacy_goods_receipts" filter_receipt ON filter_receipt."organizationId"=filter_line."organizationId" AND filter_receipt."branchId"=filter_line."branchId" AND filter_receipt."id"=filter_line."goodsReceiptId" WHERE filter_lot."organizationId"=recall."organizationId" AND ((recall."batchId" IS NOT NULL AND filter_lot."manufacturingBatchId"=recall."batchId") OR (recall."batchId" IS NULL AND EXISTS (SELECT 1 FROM "pharmacy_manufacturing_batches" filter_batch WHERE filter_batch."organizationId"=filter_lot."organizationId" AND filter_batch."id"=filter_lot."manufacturingBatchId" AND filter_batch."medicineId"=recall."medicineId"))) AND filter_receipt."supplierId"=${filters.supplierId})` : Prisma.empty}`
+                AND EXISTS (
+                  SELECT 1 FROM "pharmacy_manufacturing_batches" recall_batch
+                  WHERE recall_batch."organizationId"=recall."organizationId"
+                    AND ((recall."batchId" IS NOT NULL AND recall_batch."id"=recall."batchId")
+                      OR (recall."batchId" IS NULL AND recall_batch."medicineId"=recall."medicineId"))
+                    ${filters.batchId ? Prisma.sql`AND recall_batch."id"=${filters.batchId}` : Prisma.empty}
+                    ${ingredientForMedicine(Prisma.sql`recall_batch."medicineId"`)}
+                    ${filters.supplierId ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_inventory_lots" filter_lot WHERE filter_lot."organizationId"=recall_batch."organizationId" AND filter_lot."manufacturingBatchId"=recall_batch."id" ${lotDimensions(Prisma.sql`filter_lot`)})` : Prisma.empty}
+                )`
             )
             .then((rows) => rows[0]?.value ?? 0)
         : db.pharmacyRecallNotice.count({ where: { status: 'OPEN' } }),
