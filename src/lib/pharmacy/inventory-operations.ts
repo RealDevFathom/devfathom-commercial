@@ -574,22 +574,31 @@ export async function receiveTransferLine(
       inventoryLotId: source.id,
       stockLocationId: line.sourceStockLocationId,
       disposition: 'IN_TRANSIT',
-      reason,
+      reason: { startsWith: 'Interbranch transfer line ' },
     },
-    select: { kind: true, sealedPackDelta: true, looseUnitDelta: true },
+    select: { reason: true, kind: true, sealedPackDelta: true, looseUnitDelta: true },
   });
-  // New dispatches carry line attribution: a shared transit bucket must never
-  // let a loose shipment consume another shipment's sealed packs. Older,
-  // unattributed dispatches can only use the physical transit balance.
-  const remaining = movements.some((movement) => movement.kind === 'TRANSFER_IN')
-    ? movements.reduce(
-        (total, movement) => ({
-          sealedPacks: total.sealedPacks + movement.sealedPackDelta,
-          looseUnits: total.looseUnits + movement.looseUnitDelta,
-        }),
-        { sealedPacks: 0, looseUnits: 0 }
-      )
-    : transit;
+  const attributedLines = new Set(
+    movements
+      .filter((movement) => movement.kind === 'TRANSFER_IN')
+      .map((movement) => movement.reason)
+  );
+  const attributed = attributedLines.has(reason);
+  // Legacy dispatches have no line attribution. Their physical balance excludes
+  // packaging still owed to attributed shipments sharing the transit bucket.
+  const remaining = movements.reduce(
+    (total, movement) => {
+      if (attributed ? movement.reason === reason : attributedLines.has(movement.reason)) {
+        const sign = attributed ? 1 : -1;
+        total.sealedPacks += sign * movement.sealedPackDelta;
+        total.looseUnits += sign * movement.looseUnitDelta;
+      }
+      return total;
+    },
+    attributed
+      ? { sealedPacks: 0, looseUnits: 0 }
+      : { sealedPacks: transit.sealedPacks, looseUnits: transit.looseUnits }
+  );
   const a = planRemovalArrangement({
     ...remaining,
     unitsPerPack: source.unitsPerPack,

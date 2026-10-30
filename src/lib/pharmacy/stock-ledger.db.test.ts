@@ -894,9 +894,14 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     ]);
   });
 
-  it.each([false, true])(
-    'keeps shared transit shipments separate (sealed first: %s)',
-    async (sealedFirst) => {
+  it.each([
+    { sealedFirst: false, legacySealed: false },
+    { sealedFirst: true, legacySealed: false },
+    { sealedFirst: false, legacySealed: true },
+    { sealedFirst: true, legacySealed: true },
+  ])(
+    'keeps shared transit shipments separate (sealed first: $sealedFirst, legacy: $legacySealed)',
+    async ({ sealedFirst, legacySealed }) => {
       const fixture = await scenario(ORG_A, BRANCH_A, 'shared-transit');
       const setup = await inOrg(ORG_A, async (db) => {
         const destinationBranchId = tag('shared-destination');
@@ -940,12 +945,37 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
             { ...scopeOf(fixture), actorId: 'shared_approver' },
             transfer.id
           );
-          await deps.operations.dispatchTransfer(
-            db,
-            scopeOf(fixture),
-            transfer.id,
-            tag('shared-dispatch')
-          );
+          if (legacySealed && i === 1) {
+            // Legacy dispatches have no line attribution and must leave the
+            // newer shipment's loose units available for its own receiver.
+            await db.pharmacyStockMovement.createMany({
+              data: [
+                { kind: 'TRANSFER_OUT' as const, disposition: 'AVAILABLE' as const, sign: -1 },
+                { kind: 'TRANSFER_IN' as const, disposition: 'IN_TRANSIT' as const, sign: 1 },
+              ].map(({ kind, disposition, sign }) => ({
+                ...scopeOf(fixture),
+                inventoryLotId: lot.id,
+                stockLocationId: fixture.locationId,
+                kind,
+                disposition,
+                quantityUnits: sign * 10,
+                sealedPackDelta: sign,
+                looseUnitDelta: 0,
+                idempotencyKey: tag('shared-legacy-dispatch'),
+              })),
+            });
+            await db.pharmacyInterbranchTransfer.update({
+              where: { id: transfer.id },
+              data: { status: 'DISPATCHED', dispatchedById: ACTOR, dispatchedAt: NOW },
+            });
+          } else {
+            await deps.operations.dispatchTransfer(
+              db,
+              scopeOf(fixture),
+              transfer.id,
+              tag('shared-dispatch')
+            );
+          }
           transfers.push(transfer);
         }
         return { transfers, lot, destinationBranchId };
