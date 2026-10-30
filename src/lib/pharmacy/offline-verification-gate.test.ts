@@ -107,7 +107,6 @@ function sale(deviceId = SCOPE.deviceId, clientOriginAt = new Date().toISOString
     payload: {
       leasedReceipt: { leaseId: `lease_${deviceId}` },
       lines: [{ inventoryLotId: 'last_lot', units: 1 }],
-      clientOriginAt,
     },
     clientOriginAt,
     bucket: { inventoryLotId: 'last_lot', stockLocationId: 'dispensary' },
@@ -253,7 +252,7 @@ describe('PH-OFF OFF-05 — offline verification gate', () => {
     const origins: unknown[] = [];
 
     await counter.replay(async (request) => {
-      origins.push(request.body.clientOriginAt);
+      origins.push((request.body.leasedReceipt as { originalSaleAt: string }).originalSaleAt);
       return { status: 201 };
     }, replaySigner);
     expect(origins).toEqual(['2099-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z']);

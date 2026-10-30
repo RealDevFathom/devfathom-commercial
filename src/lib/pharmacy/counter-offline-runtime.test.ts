@@ -15,7 +15,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createMemoryDriver } from '@/lib/retail-terminal/local-store';
 import type { TerminalStorageDriver } from '@/lib/retail-terminal/local-store';
@@ -472,6 +472,29 @@ describe('PH-OFF OFF-01 — reconnect never renumbers an issued receipt', () => 
 });
 
 describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
+  it.each(['resolve', 'reject'])(
+    'keeps revocation final when signing later %ss',
+    async (result) => {
+      const driver = createMemoryDriver();
+      const counter = await readyCounter(driver);
+      await counter.enqueue(cashSale(1), MATRIX);
+      const send = vi.fn(async () => ({ status: 200 }));
+
+      await expect(
+        counter.replay(send, async () => {
+          await counter.revoke();
+          if (result === 'reject') throw new Error('credential revoked');
+          return replaySigner();
+        })
+      ).resolves.toMatchObject({ state: 'STOPPED' });
+
+      expect(send).not.toHaveBeenCalled();
+      expect(counter.snapshot().queue?.replay).toBe('STOPPED_REVOKED');
+      expect(counter.snapshot().queue?.commands).toEqual([]);
+      expect(await driver.read('org_a::branch_a::counter_1')).toBeUndefined();
+    }
+  );
+
   it('pauses without losing an upgraded persisted command when replay signing cannot complete', async () => {
     const counter = await readyCounter(createMemoryDriver());
     await counter.enqueue(cashSale(1), MATRIX);

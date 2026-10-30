@@ -57,6 +57,9 @@ it('composes on HTTP LAN and signs the final route-valid body across retry', asy
         },
         sequence: 999,
         idempotencyKey: 'untrusted-payload-key',
+        clientOriginAt: '2000-01-01T00:00:00.000Z',
+        deviceId: 'another-counter',
+        receiptNumber: 999,
         snapshots: [],
         lines: [
           {

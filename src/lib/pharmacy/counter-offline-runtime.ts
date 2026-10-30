@@ -396,6 +396,8 @@ export class PharmacyCounterRuntime {
       try {
         request = await buildCounterReplayRequest(this.queue(), next.command, sign);
       } catch {
+        const current = nextCounterReplay(this.queue(), this.scope.deviceId);
+        if (current.status !== 'READY') return { state: current.status, discarded: null };
         const applied = applyCounterReplayOutcome(this.queue(), {
           commandId: next.command.commandId,
           outcome: {
@@ -407,6 +409,10 @@ export class PharmacyCounterRuntime {
         await this.commit({ ...this.state, queue: applied.snapshot });
         return { state: 'PAUSED', discarded: null };
       }
+      // Signing may yield to a heartbeat that revokes this counter and purges
+      // its storage. Never send or persist the stale command after that purge.
+      const current = nextCounterReplay(this.queue(), this.scope.deviceId);
+      if (current.status !== 'READY') return { state: current.status, discarded: null };
       await this.commit({
         ...this.state,
         queue: beginCounterReplay(this.queue(), next.command.commandId),

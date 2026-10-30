@@ -392,24 +392,26 @@ export async function buildCounterReplayRequest(
   sign: CounterReplaySigner
 ): Promise<CounterReplayRequest> {
   const leasedReceipt = command.payload.leasedReceipt;
-  const payload =
-    leasedReceipt && typeof leasedReceipt === 'object' && !Array.isArray(leasedReceipt)
-      ? {
-          ...command.payload,
-          leasedReceipt: { ...leasedReceipt, receiptNumber: command.receiptNumber },
-        }
-      : command.payload;
+  if (!leasedReceipt || typeof leasedReceipt !== 'object' || Array.isArray(leasedReceipt)) {
+    throw new Error('A queued pharmacy sale cannot replay without its leased receipt.');
+  }
+  // Local queue metadata is not part of the strict replay wire contract.
+  const finalReceipt = {
+    ...leasedReceipt,
+    receiptNumber: command.receiptNumber,
+    originalSaleAt: command.clientOriginAt,
+  };
   const body: Record<string, unknown> = {
-    ...payload,
     sequence: command.sequence,
     idempotencyKey: command.idempotencyKey,
     action: command.action,
+    leasedReceipt: finalReceipt,
+    snapshots: command.payload.snapshots,
+    lines: command.payload.lines,
+    amountMinor: command.payload.amountMinor,
+    cashReceivedMinor: command.payload.cashReceivedMinor,
   };
-  const finalReceipt = body.leasedReceipt;
-  if (!finalReceipt || typeof finalReceipt !== 'object' || Array.isArray(finalReceipt)) {
-    throw new Error('A queued pharmacy sale cannot replay without its leased receipt.');
-  }
-  const signatures = await sign(body, finalReceipt as Record<string, unknown>);
+  const signatures = await sign(body, finalReceipt);
   return {
     path: '/api/pharmacy/counter/replay',
     method: 'POST',
