@@ -1640,8 +1640,29 @@ export const pharmacySalesRouter = router({
           organizationId: scope.organizationId,
           branchId: scope.branchId,
         },
-        select: { id: true, batch: { select: { batchNumber: true, expiresAt: true } } },
+        select: {
+          id: true,
+          packLevelId: true,
+          printedMrpMinor: true,
+          unitsPerPack: true,
+          batch: { select: { batchNumber: true, expiresAt: true } },
+        },
       });
+      const mrps = lots.length
+        ? await ctx.db.medicinePackMrp.findMany({
+            where: {
+              organizationId: scope.organizationId,
+              OR: lots.map((lot) => ({
+                packLevelId: lot.packLevelId,
+                batchReference: lot.batch.batchNumber,
+              })),
+            },
+            select: { packLevelId: true, batchReference: true, roundingIncrementMinor: true },
+          })
+        : [];
+      const roundingByPackAndBatch = new Map(
+        mrps.map((mrp) => [`${mrp.packLevelId}\0${mrp.batchReference}`, mrp.roundingIncrementMinor])
+      );
       const lotById = new Map(lots.map((lot) => [lot.id, lot]));
       return lotIds.flatMap((inventoryLotId) => {
         const lot = lotById.get(inventoryLotId);
@@ -1654,6 +1675,10 @@ export const pharmacySalesRouter = router({
         return [
           {
             inventoryLotId,
+            printedMrpMinor: lot.printedMrpMinor,
+            unitsPerPack: lot.unitsPerPack,
+            roundingIncrementMinor:
+              roundingByPackAndBatch.get(`${lot.packLevelId}\0${lot.batch.batchNumber}`) ?? 1,
             batchNumber: lot.batch.batchNumber,
             expiresAt: lot.batch.expiresAt.toISOString(),
             sellableUnits,

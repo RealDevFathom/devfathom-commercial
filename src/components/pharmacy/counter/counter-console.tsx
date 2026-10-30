@@ -554,19 +554,35 @@ function ScopedPharmacyCounterConsole({
     ) {
       return null;
     }
+    const overrideLot = lotOverride?.inventoryLotId
+      ? lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)
+      : null;
+    // Never fall back to the FEFO quote while the selected batch is unavailable.
+    if (lotOverride?.inventoryLotId && (!overrideLot || !lotOptionsQuery.isSuccess)) return null;
     try {
       return previewSaleLine({
         option: selectedOption,
         quantity,
-        printedMrpMinor: activeRow.printedMrpMinor,
-        unitsPerPack: activeRow.unitsPerPack,
-        roundingIncrementMinor: activeRow.roundingIncrementMinor,
-        availableUnits: activeRow.onHandUnits,
+        printedMrpMinor: overrideLot?.printedMrpMinor ?? activeRow.printedMrpMinor,
+        unitsPerPack: overrideLot?.unitsPerPack ?? activeRow.unitsPerPack,
+        roundingIncrementMinor:
+          overrideLot?.roundingIncrementMinor ?? activeRow.roundingIncrementMinor,
+        availableUnits:
+          overrideLot && (overrideLot.blockedBy !== null || overrideLot.sellableUnits <= 0)
+            ? 0
+            : activeRow.onHandUnits,
       });
     } catch {
       return null;
     }
-  }, [activeRow, quantity, selectedOption]);
+  }, [
+    activeRow,
+    quantity,
+    selectedOption,
+    lotOverride,
+    lotOptionsQuery.data,
+    lotOptionsQuery.isSuccess,
+  ]);
 
   const requestedCanonicalUnits = selectedOption
     ? selectedOption.canonicalUnitsPerSaleUnit * quantity

@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { CounterCart } from '@/lib/pharmacy/counter';
+import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
 import type { CounterReceipt } from '@/lib/pharmacy/counter-receipt';
 
 type Query = {
@@ -82,8 +82,11 @@ vi.mock('@/lib/trpc', () => {
       counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
       counterReceipt: { invalidate: mocks.receiptInvalidate },
       counterEvidence: { reset: vi.fn() },
+      counterSearch: { invalidate: vi.fn() },
       drawerStatus: { invalidate: mocks.drawerStatusInvalidate },
     },
+    pharmacyPrescriptions: { counterPatientPanel: { invalidate: vi.fn() } },
+    pharmacySafety: { controlledRegister: { invalidate: vi.fn() } },
   };
   return {
     trpc: {
@@ -131,7 +134,6 @@ vi.mock('./counter-rx-panel', () => ({
 vi.mock('./counter-keymap-legend', () => ({ CounterKeymapLegend: () => null }));
 vi.mock('./counter-search-results', () => ({ CounterSearchResults: () => null }));
 vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: () => null }));
-vi.mock('./counter-unit-toggle', () => ({ CounterUnitToggle: () => null }));
 
 import { PharmacyCounterConsole } from './counter-console';
 import {
@@ -195,6 +197,53 @@ function accepted(remainingMinor = 12450) {
     remainingMinor,
     receiptNumber: remainingMinor === 0 ? 42 : null,
     replayed: false,
+  };
+}
+
+function medicineRow(): CounterSearchRow {
+  return {
+    medicineId: 'med-barcode',
+    displayName: 'Paracetamol',
+    brandName: null,
+    manufacturer: null,
+    strength: '500 mg',
+    presentationId: 'presentation-a',
+    presentation: 'Tablet',
+    dosageForm: 'Tablet',
+    route: 'Oral',
+    matchedOn: 'BARCODE',
+    recommendedLotId: 'lot-a',
+    packLevelId: 'pack-a',
+    unitsPerPack: 1,
+    printedMrpMinor: 10000,
+    roundingIncrementMinor: 1,
+    batchNumber: 'B-1',
+    nearestSafeExpiry: '2028-06-30T00:00:00.000Z',
+    onHandUnits: 10,
+    saleableUnits: [],
+    saleUnits: [
+      {
+        kind: 'UNIT',
+        packLevelId: 'pack-a',
+        levelLabel: 'UNIT',
+        canonicalUnitsPerSaleUnit: 1,
+      },
+    ],
+    restriction: {
+      rx: false,
+      otc: true,
+      restricted: false,
+      controlled: false,
+      highAlert: false,
+      lasa: false,
+    },
+    storage: {
+      coldChain: false,
+      locationKind: 'STORE',
+      locationCode: 'A',
+      locationName: 'Store',
+    },
+    blocked: [],
   };
 }
 
@@ -1116,50 +1165,7 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
   });
 
   it('adds a barcode on Enter only when the search returns that single medicine', async () => {
-    const row = {
-      medicineId: 'med-barcode',
-      displayName: 'Paracetamol',
-      brandName: null,
-      manufacturer: null,
-      strength: '500 mg',
-      presentationId: 'presentation-a',
-      presentation: 'Tablet',
-      dosageForm: 'Tablet',
-      route: 'Oral',
-      matchedOn: 'BARCODE',
-      recommendedLotId: 'lot-a',
-      packLevelId: 'pack-a',
-      unitsPerPack: 1,
-      printedMrpMinor: 10000,
-      roundingIncrementMinor: 1,
-      batchNumber: 'B-1',
-      nearestSafeExpiry: '2028-06-30T00:00:00.000Z',
-      onHandUnits: 10,
-      saleableUnits: [],
-      saleUnits: [
-        {
-          kind: 'UNIT',
-          packLevelId: 'pack-a',
-          levelLabel: 'UNIT',
-          canonicalUnitsPerSaleUnit: 1,
-        },
-      ],
-      restriction: {
-        rx: false,
-        otc: true,
-        restricted: false,
-        controlled: false,
-        highAlert: false,
-        lasa: false,
-      },
-      storage: {
-        coldChain: false,
-        locationKind: 'STORE',
-        locationCode: 'A',
-        locationName: 'Store',
-      },
-      blocked: [],
-    };
+    const row = medicineRow();
     mocks.queries.counterSearch = query({ rows: [row] });
     mocks.mutations.addLine!.mockResolvedValue({});
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
@@ -1223,6 +1229,100 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
       )
     );
   });
+});
+
+describe('PharmacyCounterConsole batch override pricing', () => {
+  async function selectOverride() {
+    mocks.queries.counterSearch = query({ rows: [medicineRow()] });
+    mocks.mutations.addLine!.mockResolvedValue({});
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: '123456' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Add to cart/ })).toBeEnabled());
+    mocks.mutations.addLine!.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Sell a different batch' }));
+    fireEvent.click(screen.getByRole('radio', { name: /Batch B-2/ }));
+    fireEvent.change(screen.getByLabelText('Override reason'), {
+      target: { value: 'Customer needs longer dating' },
+    });
+    return view;
+  }
+
+  function lots(roundingIncrementMinor = 5) {
+    return [
+      {
+        inventoryLotId: 'lot-a',
+        batchNumber: 'B-1',
+        expiresAt: '2090-01-01T00:00:00Z',
+        sellableUnits: 10,
+        blockedBy: null as string | null,
+        printedMrpMinor: 10000,
+        unitsPerPack: 1,
+        roundingIncrementMinor: 1,
+      },
+      {
+        inventoryLotId: 'lot-b',
+        batchNumber: 'B-2',
+        expiresAt: '2091-01-01T00:00:00Z',
+        sellableUnits: 2,
+        blockedBy: null as string | null,
+        printedMrpMinor: 999,
+        unitsPerPack: 100,
+        roundingIncrementMinor,
+      },
+    ];
+  }
+
+  it.each([
+    { increment: 5, expectedPrice: 5, displayedPrice: '0.05' },
+    { increment: 2, expectedPrice: 8, displayedPrice: '0.08' },
+  ])(
+    'quotes and posts the selected batch with rounding $increment',
+    async ({ increment, expectedPrice, displayedPrice }) => {
+      mocks.queries.counterLotOptions = query(lots(increment));
+      await selectOverride();
+      expect(screen.getByText('Unit price').nextElementSibling).toHaveTextContent(displayedPrice);
+      fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+      await waitFor(() =>
+        expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+          expect.objectContaining({
+            expectedUnitPriceMinor: expectedPrice,
+            override: expect.objectContaining({ inventoryLotId: 'lot-b' }),
+          })
+        )
+      );
+    }
+  );
+
+  it.each(['loading', 'error', 'missing', 'blocked', 'empty'])(
+    'withholds posting when the override is %s',
+    async (state) => {
+      mocks.queries.counterLotOptions = query(lots());
+      const view = await selectOverride();
+      if (state === 'loading' || state === 'error') {
+        Object.assign(mocks.queries.counterLotOptions!, {
+          isSuccess: false,
+          isLoading: state === 'loading',
+          isError: state === 'error',
+        });
+      } else if (state === 'missing') {
+        mocks.queries.counterLotOptions = query([]);
+      } else {
+        const data = lots();
+        if (state === 'blocked') data[1]!.blockedBy = 'RECALLED';
+        else data[1]!.sellableUnits = 0;
+        mocks.queries.counterLotOptions = query(data);
+      }
+      view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      expect(screen.getByRole('button', { name: /Add to cart/ })).toBeDisabled();
+      fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', () => {

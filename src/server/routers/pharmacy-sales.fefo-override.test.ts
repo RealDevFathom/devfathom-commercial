@@ -54,6 +54,7 @@ const override = {
 function fixture() {
   const transaction = vi.fn(async (callback: (tx: unknown) => unknown) => callback(db));
   const lotRead = vi.fn();
+  const mrpRead = vi.fn().mockResolvedValue([]);
   const db = {
     $transaction: transaction,
     pharmacyBranch: {
@@ -62,6 +63,7 @@ function fixture() {
       ),
     },
     pharmacyInventoryLot: { findMany: lotRead },
+    medicinePackMrp: { findMany: mrpRead },
     // Integrated tip: addLine first reads the medicine to route controlled lines; these are not.
     medicine: { findFirst: vi.fn(async () => null) },
   };
@@ -77,7 +79,13 @@ function fixture() {
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
-  return { context, transaction, lotRead, caller: app.createCaller(context).pharmacySales };
+  return {
+    context,
+    transaction,
+    lotRead,
+    mrpRead,
+    caller: app.createCaller(context).pharmacySales,
+  };
 }
 
 function lastAudit() {
@@ -215,10 +223,17 @@ describe('pharmacySales.counterLotOptions (PH-A4)', () => {
       bucket('lot-fefo', 5, 'QUARANTINED'),
       bucket('lot-later', 100, null),
     ] as never);
-    f.lotRead.mockResolvedValue([
-      { id: 'lot-later', batch: { batchNumber: 'L-3', expiresAt: new Date('2028-01-01Z') } },
-      { id: 'lot-expired', batch: { batchNumber: 'E-1', expiresAt: new Date('2026-01-01Z') } },
-      { id: 'lot-fefo', batch: { batchNumber: 'F-2', expiresAt: new Date('2026-11-01Z') } },
+    f.lotRead.mockResolvedValue(
+      [
+        { id: 'lot-later', batch: { batchNumber: 'L-3', expiresAt: new Date('2028-01-01Z') } },
+        { id: 'lot-expired', batch: { batchNumber: 'E-1', expiresAt: new Date('2026-01-01Z') } },
+        { id: 'lot-fefo', batch: { batchNumber: 'F-2', expiresAt: new Date('2026-11-01Z') } },
+      ].map((lot) => ({ ...lot, packLevelId: 'pack-1', printedMrpMinor: 999, unitsPerPack: 100 }))
+    );
+    f.mrpRead.mockResolvedValue([
+      { packLevelId: 'pack-1', batchReference: 'L-3', roundingIncrementMinor: 5 },
+      { packLevelId: 'pack-1', batchReference: 'F-2', roundingIncrementMinor: 2 },
+      { packLevelId: 'pack-1', batchReference: 'another-batch', roundingIncrementMinor: 10 },
     ]);
 
     const rows = await f.caller.counterLotOptions({
@@ -229,6 +244,9 @@ describe('pharmacySales.counterLotOptions (PH-A4)', () => {
     expect(rows).toEqual([
       {
         inventoryLotId: 'lot-expired',
+        printedMrpMinor: 999,
+        unitsPerPack: 100,
+        roundingIncrementMinor: 1,
         batchNumber: 'E-1',
         expiresAt: '2026-01-01T00:00:00.000Z',
         sellableUnits: 0,
@@ -236,6 +254,9 @@ describe('pharmacySales.counterLotOptions (PH-A4)', () => {
       },
       {
         inventoryLotId: 'lot-fefo',
+        printedMrpMinor: 999,
+        unitsPerPack: 100,
+        roundingIncrementMinor: 2,
         batchNumber: 'F-2',
         expiresAt: '2026-11-01T00:00:00.000Z',
         sellableUnits: 30,
@@ -243,6 +264,9 @@ describe('pharmacySales.counterLotOptions (PH-A4)', () => {
       },
       {
         inventoryLotId: 'lot-later',
+        printedMrpMinor: 999,
+        unitsPerPack: 100,
+        roundingIncrementMinor: 5,
         batchNumber: 'L-3',
         expiresAt: '2028-01-01T00:00:00.000Z',
         sellableUnits: 100,
@@ -252,6 +276,17 @@ describe('pharmacySales.counterLotOptions (PH-A4)', () => {
     const [, scope, medicineId] = vi.mocked(onHand).mock.calls[0]!;
     expect(scope).toMatchObject({ organizationId: 'org-1', branchId: 'branch-1' });
     expect(medicineId).toBe('medicine-1');
+    expect(f.mrpRead).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        organizationId: 'org-1',
+        OR: [
+          { packLevelId: 'pack-1', batchReference: 'L-3' },
+          { packLevelId: 'pack-1', batchReference: 'E-1' },
+          { packLevelId: 'pack-1', batchReference: 'F-2' },
+        ],
+      },
+      select: { packLevelId: true, batchReference: true, roundingIncrementMinor: true },
+    });
     expect(f.lotRead.mock.calls[0]![0].where).toEqual({
       id: { in: ['lot-expired', 'lot-fefo', 'lot-later'] },
       organizationId: 'org-1',
@@ -276,6 +311,7 @@ describe('pharmacySales.counterLotOptions (PH-A4)', () => {
       await f.caller.counterLotOptions({ branchId: 'branch-1', medicineId: 'medicine-1' })
     ).toEqual([]);
     expect(f.lotRead).not.toHaveBeenCalled();
+    expect(f.mrpRead).not.toHaveBeenCalled();
   });
 
   it('refuses an unauthenticated caller before reading stock', async () => {
