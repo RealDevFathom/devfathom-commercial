@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { passwordSchema } from '@/lib/password-policy';
+import { procurementCapabilityGranted } from '@/lib/pharmacy/procurement-access';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { ianaTimezone } from '@/lib/timezone';
@@ -266,11 +267,9 @@ export const organizationAdminRouter = router({
             lastActiveAt: true,
             permissionOverrides: {
               where: {
-                capability: GOODS_IN_CAPABILITY,
-                effect: 'ALLOW',
                 OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
               },
-              select: { id: true },
+              select: { id: true, capability: true, effect: true },
             },
           },
         },
@@ -297,6 +296,15 @@ export const organizationAdminRouter = router({
       pharmacyBranches,
       organization: {
         ...organization,
+        users: organization.users.map((user) => ({
+          ...user,
+          goodsInAccess: procurementCapabilityGranted({
+            overrides: user.permissionOverrides,
+            role:
+              organization.roles.find((role) => role.id === user.organizationRoleId)?.permissions ??
+              [],
+          }),
+        })),
         package: assignedPackage,
         emailSettings: organization.emailSettings
           ? {
@@ -578,36 +586,27 @@ export const organizationAdminRouter = router({
       });
       if (!user) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
 
-      if (input.granted) {
-        await ctx.db.userPermissionOverride.upsert({
-          where: {
-            userId_capability: { userId: user.id, capability: GOODS_IN_CAPABILITY },
-          },
-          update: {
-            effect: 'ALLOW',
-            reason: 'Goods-in access granted by workspace administrator',
-            expiresAt: null,
-          },
-          create: {
-            organizationId: id,
-            userId: user.id,
-            capability: GOODS_IN_CAPABILITY,
-            effect: 'ALLOW',
-            reason: 'Goods-in access granted by workspace administrator',
-            createdById: ctx.session.user.id,
-          },
-        });
-      } else {
-        await ctx.db.userPermissionOverride.deleteMany({
-          // Removing an extra grant must not erase a denial and restore role access.
-          where: {
-            organizationId: id,
-            userId: user.id,
-            capability: GOODS_IN_CAPABILITY,
-            effect: 'ALLOW',
-          },
-        });
-      }
+      // An explicit denial also revokes grants inherited from roles or wildcards.
+      const effect = input.granted ? 'ALLOW' : 'DENY';
+      const reason = `Goods-in access ${input.granted ? 'granted' : 'revoked'} by workspace administrator`;
+      await ctx.db.userPermissionOverride.upsert({
+        where: {
+          userId_capability: { userId: user.id, capability: GOODS_IN_CAPABILITY },
+        },
+        update: {
+          effect,
+          reason,
+          expiresAt: null,
+        },
+        create: {
+          organizationId: id,
+          userId: user.id,
+          capability: GOODS_IN_CAPABILITY,
+          effect,
+          reason,
+          createdById: ctx.session.user.id,
+        },
+      });
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: user.id,

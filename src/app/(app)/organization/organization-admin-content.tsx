@@ -680,7 +680,7 @@ export function OrganizationAdminContent() {
                   <label className="flex min-h-11 items-center gap-2 text-sm">
                     <input
                       type="checkbox"
-                      checked={user.permissionOverrides.length > 0}
+                      checked={user.goodsInAccess}
                       disabled={goodsInAccess.isPending}
                       onChange={(event) =>
                         goodsInAccess.mutate({ id: user.id, granted: event.currentTarget.checked })

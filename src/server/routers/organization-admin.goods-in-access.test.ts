@@ -29,6 +29,8 @@ vi.mock('@/lib/abac', async () => {
 
 import type { TRPCContext } from '../trpc';
 import type { AuthzDb } from '@/lib/authz';
+import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { organizationAdminRouter } from './organization-admin';
 
 const db = {
@@ -63,20 +65,31 @@ function caller(organizationId = 'org_a') {
 describe('organization member Goods-in access', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.overrideUpsert.mockReset();
     mocks.userFindFirst.mockResolvedValue({ id: 'member_a', email: 'member@example.test' });
   });
 
-  it('removes the canonical procurement grant and reports the audited state', async () => {
+  it('persists a canonical procurement denial and reports the audited state', async () => {
     await expect(
       caller().setMemberGoodsInAccess({ id: 'member_a', granted: false })
     ).resolves.toEqual({ granted: false });
 
-    expect(mocks.overrideDeleteMany).toHaveBeenCalledWith({
+    expect(mocks.overrideUpsert).toHaveBeenCalledWith({
       where: {
+        userId_capability: { userId: 'member_a', capability: 'pharmacy:procurement' },
+      },
+      update: {
+        effect: 'DENY',
+        reason: 'Goods-in access revoked by workspace administrator',
+        expiresAt: null,
+      },
+      create: {
         organizationId: 'org_a',
         userId: 'member_a',
         capability: 'pharmacy:procurement',
-        effect: 'ALLOW',
+        effect: 'DENY',
+        reason: 'Goods-in access revoked by workspace administrator',
+        createdById: 'admin_a',
       },
     });
     expect(mocks.annotateAudit).toHaveBeenCalledWith(
@@ -170,13 +183,9 @@ describe('organization member Goods-in access', () => {
       },
     } as unknown as AuthzDb;
     const subject = { id: 'member_a', role: 'ADMIN', department: null, status: 'ACTIVE' };
-    mocks.overrideDeleteMany.mockImplementationOnce(async ({ where }) => {
-      const before = rules.length;
-      rules = rules.filter(
-        (rule) =>
-          rule.capability !== where.capability || (where.effect && rule.effect !== where.effect)
-      );
-      return { count: before - rules.length };
+    mocks.overrideUpsert.mockImplementationOnce(async ({ update }) => {
+      rules = [{ capability: 'pharmacy:procurement', effect: update.effect }];
+      return rules[0];
     });
 
     await expect(can(subject, 'pharmacy:procurement', undefined, { db: authDb })).resolves.toBe(
@@ -190,6 +199,45 @@ describe('organization member Goods-in access', () => {
     );
     expect(rules).toEqual([{ capability: 'pharmacy:procurement', effect: 'DENY' }]);
   });
+
+  it.each(['pharmacy:procurement', 'pharmacy:*', '*'])(
+    'revokes inherited %s access for receiving and ABAC, then supports regranting',
+    async (capability) => {
+      const { can } = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+      let overrides: Array<{
+        capability: string;
+        effect: 'ALLOW' | 'DENY';
+        expiresAt: Date | null;
+      }> = [];
+      const authDb = {
+        user: {
+          findUnique: vi.fn(async () => ({
+            organizationRole: { permissions: [{ capability, effect: 'ALLOW' }] },
+            permissionOverrides: overrides.filter(
+              (rule) => rule.expiresAt === null || rule.expiresAt > new Date()
+            ),
+          })),
+        },
+      } as unknown as ScopedDb;
+      const subject = { id: 'member_a', role: 'EMPLOYEE', department: null, status: 'ACTIVE' };
+      mocks.overrideUpsert.mockImplementation(async ({ update, create }) => {
+        overrides = [{ ...create, ...update }];
+        return overrides[0];
+      });
+
+      expect(await actorCanProcure(authDb, subject.id)).toBe(true);
+      expect(await can(subject, 'pharmacy:procurement', undefined, { db: authDb })).toBe(true);
+      await caller().setMemberGoodsInAccess({ id: subject.id, granted: false });
+      expect(await actorCanProcure(authDb, subject.id)).toBe(false);
+      expect(await can(subject, 'pharmacy:procurement', undefined, { db: authDb })).toBe(false);
+      // Removing a previous DENY a second time must not restore inherited access.
+      await caller().setMemberGoodsInAccess({ id: subject.id, granted: false });
+      expect(await actorCanProcure(authDb, subject.id)).toBe(false);
+      await caller().setMemberGoodsInAccess({ id: subject.id, granted: true });
+      expect(await actorCanProcure(authDb, subject.id)).toBe(true);
+      expect(await can(subject, 'pharmacy:procurement', undefined, { db: authDb })).toBe(true);
+    }
+  );
 
   it.each([true, false])(
     'does not mutate or audit a member outside the current organization when granted is %s',

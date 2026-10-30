@@ -117,6 +117,7 @@ beforeEach(() => {
           organizationRoleId: null,
           lastActiveAt: null,
           permissionOverrides: [],
+          goodsInAccess: false,
         },
       ],
       usageCounters: [],
@@ -226,10 +227,13 @@ describe('organization people and access — staff onboarding', () => {
     });
 
     const data = overviewData.current as {
-      organization: { users: Array<{ permissionOverrides: Array<{ id: string }> }> };
+      organization: {
+        users: Array<{ permissionOverrides: Array<{ id: string }>; goodsInAccess: boolean }>;
+      };
     };
     invalidateOverview.mockImplementationOnce(async () => {
       data.organization.users[0]!.permissionOverrides = [{ id: 'grant_1' }];
+      data.organization.users[0]!.goodsInAccess = true;
       view.rerender(<OrganizationAdminContent />);
     });
     await mutationFor('setMemberGoodsInAccess').onSuccess?.();
@@ -237,8 +241,31 @@ describe('organization people and access — staff onboarding', () => {
     expect(control).toBeChecked();
 
     data.organization.users[0]!.permissionOverrides = [];
+    data.organization.users[0]!.goodsInAccess = false;
     view.rerender(<OrganizationAdminContent />);
     expect(control).not.toBeChecked();
+  });
+
+  it.each([
+    { name: 'an inherited grant', permissionOverrides: [], goodsInAccess: true },
+    { name: 'a denial', permissionOverrides: [{ id: 'deny_1' }], goodsInAccess: false },
+  ])('renders effective access for $name', ({ permissionOverrides, goodsInAccess }) => {
+    const data = overviewData.current as {
+      organization: {
+        users: Array<{ permissionOverrides: Array<{ id: string }>; goodsInAccess: boolean }>;
+      };
+    };
+    Object.assign(data.organization.users[0]!, { permissionOverrides, goodsInAccess });
+
+    render(<OrganizationAdminContent />);
+    const control = screen.getByRole('checkbox', { name: 'Goods-in access' });
+    expect(control).toHaveProperty('checked', goodsInAccess);
+    fireEvent.click(control);
+    expect(mutationFor('setMemberGoodsInAccess').mutate).toHaveBeenCalledWith({
+      id: 'owner_1',
+      granted: !goodsInAccess,
+    });
+    expect(control).toHaveProperty('checked', goodsInAccess);
   });
 });
 
