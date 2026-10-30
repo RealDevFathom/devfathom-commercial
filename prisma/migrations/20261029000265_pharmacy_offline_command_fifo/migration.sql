@@ -1,14 +1,16 @@
 -- OFF-01: make the claimed per-device FIFO durable. The registered-device row
 -- is the serialization point, so separate app instances cannot accept a gap or
 -- race two different commands into the same next position.
+BEGIN;
+
 ALTER TABLE "pharmacy_registered_devices"
   ADD COLUMN "nextOfflineCommandSequence" BIGINT NOT NULL DEFAULT 1;
 
 -- Both source tables already FORCE RLS, including for their NOBYPASSRLS
 -- owner. Migrations run as that owner, so temporarily stop forcing the owner
 -- through tenant policies while the cross-tenant backfill runs. RLS remains
--- enabled for every other role, and Prisma applies this migration in one
--- transaction: FORCE is restored before any of these changes can commit.
+-- enabled for every other role. The explicit transaction keeps both the
+-- temporary RLS changes and the backfill atomic, including on deploy failure.
 ALTER TABLE "pharmacy_registered_devices" NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE "pharmacy_offline_commands" NO FORCE ROW LEVEL SECURITY;
 
@@ -74,3 +76,5 @@ $$;
 CREATE TRIGGER "pharmacy_offline_commands_fifo"
   BEFORE INSERT ON "pharmacy_offline_commands"
   FOR EACH ROW EXECUTE FUNCTION enforce_pharmacy_offline_command_fifo();
+
+COMMIT;

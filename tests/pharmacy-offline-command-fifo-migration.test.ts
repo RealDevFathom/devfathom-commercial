@@ -1,5 +1,10 @@
 import { randomBytes } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 
 import pg from 'pg';
 import { describe, expect, it } from 'vitest';
@@ -8,6 +13,7 @@ const migration = readFileSync(
   'prisma/migrations/20261029000265_pharmacy_offline_command_fifo/migration.sql',
   'utf8'
 );
+const run = promisify(execFile);
 
 function quoteIdent(value: string): string {
   if (!/^[a-z_][a-z0-9_]*$/.test(value)) throw new Error(`Unsafe identifier: ${value}`);
@@ -78,7 +84,7 @@ describe('pharmacy offline command FIFO migration', () => {
     expect(migration).toContain('command."deviceId" = device."id"');
   });
 
-  it('backfills legacy logs and handles exhausted integer sequences as a forced-RLS owner', async () => {
+  it('preserves forced RLS on deploy failure and backfills legacy logs as a restricted owner', async () => {
     const adminUrl = await superuserUrl();
     if (!adminUrl) {
       if (process.env.CI) throw new Error('A PostgreSQL superuser URL is required for this test.');
@@ -88,11 +94,15 @@ describe('pharmacy offline command FIFO migration', () => {
     const suffix = randomBytes(6).toString('hex');
     const database = `offline_fifo_${suffix}`;
     const role = `offline_fifo_owner_${suffix}`;
+    const password = randomBytes(24).toString('hex');
+    const directory = await mkdtemp(join(tmpdir(), 'offline-fifo-migration-'));
     const admin = new pg.Client({ connectionString: adminUrl });
     const owner = new pg.Client({ connectionString: databaseUrl(adminUrl, database) });
     await admin.connect();
     try {
-      await admin.query(`CREATE ROLE ${quoteIdent(role)} NOSUPERUSER NOBYPASSRLS NOLOGIN`);
+      await admin.query(
+        `CREATE ROLE ${quoteIdent(role)} NOSUPERUSER NOBYPASSRLS LOGIN PASSWORD '${password}'`
+      );
       await admin.query(`CREATE DATABASE ${quoteIdent(database)}`);
       await owner.connect();
       await owner.query(`GRANT USAGE, CREATE ON SCHEMA public TO ${quoteIdent(role)}`);
@@ -170,8 +180,87 @@ describe('pharmacy offline command FIFO migration', () => {
           'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
         );
         expect(attributes.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
-        await owner.query(migration);
       });
+
+      // Use the pinned deploy engine, without the test helper's transaction:
+      // wrapping query(migration) in BEGIN masks partial commits during deploy.
+      const ownerUrl = new URL(databaseUrl(adminUrl, database));
+      ownerUrl.username = role;
+      ownerUrl.password = password;
+      const baseline = '000_baseline';
+      const fifo = '20261029000265_pharmacy_offline_command_fifo';
+      await mkdir(join(directory, 'migrations', baseline), { recursive: true });
+      await mkdir(join(directory, 'migrations', fifo));
+      await writeFile(
+        join(directory, 'schema.prisma'),
+        'datasource db {\n provider = "postgresql"\n}\n'
+      );
+      await writeFile(
+        join(directory, 'migrations', 'migration_lock.toml'),
+        'provider = "postgresql"\n'
+      );
+      await writeFile(
+        join(directory, 'migrations', baseline, 'migration.sql'),
+        '-- Legacy fixture.\n'
+      );
+      const configPath = join(directory, 'prisma.config.ts');
+      await writeFile(
+        configPath,
+        `export default ${JSON.stringify({
+          schema: join(directory, 'schema.prisma'),
+          migrations: { path: join(directory, 'migrations') },
+          datasource: { url: ownerUrl.toString() },
+        })};\n`
+      );
+      const deploy = (...args: string[]) =>
+        run(
+          process.execPath,
+          [
+            resolve('node_modules/prisma/build/index.js'),
+            'migrate',
+            ...args,
+            '--config',
+            configPath,
+          ],
+          {
+            timeout: 15_000,
+          }
+        );
+      await deploy('resolve', '--applied', baseline);
+      const migrationPath = join(directory, 'migrations', fifo, 'migration.sql');
+      const unforce = 'ALTER TABLE "pharmacy_offline_commands" NO FORCE ROW LEVEL SECURITY;';
+      await writeFile(migrationPath, migration.replace(unforce, `${unforce}\nSELECT 1 / 0;`));
+      await expect(deploy('deploy')).rejects.toMatchObject({
+        // The engine may report the follow-up bookkeeping error while the
+        // explicit transaction is aborted rather than the division by zero.
+        stderr: expect.stringMatching(/22012|current transaction is aborted/),
+      });
+      const policies = await owner.query(
+        `SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
+         WHERE relname IN ('pharmacy_registered_devices', 'pharmacy_offline_commands')
+         ORDER BY relname`
+      );
+      expect(policies.rows).toEqual([
+        { relname: 'pharmacy_offline_commands', relrowsecurity: true, relforcerowsecurity: true },
+        { relname: 'pharmacy_registered_devices', relrowsecurity: true, relforcerowsecurity: true },
+      ]);
+      const columns = await owner.query(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_name = 'pharmacy_registered_devices' AND column_name = 'nextOfflineCommandSequence'`
+      );
+      expect(columns.rows).toEqual([]);
+      const stillHidden = await asRole(owner, role, () =>
+        owner.query('SELECT count(*)::int AS count FROM "pharmacy_registered_devices"')
+      );
+      expect(stillHidden.rows[0]?.count).toBe(0);
+
+      await writeFile(migrationPath, migration);
+      await deploy('resolve', '--rolled-back', fifo);
+      await deploy('deploy');
+      const hiddenAfterDeploy = await asRole(owner, role, () =>
+        owner.query('SELECT count(*)::int AS count FROM "pharmacy_registered_devices"')
+      );
+      expect(hiddenAfterDeploy.rows[0]?.count).toBe(0);
 
       await asRole(owner, role, async () => {
         await owner.query(`SELECT set_config('app.current_organization_id', 'org_a', true)`);
@@ -222,6 +311,7 @@ describe('pharmacy offline command FIFO migration', () => {
         .catch(() => undefined);
       await admin.query(`DROP ROLE IF EXISTS ${quoteIdent(role)}`).catch(() => undefined);
       await admin.end().catch(() => undefined);
+      await rm(directory, { recursive: true, force: true });
     }
-  });
+  }, 60_000);
 });
