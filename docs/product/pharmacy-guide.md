@@ -113,7 +113,7 @@ Catalogue review is one of the [three protected jobs](#the-three-protected-jobs)
 - **Stock by batch:** DevFathom tracks stock by batch (lot), so you know which packs came in together. TODO(confirm): whether the system warns about medicines close to expiry.
 - **Stock counts:** count what is actually on your shelves and compare it to what the system says.
 - **Transfers between branches:** move stock from one branch to another.
-- **Pack checks:** the system includes tools for checking that packs are genuine. TODO(confirm): how pack checking works and what staff do if a pack fails.
+- **Pack checks:** scans compare encoded pack details with your pharmacy's medicine and batch records and flag mismatches or duplicate serial details. A matching scan does not prove a pack is genuine. Unverifiable scans and mismatch flags are advisory; existing recall blocks still apply. TODO(confirm): the staff procedure for following up a flag.
 
 ---
 
@@ -214,8 +214,8 @@ On top of that, there are ready-made **pharmacy roles** that owners can pick:
 | ---------------- | -------------------------------------------------------------------------------------- |
 | Owner            | All everyday pharmacy permissions and reports, but **not** the three protected jobs    |
 | Owner / Operator | Optional, given on purpose: reports, customer orders, and **all three protected jobs** |
-| Pharmacist       | Dispensing and catalogue review                                                        |
-| Manager          | Pharmacy management and customer orders                                                |
+| Pharmacist       | Dispensing, catalogue review and daily close                                           |
+| Manager          | Pharmacy management, customer orders and buying from suppliers                         |
 | Cashier          | The counter and customer orders                                                        |
 | Procurement      | Buying from suppliers                                                                  |
 | Inventory        | Stock                                                                                  |
@@ -223,6 +223,8 @@ On top of that, there are ready-made **pharmacy roles** that owners can pick:
 | Auditor          | Operational reports                                                                    |
 
 These ready-made roles are still provisional and may change.
+
+The **Owner / Operator** pharmacy role must be paired with the basic **Admin** role for business and staff actions that require Admin. Giving it to an Employee does not make that person an Admin. Pharmacy permissions do not verify professional qualifications or bypass other workflow checks.
 
 ### Changing one person's permissions
 
