@@ -17,8 +17,8 @@ vi.mock('@/lib/trpc', () => ({
       returnLine: { useMutation: () => ({ mutateAsync: mocks.returnLine }) },
       refundTender: { useMutation: () => ({ mutateAsync: mocks.refund }) },
     },
-    pharmacyPurchasing: {
-      controlledWitnesses: {
+    pharmacySafety: {
+      controlledPharmacists: {
         useQuery: () => ({ data: [{ id: 'witness', name: 'Second Pharmacist' }] }),
       },
     },

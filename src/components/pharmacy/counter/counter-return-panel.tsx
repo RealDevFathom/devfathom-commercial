@@ -162,7 +162,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       : undefined;
   const recoveryReturnPending = attempt?.kind === 'return' && !recoveryLine;
   const recoveryNeedsWitness = !!recoveryLine?.controlled;
-  const witnesses = trpc.pharmacyPurchasing.controlledWitnesses.useQuery(undefined, {
+  const witnesses = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: ready && online && (!!line?.controlled || recoveryNeedsWitness),
     retry: false,
   });
