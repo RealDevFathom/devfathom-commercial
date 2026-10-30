@@ -2,7 +2,7 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { arrangementFor, PharmacyInventoryError, planRemovalArrangement } from './inventory';
+import { PharmacyInventoryError, planRemovalArrangement } from './inventory';
 import type { LedgerScope } from './stock-ledger';
 
 function assertPositive(units: number) {
