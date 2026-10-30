@@ -2,7 +2,7 @@
 -- is the serialization point, so separate app instances cannot accept a gap or
 -- race two different commands into the same next position.
 ALTER TABLE "pharmacy_registered_devices"
-  ADD COLUMN "nextOfflineCommandSequence" INTEGER NOT NULL DEFAULT 1;
+  ADD COLUMN "nextOfflineCommandSequence" BIGINT NOT NULL DEFAULT 1;
 
 -- Both source tables already FORCE RLS, including for their NOBYPASSRLS
 -- owner. Migrations run as that owner, so temporarily stop forcing the owner
@@ -14,7 +14,8 @@ ALTER TABLE "pharmacy_offline_commands" NO FORCE ROW LEVEL SECURITY;
 
 UPDATE "pharmacy_registered_devices" AS device
 SET "nextOfflineCommandSequence" = COALESCE((
-  SELECT MAX(command."sequence") + 1
+  -- Cast before addition: legacy logs may already contain INTEGER's maximum.
+  SELECT MAX(command."sequence")::bigint + 1
   FROM "pharmacy_offline_commands" AS command
   WHERE command."organizationId" = device."organizationId"
     AND command."deviceId" = device."id"
@@ -30,7 +31,7 @@ ALTER TABLE "pharmacy_registered_devices"
 CREATE OR REPLACE FUNCTION enforce_pharmacy_offline_command_fifo()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
-  expected_sequence integer;
+  expected_sequence bigint;
 BEGIN
   -- Lock before checking duplicates: a concurrent retry waits for the original
   -- insert and then observes it instead of being rejected as a late command.

@@ -19,7 +19,7 @@ const ORG_A = `org_wha1191_a_${suffix}`;
 // suite silently conflicts with the rows the first one left behind.
 const BRANCH_A = `branch_a_${suffix}`;
 
-const ACTOR = 'user_pharmacist';
+const ACTOR = `user_pharmacist_${suffix}`;
 
 const NOW = new Date('2026-09-02T09:00:00.000Z');
 const LATER = new Date('2027-10-01T00:00:00.000Z');
@@ -214,6 +214,19 @@ beforeAll(async () => {
       [ORG_A]
     )
   );
+  await inOrg(ORG_A, async (db) => {
+    await db.organizationDepartment.create({ data: { key: 'PHARMACY', name: 'Pharmacy' } });
+    await db.user.create({
+      data: {
+        id: ACTOR,
+        name: 'Recovery manager',
+        email: `${ACTOR}@example.test`,
+        department: 'PHARMACY',
+        title: 'Manager',
+        role: 'ADMIN',
+      },
+    });
+  });
 }, 180_000);
 
 // Mock only the web identity/entitlement boundary; transactions, signatures,
@@ -333,6 +346,22 @@ async function setup() {
       ...headers,
     });
   }
+  async function reject(input = command, headers: Record<string, string> = {}) {
+    return call(
+      'reject',
+      { command: input, reason: 'Reviewed failed offline sale' },
+      {
+        'idempotency-key': input.idempotencyKey,
+        'x-command-signature': signPharmacyCommand(
+          scopeOf(fixture),
+          fixture.deviceId,
+          input,
+          fixture.deviceSecret
+        ),
+        ...headers,
+      }
+    );
+  }
   async function counts() {
     return inOrg(ORG_A, async (db) => ({
       commands: await db.pharmacyOfflineCommand.count({ where: { deviceId: fixture.deviceId } }),
@@ -347,7 +376,7 @@ async function setup() {
       ).nextNumber,
     }));
   }
-  return { fixture, command, call, replay, counts, lease };
+  return { fixture, command, call, replay, reject, counts, lease };
 }
 
 describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
@@ -416,6 +445,116 @@ describeIfDatabase('offline counter REST on forced-RLS PostgreSQL', () => {
     expect(r.status).toBe(409);
     expect(await f.counts()).toEqual(before);
     expect((await f.replay()).status).toBe(200);
+  });
+  it('recovers a rolled-back replay with an audited rejection before accepting the next command', async () => {
+    const f = await setup();
+    const failed = { ...f.command, amountMinor: 1 };
+    const before = await f.counts();
+    expect((await f.replay(failed)).status).toBe(409);
+    expect(await f.counts()).toEqual(before);
+
+    const leased = await f.call('lease', { size: 2 });
+    expect(leased.status).toBe(200);
+    const replacementLease = await leased.json();
+    const next = {
+      ...f.command,
+      sequence: 2,
+      idempotencyKey: tag('after-rejection'),
+      leasedReceipt: {
+        ...f.command.leasedReceipt,
+        leaseId: replacementLease.id,
+        receiptNumber: replacementLease.blockStart,
+        originalSaleAt: new Date().toISOString(),
+      },
+    };
+    const gap = await f.replay(next);
+    expect(gap.status).toBe(409);
+    expect(await gap.json()).toEqual({ error: 'SEQUENCE_OUT_OF_ORDER' });
+    const rejected = await f.reject(failed);
+    expect(rejected.status).toBe(200);
+    const result = await rejected.json();
+    expect(result).toMatchObject({ status: 'REJECTED', replayed: false });
+    expect(await f.counts()).toEqual({ ...before, commands: 1 });
+    const [retryA, retryB] = await Promise.all([f.reject(failed), f.reject(failed)]);
+    expect(await retryA.json()).toEqual({ ...result, replayed: true });
+    expect(await retryB.json()).toEqual({ ...result, replayed: true });
+    const audits = await inOrg(ORG_A, (db) =>
+      db.auditLog.findMany({
+        where: { action: 'pharmacyOffline.rejectCommand', targetId: result.commandId },
+      })
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({
+      actorId: ACTOR,
+      organizationId: ORG_A,
+      metadata: {
+        branchId: f.fixture.branchId,
+        deviceId: f.fixture.deviceId,
+        sequence: 1,
+        reason: 'Reviewed failed offline sale',
+      },
+    });
+    expect(JSON.stringify(audits)).not.toContain(f.fixture.deviceSecret);
+    expect((await f.replay(failed)).status).toBe(409);
+    const accepted = await f.replay(next);
+    expect(accepted.status, JSON.stringify(await accepted.json())).toBe(200);
+    expect(await f.counts()).toEqual({
+      ...before,
+      commands: 2,
+      sales: 1,
+      consumed: 1,
+    });
+    expect((await f.reject(next)).status).toBe(409);
+    expect((await f.counts()).sales).toBe(1);
+  });
+  it('requires manager authorization, a valid session and the signed original for recovery', async () => {
+    const f = await setup();
+    const before = await f.counts();
+    const { can } = await import('@/lib/abac');
+    vi.mocked(can).mockResolvedValueOnce(false);
+    expect((await f.reject()).status).toBe(403);
+    expect(vi.mocked(can).mock.calls.at(-1)?.[1]).toBe('admin:access');
+    expect((await f.reject(f.command, { 'x-terminal-session': 'bad' })).status).toBe(401);
+    expect((await f.reject(f.command, { 'x-command-signature': '' })).status).toBe(401);
+    expect((await f.reject(f.command, { 'idempotency-key': 'wrong' })).status).toBe(400);
+    expect((await f.reject({ ...f.command, sequence: 2 })).status).toBe(409);
+    expect(await f.counts()).toEqual(before);
+    const audits = await inOrg(ORG_A, (db) =>
+      db.auditLog.count({
+        where: {
+          action: 'pharmacyOffline.rejectCommand',
+          metadata: { path: ['deviceId'], equals: f.fixture.deviceId },
+        },
+      })
+    );
+    expect(audits).toBe(0);
+  });
+  it('rolls back recovery and its cursor when the audit cannot be written', async () => {
+    const f = await setup();
+    const before = await f.counts();
+    const { resolveTenantActor } = await import('@/lib/tenancy/tenant-actor');
+    const missingActor = {
+      organization: { id: ORG_A },
+      session: { user: { id: tag('missing-manager'), role: 'ADMIN' } },
+    } as Awaited<ReturnType<typeof resolveTenantActor>>;
+    // Establish a token for an actor with no User FK target. The recovery audit
+    // must fail in PostgreSQL, rolling back the rejection and cursor with it.
+    vi.mocked(resolveTenantActor).mockResolvedValueOnce(missingActor);
+    const established = await f.call('establish');
+    expect(established.status).toBe(201);
+    const { sessionToken } = await established.json();
+    vi.mocked(resolveTenantActor).mockResolvedValueOnce(missingActor);
+    const rejected = await f.reject(f.command, { 'x-terminal-session': sessionToken });
+    expect(rejected.status).toBe(500);
+    expect(await rejected.json()).toEqual({ error: 'internal_error' });
+    expect(await f.counts()).toEqual(before);
+    const device = await inOrg(ORG_A, (db) =>
+      db.pharmacyRegisteredDevice.findFirstOrThrow({
+        where: { id: f.fixture.deviceId },
+      })
+    );
+    expect(device.nextOfflineCommandSequence).toBe(BigInt(1));
+    expect((await f.reject()).status).toBe(200);
   });
   it('rejects missing command MAC and mismatched idempotency header', async () => {
     const f = await setup();

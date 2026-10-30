@@ -78,7 +78,7 @@ describe('pharmacy offline command FIFO migration', () => {
     expect(migration).toContain('command."deviceId" = device."id"');
   });
 
-  it('backfills non-empty, gapped, empty, and multi-tenant devices as a forced-RLS owner', async () => {
+  it('backfills legacy logs and handles exhausted integer sequences as a forced-RLS owner', async () => {
     const adminUrl = await superuserUrl();
     if (!adminUrl) {
       if (process.env.CI) throw new Error('A PostgreSQL superuser URL is required for this test.');
@@ -130,12 +130,14 @@ describe('pharmacy offline command FIFO migration', () => {
       for (const [organization, devices, commands] of [
         [
           'org_a',
-          ['contiguous', 'gapped', 'empty'],
+          ['contiguous', 'gapped', 'empty', 'exhausted', 'last'],
           [
             ['contiguous', 1],
             ['contiguous', 2],
             ['gapped', 1],
             ['gapped', 3],
+            ['exhausted', 2147483647],
+            ['last', 2147483646],
           ],
         ],
         ['org_b', ['tenant_b'], [['tenant_b', 7]]],
@@ -174,23 +176,44 @@ describe('pharmacy offline command FIFO migration', () => {
       await asRole(owner, role, async () => {
         await owner.query(`SELECT set_config('app.current_organization_id', 'org_a', true)`);
         const cursors = await owner.query(
-          `SELECT id, "nextOfflineCommandSequence" AS next FROM "pharmacy_registered_devices" ORDER BY id`
+          `SELECT id, "nextOfflineCommandSequence"::text AS next FROM "pharmacy_registered_devices" ORDER BY id`
         );
         expect(cursors.rows).toEqual([
-          { id: 'contiguous', next: 3 },
-          { id: 'empty', next: 1 },
-          { id: 'gapped', next: 4 },
+          { id: 'contiguous', next: '3' },
+          { id: 'empty', next: '1' },
+          { id: 'exhausted', next: '2147483648' },
+          { id: 'gapped', next: '4' },
+          { id: 'last', next: '2147483647' },
         ]);
         await owner.query(
           `INSERT INTO "pharmacy_offline_commands" VALUES ('org_a', 'branch', 'contiguous', 3, 'contiguous-3')`
         );
+        await owner.query(
+          `INSERT INTO "pharmacy_offline_commands" VALUES ('org_a', 'branch', 'last', 2147483647, 'last-max')`
+        );
+        // Retries still work after exhaustion and must never wrap the cursor.
+        await owner.query(
+          `INSERT INTO "pharmacy_offline_commands" VALUES ('org_a', 'branch', 'last', 2147483647, 'last-max') ON CONFLICT DO NOTHING`
+        );
+        const exhausted = await owner.query(
+          `SELECT "nextOfflineCommandSequence"::text AS next FROM "pharmacy_registered_devices" WHERE id = 'last'`
+        );
+        expect(exhausted.rows).toEqual([{ next: '2147483648' }]);
       });
+      await expect(
+        asRole(owner, role, async () => {
+          await owner.query(`SELECT set_config('app.current_organization_id', 'org_a', true)`);
+          await owner.query(
+            `INSERT INTO "pharmacy_offline_commands" VALUES ('org_a', 'branch', 'exhausted', 1, 'cannot-wrap')`
+          );
+        })
+      ).rejects.toThrow('PHARMACY_OFFLINE_SEQUENCE_OUT_OF_ORDER');
       await asRole(owner, role, async () => {
         await owner.query(`SELECT set_config('app.current_organization_id', 'org_b', true)`);
         const cursor = await owner.query(
-          `SELECT "nextOfflineCommandSequence" AS next FROM "pharmacy_registered_devices"`
+          `SELECT "nextOfflineCommandSequence"::text AS next FROM "pharmacy_registered_devices"`
         );
-        expect(cursor.rows).toEqual([{ next: 8 }]);
+        expect(cursor.rows).toEqual([{ next: '8' }]);
       });
     } finally {
       await owner.end().catch(() => undefined);

@@ -197,6 +197,9 @@ export const counterReplaySchema = z
   })
   .strict();
 export type CounterReplay = z.infer<typeof counterReplaySchema>;
+const counterRejectSchema = z
+  .object({ command: counterReplaySchema, reason: z.string().trim().min(1).max(500) })
+  .strict();
 export type PharmacyCounterContext = {
   db: ScopedDb;
   scope: LedgerScope;
@@ -433,7 +436,7 @@ function verifyToken(token: string, ctx: PharmacyCounterContext) {
   )
     throw new CounterTransportError('invalid_terminal_session', 401);
 }
-export type CounterOperation = 'establish' | 'snapshot' | 'replay' | 'lease' | 'quota';
+export type CounterOperation = 'establish' | 'snapshot' | 'replay' | 'lease' | 'quota' | 'reject';
 
 /** Live web actor plus enrolled device, with an actor/device-bound terminal
  * token after establishment. Errors are mapped only outside the transaction. */
@@ -461,7 +464,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           )
         )
           throw new CounterTransportError('module_disabled', 403);
-        const manager = operation === 'lease' || operation === 'quota';
+        const manager = operation === 'lease' || operation === 'quota' || operation === 'reject';
         if (
           !(await can(
             subjectFromSession(actor.session.user),
@@ -599,10 +602,64 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             );
           return { snapshots, publicKey: snapshotPublicKey(), catalogLimit: 1000 };
         }
-        const command = counterReplaySchema.parse(body);
+        const rejection = operation === 'reject' ? counterRejectSchema.parse(body) : null;
+        const command = rejection?.command ?? counterReplaySchema.parse(body);
         const key = request.headers.get('idempotency-key');
         if (!key || key !== command.idempotencyKey)
           throw new CounterTransportError('invalid_idempotency_key');
+        if (rejection) {
+          // Explicit manager recovery for a command whose failed sale rolled
+          // back its log entry. Never skip a position or commit sale effects.
+          // Use the same lock order as replay so a concurrent success cannot be
+          // changed into a rejection, and authenticate the original command.
+          await db.$queryRaw(
+            Prisma.sql`SELECT id FROM pharmacy_registered_devices WHERE id=${device.id} AND "organizationId"=${ctx.scope.organizationId} AND "branchId"=${ctx.scope.branchId} FOR UPDATE`
+          );
+          await authenticatePharmacyCommand(db, ctx.scope, device.id, command, {
+            deviceSecret: secret,
+            signature: request.headers.get('x-command-signature') ?? '',
+          });
+          const recorded = await recordOfflineCommand(db, ctx.scope, {
+            deviceId: device.id,
+            sequence: command.sequence,
+            idempotencyKey: command.idempotencyKey,
+            action: command.action,
+            payload: command as Prisma.InputJsonValue,
+            clientOriginAt: new Date(command.leasedReceipt.originalSaleAt),
+            receiptNumber: command.leasedReceipt.receiptNumber,
+          });
+          if (recorded.command.status === 'REJECTED')
+            return { commandId: recorded.command.id, status: 'REJECTED', replayed: true };
+          if (recorded.command.status !== 'PENDING')
+            throw new CounterTransportError('command_already_settled', 409);
+          await settleOfflineCommand(
+            db,
+            ctx.scope,
+            { commandId: recorded.command.id, outcome: 'REJECTED', reason: rejection.reason },
+            new Date()
+          );
+          // Recovery and its audit must commit together. Do not copy the signed
+          // payload, snapshots or credentials into the audit record.
+          await db.auditLog.create({
+            data: {
+              organizationId: ctx.scope.organizationId,
+              actorId: ctx.scope.actorId,
+              source: 'REST_API',
+              category: 'PHARMACY',
+              operation: 'UPDATE',
+              action: 'pharmacyOffline.rejectCommand',
+              targetType: 'PharmacyOfflineCommand',
+              targetId: recorded.command.id,
+              metadata: {
+                branchId: ctx.scope.branchId,
+                deviceId: device.id,
+                sequence: command.sequence,
+                reason: rejection.reason,
+              },
+            },
+          });
+          return { commandId: recorded.command.id, status: 'REJECTED', replayed: false };
+        }
         return replayCounterCommand(
           ctx,
           command,
