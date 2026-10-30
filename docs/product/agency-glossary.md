@@ -18,7 +18,7 @@ Plain-language meanings of words used in the [agency guide](agency-guide.md), in
 | **HR** | The role for people who handle leave, performance reviews and resignations. HR does not see Finance. |
 | **Invitation** | An offer to join your organization in DevFathom, sent to a new user. |
 | **Contract** | An agreement with a client, recorded on the client. An invoice can be created from it. |
-| **Department** | The team a person belongs to, such as Engineering or Design. |
+| **Department** | The team a person belongs to, such as Engineering or Design. Admins manage the organization's department list. |
 | **Invoice** | A bill you send to a client. |
 | **Leave request** | An employee's request for time off. |
 | **Module** | A part of DevFathom enabled for your organization. Agency-specific modules are Agency Core, Projects, Clients and Finance; shared features such as Chat, HR and Email have separate controls. |
@@ -31,7 +31,7 @@ Plain-language meanings of words used in the [agency guide](agency-guide.md), in
 | **Review** | A staff performance review, run in review cycles by HR or an Admin. Not a client review. |
 | **SCIM** | A way to add and remove users automatically from your company's account system. TODO(confirm) which plans include it. |
 | **SSO (single sign-on)** | Signing in with your company account instead of a separate password. TODO(confirm) which plans include it. |
-| **Support session** | Access that DevFathom support uses to look into your organization when helping you. |
+| **Support session** | Temporary access that lets authorized DevFathom support staff act as an active Admin in your organization. It requires a reason, notifies active Admins, and is recorded in the platform audit log. |
 | **Task** | One piece of work on a board, usually given to one person. |
 | **Team statistics** | Figures about each person's work, such as open, overdue and finished tasks, meetings and notes. The team-wide view is for Admins. |
 | **Time entry** | A record of hours spent on work, typed in by hand. |

@@ -36,7 +36,7 @@ DevFathom also has products for pharmacies and restaurants. They run on the same
 | **Finance** | *Invoices*, *payments*, income and expenses, recurring expenses, budget vs actual, and a profit-and-loss report | Admins only |
 | **Team** | Your staff list and team statistics | The team-wide statistics are for Admins; everyone can see their own |
 | **HR** | *Leave requests*, performance *reviews*, *resignations* | |
-| **Meetings** | Plan and record meetings | |
+| **Meetings** | Schedule meetings and track attendance | Audio/video recording is deferred |
 | **Notes** | Written notes, with version history and sharing | A note can be linked to a client or a project |
 | **Chat** | Team *channels* and messages, updated live | |
 | **Email** | Connect your own Gmail or Outlook mailbox and read, send and reply from inside DevFathom | Each person connects their own mailbox |
@@ -65,7 +65,7 @@ DevFathom supports *two-step sign-in (2FA)* with an authenticator app and backup
 
 ### Step 4: Invite your team
 1. An Admin sends each person an *invitation*.
-2. Give each person a role: **Admin**, **HR** or **Employee** (see [section 5](#5-roles-who-can-do-what)), and a department (Leadership, Engineering, Product, Quality, Marketing or Design).
+2. Give each person a role: **Admin**, **HR** or **Employee** (see [section 5](#5-roles-who-can-do-what)), and an active department from your organization's list. Agencies start with Leadership, Engineering, Product, Quality, Marketing and Design; Admins can manage that list.
 3. If someone forgets their password, they can reset it themselves.
 
 Larger agencies may be able to use *SSO* (sign in with your company account) and *SCIM* (add and remove users automatically). **TODO(confirm):** which plans include SSO and SCIM.
@@ -146,8 +146,8 @@ The table describes baseline access when the relevant modules are enabled. Custo
 - create **custom roles** with their own list of *permissions*, and
 - give or remove a permission for **one person** with a *permission override*.
 
-**DevFathom staff are separate.** The DevFathom platform team uses its own accounts and roles, which are not part of your user list. To help with a problem, DevFathom support can open a *support session* in your organization.
-- **TODO(confirm):** whether customers are told about support sessions or must approve them, and where those sessions are recorded.
+**DevFathom staff are separate.** The DevFathom platform team uses its own accounts and roles, which are not part of your user list. Authorized support staff can open a *support session* that acts as an active Admin in your organization. The session requires a reason and expires after at most 60 minutes.
+- Active Admins receive an in-app notification when support access starts. The current flow does not ask for customer approval; session start, launch and end are recorded in the platform audit log.
 
 ---
 
@@ -190,5 +190,6 @@ These are code references for the implemented behavior described here, not evide
 - [Agency modules, departments, role templates and limit keys](../../src/lib/vertical-catalog.ts), [shared module controls](../../src/lib/module-catalog.ts) and [entitlement resolution](../../src/lib/entitlements.ts).
 - [Organization provisioning and first-admin access](../../src/lib/platform/commands.ts), with coverage in [agency onboarding regression tests](../../tests/agency-onboarding-regression.test.ts) and [organization creation tests](../../src/lib/platform/commands.organization-create.test.ts).
 - [Baseline role policies](../../src/lib/abac/policies.ts), [custom permissions and overrides](../../src/lib/abac/index.ts), [procedure access checks](../../src/server/trpc.ts), [audit-log access](../../src/server/routers/audit.ts), [API tokens](../../src/server/routers/api-tokens.ts) and [webhooks](../../src/server/routers/webhooks.ts).
-- [Team invitations](../../src/server/routers/team.ts), [invitation acceptance](../../src/server/routers/invitations.ts), [password resets](../../src/server/routers/password-reset.ts), [two-step sign-in](../../src/server/routers/two-factor.ts) and [support sessions](../../src/lib/tenancy/support-session.ts).
+- [Team invitations](../../src/server/routers/team.ts), [department management](../../src/server/routers/organization-admin.ts), [invitation acceptance](../../src/server/routers/invitations.ts), [password resets](../../src/server/routers/password-reset.ts), [two-step sign-in](../../src/server/routers/two-factor.ts) and [support sessions](../../src/lib/tenancy/support-session.ts), with [support-access notification and audit tests](../../tests/support-session-hardening.test.ts).
+- [Meeting scheduling and attendance](../../src/server/routers/meetings.ts) and [deferred recording scope](../meetings/000-product-scope.md#d5--launch-topology-is-deliberately-small).
 - [Agency workflows](../../tests/agency-e2e/agency-acceptance.spec.ts), [clients and contracts](../../src/server/routers/clients.ts), [projects and time entries](../../src/server/routers/projects.ts), [finance](../../src/server/routers/finance.ts), [team statistics](../../src/server/routers/team-stats.ts) and [resignations](../../src/server/routers/resignations.ts).
