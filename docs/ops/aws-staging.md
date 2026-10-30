@@ -53,7 +53,7 @@ flowchart LR
 ```
 
 1. **Source.** A zip of the commit (`git archive`) is uploaded to the build-source bucket.
-2. **Build.** Someone **starts the CodeBuild project by hand**, with the zip as source override and `IMAGE_TAG` set to the full commit SHA. Nothing triggers it automatically: no branch push, no schedule. `buildspec.yml` only builds and pushes; it does **not** migrate or deploy.
+2. **Build.** Someone **starts the CodeBuild project by hand**, with the zip as source override, `IMAGE_TAG` set to the full commit SHA, and `NEXT_PUBLIC_APP_URL` set to the target environment's public base URL. The latter is inlined into the client bundle by the Dockerfile; setting it only on the ECS task does not update that bundle. Nothing triggers CodeBuild automatically: no branch push, no schedule. `buildspec.yml` only builds and pushes; it does **not** migrate or deploy.
 3. **Migrate.** A stack update sets `MigrateImageUri` to the new image, then the migration ECS task is run once and must exit 0. It runs `prepare-extensions` → `prisma migrate deploy` → `prepare-runtime-role` → `sync-catalog`, then whatever `MigrationMode` selects (staging: `seed`, which re-runs the seed and staging demo data on every release).
 4. **Roll.** A second stack update sets `ImageUri` to the new image (and clears `MigrateImageUri`). The ECS web service rolls. The deployment circuit breaker rolls back a task that will not start or fails `/api/live`.
 5. **Check.** `/api/ready` must return 200 with `{"status":"ok","schema":"current"}`.

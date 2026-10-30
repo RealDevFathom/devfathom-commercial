@@ -16,7 +16,7 @@
 | `APP_DATABASE_URL` | Migration task only: names the app login that `prisma/prepare-runtime-role.ts` provisions and supplies its password. The script validates the URL's username and target, not app-login authentication. Must be the same server and database as `DATABASE_URL`. |
 | `MIGRATION_DATABASE_URL` | Local: the role Prisma CLI and the seed use for migrations. Falls back to `DATABASE_URL`. |
 | `SHADOW_DATABASE_URL` | Local: Prisma's shadow database for `migrate dev`. |
-| `EXTENSION_ADMIN_DATABASE_URL` | Used only by `prisma/prepare-extensions.ts`; must be a superuser or extension owner. |
+| `EXTENSION_ADMIN_DATABASE_URL` | Used only by `prisma/prepare-extensions.ts`; must be a superuser, the extension object owner, or a role with explicit SET privilege on every extension object owner. |
 | `TEST_DATABASE_URL` | Enables the database-backed test suites and `test:rls`. Disposable databases only. |
 
 ## Auth, URLs and tenancy
