@@ -9,6 +9,53 @@ function assertPositive(units: number) {
   if (!Number.isSafeInteger(units) || units <= 0) throw new PharmacyInventoryError('INVALID_UNITS');
 }
 
+/** Keep recall-managed units available for the safety-authorized reversal. */
+async function assertManualQuarantineAvailable(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: { inventoryLotId: string; stockLocationId: string; units: number }
+) {
+  // Lock before reading the reserve, then read it in a separate statement so a
+  // waiter sees the preceding transaction's committed balance and recall action.
+  // AVAILABLE comes first to match quarantinePart's movement order and avoid
+  // taking the two projection locks in opposite orders during a release.
+  await db.$queryRaw(Prisma.sql`
+    SELECT "disposition" FROM "pharmacy_stock_balances"
+    WHERE "organizationId" = ${scope.organizationId}
+      AND "branchId" = ${scope.branchId}
+      AND "inventoryLotId" = ${input.inventoryLotId}
+      AND "stockLocationId" = ${input.stockLocationId}
+      AND "disposition" IN ('AVAILABLE', 'QUARANTINE')
+    ORDER BY "disposition"
+    FOR UPDATE
+  `);
+  const [balance, recallReserve] = await Promise.all([
+    db.pharmacyStockBalance.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        inventoryLotId: input.inventoryLotId,
+        stockLocationId: input.stockLocationId,
+        disposition: 'QUARANTINE',
+      },
+      select: { onHandUnits: true },
+    }),
+    db.pharmacyRecallQuarantineAction.aggregate({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        inventoryLotId: input.inventoryLotId,
+        stockLocationId: input.stockLocationId,
+        reversedAt: null,
+      },
+      _sum: { quantityUnits: true },
+    }),
+  ]);
+  if (!balance || balance.onHandUnits - (recallReserve._sum.quantityUnits ?? 0) < input.units) {
+    throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+  }
+}
+
 async function removalArrangement(
   db: ScopedDb,
   scope: LedgerScope,
@@ -175,6 +222,9 @@ export async function writeOff(
     },
   });
   if (!lot) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  if (input.disposition === 'QUARANTINE') {
+    await assertManualQuarantineAvailable(db, scope, input);
+  }
   const a = await removalArrangement(
     db,
     scope,
@@ -296,36 +346,7 @@ export async function releaseQuarantinedPart(
     },
   });
   if (!lot) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
-  // Regulatory quarantine shares the balance projection with manual holds, but
-  // it may only be reversed by the safety-gated DRAP workflow. Reserve every
-  // unit represented by an unreversed recall action so this inventory-only
-  // operation can release manual excess without making recalled stock saleable.
-  const [quarantineBalance, recallReserve] = await Promise.all([
-    db.pharmacyStockBalance.findFirst({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        inventoryLotId: input.inventoryLotId,
-        stockLocationId: input.stockLocationId,
-        disposition: 'QUARANTINE',
-      },
-      select: { onHandUnits: true },
-    }),
-    db.pharmacyRecallQuarantineAction.aggregate({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        inventoryLotId: input.inventoryLotId,
-        stockLocationId: input.stockLocationId,
-        reversedAt: null,
-      },
-      _sum: { quantityUnits: true },
-    }),
-  ]);
-  const regulatoryUnits = recallReserve._sum.quantityUnits ?? 0;
-  if (!quarantineBalance || quarantineBalance.onHandUnits - regulatoryUnits < input.units) {
-    throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
-  }
+  await assertManualQuarantineAvailable(db, scope, input);
   const a = await removalArrangement(
     db,
     scope,

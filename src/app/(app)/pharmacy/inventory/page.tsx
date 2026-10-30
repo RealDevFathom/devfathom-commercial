@@ -783,7 +783,7 @@ export default async function PharmacyInventoryPage({
               <select className={inputClass} name="position">
                 {writeOffPositions.map(({ lot, balance }) => (
                   <option
-                    key={`${lot.id}:${balance.stockLocationId}`}
+                    key={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
                     value={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
                   >
                     {lot.batch.medicine.productName} · {lot.batch.batchNumber} ·{' '}

@@ -223,6 +223,71 @@ async function stockLot(
   return { batch, lot };
 }
 
+/** A live regulatory hold, optionally sharing its position with manual stock. */
+async function recalledLot(db: ScopedDb, fixture: Scenario, manualUnits = 0) {
+  const { batch, lot } = await stockLot(db, fixture, {
+    expiresAt: LATER,
+    units: 20 + manualUnits,
+    label: 'drap-release-guard',
+  });
+  const moved = await deps.operations.quarantinePart(db, scopeOf(fixture), {
+    inventoryLotId: lot.id,
+    stockLocationId: fixture.locationId,
+    units: 20,
+    reason: 'DRAP recall quarantine',
+    idempotencyKeyPrefix: tag('drap-release-guard-hold'),
+  });
+  const recall = await db.pharmacyRecallNotice.create({
+    data: {
+      organizationId: fixture.organizationId,
+      batchId: batch.id,
+      reference: tag('drap-recall'),
+      reason: 'Regulatory recall',
+      createdById: ACTOR,
+    },
+  });
+  const ingest = await db.pharmacyDrapIngest.create({
+    data: {
+      organizationId: fixture.organizationId,
+      sourceReference: tag('drap-source'),
+      adapter: 'MANUAL',
+      kind: 'RECALL',
+      payloadHash: tag('drap-payload'),
+      matchStatus: 'MATCHED',
+      matchDetails: { batchIds: [batch.id] },
+      recallNoticeId: recall.id,
+      ingestedById: ACTOR,
+    },
+  });
+  await db.pharmacyRecallQuarantineAction.create({
+    data: {
+      organizationId: fixture.organizationId,
+      ingestId: ingest.id,
+      recallNoticeId: recall.id,
+      branchId: fixture.branchId,
+      inventoryLotId: lot.id,
+      stockLocationId: fixture.locationId,
+      quantityUnits: 20,
+      removedMovementId: moved.removed.id,
+      heldMovementId: moved.held.id,
+    },
+  });
+  await db.pharmacyManufacturingBatch.update({
+    where: { organizationId_id: { organizationId: fixture.organizationId, id: batch.id } },
+    data: { state: 'RECALLED', stateReason: 'Regulatory recall', stateChangedAt: NOW },
+  });
+  if (manualUnits) {
+    await deps.operations.quarantinePart(db, scopeOf(fixture), {
+      inventoryLotId: lot.id,
+      stockLocationId: fixture.locationId,
+      units: manualUnits,
+      reason: 'Manual inspection hold',
+      idempotencyKeyPrefix: tag('mixed-manual-hold'),
+    });
+  }
+  return { lot, batch, recall };
+}
+
 /** Run one statement that is EXPECTED to fail, in its own transaction. */
 async function expectRejection(
   organizationId: string,
@@ -536,85 +601,206 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     );
   });
 
-  it('does not release units reserved by a live DRAP recall quarantine', async () => {
-    const fixture = await scenario(ORG_A, BRANCH_A, 'drap-release-guard');
-    const result = await inOrg(ORG_A, async (db) => {
-      const { batch, lot } = await stockLot(db, fixture, {
-        expiresAt: LATER,
-        units: 20,
-        label: 'drap-release-guard',
-      });
-      const moved = await deps.operations.quarantinePart(db, scopeOf(fixture), {
-        inventoryLotId: lot.id,
-        stockLocationId: fixture.locationId,
-        units: 20,
-        reason: 'DRAP recall quarantine',
-        idempotencyKeyPrefix: tag('drap-release-guard-hold'),
-      });
-      const recall = await db.pharmacyRecallNotice.create({
-        data: {
-          organizationId: ORG_A,
-          batchId: batch.id,
-          reference: tag('drap-recall'),
-          reason: 'Regulatory recall',
-          createdById: ACTOR,
-        },
-      });
-      const ingest = await db.pharmacyDrapIngest.create({
-        data: {
-          organizationId: ORG_A,
-          sourceReference: tag('drap-source'),
-          adapter: 'MANUAL',
-          kind: 'RECALL',
-          payloadHash: tag('drap-payload'),
-          matchStatus: 'MATCHED',
-          matchDetails: { batchIds: [batch.id] },
-          recallNoticeId: recall.id,
-          ingestedById: ACTOR,
-        },
-      });
-      await db.pharmacyRecallQuarantineAction.create({
-        data: {
-          organizationId: ORG_A,
-          ingestId: ingest.id,
-          recallNoticeId: recall.id,
-          branchId: BRANCH_A,
-          inventoryLotId: lot.id,
-          stockLocationId: fixture.locationId,
-          quantityUnits: 20,
-          removedMovementId: moved.removed.id,
-          heldMovementId: moved.held.id,
-        },
-      });
-      await db.pharmacyManufacturingBatch.update({
-        where: { organizationId_id: { organizationId: ORG_A, id: batch.id } },
-        data: { state: 'RECALLED', stateReason: 'Regulatory recall', stateChangedAt: NOW },
-      });
+  it.each(['release', 'write-off'] as const)(
+    'does not %s units reserved by a live DRAP recall quarantine',
+    async (operation) => {
+      const fixture = await scenario(ORG_A, BRANCH_A, 'drap-release-guard');
+      const result = await inOrg(ORG_A, async (db) => {
+        const { lot } = await recalledLot(db, fixture);
 
-      const refusal = await deps.operations
-        .releaseQuarantinedPart(db, scopeOf(fixture), {
+        const input = {
           inventoryLotId: lot.id,
           stockLocationId: fixture.locationId,
-          units: 1,
+          units: operation === 'release' ? 1 : 10,
           reason: 'Inventory-only bypass attempt',
           idempotencyKeyPrefix: tag('drap-release-guard-attempt'),
-        })
-        .then(() => null)
-        .catch((error: PharmacyInventoryError) => error.reason);
-      const balances = await db.pharmacyStockBalance.findMany({
-        where: { organizationId: ORG_A, inventoryLotId: lot.id },
+        };
+        const refusal = await (
+          operation === 'release'
+            ? deps.operations.releaseQuarantinedPart(db, scopeOf(fixture), input)
+            : deps.operations.writeOff(db, scopeOf(fixture), {
+                ...input,
+                disposition: 'QUARANTINE',
+                witnessId: 'user_witness',
+                evidenceRef: 'destruction-certificate',
+                idempotencyKey: tag('drap-write-off-guard-attempt'),
+              })
+        )
+          .then(() => null)
+          .catch((error: PharmacyInventoryError) => error.reason);
+        const balances = await db.pharmacyStockBalance.findMany({
+          where: { organizationId: ORG_A, inventoryLotId: lot.id },
+        });
+        return { refusal, balances };
       });
-      return { refusal, balances };
-    });
 
-    expect(result.refusal).toBe('INSUFFICIENT_STOCK');
-    expect(result.balances).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ disposition: 'AVAILABLE', onHandUnits: 0 }),
-        expect.objectContaining({ disposition: 'QUARANTINE', onHandUnits: 20 }),
-      ])
-    );
-  });
+      expect(result.refusal).toBe('INSUFFICIENT_STOCK');
+      expect(result.balances).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ disposition: 'AVAILABLE', onHandUnits: 0 }),
+          expect.objectContaining({ disposition: 'QUARANTINE', onHandUnits: 20 }),
+        ])
+      );
+    }
+  );
+
+  it.each(['release', 'write-off'] as const)(
+    'preserves the recall reserve during a concurrent manual release and %s',
+    async (operation) => {
+      const fixture = await scenario(ORG_A, BRANCH_A, 'mixed-quarantine-race');
+      const { lot, recall } = await inOrg(ORG_A, (db) => recalledLot(db, fixture, 10));
+      const input = {
+        inventoryLotId: lot.id,
+        stockLocationId: fixture.locationId,
+        units: 10,
+        reason: 'Manual inspection cleared',
+      };
+      let releaseFirst = () => {};
+      const held = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      let firstPosted = () => {};
+      const posted = new Promise<void>((resolve) => {
+        firstPosted = resolve;
+      });
+      const first = inOrg(ORG_A, async (db) => {
+        await deps.operations.releaseQuarantinedPart(db, scopeOf(fixture), {
+          ...input,
+          idempotencyKeyPrefix: tag('mixed-release-first'),
+        });
+        firstPosted();
+        await held;
+      });
+      // Propagate setup failures instead of leaving a pending barrier.
+      await Promise.race([posted, first]);
+      let secondPid = 0;
+      let secondStarted = () => {};
+      const started = new Promise<void>((resolve) => {
+        secondStarted = resolve;
+      });
+      const second = inOrg(ORG_A, async (db) => {
+        const [connection] = await db.$queryRawUnsafe<{ pid: number }[]>(
+          'SELECT pg_backend_pid() AS pid'
+        );
+        secondPid = connection!.pid;
+        secondStarted();
+        return operation === 'release'
+          ? deps.operations.releaseQuarantinedPart(db, scopeOf(fixture), {
+              ...input,
+              idempotencyKeyPrefix: tag('mixed-release-second'),
+            })
+          : deps.operations.writeOff(db, scopeOf(fixture), {
+              ...input,
+              disposition: 'QUARANTINE',
+              witnessId: 'user_witness',
+              evidenceRef: 'destruction-certificate',
+              idempotencyKey: tag('mixed-write-off-second'),
+            });
+      });
+      // Attach the rejection handler before unblocking either transaction.
+      const outcomes = Promise.allSettled([first, second]);
+      let blocked = false;
+      try {
+        await Promise.race([started, second]);
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          const [connection] = await inOrg(ORG_A, (db) =>
+            db.$queryRawUnsafe<{ waiting: boolean }[]>(
+              `SELECT wait_event_type = 'Lock' AS waiting FROM pg_stat_activity WHERE pid = $1`,
+              secondPid
+            )
+          );
+          if (connection?.waiting) {
+            blocked = true;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      } finally {
+        releaseFirst();
+      }
+      const [firstOutcome, secondOutcome] = await outcomes;
+      expect(blocked).toBe(true);
+      expect(firstOutcome.status).toBe('fulfilled');
+      expect(secondOutcome).toMatchObject({
+        status: 'rejected',
+        reason: { reason: 'INSUFFICIENT_STOCK' },
+      });
+      await inOrg(ORG_A, async (db) => {
+        expect(
+          await db.pharmacyStockBalance.findFirst({
+            where: { inventoryLotId: lot.id, disposition: 'QUARANTINE' },
+          })
+        ).toMatchObject({ onHandUnits: 20 });
+        expect(
+          await db.pharmacyRecallQuarantineAction.findFirst({
+            where: { recallNoticeId: recall.id },
+          })
+        ).toMatchObject({ reversedAt: null, quantityUnits: 20 });
+        // A legitimate safety reversal still reconciles its full original pair.
+        const { reverseRecallQuarantine } = await import('./drap-monitoring');
+        await reverseRecallQuarantine(db, scopeOf(fixture), recall.id, 'Regulatory clearance');
+        expect(
+          await db.pharmacyStockBalance.findFirst({
+            where: { inventoryLotId: lot.id, disposition: 'AVAILABLE' },
+          })
+        ).toMatchObject({ onHandUnits: 30 });
+        expect(
+          await db.pharmacyRecallQuarantineAction.findFirst({
+            where: { recallNoticeId: recall.id },
+          })
+        ).toMatchObject({ reversedById: ACTOR, reversalReason: 'Regulatory clearance' });
+      });
+    }
+  );
+
+  it.each(['tenant', 'branch', 'location'] as const)(
+    'rejects manual quarantine release across the %s boundary without moving stock',
+    async (boundary) => {
+      const fixture = await scenario(ORG_A, BRANCH_A, 'release-scope');
+      const foreign = await scenario(ORG_B, BRANCH_B, 'release-scope-foreign');
+      const { lot } = await inOrg(ORG_A, async (db) => {
+        const result = await stockLot(db, fixture, {
+          expiresAt: LATER,
+          units: 10,
+          label: 'release-scope',
+        });
+        await deps.operations.quarantinePart(db, scopeOf(fixture), {
+          inventoryLotId: result.lot.id,
+          stockLocationId: fixture.locationId,
+          units: 10,
+          reason: 'Manual hold',
+          idempotencyKeyPrefix: tag('release-scope-hold'),
+        });
+        return result;
+      });
+      const scope =
+        boundary === 'tenant'
+          ? scopeOf(foreign)
+          : { ...scopeOf(fixture), branchId: boundary === 'branch' ? BRANCH_A_TWO : BRANCH_A };
+      await expect(
+        inOrg(scope.organizationId, (db) =>
+          deps.operations.releaseQuarantinedPart(db, scope, {
+            inventoryLotId: lot.id,
+            stockLocationId: boundary === 'location' ? foreign.locationId : fixture.locationId,
+            units: 10,
+            reason: 'Substituted reference',
+            idempotencyKeyPrefix: tag('release-scope-attempt'),
+          })
+        )
+      ).rejects.toMatchObject({
+        reason: boundary === 'location' ? 'INSUFFICIENT_STOCK' : 'CROSS_BRANCH_REFERENCE',
+      });
+      await inOrg(ORG_A, async (db) => {
+        expect(
+          await db.pharmacyStockBalance.findFirst({
+            where: { inventoryLotId: lot.id, disposition: 'QUARANTINE' },
+          })
+        ).toMatchObject({ onHandUnits: 10 });
+        expect(await db.pharmacyStockMovement.count({ where: { inventoryLotId: lot.id } })).toBe(3);
+      });
+    }
+  );
 
   it('dispatches into transit, records a batch receipt discrepancy, and enforces destination branch scope', async () => {
     const fixture = await scenario(ORG_A, BRANCH_A, 'transfer-workflow');
