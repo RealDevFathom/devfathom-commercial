@@ -28,6 +28,7 @@ vi.mock('@/lib/abac', async () => {
 });
 
 import type { TRPCContext } from '../trpc';
+import type { AuthzDb } from '@/lib/authz';
 import { organizationAdminRouter } from './organization-admin';
 
 const db = {
@@ -75,6 +76,7 @@ describe('organization member Goods-in access', () => {
         organizationId: 'org_a',
         userId: 'member_a',
         capability: 'pharmacy:procurement',
+        effect: 'ALLOW',
       },
     });
     expect(mocks.annotateAudit).toHaveBeenCalledWith(
@@ -99,6 +101,7 @@ describe('organization member Goods-in access', () => {
       update: {
         effect: 'ALLOW',
         reason: 'Goods-in access granted by workspace administrator',
+        expiresAt: null,
       },
       create: {
         organizationId: 'org_a',
@@ -116,6 +119,76 @@ describe('organization member Goods-in access', () => {
         metadata: { capability: 'pharmacy:procurement', granted: true },
       })
     );
+  });
+
+  it.each(['ALLOW', 'DENY'] as const)(
+    'renews an expired %s override so a confirmed grant authorizes procurement',
+    async (effect) => {
+      const { can } = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+      const rule = {
+        capability: 'pharmacy:procurement',
+        effect,
+        expiresAt: new Date(0) as Date | null,
+      };
+      const authDb = {
+        user: {
+          findUnique: vi.fn(async () => ({
+            organizationRole: null,
+            permissionOverrides:
+              rule.expiresAt === null || rule.expiresAt > new Date() ? [rule] : [],
+          })),
+        },
+      } as unknown as AuthzDb;
+      const subject = { id: 'member_a', role: 'EMPLOYEE', department: null, status: 'ACTIVE' };
+      mocks.overrideUpsert.mockImplementationOnce(async ({ update }) => {
+        Object.assign(rule, update);
+        return rule;
+      });
+
+      await expect(can(subject, 'pharmacy:procurement', undefined, { db: authDb })).resolves.toBe(
+        false
+      );
+      await expect(
+        caller().setMemberGoodsInAccess({ id: 'member_a', granted: true })
+      ).resolves.toEqual({ granted: true });
+      await expect(can(subject, 'pharmacy:procurement', undefined, { db: authDb })).resolves.toBe(
+        true
+      );
+      expect(rule.expiresAt).toBeNull();
+    }
+  );
+
+  it('preserves a denial when removing a grant, keeping administrator procurement access denied', async () => {
+    const { can } = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+    let rules = [{ capability: 'pharmacy:procurement', effect: 'DENY' as const }];
+    const authDb = {
+      user: {
+        findUnique: vi.fn(async () => ({
+          organizationRole: null,
+          permissionOverrides: rules,
+        })),
+      },
+    } as unknown as AuthzDb;
+    const subject = { id: 'member_a', role: 'ADMIN', department: null, status: 'ACTIVE' };
+    mocks.overrideDeleteMany.mockImplementationOnce(async ({ where }) => {
+      const before = rules.length;
+      rules = rules.filter(
+        (rule) =>
+          rule.capability !== where.capability || (where.effect && rule.effect !== where.effect)
+      );
+      return { count: before - rules.length };
+    });
+
+    await expect(can(subject, 'pharmacy:procurement', undefined, { db: authDb })).resolves.toBe(
+      false
+    );
+    await expect(
+      caller().setMemberGoodsInAccess({ id: 'member_a', granted: false })
+    ).resolves.toEqual({ granted: false });
+    await expect(can(subject, 'pharmacy:procurement', undefined, { db: authDb })).resolves.toBe(
+      false
+    );
+    expect(rules).toEqual([{ capability: 'pharmacy:procurement', effect: 'DENY' }]);
   });
 
   it.each([true, false])(

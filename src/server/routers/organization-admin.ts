@@ -265,7 +265,11 @@ export const organizationAdminRouter = router({
             organizationRoleId: true,
             lastActiveAt: true,
             permissionOverrides: {
-              where: { capability: GOODS_IN_CAPABILITY, effect: 'ALLOW' },
+              where: {
+                capability: GOODS_IN_CAPABILITY,
+                effect: 'ALLOW',
+                OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+              },
               select: { id: true },
             },
           },
@@ -579,7 +583,11 @@ export const organizationAdminRouter = router({
           where: {
             userId_capability: { userId: user.id, capability: GOODS_IN_CAPABILITY },
           },
-          update: { effect: 'ALLOW', reason: 'Goods-in access granted by workspace administrator' },
+          update: {
+            effect: 'ALLOW',
+            reason: 'Goods-in access granted by workspace administrator',
+            expiresAt: null,
+          },
           create: {
             organizationId: id,
             userId: user.id,
@@ -591,7 +599,13 @@ export const organizationAdminRouter = router({
         });
       } else {
         await ctx.db.userPermissionOverride.deleteMany({
-          where: { organizationId: id, userId: user.id, capability: GOODS_IN_CAPABILITY },
+          // Removing an extra grant must not erase a denial and restore role access.
+          where: {
+            organizationId: id,
+            userId: user.id,
+            capability: GOODS_IN_CAPABILITY,
+            effect: 'ALLOW',
+          },
         });
       }
       annotateAudit(ctx, {
