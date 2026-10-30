@@ -419,6 +419,39 @@ async function addRecipeLine(page: Page, description: string, portions: string, 
 }
 
 async function moveTo(page: Page, eventName: string, status: string) {
+  if (status === 'confirmed') {
+    const dates = await tenantQuery<{ date: string }>(
+      `SELECT to_char("eventDate", 'YYYY-MM-DD') AS date FROM restaurant_catering_orders
+       WHERE "organizationId"=$1 AND "eventName"=$2 ORDER BY "createdAt" DESC LIMIT 1`,
+      [fixture.organizationId, eventName]
+    );
+    expect(dates.rows).toHaveLength(1);
+    const date = dates.rows[0]!.date;
+    await page.getByLabel('Booking start with UTC offset').fill(`${date}T12:00:00+00:00`);
+    await page.getByLabel('Booking end with UTC offset').fill(`${date}T14:00:00+00:00`);
+    await page.getByLabel('Fulfillment').selectOption('PICKUP');
+    await page.getByLabel('Stock location').selectOption(stockLocationId);
+    await waitForMutation(page, 'restaurantCatering.setBooking', () =>
+      page.getByRole('button', { name: 'Save booking', exact: true }).click()
+    );
+    await page.getByLabel('Maximum concurrent guests').fill('100');
+    await waitForMutation(page, 'restaurantCatering.setBranchCapacity', () =>
+      page.getByRole('button', { name: 'Save branch capacity' }).click()
+    );
+    await waitForMutation(page, 'restaurantCatering.publishQuote', () =>
+      page.getByRole('button', { name: 'Publish quote revision' }).click()
+    );
+    await waitForMutation(page, 'restaurantCatering.approveQuote', () =>
+      page
+        .getByRole('button', { name: 'Approve quote revision', exact: true })
+        .and(page.locator(':enabled'))
+        .click()
+    );
+    await expect(
+      orderCard(page, eventName).getByRole('button', { name: 'Move to confirmed' })
+    ).toBeEnabled();
+  }
+
   await orderCard(page, eventName)
     .getByRole('button', { name: `Move to ${status}` })
     .click();
@@ -656,7 +689,7 @@ test('cancelling before production posts no catering stock movements', async ({ 
   await expect(card.getByRole('button', { name: 'Edit order' })).toBeVisible();
 });
 
-test('cancelling a delivered order reverses consumption back to the opening balance', async ({
+test('cancelling a delivered order retains consumption until explicit unused returns restore stock', async ({
   page,
 }) => {
   test.slow();
@@ -701,11 +734,49 @@ test('cancelling a delivered order reverses consumption back to the opening bala
   await moveTo(page, eventName, 'delivered');
   expect(await orderStatus(orderId)).toBe('DELIVERED');
 
-  // DELIVERED → CANCELLED is a distinct reversal branch from READY → CANCELLED.
+  // Cancellation alone must not put prepared stock back on the shelf.
   await cancelOrder(page, eventName);
   expect(await orderStatus(orderId)).toBe('CANCELLED');
 
-  expect(await keyedMovements(orderId, 'reversal')).toEqual([
+  expect(await keyedMovements(orderId, 'reversal')).toEqual([]);
+  expect(await derivedOnHand()).toEqual(consumed);
+  const originals = await tenantQuery<{ id: string; quantity: string }>(
+    `SELECT movement.id, (-movement.quantity)::text quantity
+     FROM restaurant_inventory_idempotency_keys key
+     CROSS JOIN LATERAL unnest(string_to_array(key."resultRef", ',')) movement_id
+     JOIN restaurant_stock_movements movement ON movement.id=movement_id
+     WHERE key."organizationId"=$1 AND key.key=$2 ORDER BY movement."stockItemId"`,
+    [fixture.organizationId, `catering:${orderId}:consumption`]
+  );
+  expect(originals.rows).toHaveLength(2);
+  const disposition = page.getByRole('form', { name: 'Record physical disposition' });
+  for (const movement of originals.rows) {
+    await disposition.getByLabel('Original consumption').selectOption(movement.id);
+    await disposition.getByRole('combobox', { name: /^Disposition/ }).selectOption('UNUSED_RETURN');
+    await disposition.getByLabel('Canonical quantity').fill(movement.quantity);
+    await disposition
+      .getByLabel('Disposition reason')
+      .fill('Verified unused stock physically returned to its original store');
+    await waitForMutation(page, 'restaurantCatering.recordDisposition', () =>
+      disposition.getByRole('button', { name: 'Record disposition', exact: true }).click()
+    );
+  }
+  const returned = await tenantQuery<{
+    stock_item_id: string;
+    location_id: string;
+    reason: string;
+    quantity: string;
+  }>(
+    `SELECT movement."stockItemId" stock_item_id, movement."locationId" location_id,
+            movement.reason::text, movement.quantity::text
+     FROM restaurant_catering_dispositions disposition
+     JOIN restaurant_stock_movements movement ON movement.id=disposition."resultMovementId"
+       AND movement."organizationId"=disposition."organizationId"
+     WHERE disposition."organizationId"=$1 AND disposition."orderId"=$2
+       AND disposition.kind='UNUSED_RETURN' ORDER BY movement."stockItemId"`,
+    [fixture.organizationId, orderId]
+  );
+  expect(returned.rows).toEqual([
     {
       stock_item_id: chicken.stockItemId,
       location_id: stockLocationId,
@@ -720,7 +791,7 @@ test('cancelling a delivered order reverses consumption back to the opening bala
     },
   ]);
   // Reconciliation over the WHOLE ledger, not only the two keyed batches: the
-  // reversal is a new movement and the fold returns to the opening balance.
+  // explicit returns are new movements and the fold returns to the opening balance.
   expect(await derivedOnHand()).toEqual(opening);
 
   const card = orderCard(page, eventName);

@@ -728,11 +728,11 @@ package was pinned against:
 `pharmacyMigrationManifest()` therefore refused `SCHEMA_SOURCE_MISMATCH` before initdb. The
 contract is re-pinned to the union tree, computed with the manifest's own routine:
 
-| pin | was (merge-base `37906386`) | now (union tree) |
-| --- | --- | --- |
-| migration count | 106 | 110 |
+| pin                 | was (merge-base `37906386`)                                        | now (union tree)                                                   |
+| ------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| migration count     | 106                                                                | 110                                                                |
 | `MIGRATIONS_SHA256` | `c500a70d3ef973afe9a2192421ac0335a1436695f02cc41ab3caab74f28d5024` | `7d333db5ab4b585e11bb396d5834394d76c9617bd8e58515ba9490cb021fe011` |
-| `SCHEMA_SHA256` | `ea8f40a29b95fcba8abfe7a41344402765f1efde5fff9e60f8faccb6a28608a5` | `a1b54cecbe2a34b292496d13a669ef96382c7ec9bdb677e06e2b5084e595a4c0` |
+| `SCHEMA_SHA256`     | `ea8f40a29b95fcba8abfe7a41344402765f1efde5fff9e60f8faccb6a28608a5` | `a1b54cecbe2a34b292496d13a669ef96382c7ec9bdb677e06e2b5084e595a4c0` |
 
 The count is now the single exported constant `MIGRATION_COUNT` in
 `scripts/pharmacy-demo-contract.ts`; the four sites that previously hard-coded `106`

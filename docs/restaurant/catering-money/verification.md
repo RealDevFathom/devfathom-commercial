@@ -41,6 +41,7 @@ Identical successful replay remains before lifecycle checks and after current ac
 No transaction/idempotency primitives, schema fragments, or shared runtime files changed.
 
 Executed commands:
+
 - `node_modules/.bin/vitest run --configLoader runner --config docs/restaurant/catering-money/vitest.config.mts`: **34 passed**, zero skipped, 728 ms.
 - `./owned-repo/node_modules/.bin/tsc -p verification-tsconfig.json --noEmit` (task root): exit 0.
 - `node_modules/.bin/eslint src/lib/restaurant/catering-money.ts src/lib/restaurant/catering-money.test.ts src/lib/restaurant/catering-money.db.test.ts`: exit 0; existing sparse-checkout missing-pages warning only.

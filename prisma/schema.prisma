@@ -6888,7 +6888,8 @@ model RestaurantOrderItemModifier {
 /// `linkReason` records why it was made (seated, moved, merged). Merge = several
 /// active table links under one order; combining two OPEN orders into one is
 /// deferred (BUILD-ASSUMPTIONS). At most one active link per (order, table) is
-/// enforced by a partial unique index in the migration.
+/// enforced by a partial unique index in the migration, and a second partial
+/// unique index permits only one active MOVE link per order.
 model RestaurantOrderTable {
   id             String                         @id @default(cuid())
   organizationId String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -12549,6 +12550,10 @@ model PharmacyGoodsReceipt {
   /// are not saleable. Required on the row, not only at the router.
   supplierInvoiceRef     String
   supplierInvoiceDate    DateTime
+  /// Tax identity printed on this bill. These are snapshots: changing a
+  /// supplier later must not make an earlier input-tax claim look compliant.
+  distributorNtn         String?
+  distributorStrn        String?
   warrantyEvidenceRef    String
   receivedByUserId       String
   receivedAt             DateTime
