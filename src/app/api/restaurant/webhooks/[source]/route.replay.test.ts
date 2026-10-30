@@ -19,18 +19,16 @@ vi.mock('@/lib/tenancy/host', () => ({
   resolveExplicitOrganizationByHost: mocks.resolveOrganization,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: mocks.createTenantDb }));
-vi.mock('@/lib/restaurant/webhook-inbox', () => {
-  return {
-    recordInboundWebhook: mocks.recordInboundWebhook,
-    webhookEnvelopeSchema: z
-      .object({
-        externalEventId: z.string().min(1).max(200),
-        eventType: z.string().min(1).max(200).optional(),
-        payload: z.record(z.string(), z.unknown()),
-      })
-      .strict(),
-  };
-});
+vi.mock('@/lib/restaurant/webhook-inbox', () => ({
+  recordInboundWebhook: mocks.recordInboundWebhook,
+  webhookEnvelopeSchema: z
+    .object({
+      externalEventId: z.string().min(1).max(200),
+      eventType: z.string().min(1).max(200).optional(),
+      payload: z.record(z.string(), z.unknown()),
+    })
+    .strict(),
+}));
 
 import { POST } from './route';
 
