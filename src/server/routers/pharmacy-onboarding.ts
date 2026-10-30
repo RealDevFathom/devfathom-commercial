@@ -40,7 +40,11 @@ import {
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
-import { assertBranchMayOperate, BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
+import {
+  assertBranchMayOperate,
+  BranchOperationDeniedError,
+  resolveEffectiveJurisdictionRuleSet,
+} from '@/lib/pharmacy/regulatory';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
 /** The gates an operator may attest to; the rest are answered from data. */
@@ -354,40 +358,46 @@ export const pharmacyOnboardingRouter = router({
         branches,
         jurisdictions,
         selectedBranchId: selected?.id ?? null,
-        versions: versions.map(({ jurisdictionRuleSet, ...version }) => {
-          const effective =
-            version.effectiveFrom <= now &&
-            (version.effectiveTo === null || version.effectiveTo > now);
-          let inForce = effective;
-          if (effective) {
-            try {
-              assertBranchMayOperate(
-                {
-                  ...version,
-                  permittedSchedules: Array.isArray(version.permittedSchedules)
-                    ? version.permittedSchedules.filter(
-                        (schedule): schedule is string => typeof schedule === 'string'
-                      )
-                    : [],
-                  ruleSet: jurisdictionRuleSet,
-                  auditDenied: () => undefined,
-                },
-                { name: 'REGULATORY_PROFILE_VIEW', at: now, requiresQualifiedPerson: true }
-              );
-            } catch (error) {
-              if (!(error instanceof BranchOperationDeniedError)) throw error;
-              inForce = false;
+        versions: await Promise.all(
+          versions.map(async ({ jurisdictionRuleSet, ...version }) => {
+            const effective =
+              version.effectiveFrom <= now &&
+              (version.effectiveTo === null || version.effectiveTo > now);
+            let inForce = effective;
+            if (effective) {
+              try {
+                assertBranchMayOperate(
+                  {
+                    ...version,
+                    permittedSchedules: Array.isArray(version.permittedSchedules)
+                      ? version.permittedSchedules.filter(
+                          (schedule): schedule is string => typeof schedule === 'string'
+                        )
+                      : [],
+                    ruleSet: await resolveEffectiveJurisdictionRuleSet(
+                      ctx.db,
+                      jurisdictionRuleSet,
+                      now
+                    ),
+                    auditDenied: () => undefined,
+                  },
+                  { name: 'REGULATORY_PROFILE_VIEW', at: now, requiresQualifiedPerson: true }
+                );
+              } catch (error) {
+                if (!(error instanceof BranchOperationDeniedError)) throw error;
+                inForce = false;
+              }
             }
-          }
-          return {
-            ...version,
-            provinceName: provinceName(version.provinceCode),
-            effective,
-            inForce,
-            licenceExpired: effective && now >= version.licenceValidTo,
-            qualifiedPersonCoverageExpired: effective && now >= version.qualifiedPersonValidTo,
-          };
-        }),
+            return {
+              ...version,
+              provinceName: provinceName(version.provinceCode),
+              effective,
+              inForce,
+              licenceExpired: effective && now >= version.licenceValidTo,
+              qualifiedPersonCoverageExpired: effective && now >= version.qualifiedPersonValidTo,
+            };
+          })
+        ),
       };
     }),
 

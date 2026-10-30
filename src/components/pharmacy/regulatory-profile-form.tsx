@@ -106,16 +106,24 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
     provinceCodeForBranch(initial, initial.selectedBranchId ?? '')
   );
   const formRef = useRef<HTMLFormElement>(null);
+  const refreshRequest = useRef(0);
 
   const utils = trpc.useUtils();
   const refresh = (nextBranchId = branchId) => {
+    const request = ++refreshRequest.current;
     void utils.pharmacyOnboarding.regulatory
       .fetch({ branchId: nextBranchId || undefined })
       .then((next) => {
+        if (request !== refreshRequest.current) return;
+        // Province defaults are set when the branch changes. A refresh must
+        // preserve any province the operator has selected in the meantime.
         setData(next);
-        setProvinceCode(provinceCodeForBranch(next, next.selectedBranchId ?? ''));
       })
-      .catch(() => setErrors({ form: 'That branch could not be loaded. Try again.' }));
+      .catch(() => {
+        if (request === refreshRequest.current) {
+          setErrors({ form: 'That branch could not be loaded. Try again.' });
+        }
+      });
   };
 
   const save = trpc.pharmacyOnboarding.saveRegulatoryProfile.useMutation({

@@ -136,6 +136,25 @@ export function assertBranchMayOperate(
   }
 }
 
+/** Resolve appended rules consistently for enforcement and the profile's displayed status. */
+export async function resolveEffectiveJurisdictionRuleSet(
+  db: Pick<PrismaClient, 'jurisdictionRuleSet'>,
+  original: BranchRegulatoryState['ruleSet'] & { code: string },
+  at: Date
+) {
+  // Equal effective dates are resolved by version, including when a profile
+  // still references an older immutable rule set.
+  const latestRules = await db.jurisdictionRuleSet.findFirst({
+    where: {
+      code: original.code,
+      effectiveFrom: { lte: at },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+    },
+    orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
+  });
+  return latestRules ?? original;
+}
+
 export async function assertStoredBranchMayOperate(
   db: PrismaClient,
   organizationId: string,
@@ -174,21 +193,12 @@ export async function assertStoredBranchMayOperate(
     throw new BranchOperationDeniedError('PROFILE_MISSING');
   }
 
-  // Appended rules supersede old versions even when a profile still references
-  // the original rule set. Equal effective dates are resolved by version.
-  const latestRules = await db.jurisdictionRuleSet.findFirst({
-    where: {
-      code: profile.jurisdictionRuleSet.code,
-      effectiveFrom: { lte: at },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
-    },
-    orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
-  });
+  const ruleSet = await resolveEffectiveJurisdictionRuleSet(db, profile.jurisdictionRuleSet, at);
 
   assertBranchMayOperate(
     {
       ...profile,
-      ruleSet: latestRules ?? profile.jurisdictionRuleSet,
+      ruleSet,
       auditDenied,
     },
     { ...action, at }
