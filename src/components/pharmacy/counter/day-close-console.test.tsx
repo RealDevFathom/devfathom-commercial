@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   close: null as Record<string, unknown> | null,
   mutate: vi.fn(),
   previewInput: vi.fn(),
+  branchInput: vi.fn(),
   /** The zone the workspace has stored. */
   zone: '',
 }));
@@ -46,10 +47,13 @@ vi.mock('@/lib/trpc', () => ({
         }),
       },
       counterBranches: {
-        useQuery: () => ({
-          data: { branches: [{ id: 'b', name: 'Main' }], timezone: mocks.zone },
-          isSuccess: true,
-        }),
+        useQuery: (input: unknown) => {
+          mocks.branchInput(input);
+          return {
+            data: { branches: [{ id: 'b', name: 'Main' }], timezone: mocks.zone },
+            isSuccess: true,
+          };
+        },
       },
       closePreview: {
         useQuery: (input: unknown) => {
@@ -98,6 +102,7 @@ beforeEach(() => {
   mocks.close = null;
   mocks.mutate.mockReset();
   mocks.previewInput.mockReset();
+  mocks.branchInput.mockReset();
 });
 describe('day-close console', () => {
   it('parses exact cash minor units without rounding an invalid amount', () => {
@@ -161,6 +166,7 @@ describe('day-close console', () => {
     mocks.role = 'MEMBER';
     render(<PharmacyDayCloseConsole />);
     expect(screen.getByRole('button', { name: 'Close and lock day' })).toBeInTheDocument();
+    expect(mocks.branchInput).toHaveBeenCalledWith({ forDayClose: true });
   });
   it('shows the server-derived permission denial', () => {
     mocks.role = 'MEMBER';

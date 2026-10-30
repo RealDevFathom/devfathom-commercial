@@ -56,6 +56,7 @@ function fixture() {
       // The close read's own branch lookup.
       findFirst: vi.fn().mockResolvedValue({ id: BRANCH, name: 'Main' }),
     },
+    pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue({ id: 'assignment-1' }) },
     // The close read names the workspace's zone.
     organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
     pharmacyDailyClose: {
@@ -158,6 +159,77 @@ describe('pharmacy close family refusals', () => {
       permissionOverrides: [{ capability: 'pharmacy:manage', effect: 'DENY' }],
     });
     await expect(pharmacist().closeAccess()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  const closeOperations = [
+    ['closePreview', (c) => c.closePreview({ branchId: BRANCH, businessDate })],
+    ['dailyClose', (c) => c.dailyClose({ branchId: BRANCH, businessDate })],
+    [
+      'closeDay',
+      (c) =>
+        c.closeDay({
+          branchId: BRANCH,
+          businessDate,
+          sourceHash: previewHash,
+          counts: [{ drawerSessionId: openDrawer.id, countedCashMinor: 500 }],
+          varianceNote: '',
+        }),
+    ],
+  ] as const satisfies ReadonlyArray<
+    readonly [string, (c: ReturnType<typeof pharmacist>) => Promise<unknown>]
+  >;
+
+  it.each(closeOperations)(
+    '%s refuses an unassigned capable operator before reading or writing close data',
+    async (_name, run) => {
+      f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      await expect(run(pharmacist())).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Branch is outside your scope.',
+      });
+      expect(f.db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org-1',
+          branchId: BRANCH,
+          userId: 'pharmacist-1',
+          active: true,
+          branch: { organizationId: 'org-1', active: true },
+        },
+        select: { id: true },
+      });
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+      expect(f.db.$queryRaw).not.toHaveBeenCalled();
+      expect(f.db.pharmacyDrawerSession.findMany).not.toHaveBeenCalled();
+      expect(f.db.pharmacyDailyClose.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('filters the close branch picker by active assignments, preserving ordinary counter reads', async () => {
+    f.db.pharmacyBranch.findMany.mockResolvedValue([]);
+    await pharmacist().counterBranches({ forDayClose: true });
+    expect(f.db.pharmacyBranch.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org-1',
+          active: true,
+          branchAssignments: {
+            some: { organizationId: 'org-1', userId: 'pharmacist-1', active: true },
+          },
+        },
+      })
+    );
+    await pharmacist().counterBranches();
+    expect(f.db.pharmacyBranch.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org-1', active: true },
+      })
+    );
+    await f.caller.counterBranches({ forDayClose: true });
+    expect(f.db.pharmacyBranch.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org-1', active: true },
+      })
+    );
   });
 
   it('answers a daily close with a drawer still open as a CONFLICT, writing no close', async () => {

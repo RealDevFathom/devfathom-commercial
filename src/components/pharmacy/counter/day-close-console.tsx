@@ -68,7 +68,7 @@ export function PharmacyDayCloseConsole() {
 }
 
 function DayCloseBranches() {
-  const branches = trpc.pharmacySales.counterBranches.useQuery();
+  const branches = trpc.pharmacySales.counterBranches.useQuery({ forDayClose: true });
   const [selected, setSelected] = useState('');
   const [picked, setPicked] = useState<string | null>(null);
   const timeZone = branches.data?.timezone;
