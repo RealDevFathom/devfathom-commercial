@@ -143,7 +143,8 @@ export async function postGoodsReceiptEntry(
     accrued += shelved + (line.quarantineLocationId ? held : 0);
   }
 
-  if (accrued === 0) throw new PharmacyFinanceError('NOTHING_TO_POST');
+  // All-bonus deliveries still receive stock, but have no value to accrue.
+  if (accrued === 0) return null;
 
   // One accrual leg for the whole delivery: what is owed is owed per invoice,
   // not per line, and FIN-02 settles it against exactly that.
@@ -584,6 +585,7 @@ export async function postInterbranchTransferEntry(
   if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
   const amountMinor = lot.unitCostMinor * line.quantityUnits;
+  if (amountMinor === 0) return null;
 
   return postJournalEntry(
     db,
@@ -649,6 +651,7 @@ export async function postCountAdjustmentEntry(
   if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
   const amountMinor = lot.unitCostMinor * Math.abs(variance);
+  if (amountMinor === 0) return null;
   const dimensions = {
     branchId: line.branchId,
     productId: lot.medicineId,
@@ -815,6 +818,37 @@ export async function postDailyCloseEntry(
   });
 }
 
+/**
+ * Opening totals use bigint, while each journal leg is a PostgreSQL integer.
+ * Split large balances into exact, balanced pairs instead of narrowing the
+ * total to a number or overflowing a leg at 2^31 minor units.
+ */
+function openingBalanceLines(
+  balanceMinor: bigint,
+  accountCode: JournalLineInput['accountCode'],
+  branchId: string
+): JournalLineInput[] {
+  const side = balanceMinor > BigInt(0) ? 'DEBIT' : 'CREDIT';
+  let remaining = balanceMinor < BigInt(0) ? -balanceMinor : balanceMinor;
+  const maxLeg = BigInt(2_147_483_647);
+  const lines: JournalLineInput[] = [];
+  while (remaining > BigInt(0)) {
+    const chunk = remaining > maxLeg ? maxLeg : remaining;
+    const amountMinor = Number(chunk);
+    lines.push(
+      { accountCode, side, amountMinor, branchId },
+      {
+        accountCode: 'OPENING_BALANCE_EQUITY',
+        side: side === 'DEBIT' ? 'CREDIT' : 'DEBIT',
+        amountMinor,
+        branchId,
+      }
+    );
+    remaining -= chunk;
+  }
+  return lines;
+}
+
 /** MIG-03: recognize the posted opening stock at its recorded lot cost. */
 export async function postOpeningStockEntry(
   db: ScopedDb,
@@ -826,8 +860,7 @@ export async function postOpeningStockEntry(
   });
   if (!total) throw new PharmacyFinanceError('NOT_FOUND');
   if (total.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
-  const amountMinor = Number(total.totalValueMinor);
-  if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0)
+  if (!Number.isSafeInteger(Number(total.totalValueMinor)) || total.totalValueMinor <= BigInt(0))
     throw new PharmacyFinanceError('NOTHING_TO_POST');
   return postJournalEntry(db, scope, {
     sourceKind: 'PHARMACY_OPENING_STOCK',
@@ -836,15 +869,7 @@ export async function postOpeningStockEntry(
     occurredAt: input.at,
     idempotencyKey: postingKey('PHARMACY_OPENING_STOCK', total.id),
     branchId: total.branchId,
-    lines: [
-      { accountCode: 'INVENTORY', side: 'DEBIT', amountMinor, branchId: total.branchId },
-      {
-        accountCode: 'OPENING_BALANCE_EQUITY',
-        side: 'CREDIT',
-        amountMinor,
-        branchId: total.branchId,
-      },
-    ],
+    lines: openingBalanceLines(total.totalValueMinor, 'INVENTORY', total.branchId),
   });
 }
 
@@ -859,12 +884,8 @@ export async function postOpeningLedgerEntry(
   });
   if (!opening) throw new PharmacyFinanceError('NOT_FOUND');
   if (opening.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
-  const signed = Number(opening.balanceMinor);
-  if (!Number.isSafeInteger(signed) || signed === 0)
+  if (!Number.isSafeInteger(Number(opening.balanceMinor)) || opening.balanceMinor === BigInt(0))
     throw new PharmacyFinanceError('NOTHING_TO_POST');
-  const accountCode = opening.account;
-  const side = signed > 0 ? 'DEBIT' : 'CREDIT';
-  const equitySide = side === 'DEBIT' ? 'CREDIT' : 'DEBIT';
   return postJournalEntry(db, scope, {
     sourceKind: 'PHARMACY_OPENING_LEDGER',
     sourceId: opening.id,
@@ -872,15 +893,7 @@ export async function postOpeningLedgerEntry(
     occurredAt: input.at,
     idempotencyKey: postingKey('PHARMACY_OPENING_LEDGER', opening.id),
     branchId: opening.branchId,
-    lines: [
-      { accountCode, side, amountMinor: Math.abs(signed), branchId: opening.branchId },
-      {
-        accountCode: 'OPENING_BALANCE_EQUITY',
-        side: equitySide,
-        amountMinor: Math.abs(signed),
-        branchId: opening.branchId,
-      },
-    ],
+    lines: openingBalanceLines(opening.balanceMinor, opening.account, opening.branchId),
   });
 }
 

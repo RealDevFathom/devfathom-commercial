@@ -483,6 +483,14 @@ export async function reverseGoodsReceipt(
   }
   assertGoodsReceiptTransition(receipt.status, 'REVERSED');
 
+  // Receipts posted before automatic journal wiring may have no entry yet.
+  // Backfill at the original posting instant; the adapter reuses an existing
+  // entry and returns null for a receipt with no financial value.
+  const originalEntry = await postGoodsReceiptEntry(db, scope, {
+    goodsReceiptId: receipt.id,
+    at: receipt.postedAt ?? receipt.receivedAt,
+  });
+
   // The keys are derived, not stored, so this finds precisely the movements
   // this receipt posted and nothing that happened to the lot afterwards.
   const keys = receipt.lines.flatMap((line) => [acceptedKey(line.id), quarantineKey(line.id)]);
@@ -513,12 +521,14 @@ export async function reverseGoodsReceipt(
     },
   });
 
-  await reversePostingForSource(db, scope, {
-    sourceKind: 'PHARMACY_GOODS_RECEIPT',
-    sourceId: receipt.id,
-    reason: input.reason,
-    at: input.at,
-  });
+  if (originalEntry) {
+    await reversePostingForSource(db, scope, {
+      sourceKind: 'PHARMACY_GOODS_RECEIPT',
+      sourceId: receipt.id,
+      reason: input.reason,
+      at: input.at,
+    });
+  }
 
   return {
     goodsReceiptId: receipt.id,

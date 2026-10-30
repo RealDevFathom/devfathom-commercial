@@ -426,7 +426,7 @@ export async function postOpeningSession(
   });
 
   if (totalValueMinor > BigInt(0)) {
-    await postOpeningStockEntry(db, scope, { sessionId: session.id, at: postedAt });
+    await postOpeningStockEntry(db, scope, { sessionId: session.id, at: session.openingAt });
   }
 
   return { total, postedLineCount };
@@ -478,7 +478,7 @@ export async function postOpeningLedger(
     if (balance.balanceMinor !== BigInt(0)) {
       await postOpeningLedgerEntry(db, scope, {
         openingLedgerEntryId: opening.id,
-        at: postedAt,
+        at: session.openingAt,
       });
     }
   }

@@ -2,7 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { DEFAULT_MATERIALITY_THRESHOLD, missingAttributes } from './opening-stock';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { postOpeningLedgerEntry, postOpeningStockEntry } from '../finance-postings';
+import {
+  DEFAULT_MATERIALITY_THRESHOLD,
+  missingAttributes,
+  postOpeningLedger,
+  postOpeningSession,
+} from './opening-stock';
+
+vi.mock('../finance-postings', () => ({
+  postOpeningLedgerEntry: vi.fn(),
+  postOpeningStockEntry: vi.fn(),
+}));
 
 /** A line with every required attribute present. */
 function completeLine() {
@@ -76,6 +88,58 @@ describe('D05 materiality threshold default', () => {
     expect(DEFAULT_MATERIALITY_THRESHOLD).toEqual({
       thresholdMinor: BigInt(0),
       thresholdUnits: 0,
+    });
+  });
+});
+
+describe('opening journal effective date', () => {
+  const scope = { organizationId: 'org', branchId: 'branch', actorId: 'actor' };
+  const openingAt = new Date('2026-09-01T00:00:00Z');
+  const session = { id: 'session', branchId: scope.branchId, status: 'DRAFT', openingAt };
+
+  it('recognizes opening inventory at openingAt even when imported later', async () => {
+    const db = {
+      pharmacyOpeningSession: {
+        findFirst: vi.fn().mockResolvedValue(session),
+        update: vi.fn(),
+      },
+      pharmacyOpeningStockLine: {
+        findMany: vi.fn().mockResolvedValue([{ ...completeLine(), id: 'line' }]),
+        update: vi.fn(),
+      },
+      pharmacyInventoryLot: { create: vi.fn().mockResolvedValue({ id: 'lot' }) },
+      pharmacyStockMovement: { create: vi.fn().mockResolvedValue({ id: 'movement' }) },
+      pharmacyOpeningTotal: { create: vi.fn().mockResolvedValue({ id: 'total' }) },
+    };
+    await postOpeningSession(db as unknown as ScopedDb, scope, {
+      sessionId: session.id,
+      idempotencyKeyPrefix: 'opening',
+    });
+    expect(postOpeningStockEntry).toHaveBeenCalledWith(db, scope, {
+      sessionId: session.id,
+      at: openingAt,
+    });
+  });
+
+  it('recognizes signed opening balances at openingAt and preserves zero balances', async () => {
+    const db = {
+      pharmacyOpeningSession: { findFirst: vi.fn().mockResolvedValue(session) },
+      pharmacyOpeningLedgerEntry: {
+        create: vi.fn().mockResolvedValueOnce({ id: 'cash' }).mockResolvedValueOnce({ id: 'bank' }),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    };
+    await postOpeningLedger(db as unknown as ScopedDb, scope, {
+      sessionId: session.id,
+      balances: [
+        { account: 'CASH', balanceMinor: BigInt(50), sourceRef: 'cash' },
+        { account: 'BANK', balanceMinor: BigInt(0), sourceRef: 'bank' },
+      ],
+    });
+    expect(db.pharmacyOpeningLedgerEntry.create).toHaveBeenCalledTimes(2);
+    expect(postOpeningLedgerEntry).toHaveBeenCalledExactlyOnceWith(db, scope, {
+      openingLedgerEntryId: 'cash',
+      at: openingAt,
     });
   });
 });

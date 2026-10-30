@@ -410,6 +410,34 @@ beforeAll(async () => {
 // ── FIN-01 — one balanced entry per event kind ──────────────────────────────
 
 describeIfDatabase('FIN-01 — goods receipt', () => {
+  it('receives and reverses all-bonus stock without an empty journal entry', async () => {
+    const f = await fixture(ORG_A, branch('all-bonus'), 'all-bonus');
+    await inOrg(ORG_A, async (db) => {
+      const received = await postedReceipt(db, f, 'all-bonus', {
+        receivedPacks: 0,
+        bonusPacks: 2,
+      });
+      await deps.receipts.reverseGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: received.draft.id,
+        reason: 'Free delivery returned',
+        at: LATER,
+      });
+      expect(
+        await db.financeJournalEntry.count({
+          where: { organizationId: ORG_A, sourceId: received.draft.id },
+        })
+      ).toBe(0);
+      const receipt = await db.pharmacyGoodsReceipt.findFirstOrThrow({
+        where: { id: received.draft.id },
+      });
+      expect(receipt.status).toBe('REVERSED');
+      const balances = await db.pharmacyStockBalance.findMany({
+        where: { inventoryLotId: received.posted.lines[0]!.inventoryLotId },
+      });
+      expect(balances.reduce((sum, row) => sum + row.onHandUnits, 0)).toBe(0);
+    });
+  });
+
   it('posts a balanced entry traceable to the receipt', async () => {
     const f = await fixture(ORG_A, branch('grn'), 'grn');
     const { entry, receiptId, line } = await inOrg(ORG_A, async (db) => {
@@ -502,6 +530,7 @@ describeIfDatabase('FIN-01 — goods receipt', () => {
     // Never revenue: free goods are not a sale, and the money owed does not
     // grow because more units arrived.
     for (const { entry } of [withoutBonus, withBonus]) {
+      expectBalanced(entry);
       expect(entry.lines.some((leg) => leg.accountCode === 'SALES_REVENUE')).toBe(false);
       expect(entry.lines.some((leg) => leg.accountCode === 'SALES_DISCOUNT')).toBe(false);
     }
@@ -1132,6 +1161,7 @@ describeIfDatabase('FIN-01 — reversal is additive and org-scoped', () => {
       };
     });
 
+    expectBalanced(result.entry);
     expectBalanced(result.reversal);
     expect(result.reversal.reversesEntryId).toBe(result.entry.id);
     // Both postings survive; the correction is the SECOND one.
@@ -1155,6 +1185,7 @@ describeIfDatabase('FIN-01 — reversal is additive and org-scoped', () => {
         goodsReceiptId: received.draft.id,
         at: RECEIVED_AT,
       });
+      expectBalanced(entry);
       return entry.id;
     });
 
@@ -1368,7 +1399,8 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
       return deps.reports.leakageReport(
         db,
         { organizationId: ORG_A, branchId: f.branchId },
-        WINDOW
+        // approveCount now posts at the operation's actual approval instant.
+        { ...WINDOW, to: new Date(Math.max(WINDOW.to.getTime(), Date.now() + 1_000)) }
       );
     });
 

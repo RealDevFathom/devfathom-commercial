@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const receiveLot = vi.hoisted(() => vi.fn());
+const postGoodsReceiptEntry = vi.hoisted(() => vi.fn());
+
+vi.mock('./finance-postings', () => ({ postGoodsReceiptEntry }));
 
 vi.mock('./stock-ledger', async () => {
   const actual = await vi.importActual<typeof import('./stock-ledger')>('./stock-ledger');
@@ -83,6 +86,7 @@ function receiptDb(line: {
 }
 
 beforeEach(() => {
+  postGoodsReceiptEntry.mockReset().mockResolvedValue({ id: 'entry' });
   receiveLot.mockReset().mockResolvedValue({
     lot: { id: 'lot' },
     movement: { id: 'move' },
@@ -98,6 +102,7 @@ describe('postGoodsReceipt expiry', () => {
     ).rejects.toMatchObject({ reason: 'EXPIRED_PACK' });
     expect(batchFind).not.toHaveBeenCalled();
     expect(receiveLot).not.toHaveBeenCalled();
+    expect(postGoodsReceiptEntry).not.toHaveBeenCalled();
   });
 
   it('posts a fully rejected expired pack into quarantine', async () => {
@@ -111,6 +116,10 @@ describe('postGoodsReceipt expiry', () => {
         quarantine: expect.objectContaining({ units: 10, stockLocationId: 'quar' }),
       })
     );
+    expect(postGoodsReceiptEntry).toHaveBeenCalledWith(db, SCOPE, {
+      goodsReceiptId: 'gr',
+      at: AT,
+    });
   });
 
   it('records a near-expiry warning while the accepted units stay receivable', async () => {
@@ -124,6 +133,10 @@ describe('postGoodsReceipt expiry', () => {
     expect(lineUpdate).toHaveBeenCalledWith({
       where: { id: 'line' },
       data: { inventoryLotId: 'lot', gs1Warnings: ['NEAR_EXPIRY'] },
+    });
+    expect(postGoodsReceiptEntry).toHaveBeenCalledWith(db, SCOPE, {
+      goodsReceiptId: 'gr',
+      at: AT,
     });
   });
 });
