@@ -469,7 +469,6 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
 
       const input = {
         deviceId: device.id,
-        actingStaffProfileId: actingStaffId,
         approvingStaffProfileId: unprivilegedStaffId,
         approvingType: 'PIN' as const,
         approvingSecret: APPROVING_PIN,
@@ -559,7 +558,6 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
       ] as const) {
         const input = {
           deviceId,
-          actingStaffProfileId: actingStaffId,
           approvingStaffProfileId: approvingStaffId,
           approvingType: 'PIN' as const,
           approvingSecret: APPROVING_PIN,
