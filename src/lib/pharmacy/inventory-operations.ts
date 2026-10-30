@@ -6,10 +6,33 @@ import { arrangementFor, PharmacyInventoryError } from './inventory';
 import type { LedgerScope } from './stock-ledger';
 
 /** Serialize recall-authority decisions that can overlap at batch or medicine scope. */
-async function lockRecallAuthority(db: ScopedDb, organizationId: string) {
+export async function lockRecallAuthority(db: ScopedDb, organizationId: string) {
   await db.$queryRaw(
     Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`pharmacy-recall-authority:${organizationId}`}, 0))`
   );
+}
+
+/** Caller holds the recall-authority lock until this notice is closed and committed. */
+export async function releaseRecallBatches(
+  db: ScopedDb,
+  organizationId: string,
+  notice: { id: string; batchId: string | null; medicineId: string | null }
+) {
+  // Decide per batch: a medicine recall can overlap batch recalls for only some
+  // of its batches, and a batch recall can overlap a medicine-wide recall.
+  await db.$executeRaw(Prisma.sql`
+    UPDATE "pharmacy_manufacturing_batches" AS batch
+    SET state = 'ACTIVE', "stateReason" = NULL, "stateChangedAt" = NULL,
+        "updatedAt" = clock_timestamp()
+    WHERE batch."organizationId" = ${organizationId}
+      AND ${notice.batchId ? Prisma.sql`batch.id = ${notice.batchId}` : Prisma.sql`batch."medicineId" = ${notice.medicineId}`}
+      AND NOT EXISTS (
+        SELECT 1 FROM "pharmacy_recall_notices" AS recall
+        WHERE recall."organizationId" = batch."organizationId"
+          AND recall.status = 'OPEN' AND recall.id <> ${notice.id}
+          AND (recall."batchId" = batch.id OR recall."medicineId" = batch."medicineId")
+      )
+  `);
 }
 
 export class OpenRecallConflictError extends Error {
@@ -614,23 +637,7 @@ export async function closeRecall(
     include: { acknowledgements: true },
   });
   if (!notice || !notice.acknowledgements.length) throw new PharmacyInventoryError('INVALID_STATE');
-  const where = notice.batchId ? { id: notice.batchId } : { medicineId: notice.medicineId! };
-  const remaining = await db.pharmacyRecallNotice.count({
-    where: {
-      organizationId: scope.organizationId,
-      status: 'OPEN',
-      id: { not: notice.id },
-      OR: [
-        { batchId: notice.batchId ?? undefined },
-        { medicineId: notice.medicineId ?? undefined },
-      ],
-    },
-  });
-  if (!remaining)
-    await db.pharmacyManufacturingBatch.updateMany({
-      where: { organizationId: scope.organizationId, ...where },
-      data: { state: 'ACTIVE', stateReason: null, stateChangedAt: null },
-    });
+  await releaseRecallBatches(db, scope.organizationId, notice);
   return db.pharmacyRecallNotice.update({
     where: { id: notice.id },
     data: { status: 'CLOSED', closedById: scope.actorId, closedAt: new Date() },
