@@ -771,6 +771,29 @@ const purchasingRouter = router({
             );
           }
 
+          let updatedOrder;
+          try {
+            updatedOrder = await tx.pharmacyPurchaseOrder.update({
+              where: { id: order.id, status: 'SUBMITTED' },
+              data:
+                input.decision === 'APPROVED'
+                  ? {
+                      status: 'APPROVED',
+                      approvedAt: new Date(),
+                      approvedByUserId: ctx.session.user.id,
+                    }
+                  : { status: 'DRAFT' },
+            });
+          } catch (error) {
+            if ((error as { code?: unknown } | null)?.code === 'P2025') {
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: 'Purchase order has already been reviewed.',
+              });
+            }
+            throw error;
+          }
+
           await tx.pharmacyPurchaseOrderApproval.create({
             data: {
               purchaseOrderId: order.id,
@@ -782,17 +805,7 @@ const purchasingRouter = router({
               reason: input.reason,
             },
           });
-          return tx.pharmacyPurchaseOrder.update({
-            where: { id: order.id },
-            data:
-              input.decision === 'APPROVED'
-                ? {
-                    status: 'APPROVED',
-                    approvedAt: new Date(),
-                    approvedByUserId: ctx.session.user.id,
-                  }
-                : { status: 'DRAFT' },
-          });
+          return updatedOrder;
         });
       } catch (error) {
         domainError(error);
