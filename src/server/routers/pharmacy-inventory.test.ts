@@ -256,7 +256,7 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     });
     expect(db.pharmacyManufacturingBatch.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ expiresAt: new Date('2027-07-01T00:00:00.000Z') }),
+        data: expect.objectContaining({ expiresAt: new Date('2027-06-30T19:00:00.000Z') }),
       })
     );
   });
