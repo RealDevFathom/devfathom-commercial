@@ -106,8 +106,8 @@ Dockerfile's `tsc --noEmit` runs with an 8 GB heap.
 
 ## Deploy an image
 
-Migrate first, then roll the web service, as the Azure staging workflow did
-(`.github/workflows/deploy-staging.yml`). Nothing else enforces that order: `/api/ready`
+Migrate first, then roll the web service. (`.github/workflows/deploy-staging.yml` is Azure-only and
+**DEPRECATED – never start it**; it is not part of the AWS path.) Nothing else enforces that order: `/api/ready`
 fails for a migration that stopped part-way, but not for one that has not started.
 
 1. Update the stack with `MigrateImageUri=<new image>`, keeping every other parameter. Only
